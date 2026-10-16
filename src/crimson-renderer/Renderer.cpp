@@ -329,7 +329,7 @@ struct Renderer::Impl {
     struct BindPose {std::weak_ptr<const ModelAsset> asset;std::shared_ptr<const ModelPose> pose;};
     std::unordered_map<const ModelAsset*,BindPose> bindPoses;
     std::unique_ptr<ModelGpuCache> streamModels{std::make_unique<ModelGpuCache>()};
-    std::uint64_t externalSignature{},programRevision{1},environmentRevision{1};
+    std::uint64_t externalSignature{},geometrySceneSignature{},programRevision{1},environmentRevision{1};
     ViewportAppearance appearance;
     bool gridVisible{true};
     std::string modelStatus;
@@ -770,6 +770,12 @@ std::uint64_t Renderer::streamingSignature() const {
     for (const auto item:{impl_->streamModels->signature(),impl_->externalSignature,impl_->programRevision,impl_->environmentRevision}) { value^=item; value*=1099511628211ull; }
     return value;
 }
+std::uint64_t Renderer::pickResourceSignature(PickMode mode) const {
+    if(mode==PickMode::Selection)return streamingSignature();
+    std::uint64_t value=14695981039346656037ull;
+    for(const auto item:{impl_->streamModels->signature(),impl_->geometrySceneSignature,impl_->programRevision}) {value^=item;value*=1099511628211ull;}
+    return value;
+}
 void Renderer::setExternalResourceSignature(std::uint64_t value) { impl_->externalSignature=value; }
 std::size_t Renderer::modelResidentBytes() const {
     auto bytes=impl_->streamModels->bytes()+impl_->deformation->bytes();
@@ -969,7 +975,7 @@ bool Renderer::requestPick(const PickRequest& request) {
     impl_->latestPickSerial = request.serial;
     impl_->requestedPick = request;
     impl_->requestedPickContext=impl_->displayedMaterialContext;
-    if (!impl_->requestedPick->resourceSignature) impl_->requestedPick->resourceSignature=streamingSignature();
+    if (!impl_->requestedPick->resourceSignature) impl_->requestedPick->resourceSignature=pickResourceSignature(request.mode);
     impl_->pickingStatus.clear();
     return true;
 }
@@ -978,13 +984,14 @@ std::optional<PickResult> Renderer::pollPick(std::uint32_t bgfxFrame) {
     if (!impl_->pendingPick || !picking::frameReady(bgfxFrame,impl_->pendingPick->readyFrame)) return {};
     auto pending = std::move(impl_->pendingPick);
     if (pending->epoch != impl_->pickEpoch || pending->request.serial != impl_->latestPickSerial) return {};
-    const auto entity = pending->entities.resolve(pending->pixel);
-    if (!entity) {
+    const auto draw = pending->entities.resolveDraw(pending->pixel);
+    if (!draw) {
         impl_->pickingStatus = "Viewport picking returned an invalid entity ID.";
         return {};
     }
-    if (pending->request.resourceSignature && pending->request.resourceSignature!=streamingSignature()) return {};
-    return PickResult{pending->request.generation,pending->request.revision,pending->request.serial,*entity,pending->request.resourceSignature};
+    if (pending->request.resourceSignature && pending->request.resourceSignature!=pickResourceSignature(pending->request.mode)) return {};
+    return PickResult{pending->request.generation,pending->request.revision,pending->request.serial,draw->entityId,
+        pending->request.resourceSignature,draw->materialSlot,pending->request.mode};
 }
 
 void Renderer::cancelPicking() { ++impl_->pickEpoch; impl_->requestedPick.reset(); }
@@ -1164,6 +1171,21 @@ void Renderer::render(const SceneSettings& settings, const MaterialTextures& tex
 }
 void Renderer::render(const RenderScene& scene) {
     if (!drawable()) { impl_->particles={scene.particles.size(),0,0,scene.particles.size()}; return; }
+    // A material hit describes the visible geometry in its captured frame.
+    // Animation and transient preview bindings may advance during readback;
+    // source identity/LOD changes still invalidate it. Authored transform edits
+    // are guarded by the caller's scene revision instead of live pose values.
+    std::uint64_t geometry=14695981039346656037ull;
+    const auto bytes=[&](const void* data,std::size_t count) {
+        const auto* value=static_cast<const unsigned char*>(data);
+        for(std::size_t i=0;i<count;++i){geometry^=value[i];geometry*=1099511628211ull;}
+    };
+    const auto hash=[&](const auto& value){bytes(&value,sizeof(value));};
+    for(const auto& instance:scene.instances)if(instance.pickable&&instance.entityId&&instance.model.asset) {
+        hash(instance.entityId);hash(instance.resourceRevision);hash(instance.forceFullDetail);
+        const auto& id=instance.model.asset->id;hash(id.size());bytes(id.data(),id.size());
+    }
+    impl_->geometrySceneSignature=geometry;
     impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),{RenderViewPurpose::Scene},impl_->gridVisible,true,nullptr,&impl_->particles);
     impl_->displayedMaterialContext=scene.materialContext;
 }
@@ -1811,10 +1833,6 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
             ++missing;
         } else {
             if (sceneView && stream) streamModels->markRendered(asset.id,instance.resourceRevision,views.scene==MainViews.scene);
-            std::array<float,4> pickColor{};
-            if (capturePick && instance.pickable && instance.entityId) {
-                pickColor = picking::color(pendingPick->entities.add(instance.entityId));
-            }
             const std::array<bgfx::UniformHandle, 5> samplers{albedoSampler, metallicRoughnessSampler,
                 normalSampler, occlusionSampler, emissiveSampler};
             std::uint32_t drawIndex=0;
@@ -1857,6 +1875,9 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                 }
                 const auto tangentUv=asset.primitives[draw.primitive].tangentUv;
                 const auto materialIndex = asset.primitives[draw.primitive].material;
+                std::array<float,4> pickColor{};
+                if(capturePick&&instance.pickable&&instance.entityId)
+                    pickColor=picking::color(pendingPick->entities.add(instance.entityId,materialIndex));
                 const auto& material=instance.materials && materialIndex<instance.materials->size() ? (*instance.materials)[materialIndex]:asset.materials[materialIndex];
                 const ModelMaterialTextures emptyBindings;
                 const auto& bindings = instance.textures && materialIndex < instance.textures->size()
@@ -1909,27 +1930,29 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | blending);
                     bgfx::submit(views.scene,graph?graph->program(MaterialGraphPass::Model):modelProgram);
                     if (capturePick && instance.pickable && instance.entityId) {
-                        if(graph)pendingPick->graphMaterials.push_back(graph);
+                        const bool geometryOnly=pendingPick->request.mode==PickMode::MaterialSlot;
+                        if(graph&&!geometryOnly)pendingPick->graphMaterials.push_back(graph);
                         if (resident) pendingPick->resources.push_back(resident);
                         if(deformed)pendingPick->deformations.push_back(deformed);
-                        // This pass deliberately shares model transforms, winding,
-                        // base-color UV/filter flags, vertex alpha and mask cutoff.
-                        // It never writes to the visible scene depth or HDR targets.
+                        // Slot targeting ignores material coverage and sidedness;
+                        // selection retains the visible material's exact cutout.
+                        const Vec4 neutral{},opaque{1,1,1,1};
                         bgfx::setTransform(world.data());
                         bgfx::setUniform(modelNormalMatrix,normal.data());
-                        bgfx::setUniform(modelBase,material.baseColor.data());
-                        bgfx::setUniform(modelEmissive,emissive);
+                        bgfx::setUniform(modelBase,geometryOnly?opaque.data():material.baseColor.data());
+                        bgfx::setUniform(modelEmissive,geometryOnly?neutral.data():emissive);
                         bgfx::setUniform(modelUv,uv);
                         bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
-                        bgfx::setUniform(modelOptions,options);
-                        bgfx::setUniform(modelMaps,mapFlags);
-                        bgfx::setUniform(modelEmissiveMap,emissiveMap);
+                        bgfx::setUniform(modelOptions,geometryOnly?neutral.data():options);
+                        bgfx::setUniform(modelMaps,geometryOnly?neutral.data():mapFlags);
+                        bgfx::setUniform(modelEmissiveMap,geometryOnly?neutral.data():emissiveMap);
                         bgfx::setUniform(pickId,pickColor.data());
-                        bgfx::setTexture(0,albedoSampler,bgfx::isValid(bindings.handles[0]) ? bindings.handles[0] : white,bindings.flags[0]);
-                        if(graph)graph->bind(pendingPick->materialContext);
+                        bgfx::setTexture(0,albedoSampler,!geometryOnly&&bgfx::isValid(bindings.handles[0]) ? bindings.handles[0] : white,
+                            geometryOnly?UINT32_MAX:bindings.flags[0]);
+                        if(graph&&!geometryOnly)graph->bind(pendingPick->materialContext);
                         bindGeometry();
-                        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
-                        bgfx::submit(passView(RenderPassKind::Picking),graph?graph->program(MaterialGraphPass::Picking):pickProgram);
+                        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | (geometryOnly?BGFX_STATE_NONE:cull));
+                        bgfx::submit(passView(RenderPassKind::Picking),graph&&!geometryOnly?graph->program(MaterialGraphPass::Picking):pickProgram);
                     }
                 };
                 if(blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive) {

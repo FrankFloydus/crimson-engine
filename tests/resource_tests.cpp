@@ -2,6 +2,7 @@
 #include "resources/TextureMipCache.h"
 #include "resources/FileWatcher.h"
 #include <atomic>
+#include <algorithm>
 #include <mutex>
 #include <fstream>
 #include <iostream>
@@ -82,12 +83,22 @@ void dependencyAndWatcher() {
         auto handle=manager.request<DecodedImage>(AssetRef<DecodedImage>{"dependency"},[](std::stop_token){return image(1);},options);
         await(manager,[&]{return handle.state()==ResourceState::Ready;});
         const auto fingerprint=handle.snapshot().fingerprint(); require(fingerprint!=0,"Dependency fingerprint was omitted.");
+        for(const auto& folder:{"Content/cache","Content/.Props","Content/.staging-user",".crimson/Cache",".crimson/.resource-transactions",".crimson/.staging-images","Content/Package"})std::filesystem::create_directories(root/folder);
+        {std::ofstream output(root/"Content/Package/manifest.json");output<<"{}";}
+        {std::ofstream output(root/"Content/Package/model.gltf");output<<"{}";}
         FileWatcher watcher({root},std::chrono::milliseconds{10}); std::this_thread::sleep_for(std::chrono::milliseconds{20});
         {std::ofstream output(source); output<<"changed";}
+        const auto model=root/"Content/source.glb";
+        const auto userCache=root/"Content/cache/roughness.png";
+        const auto userHidden=root/"Content/.Props/roughness.png",userStage=root/"Content/.staging-user/detail.png";
+        for(const auto& file:{model,userCache,userHidden,userStage,root/"Content/Package/source.glb",root/".crimson/Cache/mips.bin",root/".crimson/.resource-transactions/journal.json",root/".crimson/.staging-images/source.png"}){std::ofstream output(file);output<<"fixture";}
         std::vector<std::filesystem::path> changed;
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{3};
-        while(changed.empty() && std::chrono::steady_clock::now()<deadline) { changed=watcher.poll(); std::this_thread::sleep_for(std::chrono::milliseconds{5}); }
-        require(!changed.empty(),"Native file watcher did not report a source change.");
+        const auto contains=[&](const auto& file){return std::any_of(changed.begin(),changed.end(),[&](const auto& path){return resourcePathKey(path)==resourcePathKey(file);});};
+        while((!contains(source)||!contains(model)||!contains(userCache)||!contains(userHidden)||!contains(userStage)) && std::chrono::steady_clock::now()<deadline) { const auto batch=watcher.poll();changed.insert(changed.end(),batch.begin(),batch.end()); std::this_thread::sleep_for(std::chrono::milliseconds{5}); }
+        require(contains(source)&&contains(model)&&contains(userCache)&&contains(userHidden)&&contains(userStage),"Native file watcher missed ordinary Content named source.glb, cache or a hidden user folder.");
+        require(!contains(root/"Content/Package/source.glb")&&!contains(root/".crimson/Cache/mips.bin")&&!contains(root/".crimson/.resource-transactions/journal.json")&&!contains(root/".crimson/.staging-images/source.png"),
+            "Cache, transaction or staging writes entered the authored source notification stream.");
         manager.invalidatePath(source); await(manager,[&]{return handle.snapshot().revision()==2;});
         require(handle.snapshot().fingerprint()!=fingerprint,"Changed dependency retained its old fingerprint.");
         watcher.stop();
@@ -160,8 +171,54 @@ void derivedFileStateValidation() {
     }catch(...){std::filesystem::remove_all(root);throw;}
     std::filesystem::remove_all(root);
 }
+void transientDerivedIdentity() {
+    ResourceConfig config;config.cpuRetentionBytes=0;config.idleGrace=std::chrono::milliseconds{0};ResourceManager manager(config);
+    std::atomic_uint calls{};
+    auto authored=manager.request<DecodedImage>(AssetRef<DecodedImage>{"shared-key"},[](std::stop_token){return image(3);});
+    const auto generate=[&](std::stop_token){++calls;return image(7,123);};
+    auto derived=manager.requestDerived<DecodedImage>("shared-key",generate),duplicate=manager.requestDerived<DecodedImage>("shared-key",generate);
+    await(manager,[&]{return authored.state()==ResourceState::Ready&&derived.state()==ResourceState::Ready;});
+    require(calls==1&&authored.snapshot()->rgba[0]==3&&derived.snapshot()->rgba[0]==7&&duplicate.snapshot().revision()==derived.snapshot().revision(),
+        "Derived requests failed to deduplicate or collided with an authored identity.");
+    require(derived.reference().empty()&&authored.reference().id=="shared-key","Transient derived work exposed an authored AssetRef.");
+    const auto revision=derived.snapshot().revision();manager.invalidate("shared-key");
+    await(manager,[&]{return authored.state()==ResourceState::Ready;});
+    manager.forget("shared-key");manager.pump();
+    require(derived.state()==ResourceState::Ready&&derived.snapshot().revision()==revision&&calls==1,
+        "Authored invalidation/deletion changed a content-keyed derived resource.");
+    require(manager.requestDerived<DecodedImage>("shared-key",generate).snapshot().revision()==revision,
+        "Forgotten authored identity prevented an unrelated derived cache hit.");
+    ResourceRequestOptions options;options.retainLoader=false;
+    auto captured=std::make_shared<int>(4);std::weak_ptr<int> firstCapture=captured;
+    auto once=manager.requestDerived<DecodedImage>("one-shot",[captured](std::stop_token){return image(static_cast<unsigned>(*captured));},options);captured.reset();
+    await(manager,[&]{return once.state()==ResourceState::Ready&&firstCapture.expired();});
+    require(firstCapture.expired(),"A completed one-shot derived loader retained its captured inputs.");
+    captured=std::make_shared<int>(9);std::weak_ptr<int> cacheHitCapture=captured;
+    auto hit=manager.requestDerived<DecodedImage>("one-shot",[captured](std::stop_token){return image(static_cast<unsigned>(*captured));},options);captured.reset();
+    require(cacheHitCapture.expired()&&hit.snapshot()->rgba[0]==4,"A ready derived cache hit retained an unused captured input or replaced content.");
+    auto pinned=derived.snapshot();authored={};derived={};duplicate={};once={};hit={};manager.trim();
+    require(manager.stats().cpuBytes==4&&pinned->rgba[0]==7,"Derived immutable readers lost accurate CPU retention accounting.");
+    pinned={};manager.trim();require(manager.stats().cpuBytes==0,"Unleased derived CPU versions failed to evict.");
+}
+void supersededDerivedWork() {
+    ResourceConfig config;config.workers=1;config.cpuRetentionBytes=0;config.idleGrace=std::chrono::milliseconds{0};ResourceManager manager(config);
+    std::atomic_bool entered{},release{};std::atomic_uint obsoleteCalls{},currentCalls{};
+    auto gate=manager.requestDerived<DecodedImage>("generation-gate",[&](std::stop_token stop){entered=true;while(!release&&!stop.stop_requested())std::this_thread::yield();return image(1);});
+    await(manager,[&]{return entered.load();});
+    ResourceRequestOptions options;options.retainLoader=false;options.cancelWhenUnused=true;
+    auto captured=std::make_shared<int>(9);std::weak_ptr<int> unusedCapture=captured;
+    auto obsolete=manager.requestDerived<DecodedImage>("obsolete-recipe",[&,captured](std::stop_token){++obsoleteCalls;return image(static_cast<unsigned>(*captured));},options);
+    captured.reset();obsolete={};
+    auto current=manager.requestDerived<DecodedImage>("current-recipe",[&](std::stop_token){++currentCalls;return image(2);},options);
+    release=true;await(manager,[&]{return current.state()==ResourceState::Ready&&manager.idle()&&unusedCapture.expired();});
+    require(obsoleteCalls==0&&currentCalls==1&&current.snapshot()->rgba[0]==2,
+        "An unreferenced queued generator ran before the current recipe or retained its captured inputs.");
+    auto restored=manager.requestDerived<DecodedImage>("obsolete-recipe",[&](std::stop_token){++obsoleteCalls;return image(3);},options);
+    await(manager,[&]{return restored.state()==ResourceState::Ready;});
+    require(obsoleteCalls==1&&restored.snapshot()->rgba[0]==3,"A skipped immutable recipe could not be requested again.");
+}
 }
 int main() {
-    try { handlesAndVersions(); failureAndStaleness(); retentionAndVariants(); dependencyAndWatcher(); shutdown();boundedQueueAndPriority();seedLifetimeAndIdentityRevisions();dependencyClosureAndFailedRetention();derivedFileStateValidation();std::cout<<"Resource lifecycle checks passed.\n"; }
+    try { handlesAndVersions(); failureAndStaleness(); retentionAndVariants(); dependencyAndWatcher(); shutdown();boundedQueueAndPriority();seedLifetimeAndIdentityRevisions();dependencyClosureAndFailedRetention();derivedFileStateValidation();transientDerivedIdentity();supersededDerivedWork();std::cout<<"Resource lifecycle checks passed.\n"; }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

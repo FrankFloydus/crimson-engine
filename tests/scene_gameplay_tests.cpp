@@ -49,7 +49,7 @@ void componentsAndStorage(){
     auto characterRecord=*document.scene().find(character);characterRecord.character->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==10,"Scene writer did not use version 10.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==11,"Scene writer did not use version 11.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=Json::parse(serializeSceneSnapshot(snapshot));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -219,39 +219,82 @@ void boxMaterialAndPointRadius(){
     TempProject project;SceneDocument document(project.root);
     const auto first=document.createBox("First"),second=document.createBox("Second"),light=document.createPointLight();
     const std::string red="assets/materials/red.crimson-material",blue="assets/materials/blue.crimson-material";
-    auto edited=*document.scene().find(first);edited.modelMaterial=AssetRef<MaterialAsset>{red};require(document.updateEntity(first,edited),document.status());
-    require(document.scene().find(second)->modelMaterial.empty(),"Assigning one Box changed another instance.");
-    require(document.undo() && document.scene().find(first)->modelMaterial.empty(),"Material assignment did not undo.");
-    require(document.redo() && document.scene().find(first)->modelMaterial.id==red,"Material assignment did not redo.");
+    auto edited=*document.scene().find(first);edited.modelMaterials={AssetRef<MaterialAsset>{red}};require(document.updateEntity(first,edited),document.status());
+    require(document.scene().find(second)->modelMaterials.empty(),"Assigning one Box changed another instance.");
+    require(document.undo() && document.scene().find(first)->modelMaterials.empty(),"Material assignment did not undo.");
+    require(document.redo() && document.scene().find(first)->modelMaterials[0].id==red,"Material assignment did not redo.");
     document.select({first});require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
-    require(document.scene().find(duplicate)->modelMaterial.id==red,"Duplicate lost its material assignment.");
+    require(document.scene().find(duplicate)->modelMaterials[0].id==red,"Duplicate lost its material assignment.");
     edited=*document.scene().find(light);edited.point->radius=6.25f;edited.local=math::translation({2,3,4})*math::scaling({4,2,3});
     require(document.updateEntity(light,edited),document.status());
     auto extracted=extractScene(document.scene());
     require(extracted.models.size()==3 && extracted.models[0].assetId==BuiltinBoxModelId,"Box geometry extraction changed.");
-    for(const auto& model:extracted.models)require(model.materialId==(model.id==second?"":red),"Extraction lost an instance material.");
+    for(const auto& model:extracted.models)require(model.materialOverrides==(model.id==second?ModelMaterialOverrides{}:ModelMaterialOverrides{AssetRef<MaterialAsset>{red}}),"Extraction lost an instance material.");
     require(extracted.points.size()==1 && extracted.points[0].radius==6.25f,"Point radius was lost or scaled in extraction.");
     require(document.undo() && document.scene().find(light)->point->radius==20.f,"Point radius was absent from history equality.");
     require(document.redo(),document.status());
     require(document.save("Materials and range"),document.status());SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());
     auto legacy=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    for(auto& entity:legacy["entities"]){entity.erase("modelMaterial");if(entity.contains("point"))entity["point"].erase("radius");}
+    for(auto& entity:legacy["entities"]){entity.erase("modelMaterials");if(entity.contains("point"))entity["point"].erase("radius");}
     const auto legacyId="assets/scenes/legacy-material-range.crimson-scene";{std::ofstream stream(project.root/legacyId);stream<<legacy.dump();}
-    require(reopened.load(legacyId),reopened.status());require(reopened.scene().find(first)->modelMaterial.empty() && reopened.scene().find(light)->point->radius==20.f,"Legacy defaults changed.");
-    edited=*document.scene().find(light);edited.modelMaterial=AssetRef<MaterialAsset>{red};require(!document.updateEntity(light,edited),"Non-model material override accepted.");
-    edited=*document.scene().find(first);edited.model=AssetRef<ModelAsset>{"assets/models/example/model.json"};require(!document.updateEntity(first,edited),"Imported model accepted an unsupported instance override.");
-    edited=*document.scene().find(first);edited.modelMaterial=AssetRef<MaterialAsset>{DefaultParticleMaterialId};require(!document.updateEntity(first,edited),"Protected sprite material accepted for a Box.");
-    edited.modelMaterial=AssetRef<MaterialAsset>{"assets/materials/../outside.crimson-material"};require(!document.updateEntity(first,edited),"Unsafe material reference accepted.");
+    require(reopened.load(legacyId),reopened.status());require(reopened.scene().find(first)->modelMaterials.empty() && reopened.scene().find(light)->point->radius==20.f,"Legacy defaults changed.");
+    legacy["version"]=10;
+    for(auto& entity:legacy["entities"])if(entity["name"]=="First")entity["modelMaterial"]=red;
+    {std::ofstream stream(project.root/legacyId);stream<<legacy.dump();}
+    require(reopened.load(legacyId) && reopened.scene().find(first)->modelMaterials==ModelMaterialOverrides{AssetRef<MaterialAsset>{red}},
+        "Legacy Box material did not migrate to slot zero.");
+    const auto migrated=Json::parse(serializeSceneSnapshot({legacyId,"Migrated",reopened.scene().records(),reopened.scene().properties()}));
+    for(const auto& entity:migrated["entities"])require(!entity.contains("modelMaterial"),"Scene writer retained the retired scalar material field.");
+    edited=*document.scene().find(light);edited.modelMaterials={AssetRef<MaterialAsset>{red}};require(!document.updateEntity(light,edited),"Non-model material override accepted.");
+    edited=*document.scene().find(first);edited.modelMaterials={AssetRef<MaterialAsset>{DefaultParticleMaterialId}};require(!document.updateEntity(first,edited),"Protected sprite material accepted for a Box.");
+    edited.modelMaterials={AssetRef<MaterialAsset>{"assets/materials/../outside.crimson-material"}};require(!document.updateEntity(first,edited),"Unsafe material reference accepted.");
     edited=*document.scene().find(light);for(const float radius:{0.f,-1.f,100001.f,std::numeric_limits<float>::quiet_NaN()}){edited.point->radius=radius;require(!document.updateEntity(light,edited),"Invalid point radius accepted.");}
     SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
     require(runtime.begin("Live material assignment"),runtime.status());
-    require(runtime.update([&](auto& records,auto&){for(auto& record:records)if(record.id==first)record.modelMaterial=AssetRef<MaterialAsset>{blue};}),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& record:records)if(record.id==first)record.modelMaterials={AssetRef<MaterialAsset>{blue}};}),runtime.status());
     pose(runtime,first,{10,0,0});require(runtime.commit(),runtime.status());
-    require(runtime.undo() && runtime.scene().find(first)->modelMaterial.id==red,"Runtime assignment did not undo.");near(position(runtime.scene(),first),{10,0,0});
-    require(runtime.redo() && runtime.scene().find(first)->modelMaterial.id==blue,"Runtime assignment did not redo.");near(position(runtime.scene(),first),{10,0,0});
+    require(runtime.undo() && runtime.scene().find(first)->modelMaterials[0].id==red,"Runtime assignment did not undo.");near(position(runtime.scene(),first),{10,0,0});
+    require(runtime.redo() && runtime.scene().find(first)->modelMaterials[0].id==blue,"Runtime assignment did not redo.");near(position(runtime.scene(),first),{10,0,0});
     const auto references=runtime.historicalMaterialReferences();require(std::find(references.begin(),references.end(),red)!=references.end() && std::find(references.begin(),references.end(),blue)!=references.end(),"Material assignment history lost a dependency.");
-    require(document.scene().find(first)->modelMaterial.id==red && !document.dirty(),"Runtime material changed the authored document.");
+    require(document.scene().find(first)->modelMaterials[0].id==red && !document.dirty(),"Runtime material changed the authored document.");
+}
+void importedMaterialSlots() {
+    TempProject project;SceneDocument document(project.root);
+    const std::string modelId="assets/models/imported/manifest.json",red="assets/materials/red.crimson-material",blue="assets/materials/blue.crimson-material";
+    const auto first=document.createModel(modelId,"First"),second=document.createModel(modelId,"Second");
+    auto edited=*document.scene().find(first);
+    setModelMaterialOverride(edited.modelMaterials,0,AssetRef<MaterialAsset>{red});
+    setModelMaterialOverride(edited.modelMaterials,2,AssetRef<MaterialAsset>{blue});
+    require(document.updateEntity(first,edited),document.status());
+    const auto assigned=edited.modelMaterials;
+    require(assigned.size()==3 && assigned[1].empty() && document.scene().find(second)->modelMaterials.empty(),
+        "Imported slot assignment changed an inherited slot or another instance.");
+    require(document.undo() && document.scene().find(first)->modelMaterials.empty(),"Imported slot assignment did not undo.");
+    require(document.redo() && document.scene().find(first)->modelMaterials==assigned,"Imported slot assignment did not redo.");
+    edited=*document.scene().find(first);setModelMaterialOverride(edited.modelMaterials,2,{});
+    require(edited.modelMaterials.size()==1 && document.updateEntity(first,edited),"Clearing the last slot did not trim inherited entries.");
+    require(document.undo() && document.scene().find(first)->modelMaterials==assigned,"Clearing a slot lost the other assignments.");
+    document.select({first});require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
+    require(document.scene().find(duplicate)->modelMaterials==assigned,"Duplicate lost imported material slots.");
+    const auto extracted=extractScene(document.scene());
+    for(const auto& model:extracted.models)require(model.materialOverrides==(model.id==second?ModelMaterialOverrides{}:assigned),
+        "Scene extraction lost an imported material slot.");
+    require(document.save("Imported slots"),document.status());SceneDocument reopened(project.root);
+    require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(runtime.scene().find(first)->modelMaterials==assigned,"Play did not copy imported material slots.");
+    edited=*runtime.scene().find(first);setModelMaterialOverride(edited.modelMaterials,0,{});require(runtime.updateEntity(first,edited),runtime.status());
+    pose(runtime,first,{10,0,0});require(runtime.undo(),runtime.status());
+    require(runtime.scene().find(first)->modelMaterials==assigned,"Live slot undo did not restore assignments.");near(position(runtime.scene(),first),{10,0,0});
+    require(document.scene().find(first)->modelMaterials==assigned && !document.dirty(),"Live slot edits changed the authored scene.");
+    const auto history=document.historicalMaterialReferences();
+    require(std::find(history.begin(),history.end(),red)!=history.end() && std::find(history.begin(),history.end(),blue)!=history.end(),
+        "Imported material history lost slot dependencies.");
+    const auto box=document.createBox();edited=*document.scene().find(box);setModelMaterialOverride(edited.modelMaterials,1,AssetRef<MaterialAsset>{red});
+    require(!document.updateEntity(box,edited),"Built-in geometry accepted a nonexistent material slot.");
+    bool rejected=false;try{setModelMaterialOverride(edited.modelMaterials,MaximumModelMaterialSlots,AssetRef<MaterialAsset>{red});}catch(const std::exception&){rejected=true;}
+    require(rejected,"Out-of-range slot assignment was accepted.");
 }
 void pointFalloffAndSpecularStorageAndRuntime() {
     TempProject project;SceneDocument document(project.root);const auto light=document.createPointLight();
@@ -268,7 +311,7 @@ void pointFalloffAndSpecularStorageAndRuntime() {
         "Point falloff/specular redo lost the authored values.");
     require(document.save("Point falloff"),document.status());const auto authored=document.scene().records();
     const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(serialized.at("version")==10&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
+    require(serialized.at("version")==11&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
         serialized["entities"][0]["point"].at("specularStrength")==.35f&&serialized["entities"][0]["point"].at("attenuation")==1.25f,
         "Point falloff/specular fields did not persist in the current scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
@@ -363,7 +406,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==10,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==11,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=serialized;legacy["version"]=version;
@@ -951,7 +994,7 @@ void modelAnimationStorageAndRuntime() {
         "Animation controls did not participate in scene history.");
     require(document.save("Animated scene"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==10,"Animation writer did not use scene schema 10.");
+    require(json.at("version")==11,"Animation writer did not use scene schema 11.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());
     const auto history=document.history().size();const auto records=document.scene().records();
@@ -988,4 +1031,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

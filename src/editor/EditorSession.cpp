@@ -3,9 +3,11 @@
 #include "input/Navigation.h"
 #include "scene/SceneExtraction.h"
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
 #include "math/Json.h"
 #include "AssetPreviews.h"
 #include "assets/MaterialAsset.h"
+#include "assets/ModelMaterialOverrides.h"
 #include "crimson-renderer/Environment.h"
 #include "resources/Paths.h"
 #include "tools/SceneDiagnostics.h"
@@ -37,7 +39,7 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
 }
 EditorSession::~EditorSession() { saveSession(); }
 void EditorSession::restoreSession(AssetLibrary& assets) {
-    const auto path=root_/"assets"/"editor-session.json";
+    const auto path=resolveAssetPath(root_,"assets/editor-session.json");
     try {
         if (std::filesystem::exists(path)) {
             std::ifstream input(path); const auto saved=Json::parse(input);
@@ -95,7 +97,7 @@ void EditorSession::saveSession() noexcept {
         Json cameras=Json::object();
         for (const auto& [id,camera] : cameras_) cameras[id]={{"position",camera.position},{"target",camera.target},{"up",camera.up},
             {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane}};
-        writeFileAtomically(root_/"assets"/"editor-session.json",Json{{"version",1},{"scene",unresolvedScene_.empty() ? document_.assetId() : unresolvedScene_},
+        writeFileAtomically(resolveAssetPath(root_,"assets/editor-session.json"),Json{{"version",1},{"scene",unresolvedScene_.empty() ? document_.assetId() : unresolvedScene_},
             {"recoveredLegacyPreview",recoveredLegacy_},{"cameras",std::move(cameras)},
             {"panels",{{"outliner",editor_.panels().outliner},{"inspector",editor_.panels().inspector},{"assetBrowser",editor_.panels().assetBrowser},{"game",editor_.panels().game}}},
             {"overlays",{{"collisions",editor_.overlays().collisions},{"grid",editor_.overlays().grid},{"transformGizmo",editor_.overlays().transformGizmo}}}}.dump(2));
@@ -106,8 +108,10 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     materialEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
-        const auto relative=path.lexically_relative(root_).generic_u8string();
-        previews_->invalidate({reinterpret_cast<const char*>(relative.data()),relative.size()});
+        previews_->invalidateFile(path);
+        if(!preparedEnvironment_.empty() && assetIdAtPath(root_,path)==preparedEnvironment_) {
+            environment_={};environmentRevision_=0;
+        }
     }
 }
 void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::uint32_t bgfxFrame) {
@@ -127,17 +131,23 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     hooks.resolveTexture=[&assets](const std::string& id,bool normal){return assets.references().resolveTexture(id,normal);};
     hooks.reservedAsset=[&assets](const std::string& id){return assets.references().deleted(id);};
     hooks.assetPolicyRevision=[&assets]{return assets.references().revision();};
-    hooks.applyImport=[this](EntityId owner,const QuaderLink& link,const QuaderImportResult& result){return applyQuaderSceneImport(document_,owner,link,result);};
+    hooks.applyImport=[this,&assets](EntityId owner,const QuaderLink& link,const QuaderImportResult& result){
+        if(!applyQuaderSceneImport(document_,owner,link,result,[&assets](const std::string& id)->std::optional<std::vector<std::string>> {
+            if(const auto model=assets.findModel(id))return model->materialIds;
+            return std::nullopt;
+        }))throw std::runtime_error(document_.status());
+        return true;
+    };
     hooks.publishAssets=[this,&assets](const QuaderImportResult& result) {
         assets.publishManagedModels(result.preparedModels);
         std::vector<std::filesystem::path> changed;
-        for(const auto& file:result.files) {const auto path=root_/pathFromUtf8(file.id);assets.noteAssetWrite(file.id);assets.onFileChanged(path);changed.push_back(path);}
+        for(const auto& file:result.files) {const auto path=resolveAssetPath(root_,file.id);assets.noteAssetWrite(file.id);assets.onFileChanged(path);changed.push_back(path);}
         materialEditor_.filesChanged(changed);
     };
     quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks);
     prepared_.beginFrame(); renderer.advanceStreaming();renderer.setAppearance(editor_.appearance());
     for(const auto& file:changedFiles_) {
-        const auto relative=file.lexically_relative(root_).generic_u8string(); const std::string id(reinterpret_cast<const char*>(relative.data()),relative.size());
+        const auto id=assetIdAtPath(root_,file);
         if(id==document_.assetId() && std::filesystem::is_regular_file(file)) {
             if(play_.playing()) { deferredSceneReload_=true;continue; }
             ResourceRequestOptions options;options.dependencies={file};options.forceReload=true;
@@ -161,7 +171,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     if(preparedEnvironment_!=map || !environment_) {
         preparedEnvironment_=map; environmentRevision_=0;
         ResourceRequestOptions options;options.variant="ibl";
-        if(!map.empty())options.dependencies={root_/pathFromUtf8(map)};
+        if(!map.empty())options.dependencies={resolveAssetPath(root_,map)};
         const auto root=root_;
         environment_=resources_.request<PreparedEnvironment>(AssetRef<PreparedEnvironment>{map.empty()?StudioEnvironmentId:map},[root,map](std::stop_token token){
             if(token.stop_requested())throw std::runtime_error("Environment preparation canceled.");
@@ -185,7 +195,7 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
     pendingDrops_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
     if(play_.playing()) {
         play_.stop();settings_.camera=editCameraBeforePlay_;
-        if(deferredSceneReload_ && !document_.assetId().empty())changedFiles_.push_back(root_/pathFromUtf8(document_.assetId()));
+        if(deferredSceneReload_ && !document_.assetId().empty())changedFiles_.push_back(resolveAssetPath(root_,document_.assetId()));
         deferredSceneReload_=false;
     } else if(!stop) {
         editCameraBeforePlay_=settings_.camera;
@@ -228,6 +238,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     skipSimulationTime_=false;
     const auto previousCamera=settings_.camera;
     document.setPreviewCamera(settings_.camera);
+    const auto interactionDocument=document.documentGeneration();
     const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
@@ -241,7 +252,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         if (!previousAsset.empty()) cameras_[previousAsset]=previousCamera;
         cameraScene_=document.assetId(); navigation.cancel(); renderer.cancelPicking();
-        unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();
+        unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();
         if(document.documentGeneration()!=documentEpoch_) { documentEpoch_=document.documentGeneration();pendingDrops_.clear(); }
         externalScene_={};savedPreviewFingerprint_=0;
         if (frame.documentReplaced) {
@@ -261,6 +272,29 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!dropped.empty()) pendingDrops_.push_back({std::move(dropped),placement(frame.modelDropPosition),documentEpoch_});
     if(!frame.particleDropId.empty() && assets.findParticle(frame.particleDropId))
         document.createParticle(frame.particleDropId,assets.displayName(frame.particleDropId),math::translation(placement(frame.particleDropPosition)));
+    if(!frame.materialDragId.empty())materialDropStatus_.clear();
+    const bool materialDocumentCurrent=interactionDocument==document.documentGeneration() && !frame.documentReplaced;
+    if(frame.materialAssignment && materialDocumentCurrent) {
+        try {
+            const auto& assignment=*frame.materialAssignment;
+            const auto record=document.scene().find(assignment.entityId);
+            if(!record || !record->model)throw std::runtime_error("The target mesh is no longer available.");
+            const auto model=assets.findModel(record->model->id);
+            if(!model || assignment.slot>=model->materials.size())throw std::runtime_error("The target material slot is no longer available.");
+            const auto material=assets.findMaterial(assignment.materialId.id);
+            if(!material || !modelMaterialCompatible(*material))throw std::runtime_error("Choose a Surface material for a mesh slot.");
+            auto overrides=record->modelMaterials;
+            setModelMaterialOverride(overrides,assignment.slot,assignment.materialId);
+            // Check all slot UV/tangent/domain requirements before history is
+            // changed. Preview preparation may still be waiting for GPU data.
+            (void)assets.resolvedModelMaterials(*model,overrides);
+            if(!document.edit("Assign material slot",[&](auto& records,auto&) {
+                const auto target=std::find_if(records.begin(),records.end(),[&](const auto& item){return item.id==assignment.entityId;});
+                if(target!=records.end())target->modelMaterials=overrides;
+            }))throw std::runtime_error(document.status().empty()?"The material slot could not be assigned.":document.status());
+            materialDropStatus_.clear();renderer.cancelPicking();
+        } catch(const std::exception& error) { materialDropStatus_="Material assignment: "+std::string(error.what())+'\n'; }
+    }
     bool gameOpen=editor_.panels().game;
     const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
@@ -356,6 +390,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.sceneAspect=std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height);
     renderInput.sceneVisible=frame.viewport.width>0 && frame.viewport.height>0;renderInput.gameVisible=gameOpen;
     renderInput.selection=document.selection().ids;renderInput.placementIds=frame.placementPreviewIds;
+    if(materialDocumentCurrent)renderInput.materialPreview=frame.materialPreview;
     renderInput.placementPosition=placement(frame.placementPreviewPosition);
     renderInput.particles=std::move(particlePackets);renderInput.particleMaterials=std::move(particleMaterials);
     renderInput.particlePins=std::move(particlePins);renderInput.worldId=document.documentGeneration();
@@ -363,7 +398,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.shadowResolution=editor_.pointShadowResolution();renderInput.materialContext=materialContext;
     renderInput.appearance=editor_.appearance();renderInput.gridVisible=editor_.overlays().grid;
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
-    editor_.drawPlayerLightRig(sceneCamera,renderScene,document.selection().ids);
+    editor_.drawPlayerLightRig(sceneCamera,renderScene);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
         gameView_.drawPlayerLightRig(*gameCamera,renderScene);
@@ -405,6 +440,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(environmentStatus.starts_with("Procedural sky") || environmentStatus.starts_with("Environment:"))
         status_+=environmentStatus+'\n';
     if(!resourceStatus_.empty()) { if(!status_.empty())status_+='\n';status_+=resourceStatus_; }
+    status_+=materialDropStatus_;
     drawSceneDiagnostics(status_,renderer.pickingStatus(),renderer.modelStatus(),&renderer.shadowStats());
 }
 }

@@ -21,6 +21,7 @@ namespace {
 
 constexpr uint32_t LinearSampler = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 constexpr uint32_t NearestSampler = LinearSampler | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT;
+constexpr ImTextureID RepeatTexture = static_cast<ImTextureID>(1ull << 32);
 constexpr uint64_t UiState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA |
     BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA,
                                   BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
@@ -52,6 +53,7 @@ const bgfx::Memory* copyPixels(ImTextureData* texture, int x, int y, int width, 
 }
 
 bgfx::TextureHandle decodeTexture(ImTextureID id) {
+    id &= ~RepeatTexture;
     if (id == ImTextureID_Invalid || id > static_cast<ImTextureID>(UINT16_MAX))
         return BGFX_INVALID_HANDLE;
     return bgfx::TextureHandle{static_cast<uint16_t>(id - 1)};
@@ -159,8 +161,8 @@ void ImGuiBgfx::publishProgramReload(bgfx::ProgramHandle candidate) {
     program_=candidate;
 }
 
-ImTextureID ImGuiBgfx::textureId(bgfx::TextureHandle texture) {
-    return bgfx::isValid(texture) ? static_cast<ImTextureID>(texture.idx) + 1 : ImTextureID_Invalid;
+ImTextureID ImGuiBgfx::textureId(bgfx::TextureHandle texture,bool repeat) {
+    return bgfx::isValid(texture) ? (static_cast<ImTextureID>(texture.idx) + 1) | (repeat?RepeatTexture:0) : ImTextureID_Invalid;
 }
 
 void ImGuiBgfx::newFrame(std::uint32_t completedBgfxFrame) {
@@ -396,7 +398,8 @@ void ImGuiBgfx::renderTo(ImDrawData* drawData,uint16_t viewId,bgfx::FrameBufferH
             bgfx::setState(UiState);
             bgfx::setVertexBuffer(0, &vertexBuffer, command.VtxOffset, vertices - command.VtxOffset);
             bgfx::setIndexBuffer(&indexBuffer, command.IdxOffset, command.ElemCount);
-            bgfx::setTexture(0, sampler_, texture, state.samplerFlags);
+            const auto flags=(command.GetTexID() & RepeatTexture)?state.samplerFlags & ~LinearSampler:state.samplerFlags;
+            bgfx::setTexture(0, sampler_, texture, flags);
             bgfx::submit(viewId, program_);
         }
     }

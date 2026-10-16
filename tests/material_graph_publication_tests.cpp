@@ -1,5 +1,7 @@
 #include "assets/AtomicFile.h"
 #include "assets/MaterialAsset.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Renderer.h"
 #include "editor/MaterialPreview.h"
@@ -85,11 +87,14 @@ void preparedSignatureChecks() {
     check(preparedModelSignature(asset,4,surfaces,bindings)!=original,"A replacement model generation retained the old packet identity.");
 }
 
-MaterialGraphProgramResult waitForResult(ResourceManager& resources,MaterialGraphPrograms& programs,const MaterialGraphShader& shader) {
+MaterialGraphProgramResult waitForResult(ResourceManager& resources,MaterialGraphPrograms& programs,const MaterialGraphShader& shader,bool optimized=true) {
     MaterialGraphProgramResult result;
     waitFor([&] {
         resources.pump();result=programs.request(shader);bgfx::frame();
-        return result.current || result.diagnostic!="Compiling material graph...";
+        if(optimized&&result.current&&!result.programs->optimized&&!result.diagnostic.empty())
+            throw std::runtime_error(result.diagnostic);
+        return (result.current&&(!optimized||result.programs->optimized)) ||
+            (!result.current&&result.diagnostic!="Compiling material graph...");
     },"Timed out waiting for graph shader publication.");
     return result;
 }
@@ -135,7 +140,7 @@ void writeProfile(const fs::path& root,const fs::path& output,const Json& report
 
 void profileEngine(const fs::path& project,const fs::path& rendererBin,const fs::path& output) {
     const auto root=fs::weakly_canonical(project),bin=fs::weakly_canonical(rendererBin);
-    const ShaderCompileConfig config{bin/"shader-tools/shaderc.exe",bin/"shader-tools/shaders",bin/"shader-tools/include",root/"assets/cache/shaders"};
+    const ShaderCompileConfig config{bin/"shader-tools/shaderc.exe",bin/"shader-tools/shaders",bin/"shader-tools/include",resolveAssetPath(root,"assets/cache/shaders")};
     const auto names=engineShaderNames();
     Json report{{"project",root.generic_string()},{"rendererBin",bin.generic_string()},{"cache",config.cacheDirectory.generic_string()},
         {"stageCount",names.size()},{"notes","Mirrors startup all-engine-stage ResourceManager jobs with default two workers, compiler-owned content identity, resource file-state guards, Background priority and forceReload. Cache writes are disposable. Timings exclude renderer preflight/GPU publication."}};
@@ -184,14 +189,14 @@ void profileEngine(const fs::path& project,const fs::path& rendererBin,const fs:
 // cache. Only disposable copies are handed to the program owner, whose normal
 // recovery may discard invalid derived artifacts. The sole worker is blocked
 // while probing first/repeated publication, so misses never launch shaderc.
-void profileProject(const fs::path& project,const fs::path& rendererBin,const fs::path& output,bool cold) {
+void profileProject(const fs::path& project,const fs::path& rendererBin,const fs::path& output,bool cold,bool edit=false) {
     const auto root=fs::weakly_canonical(project);
     const auto bin=fs::weakly_canonical(rendererBin);
-    const ShaderCompileConfig config{bin/"shader-tools/shaderc.exe",bin/"shader-tools/shaders",bin/"shader-tools/include",root/"assets/cache/shaders"};
+    const ShaderCompileConfig config{bin/"shader-tools/shaderc.exe",bin/"shader-tools/shaders",bin/"shader-tools/include",resolveAssetPath(root,"assets/cache/shaders")};
     check(fs::is_regular_file(config.compiler),"Runtime shader compiler is unavailable.");
-    const auto sessionFile=root/"assets/editor-session.json";
+    const auto sessionFile=resolveAssetPath(root,"assets/editor-session.json");
     const auto session=Json::parse(read(sessionFile));
-    const auto sceneFile=root/session.at("scene").get<std::string>();
+    const auto sceneFile=resolveAssetPath(root,session.at("scene").get<std::string>());
     const auto scene=Json::parse(read(sceneFile));
     std::set<std::string> usedMaterials;
     Json sceneModels=Json::array();
@@ -199,25 +204,36 @@ void profileProject(const fs::path& project,const fs::path& rendererBin,const fs
         if(!entity.contains("model"))continue;
         const auto id=entity.at("model").get<std::string>();
         sceneModels.push_back({{"id",id},{"entity",entity.at("id")}});
-        if(entity.contains("modelMaterial")) {usedMaterials.insert(entity.at("modelMaterial").get<std::string>());continue;}
-        if(id.starts_with("builtin:")){usedMaterials.insert(DefaultMaterialId);continue;}
-        const auto manifest=Json::parse(read(root/id));
+        std::vector<std::string> overrides;
+        if(entity.contains("modelMaterials"))overrides=entity.at("modelMaterials").get<std::vector<std::string>>();
+        else if(entity.contains("modelMaterial"))overrides.push_back(entity.at("modelMaterial").get<std::string>());
+        for(const auto& material:overrides)if(!material.empty())usedMaterials.insert(material);
+        if(isEngineAssetId(id)){if(overrides.empty()||overrides.front().empty())usedMaterials.insert(DefaultMaterialId);continue;}
+        const auto manifest=Json::parse(read(resolveAssetPath(root,id)));
         if(manifest.contains("materialAssets")) {
-            for(const auto& value:manifest.at("materialAssets"))usedMaterials.insert(value.get<std::string>());
+            std::size_t slot{};
+            for(const auto& value:manifest.at("materialAssets")) {
+                if(slot>=overrides.size()||overrides[slot].empty())usedMaterials.insert(value.get<std::string>());
+                ++slot;
+            }
         } else {
-            const auto document=Json::parse(read((root/id).parent_path()/manifest.at("document").get<std::string>()));
-            for(std::size_t index=0;index<document.value("materials",Json::array()).size();++index)usedMaterials.insert(importedMaterialId(id,index));
+            const auto document=Json::parse(read(resolveAssetPath(root,id).parent_path()/manifest.at("document").get<std::string>()));
+            for(std::size_t index=0;index<document.value("materials",Json::array()).size();++index)
+                if(index>=overrides.size()||overrides[index].empty())usedMaterials.insert(importedMaterialId(id,index));
         }
     }
     std::vector<fs::path> protectedFiles{sessionFile,sceneFile};
     const auto layout=root/"crimson_ui.ini";if(fs::is_regular_file(layout))protectedFiles.push_back(layout);
     std::vector<std::string> ids;
-    for(const auto& file:fs::directory_iterator(root/"assets/materials"))if(file.path().extension()==".crimson-material") {
+    if(contentStorageReady(root)) {
+        for(const auto& file:storedAssetPaths(root))if(!isEngineAssetId(file.id)&&file.file.extension()==".crimson-material"&&fs::is_regular_file(file.file)) {protectedFiles.push_back(file.file);ids.push_back(file.id);}
+    } else for(const auto& file:fs::directory_iterator(root/"assets/materials"))if(file.path().extension()==".crimson-material") {
         protectedFiles.push_back(file.path());ids.push_back(file.path().lexically_relative(root).generic_string());
     }
     std::sort(ids.begin(),ids.end());
     const auto protectedBefore=fingerprintFiles(protectedFiles);
     std::map<std::string,MaterialGraphShader> unique;
+    std::map<std::string,MaterialAsset> representatives;
     std::set<std::string> sceneTopologies;
     Json materials=Json::array();
     const auto generate=[&](MaterialAsset material,bool active) {
@@ -225,6 +241,7 @@ void profileProject(const fs::path& project,const fs::path& rendererBin,const fs
         materials.push_back({{"id",material.id},{"name",material.name},{"activeScene",active},{"topologyKey",shader.topologyKey},{"generateMs",ms},
             {"variants",shader.variants.size()},{"textureBindings",shader.textures.size()}});
         if(active)sceneTopologies.insert(shader.topologyKey);
+        representatives.try_emplace(shader.topologyKey,std::move(material));
         unique.try_emplace(shader.topologyKey,std::move(shader));
     };
     for(const auto& id:ids)generate(loadMaterialAsset(root,id),usedMaterials.contains(id));
@@ -298,6 +315,90 @@ void profileProject(const fs::path& project,const fs::path& rendererBin,const fs
             }
             report[phase]={{"elapsedMs",milliseconds(stageStart)},{"metrics",metricDifference(before)},{"stages",stages}};
         }
+    }
+    if(edit) {
+        const MaterialGraphShader* representative=nullptr;std::string representativeKey;
+        for(const auto& [key,shader]:unique)if(sceneTopologies.contains(key)) {
+            const auto& material=representatives.at(key);
+            if(materialOutputNode(material.graph).output.shading!=MaterialShading::StandardPbr)continue;
+            if(!representative||shader.textures.size()>representative->textures.size()||
+                (shader.textures.size()==representative->textures.size()&&shader.variants.front().source.size()>representative->variants.front().source.size())) {
+                representative=&shader;representativeKey=key;
+            }
+        }
+        check(representative!=nullptr,"The project has no active lit graph for the edit profile.");
+        auto material=representatives.at(representativeKey);
+        const auto outputId=materialOutputNode(material.graph).id;
+        const auto* link=materialInputLink(material.graph,outputId,MaterialPin::BaseColor);
+        auto baseNode=link?link->fromNode:std::uint64_t{};const auto basePin=link?link->fromPin:MaterialPin::RGB;
+        if(!baseNode)baseNode=addMaterialNode(material.graph,MaterialNodeKind::Color).id;
+        const auto particle=addMaterialNode(material.graph,MaterialNodeKind::ParticleColor).id;
+        const auto factor=addMaterialNode(material.graph,MaterialNodeKind::Scalar).id;
+        const auto tint=addMaterialNode(material.graph,MaterialNodeKind::Multiply).id;
+        const auto multiply=addMaterialNode(material.graph,MaterialNodeKind::Multiply).id;
+        findMaterialNode(material.graph,factor)->scalar=.75f;
+        connectMaterialNodes(material.graph,particle,MaterialPin::RGB,tint,MaterialPin::Left);
+        connectMaterialNodes(material.graph,factor,MaterialPin::Value,tint,MaterialPin::Right);
+        connectMaterialNodes(material.graph,baseNode,basePin,multiply,MaterialPin::Left);
+        connectMaterialNodes(material.graph,tint,MaterialPin::Value,multiply,MaterialPin::Right);
+        connectMaterialNodes(material.graph,multiply,MaterialPin::Value,outputId,MaterialPin::BaseColor);
+        const auto shader=generateMaterialGraphShader(material);
+        check(shader.topologyKey!=representativeKey,"The project edit profile did not change shader topology.");
+        auto editConfig=config;editConfig.cacheDirectory=temporary.root/"edit-cache";
+        auto editBefore=shaderCompilerMetrics();auto editStart=Clock::now();
+        for(const auto& variant:representative->variants) {
+            (void)compileShader(editConfig,variant.vertexName);
+            if(variant.pass!=MaterialGraphPass::Model&&variant.pass!=MaterialGraphPass::Particle)
+                (void)compileShader(editConfig,materialGraphShaderRecipe(editConfig,*representative,variant));
+        }
+        Json editReport{{"materialId",material.id},{"materialName",material.name},{"textureCount",shader.textures.size()},
+            {"baseTopology",representativeKey},{"editedTopology",shader.topologyKey},
+            {"notes","Real active-scene lit material with a new BaseColor multiply expression. A disposable cache is primed only with shared vertices and unchanged coverage; surface stages start cold. Noop timings include CPU compilation and preflight, not native GPU rendering."},
+            {"sharedStagePreparation",{{"elapsedMs",milliseconds(editStart)},{"metrics",metricDifference(editBefore)}}}};
+        {
+            auto fullConfig=editConfig;fullConfig.cacheDirectory=temporary.root/"optimized-only-edit-cache";
+            fs::copy(editConfig.cacheDirectory,fullConfig.cacheDirectory,fs::copy_options::recursive);
+            ResourceManager fullResources;std::vector<ResourceHandle<ShaderBinary>> fullJobs;
+            const auto fullBefore=shaderCompilerMetrics();const auto fullStart=Clock::now();
+            for(const auto& variant:shader.variants) {
+                ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.variant="optimized-only-profile";
+                const auto vertexName=variant.vertexName;
+                fullJobs.push_back(fullResources.request<ShaderBinary>(AssetRef<ShaderBinary>{"profile-vertex:"+vertexName},[fullConfig,vertexName](std::stop_token stop) {
+                    auto binary=std::make_shared<ShaderBinary>(compileShader(fullConfig,vertexName,stop));
+                    return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};
+                },options));
+                const auto recipe=materialGraphShaderRecipe(fullConfig,shader,variant);
+                fullJobs.push_back(fullResources.request<ShaderBinary>(AssetRef<ShaderBinary>{"profile-fragment:"+recipe.name},[fullConfig,recipe](std::stop_token stop) {
+                    auto binary=std::make_shared<ShaderBinary>(compileShader(fullConfig,recipe,stop));
+                    return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};
+                },options));
+            }
+            waitFor([&]{fullResources.pump();return std::all_of(fullJobs.begin(),fullJobs.end(),[](const auto& job) {
+                if(job.state()==ResourceState::Failed)throw std::runtime_error(job.diagnostic());
+                return job.state()==ResourceState::Ready;
+            });},"Optimized-only edit profile did not finish.");
+            MaterialGraphPrograms fullPrograms(fullResources,fullConfig);const auto full=fullPrograms.request(shader);requireComplete(full);
+            check(full.programs->optimized,"Optimized-only edit profile did not publish its full-quality bundle.");
+            editReport["optimizedOnlyFirstCurrent"]={{"elapsedMs",milliseconds(fullStart)},{"metrics",metricDifference(fullBefore)}};
+            fullResources.stop();
+        }
+        ResourceManager resources;MaterialGraphPrograms programs(resources,editConfig);
+        editBefore=shaderCompilerMetrics();editStart=Clock::now();
+        auto first=waitForResult(resources,programs,shader,false);requireComplete(first);
+        editReport["firstCurrent"]={{"elapsedMs",milliseconds(editStart)},{"optimized",first.programs->optimized},{"metrics",metricDifference(editBefore)}};
+        findMaterialNode(material.graph,factor)->scalar=.9f;const auto parameterShader=generateMaterialGraphShader(material);
+        const auto parameterBefore=shaderCompilerMetrics();const auto parameterStart=Clock::now();
+        const auto parameterResult=programs.request(parameterShader,ResourcePriority::Selected);
+        check(parameterResult.current&&parameterResult.programs==first.programs,"Parameter edit did not reuse the current interactive packet.");
+        editReport["parameterEdit"]={{"elapsedMs",milliseconds(parameterStart)},{"samePrograms",parameterResult.programs==first.programs},{"metrics",metricDifference(parameterBefore)}};
+        auto optimized=waitForResult(resources,programs,shader);requireComplete(optimized);
+        check(optimized.programs->optimized,"Project edit profiling did not finish background optimization.");
+        editReport["optimizedCurrent"]={{"elapsedMs",milliseconds(editStart)},{"metrics",metricDifference(editBefore)}};
+        const auto warmBefore=shaderCompilerMetrics();const auto warmStart=Clock::now();const auto warmStats=resources.stats();
+        MaterialGraphPrograms warm(resources,editConfig);const auto warmed=warm.request(shader);
+        check(warmed.current&&warmed.programs->optimized&&resources.stats().queued==warmStats.queued,"Optimized project edit did not reopen immediately from its complete cache.");
+        editReport["warmOptimized"]={{"elapsedMs",milliseconds(warmStart)},{"queuedJobs",resources.stats().queued-warmStats.queued},{"metrics",metricDifference(warmBefore)}};
+        resources.stop();report["interactiveEdit"]=std::move(editReport);
     }
     report["authoredFilesUnchanged"]=fingerprintFiles(protectedFiles)==protectedBefore;
     check(report["authoredFilesUnchanged"].get<bool>(),"Authored files changed during project profiling.");
@@ -391,11 +492,92 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                 const auto before=resources.stats();
                 MaterialGraphPrograms reopened(resources,config);
                 const auto hydrated=reopened.request(shader);requireComplete(hydrated);
-                check(!hydrated.compiling&&hydrated.programs->signature==first.programs->signature,
+                check(!hydrated.compiling&&hydrated.programs->optimized&&hydrated.programs->signature==first.programs->signature,
                     "Reopened material changed its exact compiled program bundle.");
                 check(resources.stats().queued==before.queued&&resources.stats().loads==before.loads,
                     "Warm material startup queued resource work instead of using its persistent bundle.");
+                auto structural=material;
+                const auto texture=std::find_if(structural.graph.nodes.begin(),structural.graph.nodes.end(),[](const auto& node){return node.kind==MaterialNodeKind::Texture2D;})->id;
+                const auto factor=addMaterialNode(structural.graph,MaterialNodeKind::Scalar).id;
+                const auto multiply=addMaterialNode(structural.graph,MaterialNodeKind::Multiply).id;
+                findMaterialNode(structural.graph,factor)->scalar=.4f;
+                connectMaterialNodes(structural.graph,texture,MaterialPin::RGB,multiply,MaterialPin::Left);
+                connectMaterialNodes(structural.graph,factor,MaterialPin::Value,multiply,MaterialPin::Right);
+                connectMaterialNodes(structural.graph,multiply,MaterialPin::Value,materialOutputNode(structural.graph).id,MaterialPin::BaseColor);
+                const auto structuralShader=generateMaterialGraphShader(structural);
+                check(structuralShader.topologyKey!=shader.topologyKey,"Structural shader fixture did not change its surface topology.");
+                auto structuralOwner=programs.createSibling();
+                const auto dependencyBefore=shaderCompilerMetrics().dependencyRequests;
+                check(structuralOwner->sourceDependencies()==programs.sourceDependencies(),"Sibling programs disagree about the shared shader source family.");
+                check(shaderCompilerMetrics().dependencyRequests==dependencyBefore,"Sibling programs rescanned an unchanged source dependency family.");
+                const auto structuralBefore=shaderCompilerMetrics();const auto queuedBefore=resources.stats().queued;
+                const auto structuralPending=structuralOwner->request(structuralShader,ResourcePriority::Selected);
+                check(!structuralPending.current&&structuralPending.compiling&&!structuralPending.programs,
+                    "A partially cached structural edit published an incomplete program generation.");
+                check(resources.stats().queued==queuedBefore+2,"Surface edit queued unchanged vertex, picking or shadow shaders.");
+                const auto structuralAfter=shaderCompilerMetrics();
+                check(structuralAfter.cacheOnlyHits==structuralBefore.cacheOnlyHits+8,
+                    "Surface edit failed to reuse cached vertices and its three unchanged coverage passes.");
+                check(structuralAfter.dependencyRequests==structuralBefore.dependencyRequests+12,
+                    "Surface edit repeated dependency walks after its cache lookup.");
                 warmGate->released=true;
+                const auto interactive=waitForResult(resources,*structuralOwner,structuralShader,false);requireComplete(interactive);
+                check(!interactive.programs->optimized,"A new surface skipped its complete interactive generation.");
+                auto parameters=structural;findMaterialNode(parameters.graph,factor)->scalar=.6f;
+                const auto parameterShader=generateMaterialGraphShader(parameters);
+                const auto parameterMetrics=shaderCompilerMetrics();const auto parameterStats=resources.stats();
+                const auto parameterResult=structuralOwner->request(parameterShader,ResourcePriority::Selected);
+                check(parameterResult.current&&parameterResult.programs==interactive.programs&&
+                    resources.stats().queued==parameterStats.queued&&shaderCompilerMetrics().compilerInvocations==parameterMetrics.compilerInvocations,
+                    "A parameter edit replaced or recompiled an interactive complete generation.");
+                {
+                    waitFor([&]{resources.pump();return resources.idle();},"Interactive shader jobs did not retire before the optimization gate.");
+                    auto optimizeGate=std::make_shared<WorkerGate>();
+                    auto optimizeBlocker=resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"optimization-worker-gate"},[optimizeGate](std::stop_token stop) {
+                        optimizeGate->entered=true;while(!optimizeGate->released&&!stop.stop_requested())std::this_thread::sleep_for(1ms);
+                        return ResourceLoadResult<ShaderBinary>{std::make_shared<ShaderBinary>(),0,1,{}};
+                    },options);
+                    waitFor([&]{return optimizeGate->entered.load();},"Could not establish the background optimization gate.");
+                    auto secondOwner=structuralOwner->createSibling();const auto secondInteractive=secondOwner->request(structuralShader);
+                    check(secondInteractive.current&&!secondInteractive.programs->optimized,"Sibling did not reuse the complete interactive disk cache.");
+                    waitFor([&]{const auto result=structuralOwner->request(structuralShader);return result.current&&result.compiling;},
+                        "A settled interactive generation did not queue background optimization.");
+                    const auto optimizeQueued=resources.stats().queued;
+                    const auto secondOptimizing=secondOwner->request(structuralShader);
+                    check(secondOptimizing.current&&secondOptimizing.compiling&&optimizeQueued==2&&resources.stats().queued==optimizeQueued,
+                        "Sibling owners duplicated the same expensive optimized shader inputs.");
+                    secondOwner.reset();
+                    auto superseding=structural;
+                    const auto extraFactor=addMaterialNode(superseding.graph,MaterialNodeKind::Scalar).id;
+                    const auto extraMultiply=addMaterialNode(superseding.graph,MaterialNodeKind::Multiply).id;
+                    findMaterialNode(superseding.graph,extraFactor)->scalar=.8f;
+                    connectMaterialNodes(superseding.graph,multiply,MaterialPin::Value,extraMultiply,MaterialPin::Left);
+                    connectMaterialNodes(superseding.graph,extraFactor,MaterialPin::Value,extraMultiply,MaterialPin::Right);
+                    connectMaterialNodes(superseding.graph,extraMultiply,MaterialPin::Value,materialOutputNode(superseding.graph).id,MaterialPin::BaseColor);
+                    const auto supersedingShader=generateMaterialGraphShader(superseding);auto foregroundOwner=programs.createSibling();
+                    const auto cancellationMetrics=shaderCompilerMetrics();
+                    const auto foregroundPending=foregroundOwner->request(supersedingShader,ResourcePriority::Selected);
+                    check(!foregroundPending.current&&foregroundPending.compiling,"A new foreground topology did not start its interactive batch.");
+                    const auto canceled=structuralOwner->request(structuralShader);
+                    check(canceled.current&&!canceled.compiling&&canceled.programs==interactive.programs,
+                        "Interrupting background optimization discarded or blocked the last complete interactive generation.");
+                    optimizeGate->released=true;
+                    const auto foregroundReady=waitForResult(resources,*foregroundOwner,supersedingShader,false);requireComplete(foregroundReady);
+                    waitFor([&]{resources.pump();return resources.idle();},"Canceled background shader work did not drain.");
+                    check(shaderCompilerMetrics().compilerInvocations==cancellationMetrics.compilerInvocations+2,
+                        "Superseded background optimization launched shaderc ahead of the two foreground fragment jobs.");
+                }
+                const auto updated=waitForResult(resources,*structuralOwner,structuralShader);requireComplete(updated);
+                check(updated.programs->optimized&&updated.programs!=interactive.programs&&updated.programs->signature!=interactive.programs->signature,
+                    "Background optimization did not atomically replace the complete interactive generation.");
+                for(const auto pass:{MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::DirectionalShadow})
+                    check(updated.programs->programs[static_cast<std::size_t>(pass)].idx==first.programs->programs[static_cast<std::size_t>(pass)].idx,
+                        "Surface edit replaced an unchanged complete coverage pass.");
+                const auto optimizedBefore=resources.stats();const auto optimizedMetrics=shaderCompilerMetrics();
+                auto optimizedOwner=programs.createSibling();const auto optimizedWarm=optimizedOwner->request(structuralShader);
+                check(optimizedWarm.current&&optimizedWarm.programs->optimized&&!optimizedWarm.compiling&&
+                    resources.stats().queued==optimizedBefore.queued&&shaderCompilerMetrics().compilerInvocations==optimizedMetrics.compilerInvocations,
+                    "Warm material reopening preferred an interactive tier or queued optimization despite its complete optimized cache.");
                 waitFor([&]{resources.pump();return resources.idle();},"Warm-start test worker did not finish.");
             }
             {
@@ -485,11 +667,13 @@ int main(int argc,char** argv) {
     try {
         const bool profile=argc>=2&&std::string(argv[1])=="--profile-project";
         const bool engine=argc>=2&&std::string(argv[1])=="--profile-engine";
-        check(profile?(argc==5||argc==6):engine?argc==5:argc==4,"Expected shaderc/source/include, --profile-project projectRoot rendererBin output.json [--cold], or --profile-engine projectRoot rendererBin output.json.");
+        const bool edit=argc>=2&&std::string(argv[1])=="--profile-edit";
+        check(profile?(argc==5||argc==6):(engine||edit)?argc==5:argc==4,"Expected shaderc/source/include, --profile-project projectRoot rendererBin output.json [--cold], --profile-edit projectRoot rendererBin output.json, or --profile-engine projectRoot rendererBin output.json.");
         bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
         check(bgfx::init(init),"Could not initialize headless Noop graphics checks.");initialized=true;
         if(profile)profileProject(argv[2],argv[3],argv[4],argc==6&&std::string(argv[5])=="--cold");
         else if(engine)profileEngine(argv[2],argv[3],argv[4]);
+        else if(edit)profileProject(argv[2],argv[3],argv[4],false,true);
         else {preparedSignatureChecks();publicationChecks(argv[1],argv[2],argv[3]);}
         bgfx::shutdown();initialized=false;
         std::cout<<"Headless material shader publication, epoch, recovery and lease checks passed.\n";return 0;

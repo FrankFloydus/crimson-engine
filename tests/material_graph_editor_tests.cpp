@@ -1,3 +1,4 @@
+#include "resources/AssetId.h"
 #include "editor/MaterialDocument.h"
 #include "tools/MaterialGraphEditor.h"
 #include <imgui.h>
@@ -12,6 +13,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <source_location>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -462,8 +464,10 @@ struct GraphUi {
         ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl,false);frame(2);
     }
     std::string snapshot() const {return serializeMaterialAsset(document.definition());}
-    void oneUndo(const std::string& before) {
-        const auto after=snapshot();require(after!=before&&!document.transactionActive(),"Graph command did not finish its document transaction.");
+    void oneUndo(const std::string& before,std::source_location location=std::source_location::current()) {
+        const auto after=snapshot();
+        if(after==before||document.transactionActive())throw std::runtime_error(std::string(location.function_name())+":"+std::to_string(location.line())+
+            (after==before?" graph gesture did not change the document.":" graph gesture left an unfinished document transaction."));
         require(document.undo()&&snapshot()==before,"Graph command changed more than one undo step or lost previous data.");frame(2);
         require(document.redo()&&snapshot()==after,"Graph command failed to redo its complete result.");frame(2);
     }
@@ -756,7 +760,7 @@ void textureCanvasDrops() {
     GraphUi ui;MaterialNodeId output{};
     require(ui.document.edit("Drop fixture",[&](auto& asset){asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{}).id;})&&ui.document.save(),
         "Could not configure texture drop fixture.");
-    ui.assets.validTexture=[](const std::string& id){return id=="assets/textures/a.png"||id=="assets/textures/b.png";};
+    ui.assets.validTexture=[](const std::string& id){return id==canonicalAssetId("assets/textures/a.png")||id==canonicalAssetId("assets/textures/b.png");};
     ui.assets.describe=[](const std::string& id){return MaterialGraphEditor::TexturePresentation{id,7,256,128,true};};
     ui.frame(5);auto& io=ImGui::GetIO();ui.move(ui.emptyPoint());
     io.AddMouseWheelEvent(0,-3);ui.frame(24);
@@ -767,8 +771,8 @@ void textureCanvasDrops() {
         ui.move(target);ui.payloadType=type;ui.payloadBytes=std::move(bytes);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame(3);
         io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame();ui.payloadType.clear();ui.payloadBytes.clear();ui.frame(3);
     };
-    const auto payload=[](std::initializer_list<const char*> ids) {std::string bytes;for(const auto* id:ids){bytes+=id;bytes+='\0';}return bytes;};
-    drop("CC_TEXTURE_ASSETS",payload({"assets/textures/a.png","assets/textures/b.png"}),position);
+    const auto payload=[](std::initializer_list<std::string> ids) {std::string bytes;for(const auto& id:ids){bytes+=id;bytes+='\0';}return bytes;};
+    drop("CC_TEXTURE_ASSETS",payload({canonicalAssetId("assets/textures/a.png"),canonicalAssetId("assets/textures/b.png")}),position);
     const auto& graph=ui.document.definition().graph;
     require(graph.nodes.size()==3,"A texture batch did not create exactly two nodes.");
     for(size_t index=1;index<graph.nodes.size();++index) {
@@ -777,11 +781,11 @@ void textureCanvasDrops() {
             std::abs(node.position[0]-expected[0]-offset)<.1f&&std::abs(node.position[1]-expected[1]-offset)<.1f,
             "Texture batch drop applied pan/zoom coordinates incorrectly or lost its 32-unit spacing.");
     }
-    require(graph.nodes[1].texture.image.id=="assets/textures/a.png"&&graph.nodes[2].texture.image.id=="assets/textures/b.png",
+    require(graph.nodes[1].texture.image.id==canonicalAssetId("assets/textures/a.png")&&graph.nodes[2].texture.image.id==canonicalAssetId("assets/textures/b.png"),
         "Dropped Texture 2D nodes did not retain the delivered image identities.");
     ui.oneUndo(before);require(ui.document.undo(),"Could not restore dropped texture fixture.");ui.frame(2);
     const auto stable=ui.snapshot();const auto revision=ui.document.revision();
-    drop("CC_TEXTURE_ASSETS",payload({"assets/textures/a.png","assets/textures/missing.png"}),ui.emptyPoint());
+    drop("CC_TEXTURE_ASSETS",payload({canonicalAssetId("assets/textures/a.png"),canonicalAssetId("assets/textures/missing.png")}),ui.emptyPoint());
     require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Invalid batch partially created texture nodes.");
     drop("CC_TEXTURE_ASSET","unterminated",ui.emptyPoint());
     require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Malformed image payload changed the graph.");
@@ -798,7 +802,7 @@ void boundedTextureLabelsAndScalarMapGestures() {
         metallic=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D,{-300,200}).id;
         for(const auto id:{roughness,metallic}) {
             auto* node=findMaterialNode(asset.graph,id);node->texture.role=MaterialTextureRole::Data;
-            node->texture.image.id="assets/textures/map-"+std::to_string(id)+".png";
+            node->texture.image.id=canonicalAssetId("assets/textures/map-"+std::to_string(id)+".png");
         }
     })&&ui.document.save(),"Could not configure long-name scalar map fixture.");
     ui.assets.describe=[&](const std::string&) {
@@ -927,12 +931,13 @@ void inlineDefaultsAndOpacityActivation() {
 }
 
 void inlineComboPopupCoordinates() {
-    GraphUi ui;MaterialNodeId mapping{},texture{};
+    GraphUi ui;MaterialNodeId mapping{},texture{},grunge{};
     require(ui.document.edit("Dropdown fixture",[&](auto& asset) {
         asset.graph={};auto& output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0}).output;
         output.shading=MaterialShading::Unlit;output.blend=MaterialBlend::Additive;
         mapping=addMaterialNode(asset.graph,MaterialNodeKind::UV,{-400,0}).id;
         texture=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D,{0,0}).id;
+        grunge=addMaterialNode(asset.graph,MaterialNodeKind::Grunge,{0,350}).id;
     })&&ui.document.save(),"Could not configure dropdown fixture.");
     ui.frame(5);auto& io=ImGui::GetIO();ui.move(ui.emptyPoint());io.AddMouseWheelEvent(0,-2);ui.frame(24);
     const auto anchor=ui.emptyPoint();io.AddMouseButtonEvent(ImGuiMouseButton_Right,true);ui.frame();ui.move({anchor.x-70,anchor.y+20});
@@ -952,9 +957,11 @@ void inlineComboPopupCoordinates() {
         require(!ui.popup()&&!ui.document.transactionActive(),"Selecting a dropdown option left its popup or transaction open.");
         const auto* node=findMaterialNode(ui.document.definition().graph,id);
         require(id==mapping?node->uv.mode==MaterialUvMode::WorldTriplanar:node->texture.role==MaterialTextureRole::Normal,
-            "Unlit Additive material lost access to full mapping or Normal sample choices.");
+            "Material lost access to mapping or sample choices.");
         ui.oneUndo(before);
     }
+    require(std::none_of(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& item){return item.node==grunge;}),
+        "Grunge still exposed an exclusive Style selector instead of independent layers.");
     // The custom screen-space anchor must still flip/clamp at a viewport edge.
     io.DisplaySize={1700,1090};ui.frame(3);
     const auto combo=std::find_if(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& item){return item.node==mapping;});
@@ -1080,15 +1087,15 @@ void commonParticleSourceNodes() {
 
 void saturateInlineInput() {
     GraphUi ui;MaterialNodeId scalar{};
-    require(ui.document.edit("Saturate fixture",[&](auto& asset) {
+    require(ui.document.edit("Clamp fixture",[&](auto& asset) {
         asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{400,0});
         scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-400,0}).id;
-    })&&ui.document.save(),"Could not configure Saturate fixture.");ui.frame(5);
-    const auto beforeCreate=ui.snapshot();ui.openAdd();ui.text("clamp");ui.key(ImGuiKey_Enter);
+    })&&ui.document.save(),"Could not configure Clamp fixture.");ui.frame(5);
+    const auto beforeCreate=ui.snapshot();ui.openAdd();ui.text("saturate");ui.key(ImGuiKey_Enter);
     const auto saturate=ui.editor.selectedNode();
     require(!ui.popup()&&findMaterialNode(ui.document.definition().graph,saturate)&&
-        findMaterialNode(ui.document.definition().graph,saturate)->kind==MaterialNodeKind::Saturate,
-        "Clamp alias did not create Saturate.");ui.oneUndo(beforeCreate);
+        findMaterialNode(ui.document.definition().graph,saturate)->kind==MaterialNodeKind::Clamp&&findMaterialNode(ui.document.definition().graph,saturate)->name=="Clamp",
+        "The Saturate search alias did not create the renamed Clamp node.");ui.oneUndo(beforeCreate);
     ui.move(ui.emptyPoint());ui.key(ImGuiKey_Home);ui.frame(24);
     const auto hasField=[&] {return std::any_of(ui.editor.presentation().fields.begin(),ui.editor.presentation().fields.end(),
         [&](const auto& field){return field.node==saturate&&field.pin==MaterialPin::Left;});};
@@ -1153,6 +1160,160 @@ void requestedMathAndRuntimeNodes() {
     ui.select({panner});ui.shortcut(ImGuiKey_P);
     require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{panner,MaterialPin::UV},"Panner did not select its Mapping checker preview.");
 }
+void imageAdjustmentAndGrungeControls() {
+    GraphUi ui;MaterialNodeId desaturation{},hue{},scalar{};
+    require(ui.document.edit("Image tool controls",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{700,0});
+        desaturation=addMaterialNode(asset.graph,MaterialNodeKind::Desaturation,{-100,-210}).id;
+        hue=addMaterialNode(asset.graph,MaterialNodeKind::HueShift,{-100,100}).id;
+        scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-500,-180}).id;
+    })&&ui.document.save(),"Could not configure image tool controls.");ui.frame(5);
+    const std::array<std::pair<const char*,MaterialNodeKind>,5> searches{{{"desaturation",MaterialNodeKind::Desaturation},
+        {"black white",MaterialNodeKind::Contrast},{"contrastrgb",MaterialNodeKind::ContrastRGB},
+        {"hue shift",MaterialNodeKind::HueShift},{"grunge",MaterialNodeKind::Grunge}}};
+    for(const auto& [alias,kind]:searches) {
+        const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
+        const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
+        require(created&&created->kind==kind&&!ui.popup(),"An image adjustment or Grunge search alias was unavailable.");
+        ui.oneUndo(before);require(ui.document.undo(),"Could not remove searched image tool.");ui.frame(2);
+    }
+    const auto field=[&](MaterialNodeId node,MaterialPin pin)->std::optional<MaterialGraphEditor::FieldPresentation> {
+        for(const auto& value:ui.editor.presentation().fields)if(value.node==node&&value.pin==pin)return value;
+        return {};
+    };
+    const auto point=[&](MaterialNodeId node,MaterialPin pin) {
+        const auto value=field(node,pin);require(value.has_value(),"Image tool fallback editor was not presented.");
+        return ImVec2{(value->minimum[0]+value->maximum[0])*.5f,(value->minimum[1]+value->maximum[1])*.5f};
+    };
+    require(field(desaturation,MaterialPin::Left)&&field(desaturation,MaterialPin::Right)&&field(hue,MaterialPin::Right),
+        "Disconnected image adjustments did not expose their color and amount defaults.");
+    const auto beforeColor=ui.snapshot();ui.click(point(desaturation,MaterialPin::Left));
+    require(ui.popup()&&ui.snapshot()==beforeColor&&!ui.document.transactionActive(),"Opening an adjustment color picker changed its authored fallback.");
+    ui.key(ImGuiKey_Escape);require(!ui.popup()&&ui.snapshot()==beforeColor,"Cancelling an adjustment color picker changed its fallback.");
+    auto amountPoint=point(desaturation,MaterialPin::Right);const auto beforeAmount=ui.snapshot();
+    ui.drag(amountPoint,{amountPoint.x+25,amountPoint.y});
+    const auto amount=findMaterialNode(ui.document.definition().graph,desaturation)->right.value[0];
+    require(amount>1&&amount<=2,"Desaturation's inline saturation amount was not editable above one.");ui.oneUndo(beforeAmount);
+    ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(desaturation,MaterialPin::Right,true));
+    require(!field(desaturation,MaterialPin::Right)&&findMaterialNode(ui.document.definition().graph,desaturation)->right.value[0]==amount,
+        "Connected adjustment amount did not hide and retain its authored default.");
+    auto& io=ImGui::GetIO();io.AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(desaturation,MaterialPin::Right,true));
+    io.AddKeyEvent(ImGuiMod_Alt,false);ui.frame(2);
+    require(field(desaturation,MaterialPin::Right)&&findMaterialNode(ui.document.definition().graph,desaturation)->right.value[0]==amount,
+        "Disconnecting an adjustment amount did not restore its retained default.");
+    const auto beforeCancel=ui.snapshot();amountPoint=point(hue,MaterialPin::Right);ui.move(amountPoint);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move({amountPoint.x+25,amountPoint.y});
+    require(ui.document.transactionActive()&&findMaterialNode(ui.document.definition().graph,hue)->right.value[0]>0,"Hue degrees did not begin an inline edit.");
+    ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+    require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Cancelling HueShift did not restore its exact degrees.");
+    require(ui.editor.status().empty(),"Image adjustment controls left an editor diagnostic.");
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+void grungeParameterControls() {
+    GraphUi ui;MaterialNodeId grunge{};
+    require(ui.document.edit("Grunge numeric controls",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{400,0});
+        grunge=addMaterialNode(asset.graph,MaterialNodeKind::Grunge,{-100,0}).id;
+    })&&ui.document.save(),"Could not configure Grunge numeric controls.");ui.frame(24);
+    const auto grungePoint=[&](const char* label,float fraction=.25f,bool slider=false) {
+        const auto& presentation=ui.editor.presentation();
+        for(const auto& control:presentation.controls)if(control.node==grunge&&control.label==label) {
+            // A Slider's item rectangle includes its trailing label. Target
+            // the actual frame in screen coordinates, accounting for zoom.
+            const float labelWidth=slider?(ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemInnerSpacing.x)*presentation.zoom:0.f;
+            const float frameWidth=control.maximum[0]-control.minimum[0]-labelWidth;
+            require(frameWidth>0,"Grunge slider frame has no clickable width.");
+            const ImVec2 point{control.minimum[0]+frameWidth*fraction,(control.minimum[1]+control.maximum[1])*.5f};
+            if(point.x<=presentation.canvasMinimum[0]||point.y<=presentation.canvasMinimum[1]||
+                point.x>=presentation.canvasMaximum[0]||point.y>=presentation.canvasMaximum[1])
+                throw std::runtime_error(std::string("Grunge fixture control is outside the visible canvas: ")+label);
+            return point;
+        }
+        throw std::runtime_error(std::string("Grunge control was not presented: ")+label);
+    };
+    const auto normalizedValue=[&](const std::string& label) {
+        const auto& value=findMaterialNode(ui.document.definition().graph,grunge)->grunge;
+        if(label=="Seed")return value.seed/65535.f;
+        if(label=="Tiling")return (value.tiling-1)/63.f;
+        if(label=="Coverage")return value.coverage;
+        if(label=="Disorder")return value.disorder;
+        if(label=="Detail")return value.detail;
+        if(label=="Base Noisiness")return value.baseNoisiness;
+        if(label=="Dirt Specks Opacity")return value.dirtSpecksOpacity;
+        if(label=="Stains Opacity")return value.stainsOpacity;
+        if(label=="Scratches Opacity")return value.scratchesOpacity;
+        if(label=="Leaks Opacity")return value.leaksOpacity;
+        if(label=="Sharpen")return value.sharpen;
+        if(label=="Large Variation Intensity")return value.largeVariationIntensity;
+        throw std::runtime_error("Unknown Grunge slider in fixture: "+label);
+    };
+    for(const auto* label:{"Seed","Tiling","Coverage","Disorder","Detail"}) {
+        const auto before=ui.snapshot();ui.click(grungePoint(label,normalizedValue(label)<.5f?.9f:.1f,true));
+        if(ui.snapshot()==before)throw std::runtime_error(std::string("Grunge numeric control did not respond: ")+label);
+        ui.oneUndo(before);
+    }
+    const auto& settings=findMaterialNode(ui.document.definition().graph,grunge)->grunge;
+    if(!(settings.seed!=0&&settings.tiling!=1&&settings.coverage!=.5f&&settings.disorder!=.5f&&settings.detail!=.5f))
+        throw std::runtime_error("Grunge settings: "+std::to_string(settings.seed)+","+std::to_string(settings.tiling)+","+std::to_string(settings.coverage)+","+std::to_string(settings.disorder)+","+std::to_string(settings.detail));
+    const auto beforeLayers=ui.snapshot();ui.click(grungePoint("Layers"));
+    require(ui.snapshot()==beforeLayers&&!ui.document.transactionActive(),"Expanding Grunge layers changed authored values.");
+    // Expanding the layer rows changes the node's bounds. Reframe the expanded
+    // content before clicking the lowest control rather than sending input
+    // beyond the graph's clipped canvas at the previous navigation scale.
+    ui.key(ImGuiKey_Home);ui.frame(24);
+    for(const auto* label:{"Base Noisiness","Dirt Specks Opacity","Stains Opacity","Scratches Opacity","Leaks Opacity","Sharpen","Large Variation Intensity","Invert Dirt"}) {
+        const bool checkbox=std::string(label)=="Invert Dirt";
+        const auto before=ui.snapshot();ui.click(checkbox?grungePoint(label):grungePoint(label,normalizedValue(label)<.5f?.9f:.1f,true));
+        if(ui.snapshot()==before)throw std::runtime_error(std::string("Grunge layer control did not respond: ")+label);
+        ui.oneUndo(before);
+    }
+    auto& io=ImGui::GetIO();
+    for(const auto* label:{"Base Noisiness","Dirt Specks Opacity","Stains Opacity","Scratches Opacity","Leaks Opacity","Sharpen","Large Variation Intensity"}) {
+        const auto beforeCancel=ui.snapshot();const auto target=normalizedValue(label)<.5f?.9f:.1f;ui.move(grungePoint(label,.5f,true));
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move(grungePoint(label,target,true));
+        require(ui.document.transactionActive()&&ui.snapshot()!=beforeCancel,"Grunge layer drag did not begin and change an owned edit.");
+        ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+        require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Cancelling a Grunge layer edit failed to restore its exact settings.");
+    }
+    const auto beforePreview=ui.snapshot();const auto revision=ui.document.revision();ui.select({grunge});ui.shortcut(ImGuiKey_P);
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{grunge,MaterialPin::Value}&&ui.snapshot()==beforePreview&&ui.document.revision()==revision,
+        "Grunge grayscale node preview changed authored material state.");
+    require(ui.editor.status().empty(),"Grunge controls left an editor diagnostic.");
+}
+void grungeGeneratedImagePresentation() {
+    GraphUi ui;MaterialNodeId grunge{};
+    require(ui.document.edit("Generated Grunge image",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});
+        grunge=addMaterialNode(asset.graph,MaterialNodeKind::Grunge,{-100,0}).id;
+        findMaterialNode(asset.graph,grunge)->grunge.tiling=3;
+    })&&ui.document.save(),"Could not configure generated Grunge image.");
+    bool ready=true;unsigned requests{};
+    auto lease=std::make_shared<int>(17);const std::weak_ptr<int> retained=lease;
+    ui.assets.generatedTexture=[&](const MaterialNode& node) {
+        require(node.kind==MaterialNodeKind::Grunge&&node.grunge.tiling==3,"Generated image request lost its authored Grunge settings.");++requests;
+        MaterialGraphEditor::TexturePresentation result;result.width=result.height=256;result.available=ready;
+        if(ready){result.textureId=77;result.lease=lease;}else result.diagnostic="Generating texture...";
+        return result;
+    };
+    const auto before=ui.snapshot();const auto revision=ui.document.revision();ui.frame(24);
+    require(requests>0&&ui.editor.presentation().images.size()==1,"Grunge did not request and present its generated image.");
+    const auto image=ui.editor.presentation().images.front();
+    require(image.node==grunge&&image.textureId==77&&image.maximum[0]>image.minimum[0]&&
+        std::abs((image.maximum[0]-image.minimum[0])-(image.maximum[1]-image.minimum[1]))<.01f,"Grunge image was absent or lost its square aspect.");
+    bool imageCommand=false,repeatCoordinates=false;
+    for(const auto* list:ImGui::GetDrawData()->CmdLists)for(const auto& command:list->CmdBuffer)if(!command.UserCallback&&command.GetTexID()==77) {
+        imageCommand=true;
+        for(unsigned index=0;index<command.ElemCount;++index) {
+            const auto& vertex=list->VtxBuffer[static_cast<int>(command.VtxOffset+list->IdxBuffer[static_cast<int>(command.IdxOffset+index)])];
+            repeatCoordinates|=vertex.uv.x==3&&vertex.uv.y==3;
+        }
+    }
+    require(imageCommand&&repeatCoordinates,"Grunge image draw data did not use the generated texture and authored Tiling.");
+    require(ui.snapshot()==before&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Presenting generated Grunge pixels changed the material.");
+    ready=false;lease.reset();ui.frame(3);
+    require(!retained.expired()&&ui.editor.presentation().images.front().textureId==77,"A pending Grunge generation discarded its leased last usable image.");
+    require(ui.document.edit("Delete generated node",[&](auto& asset){removeMaterialNode(asset.graph,grunge);}),"Could not delete generated Grunge node.");ui.frame(3);
+    require(retained.expired()&&ui.editor.presentation().images.empty(),"Deleting Grunge retained its generated image lease or presentation.");
+}
+}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

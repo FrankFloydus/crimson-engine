@@ -19,6 +19,7 @@ public:
     explicit MaterialDocument(std::filesystem::path projectRoot);
     bool isOpen() const { return open_; }
     const std::string& assetId() const { return working_.id; }
+    const std::filesystem::path& projectRoot() const { return root_; }
     const MaterialAsset& definition() const { return working_; }
     const std::shared_ptr<const MaterialAsset>& committed() const { return committed_; }
     uint64_t revision() const { return revision_; }

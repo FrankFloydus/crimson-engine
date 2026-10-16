@@ -11,7 +11,7 @@
 namespace crimson {
 void drawPlayerLightRigOverlay(ImDrawList& draw,const PlayerLightRigSettings& settings,const CharacterRevealSettings& reveal,
     const Vec3& characterPosition,float characterHeight,const Mat4& viewProjection,const Vec4& viewport,ClipDepth depth) {
-    if((!settings.enabled&&!reveal.enabled) || !math::finite(viewport) || viewport[2]<=0 || viewport[3]<=0)return;
+    if(!settings.showGizmos || (!settings.enabled&&!reveal.enabled) || !math::finite(viewport) || viewport[2]<=0 || viewport[3]<=0)return;
     const auto rig=evaluatePlayerLightRig(settings,characterPosition,{},{});
     if(!rig.valid())return;
     draw.PushClipRect({viewport[0],viewport[1]},{viewport[0]+viewport[2],viewport[1]+viewport[3]},true);

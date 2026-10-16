@@ -2,6 +2,8 @@
 #include "ShaderRuntimePaths.h"
 #include "EditorSession.h"
 #include "assets/AssetLibrary.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "resources/FileWatcher.h"
@@ -27,7 +29,7 @@ ShaderCompileConfig shaderConfig(const std::filesystem::path& root) {
     std::error_code error;
     const bool liveComplete=std::filesystem::is_directory(live.sources,error)&&std::filesystem::is_directory(live.includes,error);
     const auto selected=selectShaderRuntimePaths(development,live,staged,liveComplete);
-    return {std::filesystem::path(CC_SHADERC_PATH),selected.sources,selected.includes,root/"assets"/"cache"/"shaders"};
+    return {std::filesystem::path(CC_SHADERC_PATH),selected.sources,selected.includes,resolveAssetPath(root,"assets/cache/shaders")};
 }
 std::uint64_t fingerprint(const std::filesystem::path& file) {
     std::error_code error;if(!std::filesystem::is_regular_file(file,error))return 0;
@@ -45,14 +47,41 @@ struct ResourceRuntime::Impl {
     MaterialGraphPrograms materialPrograms;
     std::unordered_map<std::string,AssetKind> catalog;
     std::unordered_map<std::string,std::uint64_t> ownFingerprints;
+    std::unordered_map<std::string,std::filesystem::path> locations;
+    std::uint64_t storageRevision{};
+    std::uint64_t catalogRevision{};
     std::string error;
-    bool stopped{};
+    bool stopped{},storageBlocked{};
     Impl(const std::filesystem::path& project,ResourceManager& manager,AssetLibrary& library,Renderer& graphics,ImGuiBgfx& tools)
         :root(std::filesystem::absolute(project).lexically_normal()),resources(manager),assets(library),renderer(graphics),
         shaderCompile(shaderConfig(root)),watcher(shaderRuntimeWatchedRoots(root,{shaderCompile.sourceDirectory,shaderCompile.includeDirectory})),
         shaders(manager,graphics,tools,shaderCompile,EmbeddedShaderSourceBaseline),materialPrograms(manager,shaderCompile) {
         assets.setMaterialGraphPrograms(&materialPrograms);
         for(const auto& entry:assets.catalog())catalog.emplace(entry.id,entry.kind);
+        catalogRevision=assets.catalogRevision();
+        storageRevision=contentStorageRevision(root);
+        for(const auto& entry:storedAssetPaths(root))locations.emplace(entry.id,entry.file);
+    }
+    bool managedFile(const std::filesystem::path& file) const {
+        if(contentStorageReady(root))return inside(file,root/"Content") || inside(file,root/"Engine") || inside(file,root/".crimson");
+        return inside(file,root/"assets") && !inside(file,root/"assets"/"branding");
+    }
+    std::vector<std::filesystem::path> observeLocations() {
+        const auto revision=contentStorageRevision(root);
+        if(revision==storageRevision)return {};
+        storageRevision=revision;
+        std::unordered_map<std::string,std::filesystem::path> next;
+        std::vector<std::filesystem::path> changed;
+        for(const auto& entry:storedAssetPaths(root)) {
+            next.emplace(entry.id,entry.file);
+            const auto previous=locations.find(entry.id);
+            if(previous==locations.end() || resourcePathKey(previous->second)==resourcePathKey(entry.file))continue;
+            resources.invalidatePath(previous->second);resources.invalidate(entry.id);
+            assets.onFileChanged(entry.file);changed.push_back(entry.file);
+            acknowledgeFile(entry.file);
+        }
+        locations=std::move(next);
+        return changed;
     }
     void acknowledgeFile(const std::filesystem::path& file) {
         try {
@@ -69,8 +98,9 @@ struct ResourceRuntime::Impl {
         catch(const std::exception& exception) {error=exception.what();}
     }
     void acknowledgeAsset(const AssetEntry& entry) {
-        const auto file=root/pathFromUtf8(entry.id);
-        if(!inside(file,root/"assets"))return;
+        if(isEngineAssetId(entry.id))return;
+        const auto file=resolveAssetPath(root,entry.id);
+        if(!managedFile(file))return;
         acknowledgeFile(file);
         if(entry.kind==AssetKind::Model && std::filesystem::is_directory(file.parent_path()))
             for(const auto& dependency:std::filesystem::recursive_directory_iterator(file.parent_path()))
@@ -79,6 +109,7 @@ struct ResourceRuntime::Impl {
     // Source creation through imports/save/promotion updates the catalog before
     // native notification processing. External creation enters through the watcher.
     void observeCatalog(bool ownChanges) {
+        if(catalogRevision==assets.catalogRevision())return;
         std::unordered_map<std::string,AssetKind> next;
         for(const auto& entry:assets.catalog()) {
             next.emplace(entry.id,entry.kind);
@@ -86,9 +117,10 @@ struct ResourceRuntime::Impl {
         }
         for(const auto& [id,kind]:catalog)if(!next.contains(id)) {
             renderer.evictThumbnail(id);if(kind==AssetKind::Model)renderer.evictModel(id);
-            if(ownChanges)acknowledgeFile(root/pathFromUtf8(id));
+            if(ownChanges)acknowledgeFile(resolveAssetPath(root,id));
         }
         catalog=std::move(next);
+        catalogRevision=assets.catalogRevision();
     }
     bool ownChange(const std::filesystem::path& file) {
         const auto found=ownFingerprints.find(resourcePathKey(file));
@@ -107,16 +139,36 @@ ResourceRuntime::ResourceRuntime(const std::filesystem::path& root,ResourceManag
 ResourceRuntime::~ResourceRuntime(){stop();impl_->assets.setMaterialGraphPrograms(nullptr);}
 void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
     if(impl_->stopped)return;
+    // Native notifications are the storage refresh boundary. Steady frames use
+    // the validated in-memory location snapshot without filesystem polling.
+    auto changed=impl_->watcher.poll();
+    std::erase_if(changed,[&](const auto& file){return impl_->ownChange(file);});
+    bool refreshStorage=false;
+    for(const auto& file:changed) {
+        if(file==impl_->root/".crimson/asset-locations.json") {refreshStorage=true;break;}
+        if(!inside(file,impl_->root/"Content")&&!inside(file,impl_->root/"Engine"))continue;
+        std::error_code error;
+        const auto state=std::filesystem::symlink_status(file,error);
+        if(error || !std::filesystem::is_regular_file(state)) {
+            refreshStorage=std::any_of(impl_->locations.begin(),impl_->locations.end(),[&](const auto& location){return inside(location.second,file);});
+            if(refreshStorage)break;
+        }
+    }
+    if(refreshStorage) {
+        try {refreshContentStorage(impl_->root);impl_->storageBlocked=false;}
+        catch(const std::exception& error) {impl_->error=error.what();impl_->storageBlocked=true;return;}
+    }
+    if(impl_->storageBlocked)return;
+    auto relocated=impl_->observeLocations();
+    if(editor && !relocated.empty())editor->filesChanged(relocated);
     impl_->resources.pump();
     // This coordinator observes current snapshots directly. Consume notification
     // metadata each frame so long editor sessions cannot accumulate an event log.
     (void)impl_->resources.takePublications();
     acknowledge(impl_->assets.takeOwnWrites());
     impl_->observeCatalog(true);
-    auto changed=impl_->watcher.poll();
-    std::erase_if(changed,[&](const auto& file){return impl_->ownChange(file);});
     std::vector<std::filesystem::path> assetChanges;
-    for(const auto& file:changed)if(inside(file,impl_->root/"assets") && !inside(file,impl_->root/"assets"/"branding")) {
+    for(const auto& file:changed)if(impl_->managedFile(file)) {
         impl_->assets.onFileChanged(file);assetChanges.push_back(file);
     }
     // Catalog entries discovered by external notifications are not own writes.
@@ -124,7 +176,7 @@ void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
     if(editor && !assetChanges.empty())editor->filesChanged(assetChanges);
     impl_->shaders.changed(changed);
     impl_->materialPrograms.changed(changed);
-    for(const auto& file:changed)if(!inside(file,impl_->root/"assets"))impl_->resources.invalidatePath(file);
+    for(const auto& file:changed)if(!impl_->managedFile(file))impl_->resources.invalidatePath(file);
     impl_->materialPrograms.trim();
     impl_->assets.processImports();
     impl_->assets.updateResources(frame);

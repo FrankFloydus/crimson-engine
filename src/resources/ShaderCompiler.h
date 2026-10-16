@@ -29,6 +29,9 @@ struct ShaderCompilerMetrics {
 };
 ShaderCompilerMetrics shaderCompilerMetrics();
 enum class ShaderStage { Vertex, Fragment, Compute };
+// Interactive code uses identical shader semantics with FXC optimization
+// deferred. Full is the persistent build/cook quality and remains the default.
+enum class ShaderCompileOptimization { Full, Interactive };
 // Explicit generated-source recipe. The caller owns immutable source text;
 // workers stage it only under cacheDirectory and never edit engine sources.
 struct ShaderCompileRecipe {
@@ -37,6 +40,7 @@ struct ShaderCompileRecipe {
     std::filesystem::path varyingDefinition;
     std::vector<std::filesystem::path> includeDirectories;
     std::string contract;
+    ShaderCompileOptimization optimization{ShaderCompileOptimization::Full};
 };
 // Cache-only hydration at the presentation boundary. A source-epoch session
 // shares content hashing across program bundles. find never runs shaderc or

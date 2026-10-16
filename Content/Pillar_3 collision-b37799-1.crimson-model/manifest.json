@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "Quader reader ABI 6"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "Quader",
+  "materialAssets": [
+    "e698f0ce-a518-596e-8710-ff12e009eb5d",
+    "e698f0ce-a518-596e-8710-ff12e009eb5d"
+  ],
+  "name": "Pillar_3 collision",
+  "original": "source.gltf",
+  "quader": {
+    "collision": true,
+    "content": "18e50b4763513a9718b47ef2c054d6d63a879e06c230a37a453fdbddb6b37799",
+    "project": "259235be-ca11-4751-a03b-28c7c36529bf",
+    "scene": "6aeb7097-5046-450e-a451-a8b4518aa095"
+  },
+  "version": 1
+}

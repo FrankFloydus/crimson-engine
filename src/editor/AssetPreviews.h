@@ -14,10 +14,12 @@ class AssetLibrary;
 class ResourceManager;
 class Renderer;
 class EditorResources;
+struct CachedAssetPreview;
 struct PreviewDependencies {
     uint64_t fingerprint{};
     std::vector<std::filesystem::path> files;
     std::vector<uint64_t> sourceFingerprints;
+    std::shared_ptr<const CachedAssetPreview> cachedPreview;
     std::optional<uint64_t> sourceFingerprint(const std::filesystem::path& source) const {
         if (files.size()!=sourceFingerprints.size()) return std::nullopt;
         const auto normalized=source.lexically_normal();
@@ -29,6 +31,14 @@ struct PreviewDependencies {
         const auto expected=sourceFingerprint(source);
         return gpuFingerprint && expected && *expected==gpuFingerprint;
     }
+};
+struct AssetPreviewStats {
+    std::uint64_t requests{},validations{},residentHits{},diskRequests{},diskHits{},renderRequests{},invalidations{};
+};
+struct PreviewValidationKey {
+    std::uint64_t catalog{},policy{},rendererShader{},materialShader{};
+    std::uint32_t edge{};
+    bool operator==(const PreviewValidationKey&) const = default;
 };
 struct PreviewCacheState {
     std::uint64_t checked{},published{};
@@ -63,7 +73,9 @@ public:
     void pump(uint32_t bgfxFrame,std::span<const std::string> visibleIds,std::uint32_t pixelEdge=128);
     void requestSceneSave(const std::string& id);
     void invalidate(const std::string& id);
+    void invalidateFile(const std::filesystem::path& file);
     const std::string& status() const;
+    AssetPreviewStats stats() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

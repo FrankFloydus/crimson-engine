@@ -1,4 +1,5 @@
 #include "StreamingModel.h"
+#include "assets/ContentStorage.h"
 #include "CacheIO.h"
 #include <meshoptimizer.h>
 #include <algorithm>
@@ -74,7 +75,7 @@ std::uint64_t modelContentKey(const ModelAsset& asset) {
 }
 ModelStream buildModelCache(const ModelAsset& asset,const std::filesystem::path& root,bool writeMetadata) {
     ModelStream result{asset.id,modelContentKey(asset),{}};
-    const auto folder=root/"assets"/"cache"/"mesh-lods"/detail::hex(result.key);
+    const auto folder=resolveAssetPath(root,"assets/cache/mesh-lods")/detail::hex(result.key);
     std::filesystem::create_directories(folder);
     for (std::size_t p=0;p<asset.primitives.size();++p) {
         const auto& original=asset.primitives[p]; validate(original);

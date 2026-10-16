@@ -1,8 +1,10 @@
 #include "QuaderImport.h"
+#include "assets/ContentStorage.h"
 #include "scene/Scene.h"
 #include "assets/AtomicFile.h"
 #include "assets/ModelImportIdentity.h"
 #include "resources/Paths.h"
+#include "resources/AssetId.h"
 #include "resources/StreamingModel.h"
 #include <bimg/decode.h>
 #include <bx/allocator.h>
@@ -86,10 +88,12 @@ struct Preparation {
     std::unordered_map<std::string,std::size_t> fileIndexes,inputIndexes;std::unordered_map<std::string,MaterialAsset> materials;std::filesystem::path stage;
     explicit Preparation(const QuaderSourceScene& source,const QuaderPrepareOptions& settings,std::stop_token token):scene(source),options(settings),stop(token){
         static std::atomic<std::uint64_t> sequence{};const auto id=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
-        stage=checkedManagedAssetPath(options.projectRoot,"assets/models/.staging-quader-"+id);std::filesystem::create_directories(stage);
-        materials=options.existingMaterials;auto fallback=defaultMaterialAsset();canonicalizeMaterialAsset(fallback);materials[DefaultMaterialId]=std::move(fallback);
+        stage=resolveAssetPath(options.projectRoot,"assets/.staging-quader-"+id);std::filesystem::create_directories(stage);
+        for(const auto& [id,material]:options.existingMaterials)materials[canonicalAssetId(id)]=material;
+        auto fallback=defaultMaterialAsset();canonicalizeMaterialAsset(fallback);materials[DefaultMaterialId]=std::move(fallback);
     }
-    ~Preparation(){try{const auto target=std::filesystem::weakly_canonical(stage),parent=std::filesystem::weakly_canonical(options.projectRoot/"assets/models");
+    std::string publishedId(const std::string& id)const{return canonicalAssetId(id);}
+    ~Preparation(){try{const auto target=std::filesystem::weakly_canonical(stage),parent=std::filesystem::weakly_canonical(resolveAssetPath(options.projectRoot,"assets/.staging-quader").parent_path());
         if(target.parent_path()!=parent||!target.filename().string().starts_with(".staging-quader-"))return;
         std::error_code ignored;std::filesystem::remove_all(target,ignored);}catch(...){/* Never widen cleanup after a path-resolution failure. */}}
     void input(const std::string& id,const std::optional<std::string>& prior){
@@ -102,14 +106,14 @@ struct Preparation {
         const auto path=checkedManagedAssetPath(options.projectRoot,id);const auto prior=bytes(path);input(id,prior);
         auto material=loadMaterialAsset(options.projectRoot,id);
         require(digest(bytes(path))==digest(prior),"Crimson material changed during Quader preparation. Import again.");
-        materials[id]=std::move(material);
+        materials[publishedId(id)]=std::move(material);
     }
     std::string availableFileId(const std::string& original)const{
         return availableQuaderAssetId(original,options.reservedIds);
     }
     void file(const std::string& id,std::string data,bool preserve=false,bool immutable=false){
         canceled(stop);const auto path=checkedManagedAssetPath(options.projectRoot,id);
-        if(options.reservedIds.contains(id))throw std::runtime_error("Quader import would recreate an explicitly deleted asset: "+id);
+        if(options.reservedIds.contains(id)||options.reservedIds.contains(canonicalAssetId(id)))throw std::runtime_error("Quader import would recreate an explicitly deleted asset: "+id);
         if(const auto found=fileIndexes.find(id);found!=fileIndexes.end()){require(out.files[found->second].contents==data,"Conflicting Quader asset identities.");return;}
         const auto prior=std::filesystem::exists(path)?std::optional{bytes(path)}:std::nullopt;
         if(!immutable)input(id,prior);
@@ -122,15 +126,16 @@ struct Preparation {
             const auto replacement=options.materialOverrides.find(originalId);
             // Explicit authored replacements remain valid. A deleted source's
             // built-in fallback must not turn a fresh import into gray geometry.
-            if(replacement!=options.materialOverrides.end()&&replacement->second!=originalId&&
-                (!options.reservedIds.contains(originalId)||(!replacement->second.empty()&&!replacement->second.starts_with("builtin:")))){
+            if(replacement!=options.materialOverrides.end()&&canonicalAssetId(replacement->second)!=canonicalAssetId(originalId)&&
+                ((!options.reservedIds.contains(originalId)&&!options.reservedIds.contains(canonicalAssetId(originalId)))||(!replacement->second.empty()&&!isEngineAssetId(replacement->second)))){
                 const auto target=replacement->second.empty()?std::string(DefaultMaterialId):replacement->second;result.push_back(target);
-                if(!target.starts_with("builtin:"))reuseMaterial(target);continue;}
+                if(!isEngineAssetId(target))reuseMaterial(target);continue;}
             const auto id=availableFileId(originalId);
-            result.push_back(id);const bool exists=std::filesystem::is_regular_file(checkedManagedAssetPath(options.projectRoot,id));
-            if(exists&&(!options.refreshMaterials||options.protectedMaterials.contains(id))){
+            result.push_back(publishedId(id));const bool exists=std::filesystem::is_regular_file(checkedManagedAssetPath(options.projectRoot,id));
+            const bool protectedMaterial=options.protectedMaterials.contains(id)||options.protectedMaterials.contains(publishedId(id));
+            if(exists&&(!options.refreshMaterials||protectedMaterial)){
                 reuseMaterial(id);
-                if(options.refreshMaterials&&options.protectedMaterials.contains(id))out.deferredMaterials.push_back(id);continue;}
+                if(options.refreshMaterials&&protectedMaterial)out.deferredMaterials.push_back(publishedId(id));continue;}
             require(static_cast<bool>(scene.readMaterial),"No Quader material reader is available.");const auto source=scene.readMaterial(index);
             require(source.identity.id==identity.id&&source.identity.embedded==identity.embedded,"Quader material identity changed during import.");
             if(options.completed){if(identity.embedded)require(source.fingerprint==scene.fingerprint,"Embedded Quader material does not match its scene save.");
@@ -139,13 +144,14 @@ struct Preparation {
             std::array<std::string,4> images;
             for(std::size_t slot=0;slot<4;++slot){const auto& texture=source.textures[slot];if(!texture.present)continue;canceled(stop);
                 const auto originalImageId="assets/textures/quader-"+digest(identityKey(texture,slot,source.normalDirectX))+".png";
-                if(const auto replaced=options.imageOverrides.find(originalImageId);replaced!=options.imageOverrides.end()) {
+                auto replaced=options.imageOverrides.find(originalImageId);if(replaced==options.imageOverrides.end())replaced=options.imageOverrides.find(publishedId(originalImageId));
+                if(replaced!=options.imageOverrides.end()) {
                     const auto& target=replaced->second[slot==3?1:0];
-                    if(!options.reservedIds.contains(originalImageId)||(!target.empty()&&!target.starts_with("builtin:"))){images[slot]=target;continue;}
+                    if((!options.reservedIds.contains(originalImageId)&&!options.reservedIds.contains(publishedId(originalImageId)))||(!target.empty()&&!isEngineAssetId(target))){images[slot]=publishedId(target);continue;}
                 }
                 const auto imageId=availableFileId(originalImageId);
-                images[slot]=imageId;file(imageId,png(texture,slot,source.normalDirectX),!options.refreshMaterials);out.assetIds.push_back(imageId);}
-            auto candidate=materialAsset(source,id,images);file(id,serializeMaterialAsset(candidate));materials[id]=std::move(candidate);out.assetIds.push_back(id);}
+                images[slot]=publishedId(imageId);file(imageId,png(texture,slot,source.normalDirectX),!options.refreshMaterials);out.assetIds.push_back(publishedId(imageId));}
+            auto candidate=materialAsset(source,publishedId(id),images);file(id,serializeMaterialAsset(candidate));materials[publishedId(id)]=std::move(candidate);out.assetIds.push_back(publishedId(id));}
         return result;
     }
     std::string identityKey(const QuaderSourceTexture& texture,std::size_t slot,bool directX)const{return identity(scene,texture,slot,directX);}
@@ -180,7 +186,7 @@ struct Preparation {
             base=originalBase+(generation?"-"+std::to_string(generation):std::string{});
             bool reserved=false;
             for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"})
-                reserved|=options.reservedIds.contains(base+"/"+member);
+                reserved|=options.reservedIds.contains(base+"/"+member)||options.reservedIds.contains(canonicalAssetId(base+"/"+member));
             if(!reserved)break;
         }
         const auto id=base+"/manifest.json";
@@ -189,20 +195,22 @@ struct Preparation {
             {"quader",{{"project",scene.project.id},{"scene",scene.id},{"collision",collision},{"content",content}}}};
         const auto manifestText=manifest.dump(2)+"\n";file(base+"/model.gltf",gltf,false,true);file(base+"/source.gltf",gltf,false,true);file(base+"/buffers/0.bin",buffer,false,true);file(id,manifestText,false,true);
         const auto local=stage/content;std::filesystem::create_directories(local/"buffers");writeFileAtomically(local/"model.gltf",gltf);writeFileAtomically(local/"source.gltf",gltf);writeFileAtomically(local/"buffers/0.bin",buffer);writeFileAtomically(local/"manifest.json",manifestText);
-        ModelResolvers resolvers;resolvers.material=[&](const std::string& material)->std::optional<ModelMaterial>{const auto found=materials.find(material);if(found!=materials.end())return found->second.surface;return std::nullopt;};
-        auto asset=loadModelPackage(local/"manifest.json",options.projectRoot,resolvers);asset->id=id;canceled(stop);
+        ModelResolvers resolvers;resolvers.material=[&](const std::string& material)->std::optional<ModelMaterial>{const auto found=materials.find(canonicalAssetId(material));if(found!=materials.end())return found->second.surface;return std::nullopt;};
+        auto asset=loadModelPackage(local/"manifest.json",options.projectRoot,resolvers);asset->id=publishedId(id);canceled(stop);
         auto stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*asset,options.projectRoot,false));asset->stream=std::move(stream);
-        out.preparedModels.push_back(std::move(asset));out.assetIds.push_back(id);return id;
+        out.preparedModels.push_back(std::move(asset));out.assetIds.push_back(publishedId(id));return publishedId(id);
     }
 };
 }
 std::string availableQuaderAssetId(const std::string& original,const std::set<std::string>& reservedIds){
-    if(!reservedIds.contains(original))return original;
+    const auto reserved=[&](const auto& id){return reservedIds.contains(id)||reservedIds.contains(canonicalAssetId(id));};
+    if(!reserved(original))return original;
+    if(isAssetUuid(original))for(std::size_t generation=1;;++generation){const auto id=derivedAssetId(original,"generation:"+std::to_string(generation));if(!reserved(id))return id;}
     const auto extension=original.rfind('.');
     require(extension!=std::string::npos,"Quader asset identity has no file extension.");
     for(std::size_t generation=1;;++generation){
         const auto id=original.substr(0,extension)+"-"+std::to_string(generation)+original.substr(extension);
-        if(!reservedIds.contains(id))return id;
+        if(!reserved(id))return id;
     }
 }
 QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const QuaderPrepareOptions& options,std::stop_token stop){

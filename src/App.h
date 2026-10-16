@@ -20,6 +20,7 @@ struct AppOptions {
     std::string capture;
     std::string scenario{"default"};
     std::string projectRoot; // Optional isolated project for focused verification.
+    std::string frameProfile; // Optional user-driven frame report; no automatic input.
 };
 
 AppOptions parseOptions(int argc, char** argv);

@@ -43,6 +43,15 @@ void acceptViewportModelDrop(EditorFrame& frame) {
                 ImGui::SetWindowFocus();
             }
         }
+    } else if (const auto* material=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET",ImGuiDragDropFlags_AcceptBeforeDelivery)) {
+        auto ids=decode(*material,false);
+        if(ids.size()==1) {
+            frame.materialDragId=AssetRef<MaterialAsset>{std::move(ids.front())};
+            const auto mouse=ImGui::GetIO().MousePos;
+            frame.materialDragPosition={mouse.x,mouse.y};
+            frame.materialDropDelivered=material->IsDelivery();
+            if(frame.materialDropDelivered)ImGui::SetWindowFocus();
+        }
     } else if (const auto* particle=ImGui::AcceptDragDropPayload("CC_PARTICLE_ASSET")) {
         auto ids=decode(*particle,false);
         if (particle->IsDelivery() && ids.size()==1) {

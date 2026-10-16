@@ -1,4 +1,6 @@
 #include "assets/ParticleAsset.h"
+#include "assets/MaterialAsset.h"
+#include "resources/AssetId.h"
 #include "particles/ParticleAppearance.h"
 #include "editor/ParticleDocument.h"
 #include "math/Json.h"
@@ -15,6 +17,9 @@ namespace {
 using namespace crimson;
 using Json=nlohmann::json;
 void require(bool condition,const char* message) { if (!condition) throw std::runtime_error(message); }
+ParticleEffectAsset current(ParticleEffectAsset effect) {
+    effect.id=canonicalAssetId(effect.id);effect.emitter.material.id=canonicalAssetId(effect.emitter.material.id);return effect;
+}
 template<class Action> void rejects(Action action,const char* message) {
     bool rejected=false;
     try { action(); } catch (const std::exception&) { rejected=true; }
@@ -60,34 +65,35 @@ ParticleEffectAsset authoredEffect() {
     e.bursts={{0xffffffffffffffffull,.7f,15},{12,0,25},{25,.2f,7}};
     e.gravity={0,-5,0}; e.gravityBehavior={true,false};
     e.accelerationBehavior={true,true}; e.acceleration={2,-1,3}; e.dragBehavior={true,true}; e.drag=.8f;
-    e.material=AssetRef<MaterialAsset>{"assets/materials/water.crimson-material"};
+    e.material=AssetRef<MaterialAsset>{canonicalAssetId("assets/materials/water.crimson-material")};
     e.opacity=.6f;
     return effect;
 }
 void versionFourPersistence() {
     Project project;
     const auto starter=defaultParticleEffect();
+    require(starter.emitter.material.id==DefaultParticleMaterialId,"Particle starter material differs from the protected Engine UUID.");
     require(starter.emitter.directionSpread==0 && starter.emitter.directionFlatness==0,
         "New point effects do not use neutral spread/flatness defaults.");
     auto effect=authoredEffect();
     const auto encoded=serializeParticleAsset(effect);
     require(Json::parse(encoded).at("version")==9,"New particle definitions do not use schema v9.");
-    require(deserializeParticleAsset(encoded,effect.id)==effect,"v4 lost timing, ranges, behavior settings or identities.");
+    require(deserializeParticleAsset(encoded,effect.id)==current(effect),"v4 lost timing, ranges, behavior settings or identities.");
     saveParticleAsset(project.root,effect);
-    require(loadParticleAsset(project.root,effect.id)==effect,"Saved v4 effect did not reopen identically.");
+    require(loadParticleAsset(project.root,effect.id)==current(effect),"Saved v4 effect did not reopen identically.");
     const auto copy=saveParticleAssetAs(project.root,effect,"Independent fountain");
     require(copy.id!=effect.id && copy.emitter==effect.emitter && copy.defaultSeed==effect.defaultSeed,
         "Save As lost stable burst identity, references or authored variation.");
-    require(read(project.root/effect.id)==encoded,"Save As changed its source.");
+    require(read(particleAssetPath(project.root,effect.id))==encoded,"Save As changed its source.");
     for (auto shape:{ParticleShape::Point,ParticleShape::Cone,ParticleShape::Sphere,ParticleShape::Box})
         for (auto space:{ParticleSpace::World,ParticleSpace::Local})
             for (auto mode:{ParticleDirectionMode::Fixed,ParticleDirectionMode::RandomCone,ParticleDirectionMode::Outward}) {
                 effect.emitter.shape=shape; effect.emitter.space=space; effect.emitter.directionMode=mode;
-                require(deserializeParticleAsset(serializeParticleAsset(effect))==effect,"An implemented shape, space or direction mode lost its identity.");
+                require(deserializeParticleAsset(serializeParticleAsset(effect))==current(effect),"An implemented shape, space or direction mode lost its identity.");
             }
     effect.emitter.gravityBehavior={false,false}; effect.emitter.accelerationBehavior={false,true}; effect.emitter.dragBehavior={true,false};
     effect.emitter.lifetimeRange.enabled=false; effect.emitter.speedRange.enabled=false; effect.emitter.velocityMode=ParticleVelocityMode::Vector;
-    require(deserializeParticleAsset(serializeParticleAsset(effect))==effect,"Inactive controls lost their settings.");
+    require(deserializeParticleAsset(serializeParticleAsset(effect))==current(effect),"Inactive controls lost their settings.");
 }
 Json oldDefinition(int version) {
     Json emitter={{"id","ae12"},{"name","Old impact"},{"enabled",false},{"rate",83.5f},{"lifetime",2.7f},
@@ -116,14 +122,14 @@ void priorVersionMigration() {
         e.id=0xae12; e.name="Old impact"; e.enabled=false; e.rate=83.5f; e.lifetime=2.7f; e.initialVelocity={1,7,-2};
         e.gravity={1,-15,4}; e.size=.21f; e.color={particleSrgbToLinear(.2f),particleSrgbToLinear(.3f),particleSrgbToLinear(.4f)}; e.intensity=2.5f; e.capacity=151;
         if (version==2) { e.material=AssetRef<MaterialAsset>{"assets/materials/legacy.crimson-material"}; e.opacity=.35f; }
-        require(migrated==expected,"Legacy migration changed original values or enabled new authoring behaviors.");
+        require(migrated==current(expected),"Legacy migration changed original values or enabled new authoring behaviors.");
         require(migrated.emitter.shape==ParticleShape::Point && migrated.emitter.space==ParticleSpace::World &&
             !migrated.emitter.finiteDuration && !migrated.emitter.loop && migrated.emitter.bursts.empty() &&
             migrated.emitter.gravityBehavior==ParticleBehavior{true,true} && !migrated.emitter.accelerationBehavior.present &&
             !migrated.emitter.dragBehavior.present,"Legacy migration changed point/world/continuous/gravity behavior.");
-        require(read(project.root/migrated.id)==source,"Reading a legacy effect rewrote its file.");
+        require(read(particleAssetPath(project.root,migrated.id))==source,"Reading a legacy effect rewrote its file.");
         saveParticleAsset(project.root,migrated);
-        require(Json::parse(read(project.root/migrated.id)).at("version")==9 && loadParticleAsset(project.root,migrated.id)==expected,
+        require(Json::parse(read(particleAssetPath(project.root,migrated.id))).at("version")==9 && loadParticleAsset(project.root,migrated.id)==current(expected),
             "Explicit save did not upgrade legacy data without changing behavior.");
     }
 }
@@ -137,17 +143,17 @@ void versionThreeLaunchMigration() {
             source["emitters"][0].erase("directionFlatness");
             const auto encoded=source.dump(2)+"\n";
             std::filesystem::create_directories(project.root/"assets/particles");
-            std::ofstream(project.root/expected.id,std::ios::binary)<<encoded;
+            std::ofstream(particleAssetPath(project.root,expected.id),std::ios::binary)<<encoded;
             expected.emitter.directionFlatness=0;
             expected.emitter.billboardMode=ParticleBillboardMode::Enabled;
             if (mode==ParticleDirectionMode::Outward) expected.emitter.directionSpread=0;
             const auto migrated=loadParticleAsset(project.root,expected.id);
-            require(migrated==expected,"v3 migration changed active cone spread or retained formerly ignored outward spread.");
-            require(read(project.root/expected.id)==encoded,"Loading v3 launch settings rewrote the source file.");
+            require(migrated==current(expected),"v3 migration changed active cone spread or retained formerly ignored outward spread.");
+            require(read(particleAssetPath(project.root,expected.id))==encoded,"Loading v3 launch settings rewrote the source file.");
             source["emitters"][0]["directionFlatness"]=.9f;
-            require(deserializeParticleAsset(source.dump(),expected.id)==expected,"Unknown v3 flatness field changed legacy launch behavior.");
+            require(deserializeParticleAsset(source.dump(),expected.id)==current(expected),"Unknown v3 flatness field changed legacy launch behavior.");
             saveParticleAsset(project.root,migrated);
-            require(Json::parse(read(project.root/expected.id)).at("version")==9 && loadParticleAsset(project.root,expected.id)==expected,
+            require(Json::parse(read(particleAssetPath(project.root,expected.id))).at("version")==9 && loadParticleAsset(project.root,expected.id)==current(expected),
                 "Explicit v3 upgrade did not preserve migrated launch settings in v4.");
         }
 }
@@ -208,7 +214,7 @@ void boundsAndMalformedInput() {
     e.lifetimeRange={true,MinimumParticleDuration,MaximumParticleTime}; e.directionSpread=180; e.directionFlatness=1; e.delay=MaximumParticleTime;
     e.duration=MaximumParticleTime; e.drag=MaximumParticleDrag; e.acceleration={MaximumParticleForce,-MaximumParticleForce,0};
     e.bursts.clear(); for (uint64_t id=1;id<=MaximumParticleBursts;++id) e.bursts.push_back({id,0,MaximumParticleCapacity});
-    require(deserializeParticleAsset(serializeParticleAsset(bounds))==bounds,"Valid documented bounds did not save and reopen.");
+    require(deserializeParticleAsset(serializeParticleAsset(bounds))==current(bounds),"Valid documented bounds did not save and reopen.");
     const auto encoded=Json::parse(serializeParticleAsset(valid));
     const auto malformed=[&](const auto& mutation,const char* message) { auto source=encoded; mutation(source); rejects([&]{deserializeParticleAsset(source.dump());},message); };
     malformed([](auto& j){j["version"]=10;},"Unknown format version accepted.");
@@ -229,10 +235,10 @@ void boundsAndMalformedInput() {
     malformed([](auto& j){j["emitters"][0]["lifetimeRange"]["enabled"]=1;},"Nonboolean range flag accepted.");
     malformed([](auto& j){j["emitters"][0]["material"]="assets/materials/../../escaped.crimson-material";},"Escaping material dependency accepted.");
     malformed([](auto& j){j["emitters"][0].erase("timing");},"Incomplete v4 timing definition accepted.");
-    Project project; saveParticleAsset(project.root,valid); const auto before=read(project.root/valid.id);
+    Project project; saveParticleAsset(project.root,valid); const auto before=read(particleAssetPath(project.root,valid.id));
     auto rejected=valid; rejected.emitter.bursts[0].id=0;
     rejects([&]{saveParticleAsset(project.root,rejected);},"Invalid v4 asset was saved.");
-    require(read(project.root/valid.id)==before,"Failed v4 save replaced a working file.");
+    require(read(particleAssetPath(project.root,valid.id))==before,"Failed v4 save replaced a working file.");
 }
 void historyAndDependencies() {
     Project project; const auto original=authoredEffect(); saveParticleAsset(project.root,original);
@@ -243,7 +249,7 @@ void historyAndDependencies() {
     require(document.update([](auto& a){a.emitter.lifetimeRange.maximum=1.4f;}) &&
         document.update([](auto& a){a.emitter.lifetimeRange.maximum=1.6f;}),"Valid intermediate range edits failed.");
     require(document.revision()==revision && document.committed()==snapshot,"Intermediate range values leaked into scene publication.");
-    require(document.commit() && document.dirty() && document.undo() && document.definition()==original && !document.canUndo(),
+    require(document.commit() && document.dirty() && document.undo() && document.definition()==current(original) && !document.canUndo(),
         "Range drag did not form one undo transaction.");
     require(document.redo() && document.definition().emitter.lifetimeRange.maximum==1.6f,"Range redo failed.");
     const auto before=document.definition();
@@ -265,16 +271,16 @@ void historyAndDependencies() {
         "Cannot assign managed material after variation edits.");
     const auto references=document.historicalMaterialReferences();
     require(std::find(references.begin(),references.end(),original.emitter.material.id)!=references.end() &&
-        std::find(references.begin(),references.end(),"assets/materials/foam.crimson-material")!=references.end(),
+        std::find(references.begin(),references.end(),canonicalAssetId("assets/materials/foam.crimson-material"))!=references.end(),
         "Step 3 history lost material dependencies.");
     const auto published=document.revision();
     require(document.save() && !document.dirty() && document.revision()==published,"Saving v4 republished or lost clean state.");
     ParticleEffectDocument reopened(project.root);
     require(reopened.load(original.id) && reopened.definition()==document.definition(),"v4 range/behavior/history result did not reopen.");
-    const auto saved=document.definition(); const auto source=read(project.root/original.id);
+    const auto saved=document.definition(); const auto source=read(particleAssetPath(project.root,original.id));
     require(document.save("Reusable fountain copy",true) && document.assetId()!=original.id && document.definition().emitter==saved.emitter,
         "Document Save As lost timing, random ranges, behavior identities or material assignment.");
-    require(read(project.root/original.id)==source,"Document Save As replaced source effect.");
+    require(read(particleAssetPath(project.root,original.id))==source,"Document Save As replaced source effect.");
 }
 void explosivenessPersistenceAndAdoption() {
     Project project;
@@ -284,7 +290,7 @@ void explosivenessPersistenceAndAdoption() {
         effect.emitter.explosiveness=value;
         const auto source=Json::parse(serializeParticleAsset(effect)); const auto& emitter=source["emitters"][0];
         require(source.at("version")==9 && emitter.at("explosiveness")==value &&
-            !emitter.contains("bursts") && !emitter.contains("legacyBursts") && deserializeParticleAsset(source.dump())==effect,
+            !emitter.contains("bursts") && !emitter.contains("legacyBursts") && deserializeParticleAsset(source.dump())==current(effect),
             "Native v9 emission lost Explosiveness or serialized a new burst schedule.");
     }
     const auto encoded=Json::parse(serializeParticleAsset(effect));
@@ -317,15 +323,15 @@ void explosivenessPersistenceAndAdoption() {
         source["emitters"][0]["explosiveness"]=1; // An unknown newer field cannot change old schedules.
         const auto bytes=source.dump(2)+"\n";
         std::filesystem::create_directories(project.root/"assets/particles");
-        std::ofstream(project.root/legacy.id,std::ios::binary)<<bytes;
+        std::ofstream(particleAssetPath(project.root,legacy.id),std::ios::binary)<<bytes;
         const auto loaded=loadParticleAsset(project.root,legacy.id);
-        require(loaded==legacy && loaded.emitter.explosiveness==0 && read(project.root/legacy.id)==bytes,
+        require(loaded==current(legacy) && loaded.emitter.explosiveness==0 && read(particleAssetPath(project.root,legacy.id))==bytes,
             "Loading v3-v7 changed a legacy schedule or rewrote its source.");
         ParticleEffectDocument document(project.root);
         require(document.load(legacy.id) && !document.dirty() && !document.canUndo(),"Legacy emission migration dirtied a document.");
         const auto native=Json::parse(serializeParticleAsset(loaded));
         require(!native["emitters"][0].contains("bursts") && native["emitters"][0].at("legacyBursts")==source["emitters"][0]["bursts"] &&
-            deserializeParticleAsset(native.dump())==legacy,"v8 compatibility save lost legacy burst counts, times or stable identities.");
+            deserializeParticleAsset(native.dump())==current(legacy),"v8 compatibility save lost legacy burst counts, times or stable identities.");
     }
     auto legacy=authoredEffect();const auto original=legacy.emitter;
     require(setParticleExplosiveness(legacy.emitter,.5f) && legacy.emitter.bursts.empty() &&
@@ -347,32 +353,37 @@ void explosivenessPersistenceAndAdoption() {
         "Exact maximum-rate adoption was rejected.");
     // v8 may retain imported mixed schedules; ordinary load/save never adopts them.
     auto mixed=authoredEffect();mixed.emitter.explosiveness=.75f;
-    require(deserializeParticleAsset(serializeParticleAsset(mixed))==mixed,"A mixed imported v8 schedule was destructively rewritten.");
+    require(deserializeParticleAsset(serializeParticleAsset(mixed))==current(mixed),"A mixed imported v8 schedule was destructively rewritten.");
 }
 void explosivenessHistoryAndCancellation() {
     Project project;const auto original=authoredEffect();saveParticleAsset(project.root,original);
-    const auto bytes=read(project.root/original.id);
+    const auto bytes=read(particleAssetPath(project.root,original.id));
     ParticleEffectDocument document(project.root);require(document.load(original.id),"Cannot load legacy schedule history fixture.");
     const auto revision=document.revision();const auto published=document.committed();
     require(document.begin("Explosiveness") && document.update([](auto& a){setParticleExplosiveness(a.emitter,.25f);}) &&
         document.update([](auto& a){setParticleExplosiveness(a.emitter,.75f);}),"Valid Explosiveness gesture failed.");
     require(document.definition().emitter.rate==53.5f && document.definition().emitter.bursts.empty() &&
         document.revision()==revision && document.committed()==published,"Explosiveness drag refolded counts or published before commit.");
-    document.cancel();require(document.definition()==original && !document.dirty(),"Cancel did not restore legacy burst identities and schedule.");
+    document.cancel();require(document.definition()==current(original) && !document.dirty(),"Cancel did not restore legacy burst identities and schedule.");
     require(document.begin("Explosiveness") && document.update([](auto& a){setParticleExplosiveness(a.emitter,.5f);}) &&
         document.update([](auto& a){setParticleExplosiveness(a.emitter,1);}) && document.commit(),"Cannot commit Explosiveness adoption.");
     const auto adopted=document.definition();
-    require(document.undo() && document.definition()==original && !document.canUndo() && document.redo() && document.definition()==adopted,
+    require(document.undo() && document.definition()==current(original) && !document.canUndo() && document.redo() && document.definition()==adopted,
         "Explosiveness and legacy adoption did not form one reversible command.");
     require(!document.edit("Invalid Explosiveness",[](auto& a){setParticleExplosiveness(a.emitter,2);}) &&
-        document.definition()==adopted && read(project.root/original.id)==bytes,"Rejected Explosiveness edit changed state or source bytes.");
+        document.definition()==adopted && read(particleAssetPath(project.root,original.id))==bytes,"Rejected Explosiveness edit changed state or source bytes.");
     require(document.save() && loadParticleAsset(project.root,original.id)==adopted,"Adopted Explosiveness did not survive save/reopen.");
-    const auto saved=read(project.root/original.id);
+    const auto saved=read(particleAssetPath(project.root,original.id));
     require(document.save("Explosive copy",true) && document.assetId()!=original.id && document.definition().emitter==adopted.emitter &&
-        read(project.root/original.id)==saved,"Explosiveness Save As changed its source or authored emitter.");
+        read(particleAssetPath(project.root,original.id))==saved,"Explosiveness Save As changed its source or authored emitter.");
     auto overflow=original;overflow.emitter.rate=MaximumParticleRate;saveParticleAsset(project.root,overflow);
-    require(document.load(overflow.id) && !document.edit("Adopt overflowing schedule",[](auto& a){setParticleExplosiveness(a.emitter,.5f);}) &&
-        document.definition()==overflow && !document.dirty() && !document.canUndo(),"Failed legacy adoption left a partial history entry.");
+    require(document.load(overflow.id)&&document.definition()==current(overflow),"Overflow fixture did not load its canonical identity and authored schedule.");
+    const auto overflowBefore=document.definition();const auto overflowPublished=document.committed();const auto overflowRevision=document.revision();
+    const auto overflowBytes=read(particleAssetPath(project.root,overflow.id));
+    require(!document.edit("Adopt overflowing schedule",[](auto& a){setParticleExplosiveness(a.emitter,.5f);}) &&
+        document.definition()==overflowBefore && !document.dirty() && !document.canUndo() && !document.transactionActive() &&
+        document.committed()==overflowPublished && document.revision()==overflowRevision && read(particleAssetPath(project.root,overflow.id))==overflowBytes,
+        "Failed legacy adoption changed history, publication or source bytes.");
 }
 }
 

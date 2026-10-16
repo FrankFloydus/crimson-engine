@@ -3,8 +3,10 @@
 #include "EditorResources.h"
 #include "crimson-renderer/RenderFrame.h"
 #include "scene/SceneExtraction.h"
+#include "scene/MaterialSlotAssignment.h"
 
 #include <memory>
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <utility>
@@ -67,7 +69,17 @@ struct EditorRenderFrameInput {
     MaterialEvaluationContext materialContext;
     ViewportAppearance appearance;
     bool gridVisible{};
+    std::optional<MaterialSlotAssignment> materialPreview;
 };
+
+// A hover may replace the authored packet only after every pass and source is
+// coherent. Coarse resident textures are sufficient; a diagnostic fallback is not.
+inline bool materialSlotPreviewReady(const std::shared_ptr<const PreparedEditorModel>& candidate) {
+    return candidate && candidate->ready && candidate->materials.size()==candidate->textures.size() &&
+        std::all_of(candidate->textures.begin(),candidate->textures.end(),[](const auto& binding) {
+            return binding.drawable() && binding.sourceReady && !binding.graphPending;
+        });
+}
 
 struct EditorRenderFramePreparationStats {
     double shadowPreparationMs{},receiverPreparationMs{};

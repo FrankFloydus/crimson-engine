@@ -8,6 +8,7 @@
 #include <bgfx/platform.h>
 #include <lodepng.h>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -33,7 +34,7 @@ void writePng(const std::filesystem::path& file,unsigned width,unsigned height,u
 void textures(const std::filesystem::path& root) {
     ResourceConfig config;config.cpuRetentionBytes=0;config.idleGrace=std::chrono::milliseconds{0};
     ResourceManager manager(config);
-    const auto file=root/"source.png";writePng(file,256,128,70);
+    auto file=root/"source.png";writePng(file,256,128,70);
     {
         TextureStreamer streamer(manager,root);
         const auto frame=[&](unsigned edge) {
@@ -57,7 +58,14 @@ void textures(const std::filesystem::path& root) {
         check(preserved.handle.idx==old.idx,"Hot reload must retain the current texture while workers prepare replacement data.");
         auto reloaded=until([&](const auto& result){return result.width==128 && result.sourceFingerprint!=fingerprint;},128);
         check(reloaded.sourceWidth==128 && detailed.handle.idx==old.idx,"Reload must publish new metadata and preserve old reader leases.");
-        coarse={};detailed={};reloaded={};
+        const auto movedFingerprint=reloaded.sourceFingerprint;const auto retainedHandle=reloaded.handle;
+        const auto destination=root/"Content/Textures/Renamed.png";std::filesystem::create_directories(destination.parent_path());
+        std::filesystem::rename(file,destination);file=destination;
+        const auto moving=streamer.request("texture-fixture",file,streaming::TextureRole::Color,true,128);
+        check(moving.handle.idx==retainedHandle.idx,"Moving a stable image ID discarded its last prepared texture.");
+        auto moved=until([&](const auto& result){return result.complete&&result.sourceFingerprint!=movedFingerprint;},128);
+        check(moved.sourceWidth==128&&reloaded.handle.idx==retainedHandle.idx,"Streaming a moved source failed to retarget or invalidated a reader lease.");
+        coarse={};detailed={};reloaded={};moved={};
         streamer.beginFrame();streamer.trim(0);
         // 'preserved' is still a lease: trimming must keep its allocation accounted.
         check(streamer.residentBytes()>0,"A leased retired texture must survive cache eviction.");
@@ -148,6 +156,55 @@ void thumbnailTextures(const std::filesystem::path& root) {
     check(streamer.residentBytes()==std::size_t(width)*height*4,"A leased thumbnail must remain accounted under pressure.");
     third={};streamer.beginFrame();streamer.trim(0);
     check(streamer.residentBytes()==0,"An unleased thumbnail did not release under memory pressure.");
+}
+void generatedTextures(const std::filesystem::path& root) {
+    ResourceConfig config;config.cpuRetentionBytes=0;config.idleGrace=std::chrono::milliseconds{0};ResourceManager manager(config);
+    const auto generatedRoot=root/"generated-memory-only";TextureStreamer streamer(manager,generatedRoot);
+    const auto mainThread=std::this_thread::get_id();std::atomic_uint calls{};std::atomic_bool mainThreadGeneration{};
+    const auto generator=[&] {
+        ++calls;if(std::this_thread::get_id()==mainThread)mainThreadGeneration=true;
+        return DecodedImage{128,128,std::vector<std::uint8_t>(128*128*4,128)};
+    };
+    const auto request=[&](bool thumbnail){return streamer.requestGenerated("recipe-a",generator,128,!thumbnail,thumbnail?64u:128u,ResourcePriority::Selected,thumbnail);};
+    PreparedTexture runtime,thumbnail;
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+    do {
+        manager.pump();streamer.beginFrame();runtime=request(false);thumbnail=request(true);
+        if(!runtime.diagnostic.empty()||!thumbnail.diagnostic.empty())throw std::runtime_error(runtime.diagnostic+thumbnail.diagnostic);
+        if(runtime.complete&&thumbnail.complete)break;
+        streamer.advance(4096,2);bgfx::frame();std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<deadline);
+    check(runtime.complete&&thumbnail.complete&&runtime.width==128&&thumbnail.width==64,"Generated runtime/thumbnail images did not reach coherent requested residency.");
+    check(calls==1&&!mainThreadGeneration&&runtime.sourceFingerprint==thumbnail.sourceFingerprint&&runtime.signature!=thumbnail.signature&&runtime.handle.idx!=thumbnail.handle.idx,
+        "Generated views regenerated on the main thread, duplicated source work or confused display/data identities.");
+    check(runtime.sourceWidth==128&&runtime.sourceHeight==128&&thumbnail.sourceWidth==128&&!std::filesystem::exists(generatedRoot),
+        "Generated image streaming created a disk/catalog cache or lost source metadata.");
+    const auto old=runtime.handle;const auto fingerprint=runtime.sourceFingerprint;
+    const auto revised=[&]{++calls;return DecodedImage{128,128,std::vector<std::uint8_t>(128*128*4,64)};};
+    auto next=streamer.requestGenerated("recipe-b",revised,128,true,128);
+    check(!bgfx::isValid(next.handle)&&!next.sourceReady&&runtime.handle.idx==old.idx,"Pending generated content replaced an existing immutable GPU lease.");
+    const auto replacementDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+    do {
+        manager.pump();streamer.beginFrame();next=streamer.requestGenerated("recipe-b",revised,128,true,128);
+        if(!next.diagnostic.empty())throw std::runtime_error(next.diagnostic);
+        if(next.complete)break;
+        streamer.advance();bgfx::frame();std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<replacementDeadline);
+    check(next.complete&&next.sourceFingerprint!=fingerprint&&next.handle.idx!=old.idx&&runtime.handle.idx==old.idx&&calls==2,
+        "Changed generator recipes failed to publish a separate complete version while retaining old readers.");
+    streamer.invalidate("recipe-a");manager.forget("recipe-a");
+    check(request(false).handle.idx==old.idx,"Managed asset invalidation/deletion removed a generated texture with the same opaque key.");
+    next={};thumbnail={};runtime={};streamer.beginFrame();streamer.advance(0,0);streamer.trim(0);
+    manager.pump();manager.trim();
+    check(streamer.residentBytes()==0&&manager.stats().cpuBytes==0,"Generated CPU mip payloads or GPU versions remained retained after eviction.");
+    const auto malformed=[] {return DecodedImage{2,2,std::vector<std::uint8_t>(16)};};
+    const auto failureDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};PreparedTexture failure;
+    do {
+        manager.pump();streamer.beginFrame();failure=streamer.requestGenerated("bad-recipe",malformed,16,false,16);streamer.advance();
+        if(!failure.diagnostic.empty())break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<failureDeadline);
+    check(!failure.diagnostic.empty()&&!bgfx::isValid(failure.handle),"Generated dimension mismatch failed to produce a diagnostic without publishing partial pixels.");
 }
 void models(const std::filesystem::path& root) {
     ModelAsset asset;asset.id="model-fixture";ModelPrimitive primitive;primitive.uvMask=1;
@@ -247,7 +304,7 @@ int main() {
     try {
         std::filesystem::create_directories(root);bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
         check(bgfx::init(init),"Could not initialize noninteractive Noop graphics checks.");initialized=true;
-        textures(root);uploadBudget(root);thumbnailImages(root);thumbnailTextures(root);models(root);deformationUploadBudget(root);bgfx::shutdown();initialized=false;cleanup(root);
+        textures(root);uploadBudget(root);thumbnailImages(root);thumbnailTextures(root);generatedTextures(root);models(root);deformationUploadBudget(root);bgfx::shutdown();initialized=false;cleanup(root);
         std::cout<<"Noop texture/mesh streaming lifetime checks passed.\n";return 0;
     } catch(const std::exception& error) {
         if(initialized)bgfx::shutdown();try { cleanup(root); } catch (...) {} std::cerr<<error.what()<<'\n';return 1;

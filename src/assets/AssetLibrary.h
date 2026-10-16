@@ -2,7 +2,10 @@
 
 #include "crimson-renderer/Renderer.h"
 #include "ModelAsset.h"
+#include "ModelMaterialOverrides.h"
 #include "BrowserCatalog.h"
+#include "ContentStorage.h"
+#include "resources/AssetId.h"
 #include "MaterialAsset.h"
 #include "ParticleAsset.h"
 #include "AssetReferenceManager.h"
@@ -21,6 +24,7 @@ namespace crimson {
 class SceneDocument;
 class AsyncImports;
 class TextureStreamer;
+struct PreparedTexture;
 class MaterialGraphPrograms;
 
 enum class MaterialSlot { Albedo, Roughness, Metallic, Normal };
@@ -51,6 +55,7 @@ public:
 
     const std::vector<TextureAsset>& assets() const { return assets_; }
     const std::vector<AssetEntry>& catalog() const { return catalog_; }
+    std::uint64_t catalogRevision() const { return catalogRevision_; }
     const TextureAsset* find(const std::string& id) const;
     std::shared_ptr<const ModelAsset> findModel(const std::string& id) const;
     std::shared_ptr<const MaterialAsset> findMaterial(const std::string& id) const;
@@ -58,6 +63,9 @@ public:
     std::string materialDiagnostic(const std::string& id) const;
     std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
     ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material,std::uint32_t textureEdge=512) const;
+    // Display-encoded view of the same canonical generated image used by graph
+    // materials. The returned GPU lease is transient; no catalog asset is made.
+    PreparedTexture grungePreview(const MaterialGrungeNode&,std::uint32_t edge=1024) const;
     std::unique_ptr<MaterialGraphPrograms> createMaterialNodePreviewPrograms() const;
     ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget,std::uint32_t textureEdge=512) const;
     void publishMaterial(std::shared_ptr<const MaterialAsset>);
@@ -87,22 +95,25 @@ public:
     std::uint64_t materialShaderRevision() const;
     std::uint64_t modelRevision(const std::string& id) const;
     std::uint64_t modelFingerprint(const std::string& id) const;
+    std::vector<std::filesystem::path> modelDependencies(const std::string& id) const;
+    std::shared_ptr<const ModelAsset> peekModel(const std::string& id) const;
+    std::shared_ptr<const MaterialAsset> peekMaterial(const std::string& id) const;
     bool modelLoading(const std::string& id) const;
     std::string modelDiagnostic(const std::string& id) const;
     void updateResources(std::uint32_t bgfxFrame);
     void onFileChanged(const std::filesystem::path& path);
-    void noteAssetWrite(const std::string& id) { ownWrites_.push_back(projectRoot_/pathFromUtf8(id)); }
+    void noteAssetWrite(const std::string& id) { ownWrites_.push_back(resolveAssetPath(projectRoot_,id)); }
     std::vector<std::filesystem::path> takeOwnWrites() { auto result=std::move(ownWrites_);ownWrites_.clear();return result; }
     bool modelBindingsReady(const std::vector<ModelMaterialTextures>&) const;
-    bool modelMaterialsReady(const ModelAsset&,const std::string& materialOverride={}) const;
-    std::string modelMaterialsDiagnostic(const ModelAsset&,const std::string& materialOverride={}) const;
+    bool modelMaterialsReady(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={}) const;
+    std::string modelMaterialsDiagnostic(const ModelAsset&,std::span<const AssetRef<MaterialAsset>> materialOverrides={}) const;
     void rebuildModelCache(const std::string& id);
     void setTextureDemand(std::uint32_t edge,bool nativeQuality=false);
     void setThumbnailDemand(std::uint32_t edge) { thumbnailDemand_=edge; }
     std::size_t textureResidentBytes() const;
     void trimTextureCache(std::size_t bytes);
     ModelResolvers modelResolvers() const;
-    std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,const std::string& materialOverride={}) const;
+    std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides={}) const;
     AssetReferenceManager& references() { return references_; }
     const AssetReferenceManager& references() const { return references_; }
     AssetDeletionPlan planDeletion(const std::vector<std::string>& ids,const SceneDocument* active=nullptr);
@@ -113,7 +124,7 @@ public:
     void cancelDeletion();
     const TextureAsset* selected() const { return find(selectedId()); }
     const std::string& selectedId() const { return browserSelection_.primary(); }
-    void select(const std::string& id) { browserSelection_.set(id); }
+    void select(const std::string& id) { browserSelection_.set(id.starts_with("folder:")?id:canonicalAssetId(id)); }
     BrowserCatalog& browserCatalog();
     std::string displayName(const std::string& id) const;
     BrowserSelection& browserSelection() { return browserSelection_; }
@@ -123,8 +134,8 @@ public:
 
     void requestImport(SDL_Window* window, const std::string& destinationFolder = {});
     void processImports();
-    const TextureAsset* importTexture(const std::filesystem::path& source);
-    std::shared_ptr<const ModelAsset> importModel(const std::filesystem::path& source);
+    const TextureAsset* importTexture(const std::filesystem::path& source,const std::string& destinationFolder = {});
+    std::shared_ptr<const ModelAsset> importModel(const std::filesystem::path& source,const std::string& destinationFolder = {});
     size_t importFiles(const std::vector<std::filesystem::path>& sources, const std::string& destinationFolder = {});
     std::vector<ModelMaterialTextures> modelBindings(const ModelAsset& model,std::span<const ModelMaterial> materials={});
     std::string loadPreview();
@@ -165,10 +176,13 @@ private:
     mutable std::unordered_map<std::string,ResourceHandle<MaterialAsset>> materialResources_;
     mutable std::unordered_map<std::string,std::chrono::steady_clock::time_point> modelInterest_,materialInterest_;
     std::unordered_map<std::string,ResourceHandle<ModelAsset>> materialCatalogResources_;
+    bool materialCatalogDirty_{};
     std::uint32_t textureDemand_{512};
     std::uint32_t thumbnailDemand_{128};
     bool nativeTextures_{};
     std::uint64_t resourcePolicyRevision_{};
+    std::uint64_t storageRevision_{};
+    std::unordered_map<std::string,std::filesystem::path> storageLocations_;
     std::unordered_map<std::string,std::uint64_t> registeredModelRevisions_;
     AssetReferenceManager references_;
     BrowserCatalog browserCatalog_;
@@ -201,7 +215,10 @@ private:
     std::uint8_t requiredGraphUvs(const std::shared_ptr<const MaterialGraph>&) const;
     MaterialGraphPrograms* graphPrograms_{};
     mutable std::unordered_map<const MaterialAsset*,MaterialCompatibility> materialCompatibility_;
-    void registerModel(std::shared_ptr<const ModelAsset> model);
+    void ensureModelMaterials(const ModelAsset& model);
+    void registerModel(std::shared_ptr<const ModelAsset> model,bool refreshMaterialCatalog=true);
+    std::vector<std::string> newModelImportAssets(const ModelAsset& model,bool reused) const;
+    std::string placeImportedAssets(std::span<const std::string> ids,const std::string& destinationFolder);
     void addTexture(TextureAsset asset);
     void refreshReferenceIndex(const SceneDocument* active);
 };

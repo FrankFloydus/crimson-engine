@@ -1,5 +1,7 @@
 #include "ParticleAsset.h"
 #include "AtomicFile.h"
+#include "ContentStorage.h"
+#include "resources/AssetId.h"
 #include "MaterialAsset.h"
 #include "particles/ParticleAppearance.h"
 #include "math/Json.h"
@@ -25,6 +27,7 @@ std::string utf8(const std::filesystem::path& value) {
     return {reinterpret_cast<const char*>(text.data()),text.size()};
 }
 void validateId(const std::string& id) {
+    if(isAssetUuid(id))return;
     const auto relative=fromUtf8(id);
     if (id.empty() || relative.has_root_path() || relative.parent_path()!=std::filesystem::path("assets/particles") ||
         relative.extension()!=".crimson-particle" || utf8(relative.filename()).find(':')!=std::string::npos)
@@ -229,12 +232,7 @@ void readColorTrack(const Json& source,ParticleEmitterDefinition& emitter) {
     for (const auto& stop:stops) emitter.colorGradient.stops.push_back({readHex(stop.at("id")),stop.at("age").get<float>(),stop.at("color").get<Vec4>()});
 }
 std::string unusedId(const std::filesystem::path& root) {
-    static std::atomic<uint64_t> sequence{};
-    for (;;) {
-        const auto ticks=static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-        const auto id="assets/particles/"+hex(ticks)+"-"+hex(sequence.fetch_add(1))+".crimson-particle";
-        if (!std::filesystem::exists(particleAssetPath(root,id))) return id;
-    }
+    (void)root;return newAssetId();
 }
 std::string unusedName(const std::filesystem::path& root,const std::string& requested) {
     const std::string base=requested.empty() ? "New Particle Effect" : requested;
@@ -260,7 +258,7 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
     boundedFloat(asset.preprocessSeconds,0,MaximumParticlePreprocessSeconds,"Particle preprocess seconds");
     const auto& emitter=asset.emitter;
     const auto material=fromUtf8(emitter.material.id);
-    if(!emitter.material.empty()&&emitter.material.id!=DefaultParticleMaterialId&&
+    if(!emitter.material.empty()&&!isAssetUuid(emitter.material.id)&&canonicalAssetId(emitter.material.id)!=DefaultParticleMaterialId&&
         (material.has_root_path()||material.parent_path()!=std::filesystem::path("assets/materials")||material.extension()!=".crimson-material"||emitter.material.id.find(':')!=std::string::npos))
         throw std::runtime_error("Particle material must reference a managed material or the protected particle default.");
     if(!math::finite(emitter.opacity)||emitter.opacity<0||emitter.opacity>1)throw std::runtime_error("Particle opacity must be finite and between 0 and 1.");
@@ -350,6 +348,15 @@ bool setParticleExplosiveness(ParticleEmitterDefinition& emitter,float value) {
 }
 std::filesystem::path particleAssetPath(const std::filesystem::path& root,const std::string& id) {
     validateId(id);
+    if(isAssetUuid(id)) {
+        for(const auto& entry:storedAssetPaths(root))if(entry.id==canonicalAssetId(id)) {
+            if(entry.file.extension()!=".crimson-particle")throw std::runtime_error("Asset identity does not reference a particle file.");
+            return entry.file;
+        }
+        try{const auto file=resolveAssetPath(root,id);if(file.extension()==".crimson-particle")return file;}catch(const std::exception&){/* New UUID has no location until its first save. */}
+        return resolveAssetPath(root,"assets/particles")/(id+".crimson-particle");
+    }
+    if(contentStorageReady(root))return resolveAssetPath(root,id);
     const auto resolvedRoot=std::filesystem::weakly_canonical(std::filesystem::absolute(root));
     const auto directory=std::filesystem::weakly_canonical(resolvedRoot/"assets/particles");
     const auto result=std::filesystem::weakly_canonical(resolvedRoot/fromUtf8(id));
@@ -363,11 +370,11 @@ std::string serializeParticleAsset(const ParticleEffectAsset& asset) {
     const auto& e=asset.emitter;
     Json bursts=Json::array();
     for (const auto& burst:e.bursts) bursts.push_back({{"id",hex(burst.id)},{"time",burst.time},{"count",burst.count}});
-    Json result={{"version",9},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
+    Json result={{"version",9},{"type","crimson-particle"},{"id",canonicalAssetId(asset.id)},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
         {"preprocessSeconds",asset.preprocessSeconds},
         {"emitters",Json::array({Json{{"id",hex(e.id)},{"name",e.name},{"enabled",e.enabled},{"rate",e.rate},{"explosiveness",e.explosiveness},{"lifetime",e.lifetime},
             {"initialVelocity",e.initialVelocity},{"gravity",e.gravity},{"size",e.size},{"color",e.color},{"intensity",e.intensity},
-            {"capacity",e.capacity},{"material",e.material.id},{"opacity",e.opacity},{"space",spaceName(e.space)},
+            {"capacity",e.capacity},{"material",canonicalAssetId(e.material.id)},{"opacity",e.opacity},{"space",spaceName(e.space)},
             {"shape",shapeName(e.shape)},{"radius",e.radius},{"boxSize",e.boxSize},{"lifetimeRange",rangeJson(e.lifetimeRange)},
             {"velocityMode",velocityName(e.velocityMode)},{"direction",e.direction},{"directionMode",directionName(e.directionMode)},
             {"directionSpread",e.directionSpread},{"directionFlatness",e.directionFlatness},{"speed",e.speed},{"speedRange",rangeJson(e.speedRange)},
@@ -389,7 +396,8 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
     ParticleEffectAsset asset;
     asset.id=json.at("id").get<std::string>();
     validateId(asset.id);
-    if (!expectedId.empty() && asset.id!=expectedId) throw std::runtime_error("Particle asset identity differs from its managed file.");
+    asset.id=canonicalAssetId(asset.id);
+    if (!expectedId.empty() && asset.id!=canonicalAssetId(expectedId)) throw std::runtime_error("Particle asset identity differs from its managed file.");
     asset.name=json.at("name").get<std::string>(); asset.defaultSeed=readHex(json.at("defaultSeed"));
     if (json.at("version")>=7) {
         const auto& preprocess=json.at("preprocessSeconds");
@@ -480,7 +488,7 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
         for (auto& stop:e.colorGradient.stops)
             for (std::size_t channel=0;channel<3;++channel) stop.color[channel]=decode(stop.color[channel]);
     }
-    validateParticleAsset(asset);
+    validateParticleAsset(asset);asset.emitter.material.id=canonicalAssetId(asset.emitter.material.id);
     return asset;
 }
 ParticleEffectAsset loadParticleAsset(const std::filesystem::path& root,const std::string& id) {
@@ -494,15 +502,19 @@ ParticleEffectAsset loadParticleAsset(const std::filesystem::path& root,const st
 }
 void saveParticleAsset(const std::filesystem::path& root,const ParticleEffectAsset& asset) {
     const auto contents=serializeParticleAsset(asset);
-    writeFileAtomically(particleAssetPath(root,asset.id),contents);
+    const auto file=particleAssetPath(root,asset.id);if(contentStorageReady(root))(void)checkedContentPath(root,file);
+    writeFileAtomically(file,contents);
+    if(contentStorageReady(root))registerAssetPath(root,asset.id,file);
 }
 ParticleEffectAsset createParticleAsset(const std::filesystem::path& root,const std::string& name) {
+    if(!contentStorageReady(root))initializeContentStorage(root);
     auto asset=defaultParticleEffect(unusedName(root,name));
     asset.id=unusedId(root);
     saveParticleAsset(root,asset);
     return asset;
 }
 ParticleEffectAsset saveParticleAssetAs(const std::filesystem::path& root,const ParticleEffectAsset& original,const std::string& name) {
+    if(!contentStorageReady(root))initializeContentStorage(root);
     auto candidate=original;
     candidate.id=unusedId(root);
     candidate.name=unusedName(root,name.empty()?original.name:name);
@@ -511,6 +523,13 @@ ParticleEffectAsset saveParticleAssetAs(const std::filesystem::path& root,const 
 }
 std::vector<ParticleAssetEntry> scanParticleAssets(const std::filesystem::path& root,std::vector<std::string>* diagnostics) {
     std::vector<ParticleAssetEntry> entries;
+    if(contentStorageReady(root)) {
+        for(const auto& entry:storedAssetPaths(root))if(entry.file.extension()==".crimson-particle"&&std::filesystem::is_regular_file(entry.file)) {
+            try{auto asset=loadParticleAsset(root,entry.id);entries.push_back({std::move(asset.id),std::move(asset.name)});}
+            catch(const std::exception& error){if(diagnostics)diagnostics->push_back("Particle asset "+entry.id+": "+error.what());}
+        }
+        std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b){return a.name!=b.name?a.name<b.name:a.id<b.id;});return entries;
+    }
     const auto directory=root/"assets/particles";
     if (!std::filesystem::exists(directory)) return entries;
     for (const auto& file:std::filesystem::directory_iterator(directory)) {

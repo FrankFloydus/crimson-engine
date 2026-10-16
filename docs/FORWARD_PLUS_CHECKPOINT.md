@@ -2,11 +2,15 @@
 
 Recorded on 15 October 2026. This document preserves the implementation's actual correctness and performance evidence. It is a checkpoint for this renderer slice; it does not declare the engine ready for an unrestricted large ARPG.
 
+## How to read this checkpoint
+
+The measurements, test counts and binary identities below describe the 15 October Forward+ migration. They are retained evidence, not a claim that the latest renderer has been benchmarked again. Character rigs, lighting receiver/caster scopes, Ambient Darkness and Environment Ambient Light subsequently landed. For the current implementation, controls, shader ABI and remaining limits, read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md).
+
 ## Implemented slice and remaining limits
 
 The production renderer uses GPU cluster culling and fragment bitset iteration for local point lights. Each camera/render-target owner has independent data. The normal grid uses 32-pixel tiles and 24 logarithmic depth slices; very large viewports increase tile size to remain inside the cluster capacity. Direct-light storage accepts 4,096 point-light records. Transparent meshes and lit particles use conservative camera clusters without opaque-depth rejection.
 
-Point shadows remain a separate budget of sixteen eligible lights. Directional lighting remains limited to four lights. Receiver lighting channels, independent caster masks, the player light rig, ambient attenuation, an adaptive shadow atlas, and world streaming belong to later slices. This checkpoint does not claim those systems exist.
+At this checkpoint, point shadows had a separate budget of sixteen eligible lights and directional lighting was limited to four lights. Receiver lighting channels, independent caster masks, the player light rig and ambient attenuation were outside the Forward+ slice; they subsequently landed. Adaptive shadow allocation and world streaming remain future work. The current sixteen resident point maps additionally have a four-complete-map/twenty-four-face update budget shared by Scene and Game.
 
 The BRDF lookup, point-light records, and cluster masks share the existing BRDF texture binding. Existing graph material texture capacity is preserved. A static camera and unchanged light geometry reuse cluster masks; changes to camera, light geometry, viewport, or the compute program invalidate them. Color/intensity-only changes update lighting data without requiring geometric culling again.
 

@@ -7,9 +7,13 @@
 #include "DeletionPreparation.h"
 #include "AtomicFile.h"
 #include "resources/TextureStreamer.h"
+#include "resources/ImageDecoder.h"
 #include "resources/StreamingModel.h"
 #include "resources/CacheIO.h"
 #include "MaterialGraphReferences.h"
+#include "GrungeGenerator.h"
+#include "ContentStorage.h"
+#include "resources/AssetId.h"
 
 #include <SDL3/SDL.h>
 #include <bimg/decode.h>
@@ -207,6 +211,52 @@ std::string& slotPath(Material& material, MaterialSlot slot) {
 
 void destroyTexture(bgfx::TextureHandle handle) { if (bgfx::isValid(handle)) bgfx::destroy(handle); }
 
+std::filesystem::path initializedProjectRoot(std::filesystem::path root) {
+    root=std::filesystem::absolute(std::move(root)).lexically_normal();initializeContentStorage(root);return root;
+}
+void discoverContentFiles(const std::filesystem::path& root) {
+    std::unordered_set<std::string> indexed;
+    for(const auto& entry:storedAssetPaths(root))indexed.insert(utf8(std::filesystem::weakly_canonical(entry.file)));
+    const auto add=[&](const std::string& id,const std::filesystem::path& file) {
+        if(indexed.contains(utf8(std::filesystem::weakly_canonical(file))))return;
+        for(const auto& entry:storedAssetPaths(root))if(entry.id==canonicalAssetId(id)&&entry.file!=file)
+            throw std::runtime_error("A copied content file uses an existing asset identity: "+id);
+        registerAssetPath(root,id,file);indexed.insert(utf8(std::filesystem::weakly_canonical(file)));
+    };
+    const auto content=root/"Content";if(!std::filesystem::is_directory(content))return;
+    for(auto iterator=std::filesystem::recursive_directory_iterator(content);iterator!=std::filesystem::recursive_directory_iterator{};++iterator) {
+        const auto& entry=*iterator;
+        if(entry.is_directory()&&std::filesystem::is_regular_file(entry.path()/"manifest.json")) {
+            const auto manifest=entry.path()/"manifest.json";auto id=assetIdAtPath(root,manifest);
+            if(id.empty())id=canonicalAssetId("assets/models/"+utf8(entry.path().filename())+"/manifest.json");
+            add(id,manifest);
+            std::ifstream input(manifest);const auto data=nlohmann::json::parse(input);
+            for(const auto& dependency:data.at("dependencies"))if(dependency.at("kind")=="image") {
+                const auto member=fromUtf8(dependency.at("path").get<std::string>());
+                if(member.empty()||member.has_root_path())throw std::runtime_error("Model image dependency is not relative.");
+                for(const auto& part:member)if(part==".."||part==".")throw std::runtime_error("Model image dependency escapes its package.");
+                const auto image=checkedContentPath(root,entry.path()/member),relative=image.lexically_relative(std::filesystem::weakly_canonical(entry.path()));
+                if(relative.empty()||relative.has_root_path()||*relative.begin()=="..")throw std::runtime_error("Model image dependency escapes its package.");
+                if(!std::filesystem::is_regular_file(image))throw std::runtime_error("Model image dependency is missing.");
+                if(!textureFile(image))continue;
+                const auto imageId=derivedAssetId(id,"image:"+dependency.at("path").get<std::string>());
+                bool known=false;for(const auto& stored:storedAssetPaths(root))if(stored.id==imageId){known=true;break;}
+                if(!known)add(imageId,image);
+            }
+            iterator.disable_recursion_pending();continue;
+        }
+        if(!entry.is_regular_file()||indexed.contains(utf8(std::filesystem::weakly_canonical(entry.path()))))continue;
+        const auto extension=entry.path().extension();
+        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-scene") {
+            std::ifstream input(entry.path());const auto data=nlohmann::json::parse(input);
+            auto id=data.value("id",std::string{});
+            if(id.empty())id="assets/scenes/"+utf8(entry.path().filename());
+            add(id,entry.path());
+        } else if(textureFile(entry.path())) {
+            add(newAssetId(),entry.path());
+        }
+    }
+}
 } // namespace
 
 struct AssetLibrary::ImportQueue {
@@ -217,36 +267,35 @@ struct AssetLibrary::ImportQueue {
 };
 
 AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources)
-    : imports_(std::make_shared<ImportQueue>()), projectRoot_(std::filesystem::absolute(std::move(root)).lexically_normal()),resources_(resources), references_(projectRoot_),browserCatalog_(projectRoot_) {
+    : imports_(std::make_shared<ImportQueue>()), projectRoot_(initializedProjectRoot(std::move(root))),resources_(resources), references_(projectRoot_),browserCatalog_(projectRoot_) {
     if(resources_) { textureStreamer_=std::make_unique<TextureStreamer>(*resources_,projectRoot_);asyncImports_=std::make_unique<AsyncImports>(projectRoot_,*resources_); }
     if(!references_.status().empty()) status_=references_.status();
-    const auto directory = projectRoot_ / "assets" / "textures";
-    std::filesystem::create_directories(directory);
+    try{discoverContentFiles(projectRoot_);}catch(const std::exception& error){status_+=std::string(error.what())+'\n';}
+    ensureEngineMaterialAssets(projectRoot_);
     std::vector<std::filesystem::path> files;
-    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-        if (entry.is_regular_file() && textureFile(entry.path())) files.push_back(entry.path());
-    }
-    std::sort(files.begin(), files.end());
-    for (const auto& file : files) {
-        try { const auto id=utf8(std::filesystem::relative(file,projectRoot_));if(!references_.deleted(id))addTexture(makeAsset(file)); }
-        catch (const std::exception& error) { status_ += std::string(error.what()) + '\n'; }
-    }
-    const auto modelsDirectory = projectRoot_ / "assets" / "models";
-    std::filesystem::create_directories(modelsDirectory);
-    files.clear();
-    for (const auto& entry : std::filesystem::directory_iterator(modelsDirectory)) {
-        if (entry.is_directory() && !utf8(entry.path().filename()).starts_with(".staging-model-") &&
-            std::filesystem::exists(entry.path() / "manifest.json"))
-            files.push_back(entry.path() / "manifest.json");
+    for(const auto& entry:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(entry.file)) {
+        if(textureFile(entry.file)&&!references_.deleted(entry.id)) {
+            try{addTexture(makeAsset(entry.file));}catch(const std::exception& error){status_+=std::string(error.what())+'\n';}
+        }
+        else if(entry.file.filename()=="manifest.json")files.push_back(entry.file);
     }
     std::sort(files.begin(), files.end());
     for (const auto& file : files) {
         try {
-            const auto id=utf8(std::filesystem::relative(file,projectRoot_));
+            const auto id=assetIdAtPath(projectRoot_,file);
             if(references_.deleted(id)) continue;
             if(resources_) {
                 std::ifstream input(file); const auto manifest=nlohmann::json::parse(input);
                 catalog_.push_back({id,manifest.value("name",utf8(file.parent_path().filename())),AssetKind::Model}); ++catalogRevision_;
+                // Explicit shared-material assignments cannot create imported
+                // sidecars. Native material discovery below already covers them.
+                const auto explicitMaterials=manifest.find("materialAssets");
+                if(explicitMaterials!=manifest.end()&&explicitMaterials->is_array()) {
+                    bool needsPromotion=false;
+                    for(std::size_t i=0;i<explicitMaterials->size();++i)
+                        if(!explicitMaterials->at(i).is_string()||canonicalAssetId(explicitMaterials->at(i).get<std::string>())==importedMaterialId(id,i)) {needsPromotion=true;break;}
+                    if(!needsPromotion)continue;
+                }
                 const auto packageRoot=projectRoot_;const auto resolvers=modelResolvers();
                 ResourceRequestOptions metadataOptions;metadataOptions.variant="material-catalog";metadataOptions.priority=ResourcePriority::Background;
                 metadataOptions.dependencies={file,file.parent_path()/"model.gltf"};
@@ -255,20 +304,17 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
                     auto data=loadModelMaterialMetadata(file,packageRoot,resolvers);
                     return ResourceLoadResult<ModelAsset>{data,modelCpuBytes(*data),0,{}};
                 },std::move(metadataOptions));
-            } else registerModel(loadModelPackage(file, projectRoot_,modelResolvers()));
+            } else registerModel(loadModelPackage(file, projectRoot_,modelResolvers()),false);
         }
         catch (const std::exception& error) {
             status_ += "Model load failed (" + utf8(file.parent_path().filename()) + "): " + error.what() + '\n';
         }
     }
-    // Images are independent assets even after their original model is deleted.
-    for(const auto& entry:std::filesystem::recursive_directory_iterator(modelsDirectory))if(entry.is_regular_file()&&textureFile(entry.path())&&entry.path().parent_path().filename()=="images"&&!utf8(entry.path().parent_path().parent_path().filename()).starts_with(".staging-")) {
-        const auto id=utf8(std::filesystem::relative(entry.path(),projectRoot_));if(references_.deleted(id)||find(id))continue;
-        try {addTexture(makeAsset(entry.path()));}catch(const std::exception& error){status_+=std::string(error.what())+'\n';}
-    }
     refreshMaterials();
     refreshScenes();
     refreshParticles();
+    storageRevision_=contentStorageRevision(projectRoot_);
+    for(const auto& entry:storedAssetPaths(projectRoot_))storageLocations_.emplace(entry.id,entry.file);
 }
 
 AssetLibrary::~AssetLibrary() {
@@ -302,15 +348,13 @@ void AssetLibrary::refreshParticles() {
     std::unordered_map<std::string,std::string> previous;
     for(const auto& entry:catalog_) if(entry.kind==AssetKind::Particle)previous.emplace(entry.id,entry.name);
     std::erase_if(catalog_,[](const AssetEntry& entry){return entry.kind==AssetKind::Particle;});
-    const auto directory=projectRoot_/"assets/particles";
-    std::filesystem::create_directories(directory);
     std::unordered_set<std::string> present;
-    for(const auto& file:std::filesystem::directory_iterator(directory)) {
-        if(!file.is_regular_file() || file.path().extension()!=".crimson-particle") continue;
-        const auto id=utf8(file.path().lexically_relative(projectRoot_));
+    for(const auto& file:storedAssetPaths(projectRoot_)) {
+        if(!std::filesystem::is_regular_file(file.file) || file.file.extension()!=".crimson-particle") continue;
+        const auto& id=file.id;
         if(references_.deleted(id)) continue;
         present.insert(id);
-        std::string name=previous.contains(id)?previous.at(id):utf8(file.path().stem());
+        std::string name=previous.contains(id)?previous.at(id):utf8(file.file.stem());
         if(id==particleDocumentId_ && particles_.contains(id)) name=particles_.at(id).definition->name;
         else try {
             auto effect=std::make_shared<ParticleEffectAsset>(loadParticleAsset(projectRoot_,id));name=effect->name;publishParticle(std::move(effect));
@@ -337,6 +381,7 @@ std::string AssetLibrary::particleDiagnostic(const std::string& id) const {
 void AssetLibrary::publishParticle(std::shared_ptr<const ParticleEffectAsset> effect) {
     if(!effect) return;
     validateParticleAsset(*effect);
+    auto normalized=std::make_shared<ParticleEffectAsset>(*effect);normalized->id=canonicalAssetId(normalized->id);normalized->emitter.material.id=canonicalAssetId(normalized->emitter.material.id);effect=std::move(normalized);
     auto& version=particles_[effect->id];
     if(version.definition && serializeParticleAsset(*version.definition)==serializeParticleAsset(*effect)) { version.diagnostic.clear();return; }
     version.definition=std::move(effect);version.revision=nextParticleRevision_++;version.diagnostic.clear();
@@ -360,19 +405,21 @@ bool AssetLibrary::deleteScene(const std::string& id) {
 }
 
 const TextureAsset* AssetLibrary::find(const std::string& id) const {
-    const auto found = std::find_if(assets_.begin(), assets_.end(), [&](const auto& asset) { return asset.id == id; });
+    const auto canonical=canonicalAssetId(id);
+    const auto found = std::find_if(assets_.begin(), assets_.end(), [&](const auto& asset) { return asset.id == canonical; });
     if(found==assets_.end()) return nullptr;
     if(textureStreamer_) {
-        const auto view=textureStreamer_->request(id,projectRoot_/fromUtf8(id),streaming::TextureRole::Color,false,thumbnailDemand_,ResourcePriority::Preview,true);
+        const auto view=textureStreamer_->request(canonical,resolveAssetPath(projectRoot_,canonical),streaming::TextureRole::Color,false,thumbnailDemand_,ResourcePriority::Preview,true);
         found->thumbnail=view.handle;
         if(view.sourceWidth && view.sourceHeight) { found->width=view.sourceWidth;found->height=view.sourceHeight; }
     }
     return &*found;
 }
 TextureAsset* AssetLibrary::findMutable(const std::string& id) const {
-    const auto found = std::find_if(assets_.begin(), assets_.end(), [&](const auto& asset) { return asset.id == id; });
+    const auto canonical=canonicalAssetId(id);
+    const auto found = std::find_if(assets_.begin(), assets_.end(), [&](const auto& asset) { return asset.id == canonical; });
     if(found!=assets_.end())return &*found;
-    if(id==GrayTextureId||id==NeutralNormalTextureId){TextureAsset asset;asset.id=id;asset.name=id==GrayTextureId?"Default gray":"Neutral normal";asset.width=asset.height=1;assets_.push_back(std::move(asset));return &assets_.back();}
+    if(canonical==GrayTextureId||canonical==NeutralNormalTextureId){TextureAsset asset;asset.id=canonical;asset.name=canonical==GrayTextureId?"Default gray":"Neutral normal";asset.width=asset.height=1;assets_.push_back(std::move(asset));return &assets_.back();}
     return nullptr;
 }
 
@@ -384,10 +431,11 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
         modelInterest_[resolved]=std::chrono::steady_clock::now();
         auto found=modelResources_.find(resolved);
         if(found==modelResources_.end()) {
-            const auto file=projectRoot_/fromUtf8(resolved),root=projectRoot_; const auto resolvers=modelResolvers();
+            std::filesystem::path file;try{file=resolveAssetPath(projectRoot_,resolved);}catch(const std::exception&){return {};}
+            const auto root=projectRoot_; const auto resolvers=modelResolvers();
             const auto forceCold=modelCacheRebuilds_.erase(resolved)!=0;
             const auto policy=references_;
-            ResourceRequestOptions options; options.dependencies={file,file.parent_path()/"model.gltf",root/"assets"/"references.json"};
+            ResourceRequestOptions options; options.dependencies={file,file.parent_path()/"model.gltf",resolveAssetPath(root,"assets/references.json")};
             // Missing optional policy files are not source dependencies.
             std::erase_if(options.dependencies,[](const auto& dependency){return !std::filesystem::is_regular_file(dependency);});
             std::ifstream manifestInput(file); if(manifestInput) try {
@@ -414,18 +462,18 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
                     data=loadModelPackage(file,root,resolvers);
                     data->stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*data,root));
                     for(auto& primitive:data->primitives)releaseModelGeometry(primitive);
-                } else {
-                    for(size_t index=0;index<data->materials.size();++index) if(resolvers.material) {
-                        const auto materialId=index<data->materialIds.size()?data->materialIds[index]:importedMaterialId(data->id,index);
-                        if(auto surface=resolvers.material(materialId)) data->materials[index]=*surface;
-                    }
                 }
                 if(token.stop_requested()) throw std::runtime_error("Model load canceled.");
                 const auto bytes=modelCpuBytes(*data);
                 auto dependencies=packageDependencies;
                 for(const auto& materialId:data->materialIds) {
                     const auto target=policy.resolve(materialId);
-                    if(!target.empty() && !target.starts_with("builtin:") && std::filesystem::is_regular_file(root/fromUtf8(target))) dependencies.push_back(root/fromUtf8(target));
+                    if(!target.empty()&&!isEngineAssetId(target)) {
+                        // Imported sidecars may still be awaiting their catalog
+                        // promotion. Embedded material data is already usable.
+                        const auto materialFile=materialAssetPath(root,target);
+                        if(std::filesystem::is_regular_file(materialFile))dependencies.push_back(materialFile);
+                    }
                 }
                 return ResourceLoadResult<ModelAsset>{data,bytes,0,std::move(dependencies)};
             },std::move(options));
@@ -449,8 +497,8 @@ std::shared_ptr<const MaterialAsset> AssetLibrary::findMaterial(const std::strin
     if(resources_ && !resolved.empty()) {
         materialInterest_[resolved]=std::chrono::steady_clock::now();
         auto found=materialResources_.find(resolved);
-        if(found==materialResources_.end() && std::filesystem::is_regular_file(projectRoot_/fromUtf8(resolved))) {
-            const auto root=projectRoot_; ResourceRequestOptions options;options.dependencies={root/fromUtf8(resolved)};
+        if(found==materialResources_.end() && std::filesystem::is_regular_file(materialAssetPath(projectRoot_,resolved))) {
+            const auto root=projectRoot_; ResourceRequestOptions options;options.dependencies={materialAssetPath(root,resolved)};
             auto handle=resources_->request<MaterialAsset>(AssetRef<MaterialAsset>{resolved},[root,resolved](std::stop_token token){
                 if(token.stop_requested())throw std::runtime_error("Material load canceled.");
                 auto data=std::make_shared<MaterialAsset>(loadMaterialAsset(root,resolved));return ResourceLoadResult<MaterialAsset>{data,sizeof(MaterialAsset),0,{}};
@@ -477,7 +525,7 @@ void AssetLibrary::publishMaterial(std::shared_ptr<const MaterialAsset> material
     if(!material)return;
     auto canonical=std::make_shared<MaterialAsset>(*material);canonicalizeMaterialAsset(*canonical);material=std::move(canonical);
     validateMaterialAsset(*material);
-    if(material->id.starts_with("builtin:")||references_.deleted(material->id))throw std::runtime_error("Protected or deleted material cannot be published.");
+    if(isEngineAssetId(material->id)||references_.deleted(material->id))throw std::runtime_error("Protected or deleted material cannot be published.");
     (void)materialAssetPath(projectRoot_,material->id);auto& version=authoredMaterials_[material->id];
     if(version.definition&&serializeMaterialAsset(*version.definition)==serializeMaterialAsset(*material)){version.diagnostic.clear();return;}
     version.definition=material;version.revision=nextMaterialRevision_++;version.diagnostic.clear();
@@ -502,14 +550,16 @@ ModelResolvers AssetLibrary::modelResolvers()const {
     return {[policy](const auto& id){return policy.resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
         const auto resolved=policy.resolveMaterial(id);if(resolved==DefaultMaterialId)return defaultMaterialAsset().surface;
         if(resolved==DefaultParticleMaterialId){auto material=defaultParticleMaterialAsset();canonicalizeMaterialAsset(material);return material.surface;}
-        if(!resolved.empty()&&std::filesystem::exists(root/fromUtf8(resolved))){const auto material=loadMaterialAsset(root,resolved);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};
+        if(!resolved.empty()&&std::filesystem::exists(materialAssetPath(root,resolved))){const auto material=loadMaterialAsset(root,resolved);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};
     }};
 }
-std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset& model,const std::string& materialOverride)const {
+std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides)const {
     auto result=model.materials;
-    if(!materialOverride.empty() && !isBuiltinModel(model.id))throw std::runtime_error("Instance materials are supported only on built-in Box models.");
+    for(size_t i=result.size();i<materialOverrides.size();++i)
+        if(!materialOverrides[i].empty())throw std::runtime_error("An assigned material slot no longer exists in this model.");
     for(size_t i=0;i<result.size();++i) {
-        const auto id=!materialOverride.empty()?materialOverride:i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
+        const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
+            i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
         if(auto material=findMaterial(id))result[i]=materialCompatible(material)?material->surface:defaultMaterialAsset().surface;
     }
     for(const auto& primitive:model.primitives) {
@@ -539,6 +589,22 @@ std::uint64_t AssetLibrary::modelFingerprint(const std::string& id) const {
     if(id==BuiltinBoxModelId)return 0x424f5801;
     const auto found=modelResources_.find(references_.resolve(id));return found==modelResources_.end()?0:found->second.snapshot().fingerprint();
 }
+std::vector<std::filesystem::path> AssetLibrary::modelDependencies(const std::string& id) const {
+    const auto found=modelResources_.find(references_.resolve(id));return found==modelResources_.end()?std::vector<std::filesystem::path>{}:found->second.dependencies();
+}
+std::shared_ptr<const ModelAsset> AssetLibrary::peekModel(const std::string& id) const {
+    const auto resolved=references_.resolve(id);if(resolved.empty())return {};
+    if(resolved==BuiltinBoxModelId)return builtinBoxGeometry();
+    if(const auto found=modelResources_.find(resolved);found!=modelResources_.end())if(auto snapshot=found->second.snapshot())return snapshot.shared();
+    const auto found=std::find_if(models_.begin(),models_.end(),[&](const auto& model){return model->id==resolved;});return found==models_.end()?nullptr:*found;
+}
+std::shared_ptr<const MaterialAsset> AssetLibrary::peekMaterial(const std::string& id) const {
+    const auto resolved=references_.resolve(id);
+    if(resolved==DefaultMaterialId||resolved==DefaultParticleMaterialId)return findMaterial(resolved);
+    if(const auto authored=authoredMaterials_.find(resolved);authored!=authoredMaterials_.end()&&authored->second.definition)return authored->second.definition;
+    if(const auto found=materialResources_.find(resolved);found!=materialResources_.end())if(auto snapshot=found->second.snapshot())return snapshot.shared();
+    const auto found=std::find_if(materials_.begin(),materials_.end(),[&](const auto& material){return material->id==resolved;});return found==materials_.end()?nullptr:*found;
+}
 bool AssetLibrary::modelLoading(const std::string& id) const {
     const auto found=modelResources_.find(references_.resolve(id));
     return found!=modelResources_.end() && found->second.state()!=ResourceState::Ready && found->second.state()!=ResourceState::Failed;
@@ -548,6 +614,30 @@ std::string AssetLibrary::modelDiagnostic(const std::string& id) const {
 }
 void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
     (void)bgfxFrame;
+    const auto locationRevision=contentStorageRevision(projectRoot_);
+    if(storageRevision_!=locationRevision) {
+        std::unordered_map<std::string,std::filesystem::path> next;
+        for(const auto& entry:storedAssetPaths(projectRoot_))next.emplace(entry.id,entry.file);
+        std::unordered_set<std::string> moved;
+        std::unordered_set<std::filesystem::path> oldPaths;
+        for(const auto& [id,file]:storageLocations_) {
+            const auto found=next.find(id);if(found!=next.end()&&found->second==file)continue;
+            moved.insert(id);oldPaths.insert(file);
+        }
+        // New registrations do not alter any existing loader. Only relocated
+        // source/dependency paths require its captured loader to be recreated.
+        for(const auto& [id,handle]:modelResources_)
+            for(const auto& file:handle.dependencies())if(oldPaths.contains(file)){moved.insert(id);break;}
+        for(const auto& [id,handle]:materialCatalogResources_)
+            for(const auto& file:handle.dependencies())if(oldPaths.contains(file)){moved.insert(id);break;}
+        for(const auto& id:moved) {
+            if(resources_)resources_->invalidate(id);
+            modelResources_.erase(id);materialResources_.erase(id);materialCatalogResources_.erase(id);
+            registeredModelRevisions_.erase(id);preparedParticleMaterials_.erase(id);
+        }
+        storageLocations_=std::move(next);
+        storageRevision_=locationRevision;++catalogRevision_;
+    }
     if(!resources_) return;
     if(resourcePolicyRevision_ && resourcePolicyRevision_!=references_.revision()) {
         for(const auto& [id,handle]:modelResources_) { (void)handle;if(references_.deleted(id)) resources_->forget(id);else resources_->invalidate(id); }
@@ -565,7 +655,7 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
     std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return !materialInterest_.contains(entry.first);});
     for(auto iterator=materialCatalogResources_.begin();iterator!=materialCatalogResources_.end();) {
         if(auto snapshot=iterator->second.snapshot()) {
-            try { promoteModelMaterials(projectRoot_,*snapshot,[&](const auto& id){return references_.deleted(id);});refreshMaterials(); }
+            try { ensureModelMaterials(*snapshot); }
             catch(const std::exception& error){status_=error.what();}
             iterator=materialCatalogResources_.erase(iterator);
         } else if(iterator->second.state()==ResourceState::Failed) { status_=iterator->second.diagnostic();iterator=materialCatalogResources_.erase(iterator); }
@@ -575,15 +665,28 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
         if(registeredModelRevisions_[id]==snapshot.revision()) continue;
         try {
             std::erase_if(models_,[&](const auto& model){return model->id==id;});
-            registerModel(snapshot.shared()); registeredModelRevisions_[id]=snapshot.revision();
+            registerModel(snapshot.shared(),false); registeredModelRevisions_[id]=snapshot.revision();
         } catch(const std::exception& error) { status_=error.what(); }
     }
+    if(materialCatalogDirty_)refreshMaterials();
     textureStreamer_->advance(); textureStreamer_->beginFrame();
     const auto message=textureStreamer_->diagnostic(); if(!message.empty()) status_=message;
 }
 void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
+    const auto relative=std::filesystem::absolute(changed).lexically_normal().lexically_relative(projectRoot_);
+    if(!relative.empty()&&!relative.has_root_path()&&(*relative.begin()=="Content"||*relative.begin()=="Engine")) {
+        std::error_code error;const auto state=std::filesystem::status(changed,error);
+        // Directory notifications have no asset identity/index mutation. Their
+        // disappearance also needs one browser rescan, including empty folders.
+        if(error||!std::filesystem::is_regular_file(state))++catalogRevision_;
+        if(!error&&std::filesystem::is_directory(state))return;
+    }
+    auto id=assetIdAtPath(projectRoot_,changed);bool registered=false;
+    try{registered=resolveAssetPath(projectRoot_,id)==std::filesystem::absolute(changed).lexically_normal();}catch(const std::exception&){/* A newly discovered file has no registered ID yet. */}
+    if(std::filesystem::is_regular_file(changed)&&!registered) {
+        try{discoverContentFiles(projectRoot_);id=assetIdAtPath(projectRoot_,changed);}catch(const std::exception& error){status_=error.what();return;}
+    }
     if(resources_)resources_->invalidatePath(changed);
-    const auto id=utf8(changed.lexically_relative(projectRoot_));
     if(textureFile(changed)) {
         if(textureStreamer_)textureStreamer_->reload(id);
         if(!references_.deleted(id) && !findMutable(id) && std::filesystem::is_regular_file(changed)) addTexture(makeAsset(changed));
@@ -603,10 +706,12 @@ void AssetLibrary::trimTextureCache(std::size_t bytes) {
 bool AssetLibrary::modelBindingsReady(const std::vector<ModelMaterialTextures>& bindings) const {
     return std::all_of(bindings.begin(),bindings.end(),[](const auto& material){return material.drawable();});
 }
-bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,const std::string& materialOverride) const {
-    if(!materialOverride.empty() && !isBuiltinModel(model.id))return false;
-    const auto ids=materialOverride.empty()?std::span<const std::string>(model.materialIds):std::span<const std::string>(&materialOverride,1);
-    for(const auto& id:ids) {
+bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides) const {
+    const auto slots=std::max(model.materials.size(),model.materialIds.size());
+    for(size_t i=slots;i<materialOverrides.size();++i)if(!materialOverrides[i].empty())return false;
+    for(size_t i=0;i<slots;++i) {
+        const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
+            i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
         const auto target=references_.resolveMaterial(id);
         if(target==DefaultMaterialId || target.empty()) continue;
         const auto material=findMaterial(target);
@@ -614,10 +719,13 @@ bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,const std::string
     }
     return true;
 }
-std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,const std::string& materialOverride) const {
-    if(!materialOverride.empty() && !isBuiltinModel(model.id))return "Instance materials are supported only on built-in Box models.";
-    const auto ids=materialOverride.empty()?std::span<const std::string>(model.materialIds):std::span<const std::string>(&materialOverride,1);
-    for(const auto& id:ids) {
+std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides) const {
+    const auto slots=std::max(model.materials.size(),model.materialIds.size());
+    for(size_t i=slots;i<materialOverrides.size();++i)
+        if(!materialOverrides[i].empty())return "An assigned material slot no longer exists in this model.";
+    for(size_t i=0;i<slots;++i) {
+        const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
+            i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
         const auto target=references_.resolveMaterial(id);
         if(target.empty() || target==DefaultMaterialId) continue;
         if(const auto material=findMaterial(target);material&&!materialCompatible(material))return "Mesh material is invalid: "+material->name;
@@ -633,11 +741,11 @@ void AssetLibrary::rebuildModelCache(const std::string& id) {
 void AssetLibrary::refreshMaterials() {
     std::unordered_map<std::string,std::string> previous;
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material)previous.emplace(entry.id,entry.name);
-    std::erase_if(catalog_,[](const auto& e){return e.kind==AssetKind::Material;});materials_.clear();const auto directory=projectRoot_/"assets/materials";
+    std::erase_if(catalog_,[](const auto& e){return e.kind==AssetKind::Material;});materials_.clear();
     std::unordered_set<std::string> present;
-    if(std::filesystem::exists(directory))for(const auto& file:std::filesystem::directory_iterator(directory))if(file.is_regular_file()&&file.path().extension()==".crimson-material") {
-        const auto id=utf8(std::filesystem::relative(file.path(),projectRoot_));if(references_.deleted(id))continue;
-        present.insert(id);std::string name=previous.contains(id)?previous.at(id):utf8(file.path().stem());
+    for(const auto& file:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(file.file)&&file.file.extension()==".crimson-material") {
+        const auto& id=file.id;if(references_.deleted(id))continue;
+        present.insert(id);std::string name=previous.contains(id)?previous.at(id):utf8(file.file.stem());
         const auto working=authoredMaterials_.find(id);
         if(id==materialDocumentId_&&working!=authoredMaterials_.end()&&working->second.definition){name=working->second.definition->name;materials_.push_back(working->second.definition);}
         else try{auto asset=std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,id));name=asset->name;
@@ -647,10 +755,12 @@ void AssetLibrary::refreshMaterials() {
         catalog_.push_back({id,std::move(name),AssetKind::Material});
     }
     std::erase_if(authoredMaterials_,[&](const auto& entry){return !present.contains(entry.first)&&entry.first!=materialDocumentId_;});
+    materialCatalogDirty_=false;
     ++catalogRevision_;
 }
 
 void AssetLibrary::addTexture(TextureAsset asset) {
+    asset.id=canonicalAssetId(asset.id);
     AssetEntry entry;
     try {
         entry = {asset.id, asset.name, asset.hdr ? AssetKind::Environment : AssetKind::Texture};
@@ -665,28 +775,46 @@ void AssetLibrary::addTexture(TextureAsset asset) {
     assets_.push_back(std::move(asset));
 }
 
-void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
+void AssetLibrary::ensureModelMaterials(const ModelAsset& model) {
+    promoteModelMaterials(projectRoot_,model,[&](const auto& id){return references_.deleted(id);},[&](const auto& id) {
+        materialCatalogDirty_=true;noteAssetWrite(id);
+    });
+    for(const auto& id:model.materialIds)
+        if(!isEngineAssetId(id)&&!references_.deleted(id)&&!authoredMaterials_.contains(id)&&std::filesystem::is_regular_file(materialAssetPath(projectRoot_,id)))
+            materialCatalogDirty_=true;
+}
+void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool refreshMaterialCatalog) {
     if (!model || std::any_of(models_.begin(),models_.end(),[&](const auto& existing){return existing->id==model->id;})) return;
+    if(!isAssetUuid(model->id)) {
+        const auto original=model->id;const auto file=resolveAssetPath(projectRoot_,original);
+        if(std::filesystem::is_regular_file(file))registerAssetPath(projectRoot_,original,file);
+        auto normalized=std::make_shared<ModelAsset>(*model);normalized->id=canonicalAssetId(original);
+        for(auto& id:normalized->images)id=canonicalAssetId(id);
+        for(auto& id:normalized->materialIds)id=canonicalAssetId(id);
+        for(auto& surface:normalized->materials) {
+            for(auto* texture:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})texture->image.id=canonicalAssetId(texture->image.id);
+            if(surface.graph){auto graph=std::make_shared<MaterialGraph>(*surface.graph);for(auto& node:graph->nodes)if(node.kind==MaterialNodeKind::Texture2D)node.texture.image.id=canonicalAssetId(node.texture.image.id);surface.graph=std::move(graph);}
+        }
+        if(normalized->stream){auto stream=std::make_shared<streaming::ModelStream>(*normalized->stream);stream->id=normalized->id;normalized->stream=std::move(stream);}
+        model=std::move(normalized);
+    }
     // Model-package image paths stay in their package. They share the ordinary
     // texture owner and remain usable in the editor's compatible image pickers.
     std::set<std::string> imageIds;
-    std::vector<std::string> newMaterialFiles;
-    for(const auto& id:model->materialIds)if(!id.starts_with("builtin:")&&!references_.deleted(id)&&!std::filesystem::exists(projectRoot_/fromUtf8(id)))newMaterialFiles.push_back(id);
-    promoteModelMaterials(projectRoot_,*model,[&](const auto& id){return references_.deleted(id);});
-    for(const auto& id:newMaterialFiles)noteAssetWrite(id);
+    ensureModelMaterials(*model);
     const auto hasImage=[&](const auto& id){return std::any_of(assets_.begin(),assets_.end(),[&](const auto& image){return image.id==id;});};
     for (const auto& image : model->images) if (!image.empty() && !hasImage(image)&&!references_.deleted(image)) imageIds.insert(image);
     for (const auto& material : model->materials) {
         for (const auto* texture : {&material.baseColorTexture, &material.metallicRoughnessTexture,
                 &material.normalTexture, &material.occlusionTexture, &material.emissiveTexture}) {
-            if (!texture->image.empty() && !hasImage(texture->image.id)&&!references_.deleted(texture->image.id)&&!texture->image.id.starts_with("builtin:")) imageIds.insert(texture->image.id);
+            if (!texture->image.empty() && !hasImage(texture->image.id)&&!references_.deleted(texture->image.id)&&!isEngineAssetId(texture->image.id)) imageIds.insert(texture->image.id);
         }
     }
     std::vector<TextureAsset> pending;
     try {
         pending.reserve(imageIds.size());
         for (const auto& id : imageIds) {
-            auto image = makeAsset(projectRoot_ / fromUtf8(id));
+            auto image = makeAsset(resolveAssetPath(projectRoot_,id));
             image.name = model->name + " / " + image.name;
             pending.push_back(std::move(image));
         }
@@ -715,7 +843,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
             compact->primitives.push_back(std::move(metadata));
         }
         if(model->stream) {
-            ResourceRequestOptions options;options.dependencies={projectRoot_/fromUtf8(model->id),projectRoot_/fromUtf8(model->id).parent_path()/"model.gltf"};
+            ResourceRequestOptions options;options.dependencies={resolveAssetPath(projectRoot_,model->id),resolveAssetPath(projectRoot_,model->id).parent_path()/"model.gltf"};
             resources_->seed<ModelAsset>(AssetRef<ModelAsset>{model->id},{compact,modelCpuBytes(*compact),0,{}},std::move(options));
             const auto root=projectRoot_;ResourceRequestOptions indexOptions;indexOptions.variant="metadata-index";indexOptions.priority=ResourcePriority::Background;indexOptions.retainLoader=false;
             (void)resources_->request<streaming::ModelStream>(AssetRef<streaming::ModelStream>{model->id},[compact,root](std::stop_token token){
@@ -725,15 +853,44 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
             },std::move(indexOptions));
         }
     } else if(!resources_) models_.push_back(std::move(model));
-    refreshMaterials();
+    if(refreshMaterialCatalog&&materialCatalogDirty_)refreshMaterials();
 }
 void AssetLibrary::publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models) {
-    for(const auto& model:models)registerModel(model);
+    for(const auto& model:models)registerModel(model,false);
+    if(materialCatalogDirty_)refreshMaterials();
+}
+std::vector<std::string> AssetLibrary::newModelImportAssets(const ModelAsset& model,bool reused) const {
+    std::set<std::string> candidates;
+    if(!reused) {
+        candidates.insert(model.id);candidates.insert(model.images.begin(),model.images.end());
+    }
+    for(std::size_t i=0;i<model.materials.size();++i) {
+        const auto id=importedMaterialId(model.id,i);
+        if(i<model.materialIds.size()&&model.materialIds[i]!=id)continue;
+        if(!references_.deleted(id)&&!std::filesystem::exists(materialAssetPath(projectRoot_,id)))candidates.insert(id);
+    }
+    // Catalog discovery of an existing image/material is not a newly imported
+    // asset. Keep every existing card's virtual location and authored alias.
+    for(const auto& existing:catalog_)candidates.erase(existing.id);
+    candidates.erase("");return {candidates.begin(),candidates.end()};
+}
+std::string AssetLibrary::placeImportedAssets(std::span<const std::string> ids,const std::string& destinationFolder) {
+    if(ids.empty())return {};
+    auto& browser=browserCatalog();
+    std::string destination=destinationFolder.empty()?BrowserCatalog::ContentFolder:destinationFolder,warning;
+    if(!browser.writableFolder(destination)) {
+        destination=BrowserCatalog::ContentFolder;warning="Assets imported into Content: The destination folder no longer exists or is read-only.";
+    }
+    std::vector<std::string> available;available.reserve(ids.size());
+    for(const auto& id:ids)if(browser.contains(id))available.push_back(id);
+    if(available.empty())return {};
+    try{browser.move(available,destination,true);noteAssetWrite("assets/browser.json");return warning;}
+    catch(const std::exception& error){return "Assets imported into the browser root: "+std::string(error.what());}
 }
 
 TextureAsset AssetLibrary::makeAsset(const std::filesystem::path& path) {
     TextureAsset asset;
-    asset.id = utf8(std::filesystem::relative(path, projectRoot_));
+    asset.id = assetIdAtPath(projectRoot_,path);
     asset.name = utf8(path.filename());
     asset.hdr = extension(path) == ".hdr";
     if(resources_) return asset;
@@ -745,72 +902,79 @@ TextureAsset AssetLibrary::makeAsset(const std::filesystem::path& path) {
     return asset;
 }
 
-const TextureAsset* AssetLibrary::importTexture(const std::filesystem::path& source) {
+const TextureAsset* AssetLibrary::importTexture(const std::filesystem::path& source,const std::string& destinationFolder) {
     try {
         if (!textureFile(source)) throw std::runtime_error("Choose a PNG, JPEG, TGA, BMP or HDR image.");
+        std::string existing;try{existing=assetIdAtPath(projectRoot_,source);}catch(const std::exception&){/* External source files have no project identity. */}
+        if(!existing.empty()&&find(existing)) {select(existing);status_="Reused "+displayName(existing);return find(existing);}
         // Decode before copying so a failed import does not leave a broken asset.
-        const auto pixels = decode(source);
-        const auto folder = projectRoot_ / "assets" / "textures";
+        const auto pixels = [&] {
+            if(!resources_)return decode(source);
+            auto image=decodeManagedImage(source);
+            return Pixels{image.width,image.height,std::move(image.rgba)};
+        }();
+        const auto folder = resolveAssetPath(projectRoot_,"assets/textures");
+        std::filesystem::create_directories(folder);
         auto destination = folder / source.filename();
         if (std::filesystem::exists(destination) && std::filesystem::equivalent(source, destination)) {
-            const auto id = utf8(std::filesystem::relative(destination, projectRoot_));
+            const auto id = assetIdAtPath(projectRoot_,destination);
             if (!find(id)) addTexture(makeAsset(destination));
             select(id);
             status_ = "Imported " + utf8(destination.filename());
             return find(id);
         }
-        for (uint32_t suffix = 2; std::filesystem::exists(destination)||references_.deleted(utf8(destination.lexically_relative(projectRoot_))); ++suffix) {
+        const auto unavailable=[&](const auto& file){
+            if(std::filesystem::exists(file))return true;
+            for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.file==std::filesystem::weakly_canonical(file))return true;
+            return false;};
+        for (uint32_t suffix = 2; unavailable(destination); ++suffix) {
             destination = folder / (source.stem().native() + L"-" + std::to_wstring(suffix) + source.extension().native());
         }
         TextureAsset asset;
-        asset.id = utf8(std::filesystem::relative(destination, projectRoot_));
+        asset.id = newAssetId();
         asset.name = utf8(destination.filename());
         asset.width = pixels.width; asset.height = pixels.height;
         asset.hdr = extension(destination) == ".hdr";
-        asset.thumbnail = upload(thumbnail(pixels), false);
-        bgfx::setName(asset.thumbnail, asset.name.c_str());
+        if(!resources_) {asset.thumbnail = upload(thumbnail(pixels), false);bgfx::setName(asset.thumbnail, asset.name.c_str());}
         try { std::filesystem::copy_file(source, destination); }
         catch (...) { destroyTexture(asset.thumbnail); throw; }
+        registerAssetPath(projectRoot_,asset.id,destination);
         addTexture(std::move(asset));
         select(assets_.back().id);
         status_ = "Imported " + assets_.back().name;
+        if(const auto warning=placeImportedAssets(std::array{assets_.back().id},destinationFolder);!warning.empty())status_+='\n'+warning;
         return &assets_.back();
     } catch (const std::exception& error) { status_ = error.what(); return nullptr; }
 }
 
-std::shared_ptr<const ModelAsset> AssetLibrary::importModel(const std::filesystem::path& source) {
+std::shared_ptr<const ModelAsset> AssetLibrary::importModel(const std::filesystem::path& source,const std::string& destinationFolder) {
     try {
         const auto stage=stageModelImport(source,projectRoot_);
         auto model=publishModelImport(stage,[&](const auto& id){return references_.deleted(id);});
+        const auto newAssets=newModelImportAssets(*model,stage->reused);
         const bool registered=std::any_of(catalog_.begin(),catalog_.end(),[&](const auto& asset){return asset.id==model->id;});
         if (!stage->reused || !registered) registerModel(model);
+        else {ensureModelMaterials(*model);if(materialCatalogDirty_)refreshMaterials();}
         select(model->id);
         status_ = std::string(stage->reused ? "Reused " : "Imported ") + model->name;
+        if(const auto warning=placeImportedAssets(newAssets,destinationFolder);!warning.empty())status_+='\n'+warning;
         return model;
     } catch (const std::exception& error) { status_ = error.what(); return nullptr; }
 }
 
 size_t AssetLibrary::importFiles(const std::vector<std::filesystem::path>& sources, const std::string& destinationFolder) {
-    std::set<std::string> previous;
-    if (!destinationFolder.empty()) for (const auto& asset:catalog_) previous.insert(asset.id);
     size_t succeeded = 0;
-    std::string failures;
+    std::string failures,notices;
     for (const auto& source : sources) {
         const auto type = extension(source);
         bool imported = false;
-        if (type == ".gltf" || type == ".glb") imported = static_cast<bool>(importModel(source));
-        else if (textureFile(source)) imported = importTexture(source) != nullptr;
+        if (type == ".gltf" || type == ".glb") imported = static_cast<bool>(importModel(source,destinationFolder));
+        else if (textureFile(source)) imported = importTexture(source,destinationFolder) != nullptr;
         else status_ = "Unsupported asset format. Choose PNG, JPEG, TGA, BMP, HDR, glTF or GLB.";
-        if (imported) ++succeeded;
+        if (imported) {++succeeded;if(const auto newline=status_.find('\n');newline!=std::string::npos)notices+=status_.substr(newline);}
         else failures += "\n" + utf8(source.filename()) + ": " + status_;
     }
-    status_ = "Imported " + std::to_string(succeeded) + " of " + std::to_string(sources.size()) + " assets." + failures;
-    if (!destinationFolder.empty()) {
-        std::vector<std::string> added;
-        for (const auto& asset:catalog_) if (!previous.contains(asset.id)) added.push_back(asset.id);
-        if (!added.empty()) try { browserCatalog().move(added,destinationFolder); }
-        catch (const std::exception& error) { status_ += "\nAssets imported into the browser root: " + std::string(error.what()); }
-    }
+    status_ = "Imported " + std::to_string(succeeded) + " of " + std::to_string(sources.size()) + " assets." + failures + notices;
     return succeeded;
 }
 
@@ -849,7 +1013,7 @@ void AssetLibrary::processImports() {
 }
 
 std::string AssetLibrary::loadPreview() {
-    const auto file = projectRoot_ / "assets" / "preview.json";
+    const auto file = resolveAssetPath(projectRoot_,"assets/preview.json");
     if (!std::filesystem::exists(file)) return {};
     try {
         std::ifstream input(file);
@@ -865,7 +1029,7 @@ std::string AssetLibrary::loadPreview() {
 bool AssetLibrary::savePreview(const std::string& modelId) {
     try {
         const nlohmann::json json{{"version", 1}, {"model", modelId}};
-        std::ofstream output(projectRoot_ / "assets" / "preview.json");
+        std::ofstream output(resolveAssetPath(projectRoot_,"assets/preview.json"));
         output << json.dump(2) << '\n';
         if (!output) throw std::runtime_error("Could not write preview.json.");
         return true;
@@ -893,14 +1057,14 @@ void AssetLibrary::clear(Material& material, MaterialSlot slot) {
 
 bgfx::TextureHandle AssetLibrary::fullTexture(TextureAsset& asset, bool srgb) const {
     if (asset.hdr) throw std::runtime_error("HDR images are supported in the environment slot only.");
-    if(textureStreamer_) return textureStreamer_->request(asset.id,projectRoot_/fromUtf8(asset.id),srgb?streaming::TextureRole::Color:streaming::TextureRole::Data,
+    if(textureStreamer_) return textureStreamer_->request(asset.id,resolveAssetPath(projectRoot_,asset.id),srgb?streaming::TextureRole::Color:streaming::TextureRole::Data,
         false,nativeTextures_?UINT32_MAX:textureDemand_).handle;
     auto& handle = srgb ? asset.colorTexture : asset.dataTexture;
     auto& attempted = srgb ? asset.colorAttempted : asset.dataAttempted;
     if (!bgfx::isValid(handle) && !attempted) {
         attempted = true;
         if(asset.id==GrayTextureId||asset.id==NeutralNormalTextureId){Pixels pixels{1,1,{128,128,asset.id==NeutralNormalTextureId?uint8_t{255}:uint8_t{128},255}};handle=upload(pixels,srgb);}
-        else handle = upload(decode(projectRoot_ / fromUtf8(asset.id)), srgb);
+        else handle = upload(decode(resolveAssetPath(projectRoot_,asset.id)), srgb);
         bgfx::setName(handle, asset.name.c_str());
     }
     return handle;
@@ -950,11 +1114,11 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
             auto* image = findMutable(resolved);
             if (!image) throw std::runtime_error("Material image is unavailable: " + source.image.id);
             if(image->hdr)throw std::runtime_error("HDR images are unsupported in material slots: "+source.image.id);
-            if(!textureStreamer_&&!image->id.starts_with("builtin:")&&!std::filesystem::is_regular_file(projectRoot_/fromUtf8(image->id)))throw std::runtime_error("Material image is missing: "+source.image.id);
+            if(!textureStreamer_&&!isEngineAssetId(image->id)&&!std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,image->id)))throw std::runtime_error("Material image is missing: "+source.image.id);
             if(textureStreamer_) {
                 const auto role=slot==2?streaming::TextureRole::Normal:(slot==0||slot==4?streaming::TextureRole::Color:streaming::TextureRole::Data);
                 const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
-                const auto view=textureStreamer_->request(image->id,projectRoot_/fromUtf8(image->id),role,mips,textureEdge,priority);
+                const auto view=textureStreamer_->request(image->id,resolveAssetPath(projectRoot_,image->id),role,mips,textureEdge,priority);
                 target.handles[slot]=view.handle;target.leases[slot]=view.lease;
                 target.sourceFingerprints[slot]=view.sourceFingerprint;target.signatures[slot]=view.signature;
                 target.complete &=view.complete;target.sourceReady &=view.sourceReady;
@@ -1011,7 +1175,7 @@ std::uint8_t AssetLibrary::requiredGraphUvs(const std::shared_ptr<const Material
         std::uint8_t required{};const auto& output=materialOutputNode(*graph).output;
         for(const auto nodeId:materialGraphOrder(*graph,output.shading,output.blend)) {
             const auto* node=findMaterialNode(*graph,nodeId);
-            if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
+            if(node->kind!=MaterialNodeKind::Grunge && (node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty()))continue;
             const auto mapping=materialTextureMapping(*graph,nodeId);
             if(mapping.mode==MaterialUvMode::UV0)required|=1;
             else if(mapping.mode==MaterialUvMode::UV1)required|=2;
@@ -1032,6 +1196,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
         return fallback;
     }
     ModelMaterialTextures result;
+    result.diagnostic=programs.diagnostic;
     auto packet=std::make_shared<PreparedGraphMaterial>();
     packet->programs=programs.programs;packet->uniforms=generated.uniforms;packet->sources=generated.textures;
     packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
@@ -1046,28 +1211,40 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     streaming::detail::hash(packet->signature,generated.runtimeDefinitionSignature);
     std::unordered_map<std::string,std::uint64_t> sourceVersions;
     for(auto& binding:packet->sources) {
-        const bool normal=binding.role==MaterialGraphTextureRole::Normal;
-        auto resolved=references_.resolveTexture(binding.image.id,normal);
-        if(binding.image.empty() || resolved.empty())packet->uniforms[binding.settingsRow][1]=0;
-        if(resolved.empty())resolved=normal?NeutralNormalTextureId:GrayTextureId;
-        auto* image=findMutable(resolved);
-        if(!image || image->hdr)throw std::runtime_error("Material texture is unavailable or unsupported: "+binding.image.id);
-        const auto role=normal?streaming::TextureRole::Normal:binding.role==MaterialGraphTextureRole::Color?streaming::TextureRole::Color:streaming::TextureRole::Data;
         const auto& sampler=binding.sampler;const auto slot=binding.slot;
-        if(textureStreamer_) {
-            const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
-            const auto texture=textureStreamer_->request(resolved,projectRoot_/fromUtf8(resolved),role,mips,textureEdge,priority);
+        std::string resolved;
+        if(binding.grunge) {
+            if(!textureStreamer_)throw std::runtime_error("Generated material textures require the resource owner.");
+            const auto settings=*binding.grunge;
+            const auto key=std::to_string(grungeTextureKey(settings,GrungeTextureEdge));
+            const auto texture=textureStreamer_->requestGenerated(key,[settings]{return generateGrungeTexture(settings,GrungeTextureEdge);},GrungeTextureEdge,true,textureEdge,priority);
             packet->textures[slot]=texture.handle;packet->leases[slot]=texture.lease;
             packet->sourceFingerprints[slot]=texture.sourceFingerprint;packet->textureSignatures[slot]=texture.signature;
             result.complete &=texture.complete;result.sourceReady &=texture.sourceReady;
-            if(!bgfx::isValid(texture.handle) && !texture.diagnostic.empty())throw std::runtime_error(texture.diagnostic);
-            if(texture.sourceFingerprint) {
-                const auto [entry,inserted]=sourceVersions.emplace(resolved,texture.sourceFingerprint);
-                if(!inserted && entry->second!=texture.sourceFingerprint)result.sourceReady=false;
-            }
+            if(!texture.sourceReady || !texture.complete)result.diagnostic=texture.diagnostic.empty()?"Generating grunge texture...":texture.diagnostic;
         } else {
-            packet->textures[slot]=fullTexture(*image,role==streaming::TextureRole::Color);
-            result.complete &=bgfx::isValid(packet->textures[slot]);result.sourceReady &=result.complete;
+            const bool normal=binding.role==MaterialGraphTextureRole::Normal;
+            resolved=references_.resolveTexture(binding.image.id,normal);
+            if(binding.image.empty() || resolved.empty())packet->uniforms[binding.settingsRow][1]=0;
+            if(resolved.empty())resolved=normal?NeutralNormalTextureId:GrayTextureId;
+            auto* image=findMutable(resolved);
+            if(!image || image->hdr)throw std::runtime_error("Material texture is unavailable or unsupported: "+binding.image.id);
+            const auto role=normal?streaming::TextureRole::Normal:binding.role==MaterialGraphTextureRole::Color?streaming::TextureRole::Color:streaming::TextureRole::Data;
+            if(textureStreamer_) {
+                const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
+                const auto texture=textureStreamer_->request(resolved,resolveAssetPath(projectRoot_,resolved),role,mips,textureEdge,priority);
+                packet->textures[slot]=texture.handle;packet->leases[slot]=texture.lease;
+                packet->sourceFingerprints[slot]=texture.sourceFingerprint;packet->textureSignatures[slot]=texture.signature;
+                result.complete &=texture.complete;result.sourceReady &=texture.sourceReady;
+                if(!bgfx::isValid(texture.handle) && !texture.diagnostic.empty())throw std::runtime_error(texture.diagnostic);
+                if(texture.sourceFingerprint) {
+                    const auto [entry,inserted]=sourceVersions.emplace(resolved,texture.sourceFingerprint);
+                    if(!inserted && entry->second!=texture.sourceFingerprint)result.sourceReady=false;
+                }
+            } else {
+                packet->textures[slot]=fullTexture(*image,role==streaming::TextureRole::Color);
+                result.complete &=bgfx::isValid(packet->textures[slot]);result.sourceReady &=result.complete;
+            }
         }
         std::uint32_t flags{};
         if(sampler.wrapU==ModelWrap::Clamp)flags|=BGFX_SAMPLER_U_CLAMP;
@@ -1077,7 +1254,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
         if(sampler.minFilter==ModelFilter::Nearest||sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::NearestMipmapLinear)flags|=BGFX_SAMPLER_MIN_POINT;
         if(sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::LinearMipmapNearest)flags|=BGFX_SAMPLER_MIP_POINT;
         if(sampler.magFilter==ModelFilter::Nearest)flags|=BGFX_SAMPLER_MAG_POINT;
-        packet->flags[slot]=flags;binding.image.id=resolved;
+        packet->flags[slot]=flags;if(!binding.grunge)binding.image.id=resolved;
         streaming::detail::hash(packet->signature,flags);streaming::detail::hash(packet->signature,packet->textures[slot].idx);
         streaming::detail::hash(packet->signature,packet->textureSignatures[slot]);streaming::detail::hash(packet->signature,packet->sourceFingerprints[slot]);
     }
@@ -1137,6 +1314,11 @@ ModelMaterialTextures AssetLibrary::materialPreviewBindings(const MaterialAsset&
     validateMaterialAsset(material);
     return materialBindings(material.surface,std::max(1u,textureEdge),ResourcePriority::Selected);
 }
+PreparedTexture AssetLibrary::grungePreview(const MaterialGrungeNode& settings,std::uint32_t edge) const {
+    if(!textureStreamer_) {PreparedTexture result;result.diagnostic="Generated texture owner is unavailable.";return result;}
+    const auto key=std::to_string(grungeTextureKey(settings,GrungeTextureEdge));
+    return textureStreamer_->requestGenerated(key,[settings]{return generateGrungeTexture(settings,GrungeTextureEdge);},GrungeTextureEdge,true,std::clamp(edge,1u,GrungeTextureEdge),ResourcePriority::Selected,true);
+}
 std::unique_ptr<MaterialGraphPrograms> AssetLibrary::createMaterialNodePreviewPrograms() const {
     return graphPrograms_?graphPrograms_->createSibling():nullptr;
 }
@@ -1145,7 +1327,7 @@ ModelMaterialTextures AssetLibrary::materialNodePreviewBindings(MaterialGraphPro
 }
 
 void AssetLibrary::loadMaterial(Material& material) {
-    const auto file = projectRoot_ / "assets" / "material.json";
+    const auto file = resolveAssetPath(projectRoot_,"assets/material.json");
     if (!std::filesystem::exists(file)) return;
     try {
         std::ifstream input(file);
@@ -1179,7 +1361,7 @@ void AssetLibrary::saveMaterial(const Material& material) {
         const nlohmann::json json{{"version", 2}, {"baseColor", material.baseColor}, {"roughness", material.roughness}, {"metallic", material.metallic},
             {"albedoMap", material.albedoMap}, {"roughnessMap", material.roughnessMap}, {"metallicMap", material.metallicMap},
             {"normalMap", material.normalMap}, {"normalStrength", material.normalStrength}};
-        std::ofstream output(projectRoot_ / "assets" / "material.json");
+        std::ofstream output(resolveAssetPath(projectRoot_,"assets/material.json"));
         output << json.dump(2) << '\n';
         if (!output) throw std::runtime_error("Could not write material.json.");
     } catch (const std::exception& error) { status_ = error.what(); }
@@ -1198,7 +1380,7 @@ void AssetLibrary::clearEnvironment(EnvironmentSettings& environment,bool persis
 }
 
 void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
-    const auto file = projectRoot_ / "assets" / "environment.json";
+    const auto file = resolveAssetPath(projectRoot_,"assets/environment.json");
     if (!std::filesystem::exists(file)) return;
     try {
         std::ifstream input(file);
@@ -1221,15 +1403,15 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
 void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
     try {
         auto json=environmentSettingsJson(environment);json["version"]=4;
-        writeFileAtomically(projectRoot_ / "assets" / "environment.json",json.dump(2)+'\n');
+        writeFileAtomically(resolveAssetPath(projectRoot_,"assets/environment.json"),json.dump(2)+'\n');
     } catch (const std::exception& error) { status_ = error.what(); }
 }
 
 namespace {
 std::vector<SceneSnapshot> savedScenes(const std::filesystem::path& root) {
-    std::vector<SceneSnapshot> result;const auto directory=root/"assets/scenes";if(!std::filesystem::exists(directory))return result;
-    for(const auto& entry:std::filesystem::directory_iterator(directory))if(entry.is_regular_file()&&entry.path().extension()==".crimson-scene"){
-        const auto id="assets/scenes/"+utf8(entry.path().filename());try{result.push_back(readSceneSnapshot(root,id));}
+    std::vector<SceneSnapshot> result;
+    for(const auto& entry:scanSceneAssets(root)){
+        const auto& id=entry.id;try{result.push_back(readSceneSnapshot(root,id));}
         catch(const std::exception& error){throw std::runtime_error("Cannot inspect scene "+id+": "+error.what());}
     }return result;
 }
@@ -1237,11 +1419,11 @@ uint64_t mix(uint64_t value,uint64_t input){return (value^input)*1099511628211ul
 uint64_t deletionRevision(const std::filesystem::path& root,const AssetReferenceManager& references,uint64_t catalogRevision,const SceneDocument* active){
     auto result=mix(1469598103934665603ull,references.revision());result=mix(result,catalogRevision);
     if(active){result=mix(result,active->scene().revision());result=mix(result,active->scene().generation());result=mix(result,active->history().size());}
-    for(const auto& directory:{root/"assets/scenes",root/"assets/materials",root/"assets/models",root/"assets/textures",root/"assets/particles"})if(std::filesystem::exists(directory))
+    for(const auto& directory:{root/"Content",root/"Engine"})if(std::filesystem::exists(directory))
         for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_regular_file()){
             for(const auto c:utf8(item.path().lexically_relative(root)))result=mix(result,static_cast<uint8_t>(c));
             result=mix(result,item.file_size());result=mix(result,static_cast<uint64_t>(item.last_write_time().time_since_epoch().count()));}
-    const auto browser=root/"assets/browser.json";if(std::filesystem::exists(browser)){std::ifstream input(browser,std::ios::binary);for(char c;input.get(c);)result=mix(result,static_cast<uint8_t>(c));}
+    const auto browser=resolveAssetPath(root,"assets/browser.json");if(std::filesystem::exists(browser)){std::ifstream input(browser,std::ios::binary);for(char c;input.get(c);)result=mix(result,static_cast<uint8_t>(c));}
     return result;
 }
 size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,const std::unordered_set<std::string>& deletedModels){
@@ -1291,11 +1473,11 @@ size_t replaceDeletedParticles(SceneSnapshot& snapshot,const AssetReferenceManag
 size_t replaceDeletedModelMaterials(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,
     const std::unordered_set<std::string>& deletedMaterials,const std::filesystem::path& root){
     size_t changed{};
-    for(auto& record:snapshot.records)if(!record.modelMaterial.empty() && deletedMaterials.contains(previous.resolveMaterial(record.modelMaterial.id))) {
-        const auto replacement=next.resolveModelMaterial(record.modelMaterial.id);
+    for(auto& record:snapshot.records)for(auto& assigned:record.modelMaterials)if(!assigned.empty() && deletedMaterials.contains(previous.resolveMaterial(assigned.id))) {
+        const auto replacement=next.resolveModelMaterial(assigned.id);
         const auto material=loadMaterialAsset(root,replacement);
-        if(!modelMaterialCompatible(material))throw std::runtime_error("Box material is invalid: "+material.name);
-        if(record.modelMaterial.id!=replacement){record.modelMaterial=AssetRef<MaterialAsset>{replacement};++changed;}
+        if(!modelMaterialCompatible(material))throw std::runtime_error("Mesh material is invalid: "+material.name);
+        if(assigned.id!=replacement){assigned=AssetRef<MaterialAsset>{replacement};++changed;}
     }
     Scene::validate(snapshot.records,snapshot.properties);return changed;
 }
@@ -1303,22 +1485,22 @@ size_t replaceDeletedModelMaterials(SceneSnapshot& snapshot,const AssetReference
 void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::vector<AssetUsage> usages;
     std::unordered_set<std::string> usableMaterials;
-    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&std::filesystem::is_regular_file(projectRoot_/fromUtf8(entry.id)))usableMaterials.insert(entry.id);
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableMaterials.insert(entry.id);
     for(const auto& stored:materials_){const auto material=stored->id==materialDocumentId_?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
         visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
             usages.push_back({id,material->id,material->name,role==MaterialTextureRole::Normal?"Normal texture":"Graph texture",false,false,!usableMaterials.contains(material->id)});
         });
     }
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle){const auto effect=loadParticleAsset(projectRoot_,entry.id);
-        if(!effect.emitter.material.empty()&&!effect.emitter.material.id.starts_with("builtin:"))usages.push_back({effect.emitter.material.id,effect.id,effect.name,"Particle material"});}
-    for(const auto& id:particleDocumentReferences_)if(!id.empty()&&!id.starts_with("builtin:"))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material",true,false});
-    for(const auto& id:particleDocumentHistory_)if(!id.empty()&&!id.starts_with("builtin:"))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material undo / redo history",true,true});
-    for(const auto& id:materialDocumentReferences_)if(!id.empty()&&!id.starts_with("builtin:"))usages.push_back({id,materialDocumentId_,"Open material","Material texture",true,false});
-    for(const auto& id:materialDocumentHistory_)if(!id.empty()&&!id.starts_with("builtin:"))usages.push_back({id,materialDocumentId_,"Open material","Material texture undo / redo history",true,true});
+        if(!effect.emitter.material.empty()&&!isEngineAssetId(effect.emitter.material.id))usages.push_back({effect.emitter.material.id,effect.id,effect.name,"Particle material"});}
+    for(const auto& id:particleDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material",true,false});
+    for(const auto& id:particleDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,particleDocumentId_,"Open particle effect","Particle material undo / redo history",true,true});
+    for(const auto& id:materialDocumentReferences_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture",true,false});
+    for(const auto& id:materialDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture undo / redo history",true,true});
     // Inspect lightweight material metadata for every package, including models
     // never opened in the viewport. Authored usage cannot depend on residency.
     for(const auto& entry:catalog_) if(entry.kind==AssetKind::Model) {
-        const auto model=loadModelMaterialMetadata(projectRoot_/fromUtf8(entry.id),projectRoot_,modelResolvers());
+        const auto model=loadModelMaterialMetadata(resolveAssetPath(projectRoot_,entry.id),projectRoot_,modelResolvers());
         for(size_t index=0;index<model->materials.size();++index) {
             const auto materialId=index<model->materialIds.size()?model->materialIds[index]:importedMaterialId(model->id,index);
             usages.push_back({materialId,model->id,model->name,"Material "+std::to_string(index+1)});
@@ -1335,17 +1517,18 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
             if(record.meshCollider && !record.meshCollider->source.empty())usages.push_back({record.meshCollider->source.id,id,name,record.name+" / Mesh collision",isActive,false});
-            if(!record.modelMaterial.empty())usages.push_back({record.modelMaterial.id,id,name,record.name+" / Box material",isActive,false});
+            for(size_t slot=0;slot<record.modelMaterials.size();++slot)if(!record.modelMaterials[slot].empty())
+                usages.push_back({record.modelMaterials[slot].id,id,name,record.name+" / Material slot "+std::to_string(slot+1),isActive,false});
             if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
             if(record.environment&&!record.environment->environment.map.empty())usages.push_back({record.environment->environment.map,id,name,record.name+" / Environment",isActive,false});}
     };
     for(const auto& scene:savedScenes(projectRoot_))addScene(scene.records,scene.id,scene.name,false);
     if(active){addScene(active->scene().records(),active->assetId(),active->displayName(),true);
         for(const auto& id:active->historicalModelReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history",true,true});
-        for(const auto& id:active->historicalMaterialReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history / Box material",true,true});
+        for(const auto& id:active->historicalMaterialReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history / Material slot",true,true});
         for(const auto& id:active->historicalParticleReferences())usages.push_back({id,active->assetId(),active->displayName(),"Particle undo / redo history",true,true});}
     for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
-        const auto source=projectRoot_/"assets"/file;if(!std::filesystem::exists(source))continue;
+        const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
         try{std::ifstream input(source);const auto j=nlohmann::json::parse(input);
             for(const auto* slot:{"albedoMap","roughnessMap","metallicMap","normalMap","map","model","scene"})if(j.contains(slot)&&j[slot].is_string()){
                 // These preserved files belong to the retired sphere/preview
@@ -1367,7 +1550,7 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
             plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);}
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
-        for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(projectRoot_/fromUtf8(entry.id)))usableOwners.insert(entry.id);
+        for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableOwners.insert(entry.id);
         // A valid saved scene can arrive from disk before the browser's watcher
         // refresh. Its actual authored dependencies must still be protected.
         const auto scenes=savedScenes(projectRoot_);for(const auto& scene:scenes)usableOwners.insert(scene.id);
@@ -1375,11 +1558,12 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
         for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
             if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.meshCollider&&!entity.meshCollider->source.empty()&&models.contains(references_.resolve(entity.meshCollider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
-                (!entity.modelMaterial.empty()&&materials.contains(references_.resolveMaterial(entity.modelMaterial.id))))++count;
+                std::any_of(entity.modelMaterials.begin(),entity.modelMaterials.end(),[&](const auto& assigned){return !assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id));}))++count;
             if(count)plan.scenes.push_back({scene.id,scene.name,count});}
         if(active){for(const auto& entity:active->scene().records())if((entity.model&&models.contains(references_.resolve(entity.model->id))) || (entity.meshCollider&&!entity.meshCollider->source.empty()&&models.contains(references_.resolve(entity.meshCollider->source.id))))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalModelReferences())if(models.contains(references_.resolve(id)))plan.clearsActiveHistory=true;
-            for(const auto& entity:active->scene().records())if(!entity.modelMaterial.empty()&&materials.contains(references_.resolveMaterial(entity.modelMaterial.id)))plan.clearsActiveHistory=true;
+            for(const auto& entity:active->scene().records())for(const auto& assigned:entity.modelMaterials)
+                if(!assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalMaterialReferences())if(materials.contains(references_.resolveMaterial(id)))plan.clearsActiveHistory=true;
             for(const auto& entity:active->scene().records())if(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(particles.contains(references_.resolveParticle(id)))plan.clearsActiveHistory=true;}
@@ -1392,7 +1576,8 @@ std::vector<AssetEntry> AssetLibrary::fallbackCandidates(const std::string& id)c
     if(source->kind==AssetKind::Scene)return result;
     bool sprite=false,model=false;
     if(source->kind==AssetKind::Material)for(const auto& usage:references_.users(id))if(usage.targetId==id||references_.resolve(usage.targetId)==id){
-        sprite|=usage.ownerId.starts_with("assets/particles/");model|=usage.ownerId.starts_with("assets/models/")||usage.slot.ends_with(" / Box material");}
+        const auto owner=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& e){return e.id==usage.ownerId;});
+        sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||usage.slot.find(" / Material slot")!=std::string::npos;}
     for(const auto& entry:catalog_)if(entry.id!=id&&(entry.kind==source->kind||(source->kind==AssetKind::Environment&&entry.kind==AssetKind::Texture))){
         if(source->kind==AssetKind::Material){const auto material=findMaterial(entry.id);if(!material||(sprite&&!particleMaterialCompatible(*material))||(model&&!modelMaterialCompatible(*material)))continue;}
         result.push_back(entry);}
@@ -1489,13 +1674,19 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             for(const auto& id:active->historicalMaterialReferences())if(deletedMaterials.contains(references_.resolveMaterial(id)))clearHistory=true;
             for(const auto& id:active->historicalModelReferences())if(deletedModels.contains(references_.resolve(id))&&nextReferences.resolve(id).empty())clearHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(deletedParticles.contains(references_.resolveParticle(id)))clearHistory=true;}
-        for(const auto& entry:deleted){if(entry.kind==AssetKind::Model){const auto package=checkedManagedAssetPath(projectRoot_,entry.id).parent_path();
+        std::vector<std::filesystem::path> removedDirectories,selectedDirectories;
+        for(const auto& id:plan.folderIds)if(browserCatalog().writableFolder(id)) {
+            const auto directory=browserCatalog().folderPath(id);selectedDirectories.push_back(directory);removedDirectories.push_back(directory);
+            if(std::filesystem::is_directory(directory))for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_directory())removedDirectories.push_back(item.path());
+        }
+        for(const auto& entry:deleted){if(entry.kind==AssetKind::Model){const auto package=checkedManagedAssetPath(projectRoot_,entry.id).parent_path();removedDirectories.push_back(package);
                 for(const auto& file:std::filesystem::recursive_directory_iterator(package))if(file.is_regular_file()){
-                    const auto relative=file.path().lexically_relative(package);if(relative.begin()!=relative.end()&&*relative.begin()=="images")continue;
-                    changes.push_back({utf8(file.path().lexically_relative(projectRoot_)),std::nullopt});}}
+                    const auto independent=assetIdAtPath(projectRoot_,file.path());if(!independent.empty()&&independent!=entry.id&&!deletedIds.contains(independent)&&std::any_of(catalog_.begin(),catalog_.end(),[&](const auto& card){return card.id==independent;}))continue;
+                    changes.push_back({utf8(file.path().lexically_relative(projectRoot_)),std::nullopt});}
+                else if(file.is_directory())removedDirectories.push_back(file.path());}
             else changes.push_back({entry.id,std::nullopt});}
         // Delete may explicitly include an image also found in a model's package list; unique file targets only.
-        std::vector<AssetFileChange> unique;std::unordered_set<std::string> files;for(auto& change:changes)if(files.insert(change.id).second)unique.push_back(std::move(change));
+        std::vector<AssetFileChange> unique;std::set<std::filesystem::path> files;for(auto& change:changes)if(files.insert(checkedManagedAssetPath(projectRoot_,change.id)).second)unique.push_back(std::move(change));
         unique.push_back({"assets/references.json",nextReferences.serialize()});auto browserIds=plan.assetIds;browserIds.insert(browserIds.end(),plan.folderIds.begin(),plan.folderIds.end());
         unique.push_back({"assets/browser.json",browserCatalog().serializeWithout(browserIds)});
         auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;
@@ -1530,7 +1721,11 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             models_.clear();registeredModelRevisions_.clear();
         }
         for(const auto& change:unique) noteAssetWrite(change.id);
-        cancelDeletion();status_="Deleted "+std::to_string(plan.assetIds.size())+" asset(s).";return true;
+        std::sort(removedDirectories.begin(),removedDirectories.end(),[](const auto& a,const auto& b){return std::distance(a.begin(),a.end())>std::distance(b.begin(),b.end());});
+        for(const auto& directory:removedDirectories){std::error_code ignored;std::filesystem::remove(directory,ignored);}
+        std::string retained;
+        for(const auto& directory:selectedDirectories)if(std::filesystem::exists(directory))retained+="\nFolder retained because it still contains files: "+utf8(directory);
+        cancelDeletion();status_="Deleted "+std::to_string(plan.assetIds.size())+" asset(s)."+retained;return true;
     }catch(const std::exception& e){cancelDeletion();status_=(durable?"Assets were deleted; resource cache refresh needs attention: ":"Could not delete assets: ")+std::string(e.what());return durable;}
 }
 

@@ -10,8 +10,8 @@ namespace crimson {
 
 enum class MaterialShading { StandardPbr, Unlit };
 enum class MaterialBlend { Opaque, Mask, Alpha, Additive };
-enum class MaterialNodeKind { Output, UV, Texture2D, Scalar, Color, Multiply, Vector2, ParticleColor, RadialGradient, Saturate,
-    Add, Lerp, Panner, Time, Power };
+enum class MaterialNodeKind { Output, UV, Texture2D, Scalar, Color, Multiply, Vector2, ParticleColor, RadialGradient, Clamp,
+    Add, Lerp, Panner, Time, Power, Desaturation, Contrast, ContrastRGB, HueShift, Grunge };
 enum class MaterialValueType { Scalar, Color, Mapping, Normal, Vector2 };
 enum class MaterialPin { Value, RGB, R, G, B, A, Normal, UV, Left, Right,
     BaseColor, Roughness, Metallic, Occlusion, Emission, Opacity,
@@ -53,6 +53,13 @@ struct MaterialPannerNode {
     bool fractionalPart{};
     MaterialUvMode coordinate{MaterialUvMode::UV0};
 };
+struct MaterialGrungeNode {
+    int seed{}, tiling{1};
+    float coverage{.5f}, disorder{.5f}, detail{.5f};
+    float baseNoisiness{.55f}, dirtSpecksOpacity{.62f}, scratchesOpacity{.84f}, sharpen{.63f}, largeVariationIntensity{.9f};
+    bool invertDirt{};
+    float stainsOpacity{.35f}, leaksOpacity{};
+};
 struct MaterialTextureNode {
     AssetRef<DecodedImage> image;
     MaterialTextureRole role{MaterialTextureRole::Color};
@@ -83,6 +90,7 @@ struct MaterialNode {
     MaterialValue alpha{MaterialValueType::Scalar,{.5f,.5f,.5f,.5f}};
     MaterialTimeNode time;
     MaterialPannerNode panner;
+    MaterialGrungeNode grunge;
     MaterialOutputNode output;
 };
 struct MaterialLink {
@@ -108,6 +116,7 @@ struct MaterialPinDefinition {
 };
 
 const char* materialNodeKindName(MaterialNodeKind);
+bool materialNodeImageAdjustment(MaterialNodeKind);
 const char* materialPinName(MaterialPin);
 const char* materialValueTypeName(MaterialValueType);
 // RGB may feed a scalar input using its first (R) component, without changing

@@ -6,7 +6,7 @@ omni and Key silhouette have separate roles, with a separate player darkness ran
 See [the current rig and shared darkness
 contract](D2R_CHARACTER_LIGHTING_FINDINGS.md#implemented-crimson-contract) and
 [the architecture](ENGINE_ARCHITECTURE.md#lighting-dependencies-scopes-and-presented-player-rig)
-for current behavior. There is one current rig implementation and no selectable legacy mode.
+for current behavior. The consolidated [renderer and character lighting guide](RENDERER_AND_CHARACTER_LIGHTING.md) also covers Environment Ambient Light, point source radius/attenuation and current shader contracts. There is one current rig implementation and no selectable legacy mode.
 
 Recorded 15 October 2026. This is renderer Step 3: coverage-correct readable
 depth, camera-local light assignment, ambient visibility, scoped player lighting
@@ -18,9 +18,10 @@ lighting or depth; dark dungeon images alone are insufficient quality evidence.
 
 ## Status and preservation boundary
 
-Implementation, the Release build and focused checks are complete; user
-acceptance remains pending. The evidence sections below retain actual test
-outcomes, matched captures and before/after measurements.
+The Step 3 implementation, Release build and focused checks completed at the
+recorded checkpoint; its user acceptance was pending then. The evidence
+sections below retain those actual outcomes, matched captures and before/after
+measurements. They are not new validation of the latest renderer.
 
 Ambient Visibility and the Player Light Rig start disabled, including in older
 scene files. All light direct/caster masks start at World + Character. This
@@ -63,9 +64,12 @@ The dependencies join as follows:
    atlas binding. Blended surfaces evaluate the same response at their own
    world position; an opaque pixel behind glass cannot define that glass's
    ambient visibility.
-7. The resulting multiplier affects diffuse/specular environment lighting.
-   Direct light, emission, unlit response, fog radiance and background remain
-   separate. Existing post-processing follows the HDR scene color as before.
+7. In this historical Step 3 composition, the multiplier affected only
+   diffuse/specular environment lighting. The current Ambient Darkness
+   contract also attenuates direct scene/character lighting and custom ambient
+   color; emission follows its authored Affect Emission switch. Unlit response,
+   fog radiance and background remain separate. See the current guide before
+   changing shared lighting equations.
 
 Light assignment does not currently read opaque min/max depth. It is an
 independent producer consumed by ambient evaluation and surface lighting.

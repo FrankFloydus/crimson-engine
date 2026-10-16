@@ -15,6 +15,7 @@ struct MaterialGraphProgramsVersion {
     std::array<bgfx::UniformHandle,MaterialGraphMaxTextureBindings> samplers;
     std::uint64_t signature{};
     std::size_t bytes{};
+    bool optimized{}; // Interactive programs remain complete while optimized replacements compile.
     MaterialGraphProgramsVersion();
     ~MaterialGraphProgramsVersion();
     MaterialGraphProgramsVersion(const MaterialGraphProgramsVersion&)=delete;

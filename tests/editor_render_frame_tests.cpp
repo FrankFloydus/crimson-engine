@@ -15,8 +15,22 @@ int main() {
         using namespace crimson;
         static_assert(std::is_const_v<typename decltype(PreparedRenderFrame::world)::element_type>);
 
+        auto hover=std::make_shared<PreparedEditorModel>();
+        hover->materials.resize(2);hover->textures.resize(2);
+        require(!materialSlotPreviewReady(hover),"Unpublished hover candidate replaced the authored mesh.");
+        hover->ready=true;hover->textures[0].complete=false;
+        require(materialSlotPreviewReady(hover),"Coherent coarse hover textures unnecessarily waited for refinement.");
+        hover->textures[1].graphPending=true;
+        require(!materialSlotPreviewReady(hover),"Partial shader hover candidate replaced the authored material.");
+        hover->textures[1].graphPending=false;hover->textures[1].sourceReady=false;
+        require(!materialSlotPreviewReady(hover),"Stale texture hover candidate replaced the authored material.");
+        hover->textures[1].sourceReady=true;hover->textures[1].flags[0]=0;
+        require(!materialSlotPreviewReady(hover),"Missing hover texture was treated as drawable.");
+        hover->textures[1].flags[0]=UINT32_MAX;hover->textures.pop_back();
+        require(!materialSlotPreviewReady(hover),"Incomplete slot bindings replaced the authored mesh.");
+
         ExtractedScene extracted;
-        extracted.models.push_back({71,"model-a",math::translation({2,3,4}),"material-a",true,false});
+        extracted.models.push_back({71,"model-a",math::translation({2,3,4}),{AssetRef<MaterialAsset>{"material-a"}},true,false});
         extracted.models.front().lightingCategory=lighting_scope::Character;
         extracted.directional.push_back({});extracted.directional.front().intensity=2.25f;
         extracted.points.push_back({});extracted.points.front().position={8,9,10};
@@ -60,7 +74,7 @@ int main() {
             std::move(focusEntities),focusBounds,Vec3{3,4,5});
         require(frozen->points.data()==pointStorage && frozen->particles.data()==particleStorage,
             "World publication copied packet arrays instead of transferring their storage.");
-        require(extracted.models.size()==1 && extracted.models.front().materialId=="material-a",
+        require(extracted.models.size()==1 && extracted.models.front().materialOverrides==ModelMaterialOverrides{AssetRef<MaterialAsset>{"material-a"}},
             "Freezing world lighting consumed receiver metadata before view preparation.");
         require(frozen->shadowWorldId==903 && frozen->shadowResolution==512,
             "World identity or shadow quality was lost at the prepared-frame boundary.");

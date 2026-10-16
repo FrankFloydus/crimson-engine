@@ -2,6 +2,7 @@
 #include "scene/BuiltinModels.h"
 #include "MaterialAsset.h"
 #include "AtomicFile.h"
+#include "ContentStorage.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -18,11 +19,11 @@ namespace {
 using Json=nlohmann::json;
 std::filesystem::path path(const std::string& id){return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));}
 std::string text(const std::filesystem::path& file){std::ifstream in(file,std::ios::binary);if(!in)throw std::runtime_error("Cannot read asset transaction file.");return {std::istreambuf_iterator<char>(in),{}};}
-bool builtin(const std::string& id){return id.starts_with("builtin:");}
+bool builtin(const std::string& id){return isEngineAssetId(id);}
 bool knownBuiltin(const std::string& id){return id==GrayTextureId||id==NeutralNormalTextureId||id==DefaultMaterialId||id==DefaultParticleMaterialId||id==StudioEnvironmentId||isBuiltinModel(id);}
-bool particleIdentity(const std::string& id){const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&relative.extension()==".crimson-particle";}
-bool materialIdentity(const std::string& id){const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&relative.extension()==".crimson-material";}
-void validateMaterialTarget(const std::string& target){if(!target.empty()&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId&&!materialIdentity(target))throw std::runtime_error("Material replacement must reference a managed material or protected material default.");}
+bool particleIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return resolveAssetPath(root,id).extension()==".crimson-particle";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&relative.extension()==".crimson-particle";}
+bool materialIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return resolveAssetPath(root,id).extension()==".crimson-material";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&relative.extension()==".crimson-material";}
+void validateMaterialTarget(const std::filesystem::path& root,const std::string& target){if(!target.empty()&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId&&!materialIdentity(root,target))throw std::runtime_error("Material replacement must reference a managed material or protected material default.");}
 bool equalFiles(const std::filesystem::path& a,const std::filesystem::path& b){
     if(!std::filesystem::is_regular_file(a)||!std::filesystem::is_regular_file(b)||std::filesystem::file_size(a)!=std::filesystem::file_size(b))return false;
     std::ifstream left(a,std::ios::binary),right(b,std::ios::binary);std::array<char,4096> l{},r{};
@@ -47,10 +48,10 @@ void restore(const std::filesystem::path& root,const std::filesystem::path& dire
 }
 }
 std::filesystem::path checkedManagedAssetPath(const std::filesystem::path& root,const std::string& id){
-    const auto relative=path(id);if(relative.empty()||relative.has_root_path()||*relative.begin()!="assets")throw std::runtime_error("Asset file must stay under the managed assets directory.");
+    const auto relative=path(id);if(relative.empty()||relative.has_root_path()||(!isAssetUuid(id)&&*relative.begin()!="assets"&&*relative.begin()!="Content"&&*relative.begin()!=".crimson"))throw std::runtime_error("Asset file must stay under Content or private game metadata.");
     for(const auto& part:relative)if(part=="..")throw std::runtime_error("Asset path cannot contain parent traversal.");
-    const auto canonicalRoot=std::filesystem::weakly_canonical(root),result=std::filesystem::weakly_canonical(root/relative),within=result.lexically_relative(canonicalRoot);
-    if(within.empty()||within.is_absolute()||*within.begin()!="assets")throw std::runtime_error("Asset path escapes the project through a redirected directory.");return result;
+    const auto canonicalRoot=std::filesystem::weakly_canonical(root),result=isAssetUuid(id)||*relative.begin()=="assets"?resolveAssetPath(root,id):std::filesystem::weakly_canonical(root/relative),within=result.lexically_relative(canonicalRoot);
+    if(within.empty()||within.is_absolute()||*within.begin()==".."||*within.begin()=="Engine"||(*within.begin()!="assets"&&*within.begin()!="Content"&&*within.begin()!=".crimson"))throw std::runtime_error("Asset path escapes writable game content.");return result;
 }
 void recoverAssetTransactions(const std::filesystem::path& root){
     const auto base=checkedManagedAssetPath(root,"assets/.resource-transactions");if(!std::filesystem::exists(base))return;
@@ -85,24 +86,24 @@ void commitAssetTransaction(const std::filesystem::path& root,std::span<const As
     std::error_code ignored;std::filesystem::remove_all(directory,ignored);
 }
 AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(std::move(root)){
-    recoverAssetTransactions(root_);const auto file=root_/"assets/references.json";
+    recoverAssetTransactions(root_);const auto file=resolveAssetPath(root_,"assets/references.json");
     try{if(!std::filesystem::exists(file))return;const auto j=Json::parse(text(file));if(j.at("version")!=1)throw std::runtime_error("Unsupported asset reference state version.");
         for(const auto& id:j.at("deleted")){const auto value=id.get<std::string>();if(builtin(value))throw std::runtime_error("Built-in asset cannot be deleted.");checkedManagedAssetPath(root_,value);deleted_.insert(value);}
         for(auto it=j.at("replacements").begin();it!=j.at("replacements").end();++it){const auto replacement=it.value().get<std::string>();
             if(!deleted_.contains(it.key()))throw std::runtime_error("Replacement source is not a deleted managed asset.");
             if(builtin(replacement)&&!knownBuiltin(replacement))throw std::runtime_error("Replacement references an unknown built-in resource.");
             if(!replacement.empty()&&!builtin(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
-        for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(id))resolveParticle(id);else if(materialIdentity(id))validateMaterialTarget(resolve(id));else resolve(id);}
+        for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(root_,id))resolveParticle(id);else if(materialIdentity(root_,id))validateMaterialTarget(root_,resolve(id));else resolve(id);}
     }catch(const std::exception& e){deleted_.clear();replacements_.clear();writable_=false;status_="Asset reference state could not be loaded: "+std::string(e.what())+" The existing file was preserved; destructive asset operations are disabled.";}
 }
 std::string AssetReferenceManager::resolve(const std::string& id)const{
-    std::unordered_set<std::string> visited;auto current=id;
+    std::unordered_set<std::string> visited;auto current=contentStorageReady(root_)&&!id.empty()?canonicalAssetId(id):id;
     while(!current.empty()){if(!visited.insert(current).second)throw std::runtime_error("Asset fallback references contain a cycle.");
         const auto found=replacements_.find(current);if(found==replacements_.end())return deleted_.contains(current)?std::string{}:current;current=found->second;}
     return {};
 }
 std::string AssetReferenceManager::resolveTexture(const std::string& id,bool normal)const{auto result=resolve(id);if(!id.empty()&&(result.empty()||result==GrayTextureId))return normal?NeutralNormalTextureId:GrayTextureId;return result;}
-std::string AssetReferenceManager::resolveMaterial(const std::string& id)const{const auto result=resolve(id);validateMaterialTarget(result);return result;}
+std::string AssetReferenceManager::resolveMaterial(const std::string& id)const{const auto result=resolve(id);validateMaterialTarget(root_,result);return result;}
 std::string AssetReferenceManager::resolveModelMaterial(const std::string& id)const{
     const auto result=resolveMaterial(id);
     if(result==DefaultParticleMaterialId)throw std::runtime_error("Box material replacement requires a Standard PBR material.");
@@ -111,13 +112,13 @@ std::string AssetReferenceManager::resolveModelMaterial(const std::string& id)co
 std::string AssetReferenceManager::resolveEnvironment(const std::string& id)const{const auto result=resolve(id);return result==StudioEnvironmentId?std::string{}:result;}
 std::string AssetReferenceManager::resolveParticle(const std::string& id)const{
     auto result=resolve(id);if(result.empty())return result;
-    if(!particleIdentity(result))
+    if(!particleIdentity(root_,result))
         throw std::runtime_error("Particle replacement must reference a managed particle effect.");
-    checkedManagedAssetPath(root_,result);return result;
+    return result;
 }
 std::string AssetReferenceManager::resolveParticleMaterial(const std::string& id)const{
     const auto result=resolve(id);if(result.empty()||(result==DefaultMaterialId&&deleted_.contains(id)))return DefaultParticleMaterialId;
-    validateMaterialTarget(result);if(!builtin(result))checkedManagedAssetPath(root_,result);return result;
+    validateMaterialTarget(root_,result);if(!builtin(result))checkedManagedAssetPath(root_,result);return result;
 }
 std::string AssetReferenceManager::resolveParticleTexture(const std::string& id)const{
     const auto result=resolve(id);return result==GrayTextureId?std::string{}:result;
@@ -168,10 +169,11 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
         if(selected.contains(target))throw std::runtime_error("A fallback cannot be another asset in the deletion batch.");
         if(!target.empty()&&!builtin(target))checkedManagedAssetPath(root_,target);
         if(a.kind==AssetKind::Particle && !target.empty()) {
-            if(!particleIdentity(target))
+            if(!particleIdentity(root_,target))
                 throw std::runtime_error("Particle replacement must reference another managed particle effect.");
         }
-        if(a.kind==AssetKind::Material)validateMaterialTarget(target);
+        if(a.kind==AssetKind::Material){validateMaterialTarget(root_,target);if(!target.empty()&&!builtin(target)&&checkedManagedAssetPath(root_,target).extension()!=".crimson-material")throw std::runtime_error("Material replacement has an incompatible asset kind.");}
+        if(a.kind==AssetKind::Particle&&!target.empty()&&checkedManagedAssetPath(root_,target).extension()!=".crimson-particle")throw std::runtime_error("Particle replacement has an incompatible asset kind.");
         if(builtin(target)&&(!knownBuiltin(target)||(a.kind==AssetKind::Texture&&target!=GrayTextureId&&target!=NeutralNormalTextureId)||
             (a.kind==AssetKind::Environment&&target!=StudioEnvironmentId)||(a.kind==AssetKind::Material&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle))
             throw std::runtime_error("Built-in replacement has an incompatible asset kind.");
@@ -179,9 +181,9 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
         deleted.insert(a.id);redirects[a.id]=std::move(target);
     }
     auto previousDeleted=std::move(deleted_);auto previousRedirects=std::move(replacements_);deleted_=std::move(deleted);replacements_=std::move(redirects);
-    try{for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(id))resolveParticle(id);else if(materialIdentity(id))validateMaterialTarget(resolve(id));else resolve(id);}}
+    try{for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(root_,id))resolveParticle(id);else if(materialIdentity(root_,id))validateMaterialTarget(root_,resolve(id));else resolve(id);}}
     catch(...){deleted_=std::move(previousDeleted);replacements_=std::move(previousRedirects);throw;}++revision_;
 }
 std::string AssetReferenceManager::serialize()const{std::vector<std::string> deleted(deleted_.begin(),deleted_.end());std::sort(deleted.begin(),deleted.end());return Json{{"version",1},{"deleted",deleted},{"replacements",replacements_}}.dump(2)+"\n";}
-void AssetReferenceManager::save()const{if(!writable_)throw std::runtime_error(status_);writeFileAtomically(root_/"assets/references.json",serialize());}
+void AssetReferenceManager::save()const{if(!writable_)throw std::runtime_error(status_);writeFileAtomically(resolveAssetPath(root_,"assets/references.json"),serialize());}
 }

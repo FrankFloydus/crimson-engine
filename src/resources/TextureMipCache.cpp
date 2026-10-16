@@ -59,6 +59,26 @@ std::vector<TextureMip> generateTextureMips(std::uint32_t width,std::uint32_t he
     }
     return result;
 }
+TextureMipCache generatedTextureMipCache(std::uint64_t key,TextureMip image) {
+    TextureMipCache result;result.key=key;result.role=TextureRole::Data;
+    result.memory=generateTextureMips(image.width,image.height,image.rgba,TextureRole::Data);
+    for(const auto& mip:result.memory)result.levels.push_back({mip.width,mip.height,0,mip.rgba.size(),checksum(mip.rgba)});
+    return result;
+}
+TextureMipCache generatedTextureThumbnail(const TextureMipCache& linear) {
+    if(linear.memory.size()!=linear.levels.size()||linear.memory.empty())throw std::runtime_error("Generated thumbnail requires resident linear mip pixels.");
+    TextureMipCache result;result.key=linear.key;result.role=TextureRole::Data;result.memory=linear.memory;
+    for(auto& mip:result.memory) {
+        for(std::size_t offset=0;offset<mip.rgba.size();offset+=4)for(unsigned channel=0;channel<3;++channel)mip.rgba[offset+channel]=byte(gamma(mip.rgba[offset+channel]/255.0));
+        result.levels.push_back({mip.width,mip.height,0,mip.rgba.size(),checksum(mip.rgba)});
+    }
+    return result;
+}
+std::size_t textureMipCacheBytes(const TextureMipCache& cache) {
+    std::size_t bytes=sizeof(cache)+cache.levels.capacity()*sizeof(MipInfo)+cache.memory.capacity()*sizeof(TextureMip);
+    for(const auto& mip:cache.memory)bytes+=mip.rgba.capacity();
+    return bytes;
+}
 TextureMipCache writeTextureMipCache(const std::filesystem::path& file,std::uint64_t key,TextureRole role,std::span<const TextureMip> levels) {
     if (levels.empty() || levels.size()>32) throw std::runtime_error("Texture mip cache has no valid levels.");
     TextureMipCache descriptor{file,key,role,{}}; std::uint64_t offset=HeaderBytes+EntryBytes*levels.size();
@@ -102,6 +122,10 @@ TextureMipCache readTextureMipCache(const std::filesystem::path& file,std::uint6
 }
 TextureMip readTextureMip(const TextureMipCache& cache,std::uint32_t level) {
     if (level>=cache.levels.size()) throw std::out_of_range("Texture mip level is unavailable.");
+    if(!cache.memory.empty()) {
+        if(cache.memory.size()!=cache.levels.size())throw std::runtime_error("Generated mip payload is incomplete.");
+        return cache.memory[level];
+    }
     const auto& info=cache.levels[level]; std::ifstream input(cache.file,std::ios::binary);
     input.seekg(static_cast<std::streamoff>(info.offset));
     TextureMip result{info.width,info.height,std::vector<std::uint8_t>(static_cast<std::size_t>(info.bytes))};

@@ -96,7 +96,12 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::Multiply:aliases="multiply mul product times math node";break;
     case MaterialNodeKind::ParticleColor:aliases="particle color colour rgb rgba tint opacity brightness attribute input node";break;
     case MaterialNodeKind::RadialGradient:aliases="radial gradient soft disc disk circle mask falloff opacity node";break;
-    case MaterialNodeKind::Saturate:aliases="saturate clamp limit zero one 0 1 math node";break;
+    case MaterialNodeKind::Clamp:aliases="saturate clamp limit zero one 0 1 math node";break;
+    case MaterialNodeKind::Desaturation:aliases="desaturation desaturate saturation saturate color colour grayscale greyscale adjustment node";break;
+    case MaterialNodeKind::Contrast:aliases="contrast grayscale greyscale black white bw adjustment node";break;
+    case MaterialNodeKind::ContrastRGB:aliases="contrastrgb contrast rgb color colour adjustment node";break;
+    case MaterialNodeKind::HueShift:aliases="hueshift hue shift rotate color colour degrees adjustment node";break;
+    case MaterialNodeKind::Grunge:aliases="grunge noise procedural dirt stains scratches leaks roughness imperfections seed tile node";break;
     case MaterialNodeKind::Add:aliases="add addition plus + sum math node";break;
     case MaterialNodeKind::Lerp:aliases="lerp linear interpolate interpolation mix blend math node";break;
     case MaterialNodeKind::Power:aliases="power pow exponent math node";break;
@@ -120,8 +125,9 @@ const char* uvModeName(MaterialUvMode mode) {
 }
 ImVec4 nodeColor(MaterialNodeKind kind) {
     switch(kind) {
-    case MaterialNodeKind::Scalar:case MaterialNodeKind::Multiply:case MaterialNodeKind::RadialGradient:case MaterialNodeKind::Saturate:
-    case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::Scalar:case MaterialNodeKind::Multiply:case MaterialNodeKind::RadialGradient:case MaterialNodeKind::Clamp:
+    case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:
+    case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:case MaterialNodeKind::Grunge:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
     case MaterialNodeKind::Texture2D:return {.23f,.48f,.65f,1};
     case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:case MaterialNodeKind::Panner:case MaterialNodeKind::Time:return {.22f,.58f,.54f,1};
@@ -263,6 +269,7 @@ struct MaterialGraphEditor::State {
     std::optional<MaterialGraphPreviewTarget> preview;
     std::map<std::pair<MaterialNodeId,MaterialPin>,HdrColorEditorState> colorEditors;
     std::map<MaterialNodeId,Vec3> scaleBaselines;
+    std::map<MaterialNodeId,TexturePresentation> generatedTextures;
     MaterialLinkId contextLink{};
     std::array<char,128> search{};
     int searchIndex{};
@@ -399,6 +406,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     if(s.creationGesture && s.creationItem)ImGui::KeepAliveID(s.creationItem);
     std::erase_if(s.colorEditors,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first.first);});
     std::erase_if(s.scaleBaselines,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
+    std::erase_if(s.generatedTextures,[&](const auto& entry){const auto* node=findMaterialNode(document.definition().graph,entry.first);return !node||node->kind!=MaterialNodeKind::Grunge;});
     auto* previous=ed::GetCurrentEditor();ed::SetCurrentEditor(s.context);
     const bool editable=document.editable();
     if(!findMaterialNode(document.definition().graph,s.selected))s.selected=0;
@@ -466,6 +474,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const char* title=node.kind==MaterialNodeKind::Output?(output.shading==MaterialShading::StandardPbr?"Lit PBR Output":"Unlit Output"):
             node.name.empty()?materialNodeKindName(node.kind):node.name.c_str();
         float width=std::clamp(ImGui::CalcTextSize(title).x+24,220.f,320.f);
+        if(node.kind==MaterialNodeKind::Grunge)width=std::max(width,300.f);
         for(std::size_t row=0;row<std::max(inputs.size(),outputs.size());++row) {
             const float left=row<inputs.size()?ImGui::CalcTextSize(inputs[row].name).x+18:0;
             const float right=row<outputs.size()?ImGui::CalcTextSize(outputs[row].name).x+18:0;
@@ -510,6 +519,49 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             if(node.time.periodEnabled){ImGui::SetNextItemWidth(labeledWidth("Period"));field("Change time period",[](auto& n){return ImGui::DragFloat("Period",&n.time.period,.01f,0,0,"%.3f");});}
         } else if(node.kind==MaterialNodeKind::Panner) {
             field("Change panner fractional part",[](auto& n){return ImGui::Checkbox("Fractional part",&n.panner.fractionalPart);});
+        } else if(node.kind==MaterialNodeKind::Grunge) {
+            const float edge=std::min(width,160.f);const auto origin=ImGui::GetCursorScreenPos();
+            const ImVec2 imageMinimum{origin.x+(width-edge)*.5f,origin.y},imageMaximum{imageMinimum.x+edge,imageMinimum.y+edge};
+            const auto screenMinimum=ed::CanvasToScreen(imageMinimum),screenMaximum=ed::CanvasToScreen(imageMaximum);
+            const bool imageVisible=screenMaximum.x>canvasMinimum.x && screenMaximum.y>canvasMinimum.y &&
+                screenMinimum.x<canvasMinimum.x+canvasSize.x && screenMinimum.y<canvasMinimum.y+canvasSize.y;
+            auto generated=imageVisible && assets.generatedTexture?assets.generatedTexture(node):TexturePresentation{};
+            if(generated.available && generated.textureId && generated.width && generated.height)s.generatedTextures[node.id]=generated;
+            else if(const auto cachedImage=s.generatedTextures.find(node.id);cachedImage!=s.generatedTextures.end()) {
+                const auto diagnostic=generated.diagnostic;generated=cachedImage->second;generated.diagnostic=diagnostic;
+            }
+            ImGui::Dummy({width,edge});auto* draw=ImGui::GetWindowDrawList();
+            draw->AddRectFilled(imageMinimum,imageMaximum,ImGui::GetColorU32(ImGuiCol_FrameBg));
+            if(generated.available && generated.textureId)draw->AddImage(static_cast<ImTextureID>(generated.textureId),imageMinimum,imageMaximum,
+                {0,0},{static_cast<float>(node.grunge.tiling),static_cast<float>(node.grunge.tiling)});
+            if(!generated.diagnostic.empty() && ImGui::IsItemHovered()) {
+                ed::Suspend();ImGui::SetTooltip("%s",generated.diagnostic.c_str());ed::Resume();
+            }
+            s.presentation.images.push_back({node.id,point(imageMinimum),point(imageMaximum),generated.available?generated.textureId:0});
+            const float parameterOrigin=ImGui::GetCursorPosX();
+            const auto parameter=[&](const char* label,const char* transaction,const auto& draw) {
+                ImGui::SetNextItemWidth(std::max(1.f,labeledWidth(label)-std::max(0.f,ImGui::GetCursorPosX()-parameterOrigin)));field(transaction,draw);
+                s.presentation.controls.push_back({node.id,label,point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
+            };
+            parameter("Seed","Change grunge seed",[](auto& n){return ImGui::SliderInt("Seed",&n.grunge.seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);});
+            parameter("Tiling","Change grunge tiling",[](auto& n){return ImGui::SliderInt("Tiling",&n.grunge.tiling,1,64,"%d",ImGuiSliderFlags_AlwaysClamp);});
+            parameter("Coverage","Change grunge coverage",[](auto& n){return ImGui::SliderFloat("Coverage",&n.grunge.coverage,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            parameter("Disorder","Change grunge disorder",[](auto& n){return ImGui::SliderFloat("Disorder",&n.grunge.disorder,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            parameter("Detail","Change grunge detail",[](auto& n){return ImGui::SliderFloat("Detail",&n.grunge.detail,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            const bool layersOpen=ImGui::TreeNodeEx("Layers",ImGuiTreeNodeFlags_SpanAvailWidth);
+            s.presentation.controls.push_back({node.id,"Layers",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
+            if(layersOpen) {
+                parameter("Base Noisiness","Change grunge base noisiness",[](auto& n){return ImGui::SliderFloat("Base Noisiness",&n.grunge.baseNoisiness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Dirt Specks Opacity","Change grunge dirt specks opacity",[](auto& n){return ImGui::SliderFloat("Dirt Specks Opacity",&n.grunge.dirtSpecksOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Stains Opacity","Change grunge stains opacity",[](auto& n){return ImGui::SliderFloat("Stains Opacity",&n.grunge.stainsOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Scratches Opacity","Change grunge scratches opacity",[](auto& n){return ImGui::SliderFloat("Scratches Opacity",&n.grunge.scratchesOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Leaks Opacity","Change grunge leaks opacity",[](auto& n){return ImGui::SliderFloat("Leaks Opacity",&n.grunge.leaksOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Sharpen","Change grunge sharpen",[](auto& n){return ImGui::SliderFloat("Sharpen",&n.grunge.sharpen,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Large Variation Intensity","Change grunge large variation intensity",[](auto& n){return ImGui::SliderFloat("Large Variation Intensity",&n.grunge.largeVariationIntensity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                field("Toggle grunge dirt inversion",[](auto& n){return ImGui::Checkbox("Invert Dirt",&n.grunge.invertDirt);});
+                s.presentation.controls.push_back({node.id,"Invert Dirt",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
+                ImGui::TreePop();
+            }
         } else if(node.kind==MaterialNodeKind::UV) {
             ImGui::SetNextItemWidth(width);
             choice("Change UV mapping",[&](auto& n){int mode=static_cast<int>(n.uv.mode);
@@ -618,7 +670,10 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     } else field("Change input default",[&](auto& n){
                         MaterialValue value=materialInputDefault(n,definition.pin);bool changed{};
                         if(value.type==MaterialValueType::Vector2)changed=ImGui::DragFloat2("##Default",value.value.data(),.01f,0,0,"%.2f");
-                        else changed=ImGui::DragFloat("##Default",&value.value[0],.01f,0,node.kind==MaterialNodeKind::Output?1.f:0.f,"%.3f");
+                        else if(materialNodeImageAdjustment(n.kind)&&definition.pin==MaterialPin::Right) {
+                            const bool hue=n.kind==MaterialNodeKind::HueShift;
+                            changed=ImGui::SliderFloat("##Default",&value.value[0],hue?-180.f:0.f,hue?180.f:2.f,hue?"%.1f deg":"%.3f");
+                        } else changed=ImGui::DragFloat("##Default",&value.value[0],.01f,0,node.kind==MaterialNodeKind::Output?1.f:0.f,"%.3f");
                         if(definition.pin==MaterialPin::ScaleXY && ImGui::IsItemActivated())s.scaleBaselines[node.id]=n.uv.scale;
                         if(changed) {
                             const auto before=n.uv.scale;setInputDefault(n,definition.pin,value);
@@ -728,8 +783,9 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         std::vector<MaterialGraphNodeChoice> choices;
         try {
             if(s.addFrom)choices=materialGraphNodeChoices(document.definition().graph,*s.addFrom);
-            else for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Vector2,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Saturate,
-                MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power})choices.push_back({kind});
+            else for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Vector2,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Clamp,
+                MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power,
+                MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift,MaterialNodeKind::Grunge})choices.push_back({kind});
         } catch(const std::exception& error){s.status=error.what();}
         std::erase_if(choices,[&](const auto& choice){return !nodeMatches(choice.kind,s.search.data());});
         if(!choices.empty())s.searchIndex=(s.searchIndex%static_cast<int>(choices.size())+static_cast<int>(choices.size()))%static_cast<int>(choices.size());
@@ -921,6 +977,12 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     }
     for(auto& combo:s.presentation.combos) {
         combo.minimum=point(ed::CanvasToScreen(point(combo.minimum)));combo.maximum=point(ed::CanvasToScreen(point(combo.maximum)));
+    }
+    for(auto& control:s.presentation.controls) {
+        control.minimum=point(ed::CanvasToScreen(point(control.minimum)));control.maximum=point(ed::CanvasToScreen(point(control.maximum)));
+    }
+    for(auto& image:s.presentation.images) {
+        image.minimum=point(ed::CanvasToScreen(point(image.minimum)));image.maximum=point(ed::CanvasToScreen(point(image.maximum)));
     }
     s.layout=materialGraphLayoutHash(document.definition().graph);
     ed::SetCurrentEditor(previous);

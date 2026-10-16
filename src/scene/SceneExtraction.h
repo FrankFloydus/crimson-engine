@@ -12,7 +12,7 @@ struct ExtractedModel {
     EntityId id{};
     std::string assetId;
     Mat4 world{};
-    std::string materialId;
+    ModelMaterialOverrides materialOverrides;
     bool castShadows{true},receiveShadows{true};
     SurfaceLightingScopes lightingScopes{};
     std::uint32_t lightingCategory{lighting_scope::World};

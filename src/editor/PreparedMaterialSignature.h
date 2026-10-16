@@ -1,8 +1,20 @@
 #pragma once
 #include "crimson-renderer/Renderer.h"
 #include "resources/CacheIO.h"
+#include <unordered_map>
 
 namespace crimson {
+inline bool preparedGraphSourcesCoherent(const PreparedGraphMaterial& graph,std::unordered_map<std::string,std::uint64_t>& versions) {
+    for(const auto& source:graph.sources) {
+        // Generated sources already name immutable recipe content. Only shared
+        // managed images can mix file revisions across material bindings.
+        if(source.grunge)continue;
+        const auto fingerprint=graph.sourceFingerprints[source.slot];if(!fingerprint)continue;
+        const auto [found,inserted]=versions.emplace(source.image.id,fingerprint);
+        if(!inserted&&found->second!=fingerprint)return false;
+    }
+    return true;
+}
 // Prepared graph packets already fingerprint their complete program, uniforms,
 // sampler state and immutable texture versions. Frame preparation must not
 // serialize and validate the authored graph again for every view and caster.

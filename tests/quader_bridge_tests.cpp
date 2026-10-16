@@ -1,5 +1,7 @@
 #include "quader/QuaderBridge.h"
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "resources/ImageDecoder.h"
 #include "resources/Paths.h"
 #include "resources/StreamingModel.h"
@@ -28,13 +30,22 @@ void near(float actual,float expected){require(std::isfinite(actual)&&std::abs(a
 template<class Operation> void rejects(Operation operation){try{operation();}catch(const std::exception&){return;}throw std::runtime_error("Expected a rejected Quader operation.");}
 struct Temporary {
     fs::path root=fs::temp_directory_path()/("crimson-quader-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    Temporary(){fs::create_directories(root);}
+    Temporary(){fs::create_directories(root);initializeContentStorage(root);}
     ~Temporary(){try{const auto target=fs::weakly_canonical(root),parent=fs::weakly_canonical(fs::temp_directory_path());
         if(target.parent_path()!=parent||!target.filename().string().starts_with("crimson-quader-tests-"))return;
         std::error_code ignored;fs::remove_all(target,ignored);}catch(...){}}
 };
 std::string utf8(const fs::path& path){const auto value=path.generic_u8string();return {reinterpret_cast<const char*>(value.data()),value.size()};}
 std::string fileBytes(const fs::path& path){std::ifstream input(path,std::ios::binary);require(static_cast<bool>(input),"Cannot read test asset.");return {std::istreambuf_iterator<char>(input),{}};}
+void commit(const fs::path& root,std::span<const AssetFileChange> files) {
+    initializeContentStorage(root);
+    commitAssetTransaction(root,files);
+    for(const auto& file:files)if(file.contents&&file.id!="assets/references.json")registerAssetPath(root,file.id,resolveAssetPath(root,file.id));
+}
+std::string logicalFile(const QuaderImportResult& result,const std::string& id) {
+    for(const auto& file:result.files)if(canonicalAssetId(file.id)==canonicalAssetId(id))return file.id;
+    throw std::runtime_error("Prepared Quader package lost its file provenance.");
+}
 fs::path fixture(){
 #ifdef CRIMSON_QUADER_FIXTURE_DIR
     return fs::path(CRIMSON_QUADER_FIXTURE_DIR)/"godot-bridge-fixture-v2";
@@ -42,8 +53,8 @@ fs::path fixture(){
     return fs::path(__FILE__).parent_path()/"fixtures/quader/godot-bridge-fixture-v2";
 #endif
 }
-std::size_t models(const fs::path& root){std::size_t count{};if(fs::is_directory(root/"assets/models"))for(const auto& entry:fs::directory_iterator(root/"assets/models")){
-    require(!entry.path().filename().string().starts_with(".staging-"),"Quader import leaked a staging directory.");if(fs::is_regular_file(entry.path()/"manifest.json"))++count;}return count;}
+std::size_t models(const fs::path& root){std::size_t count{};for(const auto& entry:storedAssetPaths(root))if(entry.file.filename()=="manifest.json"&&fs::is_regular_file(entry.file))++count;
+    for(const auto& entry:fs::directory_iterator(root/".crimson"))require(!entry.path().filename().string().starts_with(".staging-quader-"),"Quader import leaked a staging directory.");return count;}
 QuaderSourceScene synthetic(){
     QuaderSourceScene scene;scene.project.id="66666666-6666-4666-8666-666666666666";scene.project.name="Synthetic";scene.id="11111111-1111-4111-8111-111111111111";scene.relativePath="Scenes/test.qdr";scene.fingerprint={123,456};
     QuaderSourceMesh mesh;mesh.name="Triangle";mesh.displayEntity=1;mesh.geometryEntity=2;mesh.definitionEntity=3;mesh.transform=math::translation({2,3,4});
@@ -60,13 +71,13 @@ void geometryAndLights(){
     require(!result.meshes[0].collisionModelId.empty()&&result.preparedModels.size()==2,"Static triangle collision was not staged as a standalone model.");
     near(result.lights[1].local[12],2);near(result.lights[1].local[13],4);near(result.lights[1].radius,8);near(result.lights[1].intensity,2);
     const auto direction=math::transformDirection(result.lights[0].local,{0,0,-1});near(direction[0],0);near(direction[1],-1);near(direction[2],0);
-    require(models(temporary.root)==0,"Preparation published a live model package.");commitAssetTransaction(temporary.root,result.files);
+    require(models(temporary.root)==0,"Preparation published a live model package.");commit(temporary.root,result.files);
     ModelResolvers resolvers;resolvers.material=[](const std::string& id)->std::optional<ModelMaterial>{if(id==DefaultMaterialId)return defaultMaterialAsset().surface;return std::nullopt;};
-    auto loaded=loadModelPackage(temporary.root/pathFromUtf8(result.meshes[0].modelId),temporary.root,resolvers);near(loaded->bounds.maximum[0],2);near(loaded->bounds.maximum[1],2);
-    auto collision=loadModelPackage(temporary.root/pathFromUtf8(result.meshes[0].collisionModelId),temporary.root,resolvers);require(collision->primitives[0].indices.size()==3,"Saved triangle collision lost source triangles.");
+    auto loaded=loadModelPackage(resolveAssetPath(temporary.root,result.meshes[0].modelId),temporary.root,resolvers);near(loaded->bounds.maximum[0],2);near(loaded->bounds.maximum[1],2);
+    auto collision=loadModelPackage(resolveAssetPath(temporary.root,result.meshes[0].collisionModelId),temporary.root,resolvers);require(collision->primitives[0].indices.size()==3,"Saved triangle collision lost source triangles.");
     auto repeated=prepareQuaderImport(scene,options);require(repeated.meshes[0].modelId==result.meshes[0].modelId,"Unchanged source created a different managed model identity.");require(repeated.files.empty(),"Unchanged source rewrote published immutable packages.");
     options.scale=3;auto changed=prepareQuaderImport(scene,options);require(changed.meshes[0].modelId!=result.meshes[0].modelId,"Scale replacement cannot preserve prior Undo geometry.");
-    require(fs::is_regular_file(temporary.root/pathFromUtf8(result.meshes[0].modelId)),"Preparing replacement removed prior Undo geometry.");
+    require(fs::is_regular_file(resolveAssetPath(temporary.root,result.meshes[0].modelId)),"Preparing replacement removed prior Undo geometry.");
     options.scale=0;rejects([&]{prepareQuaderImport(scene,options);});options.scale=std::numeric_limits<float>::infinity();rejects([&]{prepareQuaderImport(scene,options);});
     options.scale=1;for(std::uint64_t i=10;i<14;++i){auto light=scene.lights[0];light.entity=i;scene.lights.push_back(light);}rejects([&]{prepareQuaderImport(scene,options);});
     options.syncLights=false;auto noLights=prepareQuaderImport(scene,options);
@@ -75,24 +86,24 @@ void geometryAndLights(){
 }
 void deletedGeometryReimport(){
     Temporary temporary;const auto scene=synthetic();QuaderPrepareOptions options;options.projectRoot=temporary.root;options.scale=2;
-    const auto original=prepareQuaderImport(scene,options);commitAssetTransaction(temporary.root,original.files);
+    const auto original=prepareQuaderImport(scene,options);commit(temporary.root,original.files);
     const auto packageIds=[](const QuaderImportResult& result){return std::array{result.meshes.at(0).modelId,result.meshes.at(0).collisionModelId};};
     const auto erasePackages=[&](const QuaderImportResult& result){
         const auto ids=packageIds(result);AssetReferenceManager references(temporary.root);
         const std::array<AssetEntry,2> assets{{{ids[0],"Quader geometry",AssetKind::Model},{ids[1],"Quader collision",AssetKind::Model}}};
         references.replace(assets,{});std::vector<AssetFileChange> changes;
-        for(const auto& id:ids){options.reservedIds.insert(id);const auto directory=pathFromUtf8(id).parent_path();
+        for(const auto& id:ids){options.reservedIds.insert(id);const auto directory=pathFromUtf8(logicalFile(result,id)).parent_path();
             for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"})changes.push_back({utf8(directory/member),std::nullopt});}
-        changes.push_back({"assets/references.json",references.serialize()});commitAssetTransaction(temporary.root,changes);
+        changes.push_back({"assets/references.json",references.serialize()});commit(temporary.root,changes);
     };
-    erasePackages(original);const auto referenceBytes=fileBytes(temporary.root/"assets/references.json");
+    erasePackages(original);const auto referenceBytes=fileBytes(resolveAssetPath(temporary.root,"assets/references.json"));
     const auto replacement=prepareQuaderImport(scene,options);const auto originalIds=packageIds(original),replacementIds=packageIds(replacement);
     require(replacement.preparedModels.size()==2&&replacement.meshes[0].sourceKey==original.meshes[0].sourceKey,
         "Reimporting deleted Quader packages lost visual/collision preparation or source occurrence identity.");
     for(std::size_t index=0;index<originalIds.size();++index){
         require(replacementIds[index]!=originalIds[index]&&!options.reservedIds.contains(replacementIds[index]),
             "Quader reimport resurrected an explicitly deleted visual or collision asset identity.");
-        const auto oldDirectory=pathFromUtf8(originalIds[index]).parent_path(),newDirectory=pathFromUtf8(replacementIds[index]).parent_path();
+        const auto oldDirectory=pathFromUtf8(logicalFile(original,originalIds[index])).parent_path(),newDirectory=pathFromUtf8(logicalFile(replacement,replacementIds[index])).parent_path();
         for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"}){
             const auto oldId=utf8(oldDirectory/member),newId=utf8(newDirectory/member);
             const auto oldFile=std::find_if(original.files.begin(),original.files.end(),[&](const auto& file){return file.id==oldId;});
@@ -101,40 +112,40 @@ void deletedGeometryReimport(){
                 "Fresh Quader package identity changed source geometry or collision bytes.");
         }
     }
-    commitAssetTransaction(temporary.root,replacement.files);
-    require(fileBytes(temporary.root/"assets/references.json")==referenceBytes,"Quader reimport changed authored asset deletion policy.");
+    commit(temporary.root,replacement.files);
+    require(fileBytes(resolveAssetPath(temporary.root,"assets/references.json"))==referenceBytes,"Quader reimport changed authored asset deletion policy.");
     AssetReferenceManager references(temporary.root);
-    for(const auto& id:originalIds)require(references.deleted(id)&&references.resolve(id).empty()&&!fs::exists(temporary.root/pathFromUtf8(id)),
+    for(const auto& id:originalIds)require(references.deleted(id)&&references.resolve(id).empty()&&!fs::exists(resolveAssetPath(temporary.root,id)),
         "Reimporting Quader geometry restored an old deleted reference or package.");
     auto repeated=prepareQuaderImport(scene,options);
     require(packageIds(repeated)==replacementIds&&repeated.files.empty(),"Repeated Quader reimport did not reuse its replacement package generation.");
     erasePackages(replacement);const auto next=prepareQuaderImport(scene,options);const auto nextIds=packageIds(next);
     for(std::size_t index=0;index<nextIds.size();++index)require(nextIds[index]!=originalIds[index]&&nextIds[index]!=replacementIds[index]&&!options.reservedIds.contains(nextIds[index]),
         "Deleting and reimporting Quader geometry twice reused a deleted generation.");
-    commitAssetTransaction(temporary.root,next.files);repeated=prepareQuaderImport(scene,options);
+    commit(temporary.root,next.files);repeated=prepareQuaderImport(scene,options);
     require(packageIds(repeated)==nextIds&&repeated.files.empty(),"The second replacement Quader generation was not idempotent.");
 }
 void reservedGeometryMembersAndCorruption(){
     for(const auto* member:{"model.gltf","source.gltf","buffers/0.bin"}){
         Temporary temporary;const auto scene=synthetic();QuaderPrepareOptions options;options.projectRoot=temporary.root;
-        const auto original=prepareQuaderImport(scene,options);commitAssetTransaction(temporary.root,original.files);
-        const auto id=original.meshes[0].modelId,directory=utf8(pathFromUtf8(id).parent_path());
+        const auto original=prepareQuaderImport(scene,options);commit(temporary.root,original.files);
+        const auto id=original.meshes[0].modelId,directory=utf8(pathFromUtf8(logicalFile(original,id)).parent_path());
         options.reservedIds.insert(directory+"/"+member);
         const auto replacement=prepareQuaderImport(scene,options);
         require(replacement.meshes[0].modelId!=id&&replacement.meshes[0].collisionModelId==original.meshes[0].collisionModelId,
             "A deleted Quader package member did not reserve its containing visual package identity.");
-        for(const auto& file:original.files)require(file.contents&&fileBytes(temporary.root/pathFromUtf8(file.id))==*file.contents,
+        for(const auto& file:original.files)require(file.contents&&fileBytes(resolveAssetPath(temporary.root,file.id))==*file.contents,
             "Selecting a replacement Quader generation altered its previous immutable package.");
-        commitAssetTransaction(temporary.root,replacement.files);const auto repeated=prepareQuaderImport(scene,options);
+        commit(temporary.root,replacement.files);const auto repeated=prepareQuaderImport(scene,options);
         require(repeated.meshes[0].modelId==replacement.meshes[0].modelId&&repeated.files.empty(),
             "Reserved-member Quader replacement created redundant package generations.");
     }
     Temporary temporary;const auto scene=synthetic();QuaderPrepareOptions options;options.projectRoot=temporary.root;
-    const auto original=prepareQuaderImport(scene,options);commitAssetTransaction(temporary.root,original.files);
-    const auto corruptId=utf8(pathFromUtf8(original.meshes[0].modelId).parent_path()/"model.gltf");
-    const std::string corruptBytes="Modified immutable Quader geometry";writeFileAtomically(temporary.root/pathFromUtf8(corruptId),corruptBytes);
+    const auto original=prepareQuaderImport(scene,options);commit(temporary.root,original.files);
+    const auto corruptId=utf8(pathFromUtf8(logicalFile(original,original.meshes[0].modelId)).parent_path()/"model.gltf");
+    const std::string corruptBytes="Modified immutable Quader geometry";writeFileAtomically(resolveAssetPath(temporary.root,corruptId),corruptBytes);
     rejects([&]{prepareQuaderImport(scene,options);});
-    for(const auto& file:original.files)require(file.contents&&fileBytes(temporary.root/pathFromUtf8(file.id))==(file.id==corruptId?corruptBytes:*file.contents),
+    for(const auto& file:original.files)require(file.contents&&fileBytes(resolveAssetPath(temporary.root,file.id))==(file.id==corruptId?corruptBytes:*file.contents),
         "Rejected Quader import replaced a conflicting immutable package member.");
     require(models(temporary.root)==2,"Rejected corrupt-package import published geometry or leaked its staging directory.");
 }
@@ -175,54 +186,54 @@ void nativeReaderMaterials(){
     require(std::count_if(source->meshes.begin(),source->meshes.end(),[](const auto& mesh){return !mesh.visible;})==1,"Hidden source placement was dropped.");
     require(std::any_of(source->meshes.begin(),source->meshes.end(),[](const auto& mesh){return math::handedness(mesh.transform)<0;}),"Native mirrored instance transform was lost.");
     QuaderPrepareOptions options;options.projectRoot=temporary.root;auto result=prepareQuaderImport(*source,options);require(result.meshes.size()==3&&!result.preparedModels.empty(),"Native fixture did not prepare standalone models.");
-    commitAssetTransaction(temporary.root,result.files);std::string editedId;for(const auto& identity:source->materials){const auto id=quaderMaterialAssetId(source->project.id,source->id,identity);auto material=loadMaterialAsset(temporary.root,id);
+    commit(temporary.root,result.files);std::string editedId;for(const auto& identity:source->materials){const auto id=canonicalAssetId(quaderMaterialAssetId(source->project.id,source->id,identity));auto material=loadMaterialAsset(temporary.root,id);
         if(!identity.embedded){editedId=id;material.name="Edited in Crimson";saveMaterialAsset(temporary.root,material);}options.existingMaterials.emplace(id,std::move(material));}
     require(!editedId.empty(),"Native fixture lost the shared project material.");
     auto preservedSource=*source;preservedSource.readMaterial=[](std::uint32_t)->QuaderSourceMaterial{throw std::runtime_error("Preserved import read missing source material assets.");};
     auto preserved=prepareQuaderImport(preservedSource,options);require(std::none_of(preserved.files.begin(),preserved.files.end(),[](const auto& file){return file.id.ends_with(".crimson-material");}),"Default reimport overwrote existing native materials.");
     require(loadMaterialAsset(temporary.root,editedId).name=="Edited in Crimson","Default reimport discarded a Crimson material edit.");
     auto local=loadMaterialAsset(temporary.root,editedId);local.name="Current Crimson graph";materialOutputNode(local.graph).output.roughness=.123f;canonicalizeMaterialAsset(local);saveMaterialAsset(temporary.root,local);
-    const auto localBytes=fileBytes(temporary.root/pathFromUtf8(editedId));
-    auto latest=prepareQuaderImport(preservedSource,options);require(fileBytes(temporary.root/pathFromUtf8(editedId))==localBytes&&
-        std::none_of(latest.files.begin(),latest.files.end(),[&](const auto& file){return file.id==editedId;}),"Reuse mode overwrote a material edited after the captured material map.");
+    const auto localBytes=fileBytes(resolveAssetPath(temporary.root,editedId));
+    auto latest=prepareQuaderImport(preservedSource,options);require(fileBytes(resolveAssetPath(temporary.root,editedId))==localBytes&&
+        std::none_of(latest.files.begin(),latest.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==editedId;}),"Reuse mode overwrote a material edited after the captured material map.");
     bool latestGraph{};for(const auto& model:latest.preparedModels)for(std::size_t slot=0;slot<model->materialIds.size();++slot)if(model->materialIds[slot]==editedId){
         require(model->materials.at(slot).name==local.name,"Worker-prepared model retained a stale captured Crimson material.");latestGraph=true;}
     require(latestGraph,"Native fixture no longer references its shared material.");
-    std::string imageId,originalImage;for(const auto& id:materialTextureReferences(local))if(id.starts_with("assets/textures/")){imageId=id;break;}
-    for(const auto& file:result.files)if(file.id==imageId)originalImage=*file.contents;
+    std::string imageId,originalImage;for(const auto& id:materialTextureReferences(local))if(!isEngineAssetId(id)){imageId=id;break;}
+    for(const auto& file:result.files)if(canonicalAssetId(file.id)==imageId)originalImage=*file.contents;
     require(!imageId.empty(),"Native fixture did not normalize a source texture.");
-    writeFileAtomically(temporary.root/pathFromUtf8(imageId),"Crimson texture edit");
-    require(fs::remove(temporary.root/pathFromUtf8(editedId)),"Cannot remove disposable missing-material fixture.");
+    writeFileAtomically(resolveAssetPath(temporary.root,imageId),"Crimson texture edit");
+    require(fs::remove(resolveAssetPath(temporary.root,editedId)),"Cannot remove disposable missing-material fixture.");
     auto missingMaterial=prepareQuaderImport(*source,options);
-    require(std::any_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return file.id==editedId;})&&
-        std::none_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return file.id==imageId;}),"Reuse mode did not recreate a missing material or overwrote its existing shared image.");
-    commitAssetTransaction(temporary.root,missingMaterial.files);require(fileBytes(temporary.root/pathFromUtf8(imageId))=="Crimson texture edit","Missing material publication replaced an existing stable-ID texture in reuse mode.");
+    require(std::any_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==editedId;})&&
+        std::none_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==imageId;}),"Reuse mode did not recreate a missing material or overwrote its existing shared image.");
+    commit(temporary.root,missingMaterial.files);require(fileBytes(resolveAssetPath(temporary.root,imageId))=="Crimson texture edit","Missing material publication replaced an existing stable-ID texture in reuse mode.");
     // Sync-on must repair even a malformed destination; no old parse is needed.
-    writeFileAtomically(temporary.root/pathFromUtf8(editedId),"invalid Crimson material");
-    options.refreshMaterials=true;auto refreshed=prepareQuaderImport(*source,options);require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return file.id==editedId;}),"Explicit refresh did not stage the shared material replacement.");
-    commitAssetTransaction(temporary.root,refreshed.files);require(loadMaterialAsset(temporary.root,editedId).name=="Project surface","Explicit refresh retained an old authored material name.");
-    require(fileBytes(temporary.root/pathFromUtf8(imageId))==originalImage,"Enabled material sync did not restore source pixels at the same texture identity.");
-    for(const auto& file:result.files)if(file.id.ends_with(".png")){const auto image=decodeManagedImage(temporary.root/pathFromUtf8(file.id));require(image.width>0&&!image.rgba.empty(),"Normalized source image is unreadable.");}
+    writeFileAtomically(resolveAssetPath(temporary.root,editedId),"invalid Crimson material");
+    options.refreshMaterials=true;auto refreshed=prepareQuaderImport(*source,options);require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==editedId;}),"Explicit refresh did not stage the shared material replacement.");
+    commit(temporary.root,refreshed.files);require(loadMaterialAsset(temporary.root,editedId).name=="Project surface","Explicit refresh retained an old authored material name.");
+    require(fileBytes(resolveAssetPath(temporary.root,imageId))==originalImage,"Enabled material sync did not restore source pixels at the same texture identity.");
+    for(const auto& file:result.files)if(file.id.ends_with(".png")){const auto image=decodeManagedImage(resolveAssetPath(temporary.root,file.id));require(image.width>0&&!image.rgba.empty(),"Normalized source image is unreadable.");}
     const auto count=models(temporary.root);auto missing=readQuaderScene(project,"22222222-2222-4222-8222-222222222222");rejects([&]{prepareQuaderImport(*missing,options);});require(models(temporary.root)==count,"Failed source texture import changed managed geometry.");
 }
 void deletedMaterialsAndTexturesReimport(){
     Temporary temporary;const auto project=fixture()/"godot-bridge-fixture-v2.qproj";
     const auto source=readQuaderScene(project,"11111111-1111-4111-8111-111111111111");
     QuaderPrepareOptions options;options.projectRoot=temporary.root;
-    const auto original=prepareQuaderImport(*source,options);commitAssetTransaction(temporary.root,original.files);
+    const auto original=prepareQuaderImport(*source,options);commit(temporary.root,original.files);
     AssetReferenceManager references(temporary.root);std::vector<AssetEntry> deleted;std::vector<AssetFileChange> changes;
     std::vector<std::string> originalMaterialIds,originalImageIds;
     for(const auto& file:original.files){
-        if(file.id.ends_with(".crimson-material")){deleted.push_back({file.id,"Deleted Quader material",AssetKind::Material});originalMaterialIds.push_back(file.id);}
-        else if(file.id.ends_with(".png")){deleted.push_back({file.id,"Deleted Quader image",AssetKind::Texture});originalImageIds.push_back(file.id);}
+        if(file.id.ends_with(".crimson-material")){deleted.push_back({canonicalAssetId(file.id),"Deleted Quader material",AssetKind::Material});originalMaterialIds.push_back(file.id);}
+        else if(file.id.ends_with(".png")){deleted.push_back({canonicalAssetId(file.id),"Deleted Quader image",AssetKind::Texture});originalImageIds.push_back(file.id);}
         else continue;
-        options.reservedIds.insert(file.id);changes.push_back({file.id,std::nullopt});
+        options.reservedIds.insert(canonicalAssetId(file.id));changes.push_back({file.id,std::nullopt});
     }
     require(!originalMaterialIds.empty()&&!originalImageIds.empty(),"Native Quader fixture must contain shared materials and normalized textures.");
-    references.replace(deleted,{});changes.push_back({"assets/references.json",references.serialize()});commitAssetTransaction(temporary.root,changes);
+    references.replace(deleted,{});changes.push_back({"assets/references.json",references.serialize()});commit(temporary.root,changes);
     for(const auto& id:originalMaterialIds)options.materialOverrides.emplace(id,references.resolveModelMaterial(id));
     for(const auto& id:originalImageIds)options.imageOverrides.emplace(id,std::array{references.resolveTexture(id,false),references.resolveTexture(id,true)});
-    const auto referenceBytes=fileBytes(temporary.root/"assets/references.json");
+    const auto referenceBytes=fileBytes(resolveAssetPath(temporary.root,"assets/references.json"));
     const auto replacement=prepareQuaderImport(*source,options);std::vector<std::string> freshMaterialIds,freshImageIds;
     for(const auto& file:replacement.files){
         if(file.id.ends_with(".crimson-material"))freshMaterialIds.push_back(file.id);
@@ -231,13 +242,13 @@ void deletedMaterialsAndTexturesReimport(){
             require(std::any_of(original.files.begin(),original.files.end(),[&](const auto& before){return before.id.ends_with(".png")&&before.contents==file.contents;}),
                 "Reimporting deleted Quader textures changed normalized source pixels.");
         }else continue;
-        require(!options.reservedIds.contains(file.id),"Quader reimport reused a deleted material or texture identity.");
+        require(!options.reservedIds.contains(canonicalAssetId(file.id)),"Quader reimport reused a deleted material or texture identity.");
     }
     require(freshMaterialIds.size()==originalMaterialIds.size()&&freshImageIds.size()==originalImageIds.size(),
         "Reimporting deleted Quader assets kept fallback gray materials or omitted source textures.");
-    commitAssetTransaction(temporary.root,replacement.files);
+    commit(temporary.root,replacement.files);
     for(const auto& id:freshMaterialIds){
-        const auto material=loadMaterialAsset(temporary.root,id);require(material.id==id&&material.originModel.empty(),
+        const auto material=loadMaterialAsset(temporary.root,id);require(material.id==canonicalAssetId(id)&&material.originModel.empty(),
             "Reimported Quader material is not an editable native material.");
         for(const auto& image:materialTextureReferences(material))require(!options.reservedIds.contains(image),
             "Fresh Quader material retained a deleted image reference.");
@@ -246,29 +257,29 @@ void deletedMaterialsAndTexturesReimport(){
     for(std::size_t index=0;index<freshMaterialIds.size();++index){auto material=loadMaterialAsset(temporary.root,freshMaterialIds[index]);
         material.name="Crimson replacement edit "+std::to_string(index);materialOutputNode(material.graph).output.roughness=.123f;
         canonicalizeMaterialAsset(material);saveMaterialAsset(temporary.root,material);
-        editedMaterials.emplace(material.id,fileBytes(temporary.root/pathFromUtf8(material.id)));
+        editedMaterials.emplace(material.id,fileBytes(resolveAssetPath(temporary.root,material.id)));
     }
-    const auto refreshedImage=freshImageIds.front();const auto sourcePixels=fileBytes(temporary.root/pathFromUtf8(refreshedImage));
-    writeFileAtomically(temporary.root/pathFromUtf8(refreshedImage),"Crimson replacement texture edit");
+    const auto refreshedImage=freshImageIds.front();const auto sourcePixels=fileBytes(resolveAssetPath(temporary.root,refreshedImage));
+    writeFileAtomically(resolveAssetPath(temporary.root,refreshedImage),"Crimson replacement texture edit");
     auto preservedSource=*source;preservedSource.readMaterial=[](std::uint32_t)->QuaderSourceMaterial{throw std::runtime_error("Reuse mode unnecessarily requested deleted Quader source material data.");};
     const auto preserved=prepareQuaderImport(preservedSource,options);
     require(preserved.files.empty(),"Disabled material sync did not reuse the fresh Quader material/image/package identities.");
     for(std::size_t index=0;index<replacement.meshes.size();++index)require(preserved.meshes[index].modelId==replacement.meshes[index].modelId&&
         preserved.meshes[index].collisionModelId==replacement.meshes[index].collisionModelId,"Material reuse changed fresh Quader package identities.");
-    for(const auto& [id,contents]:editedMaterials)require(fileBytes(temporary.root/pathFromUtf8(id))==contents,
+    for(const auto& [id,contents]:editedMaterials)require(fileBytes(resolveAssetPath(temporary.root,id))==contents,
         "Disabled material sync discarded edits to a replacement Quader material.");
-    require(fileBytes(temporary.root/pathFromUtf8(refreshedImage))=="Crimson replacement texture edit",
+    require(fileBytes(resolveAssetPath(temporary.root,refreshedImage))=="Crimson replacement texture edit",
         "Disabled material sync discarded an edit to a replacement Quader texture.");
     options.refreshMaterials=true;const auto refreshed=prepareQuaderImport(*source,options);
     for(const auto& id:freshMaterialIds)require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return file.id==id;}),
         "Enabled material sync did not refresh the replacement material under its existing identity.");
-    commitAssetTransaction(temporary.root,refreshed.files);
-    require(fileBytes(temporary.root/pathFromUtf8(refreshedImage))==sourcePixels,"Enabled material sync did not restore replacement texture source pixels.");
-    for(const auto& [id,contents]:editedMaterials)require(fileBytes(temporary.root/pathFromUtf8(id))!=contents,
+    commit(temporary.root,refreshed.files);
+    require(fileBytes(resolveAssetPath(temporary.root,refreshedImage))==sourcePixels,"Enabled material sync did not restore replacement texture source pixels.");
+    for(const auto& [id,contents]:editedMaterials)require(fileBytes(resolveAssetPath(temporary.root,id))!=contents,
         "Enabled material sync retained an edited replacement material.");
-    require(fileBytes(temporary.root/"assets/references.json")==referenceBytes,"Importing replacement materials/textures modified old deletion policy.");
+    require(fileBytes(resolveAssetPath(temporary.root,"assets/references.json"))==referenceBytes,"Importing replacement materials/textures modified old deletion policy.");
     AssetReferenceManager retained(temporary.root);
-    for(const auto& asset:deleted)require(retained.deleted(asset.id)&&!fs::exists(temporary.root/pathFromUtf8(asset.id)),
+    for(const auto& asset:deleted)require(retained.deleted(asset.id)&&!fs::exists(resolveAssetPath(temporary.root,asset.id)),
         "Quader reimport revived a deleted material or texture instead of creating a fresh identity.");
 }
 void modernProjectManifest(){
@@ -309,13 +320,13 @@ void modernProjectManifest(){
     fs::create_directories(destination);
     QuaderPrepareOptions options;options.projectRoot=destination;const auto prepared=prepareQuaderImport(*source,options);
     require(prepared.meshes.size()==3&&!prepared.preparedModels.empty(),"Modern scene did not prepare Crimson geometry.");
-    const auto sharedMaterial=quaderMaterialAssetId(source->project.id,source->id,*identity);
+    const auto sharedMaterial=canonicalAssetId(quaderMaterialAssetId(source->project.id,source->id,*identity));
     require(std::any_of(prepared.preparedModels.begin(),prepared.preparedModels.end(),[&](const auto& model){
         return std::find(model->materialIds.begin(),model->materialIds.end(),sharedMaterial)!=model->materialIds.end();}),
         "Modern scene models lost their shared editable material assignment.");
-    commitAssetTransaction(destination,prepared.files);bool decodedTexture=false;
+    commit(destination,prepared.files);bool decodedTexture=false;
     for(const auto& file:prepared.files)if(file.id.ends_with(".png")){
-        const auto image=decodeManagedImage(destination/pathFromUtf8(file.id));decodedTexture|=image.width>0&&image.height>0&&!image.rgba.empty();}
+        const auto image=decodeManagedImage(resolveAssetPath(destination,file.id));decodedTexture|=image.width>0&&image.height>0&&!image.rgba.empty();}
     require(decodedTexture&&!loadMaterialAsset(destination,sharedMaterial).graph.empty(),"Modern source material/texture did not publish readable Crimson assets.");
     {std::ifstream input(project,std::ios::binary);const std::string unchanged{std::istreambuf_iterator<char>(input),{}};
         require(unchanged==modernBytes,"Read/import rewrote the source project manifest.");}
@@ -356,21 +367,22 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
         const auto imported=prepareQuaderImport(*source,options);
         require(imported.meshes.size()==source->meshes.size()&&!imported.preparedModels.empty(),
             "Preparing the selected scene lost mesh occurrences or model packages.");
-        commitAssetTransaction(temporary.root,imported.files);
+        commit(temporary.root,imported.files);
         ModelResolvers resolvers;
         resolvers.material=[&](const std::string& id)->std::optional<ModelMaterial>{
             if(id==DefaultMaterialId)return defaultMaterialAsset().surface;
             return loadMaterialAsset(temporary.root,id).surface;
         };
         resolvers.image=[&](const std::string& id){
-            require(id.starts_with("builtin:")||fs::is_regular_file(temporary.root/pathFromUtf8(id)),
+            require(isEngineAssetId(id)||fs::is_regular_file(resolveAssetPath(temporary.root,id)),
                 "Published model references a missing managed texture: "+id);
             return id;
         };
         std::size_t modelCount{},materialCount{},textureCount{};
         for(const auto& id:imported.assetIds){
-            if(id.starts_with("assets/models/")&&id.ends_with("/manifest.json")){
-                const auto model=loadModelPackage(temporary.root/pathFromUtf8(id),temporary.root,resolvers);
+            const auto file=resolveAssetPath(temporary.root,id);
+            if(file.filename()=="manifest.json"){
+                const auto model=loadModelPackage(resolveAssetPath(temporary.root,id),temporary.root,resolvers);
                 require(model&&!model->primitives.empty(),"Published model package contains no primitives: "+id);
                 std::uint64_t vertices{},triangles{};
                 for(const auto& primitive:model->primitives){
@@ -384,10 +396,10 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
                 ++modelCount;
                 std::cout<<"Published model "<<std::quoted(model->name)<<": vertices="<<vertices<<", triangles="<<triangles
                     <<", surfaces="<<model->primitives.size()<<", id="<<id<<'\n';
-            }else if(id.ends_with(".crimson-material")){
+            }else if(file.extension()==".crimson-material"){
                 const auto material=loadMaterialAsset(temporary.root,id);validateMaterialAsset(material);++materialCount;
-            }else if(id.starts_with("assets/textures/")){
-                const auto image=decodeManagedImage(temporary.root/pathFromUtf8(id));
+            }else if(file.extension()==".png"){
+                const auto image=decodeManagedImage(resolveAssetPath(temporary.root,id));
                 require(image.width&&image.height&&!image.rgba.empty(),"Published texture failed decoding: "+id);++textureCount;
             }
         }
@@ -423,9 +435,12 @@ void coordinatorTransactions(){
     pump([&]{return !bridge.busy(7);});require(published==3,"Superseded import published an extra scene transaction.");near(targets[0].link.importScale,4);
     // A failed scene transaction restores every external material/image/model file.
     const auto rollbackRoot=temporary.root/"rollback";fs::create_directories(rollbackRoot);QuaderBridge rollback(rollbackRoot);auto failing=hooks;failing.applyImport=[](EntityId,const QuaderLink&,const QuaderImportResult&){return false;};
+    const auto rollbackIndex=fileBytes(rollbackRoot/".crimson/asset-locations.json");
     rollback.requestImport(7,draft,1);const auto end=std::chrono::steady_clock::now()+std::chrono::seconds{12};while(rollback.busy(7)&&std::chrono::steady_clock::now()<end){rollback.update(targets,1,false,failing);std::this_thread::sleep_for(std::chrono::milliseconds{1});}
     require(!rollback.busy(7)&&models(rollbackRoot)==0,"Rejected scene transaction left imported model files published.");
-    require(!fs::is_directory(rollbackRoot/"assets/materials")||fs::is_empty(rollbackRoot/"assets/materials"),"Rejected scene transaction overwrote external materials.");
+    const auto materialDirectory=resolveAssetPath(rollbackRoot,"assets/materials");
+    require(!fs::is_directory(materialDirectory)||fs::is_empty(materialDirectory),"Rejected scene transaction overwrote external materials.");
+    require(fileBytes(rollbackRoot/".crimson/asset-locations.json")==rollbackIndex,"Rejected scene transaction retained newly registered asset locations.");
     // A completed source save refreshes an imported link; Undo consumption survives.
     auto native=readQuaderScene(pathFromUtf8(draft.projectPath),draft.sceneId);const std::string token="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     writeFileAtomically(sourceRoot/".quader/bridge/scenes"/pathFromUtf8(native->id+".json"),record(native->project.id,native->id,native->relativePath,native->fingerprint,token).dump());
@@ -439,7 +454,7 @@ void materialSyncTransactions(){
     QuaderLink draft;draft.projectPath=utf8(sourceRoot/"godot-bridge-fixture-v2.qproj");draft.sceneId="11111111-1111-4111-8111-111111111111";draft.autoSync=false;
     const auto source=readQuaderScene(pathFromUtf8(draft.projectPath),draft.sceneId);
     std::string sharedId,embeddedId,sourceName;
-    for(std::uint32_t index=0;index<source->materials.size();++index){const auto& identity=source->materials[index];const auto id=quaderMaterialAssetId(source->project.id,source->id,identity);
+    for(std::uint32_t index=0;index<source->materials.size();++index){const auto& identity=source->materials[index];const auto id=canonicalAssetId(quaderMaterialAssetId(source->project.id,source->id,identity));
         if(identity.embedded)embeddedId=id;else{sharedId=id;sourceName=source->readMaterial(index).name;}}
     require(!sharedId.empty()&&!embeddedId.empty(),"Material synchronization fixture needs shared and embedded materials.");
     std::vector<QuaderTarget> targets{{7,{},false,{}}};QuaderBridge bridge(destination);std::size_t published{},notifications{};std::uint64_t policyVersion{1};std::string expectedName;
@@ -465,7 +480,7 @@ void materialSyncTransactions(){
     // worker preparation, from the publication guard. Neither may be overwritten
     // using the stale candidate; the complete import must be prepared again.
     auto restored=loadMaterialAsset(destination,embeddedId);restored.name="Restored locally";
-    require(fs::remove(destination/pathFromUtf8(embeddedId)),"Cannot remove disposable embedded material.");
+    require(fs::remove(resolveAssetPath(destination,embeddedId)),"Cannot remove disposable embedded material.");
     unsigned checks{};bool changed{};hooks.dirtyMaterial=[&](const auto& id){if(id==embeddedId&&++checks==2){
         local.name="Latest local material";saveMaterialAsset(destination,local);saveMaterialAsset(destination,restored);changed=true;}return false;};
     const auto beforeChange=published;bridge.requestImport(7,targets[0].link,1);pump([&]{return changed;});
@@ -487,18 +502,20 @@ void materialSyncTransactions(){
     require(published==beforePolicy&&bridge.status(7).find("changed")!=std::string::npos,"A changed replacement/deletion policy published a stale candidate.");
     pump([&]{return !bridge.busy(7);});require(published==beforePolicy+1,"Import did not resume with the current asset policy.");hooks.assetPolicyRevision=[&]{return policyVersion;};
 
-    std::string imageId;for(const auto& id:materialTextureReferences(loadMaterialAsset(destination,sharedId)))if(id.starts_with("assets/textures/")){imageId=id;break;}
-    require(!imageId.empty(),"Shared fixture material lost its source texture.");const auto sourcePixels=fileBytes(destination/pathFromUtf8(imageId));
-    writeFileAtomically(destination/pathFromUtf8(imageId),"Local texture pixels");const auto priorMaterial=fileBytes(destination/pathFromUtf8(sharedId));const auto priorModels=models(destination);
+    std::string imageId;for(const auto& id:materialTextureReferences(loadMaterialAsset(destination,sharedId)))if(!isEngineAssetId(id)){imageId=id;break;}
+    require(!imageId.empty(),"Shared fixture material lost its source texture.");const auto sourcePixels=fileBytes(resolveAssetPath(destination,imageId));
+    writeFileAtomically(resolveAssetPath(destination,imageId),"Local texture pixels");const auto priorMaterial=fileBytes(resolveAssetPath(destination,sharedId));const auto priorModels=models(destination);
     targets[0].link.refreshMaterials=true;auto replacement=targets[0].link;replacement.importScale=2;QuaderBridge rejected(destination);auto accepting=hooks.applyImport;
+    const auto priorIndex=fileBytes(destination/".crimson/asset-locations.json");
     hooks.applyImport=[](EntityId,const QuaderLink&,const QuaderImportResult&){return false;};const auto priorNotifications=notifications;
     rejected.requestImport(7,replacement,1);run(rejected,[&]{return !rejected.busy(7);});
-    require(fileBytes(destination/pathFromUtf8(sharedId))==priorMaterial&&fileBytes(destination/pathFromUtf8(imageId))=="Local texture pixels"&&models(destination)==priorModels&&notifications==priorNotifications,
+    require(fileBytes(resolveAssetPath(destination,sharedId))==priorMaterial&&fileBytes(resolveAssetPath(destination,imageId))=="Local texture pixels"&&models(destination)==priorModels&&notifications==priorNotifications,
         "Rejected scene import did not roll back existing shared material/image files and new geometry.");hooks.applyImport=std::move(accepting);
+    require(fileBytes(destination/".crimson/asset-locations.json")==priorIndex,"Rejected material synchronization retained replacement geometry locations.");
     // The coordinator must not parse the old destination before replacing it.
-    writeFileAtomically(destination/pathFromUtf8(sharedId),"invalid old material");expectedName=sourceName;
+    writeFileAtomically(resolveAssetPath(destination,sharedId),"invalid old material");expectedName=sourceName;
     bridge.requestImport(7,targets[0].link,1);pump([&]{return !bridge.busy(7);});
-    require(loadMaterialAsset(destination,sharedId).name==sourceName&&fileBytes(destination/pathFromUtf8(imageId))==sourcePixels,"Enabled material sync did not overwrite the graph and same-ID texture from Quader.");
+    require(loadMaterialAsset(destination,sharedId).name==sourceName&&fileBytes(resolveAssetPath(destination,imageId))==sourcePixels,"Enabled material sync did not overwrite the graph and same-ID texture from Quader.");
 
     const std::string token="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     writeFileAtomically(sourceRoot/".quader/bridge/scenes"/pathFromUtf8(source->id+".json"),record(source->project.id,source->id,source->relativePath,source->fingerprint,token).dump());

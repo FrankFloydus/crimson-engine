@@ -91,11 +91,11 @@ void ResourceManager::invalidate(const std::string& id) {
     std::lock_guard lock(storesMutex_);
     std::unordered_set<std::string> affected{id};bool expanded=true;
     while(expanded){expanded=false;for(const auto& record:headers_){std::lock_guard stateLock(record->mutex);
-        if(record->deleted||affected.contains(record->id))continue;
+        if(record->derived||record->deleted||affected.contains(record->id))continue;
         if(std::any_of(record->options.assetDependencies.begin(),record->options.assetDependencies.end(),[&](const auto& dependency){return affected.contains(dependency);}))if(affected.insert(record->id).second)expanded=true;}}
     for(const auto& record:headers_) {
         std::lock_guard stateLock(record->mutex);
-        if(record->deleted || !affected.contains(record->id)) continue;
+        if(record->derived || record->deleted || !affected.contains(record->id)) continue;
         record->cancellation.request_stop(); record->epoch=nextRevision_.fetch_add(1); record->scheduled=false; record->state=ResourceState::Queued;
     }
 }
@@ -103,19 +103,19 @@ void ResourceManager::invalidatePath(const std::filesystem::path& path) {
     const auto key=resourcePathKey(path);
     std::lock_guard lock(storesMutex_);
     std::unordered_set<std::string> affected;
-    for(const auto& record:headers_){std::lock_guard stateLock(record->mutex);if(!record->deleted&&std::any_of(record->options.dependencies.begin(),record->options.dependencies.end(),[&](const auto& dependency){return resourcePathKey(dependency)==key;}))affected.insert(record->id);}
-    bool expanded=true;while(expanded){expanded=false;for(const auto& record:headers_){std::lock_guard stateLock(record->mutex);if(record->deleted||affected.contains(record->id))continue;
+    for(const auto& record:headers_){std::lock_guard stateLock(record->mutex);if(!record->derived&&!record->deleted&&std::any_of(record->options.dependencies.begin(),record->options.dependencies.end(),[&](const auto& dependency){return resourcePathKey(dependency)==key;}))affected.insert(record->id);}
+    bool expanded=true;while(expanded){expanded=false;for(const auto& record:headers_){std::lock_guard stateLock(record->mutex);if(record->derived||record->deleted||affected.contains(record->id))continue;
         if(std::any_of(record->options.assetDependencies.begin(),record->options.assetDependencies.end(),[&](const auto& dependency){return affected.contains(dependency);}))if(affected.insert(record->id).second)expanded=true;}}
     for(const auto& record:headers_) {
         std::lock_guard stateLock(record->mutex);
-        if(record->deleted || !affected.contains(record->id)) continue;
+        if(record->derived || record->deleted || !affected.contains(record->id)) continue;
         record->cancellation.request_stop(); record->epoch=nextRevision_.fetch_add(1); record->scheduled=false; record->state=ResourceState::Queued;
     }
 }
 void ResourceManager::forget(const std::string& id) {
     std::lock_guard lock(storesMutex_);
     if(!id.starts_with("import:"))forgottenIds_.insert(id);
-    for(const auto& record:headers_) if(record->id==id) {
+    for(const auto& record:headers_) if(!record->derived&&record->id==id) {
         std::lock_guard stateLock(record->mutex);
         record->cancellation.request_stop(); record->epoch=nextRevision_.fetch_add(1); record->deleted=true; record->scheduled=false;
         if(record->evict) record->evict();

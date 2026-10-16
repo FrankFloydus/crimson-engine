@@ -7,6 +7,8 @@ establish directional shadow quality on broad, brightly lit surfaces. The
 reported floor and pillar acne was a renderer defect at the default light
 biases.
 
+This document preserves the correction's original measurements and artifact identities. For today's character rig, point-source softness, ambient composition and controls, read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md), [Shadows diagnostics](SHADOW_DIAGNOSTICS.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md). No timings or image metrics below were rerun for this documentation update.
+
 ## Reproduction and retained baseline
 
 The saved authored scene was copied, without editing the original project,
@@ -301,8 +303,10 @@ This correction addresses directional self-shadow acne and resolution use
 for the bounded Game map. The existing local-light slot budget, PCF filter
 width and lack of scene antialiasing are separate constraints. Smooth,
 antialiased shadow silhouettes at every scale are not established by the
-lit-interior regression checks. New ambient attenuation, player light rigs
-and lighting channels remain later renderer stages.
+lit-interior regression checks. Ambient attenuation, player light rigs and
+lighting channels were later stages relative to this correction and have since
+landed. Current point-source PCSS is also separate from this directional-PCF
+quality evidence.
 
 The receiver fit uses conservative model boxes, rather than exact visible
 triangle footprints. Large or loose bounds can therefore still spend map

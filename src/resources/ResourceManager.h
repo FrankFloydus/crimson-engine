@@ -58,6 +58,7 @@ struct ResourceRequestOptions {
     std::vector<std::string> assetDependencies;
     bool forceReload{};
     bool retainLoader{true}; // One-shot staging/cache jobs must release captured payloads.
+    bool cancelWhenUnused{}; // Discard superseded derived work even for one-shot loaders.
     DependencyValidation dependencyValidation{DependencyValidation::Content};
 };
 template<class T> struct ResourceLoadResult {
@@ -103,7 +104,7 @@ struct Header {
     std::atomic<ResourcePriority> priority{ResourcePriority::Visible};
     std::chrono::steady_clock::time_point used{std::chrono::steady_clock::now()};
     std::stop_source cancellation;
-    bool scheduled{},deleted{};
+    bool scheduled{},deleted{},derived{};
     std::function<void()> schedule,evict,clearLoader;
     std::function<bool()> canEvict,hasPayload,hasLoader;
 };
@@ -146,7 +147,8 @@ public:
     }
     ResourceState state() const { if(!record_) return ResourceState::Unloaded; std::lock_guard lock(record_->mutex); return record_->state; }
     std::string diagnostic() const { if(!record_) return {}; std::lock_guard lock(record_->mutex); return record_->diagnostic; }
-    AssetRef<T> reference() const { return record_ ? AssetRef<T>{record_->id} : AssetRef<T>{}; }
+    std::vector<std::filesystem::path> dependencies() const { if(!record_)return {};std::lock_guard lock(record_->mutex);return record_->options.dependencies; }
+    AssetRef<T> reference() const { return record_ && !record_->derived ? AssetRef<T>{record_->id} : AssetRef<T>{}; }
 private:
     friend class ResourceManager;
     std::shared_ptr<resource_detail::Record<T>> record_;
@@ -161,14 +163,23 @@ public:
     ResourceManager(const ResourceManager&)=delete;
     ResourceManager& operator=(const ResourceManager&)=delete;
     template<class T,class Loader> ResourceHandle<T> request(AssetRef<T> reference,Loader loader,ResourceRequestOptions options={}) {
-        if(reference.empty() || stopped_.load()) return {};
+        return requestKey<T>(std::move(reference.id),false,std::move(loader),std::move(options));
+    }
+    // Content-keyed transient CPU work has no authored reference or deletion
+    // identity. It shares normal workers, immutable publication and accounting.
+    template<class T,class Loader> ResourceHandle<T> requestDerived(std::string key,Loader loader,ResourceRequestOptions options={}) {
+        return requestKey<T>(std::move(key),true,std::move(loader),std::move(options));
+    }
+private:
+    template<class T,class Loader> ResourceHandle<T> requestKey(std::string id,bool derived,Loader loader,ResourceRequestOptions options) {
+        if(id.empty() || stopped_.load()) return {};
         std::lock_guard storesLock(storesMutex_);
-        if(stopped_.load() || forgottenIds_.contains(reference.id))return {};
+        if(stopped_.load() || (!derived&&forgottenIds_.contains(id)))return {};
         auto& store=std::get<resource_detail::Store<T>>(stores_).records;
-        const auto key=reference.id+'\0'+options.variant;
+        const auto key=std::string(1,derived?'\1':'\0')+id+'\0'+options.variant;
         auto& item=store[key];
         if(!item) {
-            item=std::make_shared<resource_detail::Record<T>>(); item->id=reference.id;item->epoch=nextRevision_.fetch_add(1);
+            item=std::make_shared<resource_detail::Record<T>>(); item->id=std::move(id);item->derived=derived;item->epoch=nextRevision_.fetch_add(1);
             item->variant=options.variant; item->kind=ResourceTraits<T>::kind;
             const std::weak_ptr<resource_detail::Record<T>> weak=item;
             item->schedule=[this,weak] { if(auto record=weak.lock()) schedule(record); };
@@ -182,7 +193,8 @@ public:
         {
             std::lock_guard lock(item->mutex);
             if(item->deleted) return {};
-            item->loader=std::move(loader);
+            if(item->current&&item->readyRevision==item->epoch&&!options.forceReload&&!options.retainLoader)item->loader={};
+            else item->loader=std::move(loader);
             item->options=std::move(options); item->used=std::chrono::steady_clock::now();
             item->priority.store(item->options.priority,std::memory_order_relaxed);
             if(item->options.forceReload) { item->cancellation.request_stop(); item->epoch=nextRevision_.fetch_add(1); item->scheduled=false; item->state=ResourceState::Queued; }
@@ -192,6 +204,7 @@ public:
         schedule(item);
         return handle;
     }
+public:
     // Main-thread publication/preparation boundary, before building frame snapshots.
     void pump();
     template<class T> void seed(AssetRef<T> reference,ResourceLoadResult<T> value,ResourceRequestOptions options={}) {
@@ -246,7 +259,10 @@ private:
             {
                 std::lock_guard stateLock(record->mutex);
                 if(record->epoch!=epoch || record->job!=job || token.stop_requested()) { staleResults_.fetch_add(1); return; }
-                if(record->interests.load()==0&&record->options.retainLoader){record->scheduled=false;record->state=record->current?ResourceState::Ready:ResourceState::Unloaded;return;}
+                if(record->interests.load()==0&&(record->options.retainLoader||record->options.cancelWhenUnused)) {
+                    record->scheduled=false;record->state=record->current?ResourceState::Ready:ResourceState::Unloaded;
+                    if(!record->options.retainLoader)record->loader={};return;
+                }
                 record->state=ResourceState::Loading;
             }
             std::shared_ptr<const resource_detail::Version<T>> version;
@@ -274,7 +290,10 @@ private:
                 std::lock_guard publishLock(record->mutex);
                 if(stopped_.load() || record->deleted || record->epoch!=epoch || record->job!=job || token.stop_requested()) { staleResults_.fetch_add(1); return; }
                 record->scheduled=false;
-                if(record->interests.load()==0&&record->options.retainLoader){record->state=record->current?ResourceState::Ready:ResourceState::Unloaded;return;}
+                if(record->interests.load()==0&&(record->options.retainLoader||record->options.cancelWhenUnused)) {
+                    record->state=record->current?ResourceState::Ready:ResourceState::Unloaded;
+                    if(!record->options.retainLoader)record->loader={};return;
+                }
                 if(!version) { record->state=ResourceState::Failed; record->diagnostic=failure;if(!record->options.retainLoader)record->loader={};failures_.fetch_add(1); return; }
                 record->current=version; record->readyRevision=epoch; record->state=ResourceState::Ready; record->diagnostic.clear();
                 if(!record->options.retainLoader) record->loader={};

@@ -17,6 +17,7 @@ struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true
 struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
+    friend struct EditorPerformanceProbe;
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
                      bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&);
@@ -36,8 +37,8 @@ public:
     }
     void showGame() { panels_.game=true; }
     void hideGame() { panels_.game=false; }
-    void drawPlayerLightRig(const Camera& camera,const Scene& scene,std::span<const EntityId> selection) {
-        viewport_.drawPlayerLightRig(camera,scene,selection);
+    void drawPlayerLightRig(const Camera& camera,const Scene& scene) {
+        viewport_.drawPlayerLightRig(camera,scene);
     }
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }

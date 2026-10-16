@@ -1,4 +1,6 @@
 #include "editor/MaterialDocument.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "material_fixtures.h"
 #include <algorithm>
 #include <chrono>
@@ -69,8 +71,8 @@ void identityAndExternalAuthority(){
     require(document.edit("Texture",[](auto& a){texture(a).image.id="assets/textures/first.png";}),"Texture edit failed.");
     require(document.edit("Replace texture",[](auto& a){texture(a).image.id="assets/textures/second.png";}),"Texture replacement failed.");
     const auto refs=document.historicalTextureReferences();
-    require(std::find(refs.begin(),refs.end(),"assets/textures/first.png")!=refs.end() &&
-        std::find(refs.begin(),refs.end(),"assets/textures/second.png")!=refs.end(),"Historical texture usages omit an undo/redo dependency.");
+    require(std::find(refs.begin(),refs.end(),canonicalAssetId("assets/textures/first.png"))!=refs.end() &&
+        std::find(refs.begin(),refs.end(),canonicalAssetId("assets/textures/second.png"))!=refs.end(),"Historical texture usages omit an undo/redo dependency.");
     require(document.save("Copy",true) && document.assetId()!=sourceId && !document.dirty(),"Save As did not create an independent clean identity.");
     const auto copyId=document.assetId();
     require(document.undo() && document.assetId()==copyId && document.dirty(),"Save As Undo resurrected the original identity.");
@@ -96,7 +98,7 @@ void identityAndExternalAuthority(){
 }
 void dormantGraphTextureHistory() {
     Project project;MaterialDocument document(project.root);require(document.create("Graph history"),"Graph history fixture creation failed.");
-    const std::string colorImage="assets/textures/disconnected.png",normalImage="assets/textures/dormant-normal.png";
+    const std::string colorImage=canonicalAssetId("assets/textures/disconnected.png"),normalImage=canonicalAssetId("assets/textures/dormant-normal.png");
     MaterialNodeId colorNode{},normalNode{};
     require(document.edit("Texture branches",[&](auto& asset) {
         colorNode=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D).id;
@@ -117,7 +119,7 @@ void dormantGraphTextureHistory() {
 }
 void reconcileDeletedGraphTextureHistory() {
     Project project;MaterialDocument document(project.root);require(document.create("Reconcile graph"),"Reconciliation fixture creation failed.");
-    const std::string deleted="assets/textures/deleted-shared.png";
+    const std::string deleted=canonicalAssetId("assets/textures/deleted-shared.png");
     require(document.edit("Shared texture roles",[&](auto& asset) {
         materialOutputNode(asset.graph).output.blend=MaterialBlend::Mask;
         texture(asset,MaterialTextureRole::Color).image.id=deleted;
@@ -180,7 +182,7 @@ void protectedDefaultsAndImportedAuthoring(){
     require(document.load(DefaultParticleMaterialId) && !document.editable() && !document.externalFileChanged(),"Built-in material did not open read-only.");
     require(!document.begin("Edit builtin") && !document.save(),"Built-in material accepted edits or overwrite.");
     require(document.save("Saved sprite",true) && document.editable() && !document.dirty() && document.assetId()!=DefaultParticleMaterialId,"Save As did not create an editable native asset.");
-    auto imported=createMaterialAsset(project.root,"Imported fixture");imported.originModel="assets/models/fixture/manifest.json";
+    auto imported=createMaterialAsset(project.root,"Imported fixture");imported.originModel=canonicalAssetId("assets/models/fixture/manifest.json");
     imported.shading=MaterialShading::StandardPbr;imported.blend=MaterialBlend::Opaque;saveMaterialAsset(project.root,imported);
     require(document.load(imported.id) && document.editable() && !document.dirty(),"Imported material did not open as an editable shared asset.");
     const auto initial=text(materialAssetPath(project.root,imported.id));
@@ -210,9 +212,9 @@ void importedPackedMapsAndPromotion(){
     surface.occlusionTexture=surface.metallicRoughnessTexture;
     model.materials.push_back(surface);model.materialIds.push_back(importedMaterialId(model.id,0));
     promoteModelMaterials(project.root,model);
-    const auto original=loadMaterialAsset(project.root,model.materialIds[0]);const auto disk=text(project.root/original.id);
+    const auto original=loadMaterialAsset(project.root,model.materialIds[0]);const auto disk=text(materialAssetPath(project.root,original.id));
     MaterialDocument document(project.root);
-    require(document.load(original.id)&&document.editable()&&!document.dirty()&&text(project.root/original.id)==disk,
+    require(document.load(original.id)&&document.editable()&&!document.dirty()&&text(materialAssetPath(project.root,original.id))==disk,
         "Opening an imported packed material rewrote or locked its native sidecar.");
     const auto retained=document.committed();
     require(document.edit("Edit imported packed material",[](auto& asset){
@@ -220,8 +222,8 @@ void importedPackedMapsAndPromotion(){
         auto& normal=texture(asset,MaterialTextureRole::Normal);normal.image.id="assets/textures/authored-normal.png";normal.normalStrength=.65f;
         materialOutputNode(asset.graph).output.receiveFog=false;
     })&&document.save(),"Imported packed material rejected factor/map edits or in-place Save.");
-    const auto edited=document.definition();const auto saved=text(project.root/edited.id);
-    require(edited.id==original.id&&edited.originModel==model.id&&edited.surface.roughness==.23f&&
+    const auto edited=document.definition();const auto saved=text(materialAssetPath(project.root,edited.id));
+    require(edited.id==original.id&&edited.originModel==canonicalAssetId(model.id)&&edited.surface.roughness==.23f&&
         retained->surface.roughness==.6f&&!edited.surface.receiveFog,"Imported authoring changed identity/provenance or mutated the old revision.");
     require(sameTexture(edited.surface.baseColorTexture,original.surface.baseColorTexture)&&
         sameTexture(edited.surface.metallicRoughnessTexture,original.surface.metallicRoughnessTexture)&&
@@ -233,7 +235,7 @@ void importedPackedMapsAndPromotion(){
     require(document.undo()&&same(document.definition(),original)&&document.dirty()&&document.redo()&&
         same(document.definition(),edited)&&!document.dirty(),"Imported graph undo/redo lost channels or saved state.");
     promoteModelMaterials(project.root,model);
-    require(text(project.root/edited.id)==saved&&document.load(edited.id)&&same(document.definition(),edited),
+    require(text(materialAssetPath(project.root,edited.id))==saved&&document.load(edited.id)&&same(document.definition(),edited),
         "Model promotion or reopening overwrote authored imported material settings.");
 }
 void verifyActualMaterial(const fs::path& sourceRoot,const std::string& id) {

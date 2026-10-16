@@ -1,5 +1,7 @@
 #include "DeletionPreparation.h"
 #include "MaterialAsset.h"
+#include "ContentStorage.h"
+#include "resources/AssetId.h"
 #include "MaterialGraphReferences.h"
 #include "ParticleAsset.h"
 #include "resources/Paths.h"
@@ -17,10 +19,10 @@ namespace crimson {
 namespace {
 void canceled(std::stop_token stop){if(stop.stop_requested())throw std::runtime_error("Asset deletion preparation canceled.");}
 void materialDependencies(const std::filesystem::path& root,const MaterialAsset& definition,const AssetReferenceManager& policy,std::vector<std::filesystem::path>& result) {
-    if(!definition.id.starts_with("builtin:"))result.push_back(checkedManagedAssetPath(root,definition.id));
+    if(!isEngineAssetId(definition.id))result.push_back(checkedManagedAssetPath(root,definition.id));
     visitMaterialTextures(definition.surface,false,[&](const auto& id,MaterialTextureRole role){
         const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);
-        if(image.empty()||image.starts_with("builtin:"))return;
+        if(image.empty()||isEngineAssetId(image))return;
         const auto file=checkedManagedAssetPath(root,image);auto extension=file.extension().string();std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
         if(extension==".hdr")throw std::runtime_error("A material cannot use HDR images in material slots.");result.push_back(file);
     });
@@ -29,21 +31,24 @@ std::vector<std::filesystem::path> dependencies(const std::filesystem::path& roo
     std::vector<std::filesystem::path> result;
     for(const auto& model:models){const auto file=checkedManagedAssetPath(root,model.id);result.push_back(file);std::ifstream input(file);if(!input)throw std::runtime_error("Model manifest is unavailable: "+model.id);
         const auto manifest=nlohmann::json::parse(input);const auto document=file.parent_path()/pathFromUtf8(manifest.at("document").get<std::string>());result.push_back(document);
-        for(const auto& dependency:manifest.at("dependencies")){const auto id=(file.parent_path()/pathFromUtf8(dependency.at("path").get<std::string>())).lexically_relative(root);
-            const auto utf8=id.generic_u8string();const std::string identity(reinterpret_cast<const char*>(utf8.data()),utf8.size());
-            if(dependency.at("kind")=="image"){const auto target=policy.resolveTexture(identity);if(!target.empty()&&!target.starts_with("builtin:"))result.push_back(checkedManagedAssetPath(root,target));}
-            else result.push_back(checkedManagedAssetPath(root,identity));
+        for(const auto& dependency:manifest.at("dependencies")){const auto identity=derivedAssetId(model.id,"image:"+dependency.at("path").get<std::string>());
+            if(dependency.at("kind")=="image"){const auto target=policy.resolveTexture(identity);if(!target.empty()&&!isEngineAssetId(target))result.push_back(checkedManagedAssetPath(root,target));}
+            else result.push_back(file.parent_path()/pathFromUtf8(dependency.at("path").get<std::string>()));
         }
         const auto metadata=loadModelMaterialMetadata(file,root,ModelResolvers{[policy](const auto& id){return policy.resolveTexture(id);},{}});
-        for(const auto& id:metadata->materialIds){const auto target=policy.resolve(id);if(!target.empty()&&!target.starts_with("builtin:")){
+        for(const auto& id:metadata->materialIds){const auto target=policy.resolve(id);if(!target.empty()&&!isEngineAssetId(target)){
             const auto material=checkedManagedAssetPath(root,target);if(std::filesystem::is_regular_file(material)){
                 const auto definition=loadMaterialAsset(root,target);
                 materialDependencies(root,definition,policy,result);
             }
         }}
     }
-    const auto materials=root/"assets/materials";if(std::filesystem::exists(materials))for(const auto& file:std::filesystem::directory_iterator(materials))if(file.is_regular_file()&&file.path().extension()==".crimson-material") {
-        const auto text=file.path().lexically_relative(root).generic_u8string();const std::string id(reinterpret_cast<const char*>(text.data()),text.size());
+    std::vector<StoredAssetPath> materialFiles;
+    if(contentStorageReady(root))materialFiles=storedAssetPaths(root);
+    else {const auto materials=root/"assets/materials";if(std::filesystem::exists(materials))for(const auto& file:std::filesystem::directory_iterator(materials))
+        if(file.is_regular_file())materialFiles.push_back({assetIdAtPath(root,file.path()),file.path()});}
+    for(const auto& file:materialFiles)if(file.file.extension()==".crimson-material"&&std::filesystem::is_regular_file(file.file)) {
+        const auto& id=file.id;
         if(policy.deleted(id))continue;const auto definition=loadMaterialAsset(root,id);materialDependencies(root,definition,policy,result);
     }
     for(const auto& entry:particles){result.push_back(checkedManagedAssetPath(root,entry.id));const auto effect=loadParticleAsset(root,entry.id);
@@ -62,12 +67,12 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
     const ModelResolvers resolvers{[policy](const auto& id){return policy.resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
         const auto target=policy.resolveMaterial(id);if(target==DefaultMaterialId)return defaultMaterialAsset().surface;
         if(target==DefaultParticleMaterialId){auto material=defaultParticleMaterialAsset();canonicalizeMaterialAsset(material);return material.surface;}
-        if(!target.empty()&&std::filesystem::exists(root/pathFromUtf8(target))){const auto material=loadMaterialAsset(root,target);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};}};
-    for(const auto& entry:models){canceled(stop);auto model=loadModelPackage(root/pathFromUtf8(entry.id),root,resolvers);canceled(stop);
+        if(!target.empty()&&std::filesystem::exists(resolveAssetPath(root,target))){const auto material=loadMaterialAsset(root,target);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};}};
+    for(const auto& entry:models){canceled(stop);auto model=loadModelPackage(resolveAssetPath(root,entry.id),root,resolvers);canceled(stop);
         model->stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*model,root));
         for(const auto& surface:model->materials)visitMaterialTextures(surface,false,[&](const auto& id,MaterialTextureRole role){
             const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);
-            if(!image.empty()&&!image.starts_with("builtin:"))(void)decodeManagedImage(checkedManagedAssetPath(root,image));
+            if(!image.empty()&&!isEngineAssetId(image))(void)decodeManagedImage(checkedManagedAssetPath(root,image));
         });
         for(const auto& primitive:model->primitives) {
             if(primitive.material>=model->materials.size())throw std::runtime_error("Replacement model has an invalid material index.");
@@ -93,7 +98,7 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
         if(!particleMaterialCompatible(material))material=defaultParticleMaterialAsset();
         visitMaterialTextures(material.surface,false,[&](const auto& id,MaterialTextureRole role){
             const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);
-            if(!image.empty()&&!image.starts_with("builtin:"))(void)decodeManagedImage(checkedManagedAssetPath(root,image));
+            if(!image.empty()&&!isEngineAssetId(image))(void)decodeManagedImage(checkedManagedAssetPath(root,image));
         });
         result->bytes+=sizeof(ParticleEffectAsset)+definition.id.size()+definition.name.size();
         if(progress)progress->completed.fetch_add(1);

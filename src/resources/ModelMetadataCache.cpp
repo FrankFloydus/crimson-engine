@@ -1,5 +1,7 @@
 #include "StreamingModel.h"
 #include "assets/ModelAnimation.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "CacheIO.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
@@ -26,11 +28,11 @@ std::uint64_t fileHash(const std::filesystem::path& file) {
 }
 std::filesystem::path indexFile(const std::filesystem::path& root,const std::string& id) {
     auto key=detail::HashSeed; detail::hash(key,id.data(),id.size());
-    return root/"assets"/"cache"/"mesh-lods"/"index"/(detail::hex(key)+".json");
+    return resolveAssetPath(root,"assets/cache/mesh-lods/index")/(detail::hex(key)+".json");
 }
 Json dependencies(const std::filesystem::path& root,const std::string& id) {
-    const auto manifest=std::filesystem::weakly_canonical(root/path(id));
-    if (!inside(manifest,std::filesystem::weakly_canonical(root/"assets"/"models"))) throw std::runtime_error("Model metadata cache asset identity is outside managed models.");
+    const auto manifest=std::filesystem::weakly_canonical(resolveAssetPath(root,id));
+    if (manifest.filename()!="manifest.json" || (!isAssetUuid(id) && (!id.starts_with("assets/models/") || path(id).filename()!="manifest.json"))) throw std::runtime_error("Model metadata cache asset identity is outside managed models.");
     std::ifstream input(manifest); const auto data=Json::parse(input);
     std::vector<std::filesystem::path> files{manifest,manifest.parent_path()/path(data.at("document").get<std::string>())};
     for (const auto& dependency:data.at("dependencies")) if (dependency.at("kind")=="buffer") files.push_back(manifest.parent_path()/path(dependency.at("path").get<std::string>()));
@@ -85,7 +87,8 @@ Aabb bounds(const Json& value) { return {value.at("min").get<Vec3>(),value.at("m
 }
 void writeModelMetadataCache(const ModelAsset& asset,const ModelStream& stream,const std::filesystem::path& root) {
     // Synthetic CPU fixtures do not have a managed package; their independent LOD files remain usable.
-    if (!std::filesystem::exists(root/path(asset.id))) return;
+    if(!isAssetUuid(asset.id)&&!asset.id.starts_with("assets/"))return;
+    if (!std::filesystem::exists(resolveAssetPath(root,asset.id))) return;
     Json data{{"version",ModelCacheVersion},{"meshoptimizer",1010},{"id",asset.id},{"key",stream.key},{"name",asset.name},{"format",asset.format},
         {"bounds",bounds(asset.bounds)},{"images",asset.images},{"materialIds",asset.materialIds},{"roots",asset.roots},{"warnings",asset.warnings},
         {"dependencies",dependencies(root,asset.id)}};
@@ -118,7 +121,7 @@ std::shared_ptr<ModelAsset> loadModelMetadataCache(const std::filesystem::path& 
     try {
         const auto root=std::filesystem::weakly_canonical(projectRoot);
         const auto canonical=std::filesystem::weakly_canonical(manifest.is_absolute() ? manifest:root/manifest);
-        const auto id=utf8(canonical.lexically_relative(root)); std::ifstream input(indexFile(root,id)); if (!input) return {};
+        const auto id=assetIdAtPath(root,canonical); std::ifstream input(indexFile(root,id)); if (!input) return {};
         const auto data=Json::parse(input);input.close();
         if (data.at("version")!=ModelCacheVersion || data.at("meshoptimizer")!=1010 || data.at("id")!=id || data.at("dependencies")!=dependencies(root,id)) return {};
         auto asset=std::make_shared<ModelAsset>(); asset->id=id; asset->name=data.at("name").get<std::string>(); asset->format=data.at("format").get<std::string>(); asset->bounds=bounds(data.at("bounds"));
@@ -157,7 +160,7 @@ std::shared_ptr<ModelAsset> loadModelMetadataCache(const std::filesystem::path& 
             descriptor.uvSpan=value.at("uvSpan").get<std::array<Vec2,2>>();
             for (const auto& item:value.at("levels")) {
                 auto file=std::filesystem::weakly_canonical(root/path(item.at("file").get<std::string>()));
-                if (!inside(file,std::filesystem::weakly_canonical(root/"assets"/"cache"/"mesh-lods")) || !std::filesystem::is_regular_file(file)) return {};
+                if (!inside(file,std::filesystem::weakly_canonical(resolveAssetPath(root,"assets/cache/mesh-lods"))) || !std::filesystem::is_regular_file(file)) return {};
                 descriptor.levels.push_back({file,item.at("key").get<std::uint64_t>(),item.at("vertices").get<std::uint32_t>(),item.at("indices").get<std::uint32_t>(),item.at("error").get<float>()});
             }
             if (descriptor.levels.empty()) return {}; stream->primitives.push_back(std::move(descriptor));

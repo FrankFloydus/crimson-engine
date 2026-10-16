@@ -96,14 +96,18 @@ struct RenderModelInstance {
     std::shared_ptr<const ModelPose> pose;
 };
 
+enum class PickMode { Selection, MaterialSlot };
 struct PickRequest {
     std::uint64_t generation{}, revision{}, serial{};
     std::uint32_t x{}, y{}; // Top-left viewport texture pixel, independent of desktop DPI.
     std::uint64_t resourceSignature{};
+    PickMode mode{PickMode::Selection};
 };
 struct PickResult {
     std::uint64_t generation{}, revision{}, serial{}, entityId{}; // Zero means background.
     std::uint64_t resourceSignature{};
+    std::uint32_t materialSlot{UINT32_MAX};
+    PickMode mode{PickMode::Selection};
 };
 
 struct ThumbnailResult {
@@ -209,14 +213,15 @@ public:
     bool modelLodReady(const std::string&,std::uint64_t revision,std::uint32_t primitive,std::uint32_t level) const;
     void evictModel(const std::string&);
     std::uint64_t streamingSignature() const;
+    std::uint64_t pickResourceSignature(PickMode) const;
     void setExternalResourceSignature(std::uint64_t);
     std::size_t modelResidentBytes() const;
     void trimModelCache(std::size_t targetBytes,std::span<const std::string> liveIds);
     void clearModel();
     const std::string& modelStatus() const;
-    // ID picking is rendered only on demand, with the same transforms and alpha
-    // cutouts as the visible model pass. Results are asynchronous and carry the
-    // caller's scene/interaction tags; the caller must reject stale tags too.
+    // Selection shares visible alpha coverage. Material-slot targeting uses
+    // neutral geometry coverage so a temporary material preview cannot change
+    // its target. Both modes retain geometry and scene/interaction stale guards.
     bool requestPick(const PickRequest& request);
     std::optional<PickResult> pollPick(std::uint32_t bgfxFrame);
     void cancelPicking();

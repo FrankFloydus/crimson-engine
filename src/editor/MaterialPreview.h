@@ -4,6 +4,7 @@
 #include "assets/MaterialAsset.h"
 #include "crimson-renderer/Renderer.h"
 #include "resources/ResourceManager.h"
+#include "resources/TextureStreamer.h"
 namespace crimson {
 class AssetLibrary;
 inline bool materialPreviewPacketReady(const ModelMaterialTextures& bindings) noexcept {
@@ -28,6 +29,7 @@ private:
     ResourceHandle<PreparedEnvironment> environmentHandle_;
     std::string requestedEnvironment_,status_,definitionKey_;
     std::uint64_t environmentRevision_{};
+    std::uint64_t storageRevision_{};
     std::uint16_t displayedTarget_{UINT16_MAX};
     struct Prepared {MaterialAsset material;ModelMaterialTextures bindings;};
     std::shared_ptr<const Prepared> current_,nodeCurrent_;
@@ -35,5 +37,8 @@ private:
     std::unique_ptr<MaterialGraphPrograms> nodePrograms_;
     std::string nodeDefinitionKey_;
     MaterialEvaluationContext materialContext_;
+    PreparedTexture grungeCurrent_;
+    std::string grungeDocumentId_;
+    MaterialNodeId grungeNode_{};
 };
 }

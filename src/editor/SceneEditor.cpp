@@ -459,9 +459,10 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool materialKeyboardTarget=commandTarget_==CommandTarget::Material;
     const bool targetTransaction=materialKeyboardTarget?materials.transactionActive():particleKeyboardTarget?particles.transactionActive():document.transactionActive();
     const auto shortcuts=readSceneShortcuts({actionPending,preferencesKeyboard || commandTarget_==CommandTarget::Game,navigationActive,
-        targetTransaction,!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty(),particleKeyboardTarget,materialKeyboardTarget});
+        targetTransaction,!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty() ||
+            viewport_.interacting() || frame.materialAssignment.has_value(),particleKeyboardTarget,materialKeyboardTarget});
     if (shortcuts.toggleAssetBrowser) panels_.assetBrowser=!panels_.assetBrowser;
-    if (shortcuts.save)saveTarget(shortcuts.saveAs);
+    if (shortcuts.save && !viewport_.interacting() && !frame.materialAssignment)saveTarget(shortcuts.saveAs);
     if (shortcuts.undo)undoTarget();
     if (shortcuts.redo)redoTarget();
     if (shortcuts.duplicate) document.duplicateSelection();

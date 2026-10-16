@@ -6,6 +6,10 @@ planning while preserving the existing image. It does not implement the later
 ARPG shadow policies, ambient attenuation, player light rig, lighting channels,
 new transparency composition or scene antialiasing.
 
+## How to read this checkpoint
+
+This is the Step 1 implementation and measurement record. Its statements about absent effects and write-only depth describe that build. Subsequent steps added shadow policies, readable depth/receiver targets, Ambient Darkness and character lighting without replacing the prepared-frame ownership boundary. Read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md) for the current pass/resource contracts. Retained measurements and hashes below have not been refreshed by this documentation update.
+
 ## Implemented boundaries
 
 - `RenderWorldSnapshot` freezes light, particle, material-time and caster values
@@ -30,12 +34,12 @@ new transparency composition or scene antialiasing.
   not introduce a dynamic view allocator, general graph compiler or transient
   resource aliasing.
 
-The current scene-color stage retains its existing background, opaque/masked
+At this checkpoint, the scene-color stage retained its existing background, opaque/masked
 geometry and shared sorted transparent mesh/particle composition. Scene depth
-remains write-only; depth attachment tests are distinguished from sampled depth
-reads in the resource contract. Future depth/ambient/transparency stages must
-add real producers, resources and consumers when implemented. They are not
-represented as empty passes today.
+was write-only; depth attachment tests were distinguished from sampled depth
+reads in the resource contract. Later readable-depth and ambient stages added
+real producers, resources and consumers. Step 1 did not represent them as empty
+passes, and its saved pass-plan output must not be treated as the current plan.
 
 See [engine architecture](ENGINE_ARCHITECTURE.md) for ownership contracts and the
 [large-scene guide](LARGE_SCENE_PERFORMANCE_GUIDE.md) for remaining scaling work.

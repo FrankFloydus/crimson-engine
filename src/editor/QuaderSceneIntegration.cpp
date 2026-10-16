@@ -1,6 +1,10 @@
 #include "QuaderSceneIntegration.h"
+#include <algorithm>
+#include <stdexcept>
+#include <unordered_map>
 namespace crimson {
-bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderLink& requested,const QuaderImportResult& result) {
+bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderLink& requested,const QuaderImportResult& result,
+    const ModelMaterialSourceQuery& modelMaterials) {
     std::vector<EntityRecord> records;
     const auto append=[&](std::string key,std::string name,const Mat4& local,EntityId parent=NoEntity)->EntityRecord& {
         EntityRecord record;record.id=records.size()+1;record.name=name.empty()?"Quader object":std::move(name);
@@ -21,6 +25,26 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
         }
     }
     auto link=requested;link.projectId=result.projectId;link.sceneId=result.sceneId;link.saveKey=result.sourceKey;
-    return document.replaceQuaderImport(owner,link,records);
+    const auto sources=[&](const std::string& id)->std::optional<std::vector<std::string>> {
+        for(const auto& model:result.preparedModels)if(model && model->id==id)return model->materialIds;
+        return modelMaterials?modelMaterials(id):std::nullopt;
+    };
+    return document.replaceQuaderImport(owner,link,records,[&](const EntityRecord& previous,const EntityRecord& incoming) {
+        if(previous.modelMaterials.empty() || previous.model==incoming.model)return previous.modelMaterials;
+        const auto before=sources(previous.model->id),after=sources(incoming.model->id);
+        if(!before || !after)throw std::runtime_error("Quader sync is waiting for source material slots to preserve assignments on "+incoming.name+".");
+        if(*before==*after)return previous.modelMaterials;
+        std::unordered_map<std::string,std::size_t> beforeCounts,afterCounts,afterSlots;
+        for(const auto& id:*before)++beforeCounts[id];
+        for(std::size_t index=0;index<after->size();++index){++afterCounts[(*after)[index]];afterSlots[(*after)[index]]=index;}
+        ModelMaterialOverrides remapped;
+        for(std::size_t index=0;index<previous.modelMaterials.size();++index)if(!previous.modelMaterials[index].empty()) {
+            if(index>=before->size() || beforeCounts[(*before)[index]]!=1 || afterCounts[(*before)[index]]!=1)
+                throw std::runtime_error("Quader sync cannot preserve material slot "+std::to_string(index+1)+" on "+incoming.name+
+                    ": its source slot was removed or became ambiguous. Clear that instance assignment before syncing.");
+            setModelMaterialOverride(remapped,afterSlots.at((*before)[index]),previous.modelMaterials[index]);
+        }
+        return remapped;
+    });
 }
 }

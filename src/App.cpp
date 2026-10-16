@@ -11,6 +11,7 @@
 #include "editor/ResourceRuntime.h"
 #include "resources/ResourceManager.h"
 #include "app/DiagnosticSession.h"
+#include "app/FrameProfile.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <implot.h>
@@ -129,6 +130,8 @@ int run(const AppOptions& options) {
         if (diagnosticMode) diagnostic=std::make_unique<DiagnosticSession>(options,root,assets,renderer,diagnostics);
         else editor=std::make_unique<EditorSession>(root,assets,renderer);
         uint32_t frame=0,bgfxFrame=0;
+        std::unique_ptr<FrameProfile> frameProfile;
+        if(!options.frameProfile.empty())frameProfile=std::make_unique<FrameProfile>(std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(options.frameProfile.data()),options.frameProfile.size())));
         bool running=true,captureRequested=false,cycleMinimized=false,pendingQuit=false;
         uint64_t cycleRestoreTime=0;
         while (running && (!options.frameLimit || frame < options.frameLimit)) {
@@ -200,9 +203,11 @@ int run(const AppOptions& options) {
             bgfxFrame=bgfx::frame();
             const bool nativeSynchronized=toolsRenderer.postFrame(bgfxFrame,!mainDrawable);
             if(!mainDrawable && !nativeSynchronized)SDL_Delay(16);
-            if(editor)editor->setFrameTiming({
+            const FrameTiming frameTiming{
                 std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStarted).count(),
-                std::chrono::duration<double,std::milli>(cpuSubmitted-frameStarted).count()});
+                std::chrono::duration<double,std::milli>(cpuSubmitted-frameStarted).count()};
+            if(editor)editor->setFrameTiming(frameTiming);
+            if(frameProfile)frameProfile->record(frameTiming,navigation.active(),static_cast<std::uint32_t>(pixelWidth),static_cast<std::uint32_t>(pixelHeight));
             ++frame;
         }
         if(resourceRuntime)resourceRuntime->stop();else resources.stop();

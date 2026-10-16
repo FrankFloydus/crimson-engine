@@ -249,6 +249,13 @@ std::string recipeIdentity(const ShaderCompileRecipe& recipe) {
     const auto add=[&](const std::string& value){for(unsigned char ch:value){hash^=ch;hash*=1099511628211ull;}hash^=0xff;hash*=1099511628211ull;};
     add(recipe.name);add(recipe.source);add(recipe.contract);add(std::to_string(static_cast<unsigned>(recipe.stage)));add(resourcePathKey(recipe.varyingDefinition));
     for(const auto& directory:recipe.includeDirectories)add(resourcePathKey(directory));
+    // Preserve existing optimized cache identities. An interactive binary is a
+    // different compiler result, never a substitute for the optimized artifact.
+    switch(recipe.optimization) {
+    case ShaderCompileOptimization::Full:break;
+    case ShaderCompileOptimization::Interactive:add("fxc-skip-optimization-v1");break;
+    default:throw std::runtime_error("Generated shader optimization policy is invalid.");
+    }
     return recipe.name+"-"+std::to_string(hash);
 }
 std::filesystem::path recipeInclude(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe,
@@ -338,8 +345,11 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
         const auto addDirectory=[&](const std::filesystem::path& directory){if(!directory.empty())includeArguments+=L" -i "+quoted(directory);};
         for(const auto& directory:recipe.includeDirectories)addDirectory(directory);
         addDirectory(config.sourceDirectory);addDirectory(config.includeDirectory);
+        // shaderc -O 0 still invokes the FXC optimizer. Omitting -O explicitly
+        // selects D3DCOMPILE_SKIP_OPTIMIZATION in the pinned compiler.
+        const auto optimization=recipe.optimization==ShaderCompileOptimization::Interactive?L"":L" -O 3";
         const auto command=L"-f "+quoted(source)+L" -o "+quoted(stage)+L" --platform windows --type "+type+
-            L" --profile s_5_0 -O 3 --depends --varyingdef "+quoted(recipe.varyingDefinition)+includeArguments;
+            L" --profile s_5_0"+optimization+L" --depends --varyingdef "+quoted(recipe.varyingDefinition)+includeArguments;
         const auto initial=fingerprintFiles(dependencies);
         runCompiler(config.compiler,command,token);
         if(token.stop_requested() || fingerprintFiles(dependencies)!=initial)throw std::runtime_error("Generated shader dependencies changed during compilation.");

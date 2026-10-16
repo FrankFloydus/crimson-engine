@@ -1,4 +1,5 @@
 #include "ParticleDocument.h"
+#include "resources/AssetId.h"
 #include <algorithm>
 #include <fstream>
 #include <stdexcept>
@@ -40,6 +41,7 @@ void ParticleEffectDocument::publish() {
 }
 void ParticleEffectDocument::install(ParticleEffectAsset asset,bool saved) {
     validateParticleAsset(asset);
+    asset.id=canonicalAssetId(asset.id);asset.emitter.material.id=canonicalAssetId(asset.emitter.material.id);
     auto prepared=std::make_shared<const ParticleEffectAsset>(asset);
     const auto fingerprint=saved?fileFingerprint(root_,asset.id):0;
     working_=std::move(asset); saved_=working_; committed_=std::move(prepared);
@@ -118,6 +120,7 @@ bool ParticleEffectDocument::update(const Mutation& mutation) {
         if (candidate.id!=transaction_->before.id) throw std::runtime_error("A particle edit cannot change its managed identity; use Save As.");
         if (candidate.emitter.id!=transaction_->before.emitter.id) throw std::runtime_error("A particle edit cannot change its persistent emitter identity.");
         validateParticleAsset(candidate);
+        candidate.emitter.material.id=canonicalAssetId(candidate.emitter.material.id);
         transaction_->invalid=false;
         if (candidate!=working_) { working_=std::move(candidate); ++previewRevision_; }
         status_.clear(); return true;

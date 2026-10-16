@@ -53,7 +53,7 @@ ExtractedScene extractScene(const Scene& scene) {
             auto scopes=model->lightingScopes;
             const auto category=characterEntities.contains(id)?lighting_scope::Character:lighting_scope::World;
             scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;scopes.ambientReceiverMask&=category;
-            result.models.push_back({id,model->assetId.id,*world,model->material.id,model->castShadows,model->receiveShadows,scopes,category,model->animation});
+            result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
         }
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
             result.particles.push_back({id,particle->assetId.id,*world});

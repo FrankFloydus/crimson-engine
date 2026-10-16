@@ -1,3 +1,4 @@
+#include "resources/AssetId.h"
 #include "editor/MaterialGraphActions.h"
 #include "editor/MaterialDocument.h"
 #include <nlohmann/json.hpp>
@@ -40,10 +41,10 @@ void copyPastePreservesSubgraph() {
     auto& mapping=findMaterialNode(source,uv)->uv;mapping.mode=MaterialUvMode::WorldTriplanar;
     mapping.scale={2,3,4};mapping.offset={.1f,.2f,.3f};mapping.rotation={15,30,45};mapping.scaleLinked=false;
     const auto texture=addMaterialNode(source,MaterialNodeKind::Texture2D,{40,80}).id;
-    auto& sample=findMaterialNode(source,texture)->texture;sample.image.id="assets/textures/paint.png";
+    auto& sample=findMaterialNode(source,texture)->texture;sample.image.id=canonicalAssetId("assets/textures/paint.png");
     sample.sampler={ModelWrap::Clamp,ModelWrap::Mirror,ModelFilter::NearestMipmapNearest,ModelFilter::Nearest};
     const auto normal=addMaterialNode(source,MaterialNodeKind::Texture2D,{40,340}).id;
-    auto& normalSample=findMaterialNode(source,normal)->texture;normalSample.image.id="assets/textures/normal.png";
+    auto& normalSample=findMaterialNode(source,normal)->texture;normalSample.image.id=canonicalAssetId("assets/textures/normal.png");
     normalSample.role=MaterialTextureRole::Normal;normalSample.normalStrength=-.35f;
     const auto scalar=addMaterialNode(source,MaterialNodeKind::Scalar,{200,260}).id;
     findMaterialNode(source,scalar)->scalar=-3.25f;findMaterialNode(source,scalar)->scalarRange={-8,12};findMaterialNode(source,scalar)->name="HDR factor";
@@ -160,7 +161,7 @@ void compatibleCreationAndReplacement() {
     require(uvChoices.size()==2&&uvChoices.front().kind==MaterialNodeKind::UV&&uvChoices.back().kind==MaterialNodeKind::Panner,"UV input offered incompatible node kinds.");
     const auto uv=addConnectedMaterialGraphNode(graph,mapping,uvChoices.front(),{});
     const MaterialGraphEndpoint uvOutput{uv,MaterialPin::UV,false};const auto textureChoices=materialGraphNodeChoices(graph,uvOutput);
-    require(textureChoices.size()==3&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::Panner,"UV output offered incompatible node kinds.");
+    require(textureChoices.size()==4&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::Grunge,"UV output offered incompatible node kinds.");
     const auto secondTexture=addConnectedMaterialGraphNode(graph,uvOutput,textureChoices.front(),{});
     const auto gradient=addConnectedMaterialGraphNode(graph,uvOutput,choiceFor(graph,uvOutput,MaterialNodeKind::RadialGradient),{});
     require(materialInputLink(graph,gradient,MaterialPin::UV)->fromNode==uv&&materialOutputType(graph,gradient,MaterialPin::Value)==MaterialValueType::Scalar,
@@ -179,7 +180,7 @@ void compatibleCreationAndReplacement() {
     const auto opacity=choiceFor(graph,{output,MaterialPin::OpacityMask,true},MaterialNodeKind::Texture2D);
     require(opacity.pin==MaterialPin::A&&opacity.textureRole==MaterialTextureRole::Color,"Opacity suggestion did not use a texture alpha channel.");
     const auto outgoing=materialGraphNodeChoices(graph,{texture,MaterialPin::R,false});
-    require(outgoing.size()==5&&outgoing.front().kind==MaterialNodeKind::Multiply&&outgoing.front().pin==MaterialPin::Left&&outgoing.back().kind==MaterialNodeKind::Power,"Numeric output did not offer compatible arithmetic inputs.");
+    require(outgoing.size()==9&&outgoing.front().kind==MaterialNodeKind::Multiply&&outgoing.front().pin==MaterialPin::Left&&outgoing.back().kind==MaterialNodeKind::HueShift,"Numeric output did not offer compatible arithmetic and adjustment inputs.");
     rejectedWithoutChange(graph,[&]{addConnectedMaterialGraphNode(graph,{9999,MaterialPin::Value,false},outgoing.front(),{});},"Stale endpoint changed the graph.");
     rejectedWithoutChange(graph,[&]{addConnectedMaterialGraphNode(graph,roughness,{MaterialNodeKind::UV,MaterialTextureRole::Color,MaterialPin::UV},{});},"Incompatible drag-created node changed the graph.");
     materialOutputNode(graph).output.shading=MaterialShading::Unlit;
@@ -187,7 +188,7 @@ void compatibleCreationAndReplacement() {
 }
 void documentCommandsAndDeletedClipboard() {
     Project project;MaterialDocument document(project.root);require(document.create("Clipboard history"),"Could not create the clipboard document.");
-    std::vector<MaterialNodeId> selected;const std::string removed="assets/textures/deleted-clipboard.png";
+    std::vector<MaterialNodeId> selected;const std::string removed=canonicalAssetId("assets/textures/deleted-clipboard.png");
     require(document.edit("Add texture roles",[&](auto& asset){
         for(const auto role:{MaterialTextureRole::Color,MaterialTextureRole::Data,MaterialTextureRole::Normal}) {
             const auto id=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D).id;auto& texture=findMaterialNode(asset.graph,id)->texture;
@@ -266,8 +267,65 @@ void animatedNodeHistory() {
     require(document.save(),"Could not save animated material.");MaterialDocument reopened(project.root);
     require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==serializeMaterialAsset(document.definition()),"Animated nodes lost settings during save/reopen.");
 }
+void adjustmentAndGrungeActions() {
+    auto graph=graphWithOutput();const auto output=materialOutputNode(graph).id;
+    const auto source=addMaterialNode(graph,MaterialNodeKind::Color).id;
+    const MaterialGraphEndpoint rgbSource{source,MaterialPin::RGB,false},scalarSource{source,MaterialPin::R,false};
+    const MaterialGraphEndpoint colorTarget{output,MaterialPin::BaseColor,true},scalarTarget{output,MaterialPin::Roughness,true};
+    for(const auto kind:{MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift}) {
+        const auto colorChoice=choiceFor(graph,colorTarget,kind),scalarChoice=choiceFor(graph,scalarTarget,kind);
+        require(colorChoice.pin==MaterialPin::RGB&&scalarChoice.pin==(kind==MaterialNodeKind::Contrast?MaterialPin::Value:MaterialPin::R),
+            "Image adjustment suggestions chose incompatible destination outputs.");
+        for(const auto endpoint:{rgbSource,scalarSource}) {
+            const auto id=addConnectedMaterialGraphNode(graph,endpoint,choiceFor(graph,endpoint,kind),{});
+            const auto* link=materialInputLink(graph,id,MaterialPin::Left);
+            require(link&&link->fromNode==source&&link->fromPin==endpoint.pin&&findMaterialNode(graph,id)->left.type==MaterialValueType::Color,
+                "Image adjustment creation failed to preserve scalar/RGB links and its authored Color fallback.");
+        }
+        addConnectedMaterialGraphNode(graph,colorTarget,colorChoice,{});
+        require(materialInputLink(graph,output,MaterialPin::BaseColor)->fromPin==MaterialPin::RGB,"Image adjustment did not wire its RGB output to Base Color.");
+    }
+    const auto uv=addMaterialNode(graph,MaterialNodeKind::UV).id;
+    const MaterialGraphEndpoint mapping{uv,MaterialPin::UV,false};
+    const auto grunge=addConnectedMaterialGraphNode(graph,mapping,choiceFor(graph,mapping,MaterialNodeKind::Grunge),{});
+    require(materialInputLink(graph,grunge,MaterialPin::UV)->fromNode==uv&&
+        choiceFor(graph,colorTarget,MaterialNodeKind::Grunge).pin==MaterialPin::RGB&&choiceFor(graph,scalarTarget,MaterialNodeKind::Grunge).pin==MaterialPin::Value,
+        "Grunge suggestions failed to connect Mapping, scalar and RGB destinations.");
+
+    Project project;MaterialDocument document(project.root);require(document.create("Adjustment history"),"Could not create adjustment history document.");
+    std::vector<MaterialNodeId> selected;const auto before=serializeMaterialAsset(document.definition());
+    require(document.edit("Create image tools",[&](auto& asset) {
+        for(const auto kind:{MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift,MaterialNodeKind::Grunge})
+            selected.push_back(addMaterialNode(asset.graph,kind).id);
+        findMaterialNode(asset.graph,selected[0])->right.value={2.7f,2.7f,2.7f,2.7f};
+        findMaterialNode(asset.graph,selected[3])->right.value={-450,-450,-450,-450};
+        auto& layers=findMaterialNode(asset.graph,selected[4])->grunge;
+        layers.seed=65535;layers.tiling=64;layers.coverage=.2f;layers.disorder=.7f;layers.detail=.9f;
+        layers.baseNoisiness=.17f;layers.dirtSpecksOpacity=.28f;layers.scratchesOpacity=.39f;
+        layers.stainsOpacity=.63f;layers.leaksOpacity=.74f;
+        layers.sharpen=.41f;layers.largeVariationIntensity=.52f;layers.invertDirt=true;
+        connectMaterialNodes(asset.graph,selected[4],MaterialPin::RGB,selected[0],MaterialPin::Left);
+    }),"Could not create image-tool history fixture.");
+    const auto authored=serializeMaterialAsset(document.definition());
+    require(document.undo()&&serializeMaterialAsset(document.definition())==before&&document.redo()&&serializeMaterialAsset(document.definition())==authored,
+        "Image tool creation did not form one reversible graph command.");
+    const auto clipboard=copyMaterialGraphSelection(document.definition().graph,selected);std::vector<MaterialNodeId> pasted;
+    require(document.edit("Paste image tools",[&](auto& asset){pasted=pasteMaterialGraphSelection(asset.graph,clipboard,{600,300});}),"Could not paste image adjustment and Grunge nodes.");
+    const auto* copiedGrunge=findMaterialNode(document.definition().graph,pasted[4]);
+    require(copiedGrunge->grunge.seed==65535&&copiedGrunge->grunge.tiling==64&&
+        copiedGrunge->grunge.coverage==.2f&&copiedGrunge->grunge.disorder==.7f&&copiedGrunge->grunge.detail==.9f&&
+        copiedGrunge->grunge.baseNoisiness==.17f&&copiedGrunge->grunge.dirtSpecksOpacity==.28f&&copiedGrunge->grunge.scratchesOpacity==.39f&&
+        copiedGrunge->grunge.stainsOpacity==.63f&&copiedGrunge->grunge.leaksOpacity==.74f&&
+        copiedGrunge->grunge.sharpen==.41f&&copiedGrunge->grunge.largeVariationIntensity==.52f&&copiedGrunge->grunge.invertDirt&&
+        findMaterialNode(document.definition().graph,pasted[3])->right.value[0]==-450&&
+        materialInputLink(document.definition().graph,pasted[0],MaterialPin::Left)->fromNode==pasted[4],
+        "Image tool clipboard lost settings or its internal links.");
+    require(document.undo()&&serializeMaterialAsset(document.definition())==authored,"Image tool paste was split across undo commands.");
+    require(document.save(),"Could not save image tool document.");MaterialDocument reopened(project.root);
+    require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==authored,"Image adjustments or Grunge changed during save/reopen.");
+}
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();animatedNodeHistory();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();animatedNodeHistory();adjustmentAndGrungeActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

@@ -3,6 +3,7 @@
 #include "math/Math.h"
 #include "crimson-renderer/RenderTypes.h"
 #include "resources/AssetRef.h"
+#include "assets/ModelMaterialOverrides.h"
 #include <entt/entt.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +34,7 @@ struct SceneModelAnimation {
 };
 struct ModelReference {
     AssetRef<ModelAsset> assetId;
-    AssetRef<MaterialAsset> material;
+    ModelMaterialOverrides materials;
     bool castShadows{true},receiveShadows{true};
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation animation{};
@@ -129,9 +130,9 @@ struct EntityRecord {
     std::optional<SceneCharacter> character;
     std::optional<SceneCollider> collider;
     std::optional<SceneCamera> camera;
-    // Empty uses the shared model material. This slice permits overrides only
-    // on built-in Box instances; the protected geometry remains immutable.
-    AssetRef<MaterialAsset> modelMaterial;
+    // Empty slots use their source material. Geometry and source materials
+    // remain shared; assignments belong only to this entity.
+    ModelMaterialOverrides modelMaterials;
     // Per rendered model entity; these settings are never inherited by children.
     bool castShadows{true},receiveShadows{true};
     std::optional<SceneMeshCollider> meshCollider;

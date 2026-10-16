@@ -1,5 +1,7 @@
 #include "assets/MaterialAsset.h"
 #include "material_fixtures.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -30,13 +32,13 @@ MaterialValue evaluate(const MaterialGraph& graph,MaterialNodeId id,MaterialPin 
     if(n.kind==MaterialNodeKind::RadialGradient){result.value={.5625f,.5625f,.5625f,.5625f};return result;}
     if(n.kind==MaterialNodeKind::Color||n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::ParticleColor) {
         Vec4 sample=n.kind==MaterialNodeKind::ParticleColor?Vec4{.5f,.75f,.25f,.4f}:n.color;
-        if(n.kind==MaterialNodeKind::Texture2D)sample=n.texture.image.id.find("orm")!=std::string::npos?Vec4{.2f,.3f,.6f,.8f}:
-            n.texture.image.id.find("emit")!=std::string::npos?Vec4{.1f,.2f,.3f,1}:Vec4{.4f,.6f,.8f,.5f};
+        if(n.kind==MaterialNodeKind::Texture2D)sample=(n.texture.image.id.find("orm")!=std::string::npos||n.texture.image.id==canonicalAssetId("assets/textures/orm.png"))?Vec4{.2f,.3f,.6f,.8f}:
+            (n.texture.image.id.find("emit")!=std::string::npos||n.texture.image.id==canonicalAssetId("assets/textures/emit.png"))?Vec4{.1f,.2f,.3f,1}:Vec4{.4f,.6f,.8f,.5f};
         if(pin==MaterialPin::RGB)result.value=sample;
         else {const auto channel=pin==MaterialPin::R?0:pin==MaterialPin::G?1:pin==MaterialPin::B?2:3;const auto x=sample[channel];result.value={x,x,x,x};}
         return result;
     }
-    if(n.kind==MaterialNodeKind::Saturate) {
+    if(n.kind==MaterialNodeKind::Clamp) {
         const auto* input=materialInputLink(graph,id,MaterialPin::Left);
         const auto value=std::clamp(input?evaluate(graph,input->fromNode,input->fromPin).value[0]:n.left.value[0],0.f,1.f);
         result.value={value,value,value,value};return result;
@@ -54,7 +56,7 @@ MaterialValue output(const MaterialGraph& graph,MaterialPin pin) {
 void typesChainsAndTransactions() {
     auto graph=blank();const auto out=materialOutputNode(graph).id;
     const auto uv=node(graph,MaterialNodeKind::UV),first=node(graph,MaterialNodeKind::Texture2D),second=node(graph,MaterialNodeKind::Texture2D);
-    findMaterialNode(graph,first)->texture.image.id="assets/textures/first.png";findMaterialNode(graph,second)->texture.image.id="assets/textures/second.png";
+    findMaterialNode(graph,first)->texture.image.id=canonicalAssetId("assets/textures/first.png");findMaterialNode(graph,second)->texture.image.id=canonicalAssetId("assets/textures/second.png");
     connectMaterialNodes(graph,uv,MaterialPin::UV,first,MaterialPin::UV);connectMaterialNodes(graph,uv,MaterialPin::UV,second,MaterialPin::UV);
     const auto multiply=node(graph,MaterialNodeKind::Multiply),scale=node(graph,MaterialNodeKind::Scalar),chain=node(graph,MaterialNodeKind::Multiply);
     findMaterialNode(graph,scale)->scalar=2;
@@ -86,7 +88,7 @@ void typesChainsAndTransactions() {
 void signaturesAndDormantReferences() {
     auto graph=blank();const auto out=materialOutputNode(graph).id,rough=node(graph,MaterialNodeKind::Scalar);
     connectMaterialNodes(graph,rough,MaterialPin::Value,out,MaterialPin::Roughness);
-    const auto texture=node(graph,MaterialNodeKind::Texture2D);findMaterialNode(graph,texture)->texture.image.id="assets/textures/dormant.png";
+    const auto texture=node(graph,MaterialNodeKind::Texture2D);findMaterialNode(graph,texture)->texture.image.id=canonicalAssetId("assets/textures/dormant.png");
     connectMaterialNodes(graph,texture,MaterialPin::R,out,MaterialPin::Occlusion);
     const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
     const auto values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),layout=materialGraphLayoutHash(graph);
@@ -96,10 +98,10 @@ void signaturesAndDormantReferences() {
     require(topology==materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)&&values!=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),"Uniform edit changed topology or failed to change values.");
     materialOutputNode(graph).output.shading=MaterialShading::Unlit;
     const auto order=materialGraphOrder(graph,MaterialShading::Unlit,MaterialBlend::Opaque);
-    require(std::find(order.begin(),order.end(),texture)==order.end()&&materialGraphTextureReferences(graph)==std::vector<std::string>{"assets/textures/dormant.png"},"Dormant resources were prepared or forgotten as authored dependencies.");
+    require(std::find(order.begin(),order.end(),texture)==order.end()&&materialGraphTextureReferences(graph)==std::vector<std::string>{canonicalAssetId("assets/textures/dormant.png")},"Dormant resources were prepared or forgotten as authored dependencies.");
     const auto restored=parseMaterialGraph(serializeMaterialGraph(graph));
     require(materialInputLink(restored,out,MaterialPin::Roughness)&&materialInputLink(restored,out,MaterialPin::Occlusion),"Model switching or serialization destroyed hidden links.");
-    const auto normal=node(graph,MaterialNodeKind::Texture2D);findMaterialNode(graph,normal)->texture.role=MaterialTextureRole::Normal;findMaterialNode(graph,normal)->texture.image.id="assets/textures/dormant.png";
+    const auto normal=node(graph,MaterialNodeKind::Texture2D);findMaterialNode(graph,normal)->texture.role=MaterialTextureRole::Normal;findMaterialNode(graph,normal)->texture.image.id=canonicalAssetId("assets/textures/dormant.png");
     rewriteMaterialGraphTextures(graph,[](const auto&,MaterialTextureRole role){return std::string(role==MaterialTextureRole::Normal?NeutralNormalTextureId:GrayTextureId);});
     require(findMaterialNode(graph,texture)->texture.image.id==GrayTextureId&&findMaterialNode(graph,normal)->texture.image.id==NeutralNormalTextureId,"Graph reference replacement lost role-correct dormant defaults.");
 }
@@ -132,9 +134,9 @@ void receiveFogPersistence() {
     for(const int materialVersion:{4,5,6})for(const int graphVersion:{1,2,3,4}) {
         old["version"]=materialVersion;old["graph"]["version"]=graphVersion;
         if(graphVersion==2)output["usage"]=0;
-        const auto bytes=old.dump();write(project.root/material.id,bytes);
+        const auto bytes=old.dump();write(materialAssetPath(project.root,material.id),bytes);
         const auto loaded=loadMaterialAsset(project.root,material.id);
-        require(loaded.surface.receiveFog&&materialOutputNode(loaded.graph).output.receiveFog&&read(project.root/material.id)==bytes,
+        require(loaded.surface.receiveFog&&materialOutputNode(loaded.graph).output.receiveFog&&read(materialAssetPath(project.root,material.id))==bytes,
             "An older material lost fog reception or was rewritten while loading.");
     }
     for(const auto& invalid:nlohmann::json::array({0,1,"false",nullptr})) {
@@ -145,8 +147,8 @@ void receiveFogPersistence() {
 void rgbScalarInputsAndFallbacks() {
     auto graph=blank();const auto out=materialOutputNode(graph).id;
     const auto rough=node(graph,MaterialNodeKind::Texture2D),metal=node(graph,MaterialNodeKind::Texture2D);
-    findMaterialNode(graph,rough)->texture.role=MaterialTextureRole::Data;findMaterialNode(graph,rough)->texture.image.id="assets/textures/roughness.png";
-    findMaterialNode(graph,metal)->texture.role=MaterialTextureRole::Data;findMaterialNode(graph,metal)->texture.image.id="assets/textures/metallic.png";
+    findMaterialNode(graph,rough)->texture.role=MaterialTextureRole::Data;findMaterialNode(graph,rough)->texture.image.id=canonicalAssetId("assets/textures/roughness.png");
+    findMaterialNode(graph,metal)->texture.role=MaterialTextureRole::Data;findMaterialNode(graph,metal)->texture.image.id=canonicalAssetId("assets/textures/metallic.png");
     for(const auto channel:{MaterialPin::R,MaterialPin::G,MaterialPin::B,MaterialPin::A,MaterialPin::RGB}) {
         connectMaterialNodes(graph,rough,channel,out,MaterialPin::Roughness);
         connectMaterialNodes(graph,metal,channel,out,MaterialPin::Metallic);
@@ -159,13 +161,13 @@ void rgbScalarInputsAndFallbacks() {
         "Independent RGB scalar maps were incorrectly interpreted as packed G/B or lost from authoritative graph transport.");
     connectMaterialNodes(graph,rough,MaterialPin::G,out,MaterialPin::Roughness);
     connectMaterialNodes(graph,rough,MaterialPin::B,out,MaterialPin::Metallic);
-    require(materialGraphLegacySurface(graph).metallicRoughnessTexture.image.id=="assets/textures/roughness.png","Explicit packed G/B lost legacy fallback representation.");
+    require(materialGraphLegacySurface(graph).metallicRoughnessTexture.image.id==canonicalAssetId("assets/textures/roughness.png"),"Explicit packed G/B lost legacy fallback representation.");
     materialOutputNode(graph).output.blend=MaterialBlend::Alpha;
     connectMaterialNodes(graph,rough,MaterialPin::RGB,out,MaterialPin::Opacity);
     require(materialGraphLegacySurface(graph).baseColorTexture.image.empty(),"RGB scalar coverage was misinterpreted as texture alpha by legacy fallback.");
     connectMaterialNodes(graph,rough,MaterialPin::A,out,MaterialPin::Opacity);
-    require(materialGraphLegacySurface(graph).baseColorTexture.image.id=="assets/textures/roughness.png","Explicit texture alpha lost legacy fallback representation.");
-    const auto color=node(graph,MaterialNodeKind::Color),scalar=node(graph,MaterialNodeKind::Scalar),product=node(graph,MaterialNodeKind::Multiply),saturate=node(graph,MaterialNodeKind::Saturate);
+    require(materialGraphLegacySurface(graph).baseColorTexture.image.id==canonicalAssetId("assets/textures/roughness.png"),"Explicit texture alpha lost legacy fallback representation.");
+    const auto color=node(graph,MaterialNodeKind::Color),scalar=node(graph,MaterialNodeKind::Scalar),product=node(graph,MaterialNodeKind::Multiply),saturate=node(graph,MaterialNodeKind::Clamp);
     findMaterialNode(graph,color)->color={.2f,.9f,.7f,.8f};findMaterialNode(graph,scalar)->scalar=.5f;
     connectMaterialNodes(graph,scalar,MaterialPin::Value,product,MaterialPin::Left);
     connectMaterialNodes(graph,scalar,MaterialPin::Value,product,MaterialPin::Right);
@@ -198,7 +200,7 @@ void migrationAndAuthority() {
     for(const int version:{1,2,3}) {
         const auto bytes=material_test::legacyMaterialJson(legacy,version).dump(2);write(project.root/legacy.id,bytes);
         const auto loaded=loadMaterialAsset(project.root,legacy.id);
-        require(read(project.root/legacy.id)==bytes&&!loaded.graph.empty()&&loaded.originModel==legacy.originModel,"Migration rewrote the file or lost imported identity.");
+        require(read(project.root/legacy.id)==bytes&&!loaded.graph.empty()&&loaded.originModel==canonicalAssetId(legacy.originModel),"Migration rewrote the file or lost imported identity.");
         require(loaded.surface.receiveFog&&materialOutputNode(loaded.graph).output.receiveFog,"Legacy material migration disabled fog reception.");
         require(near(output(loaded.graph,MaterialPin::BaseColor).value[0],.1f)&&near(output(loaded.graph,MaterialPin::OpacityMask).value[0],.175f)&&
             near(output(loaded.graph,MaterialPin::Roughness).value[0],.21f)&&near(output(loaded.graph,MaterialPin::Metallic).value[0],.24f)&&
@@ -251,14 +253,14 @@ void activeCompatibilityTransport() {
     const auto out=materialOutputNode(graph).id,uv=node(graph,MaterialNodeKind::UV),normal=node(graph,MaterialNodeKind::Texture2D);
     findMaterialNode(graph,uv)->uv.mode=MaterialUvMode::UV1;
     findMaterialNode(graph,normal)->texture.role=MaterialTextureRole::Normal;
-    findMaterialNode(graph,normal)->texture.image.id="assets/textures/normal-uv1.png";
+    findMaterialNode(graph,normal)->texture.image.id=canonicalAssetId("assets/textures/normal-uv1.png");
     connectMaterialNodes(graph,uv,MaterialPin::UV,normal,MaterialPin::UV);
     connectMaterialNodes(graph,normal,MaterialPin::Normal,out,MaterialPin::Normal);
     materialOutputNode(graph).output.shading=MaterialShading::Unlit;canonicalizeMaterialAsset(material);
-    require(material.surface.normalTexture.image.empty()&&materialTextureReferences(material)==std::vector<std::string>{"assets/textures/normal-uv1.png"},
+    require(material.surface.normalTexture.image.empty()&&materialTextureReferences(material)==std::vector<std::string>{canonicalAssetId("assets/textures/normal-uv1.png")},
         "Inactive Unlit normal branch leaked a UV1 requirement into legacy rendering transport or lost its authored dependency.");
     materialOutputNode(graph).output.shading=MaterialShading::StandardPbr;canonicalizeMaterialAsset(material);
-    require(material.surface.normalTexture.image.id=="assets/textures/normal-uv1.png"&&material.surface.normalTexture.texCoord==1,
+    require(material.surface.normalTexture.image.id==canonicalAssetId("assets/textures/normal-uv1.png")&&material.surface.normalTexture.texCoord==1,
         "Returning to Lit did not restore the dormant normal branch and its UV selection.");
 }
 void usageOpacityAndSpecular() {
@@ -339,10 +341,10 @@ void schemaOneMigration() {
         output["particleSoftDisc"]=true;output["opacity"]=.7f;output["blend"]=static_cast<int>(blend);
         output["shading"]=static_cast<int>(blend==MaterialBlend::Alpha||blend==MaterialBlend::Additive?MaterialShading::Unlit:MaterialShading::StandardPbr);
         graph["links"][0]["toPin"]=static_cast<int>(MaterialPin::Opacity);
-        const auto bytes=json.dump(2);write(project.root/material.id,bytes);const auto loaded=loadMaterialAsset(project.root,material.id);
+        const auto bytes=json.dump(2);write(materialAssetPath(project.root,material.id),bytes);const auto loaded=loadMaterialAsset(project.root,material.id);
         const bool particle=blend==MaterialBlend::Alpha||blend==MaterialBlend::Additive;
         const auto migrated=std::find_if(loaded.graph.links.begin(),loaded.graph.links.end(),[&](const auto& value){return value.id==link;});
-        require(read(project.root/material.id)==bytes&&migrated!=loaded.graph.links.end()&&migrated->fromNode==scalar,
+        require(read(materialAssetPath(project.root,material.id))==bytes&&migrated!=loaded.graph.links.end()&&migrated->fromNode==scalar,
             "v4 migration rewrote bytes or lost stable coverage identities.");
         require(particle?(migrated->toPin==MaterialPin::Left):(migrated->toNode==out&&migrated->toPin==MaterialPin::OpacityMask),
             "Old coverage was not retargeted through visible particle modulation.");
@@ -360,7 +362,7 @@ void explicitParticleMigration() {
     const auto colorLink=connectMaterialNodes(graph,color,MaterialPin::RGB,root,MaterialPin::BaseColor);
     const auto alphaLink=connectMaterialNodes(graph,texture,MaterialPin::A,root,MaterialPin::Opacity);
     for(const bool image:{false,true})for(const bool soft:{false,true}) {
-        findMaterialNode(graph,texture)->texture.image.id=image?"assets/textures/alpha.png":"";
+        findMaterialNode(graph,texture)->texture.image.id=image?canonicalAssetId("assets/textures/alpha.png"):"";
         auto serialized=nlohmann::json::parse(serializeMaterialGraph(graph));serialized["version"]=2;
         serialized["nodes"][0]["output"]["usage"]=1;serialized["nodes"][0]["output"]["particleSoftDisc"]=soft;
         const auto migrated=parseMaterialGraph(serialized.dump());
@@ -372,7 +374,7 @@ void explicitParticleMigration() {
         const auto native=serializeMaterialGraph(migrated);
         require(native==serializeMaterialGraph(parseMaterialGraph(native))&&native.find("particleSoftDisc")==std::string::npos&&native.find("usage")==std::string::npos,
             "Native round-trip repeated migration or retained hidden particle semantics.");
-        auto changed=migrated;findMaterialNode(changed,texture)->texture.image.id=image?"":"assets/textures/new.png";
+        auto changed=migrated;findMaterialNode(changed,texture)->texture.image.id=image?"":canonicalAssetId("assets/textures/new.png");
         require(std::count_if(changed.nodes.begin(),changed.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::RadialGradient;})==((soft&&!image)?1:0),
             "Image reassignment changed the explicit radial graph.");
         serialized["nodes"][0]["output"]["usage"]=0;
@@ -387,7 +389,7 @@ void explicitParticleMigration() {
     migrateLegacyParticleGraph(hdr,true);
     require(near(output(hdr,MaterialPin::Opacity).value[0],.4f*.5625f)&&findMaterialNode(hdr,hdrValue)->scalar==4,
         "Legacy coverage was clamped after particle alpha/disc or rewrote its authored HDR source.");
-    const auto saturation=std::find_if(hdr.nodes.begin(),hdr.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Saturate;});
+    const auto saturation=std::find_if(hdr.nodes.begin(),hdr.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Clamp;});
     require(saturation!=hdr.nodes.end()&&materialExpressionUniform(hdr,saturation->id,MaterialPin::Value)&&
         evaluateMaterialUniform(hdr,saturation->id,MaterialPin::Value).value[0]==1,"Uniform Saturate evaluation failed.");
     findMaterialNode(hdr,hdrValue)->scalar=-2;
@@ -406,12 +408,12 @@ void snapshotMaterials(const fs::path& root) {
         const auto before=read(snapshot);require(!before.empty(),"Expected immutable material migration fixture is unavailable.");
         const auto source=nlohmann::json::parse(before);const auto id=source.at("id").get<std::string>();
         write(project.root/id,before);const auto material=loadMaterialAsset(project.root,id);
-        require(!material.graph.empty()&&material.id==id&&read(project.root/id)==before&&read(snapshot)==before,"Snapshot migration rewrote authored bytes or lost identity.");
+        require(!material.graph.empty()&&material.id==canonicalAssetId(id)&&read(project.root/id)==before&&read(snapshot)==before,"Snapshot migration rewrote authored bytes or lost identity.");
         if(source.at("version").get<int>()<4) {
             require(material.surface.baseColor==source.at("baseColor").get<Vec4>()&&material.surface.roughness==source.at("roughness").get<float>()&&material.surface.metallic==source.at("metallic").get<float>(),"Snapshot migration changed material factors.");
             if(source.at("version")==3)require(material.surface.uvScale==source.at("uvScale").get<Vec3>()&&material.surface.triplanarWorld==source.value("triplanarWorld",false),"Snapshot migration changed world triplanar or scale.");
             const auto& texture=source.at("baseColorTexture");const auto& sampler=source.contains("sharedSampler")&&!source.at("sharedSampler").is_null()?source.at("sharedSampler"):texture;
-            require(material.surface.baseColorTexture.image.id==texture.at("image").get<std::string>()&&static_cast<int>(material.surface.baseColorTexture.minFilter)==sampler.at("minFilter").get<int>(),"Snapshot migration lost texture identity or filtering.");
+            require(material.surface.baseColorTexture.image.id==canonicalAssetId(texture.at("image").get<std::string>())&&static_cast<int>(material.surface.baseColorTexture.minFilter)==sampler.at("minFilter").get<int>(),"Snapshot migration lost texture identity or filtering.");
         }
         std::cout<<"Snapshot material read without changes: "<<id<<'\n';
     }
@@ -463,19 +465,163 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==4&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Schema 4 nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==7&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Schema 7 nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
     require(parseMaterialGraph(old.dump()).nodes.size()==graph.nodes.size(),"Schema 3 compatibility was lost.");
     require(valueHash==materialGraphValueHash(parseMaterialGraph(before),MaterialShading::StandardPbr,MaterialBlend::Opaque),"Frame evaluation changed an authored hash.");
 }
+void imageAdjustmentsAndGrunge() {
+    require(static_cast<int>(MaterialNodeKind::Clamp)==9&&static_cast<int>(MaterialNodeKind::Power)==14&&
+        static_cast<int>(MaterialNodeKind::Desaturation)==15,"New kinds renumbered existing serialized nodes.");
+    auto graph=blank();const auto root=materialOutputNode(graph).id;
+    const auto desaturation=node(graph,MaterialNodeKind::Desaturation),contrast=node(graph,MaterialNodeKind::Contrast),
+        contrastRgb=node(graph,MaterialNodeKind::ContrastRGB),hue=node(graph,MaterialNodeKind::HueShift),grunge=node(graph,MaterialNodeKind::Grunge);
+    for(const auto id:{desaturation,contrast,contrastRgb,hue}) {
+        const auto& n=*findMaterialNode(graph,id);
+        require(n.left.type==MaterialValueType::Color&&n.left.value==Vec4{1,1,1,1}&&n.right.type==MaterialValueType::Scalar&&
+            n.right.value[0]==(id==hue?0.f:1.f),"Image adjustment defaults are inconsistent.");
+        require(materialExpressionUniform(graph,id,MaterialPin::RGB),"Constant image adjustment was classified as varying.");
+    }
+    auto rgb=[&](MaterialNodeId id){const auto value=evaluateMaterialUniform(graph,id,MaterialPin::RGB).value;return Vec3{value[0],value[1],value[2]};};
+    const auto equalRgb=[](Vec3 a,Vec3 b){return std::abs(a[0]-b[0])<3e-6f&&std::abs(a[1]-b[1])<3e-6f&&std::abs(a[2]-b[2])<3e-6f;};
+    findMaterialNode(graph,desaturation)->left.value={1,0,0,1};findMaterialNode(graph,desaturation)->right.value[0]=0;
+    require(equalRgb(rgb(desaturation),{.2126f,.2126f,.2126f}),"Desaturation did not use linear luminance.");
+    findMaterialNode(graph,desaturation)->right.value[0]=1;
+    require(equalRgb(rgb(desaturation),{1,0,0}),"Desaturation one did not preserve its input.");
+    findMaterialNode(graph,desaturation)->right.value[0]=2;
+    require(equalRgb(rgb(desaturation),{1.7874f,-.2126f,-.2126f}),"Increased saturation clamped signed/HDR output.");
+    require(near(evaluateMaterialUniform(graph,desaturation,MaterialPin::G).value[0],-.2126f),"Adjustment channel output lost its selected channel.");
+    findMaterialNode(graph,contrast)->left.value={1,0,0,1};findMaterialNode(graph,contrast)->right.value[0]=2;
+    require(near(evaluateMaterialUniform(graph,contrast,MaterialPin::Value).value[0],-.0748f)&&equalRgb(rgb(contrast),{-.0748f,-.0748f,-.0748f}),
+        "Contrast failed grayscale conversion, unclamped range or RGB expansion.");
+    findMaterialNode(graph,contrast)->right.value[0]=0;
+    require(equalRgb(rgb(contrast),{.5f,.5f,.5f}),"Zero Contrast did not produce middle gray.");
+    findMaterialNode(graph,contrastRgb)->left.value={-1,.5f,3,1};findMaterialNode(graph,contrastRgb)->right.value[0]=2;
+    require(equalRgb(rgb(contrastRgb),{-2.5f,.5f,5.5f}),"ContrastRGB altered channels or clipped signed/HDR values.");
+    findMaterialNode(graph,hue)->left.value={2,-1,-1,1};findMaterialNode(graph,hue)->right.value[0]=120;
+    require(equalRgb(rgb(hue),{-1,2,-1}),"HueShift failed a signed/HDR red-to-green rotation.");
+    findMaterialNode(graph,hue)->right.value[0]=-120;
+    require(equalRgb(rgb(hue),{-1,-1,2}),"Negative HueShift failed degree wrapping.");
+    findMaterialNode(graph,hue)->right.value[0]=720;
+    require(rgb(hue)==Vec3{2,-1,-1},"A complete hue rotation altered its input.");
+    findMaterialNode(graph,hue)->left.value={-2,-2,-2,1};findMaterialNode(graph,hue)->right.value[0]=137;
+    require(rgb(hue)==Vec3{-2,-2,-2},"HueShift altered an achromatic signed input.");
+    const auto scalar=node(graph,MaterialNodeKind::Scalar),color=node(graph,MaterialNodeKind::Color),vector=node(graph,MaterialNodeKind::Vector2),
+        texture=node(graph,MaterialNodeKind::Texture2D),uv=node(graph,MaterialNodeKind::UV),time=node(graph,MaterialNodeKind::Time);
+    findMaterialNode(graph,scalar)->scalar=.25f;
+    const auto fallback=findMaterialNode(graph,hue)->left;
+    const auto scalarLink=connectMaterialNodes(graph,scalar,MaterialPin::Value,hue,MaterialPin::Left);
+    require(rgb(hue)==Vec3{.25f,.25f,.25f},"Image adjustment did not broadcast a Scalar Input.");
+    removeMaterialLink(graph,scalarLink);
+    require(findMaterialNode(graph,hue)->left==fallback,"Disconnecting an adjustment changed its authored Input fallback.");
+    rejects([&]{connectMaterialNodes(graph,vector,MaterialPin::XY,hue,MaterialPin::Left);},"Image adjustment accepted Vector2.");
+    rejects([&]{connectMaterialNodes(graph,uv,MaterialPin::UV,hue,MaterialPin::Left);},"Image adjustment accepted Mapping.");
+    rejects([&]{connectMaterialNodes(graph,scalar,MaterialPin::Value,root,MaterialPin::BaseColor);},"Image adjustments globally loosened Scalar-to-Color typing.");
+    findMaterialNode(graph,color)->color={2,99,99,1};
+    const auto factorLink=connectMaterialNodes(graph,color,MaterialPin::RGB,desaturation,MaterialPin::Right);
+    require(equalRgb(rgb(desaturation),{1.7874f,-.2126f,-.2126f}),"Adjustment factor did not consume the receiving input's first component.");
+    removeMaterialLink(graph,factorLink);
+    connectMaterialNodes(graph,time,MaterialPin::Value,hue,MaterialPin::Right);
+    require(materialExpressionUniform(graph,hue,MaterialPin::RGB)&&materialExpressionTimeDependent(graph,hue,MaterialPin::RGB),
+        "Animated image adjustment lost uniform/time classification.");
+    connectMaterialNodes(graph,desaturation,MaterialPin::RGB,root,MaterialPin::BaseColor);
+    const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    findMaterialNode(graph,desaturation)->right.value[0]=3;
+    require(topology==materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)&&values!=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),
+        "Image adjustment parameter edit changed topology or failed to change value identity.");
+    const auto fixed=materialGraphFixedSurface(graph);
+    require(fixed&&near(fixed->baseColor[0],rgb(desaturation)[0]),"Uniform adjustment was not reduced into exact fixed-surface factors.");
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,desaturation,MaterialPin::Left);
+    require(!materialExpressionUniform(graph,desaturation,MaterialPin::RGB)&&!materialGraphFixedSurface(graph),"Textured adjustment was evaluated as a constant/fixed surface.");
+    require(materialOutputType(graph,grunge,MaterialPin::Value)==MaterialValueType::Scalar&&materialOutputType(graph,grunge,MaterialPin::RGB)==MaterialValueType::Color&&
+        !materialExpressionUniform(graph,grunge,MaterialPin::Value),"Grunge is not a general varying Scalar/RGB source.");
+    connectMaterialNodes(graph,uv,MaterialPin::UV,grunge,MaterialPin::UV);
+    connectMaterialNodes(graph,grunge,MaterialPin::RGB,root,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,grunge,MaterialPin::Value,root,MaterialPin::Roughness);
+    require(!materialGraphFixedSurface(graph),"Procedural Grunge was certified as a fixed surface.");
+    const auto grungeTopology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),grungeValues=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    findMaterialNode(graph,grunge)->grunge={65535,64,1,0,.75f};
+    require(grungeTopology==materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)&&grungeValues!=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),
+        "Grunge controls changed shader topology or failed to change values.");
+    auto& grungeSettings=findMaterialNode(graph,grunge)->grunge;
+    grungeSettings.baseNoisiness=.2f;grungeSettings.dirtSpecksOpacity=.3f;grungeSettings.invertDirt=true;
+    grungeSettings.scratchesOpacity=.4f;grungeSettings.sharpen=.5f;grungeSettings.largeVariationIntensity=.6f;
+    grungeSettings.stainsOpacity=.7f;grungeSettings.leaksOpacity=.8f;
+    const auto bytes=serializeMaterialGraph(graph);require(serializeMaterialGraph(parseMaterialGraph(bytes))==bytes,"Schema 7 image adjustments/Grunge failed round-trip.");
+    const auto current=nlohmann::json::parse(bytes);
+    for(const auto& n:current["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style")&&n["grunge"].contains("stainsOpacity")&&n["grunge"].contains("leaksOpacity"),"Current Grunge persistence retained a Style selector.");
+    for(const int version:{5,6})for(const int style:{0,1,2,3}) {
+        auto prior=current;prior["version"]=version;
+        for(auto& n:prior["nodes"])if(n["id"]==grunge) {
+            n["grunge"]["style"]=style;n["grunge"].erase("stainsOpacity");n["grunge"].erase("leaksOpacity");
+            if(version==5)for(const auto property:{"baseNoisiness","dirtSpecksOpacity","invertDirt","scratchesOpacity","sharpen","largeVariationIntensity"})n["grunge"].erase(property);
+        }
+        const auto loadedPrior=parseMaterialGraph(prior.dump());const auto& oldSettings=findMaterialNode(loadedPrior,grunge)->grunge;
+        require(oldSettings.baseNoisiness==(version==5?.55f:.2f)&&oldSettings.dirtSpecksOpacity==(version==5?.62f:.3f)&&oldSettings.invertDirt==(version==6)&&
+            oldSettings.scratchesOpacity==(version==5?.84f:.4f)&&oldSettings.sharpen==(version==5?.63f:.5f)&&oldSettings.largeVariationIntensity==(version==5?.9f:.6f)&&
+            oldSettings.seed==65535&&oldSettings.tiling==64&&oldSettings.coverage==1&&oldSettings.disorder==0&&oldSettings.detail==.75f&&
+            oldSettings.stainsOpacity==(style==1?1.f:style==0?.35f:0.f)&&oldSettings.leaksOpacity==(style==3?1.f:0.f),
+            "Prior Grunge style conversion lost authored values or layer defaults.");
+        require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
+            "Grunge style conversion changed links or persistent identities.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==7,"Legacy Grunge did not write the current schema.");
+        for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
+        for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
+        rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
+    }
+    require(materialTextureMapping(graph,grunge)==resolveMaterialUvMapping(graph,uv),"Grunge did not resolve its authored texture Mapping.");
+    for(const auto property:{"seed","tiling"}) {
+        auto json=nlohmann::json::parse(bytes);for(auto& n:json["nodes"])if(n["id"]==grunge)n["grunge"][property]=1.5;
+        rejects([&]{parseMaterialGraph(json.dump());},"Fractional Grunge integer setting was accepted.");
+        for(auto& n:json["nodes"])if(n["id"]==grunge)n["grunge"][property]=std::uint64_t{4294967297};
+        rejects([&]{parseMaterialGraph(json.dump());},"Oversized Grunge integer setting wrapped into an accepted value.");
+    }
+    const auto invalidGrunge=[&](const auto& mutation){auto bad=graph;mutation(findMaterialNode(bad,grunge)->grunge);rejects([&]{validateMaterialGraph(bad);},"Invalid Grunge controls were accepted.");};
+    invalidGrunge([](auto& g){g.seed=-1;});invalidGrunge([](auto& g){g.seed=65536;});
+    invalidGrunge([](auto& g){g.tiling=0;});invalidGrunge([](auto& g){g.tiling=65;});invalidGrunge([](auto& g){g.coverage=1.1f;});
+    invalidGrunge([](auto& g){g.disorder=-.1f;});invalidGrunge([](auto& g){g.detail=std::numeric_limits<float>::infinity();});
+    invalidGrunge([](auto& g){g.baseNoisiness=-.1f;});invalidGrunge([](auto& g){g.dirtSpecksOpacity=1.1f;});
+    invalidGrunge([](auto& g){g.scratchesOpacity=std::numeric_limits<float>::quiet_NaN();});invalidGrunge([](auto& g){g.sharpen=-1;});
+    invalidGrunge([](auto& g){g.largeVariationIntensity=2;});
+    invalidGrunge([](auto& g){g.stainsOpacity=-1;});invalidGrunge([](auto& g){g.leaksOpacity=2;});
+    auto bad=graph;findMaterialNode(bad,hue)->right.value[0]=std::numeric_limits<float>::quiet_NaN();
+    rejects([&]{validateMaterialGraph(bad);},"Nonfinite adjustment factor was accepted.");
+    auto legacy=blank();const auto clamp=node(legacy,MaterialNodeKind::Clamp);findMaterialNode(legacy,clamp)->left.value[0]=2;
+    auto json=nlohmann::json::parse(serializeMaterialGraph(legacy));json["version"]=4;
+    for(auto& n:json["nodes"])if(n["id"]==clamp)n["name"]="Saturate";
+    const auto converted=parseMaterialGraph(json.dump());
+    require(findMaterialNode(converted,clamp)->name=="Clamp"&&evaluateMaterialUniform(converted,clamp,MaterialPin::Value).value[0]==1,
+        "Legacy ordinal 9 did not retain clamp semantics/default-name migration.");
+    for(auto& n:json["nodes"])if(n["id"]==clamp)n["name"]="Authored clamp name";
+    require(findMaterialNode(parseMaterialGraph(json.dump()),clamp)->name=="Authored clamp name","Clamp migration overwrote a custom name.");
+    json["version"]=5;for(auto& n:json["nodes"])if(n["id"]==clamp)n["name"]="Saturate";
+    require(findMaterialNode(parseMaterialGraph(json.dump()),clamp)->name=="Saturate","Current-schema custom names were migrated again.");
+    auto samplerGraph=blank();const auto samplerOutput=materialOutputNode(samplerGraph).id;
+    MaterialNodeId previous{};
+    for(unsigned i=0;i<12;++i) {
+        const auto imageNode=node(samplerGraph,i%2?MaterialNodeKind::Grunge:MaterialNodeKind::Texture2D);
+        if(previous) {
+            const auto multiply=node(samplerGraph,MaterialNodeKind::Multiply);
+            connectMaterialNodes(samplerGraph,previous,i==1?MaterialPin::RGB:MaterialPin::Value,multiply,MaterialPin::Left);
+            connectMaterialNodes(samplerGraph,imageNode,MaterialPin::RGB,multiply,MaterialPin::Right);previous=multiply;
+        } else previous=imageNode;
+    }
+    connectMaterialNodes(samplerGraph,previous,MaterialPin::Value,samplerOutput,MaterialPin::BaseColor);
+    const auto extra=node(samplerGraph,MaterialNodeKind::Grunge),extraMultiply=node(samplerGraph,MaterialNodeKind::Multiply);
+    connectMaterialNodes(samplerGraph,previous,MaterialPin::Value,extraMultiply,MaterialPin::Left);
+    connectMaterialNodes(samplerGraph,extra,MaterialPin::RGB,extraMultiply,MaterialPin::Right);
+    const auto bounded=serializeMaterialGraph(samplerGraph);
+    rejects([&]{connectMaterialNodes(samplerGraph,extraMultiply,MaterialPin::Value,samplerOutput,MaterialPin::BaseColor);},"The combined Texture 2D/Grunge sampler budget was ignored.");
+    require(serializeMaterialGraph(samplerGraph)==bounded,"Rejected sampler-budget overflow modified the graph.");
+}
 void exactColdModelSurface() {
     ModelMaterial original;original.baseColor={.3f,.5f,.7f,1};original.metallic=.4f;original.roughness=.8f;
     original.normalScale=.7f;original.occlusionStrength=.6f;original.emissive={1,.5f,.2f};
     original.uvScale={2,3,1};original.uvOffset={.2f,.1f,0};original.uvRotation={0,0,30};
     const std::array slots{&original.baseColorTexture,&original.metallicRoughnessTexture,&original.normalTexture,&original.occlusionTexture,&original.emissiveTexture};
-    unsigned index{};for(auto* slot:slots){slot->image.id="assets/textures/map"+std::to_string(index++)+".png";slot->texCoord=1;}
+    unsigned index{};for(auto* slot:slots){slot->image.id=canonicalAssetId("assets/textures/map"+std::to_string(index++)+".png");slot->texCoord=1;}
     auto graph=materialGraphFromLegacy(original,MaterialShading::StandardPbr,MaterialBlend::Opaque);
     const auto fixed=materialGraphFixedSurface(graph);
     require(fixed && !fixed->graph && fixed->baseColor==original.baseColor && fixed->roughness==original.roughness &&
@@ -511,5 +657,5 @@ void exactColdModelSurface() {
     require(!materialGraphFixedSurface(changed),"Animated graph uniforms were frozen by the fixed lowering.");
 }
 }
-int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

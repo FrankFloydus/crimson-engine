@@ -4,8 +4,11 @@ Recorded 15 October 2026. This checkpoint covers the second renderer migration
 step: bounded stabilized Game directional coverage, focused character shadow
 detail and budgeted local-light shadow updates. The fixed gameplay camera is
 the primary design constraint. Scene inspection retains its own appropriate
-coverage policy. Ambient attenuation, player light rigs, lighting channels,
-new transparency composition and scene antialiasing remain separate steps.
+coverage policy. Ambient attenuation, player light rigs and lighting channels
+were separate steps at this checkpoint. New transparency composition and scene
+antialiasing remain outside that completed slice.
+
+This is a historical Step 2 record. Ambient Darkness, character lighting/scopes and the dedicated Key silhouette subsequently landed; read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md), [current Shadows diagnostics](SHADOW_DIAGNOSTICS.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md) for their contracts. The evidence below preserves its original fixture, tests and measurements.
 
 For the frame-input and pass-planning foundation, see
 [the frame architecture checkpoint](FRAME_ARCHITECTURE_CHECKPOINT.md).

@@ -317,35 +317,46 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     if(lightRoleEdit(state.active) && (!activeRoleDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     ImGui::PopID();
 }
-void builtinMaterialControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,const Renderer& renderer) {
-    const auto assigned=record.modelMaterial.id;
-    const auto materialId=assigned.empty()?std::string(DefaultMaterialId):assets.references().resolveMaterial(assigned);
+void materialSlotControl(SceneDocument& document,PanelsState& state,const EntityRecord& record,const ModelAsset& model,
+    std::size_t slot,AssetLibrary& assets,const Renderer& renderer,std::string* openMaterial) {
+    const auto assigned=slot<record.modelMaterials.size()?record.modelMaterials[slot].id:std::string{};
+    const auto source=slot<model.materialIds.size()?model.materialIds[slot]:importedMaterialId(model.id,slot);
+    const auto materialId=assets.references().resolveMaterial(assigned.empty()?source:assigned);
     const auto material=assets.findMaterial(materialId);
-    const auto model=assets.findModel(record.model->id);
     const auto assign=[&](const std::string& id) {
+        auto assignments=record.modelMaterials;
+        setModelMaterialOverride(assignments,slot,AssetRef<MaterialAsset>{id});
         if(!id.empty()) {
             const auto candidate=assets.findMaterial(id);
             if(!candidate || !modelMaterialCompatible(*candidate)){state.materialDiagnostic="Choose a valid material.";return;}
-            try {if(model)(void)assets.resolvedModelMaterials(*model,id);}
+            try {(void)assets.resolvedModelMaterials(model,assignments);}
             catch(const std::exception& error){state.materialDiagnostic=error.what();return;}
         }
         if(document.transactionActive() && !finishScenePanelEdit(document))return;
-        if(document.edit("Assign Box material",changeEntity(record.id,[id](auto& entity){entity.modelMaterial=AssetRef<MaterialAsset>{id};})))state.materialDiagnostic.clear();
+        if(document.edit("Assign material slot "+std::to_string(slot+1),changeEntity(record.id,[slot,id](auto& entity){
+            setModelMaterialOverride(entity.modelMaterials,slot,AssetRef<MaterialAsset>{id});
+        })))state.materialDiagnostic.clear();
     };
-    ImGui::TextUnformatted("Material");
+    ImGui::Text("Slot %zu: %s",slot+1,model.materials[slot].name.c_str());
     const float height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
-    const float width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-2*gap);
-    ImGui::BeginGroup();bool picker=ImGui::InvisibleButton("Box material",{width,height});
+    const float openWidth=ImGui::CalcTextSize("Open").x+2*ImGui::GetStyle().FramePadding.x;
+    const float width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-openWidth-3*gap);
+    ImGui::BeginGroup();bool picker=ImGui::InvisibleButton("Material",{width,height});
     const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();auto* draw=ImGui::GetWindowDrawList();
     draw->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_FrameBg),ImGui::GetStyle().FrameRounding);
     const auto thumbnail=renderer.thumbnailTexture(materialId);
     if(bgfx::isValid(thumbnail))draw->AddImage(ImGuiBgfx::textureId(thumbnail),{minimum.x+3,minimum.y+3},{minimum.x+height-3,maximum.y-3});
     else if(material) {const auto& c=material->surface.baseColor;draw->AddRectFilled({minimum.x+3,minimum.y+3},{minimum.x+height-3,maximum.y-3},ImGui::ColorConvertFloat4ToU32({c[0],c[1],c[2],1}));}
-    const auto label=assigned.empty()?std::string("Default PBR"):material?assets.displayName(materialId):"Missing: "+assets.displayName(assigned);
+    const auto label=material?assets.displayName(materialId):"Missing: "+assets.displayName(assigned.empty()?source:assigned);
     draw->PushClipRect({minimum.x+height,minimum.y},{maximum.x-3,maximum.y},true);
     draw->AddText({minimum.x+height,minimum.y+(height-ImGui::GetFontSize())*.5f},ImGui::GetColorU32(ImGuiCol_Text),label.c_str());draw->PopClipRect();
-    ImGui::SameLine(0,gap);picker|=ImGui::Button("...##Box material",{height,height});
-    ImGui::SameLine(0,gap);ImGui::BeginDisabled(assigned.empty());if(ImGui::Button("x##Box material",{height,height}))assign({});ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("%s",materialId.c_str());
+    ImGui::SameLine(0,gap);picker|=ImGui::Button("...##Material",{height,height});
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(assigned.empty());if(ImGui::Button("x##Material",{height,height}))assign({});ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Restore source material");
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(!openMaterial || !material);
+    if(ImGui::Button("Open",{openWidth,height}) && openMaterial)*openMaterial=materialId;
+    ImGui::EndDisabled();
     ImGui::EndGroup();
     if(ImGui::BeginDragDropTarget()) {
         if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
@@ -356,18 +367,16 @@ void builtinMaterialControls(SceneDocument& document,PanelsState& state,const En
         ImGui::EndDragDropTarget();
     }
     static ImGuiTextFilter filter;
-    if(picker){filter.Clear();ImGui::OpenPopup("Select Box material");}
-    if(ImGui::BeginPopup("Select Box material")) {
+    if(picker){filter.Clear();ImGui::OpenPopup("Select material");}
+    if(ImGui::BeginPopup("Select material")) {
         filter.Draw("Search");ImGui::BeginChild("Material choices",{320,ImGui::GetFontSize()*12});
-        if(ImGui::Selectable("Default PBR",assigned.empty())){assign({});ImGui::CloseCurrentPopup();}
+        if(ImGui::Selectable("Source material",assigned.empty())){assign({});ImGui::CloseCurrentPopup();}
         for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material && filter.PassFilter(assets.displayName(entry.id).c_str())) {
             const auto candidate=assets.findMaterial(entry.id);if(!candidate || !modelMaterialCompatible(*candidate))continue;
             ImGui::PushID(entry.id.c_str());if(ImGui::Selectable(assets.displayName(entry.id).c_str(),entry.id==materialId)){assign(entry.id);ImGui::CloseCurrentPopup();}ImGui::PopID();
         }
         ImGui::EndChild();ImGui::EndPopup();
     }
-    if(!state.materialDiagnostic.empty())ImGui::TextWrapped("%s",state.materialDiagnostic.c_str());
-    if(model && !assigned.empty() && !assets.modelMaterialsReady(*model,assigned))ImGui::TextWrapped("%s",assets.modelMaterialsDiagnostic(*model,assigned).c_str());
 }
 void modelAnimationControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,const AssetLibrary& assets) {
     const auto model=assets.findModel(record.model->id);
@@ -409,44 +418,23 @@ void modelAnimationControls(SceneDocument& document,PanelsState& state,const Ent
     if(state.active>=Edit::ModelAnimationClip&&state.active<=Edit::ModelAnimationStart&&
         (!activeDrawn||!ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
 }
-void modelInformation(const EntityRecord& record, const AssetLibrary& assets,std::string* openMaterial) {
+void modelInformation(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,
+    const Renderer& renderer,std::string* openMaterial) {
     const auto model=assets.findModel(record.model->id);
     if (!model) {
         ImGui::TextWrapped("Model unavailable: %s",record.model->id.c_str());
         return;
     }
     for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
-    if (model->format!="BUILTIN" && ImGui::TreeNode("Materials")) {
-        auto materials=model->materials;
-        try { materials=assets.resolvedModelMaterials(*model); }
-        catch (const std::exception& error) { ImGui::TextWrapped("Material unavailable: %s",error.what()); }
-        for (std::size_t index=0;index<materials.size();++index) {
-            const auto& material=materials[index];
+    if (ImGui::TreeNodeEx("Materials",ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (std::size_t index=0;index<model->materials.size();++index) {
             ImGui::PushID(static_cast<int>(index));
-            if (ImGui::TreeNode("material","%s",material.name.c_str())) {
-                const auto id=assets.references().resolveMaterial(index<model->materialIds.size()?model->materialIds[index]:importedMaterialId(model->id,index));
-                const auto asset=assets.findMaterial(id);
-                ImGui::BeginDisabled(!openMaterial || !asset);
-                if(ImGui::Button("Open Material") && openMaterial)*openMaterial=id;
-                ImGui::EndDisabled();
-                ImGui::Text("Base color: %.3f, %.3f, %.3f, %.3f",material.baseColor[0],material.baseColor[1],material.baseColor[2],material.baseColor[3]);
-                ImGui::Text("Metallic: %.3f   Roughness: %.3f",material.metallic,material.roughness);
-                ImGui::Text("Normal scale: %.3f   Occlusion: %.3f",material.normalScale,material.occlusionStrength);
-                ImGui::Text("Emissive: %.3f, %.3f, %.3f",material.emissive[0],material.emissive[1],material.emissive[2]);
-                ImGui::Text("%s%s",material.alphaMask ? "Alpha mask" : "Opaque",material.doubleSided ? ", double-sided" : "");
-                const std::array<std::pair<const char*,const ModelTexture*>,5> slots{{
-                    {"Base color",&material.baseColorTexture},{"Metallic / roughness",&material.metallicRoughnessTexture},
-                    {"Normal",&material.normalTexture},{"Occlusion",&material.occlusionTexture},{"Emissive",&material.emissiveTexture}}};
-                for (const auto& [label,texture]:slots) if (!texture->image.empty()) {
-                    const auto resolved=assets.references().resolveTexture(texture->image.id,texture==&material.normalTexture);
-                    const auto name=resolved==GrayTextureId ? std::string("Default gray") : resolved==NeutralNormalTextureId ?
-                        std::string("Neutral normal") : assets.displayName(resolved);
-                    ImGui::TextWrapped("%s (UV%u): %s",label,texture->texCoord,name.c_str());
-                }
-                ImGui::TreePop();
-            }
+            materialSlotControl(document,state,record,*model,index,assets,renderer,openMaterial);
             ImGui::PopID();
         }
+        if(!state.materialDiagnostic.empty())ImGui::TextWrapped("%s",state.materialDiagnostic.c_str());
+        const auto diagnostic=assets.modelMaterialsDiagnostic(*model,record.modelMaterials);
+        if(!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
         ImGui::TreePop();
     }
 }
@@ -954,7 +942,6 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     (state.active>=Edit::PointReceivers && state.active<=Edit::PointRevealStrength))finishEdit(document,state,state.active);
         }
         if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) {
-            if(isBuiltinModel(record->model->id))builtinMaterialControls(document,state,*record,assets,renderer);
             auto castShadows=record->castShadows,receiveShadows=record->receiveShadows;
             const bool castChanged=ImGui::Checkbox("Cast Shadows",&castShadows);
             propertyEdit(document,state,Edit::ModelCastShadows,"Toggle model shadow casting",castChanged,
@@ -977,7 +964,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             if(state.active>=Edit::ModelDirectReceivers && state.active<=Edit::ModelAmbientReceivers &&
                (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
             modelAnimationControls(document,state,*record,assets);
-            modelInformation(*record,assets,openMaterial);
+            modelInformation(document,state,*record,assets,renderer,openMaterial);
         } else if(record->model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart)finishEdit(document,state,state.active);
         if(record->particle && ImGui::CollapsingHeader("Particle effect",ImGuiTreeNodeFlags_DefaultOpen)) {
             auto assigned=record->particle->id;

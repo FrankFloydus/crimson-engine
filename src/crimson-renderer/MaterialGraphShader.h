@@ -5,6 +5,7 @@
 #include "ShaderPreflight.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -19,6 +20,10 @@ struct MaterialGraphTextureBinding {
     AssetRef<DecodedImage> image;
     ModelSampler sampler;
     MaterialGraphTextureRole role{MaterialGraphTextureRole::Color};
+    // A derived image recipe is transient binding data, never an authored
+    // catalog reference. Like replacing a Texture 2D image, editing a recipe
+    // keeps the generated program and replaces its coherent texture packet.
+    std::optional<MaterialGrungeNode> grunge;
 };
 struct MaterialGraphShaderVariant {
     MaterialGraphPass pass{};

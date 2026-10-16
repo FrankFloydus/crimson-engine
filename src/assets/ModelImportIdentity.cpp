@@ -1,5 +1,7 @@
 #include "ModelImportIdentity.h"
 #include "MaterialAsset.h"
+#include "ContentStorage.h"
+#include "resources/AssetId.h"
 #include "resources/Paths.h"
 #include <Windows.h>
 #include <bcrypt.h>
@@ -108,16 +110,16 @@ ModelImportIdentity identifyModelImport(const fs::path& directory) {
     result.digest=hash.finish();return result;
 }
 std::unordered_set<std::string> reservedModelImportIds(const fs::path& root) {
-    const auto file=root/"assets/references.json";if(!fs::exists(file))return {};
+    const auto file=resolveAssetPath(root,"assets/references.json");if(!fs::exists(file))return {};
     std::ifstream input(file);const auto state=Json::parse(input);
     if(state.at("version")!=1 || !state.at("deleted").is_array())throw std::runtime_error("Cannot read reserved asset identities for model import.");
-    std::unordered_set<std::string> result;for(const auto& item:state.at("deleted"))result.insert(item.get<std::string>());return result;
+    std::unordered_set<std::string> result;for(const auto& item:state.at("deleted"))result.insert(canonicalAssetId(item.get<std::string>()));return result;
 }
 bool modelImportIdentityReserved(const fs::path& root,const fs::path& directory,const std::function<bool(const std::string&)>& reservedId) {
     if(!reservedId)return false;
-    const auto metadata=manifest(directory);const auto id=utf8((directory/"manifest.json").lexically_relative(root));if(reservedId(id))return true;
+    const auto metadata=manifest(directory);const auto id=canonicalAssetId(assetIdAtPath(root,directory/"manifest.json"));if(reservedId(id))return true;
     for(const auto& item:metadata.at("dependencies"))
-        if(reservedId(utf8((directory/pathFromUtf8(item.at("path").get<std::string>())).lexically_relative(root))))return true;
+        if(reservedId(derivedAssetId(id,"image:"+item.at("path").get<std::string>())))return true;
     // Material sidecars have deterministic IDs. Count core glTF materials plus
     // its possible implicit default without decoding geometry or images.
     std::ifstream input(dependency(directory,metadata.at("document").get<std::string>()));const auto document=Json::parse(input);
@@ -130,11 +132,14 @@ bool modelImportManifestMatches(const fs::path& directory,const std::string& dig
     catch(...) {return false;}
 }
 std::optional<MatchingModelImport> findMatchingModelImport(const fs::path& root,const std::string& digest,const std::unordered_set<std::string>& reservedIds) {
-    const auto models=fs::weakly_canonical(root/"assets/models");if(!fs::is_directory(models))return {};
-    std::vector<fs::path> packages;for(const auto& item:fs::directory_iterator(models))if(item.is_directory() && !utf8(item.path().filename()).starts_with(".staging-") && fs::is_regular_file(item.path()/"manifest.json"))packages.push_back(item.path());
+    const auto models=fs::weakly_canonical(resolveAssetPath(root,"assets/models"));
+    std::vector<fs::path> packages;
+    if(contentStorageReady(root)) {
+        for(const auto& entry:storedAssetPaths(root))if(entry.file.filename()=="manifest.json"&&fs::is_regular_file(entry.file))packages.push_back(entry.file.parent_path());
+    } else if(fs::is_directory(models))for(const auto& item:fs::directory_iterator(models))if(item.is_directory() && !utf8(item.path().filename()).starts_with(".staging-") && fs::is_regular_file(item.path()/"manifest.json"))packages.push_back(item.path());
     std::sort(packages.begin(),packages.end());
     for(const auto& candidate:packages)try {
-        const auto directory=fs::weakly_canonical(candidate);if(directory.parent_path()!=models)continue;
+        const auto directory=fs::weakly_canonical(candidate);if(!contentStorageReady(root)&&directory.parent_path()!=models)continue;
         if(modelImportIdentityReserved(root,directory,[&](const auto& id){return reservedIds.contains(id);}))continue;
         const auto metadata=manifest(directory);
         if(metadata.contains("importIdentity") && !modelImportManifestMatches(directory,digest))continue;

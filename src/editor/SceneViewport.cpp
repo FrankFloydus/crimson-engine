@@ -113,26 +113,17 @@ void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     ImGuizmo::Enable(false);
     dragging_ = false; roots_.clear(); renderer.cancelPicking(); ++serial_;
     pickIntent_=false;
+    materialDrop_.cancel();
 }
 void SceneViewport::focus(Camera& camera, const SceneDocument& document, const AssetLibrary& assets, float aspect) {
     const auto bounds = boundsOf(document,assets,particleBounds_,collisionMeshes_);
     if (bounds.valid) camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
 }
-void SceneViewport::drawPlayerLightRig(const Camera& camera,const Scene& scene,std::span<const EntityId> selection) {
+void SceneViewport::drawPlayerLightRig(const Camera& camera,const Scene& scene) {
     if(!imageDrawList_ || imageRegion_.width<=0 || imageRegion_.height<=0)return;
     const auto player=scene.find(scene.properties().playerCharacter);
-    if(!player || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled))return;
-    const auto playerSelected=[&] {
-        for(const auto id:selection) {
-            for(auto current=id;current;) {
-                if(current==player->id)return true;
-                const auto record=scene.find(current);
-                current=record?record->parent:NoEntity;
-            }
-        }
-        return false;
-    };
-    if(!player->character->lightRig.showGizmos && !playerSelected())return;
+    if(!player || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled) ||
+        !player->character->lightRig.showGizmos)return;
     const auto world=scene.worldTransform(player->id);if(!world)return;
     const auto vp=camera.projectionMatrix(imageRegion_.width/imageRegion_.height,ClipDepth::NegativeOneToOne)*camera.viewMatrix();
     drawPlayerLightRigOverlay(*imageDrawList_,player->character->lightRig,player->character->darknessReveal,
@@ -157,12 +148,14 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
         // readback can clear selection or let a newly appeared gizmo claim it.
         renderer.cancelPicking(); ++serial_;
         pickIntent_=false;
+        materialDrop_.cancel();
     }
     previousSelection_ = document.selection().ids;
     previousView_ = cameraView;
     selectionGeneration_ = document.scene().generation();
     const auto pendingPick = renderer.pollPick(bgfxFrame);
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) waitForRelease_ = false;
+    if(!ImGui::GetDragDropPayload())materialDropCanceled_=false;
     if (ImGui::Begin("Viewport",nullptr,ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         const bool blockKeys = ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
             navigationActive || ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle);
@@ -181,7 +174,8 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             imageDrawList_=ImGui::GetWindowDrawList();imageRegion_=frame.viewport;
             acceptViewportModelDrop(frame);
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            if (!keyboardBlocked && !blockKeys && !document.transactionActive() && (imageHovered || editorFocus)) {
+            if (!keyboardBlocked && !blockKeys && !document.transactionActive() && !materialDrop_.active() &&
+                ImGui::GetDragDropPayload()==nullptr && (imageHovered || editorFocus)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_T,false)) operation_ = ImGuizmo::TRANSLATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_R,false)) operation_ = ImGuizmo::ROTATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_E,false)) operation_ = ImGuizmo::SCALE;
@@ -191,7 +185,41 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const auto view = camera.viewMatrix();
             // ImGuizmo expects homogeneous clip depth. Renderer uses its backend convention.
             const auto projection = camera.projectionMatrix(size.x/size.y,ClipDepth::NegativeOneToOne);
-            if (pendingPick && pickSize_ == Vec2{size.x,size.y} && pickProjection_ == projection && pickView_ == view &&
+            const bool materialContextChanged=materialDrop_.active() &&
+                (pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
+                 intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision());
+            if((materialDrop_.active() || !frame.materialDragId.empty()) && ImGui::IsKeyPressed(ImGuiKey_Escape,false))materialDropCanceled_=true;
+            const bool materialBlocked=blockKeys || keyboardBlocked || dragging_ || document.transactionActive() || materialDropCanceled_;
+            if(materialDrop_.active() && (materialBlocked || materialContextChanged ||
+                (frame.materialDragId.empty() && !materialDrop_.delivered()))) {
+                materialDrop_.cancel();renderer.cancelPicking();++serial_;
+            }
+            if(!frame.materialDragId.empty() && !materialBlocked && !materialContextChanged) {
+                if(!materialDrop_.active()) {
+                    pickProjection_=projection;pickView_=view;pickSize_={size.x,size.y};
+                    intentGeneration_=document.scene().generation();intentRevision_=document.scene().revision();
+                }
+                const ViewportMaterialDrop::Pixel pixel{
+                    static_cast<uint32_t>(std::clamp((frame.materialDragPosition[0]-origin.x)/size.x*renderer.width(),0.0f,static_cast<float>(renderer.width()-1))),
+                    static_cast<uint32_t>(std::clamp((frame.materialDragPosition[1]-origin.y)/size.y*renderer.height(),0.0f,static_cast<float>(renderer.height()-1)))};
+                if(materialDrop_.update(frame.materialDragId,pixel,frame.materialDropDelivered)) {
+                    renderer.cancelPicking();++serial_;pickIntent_=false;
+                }
+            }
+            if(pendingPick && pendingPick->mode==PickMode::MaterialSlot && materialDrop_.active() &&
+                pendingPick->generation==intentGeneration_ && pendingPick->revision==intentRevision_) {
+                frame.materialAssignment=materialDrop_.resolve(pendingPick->serial,pendingPick->entityId,pendingPick->materialSlot);
+                if(!materialDrop_.pending())renderer.cancelPicking();
+            }
+            if(materialDrop_.needsPick())materialDrop_.request(++serial_);
+            if(const auto& request=materialDrop_.pending()) {
+                if(!renderer.requestPick({intentGeneration_,intentRevision_,request->serial,request->pixel.x,request->pixel.y,0,PickMode::MaterialSlot})) {
+                    materialDrop_.cancel();renderer.cancelPicking();++serial_;
+                }
+            }
+            frame.materialPreview=frame.materialAssignment ? frame.materialAssignment : materialDrop_.preview();
+            if (pendingPick && pendingPick->mode==PickMode::Selection && !materialDrop_.active() &&
+                pickSize_ == Vec2{size.x,size.y} && pickProjection_ == projection && pickView_ == view &&
                 pendingPick->generation == document.scene().generation() && pendingPick->revision == document.scene().revision() &&
                 pendingPick->serial == serial_ && !blockKeys && !document.transactionActive()) {
                 renderer.cancelPicking();
@@ -221,7 +249,8 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             bool overGizmo = false;
             if (!showTransformGizmo && dragging_) cancel(document,renderer);
             if (!showTransformGizmo) ImGuizmo::Enable(false);
-            if (showTransformGizmo && !waitForRelease_ && !document.selection().ids.empty() && !navigationActive && (!document.transactionActive() || dragging_)) {
+            if (showTransformGizmo && !waitForRelease_ && !materialDrop_.active() && !frame.materialAssignment &&
+                !document.selection().ids.empty() && !navigationActive && (!document.transactionActive() || dragging_)) {
                 if (!dragging_) {
                     const auto top = document.scene().topmost(document.selection().ids);
                     const auto bounds = boundsOf(document,assets,{},collisionMeshes_);
@@ -318,7 +347,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             }
             draw->ChannelsMerge();
             draw->PopClipRect();
-            if (imageHovered && !blockKeys && !overGizmo && !dragging_ && !document.transactionActive() &&
+            if (imageHovered && !blockKeys && !overGizmo && !dragging_ && !materialDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
                 ImGui::GetDragDropPayload() == nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 ImGui::SetWindowFocus();
                 if (iconHit) { renderer.cancelPicking(); select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift); }
@@ -335,10 +364,14 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
                 }
             }
-            frame.viewport.inputBlocked |= dragging_ || (overGizmo && !blockKeys) || document.transactionActive() || ImGui::GetDragDropPayload() != nullptr;
+            frame.viewport.inputBlocked |= dragging_ || materialDrop_.active() || frame.materialAssignment.has_value() ||
+                (overGizmo && !blockKeys) || document.transactionActive() || ImGui::GetDragDropPayload() != nullptr;
         }
     }
     ImGui::End();
+    if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
+        materialDrop_.cancel();renderer.cancelPicking();++serial_;
+    }
     previousSelection_=document.selection().ids;
     previousView_=camera.viewMatrix();
     selectionGeneration_=document.scene().generation();

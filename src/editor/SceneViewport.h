@@ -2,6 +2,7 @@
 #include "tools/Tools.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
+#include "ViewportMaterialDrop.h"
 #include <span>
 #include <vector>
 
@@ -13,9 +14,9 @@ public:
     EditorFrame draw(Camera&, SceneDocument&, AssetLibrary&, Renderer&, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked=false,
                      bool showCollisions=true, bool showTransformGizmo=true);
     void cancel(SceneDocument&, Renderer&);
-    bool interacting() const { return dragging_; }
+    bool interacting() const { return dragging_ || materialDrop_.active(); }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect);
-    void drawPlayerLightRig(const Camera&,const Scene&,std::span<const EntityId> selection);
+    void drawPlayerLightRig(const Camera&,const Scene&);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
 private:
@@ -30,6 +31,8 @@ private:
     uint32_t pickX_{},pickY_{};
     EntityId pickCollisionFallback_{};
     bool pickIntent_{};
+    ViewportMaterialDrop materialDrop_;
+    bool materialDropCanceled_{};
     std::vector<DragRoot> roots_;
     ParticleBoundsQuery particleBounds_;
     CollisionMeshQuery collisionMeshes_;

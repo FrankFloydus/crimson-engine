@@ -1,8 +1,12 @@
 #include "material_fixtures.h"
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "assets/MaterialAsset.h"
 #include "assets/BuiltinGeometry.h"
+#include "assets/GrungeGenerator.h"
+#include "resources/TextureStreamer.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "editor/PreparedMaterialSignature.h"
 #include "scene/SceneDocument.h"
@@ -25,6 +29,11 @@ namespace fs=std::filesystem;
 
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 std::string read(const fs::path& file){std::ifstream input(file,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
+fs::path fixturePath(const fs::path& root,const std::string& id) {
+    const auto file=resolveAssetPath(root,id);const auto ext=file.extension();
+    if(contentStorageReady(root)&&!isAssetUuid(id)&&(ext==".png"||ext==".PNG"||ext==".hdr"||ext==".tga"||ext==".crimson-material"||ext==".crimson-particle"||ext==".crimson-scene"))registerAssetPath(root,id,file);
+    return file;
+}
 struct Project {
     fs::path root;
     Project(){
@@ -46,12 +55,14 @@ void nearMatrix(const Mat4& left,const Mat4& right){
     for(size_t i=0;i<16;++i)require(std::abs(left[i]-right[i])<0.0002f,"Asset deletion changed a surviving child's world transform.");
 }
 bool hasAsset(const AssetLibrary& library,const std::string& id){
-    return std::any_of(library.catalog().begin(),library.catalog().end(),[&](const auto& asset){return asset.id==id;});
+    return std::any_of(library.catalog().begin(),library.catalog().end(),[&](const auto& asset){return asset.id==canonicalAssetId(id);});
 }
 void finishDeletion(AssetLibrary& library,ResourceManager& resources,const AssetDeletionPlan& plan,
                     const std::unordered_map<std::string,std::string>& replacements={},SceneDocument* active=nullptr){
     require(plan.error.empty(),plan.error);
-    if(library.deleteAssets(plan,replacements,active))return;
+    std::unordered_map<std::string,std::string> canonicalReplacements;
+    for(const auto& [id,target]:replacements)canonicalReplacements.emplace(canonicalAssetId(id),canonicalAssetId(target));
+    if(library.deleteAssets(plan,canonicalReplacements,active))return;
     require(library.deletionPending(),library.status());
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{20};
     while(std::chrono::steady_clock::now()<deadline){
@@ -69,24 +80,24 @@ const EntityRecord& record(const SceneSnapshot& scene,EntityId id){
 
 void warningQueries(){
     Project p;const auto model=seedModel(p);SceneDocument active(p.root);active.createModel(model->id,"Only an unsaved instance");
-    writeFileAtomically(p.root/"assets/preview.json",nlohmann::json{{"version",1},{"model",model->id}}.dump());
-    writeFileAtomically(p.root/"assets/editor-session.json",nlohmann::json{{"version",1},{"model",model->id}}.dump());
+    writeFileAtomically(fixturePath(p.root,"assets/preview.json"),nlohmann::json{{"version",1},{"model",model->id}}.dump());
+    writeFileAtomically(fixturePath(p.root,"assets/editor-session.json"),nlohmann::json{{"version",1},{"model",model->id}}.dump());
     ResourceManager resources;AssetLibrary library(p.root,&resources);
-    const auto unsaved=library.planDeletion({model->id},&active);
+    const auto unsaved=library.planDeletion({canonicalAssetId(model->id)},&active);
     require(unsaved.error.empty()&&!unsaved.needsReferenceWarning()&&unsaved.clearsActiveHistory,
         "Unsaved placement, undo history or editor bookmarks triggered an authored dependency warning.");
     require(!unsaved.usages.empty(),"Suppressing dependency warnings discarded active/history impact information.");
     active.createModel(model->id,"A second instance");require(active.save("Saved instances"),active.status());library.refreshScenes();
-    const auto saved=library.planDeletion({model->id},&active);
+    const auto saved=library.planDeletion({canonicalAssetId(model->id)},&active);
     require(saved.error.empty()&&saved.needsReferenceWarning()&&saved.warningUsages.size()==1&&saved.warningUsages.front().ownerId==active.assetId(),
         "Saved scene references were missing or counted once per entity/current history.");
-    const auto together=library.planDeletion({model->id,active.assetId()},&active);
+    const auto together=library.planDeletion({canonicalAssetId(model->id),canonicalAssetId(active.assetId())},&active);
     require(together.error.empty()&&!together.needsReferenceWarning(),"A scene removed with its model was counted as a surviving owner.");
 }
 
 void legacyEnvironmentGlowPersistence(){
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
-    const auto file=p.root/"assets/environment.json";
+    const auto file=fixturePath(p.root,"assets/environment.json");
     writeFileAtomically(file,R"({"version":1,"map":"","enabled":false,"intensity":2.5,"rotation":35,"toneMapping":3})");
     EnvironmentSettings environment;environment.glow={true,4,2,3};environment.source=EnvironmentSource::ProceduralSky;
     environment.background={true,true,{1,0,0}};environment.fog={true,{1,0,0},.5f};
@@ -161,25 +172,25 @@ void legacyEnvironmentGlowPersistence(){
 void archivedLegacyWarnings(){
     Project p;const auto model=seedModel(p);const auto fixtures=model_test::writeModelFixtures(p.root/"legacy-source");
     const std::string image="assets/textures/0b21c54a-61bd-4a5a-a0a9-693d6ad4f15f_roughness_linear.png";
-    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,image));
     const auto legacyMaterial=nlohmann::json{{"version",2},{"roughnessMap",image}}.dump();
     const auto legacyEnvironment=nlohmann::json{{"version",1},{"map",image}}.dump();
-    writeFileAtomically(p.root/"assets/material.json",legacyMaterial);writeFileAtomically(p.root/"assets/environment.json",legacyEnvironment);
+    writeFileAtomically(fixturePath(p.root,"assets/material.json"),legacyMaterial);writeFileAtomically(fixturePath(p.root,"assets/environment.json"),legacyEnvironment);
     SceneDocument active(p.root);active.createModel(model->id,"Model");require(active.save("Scene"),active.status());
     ResourceManager resources;AssetLibrary library(p.root,&resources);
-    const auto unused=library.planDeletion({image},&active);
+    const auto unused=library.planDeletion({canonicalAssetId(image)},&active);
     require(unused.error.empty()&&!unused.needsReferenceWarning(),"Archived sphere material/environment files triggered an asset dependency warning.");
     require(std::count_if(unused.usages.begin(),unused.usages.end(),[](const auto& use){return use.editorState;})==2,"Archived references were removed from full impact tracking.");
     const auto environment=active.createEnvironment();auto record=*active.scene().find(environment);record.environment->environment.map=image;
     record.environment->environment.source=EnvironmentSource::ProceduralSky;
     require(active.updateEntity(environment,record),active.status());require(active.save(),active.status());library.refreshScenes();
-    const auto used=library.planDeletion({image},&active);
+    const auto used=library.planDeletion({canonicalAssetId(image)},&active);
     require(used.error.empty()&&used.warningUsages.size()==1&&used.warningUsages.front().ownerId==active.assetId(),"A procedural Environment's retained HDRI dependency was hidden with legacy settings.");
-    std::vector<std::string> all;for(const auto& asset:library.catalog())all.push_back(asset.id);
+    std::vector<std::string> all;for(const auto& asset:library.catalog())if(library.browserCatalog().mutableItem(asset.id))all.push_back(asset.id);
     const auto deletingAll=library.planDeletion(all,&active);
     require(deletingAll.error.empty()&&!deletingAll.needsReferenceWarning(),"Selecting all usable browser assets left a legacy or same-batch owner warning.");
     finishDeletion(library,resources,deletingAll,{},&active);
-    require(read(p.root/"assets/material.json")==legacyMaterial&&read(p.root/"assets/environment.json")==legacyEnvironment,
+    require(read(fixturePath(p.root,"assets/material.json"))==legacyMaterial&&read(fixturePath(p.root,"assets/environment.json"))==legacyEnvironment,
         "Warning classification changed preserved legacy configuration files.");
     require(library.references().resolveTexture(image)==GrayTextureId,
         "Suppressing archived warnings changed the persisted texture replacement policy.");
@@ -187,17 +198,17 @@ void archivedLegacyWarnings(){
 
 void embeddedMaterialWarningOwners(){
     Project p;const auto model=seedModel(p);
-    for(const auto& material:model->materialIds)fs::remove(p.root/material);
+    for(const auto& material:model->materialIds)fs::remove(fixturePath(p.root,material));
     ResourceManager resources;AssetLibrary library(p.root,&resources);const auto image=model->images.front();
-    const auto imageOnly=library.planDeletion({image});
+    const auto imageOnly=library.planDeletion({canonicalAssetId(image)});
     require(imageOnly.error.empty()&&imageOnly.warningUsages.size()==1&&imageOnly.warningUsages.front().ownerId==model->id,
         "A model's embedded material was hidden or exposed as a missing standalone owner.");
-    const auto withOwner=library.planDeletion({image,model->id});
+    const auto withOwner=library.planDeletion({canonicalAssetId(image),canonicalAssetId(model->id)});
     require(withOwner.error.empty()&&!withOwner.needsReferenceWarning(),"Deleting a model with its image retained a nonexistent material owner warning.");
     // A native sidecar arriving before catalog refresh is still consumed through
     // its model; it must not become a second, unselectable warning owner.
     promoteModelMaterials(p.root,*model);
-    const auto notYetCataloged=library.planDeletion({image});
+    const auto notYetCataloged=library.planDeletion({canonicalAssetId(image)});
     require(notYetCataloged.error.empty()&&notYetCataloged.warningUsages.size()==1&&notYetCataloged.warningUsages.front().ownerId==model->id,
         "Uncataloged native material sidecars became extra ghost warning owners.");
 }
@@ -219,8 +230,8 @@ void removeModelAcrossScenes(bool dirty){
     const auto otherWorld=*other.scene().worldTransform(otherChild);require(other.save("Second scene"),other.status());
     if(dirty){auto unsaved=*active.scene().find(child);unsaved.name="Unsaved child rename";require(active.updateEntity(child,unsaved),active.status());}
     require(active.dirty()==dirty,"Fixture clean/dirty state is wrong.");
-    const auto materialBytes=read(p.root/model->materialIds.front());const auto imageBytes=read(p.root/model->images.front());
-    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({model->id},&active);
+    const auto materialBytes=read(fixturePath(p.root,model->materialIds.front()));const auto imageBytes=read(fixturePath(p.root,model->images.front()));
+    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({canonicalAssetId(model->id)},&active);
     require(plan.error.empty()&&plan.scenes.size()==2&&plan.warningUsages.size()==2&&plan.clearsActiveHistory,"Public deletion did not report both saved scenes and active history.");
     finishDeletion(library,resources,plan,{},&active);
     require(!active.scene().contains(removed)&&active.scene().contains(child)&&active.scene().find(child)->parent==parent,"Active model removal deleted or detached unrelated children incorrectly.");
@@ -233,36 +244,36 @@ void removeModelAcrossScenes(bool dirty){
     require(record(first,child).name=="Saved child","Deletion saved unrelated dirty document edits to disk.");
     Scene firstScene;firstScene.apply(first.records,first.properties);nearMatrix(*firstScene.worldTransform(child),childWorld);
     Scene secondScene;secondScene.apply(second.records,second.properties);nearMatrix(*secondScene.worldTransform(otherChild),otherWorld);
-    require(!fs::exists(p.root/model->id)&&!hasAsset(library,model->id),"Deleted model remained published in storage or the catalog.");
-    require(read(p.root/model->materialIds.front())==materialBytes&&read(p.root/model->images.front())==imageBytes&&
+    require(!fs::exists(fixturePath(p.root,model->id))&&!hasAsset(library,model->id),"Deleted model remained published in storage or the catalog.");
+    require(read(fixturePath(p.root,model->materialIds.front()))==materialBytes&&read(fixturePath(p.root,model->images.front()))==imageBytes&&
         hasAsset(library,model->materialIds.front())&&hasAsset(library,model->images.front()),"Deleting a model removed independent material/image assets.");
     require(!active.externalFileChanged(),"The active scene fingerprint was not advanced to its externally remapped saved file.");
 }
 
 void fallbackReopening(){
     Project p;const auto model=seedModel(p);const auto fixtures=model_test::writeModelFixtures(p.root/"fallback-source");
-    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/"assets/textures/replacement.png");
-    const std::string imageFallback="assets/textures/replacement.png";
-    auto material=loadMaterialAsset(p.root,model->materialIds.front());material.id="assets/materials/replacement.crimson-material";material.name="Replacement material";material_test::legacyFixture(material);
+    fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,"assets/textures/replacement.png"));
+    const std::string imageFallback=canonicalAssetId("assets/textures/replacement.png");
+    auto material=loadMaterialAsset(p.root,model->materialIds.front());material.id=canonicalAssetId("assets/materials/replacement.crimson-material");material.name="Replacement material";material_test::legacyFixture(material);
     material.surface.baseColor={.25f,.5f,.75f,1};material.surface.baseColorTexture.image=AssetRef<DecodedImage>{imageFallback};saveMaterialAsset(p.root,material);
     {
         ResourceManager resources;AssetLibrary library(p.root,&resources);
-        const auto image=model->images.front();const auto plan=library.planDeletion({image});
+        const auto image=model->images.front();const auto plan=library.planDeletion({canonicalAssetId(image)});
         require(plan.error.empty()&&plan.needsReferenceWarning(),"A package image's actual material dependencies were not reported.");
         finishDeletion(library,resources,plan,{{image,imageFallback}});
-        require(!fs::exists(p.root/image)&&library.references().resolveTexture(image)==imageFallback,"Texture fallback was not published.");
+        require(!fs::exists(fixturePath(p.root,image))&&library.references().resolveTexture(image)==imageFallback,"Texture fallback was not published.");
         const auto reopened=loadModelPackage(model->id,p.root,library.modelResolvers());
         require(library.references().resolveTexture(reopened->materials.front().baseColorTexture.image.id)==imageFallback,"Managed model reopening ignored a deleted package-image fallback.");
-        const auto materialPlan=library.planDeletion({model->materialIds.front()});
+        const auto materialPlan=library.planDeletion({canonicalAssetId(model->materialIds.front())});
         finishDeletion(library,resources,materialPlan,{{model->materialIds.front(),material.id}});
         require(loadModelPackage(model->id,p.root,library.modelResolvers())->materials.front().baseColor==material.surface.baseColor,"Material fallback lost authored factors when reopening.");
-        const auto normalUses=library.planDeletion({model->images.at(1)});
+        const auto normalUses=library.planDeletion({canonicalAssetId(model->images.at(1))});
         require(normalUses.error.empty()&&std::none_of(normalUses.warningUsages.begin(),normalUses.warningUsages.end(),[&](const auto& usage){return library.references().deleted(usage.ownerId);}),
             "A replaced imported material sidecar remained a ghost dependency owner.");
-        finishDeletion(library,resources,library.planDeletion({material.id}));
+        finishDeletion(library,resources,library.planDeletion({canonicalAssetId(material.id)}));
         const auto defaults=loadModelPackage(model->id,p.root,library.modelResolvers())->materials.front();
         require(defaults.baseColor==Vec4{.5f,.5f,.5f,1}&&defaults.roughness==1&&defaults.metallic==0,"No-fallback material deletion did not use the requested default.");
-        const auto normal=model->images.at(1);finishDeletion(library,resources,library.planDeletion({normal}));
+        const auto normal=model->images.at(1);finishDeletion(library,resources,library.planDeletion({canonicalAssetId(normal)}));
         require(library.references().resolveTexture(normal,true)==NeutralNormalTextureId&&library.references().resolveTexture(normal)==GrayTextureId,"No-fallback texture defaults lost role semantics.");
     }
     ResourceManager resources;AssetLibrary reopened(p.root,&resources);
@@ -273,31 +284,31 @@ void fallbackReopening(){
 
 void cancelAndStaleDeletion(){
     Project p;const auto model=seedModel(p);SceneDocument active(p.root);const auto entity=active.createModel(model->id,"Model");require(active.save("Scene"),active.status());
-    ResourceManager resources;AssetLibrary library(p.root,&resources);auto plan=library.planDeletion({model->id},&active);
-    const auto savedId=active.assetId();const auto beforeModel=read(p.root/model->id),beforeScene=read(p.root/savedId),beforeBrowser=read(p.root/"assets/browser.json");
+    ResourceManager resources;AssetLibrary library(p.root,&resources);auto plan=library.planDeletion({canonicalAssetId(model->id)},&active);
+    const auto savedId=active.assetId();const auto beforeModel=read(fixturePath(p.root,model->id)),beforeScene=read(fixturePath(p.root,savedId)),beforeBrowser=read(fixturePath(p.root,"assets/browser.json"));
     require(!library.deleteAssets(plan,{},&active)&&library.deletionPending(),"Runtime asset deletion did not defer validation.");
     library.cancelDeletion();require(!library.deletionPending()&&!library.pumpDeletion(&active),"Canceled deletion retained a pending publication.");
     for(unsigned i=0;i<30;++i){resources.pump();std::this_thread::sleep_for(std::chrono::milliseconds{1});}
-    require(read(p.root/model->id)==beforeModel&&read(p.root/active.assetId())==beforeScene&&read(p.root/"assets/browser.json")==beforeBrowser&&
-        !fs::exists(p.root/"assets/references.json")&&active.scene().contains(entity),"Canceled deletion changed authored files or the active scene.");
-    plan=library.planDeletion({model->id},&active);require(!library.deleteAssets(plan,{},&active)&&library.deletionPending(),"Second deletion failed to start.");
+    require(read(fixturePath(p.root,model->id))==beforeModel&&read(fixturePath(p.root,active.assetId()))==beforeScene&&read(fixturePath(p.root,"assets/browser.json"))==beforeBrowser&&
+        !fs::exists(fixturePath(p.root,"assets/references.json"))&&active.scene().contains(entity),"Canceled deletion changed authored files or the active scene.");
+    plan=library.planDeletion({canonicalAssetId(model->id)},&active);require(!library.deleteAssets(plan,{},&active)&&library.deletionPending(),"Second deletion failed to start.");
     active.newScene();require(!library.pumpDeletion(&active)&&!library.deletionPending(),"A deletion prepared for a replaced scene was published.");
-    require(read(p.root/model->id)==beforeModel&&read(p.root/savedId)==beforeScene,"Stale deletion changed managed model or saved scene files.");
+    require(read(fixturePath(p.root,model->id))==beforeModel&&read(fixturePath(p.root,savedId))==beforeScene,"Stale deletion changed managed model or saved scene files.");
 }
 
 void activeSceneAndFolderDeletion(){
     Project p;const auto model=seedModel(p);SceneDocument active(p.root);active.createModel(model->id,"Retained model asset");require(active.save("Delete this scene"),active.status());
     const auto sceneId=active.assetId();const auto generation=active.documentGeneration();
-    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto folder=library.browserCatalog().createFolder({},"Scenes");
+    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto folder=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Scenes");
     const auto childFolder=library.browserCatalog().createFolder(folder,"Nested");
     library.browserCatalog().move(std::array<std::string,1>{sceneId},childFolder);
-    const auto plan=library.planDeletion({folder},&active);
+    const auto plan=library.planDeletion({canonicalAssetId(folder)},&active);
     require(plan.error.empty()&&plan.assetIds==std::vector<std::string>{sceneId}&&plan.folderIds.size()==2,"Folder deletion did not expand nested content.");
     finishDeletion(library,resources,plan,{},&active);
     require(active.assetId().empty()&&active.scene().records().empty()&&active.dirty()&&active.history().size()==0&&active.documentGeneration()!=generation,
         "Deleting the active scene did not open a new empty unsaved document.");
-    require(!fs::exists(p.root/sceneId)&&!hasAsset(library,sceneId)&&!library.browserCatalog().contains(folder)&&!library.browserCatalog().contains(childFolder),"Folder/scene deletion left browser entries or files.");
-    require(fs::exists(p.root/model->id)&&hasAsset(library,model->id),"Deleting a scene deleted a referenced model asset.");
+    require(!fs::exists(fixturePath(p.root,sceneId))&&!hasAsset(library,sceneId)&&!library.browserCatalog().contains(folder)&&!library.browserCatalog().contains(childFolder),"Folder/scene deletion left browser entries or files.");
+    require(fs::exists(fixturePath(p.root,model->id))&&hasAsset(library,model->id),"Deleting a scene deleted a referenced model asset.");
     BrowserCatalog reopened(p.root);reopened.synchronize(library.catalog());require(!reopened.contains(folder)&&!reopened.contains(sceneId),"Deleted folder contents reappeared on reopening.");
 }
 void particleMaterialDeletionAndAuthority(){
@@ -305,16 +316,16 @@ void particleMaterialDeletionAndAuthority(){
     material_test::legacyFixture(material);material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,material);
     effect.emitter.material=AssetRef<MaterialAsset>{material.id};saveParticleAsset(p.root,effect);
     SceneDocument scene(p.root);const auto entity=scene.createParticle(effect.id,"Placed effect",math::translation({2,3,4}));require(scene.save("Particle scene"),scene.status());
-    const auto sceneBytes=read(p.root/scene.assetId());ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto sceneBytes=read(fixturePath(p.root,scene.assetId()));ResourceManager resources;AssetLibrary library(p.root,&resources);
     library.protectParticleDocument(effect.id);library.setParticleDocumentReferences({material.id},{material.id});
-    const auto plan=library.planDeletion({material.id},&scene);
+    const auto plan=library.planDeletion({canonicalAssetId(material.id)},&scene);
     require(plan.error.empty()&&plan.warningUsages.size()==1&&plan.warningUsages.front().ownerId==effect.id,
         "Saved effect material dependency was missing, counted per scene instance, or inflated by active/history usages.");
     require(std::any_of(plan.usages.begin(),plan.usages.end(),[](const auto& usage){return usage.historical;}),"Material deletion lost active particle history impact.");
     finishDeletion(library,resources,plan,{},&scene);
-    require(!fs::exists(p.root/material.id)&&loadParticleAsset(p.root,effect.id).emitter.material.id==DefaultParticleMaterialId&&
+    require(!fs::exists(fixturePath(p.root,material.id))&&loadParticleAsset(p.root,effect.id).emitter.material.id==DefaultParticleMaterialId&&
         library.references().resolveParticleMaterial(material.id)==DefaultParticleMaterialId,"Material deletion did not atomically install the protected sprite fallback.");
-    require(scene.scene().contains(entity)&&scene.scene().find(entity)->particle->id==effect.id&&read(p.root/scene.assetId())==sceneBytes,
+    require(scene.scene().contains(entity)&&scene.scene().find(entity)->particle->id==effect.id&&read(fixturePath(p.root,scene.assetId()))==sceneBytes,
         "Deleting a sprite material removed its effect instance or modified the scene file.");
     const auto fallback=library.preparedParticleMaterial(material.id);require(fallback->ready&&fallback->render.baseColor==Vec4{1,1,1,1}&&fallback->render.blend==MaterialBlend::Additive&&!bgfx::isValid(fallback->render.colorTexture),
         "Deleted sprite material did not prepare the original white procedural appearance.");
@@ -325,25 +336,25 @@ void particleMaterialDeletionAndAuthority(){
     const auto revision=library.materialRevision(user->id);const auto first=library.preparedParticleMaterial(user->id);require(first->ready&&first->render.baseColor==committed.surface.baseColor,"Committed open material was not immediately visible.");
     require(first->render.uvScale==committed.surface.uvScale && first->render.uvOffset==committed.surface.uvOffset && first->render.uvRotation==committed.surface.uvRotation,
         "Prepared particle material discarded committed texture mapping.");
-    auto external=committed;external.surface.baseColor={.8f,.7f,.6f,1};saveMaterialAsset(p.root,external);library.onFileChanged(p.root/user->id);
+    auto external=committed;external.surface.baseColor={.8f,.7f,.6f,1};saveMaterialAsset(p.root,external);library.onFileChanged(fixturePath(p.root,user->id));
     require(library.materialRevision(user->id)==revision&&library.findMaterial(user->id)->surface.baseColor==committed.surface.baseColor,
         "Background reload replaced open material document authority.");
     library.protectMaterialDocument({});library.refreshMaterials();require(library.findMaterial(user->id)->surface.baseColor==external.surface.baseColor,"Closing material authority did not allow reload.");
-    const auto good=library.preparedParticleMaterial(user->id);writeFileAtomically(p.root/user->id,"{invalid");library.refreshMaterials();const auto retained=library.preparedParticleMaterial(user->id);
+    const auto good=library.preparedParticleMaterial(user->id);writeFileAtomically(fixturePath(p.root,user->id),"{invalid");library.refreshMaterials();const auto retained=library.preparedParticleMaterial(user->id);
     require(good->current&&retained->ready&&!retained->current&&!retained->diagnostic.empty()&&retained->signature==good->signature&&retained->render.baseColor==good->render.baseColor,
         "Failed material reload lost the immutable last-good renderer packet or its diagnostic.");
     saveMaterialAsset(p.root,external);library.refreshMaterials();require(library.preparedParticleMaterial(user->id)->diagnostic.empty(),"Corrected material reload retained a stale failure diagnostic.");
 }
 void spriteImageDeletionAndIncompatibleMaterial(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/sprite.png";
-    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,image));
     auto sprite=createMaterialAsset(p.root,"Textured");material_test::legacyFixture(sprite);sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Alpha;sprite.surface.baseColorTexture.image=AssetRef<DecodedImage>{image};saveMaterialAsset(p.root,sprite);
     auto expectedGraph=loadMaterialAsset(p.root,sprite.id).graph;
     rewriteMaterialGraphTextures(expectedGraph,[&](const auto& id,MaterialTextureRole role){
-        return id==image?std::string(role==MaterialTextureRole::Normal?NeutralNormalTextureId:GrayTextureId):id;
+        return id==canonicalAssetId(image)?std::string(role==MaterialTextureRole::Normal?NeutralNormalTextureId:GrayTextureId):id;
     });
     auto effect=createParticleAsset(p.root,"Smoke");effect.emitter.material=AssetRef<MaterialAsset>{sprite.id};saveParticleAsset(p.root,effect);
-    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({image});
+    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({canonicalAssetId(image)});
     require(plan.error.empty()&&plan.warningUsages.size()==1&&plan.warningUsages.front().ownerId==sprite.id,
         "Sprite image warnings counted transitive effects as direct image owners.");
     finishDeletion(library,resources,plan);const auto cleared=loadMaterialAsset(p.root,sprite.id);
@@ -354,12 +365,12 @@ void spriteImageDeletionAndIncompatibleMaterial(){
         serializeMaterialGraph(cleared.graph)==serializeMaterialGraph(expectedGraph)&&
         serializeMaterialGraph(published->graph)==serializeMaterialGraph(expectedGraph),
         "Texture deletion changed the authored graph or failed to publish its shared role-correct replacement.");
-    auto pbr=defaultMaterialAsset();pbr.id="assets/materials/pbr.crimson-material";pbr.name="PBR";saveMaterialAsset(p.root,pbr);library.refreshMaterials();
-    const auto deletion=library.planDeletion({sprite.id});
+    auto pbr=defaultMaterialAsset();pbr.id=canonicalAssetId("assets/materials/pbr.crimson-material");pbr.name="PBR";saveMaterialAsset(p.root,pbr);library.refreshMaterials();
+    const auto deletion=library.planDeletion({canonicalAssetId(sprite.id)});
     const auto candidates=library.fallbackCandidates(sprite.id);
     require(std::any_of(candidates.begin(),candidates.end(),[&](const auto& entry){return entry.id==pbr.id;}),"Shared material deletion excluded a valid Lit/Opaque replacement.");
     finishDeletion(library,resources,deletion,{{sprite.id,pbr.id}});
-    require(!fs::exists(p.root/sprite.id)&&loadParticleAsset(p.root,effect.id).emitter.material.id==pbr.id&&library.references().resolveMaterial(sprite.id)==pbr.id,
+    require(!fs::exists(fixturePath(p.root,sprite.id))&&loadParticleAsset(p.root,effect.id).emitter.material.id==pbr.id&&library.references().resolveMaterial(sprite.id)==pbr.id,
         "Shared material replacement failed to update the saved particle assignment.");
     const auto shared=library.preparedParticleMaterial(pbr.id);
     require(shared->ready&&shared->current&&shared->diagnostic.empty()&&shared->render.baseColor==pbr.surface.baseColor,
@@ -374,19 +385,19 @@ void spriteImageDeletionAndIncompatibleMaterial(){
 void changedUsagePreservesConsumerAssignments() {
     Project p;auto meshMaterial=createMaterialAsset(p.root,"Changing Surface");
     auto particleMaterial=copyMaterialAsset(p.root,defaultParticleMaterialAsset(),"Changing Particle");
-    SceneDocument scene(p.root);const auto box=scene.createBox();auto entity=*scene.scene().find(box);entity.modelMaterial.id=meshMaterial.id;
+    SceneDocument scene(p.root);const auto box=scene.createBox();auto entity=*scene.scene().find(box);entity.modelMaterials=ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}};
     require(scene.updateEntity(box,entity)&&scene.save("Usage scene"),scene.status());
     auto effect=createParticleAsset(p.root,"Usage effect");effect.emitter.material.id=particleMaterial.id;saveParticleAsset(p.root,effect);
-    const auto sceneBytes=read(p.root/scene.assetId()),effectBytes=read(p.root/effect.id);
+    const auto sceneBytes=read(fixturePath(p.root,scene.assetId())),effectBytes=read(fixturePath(p.root,effect.id));
     ResourceManager resources;AssetLibrary library(p.root,&resources);const auto geometry=library.findModel(BuiltinBoxModelId);
-    require(geometry&&library.modelMaterialsDiagnostic(*geometry,meshMaterial.id).empty(),"Surface fixture was not compatible before Usage changed.");
+    require(geometry&&library.modelMaterialsDiagnostic(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}}).empty(),"Surface fixture was not compatible before Usage changed.");
     require(library.preparedParticleMaterial(particleMaterial.id)->ready,"Particle fixture was not usable before Usage changed.");
     const auto savedSurface=meshMaterial,savedParticle=particleMaterial;
     materialOutputNode(meshMaterial.graph).output.shading=MaterialShading::Unlit;
     materialOutputNode(meshMaterial.graph).output.blend=MaterialBlend::Additive;canonicalizeMaterialAsset(meshMaterial);
     saveMaterialAsset(p.root,meshMaterial);library.publishMaterial(std::make_shared<MaterialAsset>(meshMaterial));
-    const auto modelPacket=library.resolvedModelMaterials(*geometry,meshMaterial.id);
-    require(library.modelMaterialsReady(*geometry,meshMaterial.id)&&library.modelMaterialsDiagnostic(*geometry,meshMaterial.id).empty()&&
+    const auto modelPacket=library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}});
+    require(library.modelMaterialsReady(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}})&&library.modelMaterialsDiagnostic(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}}).empty()&&
         modelPacket.front().baseColor==meshMaterial.surface.baseColor,"Shared mesh shader/blend edit installed an unrelated fallback.");
     materialOutputNode(particleMaterial.graph).output.shading=MaterialShading::StandardPbr;
     materialOutputNode(particleMaterial.graph).output.blend=MaterialBlend::Mask;canonicalizeMaterialAsset(particleMaterial);
@@ -395,54 +406,137 @@ void changedUsagePreservesConsumerAssignments() {
     require(particlePacket->ready&&particlePacket->current&&particlePacket->diagnostic.empty()&&
         particlePacket->render.blend==MaterialBlend::Mask&&particlePacket->render.shading==MaterialShading::StandardPbr,
         "Sprite did not retain the assigned Lit/Masked material.");
-    require(scene.scene().find(box)->modelMaterial.id==meshMaterial.id&&record(readSceneSnapshot(p.root,scene.assetId()),box).modelMaterial.id==meshMaterial.id&&
-        loadParticleAsset(p.root,effect.id).emitter.material.id==particleMaterial.id&&read(p.root/scene.assetId())==sceneBytes&&read(p.root/effect.id)==effectBytes&&
+    require(scene.scene().find(box)->modelMaterials.front().id==meshMaterial.id&&record(readSceneSnapshot(p.root,scene.assetId()),box).modelMaterials.front().id==meshMaterial.id&&
+        loadParticleAsset(p.root,effect.id).emitter.material.id==particleMaterial.id&&read(fixturePath(p.root,scene.assetId()))==sceneBytes&&read(fixturePath(p.root,effect.id))==effectBytes&&
         library.references().resolveMaterial(meshMaterial.id)==meshMaterial.id&&library.references().resolveParticleMaterial(particleMaterial.id)==particleMaterial.id,
         "Shader/blend edit rewrote saved/live consumer references, source files or deletion aliases.");
     saveMaterialAsset(p.root,savedSurface);library.publishMaterial(std::make_shared<MaterialAsset>(savedSurface));
     saveMaterialAsset(p.root,savedParticle);library.publishMaterial(std::make_shared<MaterialAsset>(savedParticle));
-    require(library.modelMaterialsDiagnostic(*geometry,meshMaterial.id).empty()&&
-        library.resolvedModelMaterials(*geometry,meshMaterial.id).front().baseColor==savedSurface.surface.baseColor&&
+    require(library.modelMaterialsDiagnostic(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}}).empty()&&
+        library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{meshMaterial.id}}).front().baseColor==savedSurface.surface.baseColor&&
         library.preparedParticleMaterial(particleMaterial.id)->ready&&library.preparedParticleMaterial(particleMaterial.id)->diagnostic.empty(),
         "Restoring shader/blend did not resume the existing saved assignments or clear compatibility diagnostics.");
 }
 void boxMaterialDeletionAndPublication(){
-    Project p;
-    auto red=defaultMaterialAsset();red.id="assets/materials/red.crimson-material";red.name="Red";red.surface.baseColor={1,.1f,.1f,1};saveMaterialAsset(p.root,red);
-    auto blue=red;blue.id="assets/materials/blue.crimson-material";blue.name="Blue";blue.surface.baseColor={.1f,.1f,1,1};saveMaterialAsset(p.root,blue);
+    Project p;initializeContentStorage(p.root);
+    auto red=defaultMaterialAsset();red.id=canonicalAssetId("assets/materials/red.crimson-material");red.name="Red";red.surface.baseColor={1,.1f,.1f,1};saveMaterialAsset(p.root,red);
+    auto blue=red;blue.id=canonicalAssetId("assets/materials/blue.crimson-material");blue.name="Blue";blue.surface.baseColor={.1f,.1f,1,1};saveMaterialAsset(p.root,blue);
     auto sprite=createMaterialAsset(p.root,"Unsupported sprite");material_test::legacyFixture(sprite);sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,sprite);
-    SceneDocument active(p.root);const auto box=active.createBox();auto entity=*active.scene().find(box);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
+    SceneDocument active(p.root);const auto box=active.createBox();auto entity=*active.scene().find(box);entity.modelMaterials=ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}};
     require(active.updateEntity(box,entity) && active.save("Box scene"),active.status());
-    SceneDocument other(p.root);const auto otherBox=other.createBox();entity=*other.scene().find(otherBox);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
+    SceneDocument other(p.root);const auto otherBox=other.createBox();entity=*other.scene().find(otherBox);entity.modelMaterials=ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}};
     require(other.updateEntity(otherBox,entity) && other.save("Other Box scene"),other.status());
     entity=*active.scene().find(box);entity.name="Unsaved local name";require(active.updateEntity(box,entity),active.status());
     ResourceManager resources;AssetLibrary library(p.root,&resources);
     const auto geometry=library.findModel(BuiltinBoxModelId);require(bool(geometry),"Built-in Box was unavailable.");
     const auto original=geometry->materials.front().baseColor;
-    require(library.resolvedModelMaterials(*geometry,red.id).front().baseColor==red.surface.baseColor && library.resolvedModelMaterials(*geometry,blue.id).front().baseColor==blue.surface.baseColor,
+    require(library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}}).front().baseColor==red.surface.baseColor && library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{blue.id}}).front().baseColor==blue.surface.baseColor,
         "Per-instance Box material identities collided.");
     require(geometry->materials.front().baseColor==original && library.findModel(BuiltinBoxModelId)==geometry,"Instance assignment mutated or copied protected geometry.");
     library.protectMaterialDocument(red.id);auto committed=red;committed.surface.roughness=.31f;library.publishMaterial(std::make_shared<MaterialAsset>(committed));
-    require(library.resolvedModelMaterials(*geometry,red.id).front().roughness==.31f,"Committed material changes did not reach Box bindings.");
-    auto external=red;external.surface.roughness=.87f;saveMaterialAsset(p.root,external);library.onFileChanged(p.root/red.id);
-    require(library.resolvedModelMaterials(*geometry,red.id).front().roughness==.31f,"Disk hot reload replaced open material authority.");
+    require(library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}}).front().roughness==.31f,"Committed material changes did not reach Box bindings.");
+    auto external=red;external.surface.roughness=.87f;saveMaterialAsset(p.root,external);library.onFileChanged(fixturePath(p.root,red.id));
+    require(library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}}).front().roughness==.31f,"Disk hot reload replaced open material authority.");
     library.protectMaterialDocument({});library.refreshMaterials();
-    require(library.resolvedModelMaterials(*geometry,red.id).front().roughness==.87f,"Closed material document did not resume resource publication.");
-    const auto plan=library.planDeletion({red.id},&active);
+    require(library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}}).front().roughness==.87f,"Closed material document did not resume resource publication.");
+    const auto plan=library.planDeletion({canonicalAssetId(red.id)},&active);
     require(plan.error.empty() && plan.warningUsages.size()==2 && plan.scenes.size()==2 && plan.clearsActiveHistory,"Box material deletion did not discover saved/live/history references.");
     const auto candidates=library.fallbackCandidates(red.id);
     require(std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==blue.id;}) &&
         std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==sprite.id;}),"Box material deletion excluded a valid shared additive replacement.");
     finishDeletion(library,resources,plan,{{red.id,blue.id}},&active);
     const auto saved=readSceneSnapshot(p.root,active.assetId()),otherSaved=readSceneSnapshot(p.root,other.assetId());
-    require(record(saved,box).modelMaterial.id==blue.id && record(otherSaved,otherBox).modelMaterial.id==blue.id,"Material deletion did not update every saved scene.");
+    require(record(saved,box).modelMaterials.front().id==blue.id && record(otherSaved,otherBox).modelMaterials.front().id==blue.id,"Material deletion did not update every saved scene.");
     require(record(saved,box).name=="Box" && active.scene().find(box)->name=="Unsaved local name" && active.dirty(),"Material deletion saved or discarded unrelated live edits.");
-    require(active.scene().find(box)->modelMaterial.id==blue.id && active.history().size()==0 && active.scene().contains(box),"Material deletion lost the entity or allowed deleted material undo.");
-    require(library.resolvedModelMaterials(*geometry,red.id).front().baseColor==blue.surface.baseColor,"Deleted material redirect did not resolve its replacement.");
-    finishDeletion(library,resources,library.planDeletion({blue.id},&active),{},&active);
-    require(active.scene().find(box)->modelMaterial.id==DefaultMaterialId && record(readSceneSnapshot(p.root,other.assetId()),otherBox).modelMaterial.id==DefaultMaterialId,
+    require(active.scene().find(box)->modelMaterials.front().id==blue.id && active.history().size()==0 && active.scene().contains(box),"Material deletion lost the entity or allowed deleted material undo.");
+    require(library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}}).front().baseColor==blue.surface.baseColor,"Deleted material redirect did not resolve its replacement.");
+    finishDeletion(library,resources,library.planDeletion({canonicalAssetId(blue.id)},&active),{},&active);
+    require(active.scene().find(box)->modelMaterials.front().id==DefaultMaterialId && record(readSceneSnapshot(p.root,other.assetId()),otherBox).modelMaterials.front().id==DefaultMaterialId,
         "Default Box material fallback was not durable.");
-    require(geometry->materials.front().baseColor==original && library.resolvedModelMaterials(*geometry,red.id).front().baseColor==original,"Deleted override damaged shared geometry/default material.");
+    require(geometry->materials.front().baseColor==original && library.resolvedModelMaterials(*geometry,ModelMaterialOverrides{AssetRef<MaterialAsset>{red.id}}).front().baseColor==original,"Deleted override damaged shared geometry/default material.");
+}
+void importedMaterialSlotsAndDeletion(){
+    Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"sources");
+    auto source=nlohmann::json::parse(read(fixtures.gltf));
+    source["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_1");
+    model_test::writeJson(fixtures.gltf,source);
+    const auto model=importModelPackage(fixtures.gltf,p.root);promoteModelMaterials(p.root,*model);
+    // glTF imports also retain an unused default-material slot. These two
+    // primitives must keep their authored slot identities and UV availability.
+    require(model->materials.size()>=2 && model->materialIds.size()==model->materials.size() && model->primitives.size()==2 &&
+        model->primitives[0].material==0 && model->primitives[1].material==1 &&
+        model->primitives[0].uvMask==1 && model->primitives[1].uvMask==3,"Imported material-slot fixture lost its distinct UV availability.");
+    std::vector<std::pair<fs::path,std::string>> unchanged;
+    for(const auto& folder:{p.root/"sources",(fixturePath(p.root,model->id)).parent_path()})
+        for(const auto& file:fs::recursive_directory_iterator(folder))if(file.is_regular_file())unchanged.emplace_back(file.path(),read(file.path()));
+    for(const auto& id:model->materialIds)unchanged.emplace_back(fixturePath(p.root,id),read(fixturePath(p.root,id)));
+    const auto create=[&](const std::string& name,Vec4 color) {
+        auto material=createMaterialAsset(p.root,name);material_test::legacyFixture(material);material.surface.baseColor=color;
+        saveMaterialAsset(p.root,material);return loadMaterialAsset(p.root,material.id);
+    };
+    const auto red=create("Slot red",{1,.1f,.1f,1}),blue=create("Slot blue",{.1f,.1f,1,1}),gold=create("Slot gold",{1,.7f,.1f,1});
+    const auto overrides=[](const std::string& first,const std::string& second) {
+        return ModelMaterialOverrides{AssetRef<MaterialAsset>{first},AssetRef<MaterialAsset>{second}};
+    };
+    SceneDocument active(p.root);const auto first=active.createModel(model->id,"First imported instance"),second=active.createModel(model->id,"Second imported instance");
+    auto entity=*active.scene().find(first);entity.modelMaterials=overrides(red.id,blue.id);require(active.updateEntity(first,entity),active.status());
+    entity=*active.scene().find(second);entity.modelMaterials=overrides(blue.id,red.id);require(active.updateEntity(second,entity)&&active.save("Imported slots"),active.status());
+    SceneDocument other(p.root);const auto otherEntity=other.createModel(model->id,"Other imported instance");
+    entity=*other.scene().find(otherEntity);entity.modelMaterials=overrides(red.id,red.id);require(other.updateEntity(otherEntity,entity)&&other.save("Other imported slots"),other.status());
+    ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto inherited=library.resolvedModelMaterials(*model);
+    const auto resolvedFirst=library.resolvedModelMaterials(*model,active.scene().find(first)->modelMaterials);
+    const auto resolvedSecond=library.resolvedModelMaterials(*model,active.scene().find(second)->modelMaterials);
+    require(resolvedFirst[0].baseColor==red.surface.baseColor && resolvedFirst[1].baseColor==blue.surface.baseColor &&
+        resolvedSecond[0].baseColor==blue.surface.baseColor && resolvedSecond[1].baseColor==red.surface.baseColor,
+        "Per-slot assignments leaked across imported slots or instances.");
+    entity=*active.scene().find(first);setModelMaterialOverride(entity.modelMaterials,0,{});require(active.updateEntity(first,entity),active.status());
+    const auto clearedFirst=library.resolvedModelMaterials(*model,active.scene().find(first)->modelMaterials);
+    require(active.scene().find(first)->modelMaterials.size()==2 && active.scene().find(first)->modelMaterials[0].empty() &&
+        clearedFirst[0].baseColor==inherited[0].baseColor && clearedFirst[0].graph==inherited[0].graph && clearedFirst[1].baseColor==blue.surface.baseColor,
+        "Clearing an interior override shifted slots or failed to inherit its source material.");
+    require(active.undo() && active.scene().find(first)->modelMaterials==overrides(red.id,blue.id),"Undo did not restore the independent imported slot.");
+    entity=*active.scene().find(first);setModelMaterialOverride(entity.modelMaterials,1,{});require(active.updateEntity(first,entity),active.status());
+    const auto clearedLast=library.resolvedModelMaterials(*model,active.scene().find(first)->modelMaterials);
+    require(active.scene().find(first)->modelMaterials.size()==1 && clearedLast[0].baseColor==red.surface.baseColor &&
+        clearedLast[1].baseColor==inherited[1].baseColor && clearedLast[1].graph==inherited[1].graph,
+        "Clearing the final override failed to restore the imported material.");
+    require(active.undo() && active.scene().find(first)->modelMaterials==overrides(red.id,blue.id),"Undo lost a trailing imported material slot.");
+
+    auto uvMaterial=createMaterialAsset(p.root,"UV1 slot");const auto output=materialOutputNode(uvMaterial.graph).id;
+    const auto uv=addMaterialNode(uvMaterial.graph,MaterialNodeKind::UV).id,texture=addMaterialNode(uvMaterial.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(uvMaterial.graph,uv)->uv.mode=MaterialUvMode::UV1;
+    findMaterialNode(uvMaterial.graph,texture)->texture.image.id=model->images.front();
+    connectMaterialNodes(uvMaterial.graph,uv,MaterialPin::UV,texture,MaterialPin::UV);
+    connectMaterialNodes(uvMaterial.graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    saveMaterialAsset(p.root,uvMaterial);canonicalizeMaterialAsset(uvMaterial);library.publishMaterial(std::make_shared<MaterialAsset>(uvMaterial));
+    bool rejected=false;try{(void)library.resolvedModelMaterials(*model,overrides(uvMaterial.id,blue.id));}catch(const std::exception& error){rejected=std::string(error.what()).find("UV")!=std::string::npos;}
+    require(rejected,"An imported slot accepted a material requiring its unavailable UV1 set.");
+    require(library.resolvedModelMaterials(*model,overrides(red.id,uvMaterial.id))[1].graph==library.findMaterial(uvMaterial.id)->surface.graph,
+        "UV validation incorrectly applied another slot's primitive UV requirements.");
+    auto invalid=overrides(red.id,blue.id);setModelMaterialOverride(invalid,model->materials.size(),AssetRef<MaterialAsset>{gold.id});
+    rejected=false;try{(void)library.resolvedModelMaterials(*model,invalid);}catch(const std::exception&){rejected=true;}
+    require(rejected && !library.modelMaterialsReady(*model,invalid) && !library.modelMaterialsDiagnostic(*model,invalid).empty(),
+        "A nonexistent imported slot silently dropped its explicit material assignment.");
+
+    entity=*active.scene().find(first);entity.name="Unsaved slot name";require(active.updateEntity(first,entity),active.status());
+    const auto plan=library.planDeletion({canonicalAssetId(red.id)},&active);
+    require(plan.error.empty() && plan.warningUsages.size()==2 && plan.scenes.size()==2 && plan.clearsActiveHistory,
+        "Imported slot deletion missed saved/live/history owners or counted each slot as a separate saved owner.");
+    finishDeletion(library,resources,plan,{{red.id,gold.id}},&active);
+    const auto saved=readSceneSnapshot(p.root,active.assetId()),otherSaved=readSceneSnapshot(p.root,other.assetId());
+    require(record(saved,first).modelMaterials==overrides(gold.id,blue.id) && record(saved,second).modelMaterials==overrides(blue.id,gold.id) &&
+        record(otherSaved,otherEntity).modelMaterials==overrides(gold.id,gold.id),"Material deletion failed to replace every saved imported slot.");
+    require(active.scene().find(first)->modelMaterials==overrides(gold.id,blue.id) && active.scene().find(second)->modelMaterials==overrides(blue.id,gold.id) &&
+        active.history().size()==0 && !active.undo(),"Material deletion left a live slot or history path to the deleted material.");
+    require(record(saved,first).name=="First imported instance" && active.scene().find(first)->name=="Unsaved slot name" && active.dirty(),
+        "Imported slot deletion overwrote unrelated unsaved entity changes.");
+    const auto redirected=library.resolvedModelMaterials(*model,overrides(red.id,red.id));
+    require(redirected[0].baseColor==gold.surface.baseColor && redirected[1].baseColor==gold.surface.baseColor,
+        "Deleted material aliases did not resolve independently in every imported slot.");
+    for(const auto& [file,bytes]:unchanged)require(fs::exists(file) && read(file)==bytes,"Instance material edits or deletion rewrote imported geometry/source material files: "+file.string());
+    require(model->materialIds[0]!=gold.id && model->materials[0].baseColor==inherited[0].baseColor && model->materials[1].baseColor==inherited[1].baseColor,
+        "Instance material assignment mutated the shared imported model metadata.");
 }
 void immutableMaterialMetadata(){
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -469,7 +563,7 @@ void immutableMaterialMetadata(){
 }
 void dormantGraphTextureDeletion(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/dormant.png";
-    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,image));
     std::array<std::string,2> ids;
     std::array<std::array<MaterialNodeId,2>,2> textureNodes{};
     for(std::size_t index=0;index<2;++index) {
@@ -485,15 +579,15 @@ void dormantGraphTextureDeletion(){
         materialOutputNode(material.graph).output.shading=MaterialShading::Unlit;
         if(index)materialOutputNode(material.graph).output.blend=MaterialBlend::Alpha;
         saveMaterialAsset(p.root,material);
-        require(nlohmann::json::parse(read(p.root/material.id)).at("version")==6,"Dormant deletion fixture was not authored as a graph.");
+        require(nlohmann::json::parse(read(fixturePath(p.root,material.id))).at("version")==6,"Dormant deletion fixture was not authored as a graph.");
     }
     ResourceManager resources;AssetLibrary library(p.root,&resources);
     library.setMaterialDocumentReferences({}, {image});
-    const auto plan=library.planDeletion({image});
+    const auto plan=library.planDeletion({canonicalAssetId(image)});
     require(plan.error.empty()&&plan.warningUsages.size()==2,"Dormant graph textures were omitted or duplicate roles inflated authored deletion owners.");
     require(std::any_of(plan.usages.begin(),plan.usages.end(),[](const auto& use){return use.historical;}),"Graph texture deletion omitted the open material's undo dependency.");
     finishDeletion(library,resources,plan);
-    require(!fs::exists(p.root/image),"Graph texture deletion did not remove the managed image.");
+    require(!fs::exists(fixturePath(p.root,image)),"Graph texture deletion did not remove the managed image.");
     for(std::size_t index=0;index<2;++index) {
         const auto restored=loadMaterialAsset(p.root,ids[index]);
         const auto* color=findMaterialNode(restored.graph,textureNodes[index][0]);
@@ -509,7 +603,7 @@ void dormantGraphTextureDeletion(){
 void pendingGraphKeepsCoverageExplicit() {
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");
     const std::string image="assets/textures/alpha-color.png";
-    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,image));
     auto material=createMaterialAsset(p.root,"Color without alpha coverage");
     auto& graph=material.graph;const auto output=materialOutputNode(graph).id;
     materialOutputNode(graph).output.blend=MaterialBlend::Alpha;materialOutputNode(graph).output.opacity=.7f;
@@ -578,30 +672,30 @@ void pendingGraphKeepsCoverageExplicit() {
     }catch(...){bgfx::shutdown();throw;}
 }
 void boxMaterialHistoryOnlyDeletion(){
-    Project p;auto material=defaultMaterialAsset();material.id="assets/materials/history.crimson-material";material.name="History material";saveMaterialAsset(p.root,material);
-    SceneDocument scene(p.root);const auto box=scene.createBox();require(scene.save("Default Box"),scene.status());const auto saved=read(p.root/scene.assetId());
-    auto entity=*scene.scene().find(box);entity.modelMaterial=AssetRef<MaterialAsset>{material.id};require(scene.updateEntity(box,entity),scene.status());
-    entity.modelMaterial={};require(scene.updateEntity(box,entity),scene.status());ResourceManager resources;AssetLibrary library(p.root,&resources);
-    const auto plan=library.planDeletion({material.id},&scene);require(plan.error.empty() && !plan.needsReferenceWarning() && plan.clearsActiveHistory,"History-only Box material impact was missing or treated as a saved dependency.");
+    Project p;initializeContentStorage(p.root);auto material=defaultMaterialAsset();material.id=canonicalAssetId("assets/materials/history.crimson-material");material.name="History material";saveMaterialAsset(p.root,material);
+    SceneDocument scene(p.root);const auto box=scene.createBox();require(scene.save("Default Box"),scene.status());const auto saved=read(fixturePath(p.root,scene.assetId()));
+    auto entity=*scene.scene().find(box);entity.modelMaterials=ModelMaterialOverrides{AssetRef<MaterialAsset>{material.id}};require(scene.updateEntity(box,entity),scene.status());
+    entity.modelMaterials={};require(scene.updateEntity(box,entity),scene.status());ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto plan=library.planDeletion({canonicalAssetId(material.id)},&scene);require(plan.error.empty() && !plan.needsReferenceWarning() && plan.clearsActiveHistory,"History-only Box material impact was missing or treated as a saved dependency.");
     finishDeletion(library,resources,plan,{},&scene);
-    require(scene.history().size()==0 && scene.dirty() && scene.scene().find(box)->modelMaterial.empty() && read(p.root/scene.assetId())==saved,
+    require(scene.history().size()==0 && scene.dirty() && scene.scene().find(box)->modelMaterials.empty() && read(fixturePath(p.root,scene.assetId()))==saved,
         "History-only material deletion changed saved content or retained resurrectable references.");
 }
 void materialPreviewResources(const fs::path& compiler,const fs::path& sources,const fs::path& includes){
     Project p;const std::string image="assets/textures/preview-pattern.png";
     model_test::Bytes pixels(512*512*4,255);
     for(std::size_t y=0;y<512;++y)for(std::size_t x=0;x<512;++x){const auto offset=(y*512+x)*4;pixels[offset]=x<256?255:0;pixels[offset+1]=y<256?0:255;}
-    fs::create_directories(p.root/"assets/textures");model_test::writeBytes(p.root/image,model_test::png(512,512,pixels));
+    fs::create_directories(fixturePath(p.root,"assets/textures"));model_test::writeBytes(fixturePath(p.root,image),model_test::png(512,512,pixels));
     auto material=createMaterialAsset(p.root,"Streamed preview");const auto output=materialOutputNode(material.graph).id;
     const auto uv=addMaterialNode(material.graph,MaterialNodeKind::UV).id;findMaterialNode(material.graph,uv)->uv.mode=MaterialUvMode::WorldTriplanar;
     const auto color=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
     findMaterialNode(material.graph,color)->texture.image.id=image;findMaterialNode(material.graph,color)->texture.sampler.minFilter=ModelFilter::LinearMipmapLinear;
     connectMaterialNodes(material.graph,uv,MaterialPin::UV,color,MaterialPin::UV);connectMaterialNodes(material.graph,color,MaterialPin::RGB,output,MaterialPin::BaseColor);
-    canonicalizeMaterialAsset(material);saveMaterialAsset(p.root,material);const auto sourceBytes=read(p.root/material.id);
+    canonicalizeMaterialAsset(material);saveMaterialAsset(p.root,material);const auto sourceBytes=read(fixturePath(p.root,material.id));
     bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
     require(bgfx::init(init),"Could not initialize material-preview resource check.");
     try {{
-        ResourceManager resources;MaterialGraphPrograms programs(resources,{compiler,sources,includes,p.root/"assets/cache/shaders"});
+        ResourceManager resources;MaterialGraphPrograms programs(resources,{compiler,sources,includes,fixturePath(p.root,"assets/cache/shaders")});
         AssetLibrary library(p.root,&resources);library.setMaterialGraphPrograms(&programs);
         const auto tick=[&]{resources.pump();library.updateResources(bgfx::frame());programs.trim();};
         const auto until=[&](auto request,const auto& accepted,const char* failure){
@@ -626,7 +720,7 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         require(coarseDrawable,"Preview resource fixture did not pass through a coherent coarse packet before refinement.");
         for(unsigned frame=0;frame<20;++frame){tick();auto binding=library.materialPreviewBindings(material,512);library.trimTextureCache(0);
             require(ready(binding)&&binding.graph->textureSignatures==fullSignature,"Zero cache allowance degraded the selected material preview again.");}
-        require(read(p.root/material.id)==sourceBytes,"Preview publication rewrote its authored material.");
+        require(read(fixturePath(p.root,material.id))==sourceBytes,"Preview publication rewrote its authored material.");
         auto animated=material;const auto animatedOutput=materialOutputNode(animated.graph).id;
         findMaterialNode(animated.graph,uv)->uv.mode=MaterialUvMode::UV0;
         materialOutputNode(animated.graph).output.blend=MaterialBlend::Mask;
@@ -658,7 +752,55 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         changed=until([&]{return library.materialPreviewBindings(animated,512);},ready,"Opaque animated material did not publish");
         require(!changed.graph->dynamicCoverage&&changed.graph->coverageSignature({1,1})==changed.graph->coverageSignature({3,3}),
             "Opaque animation invalidated static shadow coverage.");
-        require(read(p.root/material.id)==sourceBytes,"Runtime material edits rewrote the authored fixture.");
+        // A generator is a real linear-data image binding. Editing its recipe
+        // replaces pixels consumed by Roughness while keeping the same shader.
+        MaterialAsset noise;noise.id="grunge-resource-fixture";noise.name="Generated roughness";
+        const auto noiseOutput=addMaterialNode(noise.graph,MaterialNodeKind::Output).id;
+        const auto grunge=addMaterialNode(noise.graph,MaterialNodeKind::Grunge).id;
+        const auto grungeMetal=addMaterialNode(noise.graph,MaterialNodeKind::Grunge).id;
+        findMaterialNode(noise.graph,grungeMetal)->grunge.seed=44;
+        connectMaterialNodes(noise.graph,grunge,MaterialPin::Value,noiseOutput,MaterialPin::Roughness);
+        connectMaterialNodes(noise.graph,grungeMetal,MaterialPin::Value,noiseOutput,MaterialPin::Metallic);
+        canonicalizeMaterialAsset(noise);
+        auto noiseBinding=until([&]{return library.materialPreviewBindings(noise,512);},ready,"Grunge roughness texture did not publish");
+        require(noiseBinding.graph->sources.size()==2&&std::all_of(noiseBinding.graph->sources.begin(),noiseBinding.graph->sources.end(),[](const auto& source){return source.grunge&&source.image.empty();}),
+            "Generated roughness was replaced with an authored image reference.");
+        const auto sourceSlot=[](const PreparedGraphMaterial& graph,MaterialNodeId node) {
+            const auto source=std::find_if(graph.sources.begin(),graph.sources.end(),[&](const auto& value){return value.nodeId==node;});
+            require(source!=graph.sources.end(),"Generated node has no prepared texture binding.");return source->slot;
+        };
+        const auto previousNoise=noiseBinding.graph;
+        const auto previousNoiseSlot=sourceSlot(*previousNoise,grunge),previousMetalSlot=sourceSlot(*previousNoise,grungeMetal);
+        findMaterialNode(noise.graph,grunge)->grunge.baseNoisiness=.19f;canonicalizeMaterialAsset(noise);
+        const auto pendingNoise=library.materialPreviewBindings(noise,512);
+        require(!pendingNoise.sourceReady&&bgfx::isValid(previousNoise->textures[previousNoiseSlot])&&previousNoise->leases[previousNoiseSlot],
+            "A pending Grunge edit exposed incomplete pixels or discarded the previous packet lease.");
+        noiseBinding=until([&]{return library.materialPreviewBindings(noise,512);},ready,"Edited Grunge roughness did not regenerate");
+        const auto noiseSlot=sourceSlot(*noiseBinding.graph,grunge),metalSlot=sourceSlot(*noiseBinding.graph,grungeMetal);
+        require(noiseBinding.graph->programs==previousNoise->programs&&noiseBinding.graph->uniforms==previousNoise->uniforms&&
+            noiseBinding.graph->signature!=previousNoise->signature&&noiseBinding.graph->sourceFingerprints[noiseSlot]!=previousNoise->sourceFingerprints[previousNoiseSlot]&&
+            noiseBinding.graph->sourceFingerprints[metalSlot]==previousNoise->sourceFingerprints[previousMetalSlot],
+            "Grunge recipe edits did not replace texture content independently of shader topology and uniforms.");
+        PreparedTexture thumbnail;
+        const auto thumbnailDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+        do {
+            tick();thumbnail=library.grungePreview(findMaterialNode(noise.graph,grunge)->grunge,256);
+            if(!thumbnail.diagnostic.empty())throw std::runtime_error(thumbnail.diagnostic);
+            if(!thumbnail.complete)std::this_thread::sleep_for(std::chrono::milliseconds{2});
+        }while(!thumbnail.complete&&std::chrono::steady_clock::now()<thumbnailDeadline);
+        require(thumbnail.complete&&thumbnail.sourceReady&&bgfx::isValid(thumbnail.handle)&&thumbnail.lease&&
+            thumbnail.sourceWidth==GrungeTextureEdge&&thumbnail.sourceHeight==GrungeTextureEdge&&
+            thumbnail.sourceFingerprint==noiseBinding.graph->sourceFingerprints[noiseSlot],
+            "Grunge node preview did not reuse a mip of the canonical generated 2D image.");
+        std::unordered_map<std::string,std::uint64_t> versions;
+        require(preparedGraphSourcesCoherent(*noiseBinding.graph,versions)&&versions.empty(),
+            "Distinct generated recipes collided under the empty managed-image identity.");
+        auto managed=*noiseBinding.graph;
+        for(auto& source:managed.sources){source.grunge.reset();source.image.id="shared-managed-image";managed.sourceFingerprints[source.slot]=source.slot==noiseSlot?11:22;}
+        require(!preparedGraphSourcesCoherent(managed,versions),"Managed image revision conflicts stopped blocking incoherent publication.");
+        versions.clear();for(const auto& source:managed.sources)managed.sourceFingerprints[source.slot]=11;
+        require(preparedGraphSourcesCoherent(managed,versions)&&versions.size()==1,"Matching shared managed image versions failed coherent publication.");
+        require(read(fixturePath(p.root,material.id))==sourceBytes,"Runtime material edits rewrote the authored fixture.");
         resources.stop();
     }bgfx::shutdown();}catch(...){bgfx::shutdown();throw;}
     std::cout<<"Material preview coherent coarse publication and selected texture recovery under zero cache budget passed.\n";
@@ -669,6 +811,6 @@ int main(int argc,char** argv){try{
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
+    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

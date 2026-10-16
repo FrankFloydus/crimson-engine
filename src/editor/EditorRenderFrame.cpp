@@ -55,6 +55,22 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     using Clock=std::chrono::steady_clock;
     if(stats)*stats={};
     resources.setMaterialContext(input.materialContext);
+    if(input.materialPreview)for(auto& model:input.extracted.models) {
+        const auto& preview=*input.materialPreview;
+        if(model.id!=preview.entityId)continue;
+        const auto asset=assets.findModel(model.assetId);
+        if(!asset || preview.slot>=asset->materials.size() || preview.materialId.empty())break;
+        // Keep requesting the authored packet so cancel/exit restores it at
+        // once, and a pending shader/texture never hides the original mesh.
+        (void)resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,true,
+            ResourcePriority::Selected,input.sceneAspect,model.materialOverrides,0,&model);
+        auto overrides=model.materialOverrides;
+        setModelMaterialOverride(overrides,preview.slot,preview.materialId);
+        const auto candidate=resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,true,
+            ResourcePriority::Selected,input.sceneAspect,overrides,0,&model);
+        if(materialSlotPreviewReady(candidate))model.materialOverrides=std::move(overrides);
+        break;
+    }
     auto frame=std::make_shared<PreparedRenderFrame>();
     frame->appearance=input.appearance;frame->gridVisible=input.gridVisible;
     frame->views.reserve(2);
@@ -95,7 +111,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
         if(!selected)if(const auto metadata=assets.findModel(model.assetId))
             if(!visibleBounds(resources.modelBounds(model,metadata),model.world,input.sceneCamera,input.sceneAspect))continue;
         auto prepared=resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,selected,
-            ResourcePriority::Visible,input.sceneAspect,model.materialId,0,&model);
+            ResourcePriority::Visible,input.sceneAspect,model.materialOverrides,0,&model);
         includePreparedModel(stats,prepared);
         if(prepared) {
             signature=(signature^prepared->signature)*1099511628211ull;
@@ -124,7 +140,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
             if(const auto metadata=assets.findModel(model.assetId))
                 if(!visibleBounds(resources.modelBounds(model,metadata),model.world,*input.gameCamera,aspect))continue;
             auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,false,
-                ResourcePriority::Visible,aspect,model.materialId,0,&model);
+                ResourcePriority::Visible,aspect,model.materialOverrides,0,&model);
             includePreparedModel(stats,prepared);
             if(prepared)appendModel(game,*gamePins,model,std::move(prepared),false,resources);
         }

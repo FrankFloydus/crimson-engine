@@ -36,7 +36,7 @@ public:
     void publishProgramReload(bgfx::ProgramHandle candidate);
 
     // ImGui's invalid ID is zero; bgfx texture handle zero remains usable.
-    static ImTextureID textureId(bgfx::TextureHandle texture);
+    static ImTextureID textureId(bgfx::TextureHandle texture,bool repeat=false);
     // Borrowed ordinary offscreen framebuffer. Native chain buffers are never
     // imported into bgfx; native captures run after copy and before Present.
     bgfx::FrameBufferHandle platformViewportFramebuffer(ImGuiID viewportId) const noexcept;

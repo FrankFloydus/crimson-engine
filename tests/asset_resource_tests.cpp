@@ -3,6 +3,8 @@
 #include "assets/MaterialAsset.h"
 #include "assets/ModelAsset.h"
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "assets/AsyncImports.h"
 #include "assets/DeletionPreparation.h"
 #include "assets/ParticleAsset.h"
@@ -34,6 +36,11 @@ struct Project{
     ~Project(){std::error_code ignored;fs::remove_all(root,ignored);}
 };
 std::string read(const fs::path& file){std::ifstream input(file,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
+fs::path fixturePath(const fs::path& root,const std::string& id) {
+    const auto file=resolveAssetPath(root,id);const auto ext=file.extension();
+    if(contentStorageReady(root)&&!isAssetUuid(id)&&(ext==".png"||ext==".PNG"||ext==".hdr"||ext==".tga"||ext==".crimson-material"||ext==".crimson-particle"||ext==".crimson-scene"))registerAssetPath(root,id,file);
+    return file;
+}
 void policies(){
     Project p;AssetReferenceManager refs(p.root);
     const std::array<AssetEntry,4> entries{{{"assets/textures/a.png","A",AssetKind::Texture},{"assets/textures/sky.hdr","Sky",AssetKind::Environment},
@@ -53,9 +60,9 @@ void policies(){
     rejects([&]{chain.replace(other,{{other[0].id,other[0].id}});},"Self-fallback accepted.");
     require(chain.resolveTexture(other[0].id)==GrayTextureId,"Failed replacement altered the previous policy.");
     rejects([&]{checkedManagedAssetPath(p.root,"assets/../../outside.txt");},"Path traversal accepted.");
-    writeFileAtomically(p.root/"assets/references.json","{broken JSON");AssetReferenceManager corrupt(p.root);
+    writeFileAtomically(fixturePath(p.root,"assets/references.json"),"{broken JSON");AssetReferenceManager corrupt(p.root);
     require(!corrupt.status().empty(),"Damaged reference state produced no diagnostic.");rejects([&]{corrupt.replace(other,{});},"Destructive editing remained enabled with damaged reference state.");
-    require(read(p.root/"assets/references.json")=="{broken JSON","Damaged reference state was overwritten.");
+    require(read(fixturePath(p.root,"assets/references.json"))=="{broken JSON","Damaged reference state was overwritten.");
 }
 void authoredWarningClassification(){
     Project p;AssetReferenceManager refs(p.root);
@@ -89,23 +96,23 @@ void authoredWarningClassification(){
     require(refs.authoredUsers(image).empty(),"A built-in default material inherited ghost dependencies from deleted sidecars.");
 }
 void transactionAndRecovery(){
-    Project p;writeFileAtomically(p.root/"assets/a.txt","original");writeFileAtomically(p.root/"assets/b.txt","preserved");
+    Project p;writeFileAtomically(fixturePath(p.root,"assets/a.txt"),"original");writeFileAtomically(fixturePath(p.root,"assets/b.txt"),"preserved");
     const std::array<AssetFileChange,3> changes{{{"assets/a.txt",std::string("updated")},{"assets/b.txt",std::nullopt},{"assets/c.txt",std::string("new")}}};
-    commitAssetTransaction(p.root,changes);require(read(p.root/"assets/a.txt")=="updated"&&!fs::exists(p.root/"assets/b.txt")&&read(p.root/"assets/c.txt")=="new","Multi-file transaction did not publish.");
+    commitAssetTransaction(p.root,changes);require(read(fixturePath(p.root,"assets/a.txt"))=="updated"&&!fs::exists(fixturePath(p.root,"assets/b.txt"))&&read(fixturePath(p.root,"assets/c.txt"))=="new","Multi-file transaction did not publish.");
     const std::array<AssetFileChange,2> invalid{{{"assets/a.txt",std::string("broken")},{"assets/../outside",std::string("bad")}}};
-    rejects([&]{commitAssetTransaction(p.root,invalid);},"Invalid transaction succeeded.");require(read(p.root/"assets/a.txt")=="updated","Failed validation partially published files.");
+    rejects([&]{commitAssetTransaction(p.root,invalid);},"Invalid transaction succeeded.");require(read(fixturePath(p.root,"assets/a.txt"))=="updated","Failed validation partially published files.");
 #ifdef _WIN32
-    writeFileAtomically(p.root/"assets/protected.txt","readonly");fs::permissions(p.root/"assets/protected.txt",fs::perms::owner_read,fs::perm_options::replace);
+    writeFileAtomically(fixturePath(p.root,"assets/protected.txt"),"readonly");fs::permissions(fixturePath(p.root,"assets/protected.txt"),fs::perms::owner_read,fs::perm_options::replace);
     const std::array<AssetFileChange,2> denied{{{"assets/a.txt",std::string("must roll back")},{"assets/protected.txt",std::string("denied")}}};
     bool failed=false;try{commitAssetTransaction(p.root,denied);}catch(const std::exception&){failed=true;}
-    fs::permissions(p.root/"assets/protected.txt",fs::perms::owner_all,fs::perm_options::replace);
-    require(failed&&read(p.root/"assets/a.txt")=="updated"&&read(p.root/"assets/protected.txt")=="readonly","Mid-publication failure did not roll back earlier writes.");
+    fs::permissions(fixturePath(p.root,"assets/protected.txt"),fs::perms::owner_all,fs::perm_options::replace);
+    require(failed&&read(fixturePath(p.root,"assets/a.txt"))=="updated"&&read(fixturePath(p.root,"assets/protected.txt"))=="readonly","Mid-publication failure did not roll back earlier writes.");
 #endif
-    const auto staging=p.root/"assets/.resource-transactions/interrupted";fs::create_directories(staging/"before");
-    writeFileAtomically(staging/"before/0.bin","updated");writeFileAtomically(p.root/"assets/a.txt","partial");writeFileAtomically(p.root/"assets/new.tmp","partial");
+    const auto staging=fixturePath(p.root,"assets/.resource-transactions/interrupted");fs::create_directories(staging/"before");
+    writeFileAtomically(staging/"before/0.bin","updated");writeFileAtomically(fixturePath(p.root,"assets/a.txt"),"partial");writeFileAtomically(fixturePath(p.root,"assets/new.tmp"),"partial");
     const Json journal{{"version",1},{"committed",false},{"files",Json::array({{{"id","assets/a.txt"},{"existed",true},{"backup","0.bin"}},{{"id","assets/new.tmp"},{"existed",false},{"backup","1.bin"}}})}};
     writeFileAtomically(staging/"journal.json",journal.dump());recoverAssetTransactions(p.root);
-    require(read(p.root/"assets/a.txt")=="updated"&&!fs::exists(p.root/"assets/new.tmp")&&!fs::exists(staging),"Interrupted transaction did not restore its original state.");
+    require(read(fixturePath(p.root,"assets/a.txt"))=="updated"&&!fs::exists(fixturePath(p.root,"assets/new.tmp"))&&!fs::exists(staging),"Interrupted transaction did not restore its original state.");
 }
 void managedMaterialsAndImages(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"sources");auto stage=stageModelImport(fixtures.glb,p.root);
@@ -119,9 +126,9 @@ void managedMaterialsAndImages(){
     auto changed=promoted;material_test::legacyFixture(changed);changed.surface.roughness=.91f;changed.surface.alphaCutoff=2;saveMaterialAsset(p.root,changed);promoteModelMaterials(p.root,*model);
     const auto preserved=loadMaterialAsset(p.root,materialId);
     require(preserved.surface.roughness==.91f&&preserved.surface.alphaCutoff==2,"Idempotent promotion overwrote authored factors or rejected a valid glTF cutoff.");
-    const auto authoredBytes=read(p.root/materialId);
+    const auto authoredBytes=read(fixturePath(p.root,materialId));
     const auto repeated=importModelPackage(fixtures.glb,p.root);promoteModelMaterials(p.root,*repeated);
-    require(repeated->id==model->id&&repeated->materialIds==model->materialIds&&read(p.root/materialId)==authoredBytes,
+    require(repeated->id==model->id&&repeated->materialIds==model->materialIds&&read(fixturePath(p.root,materialId))==authoredBytes,
         "Repeating an exact model import changed shared assignments or overwrote authored sidecar bytes.");
     const ModelResolvers authored{{},[&](const auto& id)->std::optional<ModelMaterial>{return loadMaterialAsset(p.root,id).surface;}};
     const auto authoredModel=loadModelPackage(model->id,p.root,authored);
@@ -138,26 +145,26 @@ void managedMaterialsAndImages(){
     fs::path abandonedPath;{const auto abandoned=stageModelImport(fixtures.gltf,p.root);abandonedPath=abandoned->staging;auto owned=abandoned;
         owned.reset();require(fs::exists(abandonedPath),"A shared staging package was destroyed while still held.");}
     require(!fs::exists(abandonedPath),"An unpublished staging package leaked after cancellation.");
-    const auto before=read(p.root/materialId);std::vector<AssetFileChange> modelFiles;
-    const auto package=(p.root/model->id).parent_path();for(const auto& file:fs::recursive_directory_iterator(package))if(file.is_regular_file()&&file.path().parent_path().filename()!="images")
+    const auto before=read(fixturePath(p.root,materialId));std::vector<AssetFileChange> modelFiles;
+    const auto package=(fixturePath(p.root,model->id)).parent_path();for(const auto& file:fs::recursive_directory_iterator(package))if(file.is_regular_file()&&file.path().parent_path().filename()!="images")
         modelFiles.push_back({file.path().lexically_relative(p.root).generic_string(),std::nullopt});
-    commitAssetTransaction(p.root,modelFiles);require(read(p.root/materialId)==before&&fs::exists(p.root/model->images[1]),"Deleting model files removed independently usable material/image data.");
+    commitAssetTransaction(p.root,modelFiles);require(read(fixturePath(p.root,materialId))==before&&fs::exists(fixturePath(p.root,model->images[1])),"Deleting model files removed independently usable material/image data.");
 }
 void stagedImages(){
     Project p;model_test::writeModelFixtures(p.root/"sources");const auto source=p.root/"sources/CASE_CHECKER.PNG";
     fs::copy_file(p.root/"sources/checker.png",source);
     std::shared_ptr<ImageImportStage> prepared;{std::jthread worker([&]{prepared=stageImageImport(source,p.root);});worker.join();}
-    require(prepared&&prepared->image->width>0&&prepared->image->rgba.size()>0&&!fs::exists(p.root/"assets/textures/CASE_CHECKER.PNG"),"Worker image decoding published managed data or required bgfx.");
+    require(prepared&&prepared->image->width>0&&prepared->image->rgba.size()>0&&!fs::exists(resolveAssetPath(p.root,"assets/textures/CASE_CHECKER.PNG")),"Worker image decoding published managed data or required bgfx.");
     const auto first=publishImageImport(prepared);auto next=stageImageImport(source,p.root);const auto second=publishImageImport(next);
     require(first!=second&&read(first)==read(source)&&read(second)==read(source),"Staged image collision overwrote a managed asset.");
-    AssetReferenceManager refs(p.root);const auto id=first.lexically_relative(p.root).generic_string();refs.replace(std::array<AssetEntry,1>{{{id,"Deleted",AssetKind::Texture}}},{});fs::remove(first);
+    AssetReferenceManager refs(p.root);const auto id=assetIdAtPath(p.root,first);refs.replace(std::array<AssetEntry,1>{{{id,"Deleted",AssetKind::Texture}}},{});fs::remove(first);
     const auto replacement=publishImageImport(stageImageImport(source,p.root),[&](const auto& candidate){return refs.deleted(candidate);});
     require(replacement!=first&&replacement!=second,"Reimport reused a tombstoned persistent identity.");
     rejects([&]{publishImageImport(prepared);},"Image stage was published twice.");
     fs::path abandoned;{const auto stage=stageImageImport(source,p.root);abandoned=stage->directory;}require(!fs::exists(abandoned),"Canceled image staging directory leaked.");
     std::stop_source canceled;canceled.request_stop();rejects([&]{stageImageImport(source,p.root,canceled.get_token());},"Stopped image import continued.");
     writeFileAtomically(p.root/"sources/broken.png","not a PNG");rejects([&]{stageImageImport(p.root/"sources/broken.png",p.root);},"Malformed image entered a publishable stage.");
-    require(fs::directory_iterator(p.root/"assets/textures")!=fs::directory_iterator{},"Valid mixed-batch image was removed after a failed sibling.");
+    require(fs::directory_iterator(fixturePath(p.root,"assets/textures"))!=fs::directory_iterator{},"Valid mixed-batch image was removed after a failed sibling.");
 }
 void materialTangentBasis(){
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"sources");
@@ -202,7 +209,7 @@ void backgroundDeletionValidation(){
     for(auto& primitive:json["meshes"][0]["primitives"])primitive["attributes"].erase("TEXCOORD_1");
     json["materials"][1]["pbrMetallicRoughness"]["baseColorTexture"]["texCoord"]=0;json["materials"][1]["normalTexture"]["texCoord"]=0;model_test::writeJson(fixture.gltf,json);
     const auto model=importModelPackage(fixture.gltf,p.root);promoteModelMaterials(p.root,*model);AssetReferenceManager refs(p.root);
-    const std::array<AssetEntry,1> entries{{{model->id,model->name,AssetKind::Model}}};const auto before=read(p.root/model->id);
+    const std::array<AssetEntry,1> entries{{{model->id,model->name,AssetKind::Model}}};const auto before=read(fixturePath(p.root,model->id));
     ResourceManager manager;std::atomic_uint calls{};
     const auto loader=[&](std::stop_token stop){++calls;auto data=validateAssetDeletion(p.root,entries,refs,stop);return ResourceLoadResult<DeletionValidation>{data,data->bytes,data->fileStateFingerprint,data->dependencies};};
     auto a=manager.request<DeletionValidation>(AssetRef<DeletionValidation>{"validation"},loader);auto b=manager.request<DeletionValidation>(AssetRef<DeletionValidation>{"validation"},loader);
@@ -210,32 +217,32 @@ void backgroundDeletionValidation(){
     wait([&]{return a.state()==ResourceState::Ready;});require(calls==1&&b.snapshot(),"Duplicate deletion validation loaded the project twice.");
     const auto validated=a.snapshot();require(validated->models.size()==1&&validated->models.front()->stream&&deletionValidationCurrent(*validated),"Deletion validation did not return a current streamed model descriptor.");
     for(const auto& primitive:validated->models.front()->primitives)require(primitive.vertices.capacity()==0&&primitive.indices.capacity()==0,"Compact validation retained full geometry capacity.");
-    MaterialAsset fallback{"assets/materials/invalid-uv.crimson-material","Unavailable UV",model->id,model->materials[0]};fallback.surface.normalTexture.texCoord=1;saveMaterialAsset(p.root,fallback);
+    MaterialAsset fallback{canonicalAssetId("assets/materials/invalid-uv.crimson-material"),"Unavailable UV",model->id,model->materials[0]};fallback.surface.normalTexture.texCoord=1;saveMaterialAsset(p.root,fallback);
     auto invalid=refs;invalid.replace(std::array<AssetEntry,1>{{{model->materialIds[0],"Original",AssetKind::Material}}},{{model->materialIds[0],fallback.id}});
     auto bad=manager.request<DeletionValidation>(AssetRef<DeletionValidation>{"invalid-validation"},[&](std::stop_token stop){auto data=validateAssetDeletion(p.root,entries,invalid,stop);return ResourceLoadResult<DeletionValidation>{data,data->bytes,data->fileStateFingerprint,data->dependencies};});
-    wait([&]{return bad.state()==ResourceState::Failed;});require(bad.diagnostic().find("UV")!=std::string::npos&&read(p.root/model->id)==before&&!fs::exists(p.root/"assets/references.json"),"Invalid fallback published files or lacked a UV diagnostic.");
+    wait([&]{return bad.state()==ResourceState::Failed;});require(bad.diagnostic().find("UV")!=std::string::npos&&read(fixturePath(p.root,model->id))==before&&!fs::exists(fixturePath(p.root,"assets/references.json")),"Invalid fallback published files or lacked a UV diagnostic.");
     fallback.surface.triplanar=true;fallback.surface.uvScale={2,3,4};saveMaterialAsset(p.root,fallback);
     const auto projected=validateAssetDeletion(p.root,entries,invalid);
     require(projected->models.size()==1 && projected->models.front()->materials[0].triplanar && projected->models.front()->materials[0].uvScale==Vec3{2,3,4} &&
-        projected->models.front()->primitives[0].tangentUv==0xff && read(p.root/model->id)==before && !fs::exists(p.root/"assets/references.json"),
+        projected->models.front()->primitives[0].tangentUv==0xff && read(fixturePath(p.root,model->id))==before && !fs::exists(fixturePath(p.root,"assets/references.json")),
         "Triplanar deletion fallback required unavailable UVs/tangents or changed authored source files.");
-    const auto originalMaterial=p.root/model->materialIds[0];writeFileAtomically(originalMaterial,read(originalMaterial)+" ");
+    const auto originalMaterial=fixturePath(p.root,model->materialIds[0]);writeFileAtomically(originalMaterial,read(originalMaterial)+" ");
     require(!deletionValidationCurrent(*validated),"Validated dependency state ignored a later material change.");
     std::atomic_bool entered{},release{};auto stale=manager.request<DeletionValidation>(AssetRef<DeletionValidation>{"import:delete/stale"},[&](std::stop_token stop){entered=true;while(!release&&!stop.stop_requested())std::this_thread::yield();if(stop.stop_requested())throw std::runtime_error("canceled");return loader(stop);});
     wait([&]{return entered.load();});manager.forget("import:delete/stale");release=true;wait([&]{return manager.idle();});
-    require(!stale.snapshot()&&read(p.root/model->id)==before,"Canceled validation accepted a stale result or changed source files.");
+    require(!stale.snapshot()&&read(fixturePath(p.root,model->id))==before,"Canceled validation accepted a stale result or changed source files.");
 }
 void particleReferencesAndDeletionValidation(){
     Project p;const auto first=createParticleAsset(p.root,"First"),second=createParticleAsset(p.root,"Second");
     AssetReferenceManager references(p.root);
     const std::array<AssetEntry,1> selected{{{first.id,first.name,AssetKind::Particle}}};
-    references.setUsages({{first.id,"assets/scenes/placed.crimson-scene","Scene","Sparks"},
+    references.setUsages({{first.id,canonicalAssetId("assets/scenes/placed.crimson-scene"),"Scene","Sparks"},
                           {first.id,"active","Untitled","Particle history",true,true}});
     require(references.users(first.id).size()==2,"Particle reference scan omitted saved or historical users.");
     const auto authored=references.authoredUsers(first.id);
-    require(authored.size()==1 && authored.front().ownerId=="assets/scenes/placed.crimson-scene",
+    require(authored.size()==1 && authored.front().ownerId==canonicalAssetId("assets/scenes/placed.crimson-scene"),
             "Particle undo history was counted as a surviving authored dependency.");
-    const std::array<std::string,1> removedScene{{"assets/scenes/placed.crimson-scene"}};
+    const std::array<std::string,1> removedScene{{canonicalAssetId("assets/scenes/placed.crimson-scene")}};
     require(references.authoredUsers(first.id,removedScene).empty(),
             "A saved scene removed with its particle effect still triggered a dependency warning.");
     references.replace(selected,{{first.id,second.id}});
@@ -246,7 +253,7 @@ void particleReferencesAndDeletionValidation(){
     require(references.serialize()==before,"Rejected typed replacement altered the policy.");
     references.save();AssetReferenceManager reopened(p.root);
     require(reopened.resolveParticle(first.id)==second.id,"Particle replacement was not persistent.");
-    require(reopened.resolveParticle("assets/particles/unresolved.crimson-particle")=="assets/particles/unresolved.crimson-particle",
+    require(reopened.resolveParticle("assets/particles/unresolved.crimson-particle")==canonicalAssetId("assets/particles/unresolved.crimson-particle"),
             "An unresolved authored effect ID was discarded.");
     const std::array<AssetEntry,1> survivors{{{second.id,second.name,AssetKind::Particle}}};
     auto progress=std::make_shared<DeletionProgress>();progress->total=1;
@@ -255,11 +262,11 @@ void particleReferencesAndDeletionValidation(){
             "Particle deletion validation did not complete or track its file snapshot.");
     require(std::find(validation->dependencies.begin(),validation->dependencies.end(),particleAssetPath(p.root,second.id))!=validation->dependencies.end(),
             "Particle validation did not pin its surviving definition dependency.");
-    const auto original=read(p.root/second.id);writeFileAtomically(p.root/second.id,original+" ");
+    const auto original=read(fixturePath(p.root,second.id));writeFileAtomically(fixturePath(p.root,second.id),original+" ");
     require(!deletionValidationCurrent(*validation),"A particle asset change did not invalidate pending deletion.");
-    writeFileAtomically(p.root/second.id,"{invalid");
+    writeFileAtomically(fixturePath(p.root,second.id),"{invalid");
     rejects([&]{validateAssetDeletion(p.root,{},reopened,{}, {},survivors);},"Malformed surviving particle definition passed deletion validation.");
-    require(read(p.root/first.id)==serializeParticleAsset(first),"Particle validation modified a managed source.");
+    require(read(fixturePath(p.root,first.id))==serializeParticleAsset(first),"Particle validation modified a managed source.");
     reopened.replace(survivors,{});
     require(reopened.resolveParticle(second.id).empty() && reopened.resolveParticle(first.id).empty(),
             "Deleting a replacement target did not disable old particle aliases.");
@@ -273,12 +280,12 @@ void particleReplacementStateValidation(){
     Project p;
     const std::string first="assets/particles/first.crimson-particle",second="assets/particles/second.crimson-particle";
     const auto state=Json{{"version",1},{"deleted",Json::array({first})},{"replacements",{{first,"assets/textures/foreign.png"}}}}.dump(2);
-    writeFileAtomically(p.root/"assets/references.json",state);AssetReferenceManager damaged(p.root);
+    writeFileAtomically(fixturePath(p.root,"assets/references.json"),state);AssetReferenceManager damaged(p.root);
     require(!damaged.status().empty(),"Persisted particle replacement accepted a texture target.");
     rejects([&]{damaged.replace(std::array<AssetEntry,1>{{{second,"Second",AssetKind::Particle}}},{});},
             "Destructive operations remained enabled after incompatible persisted particle replacement.");
-    require(read(p.root/"assets/references.json")==state,"Invalid persisted particle policy was overwritten.");
-    writeFileAtomically(p.root/"assets/references.json",Json{{"version",1},{"deleted",Json::array()},{"replacements",Json::object()}}.dump(2));
+    require(read(fixturePath(p.root,"assets/references.json"))==state,"Invalid persisted particle policy was overwritten.");
+    writeFileAtomically(fixturePath(p.root,"assets/references.json"),Json{{"version",1},{"deleted",Json::array()},{"replacements",Json::object()}}.dump(2));
     AssetReferenceManager references(p.root);
     references.replace(std::array<AssetEntry,1>{{{first,"First",AssetKind::Particle}}},{{first,second}});
     const auto previous=references.serialize();const auto revision=references.revision();
@@ -296,20 +303,20 @@ void spriteMaterialStorageAndMigration(){
     require(original.surface.baseColor==Vec4{.21404114f,.21404114f,.21404114f,1}&&original.surface.roughness==1&&original.surface.metallic==0&&original.surface.baseColorTexture.image.empty()&&!original.graph.empty(),
             "New material did not use sRGB midgray, roughness 1, metallic 0 and a material graph.");
     require(defaultMaterialAsset().surface.baseColor==Vec4{.5f,.5f,.5f,1} && defaultParticleMaterialAsset().surface.baseColor==Vec4{1,1,1,1},"New material defaults altered protected fallbacks.");
-    auto alpha=original;material_test::legacyFixture(alpha);alpha.shading=MaterialShading::Unlit;alpha.blend=MaterialBlend::Alpha;alpha.surface.sharedSampler.reset();alpha.surface.baseColor={.2f,.4f,.6f,.35f};alpha.surface.baseColorTexture.image=AssetRef<DecodedImage>{"assets/textures/unresolved.png"};
+    auto alpha=original;material_test::legacyFixture(alpha);alpha.shading=MaterialShading::Unlit;alpha.blend=MaterialBlend::Alpha;alpha.surface.sharedSampler.reset();alpha.surface.baseColor={.2f,.4f,.6f,.35f};alpha.surface.baseColorTexture.image=AssetRef<DecodedImage>{canonicalAssetId("assets/textures/unresolved.png")};
     alpha.surface.baseColorTexture.wrapU=ModelWrap::Mirror;alpha.surface.baseColorTexture.minFilter=ModelFilter::NearestMipmapLinear;saveMaterialAsset(p.root,alpha);
     const auto reopened=loadMaterialAsset(p.root,alpha.id);require(reopened.blend==MaterialBlend::Alpha&&reopened.surface.baseColor==alpha.surface.baseColor&&reopened.surface.baseColorTexture.image==alpha.surface.baseColorTexture.image&&reopened.surface.baseColorTexture.wrapU==ModelWrap::Mirror&&reopened.surface.baseColorTexture.minFilter==ModelFilter::NearestMipmapLinear,"Native sprite factors, unresolved map or sampler did not round-trip.");
-    const auto bytes=read(p.root/alpha.id);auto imported=alpha;imported.originModel="assets/models/origin/manifest.json";
-    const auto copy=copyMaterialAsset(p.root,imported);require(copy.id!=alpha.id&&copy.originModel.empty()&&copy.surface.baseColor==alpha.surface.baseColor&&read(p.root/alpha.id)==bytes,"Making an independent material copy changed its source.");
+    const auto bytes=read(fixturePath(p.root,alpha.id));auto imported=alpha;imported.originModel="assets/models/origin/manifest.json";
+    const auto copy=copyMaterialAsset(p.root,imported);require(copy.id!=alpha.id&&copy.originModel.empty()&&copy.surface.baseColor==alpha.surface.baseColor&&read(fixturePath(p.root,alpha.id))==bytes,"Making an independent material copy changed its source.");
     auto legacy=material_test::legacyMaterialJson(alpha);legacy["version"]=1;legacy.erase("shading");legacy.erase("blend");legacy["alphaMask"]=true;
-    writeFileAtomically(p.root/alpha.id,legacy.dump(2));const auto migrated=loadMaterialAsset(p.root,alpha.id);
+    writeFileAtomically(fixturePath(p.root,alpha.id),legacy.dump(2));const auto migrated=loadMaterialAsset(p.root,alpha.id);
     require(migrated.shading==MaterialShading::StandardPbr&&migrated.blend==MaterialBlend::Mask&&migrated.surface.alphaMask&&modelMaterialCompatible(migrated),"Legacy alphaMask did not migrate to PBR Mask.");
     require(Json::parse(serializeMaterialAsset(migrated)).at("version")==6,"Explicit material saving did not use native version 6.");
     auto unsupported=alpha;unsupported.surface.baseColorTexture.texCoord=1;require(particleMaterialCompatible(unsupported),"Unified sprite material rejected a UV1 color map.");
     unsupported=alpha;unsupported.surface.normalTexture.image=AssetRef<DecodedImage>{"assets/textures/normal.png"};require(particleMaterialCompatible(unsupported),"Unified sprite material rejected a normal map.");
     unsupported=alpha;unsupported.surface.baseColorTexture.wrapV=static_cast<ModelWrap>(99);rejects([&]{validateMaterialAsset(unsupported);},"Native material accepted an invalid sampler.");
     rejects([&]{saveMaterialAsset(p.root,defaultParticleMaterialAsset());},"Protected particle default was writable.");
-    unsupported=alpha;unsupported.surface.baseColor[0]=-1;const auto previous=read(p.root/alpha.id);rejects([&]{saveMaterialAsset(p.root,unsupported);},"Invalid material was written.");require(read(p.root/alpha.id)==previous,"Failed material save overwrote the previous source.");
+    unsupported=alpha;unsupported.surface.baseColor[0]=-1;const auto previous=read(fixturePath(p.root,alpha.id));rejects([&]{saveMaterialAsset(p.root,unsupported);},"Invalid material was written.");require(read(fixturePath(p.root,alpha.id))==previous,"Failed material save overwrote the previous source.");
 }
 void particleMaterialStorageAndDependencies(){
     Project p;auto effect=createParticleAsset(p.root,"Sprite");auto material=createMaterialAsset(p.root,"Sprite material");
@@ -332,23 +339,23 @@ void particleMaterialStorageAndDependencies(){
     require(migrated==expectedLegacy,"Particle v1 migration changed its decoded color, intensity or procedural appearance.");
     auto invalid=effect;invalid.emitter.opacity=1.1f;rejects([&]{validateParticleAsset(invalid);},"Particle accepted opacity above one.");
     invalid=effect;invalid.emitter.material=AssetRef<MaterialAsset>{"assets/materials/../../foreign.crimson-material"};rejects([&]{validateParticleAsset(invalid);},"Particle accepted an escaping material reference.");
-    const auto fixtures=model_test::writeModelFixtures(p.root/"source");fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/"assets/textures/sprite.png");
+    const auto fixtures=model_test::writeModelFixtures(p.root/"source");fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,"assets/textures/sprite.png"));
     material.surface.baseColorTexture.image=AssetRef<DecodedImage>{"assets/textures/sprite.png"};saveMaterialAsset(p.root,material);
     AssetReferenceManager policy(p.root);const std::array<AssetEntry,1> effects{{{effect.id,effect.name,AssetKind::Particle}}};
     const auto validation=validateAssetDeletion(p.root,{},policy,{}, {},effects);
     require(std::find(validation->dependencies.begin(),validation->dependencies.end(),materialAssetPath(p.root,material.id))!=validation->dependencies.end()&&std::find(validation->dependencies.begin(),validation->dependencies.end(),checkedManagedAssetPath(p.root,"assets/textures/sprite.png"))!=validation->dependencies.end(),"Deletion validation omitted sprite material or color image dependencies.");
-    writeFileAtomically(p.root/material.id,read(p.root/material.id)+" ");require(!deletionValidationCurrent(*validation),"A changed particle material did not invalidate deletion preparation.");
+    writeFileAtomically(fixturePath(p.root,material.id),read(fixturePath(p.root,material.id))+" ");require(!deletionValidationCurrent(*validation),"A changed particle material did not invalidate deletion preparation.");
     policy.replace(std::array<AssetEntry,1>{{{material.id,material.name,AssetKind::Material}}},{});
     require(policy.resolveMaterial(material.id)==DefaultMaterialId&&policy.resolveParticleMaterial(material.id)==DefaultParticleMaterialId&&policy.resolveParticleMaterial(DefaultMaterialId)==DefaultMaterialId,"Material defaults lost context or an explicit PBR assignment became a particle material.");
     (void)validateAssetDeletion(p.root,{},policy,{}, {},effects);
-    policy.replace(std::array<AssetEntry,1>{{{"assets/textures/sprite.png","Sprite",AssetKind::Texture}}},{});
+    policy.replace(std::array<AssetEntry,1>{{{canonicalAssetId("assets/textures/sprite.png"),"Sprite",AssetKind::Texture}}},{});
     require(policy.resolveParticleTexture("assets/textures/sprite.png").empty()&&policy.resolveTexture("assets/textures/sprite.png")==GrayTextureId,"Deleted sprite images did not use the procedural fallback without changing model defaults.");
     policy.save();AssetReferenceManager reopened(p.root);require(reopened.resolveParticleMaterial(material.id)==DefaultParticleMaterialId,"Role-correct material deletion did not survive reopening.");
     const auto previous=reopened.serialize();rejects([&]{reopened.replace(std::array<AssetEntry,1>{{{material.id,material.name,AssetKind::Material}}},{{material.id,effect.id}});},"Material replacement accepted a particle-effect target.");
     require(reopened.serialize()==previous,"Rejected material-kind replacement changed the reference policy.");
     const auto damaged=Json{{"version",1},{"deleted",Json::array({material.id})},{"replacements",{{material.id,GrayTextureId}}}}.dump(2);
-    writeFileAtomically(p.root/"assets/references.json",damaged);AssetReferenceManager invalidPolicy(p.root);
-    require(!invalidPolicy.status().empty()&&read(p.root/"assets/references.json")==damaged,"Incompatible persisted material chain was accepted or overwritten.");
+    writeFileAtomically(fixturePath(p.root,"assets/references.json"),damaged);AssetReferenceManager invalidPolicy(p.root);
+    require(!invalidPolicy.status().empty()&&read(fixturePath(p.root,"assets/references.json"))==damaged,"Incompatible persisted material chain was accepted or overwritten.");
 }
 void materialMappingAndSharedSamplerStorage() {
     Project p;auto material=createMaterialAsset(p.root,"Mapped");material_test::legacyFixture(material);auto& surface=material.surface;
@@ -358,33 +365,33 @@ void materialMappingAndSharedSamplerStorage() {
     surface.baseColorTexture.image.id="assets/textures/color.png";surface.normalTexture.image.id="assets/textures/normal.png";
     surface.sharedSampler=ModelSampler{ModelWrap::Mirror,ModelWrap::Clamp,ModelFilter::NearestMipmapLinear,ModelFilter::Nearest};
     surface.baseColorTexture.wrapU=ModelWrap::Clamp;surface.normalTexture.wrapU=ModelWrap::Repeat;
-    saveMaterialAsset(p.root,material);const auto serialized=read(p.root/material.id);const auto loaded=loadMaterialAsset(p.root,material.id);
+    saveMaterialAsset(p.root,material);const auto serialized=read(fixturePath(p.root,material.id));const auto loaded=loadMaterialAsset(p.root,material.id);
     require(serializeMaterialAsset(loaded)==serializeMaterialAsset(material) && Json::parse(serialized).at("version")==6,
         "Native graph mapping, linkage and sampler state did not round-trip.");
     for(const auto& node:loaded.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D)
         require(node.texture.sampler==*surface.sharedSampler,"Migration ignored the shared material sampler.");
     const auto copied=copyMaterialAsset(p.root,material,"Mapped copy");
     require(copied.surface.uvScale==surface.uvScale && copied.surface.uvOffset==surface.uvOffset && copied.surface.uvRotation==surface.uvRotation &&
-        copied.surface.triplanar && copied.surface.triplanarWorld && !copied.surface.uvScaleLinked && read(p.root/material.id)==serialized,
+        copied.surface.triplanar && copied.surface.triplanarWorld && !copied.surface.uvScaleLinked && read(fixturePath(p.root,material.id))==serialized,
         "Copy lost mapping/sampler state or modified its source.");
     auto earlierV3=material_test::legacyMaterialJson(material);earlierV3.erase("triplanarWorld");
-    writeFileAtomically(p.root/material.id,earlierV3.dump());const auto earlierBytes=read(p.root/material.id);
+    writeFileAtomically(fixturePath(p.root,material.id),earlierV3.dump());const auto earlierBytes=read(fixturePath(p.root,material.id));
     const auto earlier=loadMaterialAsset(p.root,material.id);auto expectedEarlier=material;expectedEarlier.surface.triplanarWorld=false;
-    require(serializeMaterialAsset(earlier)==serializeMaterialAsset(expectedEarlier) && read(p.root/material.id)==earlierBytes,
+    require(serializeMaterialAsset(earlier)==serializeMaterialAsset(expectedEarlier) && read(fixturePath(p.root,material.id))==earlierBytes,
         "Opening an earlier v3 material changed local triplanar mapping or rewrote its file.");
     auto invalidSpace=material_test::legacyMaterialJson(material);invalidSpace["triplanarWorld"]="world";
-    writeFileAtomically(p.root/material.id,invalidSpace.dump());
+    writeFileAtomically(fixturePath(p.root,material.id),invalidSpace.dump());
     rejects([&]{loadMaterialAsset(p.root,material.id);},"A malformed World Triplanar field was accepted.");
     for(const int version:{1,2}) {
         auto legacy=material_test::legacyMaterialJson(material);legacy["version"]=version;
         for(const auto* field:{"uvScale","uvOffset","uvRotation","triplanar","triplanarWorld","uvScaleLinked","sharedSampler"})legacy.erase(field);
         if(version==1){legacy.erase("shading");legacy.erase("blend");}
-        writeFileAtomically(p.root/material.id,legacy.dump());const auto before=read(p.root/material.id);
+        writeFileAtomically(fixturePath(p.root,material.id),legacy.dump());const auto before=read(fixturePath(p.root,material.id));
         const auto old=loadMaterialAsset(p.root,material.id);
         require(old.surface.uvScale==Vec3{1,1,1} && old.surface.uvOffset==Vec3{} && old.surface.uvRotation==Vec3{} &&
             !old.surface.triplanar && !old.surface.triplanarWorld && old.surface.uvScaleLinked && !old.surface.sharedSampler &&
             old.surface.baseColorTexture.texCoord==1 && materialSampler(old.surface,old.surface.baseColorTexture).wrapU==ModelWrap::Clamp &&
-            materialSampler(old.surface,old.surface.normalTexture).wrapU==ModelWrap::Repeat && read(p.root/material.id)==before,
+            materialSampler(old.surface,old.surface.normalTexture).wrapU==ModelWrap::Repeat && read(fixturePath(p.root,material.id))==before,
             "Opening legacy material changed its mapping, UV selection, mixed sampler behavior or file.");
         auto savedCopy=copyMaterialAsset(p.root,old,"Legacy copy");
         require(!savedCopy.surface.sharedSampler && !loadMaterialAsset(p.root,savedCopy.id).surface.sharedSampler,
@@ -401,10 +408,10 @@ void deletionValidationRetainsIncompatibleUsage() {
     auto meshMaterial=loadMaterialAsset(p.root,model->materialIds.front());materialOutputNode(meshMaterial.graph).output.shading=MaterialShading::Unlit;materialOutputNode(meshMaterial.graph).output.blend=MaterialBlend::Additive;canonicalizeMaterialAsset(meshMaterial);
     saveMaterialAsset(p.root,meshMaterial);
     auto surface=createMaterialAsset(p.root,"Surface used by saved effect");
-    const std::string image="assets/textures/dormant-usage.png";fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    const std::string image="assets/textures/dormant-usage.png";fs::create_directories(fixturePath(p.root,"assets/textures"));fs::copy_file(fixtures.image,fixturePath(p.root,image));
     addMaterialNode(surface.graph,MaterialNodeKind::Texture2D).texture.image.id=image;saveMaterialAsset(p.root,surface);
     auto effect=createParticleAsset(p.root,"Retained assignment");effect.emitter.material.id=surface.id;saveParticleAsset(p.root,effect);
-    const auto meshBytes=read(p.root/meshMaterial.id),surfaceBytes=read(p.root/surface.id),effectBytes=read(p.root/effect.id);
+    const auto meshBytes=read(fixturePath(p.root,meshMaterial.id)),surfaceBytes=read(fixturePath(p.root,surface.id)),effectBytes=read(fixturePath(p.root,effect.id));
     AssetReferenceManager policy(p.root);const std::array<AssetEntry,1> models{{{model->id,model->name,AssetKind::Model}}};
     const std::array<AssetEntry,1> effects{{{effect.id,effect.name,AssetKind::Particle}}};
     const auto prepared=validateAssetDeletion(p.root,models,policy,{}, {},effects);
@@ -413,7 +420,7 @@ void deletionValidationRetainsIncompatibleUsage() {
     for(const auto& id:{meshMaterial.id,surface.id,image})
         require(std::find(prepared->dependencies.begin(),prepared->dependencies.end(),checkedManagedAssetPath(p.root,id))!=prepared->dependencies.end(),
             "Fallback preparation forgot an authored material or disconnected texture dependency.");
-    require(read(p.root/meshMaterial.id)==meshBytes&&read(p.root/surface.id)==surfaceBytes&&read(p.root/effect.id)==effectBytes&&
+    require(read(fixturePath(p.root,meshMaterial.id))==meshBytes&&read(fixturePath(p.root,surface.id))==surfaceBytes&&read(fixturePath(p.root,effect.id))==effectBytes&&
         loadParticleAsset(p.root,effect.id).emitter.material.id==surface.id&&policy.resolveMaterial(meshMaterial.id)==meshMaterial.id,
         "Deletion validation rewrote shared assignments or material files.");
     require(deletionValidationCurrent(*prepared),"Stable shared-material dependencies immediately invalidated preparation.");

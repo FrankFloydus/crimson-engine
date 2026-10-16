@@ -1,5 +1,7 @@
 #include "MaterialAsset.h"
 #include "AtomicFile.h"
+#include "ContentStorage.h"
+#include "resources/AssetId.h"
 #include "math/Json.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -17,9 +19,16 @@ namespace {
 using Json=nlohmann::json;
 std::filesystem::path path(const std::string& id) { return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size())); }
 std::filesystem::path materialPath(const std::filesystem::path& root,const std::string& id) {
+    if(isAssetUuid(id)) {
+        std::optional<std::filesystem::path> existing;
+        try{existing=resolveAssetPath(root,id);}catch(const std::exception&){/* New UUID has no location until its first save. */}
+        if(existing){if(existing->extension()!=".crimson-material")throw std::runtime_error("Asset identity does not reference a material file.");return *existing;}
+        return resolveAssetPath(root,"assets/materials")/(id+".crimson-material");
+    }
     const auto relative=path(id);
     if (relative.has_root_path() || relative.parent_path()!=std::filesystem::path("assets/materials") || relative.extension()!=".crimson-material" || id.find(':')!=std::string::npos)
         throw std::runtime_error("Material asset must be stored directly under assets/materials.");
+    if(contentStorageReady(root))return resolveAssetPath(root,id);
     const auto result=std::filesystem::weakly_canonical(root/relative),directory=std::filesystem::weakly_canonical(root/"assets/materials");
     const auto containment=result.lexically_relative(std::filesystem::weakly_canonical(root));
     if (result.parent_path()!=directory || containment.empty() || containment.is_absolute() || *containment.begin()=="..")
@@ -27,7 +36,8 @@ std::filesystem::path materialPath(const std::filesystem::path& root,const std::
     return result;
 }
 bool safeImage(const std::string& id) {
-    if (id.empty() || id==GrayTextureId || id==NeutralNormalTextureId) return true;
+    if(isAssetUuid(id))return true;
+    if (id.empty() || id==GrayTextureId || id==NeutralNormalTextureId || id=="builtin:texture/gray" || id=="builtin:texture/normal") return true;
     const auto relative=path(id);
     if (relative.has_root_path() || relative.empty() || id.find(':')!=std::string::npos) return false;
     for(const auto& part:relative) if(part=="..") return false;
@@ -35,6 +45,8 @@ bool safeImage(const std::string& id) {
 }
 ModelTexture readTexture(const Json& j) {
     ModelTexture t; t.image=AssetRef<DecodedImage>{j.at("image").get<std::string>()}; t.texCoord=j.at("uv").get<uint32_t>();
+    if(!safeImage(t.image.id))throw std::runtime_error("Material image identity is invalid.");
+    t.image.id=canonicalAssetId(t.image.id);
     const int u=j.at("wrapU").get<int>(),v=j.at("wrapV").get<int>(),min=j.at("minFilter").get<int>(),mag=j.at("magFilter").get<int>();
     if(u<0||u>2||v<0||v>2||min<0||min>5||mag<0||mag>1) throw std::runtime_error("Material sampler is invalid.");
     t.wrapU=static_cast<ModelWrap>(u);t.wrapV=static_cast<ModelWrap>(v);t.minFilter=static_cast<ModelFilter>(min);t.magFilter=static_cast<ModelFilter>(mag);return t;
@@ -66,28 +78,24 @@ MaterialBlend readBlend(const std::string& value) {
     throw std::runtime_error("Unsupported material blend mode.");
 }
 std::string uniqueId(const std::filesystem::path& root) {
-    static std::atomic<uint64_t> sequence{};
-    for(;;){char buffer[40]{};const auto tick=static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-        auto first=std::to_chars(buffer,buffer+sizeof buffer,tick,16);*first.ptr++='-';
-        const auto last=std::to_chars(first.ptr,buffer+sizeof buffer,sequence.fetch_add(1),16);
-        const auto id="assets/materials/"+std::string(buffer,last.ptr)+".crimson-material";
-        if(!std::filesystem::exists(materialPath(root,id)))return id;
-    }
+    (void)root;return newAssetId();
 }
 std::string uniqueName(const std::filesystem::path& root,const std::string& requested) {
     const std::string base=requested.empty()?"New Material":requested;if(base.size()>1024)throw std::runtime_error("Material name exceeds 1024 UTF-8 bytes.");
-    std::unordered_set<std::string> names;const auto directory=root/"assets/materials";
-    if(std::filesystem::exists(directory))for(const auto& entry:std::filesystem::directory_iterator(directory))if(entry.is_regular_file()&&entry.path().extension()==".crimson-material")
-        try{std::ifstream input(entry.path());const auto json=Json::parse(input);names.insert(json.at("name").get<std::string>());}catch(const std::exception&){/* Damaged files remain untouched. */}
+    std::unordered_set<std::string> names;
+    const auto readName=[&](const auto& file){try{std::ifstream input(file);const auto json=Json::parse(input);names.insert(json.at("name").get<std::string>());}catch(const std::exception&){/* Damaged files remain untouched. */}};
+    if(contentStorageReady(root)) {for(const auto& entry:storedAssetPaths(root))if(entry.file.extension()==".crimson-material")readName(entry.file);}
+    else {const auto directory=root/"assets/materials";if(std::filesystem::exists(directory))for(const auto& entry:std::filesystem::directory_iterator(directory))if(entry.is_regular_file()&&entry.path().extension()==".crimson-material")readName(entry.path());}
     if(!names.contains(base))return base;
     for(uint64_t suffix=2;;++suffix){const auto name=base+" "+std::to_string(suffix);if(name.size()>1024)throw std::runtime_error("Material name is too long for a unique suffix.");if(!names.contains(name))return name;}
 }
 }
 std::filesystem::path materialAssetPath(const std::filesystem::path& root,const std::string& id){return materialPath(root,id);}
 std::string importedMaterialId(const std::string& modelId,std::size_t index) {
+    if(isAssetUuid(modelId))return derivedAssetId(modelId,"material:"+std::to_string(index));
     const auto token=path(modelId).parent_path().filename().generic_u8string();
     if(token.empty()) throw std::runtime_error("Model package identity is empty.");
-    return "assets/materials/"+std::string(reinterpret_cast<const char*>(token.data()),token.size())+"-m"+std::to_string(index)+".crimson-material";
+    return canonicalAssetId("assets/materials/"+std::string(reinterpret_cast<const char*>(token.data()),token.size())+"-m"+std::to_string(index)+".crimson-material");
 }
 MaterialGraph materialGraphFromLegacy(const ModelMaterial& surface,MaterialShading shading,MaterialBlend blend) {
     MaterialGraph graph;graph.nodes.reserve(32);graph.links.reserve(40);
@@ -181,7 +189,7 @@ LegacyExpression legacyExpression(const MaterialGraph& graph,MaterialNodeId id,M
         else {const auto index=pin==MaterialPin::R?0:pin==MaterialPin::G?1:pin==MaterialPin::B?2:3;const auto v=n.color[index];result.factor={v,v,v,v};}
         return result;
     }
-    if(n.kind==MaterialNodeKind::Saturate) {
+    if(n.kind==MaterialNodeKind::Clamp) {
         // Only a uniform clamp can be represented by the legacy factor slots.
         // Keep textured saturation in the authoritative graph, not an incorrect
         // texture-times-factor approximation that changes coverage.
@@ -199,7 +207,7 @@ LegacyExpression legacyExpression(const MaterialGraph& graph,MaterialNodeId id,M
         result.texture=a.texture?a.texture:b.texture;result.channel=a.texture?a.channel:b.channel;
         result.representable=a.representable&&b.representable&&!(a.texture&&b.texture);return result;
     }
-    if(n.kind==MaterialNodeKind::Add||n.kind==MaterialNodeKind::Lerp||n.kind==MaterialNodeKind::Power) {
+    if(n.kind==MaterialNodeKind::Add||n.kind==MaterialNodeKind::Lerp||n.kind==MaterialNodeKind::Power||materialNodeImageAdjustment(n.kind)) {
         if(materialExpressionUniform(graph,id,pin)&&!materialExpressionTimeDependent(graph,id,pin))result.factor=evaluateMaterialUniform(graph,id,pin).value;
         else result.representable=false;
         return result;
@@ -256,6 +264,9 @@ ModelMaterial materialGraphLegacySurface(const MaterialGraph& graph,const std::s
 }
 void canonicalizeMaterialAsset(MaterialAsset& material) {
     if(material.graph.empty())material.graph=materialGraphFromLegacy(material.surface,material.shading,material.blend);
+    validateMaterialGraph(material.graph);
+    material.id=canonicalAssetId(material.id);material.originModel=canonicalAssetId(material.originModel);
+    for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D)node.texture.image.id=canonicalAssetId(node.texture.image.id);
     const auto& output=materialOutputNode(material.graph).output;material.shading=output.shading;material.blend=output.blend;
     material.surface=materialGraphLegacySurface(material.graph,material.name);
 }
@@ -268,7 +279,7 @@ std::optional<ModelMaterial> materialGraphFixedSurface(const MaterialGraph& grap
     for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
         const auto kind=findMaterialNode(graph,id)->kind;
         if(kind==MaterialNodeKind::Time || kind==MaterialNodeKind::Panner ||
-           kind==MaterialNodeKind::ParticleColor || kind==MaterialNodeKind::RadialGradient)return {};
+           kind==MaterialNodeKind::ParticleColor || kind==MaterialNodeKind::RadialGradient || kind==MaterialNodeKind::Grunge)return {};
     }
     LegacyExpressionCache cache;
     const auto expression=[&](MaterialPin pin) {
@@ -384,16 +395,21 @@ void validateMaterialAsset(const MaterialAsset& a) {
 }
 std::string serializeMaterialAsset(const MaterialAsset& a) {
     validateMaterialAsset(a);auto canonical=a;canonicalizeMaterialAsset(canonical);
-    return Json{{"version",6},{"type","crimson-material"},{"id",a.id},{"name",a.name},{"originModel",a.originModel},
+    return Json{{"version",6},{"type","crimson-material"},{"id",canonical.id},{"name",a.name},{"originModel",canonical.originModel},
         {"graph",Json::parse(serializeMaterialGraph(canonical.graph))}}.dump(2)+"\n";
 }
 MaterialAsset loadMaterialAsset(const std::filesystem::path& root,const std::string& id) {
-    if(id==DefaultMaterialId){auto a=defaultMaterialAsset();canonicalizeMaterialAsset(a);return a;}
-    if(id==DefaultParticleMaterialId){auto a=defaultParticleMaterialAsset();canonicalizeMaterialAsset(a);return a;}
-    const auto file=materialPath(root,id);if(std::filesystem::file_size(file)>1024u*1024u)throw std::runtime_error("Material file exceeds 1 MiB.");
+    const auto canonicalId=canonicalAssetId(id);
+    if(canonicalId==DefaultMaterialId||canonicalId==DefaultParticleMaterialId) {
+        if(!contentStorageReady(root)||!std::filesystem::is_regular_file(resolveAssetPath(root,canonicalId))) {
+            auto a=canonicalId==DefaultMaterialId?defaultMaterialAsset():defaultParticleMaterialAsset();canonicalizeMaterialAsset(a);return a;
+        }
+    }
+    const auto file=materialPath(root,isEngineAssetId(canonicalId)?canonicalId:id);if(std::filesystem::file_size(file)>1024u*1024u)throw std::runtime_error("Material file exceeds 1 MiB.");
     std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read material asset.");const auto j=Json::parse(input);
-    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4&&j.at("version")!=5&&j.at("version")!=6)||j.at("type")!="crimson-material"||j.at("id")!=id)throw std::runtime_error("Material type, version or identity is invalid.");
-    MaterialAsset a;a.id=id;a.name=j.at("name").get<std::string>();a.originModel=j.value("originModel",std::string{});auto& m=a.surface;m.name=a.name;
+    (void)materialPath(root,j.at("id").get<std::string>());
+    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4&&j.at("version")!=5&&j.at("version")!=6)||j.at("type")!="crimson-material"||canonicalAssetId(j.at("id").get<std::string>())!=canonicalId)throw std::runtime_error("Material type, version or identity is invalid.");
+    MaterialAsset a;a.id=canonicalId;a.name=j.at("name").get<std::string>();a.originModel=canonicalAssetId(j.value("originModel",std::string{}));auto& m=a.surface;m.name=a.name;
     if(j.at("version")==4||j.at("version")==5||j.at("version")==6){a.graph=parseMaterialGraph(j.at("graph").dump());canonicalizeMaterialAsset(a);validateMaterialAsset(a);return a;}
     m.baseColor=j.at("baseColor").get<Vec4>();m.metallic=j.at("metallic").get<float>();m.roughness=j.at("roughness").get<float>();m.normalScale=j.at("normalScale").get<float>();
     m.occlusionStrength=j.at("occlusionStrength").get<float>();m.emissive=j.at("emissive").get<Vec3>();m.alphaMask=j.at("alphaMask").get<bool>();m.doubleSided=j.at("doubleSided").get<bool>();m.alphaCutoff=j.at("alphaCutoff").get<float>();
@@ -408,10 +424,20 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& root,const std::str
     m.occlusionTexture=readTexture(j.at("occlusionTexture"));m.emissiveTexture=readTexture(j.at("emissiveTexture"));validateMaterialAsset(a);canonicalizeMaterialAsset(a);return a;
 }
 void saveMaterialAsset(const std::filesystem::path& root,const MaterialAsset& a) {
-    if(a.id.starts_with("builtin:"))throw std::runtime_error("Built-in materials cannot be edited.");
-    writeFileAtomically(materialPath(root,a.id),serializeMaterialAsset(a));
+    if(isEngineAssetId(a.id))throw std::runtime_error("Built-in materials cannot be edited.");
+    const auto file=materialPath(root,a.id);if(contentStorageReady(root))(void)checkedContentPath(root,file);
+    writeFileAtomically(file,serializeMaterialAsset(a));
+    if(contentStorageReady(root))registerAssetPath(root,a.id,file);
+}
+void ensureEngineMaterialAssets(const std::filesystem::path& root) {
+    if(!contentStorageReady(root))return;
+    for(const auto material:{defaultMaterialAsset(),defaultParticleMaterialAsset()}) {
+        const auto file=resolveAssetPath(root,material.id);
+        if(!std::filesystem::exists(file))writeFileAtomically(file,serializeMaterialAsset(material));
+    }
 }
 MaterialAsset createMaterialAsset(const std::filesystem::path& root,const std::string& name) {
+    if(!contentStorageReady(root))initializeContentStorage(root);
     auto material=defaultMaterialAsset();material.id=uniqueId(root);material.name=uniqueName(root,name);material.surface.name=material.name;
     constexpr float midgrayLinear=.21404114f;material.surface.baseColor={midgrayLinear,midgrayLinear,midgrayLinear,1};
     material.surface.sharedSampler=ModelSampler{ModelWrap::Repeat,ModelWrap::Repeat,ModelFilter::LinearMipmapLinear,ModelFilter::Linear};
@@ -419,15 +445,18 @@ MaterialAsset createMaterialAsset(const std::filesystem::path& root,const std::s
     saveMaterialAsset(root,material);return material;
 }
 MaterialAsset copyMaterialAsset(const std::filesystem::path& root,const MaterialAsset& source,const std::string& name) {
+    if(!contentStorageReady(root))initializeContentStorage(root);
     validateMaterialAsset(source);auto material=source;material.id=uniqueId(root);material.name=uniqueName(root,name.empty()?source.name:name);
     material.surface.name=material.name;material.originModel.clear();canonicalizeMaterialAsset(material);saveMaterialAsset(root,material);return material;
 }
-void promoteModelMaterials(const std::filesystem::path& root,const ModelAsset& model,const std::function<bool(const std::string&)>& deleted) {
+void promoteModelMaterials(const std::filesystem::path& root,const ModelAsset& model,const std::function<bool(const std::string&)>& deleted,
+    const std::function<void(const std::string&)>& created) {
     for(std::size_t i=0;i<model.materials.size();++i){const auto id=importedMaterialId(model.id,i);
         if(i<model.materialIds.size() && model.materialIds[i]!=id)continue;
         if((deleted&&deleted(id))||std::filesystem::exists(materialPath(root,id)))continue;
         MaterialAsset a{id,model.materials[i].name,model.id,model.materials[i]};
         a.blend=a.surface.alphaBlend?MaterialBlend::Alpha:a.surface.alphaMask?MaterialBlend::Mask:MaterialBlend::Opaque;saveMaterialAsset(root,a);
+        if(created)created(id);
     }
 }
 }

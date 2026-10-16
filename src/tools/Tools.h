@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crimson-renderer/RenderTypes.h"
+#include "scene/MaterialSlotAssignment.h"
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -31,6 +32,10 @@ struct EditorFrame {
     // Transient placement and visible thumbnail demands do not mutate a scene.
     std::vector<std::string> placementPreviewIds;
     Vec2 placementPreviewPosition{};
+    AssetRef<MaterialAsset> materialDragId;
+    Vec2 materialDragPosition{};
+    bool materialDropDelivered{};
+    std::optional<MaterialSlotAssignment> materialPreview,materialAssignment;
     std::vector<std::string> visiblePreviewIds;
     bool documentReplaced{false};
     std::string particleDropId, openParticle, particleFolder;

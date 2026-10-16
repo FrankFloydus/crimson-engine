@@ -2,6 +2,8 @@
 #include "BuiltinModels.h"
 #include "EnvironmentSerialization.h"
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
 #include "crimson-renderer/shaders/point_light.sh"
@@ -67,11 +69,13 @@ EntityId parseId(const Json& value) {
 std::string uniqueToken() { return hexId(randomId()) + hexId(randomId()); }
 std::filesystem::path scenePath(const std::filesystem::path& root, const std::string& id) {
     const auto relative = fromUtf8(id);
-    if (relative.has_root_path() || relative.extension() != ".crimson-scene" ||
-        relative.parent_path() != std::filesystem::path("assets/scenes"))
+    if (!isAssetUuid(id) && (relative.has_root_path() || relative.extension() != ".crimson-scene" ||
+        relative.parent_path() != std::filesystem::path("assets/scenes")))
         throw std::runtime_error("Scene asset must be a .crimson-scene file directly under assets/scenes.");
+    const auto path = std::filesystem::weakly_canonical(resolveAssetPath(root,id));
+    if(path.extension()!=".crimson-scene")throw std::runtime_error("Scene identity does not reference a native scene file.");
+    if(contentStorageReady(root))return checkedContentPath(root,path);
     const auto directory = std::filesystem::weakly_canonical(root / "assets/scenes");
-    const auto path = std::filesystem::weakly_canonical(root / relative);
     if (path.parent_path() != directory)
         throw std::runtime_error("Scene asset path escapes its managed directory.");
     // Also reject a redirected assets/scenes directory outside the project.
@@ -322,7 +326,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>10) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>11) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -362,7 +366,14 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             animation.playing=source.value("playing",animation.playing);animation.loop=source.value("loop",animation.loop);
             animation.speed=source.value("speed",animation.speed);animation.startTime=source.value("startTime",animation.startTime);
         }
-        if (entity.contains("modelMaterial")) record.modelMaterial=entity.at("modelMaterial").get<AssetRef<MaterialAsset>>();
+        if(version>=11 && entity.contains("modelMaterials")) {
+            const auto& materials=entity.at("modelMaterials");
+            if(!materials.is_array() || materials.size()>MaximumModelMaterialSlots)
+                throw std::runtime_error("Model materials must be a supported slot array.");
+            record.modelMaterials=materials.get<ModelMaterialOverrides>();
+            trimModelMaterialOverrides(record.modelMaterials);
+        } else if(entity.contains("modelMaterial"))
+            setModelMaterialOverride(record.modelMaterials,0,entity.at("modelMaterial").get<AssetRef<MaterialAsset>>());
         record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
         if(entity.contains("lightingScopes")) {
             const auto& scopes=entity.at("lightingScopes");
@@ -456,6 +467,16 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     Scene::validate(result.records,result.properties);
     return result;
 }
+void canonicalizeSceneAssetRefs(SceneSnapshot& snapshot) {
+    snapshot.id=canonicalAssetId(snapshot.id);
+    for(auto& record:snapshot.records) {
+        if(record.model)record.model->id=canonicalAssetId(record.model->id);
+        for(auto& material:record.modelMaterials)material.id=canonicalAssetId(material.id);
+        if(record.particle)record.particle->id=canonicalAssetId(record.particle->id);
+        if(record.meshCollider)record.meshCollider->source.id=canonicalAssetId(record.meshCollider->source.id);
+        if(record.environment)record.environment->environment.map=canonicalAssetId(record.environment->environment.map);
+    }
+}
 Json writeScene(const SceneSnapshot& snapshot) {
     Scene::validate(snapshot.records,snapshot.properties);
     Json entities = Json::array();
@@ -471,7 +492,8 @@ Json writeScene(const SceneSnapshot& snapshot) {
             entity["modelAnimation"]={{"clip",animation.clip},{"playing",animation.playing},{"loop",animation.loop},
                 {"speed",animation.speed},{"startTime",animation.startTime}};
         }
-        if (!record.modelMaterial.empty()) entity["modelMaterial"]=record.modelMaterial;
+        auto materials=record.modelMaterials;trimModelMaterialOverrides(materials);
+        if(!materials.empty())entity["modelMaterials"]=materials;
         if (record.particle) entity["particle"] = *record.particle;
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
@@ -491,9 +513,10 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",10},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",11},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
+    if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
     if (snapshot.previewCamera) {
         if (!validCamera(*snapshot.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
         const auto& camera=*snapshot.previewCamera;
@@ -520,7 +543,7 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(!equalLight(a.directional,b.directional))fields|=Directional;if(!equalLight(a.point,b.point))fields|=Point;
     if(a.environment.has_value()!=b.environment.has_value() || (a.environment && !sameEnvironment(*a.environment,*b.environment)))fields|=Environment;
     if(a.character!=b.character)fields|=Character;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
-    if(a.modelMaterial!=b.modelMaterial)fields|=ModelMaterialField;
+    if(a.modelMaterials!=b.modelMaterials)fields|=ModelMaterialField;
     if(a.castShadows!=b.castShadows)fields|=CastShadows;if(a.receiveShadows!=b.receiveShadows)fields|=ReceiveShadows;
     if(a.meshCollider!=b.meshCollider)fields|=MeshColliderField;if(a.quader!=b.quader)fields|=QuaderField;
     if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
@@ -534,7 +557,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&Directional)target.directional=source.directional;if(fields&Point)target.point=source.point;
     if(fields&Environment)target.environment=source.environment;if(fields&Character)target.character=source.character;
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
-    if(fields&ModelMaterialField)target.modelMaterial=source.modelMaterial;
+    if(fields&ModelMaterialField)target.modelMaterials=source.modelMaterials;
     if(fields&CastShadows)target.castShadows=source.castShadows;if(fields&ReceiveShadows)target.receiveShadows=source.receiveShadows;
     if(fields&MeshColliderField)target.meshCollider=source.meshCollider;if(fields&QuaderField)target.quader=source.quader;
     if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
@@ -639,15 +662,23 @@ void updateFollowOffsets(const Scene& previous,std::vector<EntityRecord>& record
 
 std::filesystem::path sceneAssetPath(const std::filesystem::path& root,const std::string& id) { return scenePath(root,id); }
 SceneSnapshot readSceneSnapshot(const std::filesystem::path& root,const std::string& id) {
-    auto result=readScene(scenePath(root,id)); result.id=id; return result;
+    auto result=readScene(scenePath(root,id)); result.id=id;
+    if(contentStorageReady(root))canonicalizeSceneAssetRefs(result);
+    return result;
 }
 std::string serializeSceneSnapshot(const SceneSnapshot& snapshot) {
     if (snapshot.name.empty() || snapshot.name.size()>1024 || snapshot.name.find_first_not_of(" \t\r\n")==std::string::npos)
         throw std::runtime_error("Scene name must contain 1 to 1024 UTF-8 bytes.");
-    return writeScene(snapshot).dump(2)+"\n";
+    auto current=snapshot;
+    if(isAssetUuid(current.id))canonicalizeSceneAssetRefs(current);
+    return writeScene(current).dump(2)+"\n";
 }
 void saveSceneSnapshot(const std::filesystem::path& root,const std::string& id,const SceneSnapshot& snapshot) {
-    writeFileAtomically(scenePath(root,id),serializeSceneSnapshot(snapshot));
+    const auto file=scenePath(root,id);
+    auto current=snapshot;current.id=id;
+    if(contentStorageReady(root))canonicalizeSceneAssetRefs(current);
+    writeFileAtomically(file,serializeSceneSnapshot(current));
+    if(contentStorageReady(root))registerAssetPath(root,canonicalAssetId(id),file);
 }
 uint64_t sceneFileFingerprint(const std::filesystem::path& root,const std::string& id) { return fingerprint(readText(scenePath(root,id))); }
 uint64_t sceneTextFingerprint(std::string_view contents) noexcept { return fingerprint(contents); }
@@ -655,12 +686,18 @@ uint64_t sceneTextFingerprint(std::string_view contents) noexcept { return finge
 std::vector<SceneAssetEntry> scanSceneAssets(const std::filesystem::path& root, std::vector<std::string>* diagnostics) {
     std::vector<SceneAssetEntry> entries;
     try {
-        const auto directory = root / "assets/scenes";
-        if (!std::filesystem::exists(directory)) return entries;
-        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-            if (!entry.is_regular_file() || entry.path().extension() != ".crimson-scene") continue;
-            const auto id = "assets/scenes/" + utf8(entry.path().filename());
-            try { entries.push_back({id,readScene(scenePath(root,id)).name}); }
+        std::vector<StoredAssetPath> files;
+        if(contentStorageReady(root))files=storedAssetPaths(root);
+        else {
+            const auto directory = root / "assets/scenes";
+            if (!std::filesystem::exists(directory)) return entries;
+            for(const auto& entry:std::filesystem::directory_iterator(directory))
+                if(entry.is_regular_file())files.push_back({"assets/scenes/"+utf8(entry.path().filename()),entry.path()});
+        }
+        for (const auto& entry : files) {
+            if (entry.file.extension() != ".crimson-scene" || !std::filesystem::is_regular_file(entry.file)) continue;
+            const auto& id = entry.id;
+            try {const auto scene=readSceneSnapshot(root,id);entries.push_back({scene.id,scene.name});}
             catch (const std::exception& error) { if (diagnostics) diagnostics->push_back(id + ": " + error.what()); }
         }
     } catch (const std::exception& error) { if (diagnostics) diagnostics->push_back(error.what()); }
@@ -778,16 +815,28 @@ bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExt
                 if((saveAs||entry.id!=assetId_)&&sceneNameKey(entry.name)==key)
                     throw std::runtime_error("A scene named '"+entry.name+"' already exists. Choose another name.");
         }
-        std::string savedId = assetId_;
+        std::string savedId = contentStorageReady(projectRoot_)?canonicalAssetId(assetId_):assetId_;std::filesystem::path file;
         if (savedId.empty() || saveAs) {
-            do { savedId = "assets/scenes/" + uniqueToken() + ".crimson-scene"; }
-            while (std::filesystem::exists(scenePath(projectRoot_,savedId)));
+            if(contentStorageReady(projectRoot_)) {
+                savedId=newAssetId();std::string filename=savedName;
+                try {(void)contentFilename(filename+".crimson-scene");}catch(const std::exception&){filename=savedId;}
+                for(std::size_t suffix=1;;++suffix) {
+                    const auto name=filename+(suffix>1?" "+std::to_string(suffix):std::string{})+".crimson-scene";
+                    file=checkedContentPath(projectRoot_,projectRoot_/"Content"/fromUtf8(name));
+                    if(!std::filesystem::exists(file))break;
+                }
+            } else {
+                do { savedId = "assets/scenes/" + uniqueToken() + ".crimson-scene"; }
+                while (std::filesystem::exists(scenePath(projectRoot_,savedId)));
+            }
         }
         if (!saveAs && !assetId_.empty() && !overwriteExternal && externalFileChanged())
             throw std::runtime_error("The scene file changed outside the editor. Reload, Save As, or explicitly overwrite it.");
         const SceneSnapshot snapshot{savedId,savedName,scene_.records(),scene_.properties(),previewCamera_};
         const auto contents=serializeSceneSnapshot(snapshot);
-        writeFileAtomically(scenePath(projectRoot_,savedId),contents);
+        if(file.empty())file=scenePath(projectRoot_,savedId);
+        writeFileAtomically(file,contents);
+        if(contentStorageReady(projectRoot_))registerAssetPath(projectRoot_,savedId,file);
         assetId_ = std::move(savedId); name_ = std::move(savedName);
         history_.savedState_ = history_.state_;
         loadedFingerprint_=fingerprint(contents);
@@ -833,7 +882,9 @@ std::vector<std::string> SceneDocument::historicalParticleReferences() const {
 }
 std::vector<std::string> SceneDocument::historicalMaterialReferences() const {
     std::unordered_set<std::string> references;
-    const auto add=[&](const EntityRecord& record) {if(!record.modelMaterial.empty())references.insert(record.modelMaterial.id);};
+    const auto add=[&](const EntityRecord& record) {
+        for(const auto& material:record.modelMaterials)if(!material.empty())references.insert(material.id);
+    };
     for(const auto& command:history_.commands_)for(const auto& change:command.entities) {
         if(change.before)add(*change.before);if(change.after)add(*change.after);
     }
@@ -845,14 +896,16 @@ bool SceneDocument::applyReloadSnapshot(const SceneSnapshot& snapshot,bool prese
 }
 bool SceneDocument::applyPreparedSnapshot(const SceneSnapshot& snapshot,bool preserveSelection,bool opening) {
     try {
-        if (snapshot.id.empty()) throw std::runtime_error("Reloaded scene has no asset identity.");
-        scenePath(projectRoot_,snapshot.id);
-        std::string preparedId=snapshot.id, preparedName=snapshot.name;
+        auto current=snapshot;
+        if(contentStorageReady(projectRoot_))canonicalizeSceneAssetRefs(current);
+        if (current.id.empty()) throw std::runtime_error("Reloaded scene has no asset identity.");
+        scenePath(projectRoot_,current.id);
+        std::string preparedId=current.id, preparedName=current.name;
         if (preparedName.empty() || preparedName.size()>1024) throw std::runtime_error("Scene name is invalid.");
-        if (snapshot.previewCamera && !validCamera(*snapshot.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
-        scene_.apply(snapshot.records,snapshot.properties);
-        assetId_=std::move(preparedId); name_=std::move(preparedName); previewCamera_=snapshot.previewCamera;
-        loadedFingerprint_=snapshot.fingerprint; transaction_.reset(); history_.reset(true);
+        if (current.previewCamera && !validCamera(*current.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
+        scene_.apply(current.records,current.properties);
+        assetId_=std::move(preparedId); name_=std::move(preparedName); previewCamera_=current.previewCamera;
+        loadedFingerprint_=current.fingerprint; transaction_.reset(); history_.reset(true);
         ++documentGeneration_;
         if (!preserveSelection) selection_={};
         sanitizeSelection(); status_=std::string(opening ? "Opened scene: " : "Reloaded scene: ")+name_; return true;
@@ -977,7 +1030,8 @@ EntityId SceneDocument::createEmpty(const std::string& name) {
 EntityId SceneDocument::createQuader(const std::string& name) {
     EntityRecord record;record.name=name;record.quader.emplace();return create(std::move(record),"Create Quader");
 }
-bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,const std::vector<EntityRecord>& generated) {
+bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,const std::vector<EntityRecord>& generated,
+    const ModelMaterialRemap& remapMaterials) {
     if(transient_ || transaction_){status_="Quader import waits for Edit mode and the current scene edit.";return false;}
     const auto root=scene_.find(owner);
     if(!root || !root->quader){status_="Quader entity no longer exists.";return false;}
@@ -1010,7 +1064,13 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
             // those authored values on matching source identities/kinds while
             // source transforms, energy, geometry and shadow flags still sync.
             if(const auto previous=scene_.find(record.id)) {
-                if(record.model && previous->model)record.lightingScopes=previous->lightingScopes;
+                if(record.model && previous->model) {
+                    record.lightingScopes=previous->lightingScopes;
+                    if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);
+                    else if(record.model==previous->model)record.modelMaterials=previous->modelMaterials;
+                    else if(!previous->modelMaterials.empty())
+                        throw std::runtime_error("Quader sync needs source material slots to preserve assignments on "+record.name+".");
+                }
                 if(record.point && previous->point)record.point->roles=previous->point->roles;
                 if(record.directional && previous->directional)record.directional->roles=previous->directional->roles;
             }

@@ -23,6 +23,7 @@ find_package(imgui CONFIG REQUIRED)
 find_package(implot CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(stduuid CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
@@ -51,7 +52,8 @@ add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-rend
 target_link_libraries(crimson-camera PUBLIC crimson-math)
 target_compile_options(crimson-camera PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-storage src/assets/AtomicFile.cpp)
+add_library(crimson-storage src/assets/AtomicFile.cpp src/assets/ContentStorage.cpp src/resources/AssetId.cpp)
+target_link_libraries(crimson-storage PUBLIC nlohmann_json::nlohmann_json PRIVATE stduuid Ole32)
 target_include_directories(crimson-storage PUBLIC src)
 target_compile_definitions(crimson-storage PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-storage PRIVATE /W4 /permissive- /utf-8)
@@ -76,7 +78,7 @@ target_link_libraries(crimson-scene PUBLIC crimson-math crimson-storage EnTT::En
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp)
+add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp)
 target_include_directories(crimson-materials PUBLIC src)
 target_link_libraries(crimson-materials PUBLIC crimson-math crimson-storage nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-materials PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -127,6 +129,8 @@ function(cc_shader NAME TYPE VARYING)
     if(NAME STREQUAL "fs_particle")
         list(APPEND EXTRA_DEPENDENCIES
             "${CC_SHADER_DIR}/material_graph_common.sh"
+            "${CC_SHADER_DIR}/material_graph_adjustments.sh"
+            "${CC_SHADER_DIR}/material_graph_grunge.sh"
             "${CC_SHADER_DIR}/material_graph_model.sh"
             "${CC_SHADER_DIR}/material_graph_particle.sh")
     endif()
@@ -237,9 +241,9 @@ add_executable(crimson-renderer WIN32
     "${CC_SHADER_BASELINE_HEADER}"
     src/main.cpp
     src/App.cpp src/App.h
-    src/app/Options.cpp src/app/DiagnosticSession.cpp
+    src/app/Options.cpp src/app/DiagnosticSession.cpp src/app/FrameProfile.cpp
     src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
-    src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp
+    src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
     src/editor/PlayerLightRigOverlay.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
@@ -263,6 +267,7 @@ add_executable(crimson-renderer WIN32
     src/tools/GameViewInteraction.cpp
     src/tools/InspectorTransform.cpp
     src/tools/AssetBrowser.cpp
+    src/tools/AssetBrowserPaths.cpp
     src/tools/ParticleEditor.cpp
     src/tools/ParticleAppearanceEditor.cpp
     src/tools/ParticleGradientEditor.cpp
@@ -282,6 +287,7 @@ target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CUR
 target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaderc.exe" CC_STAGED_SHADER_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaders" CC_STAGED_SHADER_INCLUDE_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/include")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
 target_link_libraries(crimson-renderer PRIVATE crimson-quader crimson-material-gpu crimson-node-editor crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
+target_link_libraries(crimson-renderer PRIVATE shell32)
 
 # A payload-only update must stage even when neither executable needs linking.
 # One shared target also prevents concurrent renderer/test copies into bin.
@@ -323,6 +329,10 @@ if(BUILD_TESTING)
     target_link_libraries(player_light_rig_tests PRIVATE crimson-scene)
     target_compile_options(player_light_rig_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME player_light_rig_core COMMAND player_light_rig_tests)
+    add_executable(player_light_rig_overlay_tests tests/player_light_rig_overlay_tests.cpp src/editor/PlayerLightRigOverlay.cpp)
+    target_link_libraries(player_light_rig_overlay_tests PRIVATE crimson-scene imgui::imgui)
+    target_compile_options(player_light_rig_overlay_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME player_light_rig_overlay_core COMMAND player_light_rig_overlay_tests)
     add_executable(ambient_visibility_tests tests/ambient_visibility_tests.cpp)
     target_link_libraries(ambient_visibility_tests PRIVATE crimson-camera)
     target_compile_options(ambient_visibility_tests PRIVATE /W4 /permissive- /utf-8)
@@ -401,9 +411,9 @@ if(BUILD_TESTING)
     target_link_libraries(game_view_input_tests PRIVATE crimson-runtime imgui::imgui)
     target_compile_options(game_view_input_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME game_view_input_core COMMAND game_view_input_tests)
-    add_executable(game_metrics_tests tests/game_metrics_tests.cpp src/tools/GameViewInteraction.cpp)
+    add_executable(game_metrics_tests tests/game_metrics_tests.cpp src/tools/GameViewInteraction.cpp src/app/FrameProfile.cpp)
     target_include_directories(game_metrics_tests PRIVATE src)
-    target_link_libraries(game_metrics_tests PRIVATE imgui::imgui)
+    target_link_libraries(game_metrics_tests PRIVATE imgui::imgui crimson-storage nlohmann_json::nlohmann_json)
     target_compile_options(game_metrics_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME game_metrics_core COMMAND game_metrics_tests)
     add_executable(builtin_geometry_tests tests/builtin_geometry_tests.cpp src/assets/AssetReferenceManager.cpp)
@@ -455,6 +465,10 @@ if(BUILD_TESTING)
     target_link_libraries(material_graph_tests PRIVATE crimson-materials)
     target_compile_options(material_graph_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME material_graph_core COMMAND material_graph_tests "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_executable(grunge_generator_tests tests/grunge_generator_tests.cpp)
+    target_link_libraries(grunge_generator_tests PRIVATE crimson-materials)
+    target_compile_options(grunge_generator_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME grunge_generator_core COMMAND grunge_generator_tests)
     add_executable(material_graph_actions_tests tests/material_graph_actions_tests.cpp)
     target_link_libraries(material_graph_actions_tests PRIVATE crimson-materials)
     target_compile_options(material_graph_actions_tests PRIVATE /W4 /permissive- /utf-8)
@@ -501,7 +515,7 @@ if(BUILD_TESTING)
     target_include_directories(environment_tests PRIVATE src)
     target_compile_definitions(environment_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(environment_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(environment_tests PRIVATE crimson-math bgfx::bgfx bgfx::bx bgfx::bimg_decode)
+    target_link_libraries(environment_tests PRIVATE crimson-math crimson-storage bgfx::bgfx bgfx::bx bgfx::bimg_decode)
     add_test(NAME environment_core COMMAND environment_tests)
     add_executable(model_tests tests/model_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp)
     target_include_directories(model_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
@@ -538,11 +552,22 @@ if(BUILD_TESTING)
     target_link_libraries(editor_render_frame_tests PRIVATE crimson-scene bgfx::bgfx)
     target_compile_options(editor_render_frame_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME editor_render_frame_core COMMAND editor_render_frame_tests)
-    add_executable(asset_browser_tests tests/asset_browser_tests.cpp src/assets/BrowserCatalog.cpp src/assets/AtomicFile.cpp)
+    add_executable(content_storage_tests tests/content_storage_tests.cpp src/assets/AssetReferenceManager.cpp)
+    target_link_libraries(content_storage_tests PRIVATE crimson-storage)
+    target_compile_options(content_storage_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME content_storage_core COMMAND content_storage_tests)
+
+    add_executable(asset_browser_tests tests/asset_browser_tests.cpp src/assets/BrowserCatalog.cpp)
     target_include_directories(asset_browser_tests PRIVATE src)
     target_compile_options(asset_browser_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(asset_browser_tests PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(asset_browser_tests PRIVATE crimson-storage nlohmann_json::nlohmann_json)
     add_test(NAME asset_browser_core COMMAND asset_browser_tests)
+    add_executable(asset_browser_path_tests tests/asset_browser_path_tests.cpp src/tools/AssetBrowserPaths.cpp)
+    target_include_directories(asset_browser_path_tests PRIVATE src)
+    target_compile_definitions(asset_browser_path_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(asset_browser_path_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_browser_path_tests PRIVATE crimson-storage nlohmann_json::nlohmann_json shell32)
+    add_test(NAME asset_browser_path_core COMMAND asset_browser_path_tests)
 
     add_executable(resource_tests tests/resource_tests.cpp)
     target_link_libraries(resource_tests PRIVATE crimson-resources)
@@ -646,8 +671,9 @@ if(BUILD_TESTING)
     target_link_libraries(material_mapping_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME material_mapping_render_core COMMAND material_mapping_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(material_mapping_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
-    add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp)
+    add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp src/editor/AssetPreviewCache.cpp)
     target_include_directories(preview_dependencies_tests PRIVATE src)
+    target_link_libraries(preview_dependencies_tests PRIVATE crimson-resources lodepng nlohmann_json::nlohmann_json)
     target_compile_options(preview_dependencies_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME preview_dependencies_core COMMAND preview_dependencies_tests)
 
@@ -756,3 +782,18 @@ foreach(CC_TARGET crimson-renderer native_resource_tests point_shadow_render_tes
         target_sources(${CC_TARGET} PRIVATE src/crimson-renderer/RenderFrame.cpp src/crimson-renderer/ProceduralSkyGpu.cpp src/crimson-renderer/ClusteredLightingGpu.cpp src/crimson-renderer/AmbientVisibilityGpu.cpp)
     endif()
 endforeach()
+
+if(BUILD_TESTING)
+    # Explicit performance fixture: the real editor runs hidden against a frozen
+    # disposable project, including browser previews, workers, UI and GPU frames.
+    get_target_property(CC_EDITOR_PERF_SOURCES crimson-renderer SOURCES)
+    list(FILTER CC_EDITOR_PERF_SOURCES EXCLUDE REGEX "src/main\\.cpp$|src/App\\.cpp$|src/app/Options\\.cpp$|src/app/DiagnosticSession\\.cpp$|CrimsonResources\\.rc$")
+    add_executable(editor_navigation_benchmark EXCLUDE_FROM_ALL tests/editor_navigation_benchmark.cpp ${CC_EDITOR_PERF_SOURCES})
+    get_target_property(CC_EDITOR_PERF_INCLUDES crimson-renderer INCLUDE_DIRECTORIES)
+    get_target_property(CC_EDITOR_PERF_DEFINITIONS crimson-renderer COMPILE_DEFINITIONS)
+    get_target_property(CC_EDITOR_PERF_LINK_LIBRARIES crimson-renderer LINK_LIBRARIES)
+    target_include_directories(editor_navigation_benchmark PRIVATE ${CC_EDITOR_PERF_INCLUDES})
+    target_compile_definitions(editor_navigation_benchmark PRIVATE ${CC_EDITOR_PERF_DEFINITIONS})
+    target_compile_options(editor_navigation_benchmark PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
+    target_link_libraries(editor_navigation_benchmark PRIVATE ${CC_EDITOR_PERF_LINK_LIBRARIES})
+endif()

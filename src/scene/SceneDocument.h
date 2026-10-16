@@ -138,7 +138,9 @@ public:
     EntityId createQuader(const std::string& name = "Quader");
     // Generated records use temporary IDs/parent IDs and stable source keys.
     // Reimport preserves matching persistent identities and all manual siblings.
-    bool replaceQuaderImport(EntityId owner,const QuaderLink&,const std::vector<EntityRecord>& generated);
+    using ModelMaterialRemap = std::function<ModelMaterialOverrides(const EntityRecord&,const EntityRecord&)>;
+    bool replaceQuaderImport(EntityId owner,const QuaderLink&,const std::vector<EntityRecord>& generated,
+        const ModelMaterialRemap& remapMaterials={});
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
     EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models);

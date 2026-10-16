@@ -21,6 +21,7 @@ class AssetPreviews;
 // Application-facing authoring coordinator: document, UI, asset preparation,
 // render extraction, and editor session persistence have one explicit owner.
 class EditorSession {
+    friend struct EditorPerformanceProbe;
 public:
     EditorSession(const std::filesystem::path&, AssetLibrary&, Renderer&);
     ~EditorSession();
@@ -71,7 +72,7 @@ private:
     struct PendingDrop { std::vector<std::string> ids;Vec3 position;std::uint64_t documentEpoch{}; };
     std::vector<PendingDrop> pendingDrops_;
     std::unordered_map<std::string,Camera> cameras_;
-    std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_;
+    std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_,materialDropStatus_;
     bool recoveredLegacy_{false};
     bool simulationSuspended_{},skipSimulationTime_{true};
     PlayAction playActionPending_{PlayAction::None};

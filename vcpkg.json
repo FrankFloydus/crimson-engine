@@ -7,6 +7,7 @@
     { "name": "bgfx", "features": ["tools"] },
     { "name": "imgui", "features": ["sdl3-binding", "docking-experimental"] },
     "nlohmann-json",
+    { "name": "stduuid", "features": ["system-gen"] },
     "lodepng",
     "cgltf",
     "mikktspace",

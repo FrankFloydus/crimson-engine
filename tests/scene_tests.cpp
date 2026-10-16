@@ -2,6 +2,9 @@
 #include "scene/EnvironmentSerialization.h"
 #include "editor/ViewportSelection.h"
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
+#include "resources/Paths.h"
+#include "resources/AssetId.h"
 #include "math/Json.h"
 
 #include <nlohmann/json.hpp>
@@ -59,6 +62,34 @@ void writeText(const std::filesystem::path& path, const std::string& value) {
 void sameRecords(const std::vector<EntityRecord>& a, const std::vector<EntityRecord>& b) {
     require(a.size() == b.size(),"Entity count differs.");
     for (size_t i=0;i<a.size();++i) require(sameEntity(a[i],b[i]),"Entity data differs.");
+}
+
+void physicalSceneStorage() {
+    TempProject project;SceneDocument document(project.root);
+    const auto entity=document.createEmpty("Preserved entity");
+    require(document.save("Migrated scene"),document.status());
+    const auto legacyId=document.assetId();const auto original=project.root/pathFromUtf8(legacyId);
+    initializeContentStorage(project.root);
+    const auto migrated=resolveAssetPath(project.root,legacyId);
+    const auto id=readSceneSnapshot(project.root,legacyId).id;
+    require(isAssetUuid(id)&&id==canonicalAssetId(legacyId)&&document.load(legacyId)&&document.scene().find(entity)&&!document.externalFileChanged(),document.status());
+    require(migrated!=original&&!std::filesystem::exists(original),"Physical scene migration retained the legacy file location.");
+    const auto moved=project.root/"Content/Levels/Act One/Opening.crimson-scene";
+    const std::array<ContentPathMove,1> moves{{{migrated,moved,false}}};
+    relocateContentPaths(project.root,moves);
+    require(resolveAssetPath(project.root,id)==std::filesystem::weakly_canonical(moved)&&assetIdAtPath(project.root,moved)==id,
+        "Scene move failed to retain its original logical ID.");
+    require(document.edit("Edit after physical move",[&](auto& records,auto&){for(auto& record:records)if(record.id==entity)record.name="Edited entity";})&&document.save(),document.status());
+    const auto saved=readSceneSnapshot(project.root,id);
+    require(saved.id==id&&saved.records.size()==1&&saved.records.front().name=="Edited entity"&&!std::filesystem::exists(original),
+        "Saving a relocated scene recreated its legacy path or lost entity data.");
+    const auto catalog=scanSceneAssets(project.root);
+    require(catalog.size()==1&&catalog.front().id==id&&catalog.front().name=="Migrated scene",
+        "Recursive indexed scene discovery missed or duplicated a moved scene.");
+    SceneDocument reopened(project.root);require(reopened.load(id)&&reopened.scene().find(entity),reopened.status());
+    reopened.newScene();require(reopened.save("New Content scene"),reopened.status());
+    require(std::filesystem::is_regular_file(resolveAssetPath(project.root,reopened.assetId()))&&scanSceneAssets(project.root).size()==2,
+        "A newly saved Content scene was not registered for indexed discovery.");
 }
 
 void registryAndHierarchy() {
@@ -454,7 +485,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==10,"Explicit save did not write scene version 10.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==11,"Explicit save did not write scene version 11.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -562,7 +593,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==10,"Environment writer did not use scene v10.");
+    require(Json::parse(saved).at("version")==11,"Environment writer did not use scene v11.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -792,7 +823,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==10,"Particle scene writer did not use version 10.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==11,"Particle scene writer did not use version 11.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -804,7 +835,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==10,"Explicit version-two save did not migrate to version ten.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==11,"Explicit version-two save did not migrate to version eleven.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -1019,7 +1050,7 @@ void inspectorZeroScaleHistory() {
 
 int main() {
     try {
-        registryAndHierarchy();
+        registryAndHierarchy();physicalSceneStorage();
         reparentPreservesAffine();
         transactionsAndSelection();
         viewportParentSelection();
@@ -1030,7 +1061,7 @@ int main() {
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();
         particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 20 groups passed.\n";
+        std::cout << "Scene core: 21 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

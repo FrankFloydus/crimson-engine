@@ -1,5 +1,6 @@
 #include "MaterialPreview.h"
 #include "assets/AssetLibrary.h"
+#include "assets/ContentStorage.h"
 #include "assets/MaterialGraphReferences.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -12,6 +13,7 @@
 namespace crimson {
 void MaterialPreview::setNodePreview(std::optional<MaterialGraphPreviewTarget> target) {
     if(nodePreview_==target)return;
+    if(!target || !nodePreview_ || target->node!=nodePreview_->node){grungeCurrent_={};grungeNode_=0;}
     nodePreview_=target;nodeDefinitionKey_.clear();
     if(!target)nodeCurrent_.reset();
 }
@@ -35,15 +37,45 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     }
     if(std::isfinite(dt)&&dt>0)materialContext_.gameSeconds+=std::min(dt,1.0);
     materialContext_.realSeconds=ImGui::GetTime();
+    if(grungeDocumentId_!=material.id){grungeCurrent_={};grungeNode_=0;grungeDocumentId_=material.id;}
+    if(nodePreview_) {
+        const auto* node=findMaterialNode(material.graph,nodePreview_->node);
+        const auto outputs=node?materialNodeOutputs(material.graph,*node):std::vector<MaterialPinDefinition>{};
+        if(!node || std::none_of(outputs.begin(),outputs.end(),[&](const auto& pin){return pin.pin==nodePreview_->pin;}))setNodePreview({});
+        else if(node->kind==MaterialNodeKind::Grunge) {
+            cancelInteraction();
+            if(grungeNode_!=node->id){grungeCurrent_={};grungeNode_=node->id;}
+            try {
+                auto texture=assets.grungePreview(node->grunge,1024);status_=texture.diagnostic;
+                if(texture.sourceReady && bgfx::isValid(texture.handle))grungeCurrent_=std::move(texture);
+                else if(status_.empty())status_="Generating texture...";
+            } catch(const std::exception& error){status_=error.what();}
+            if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
+            const auto available=ImGui::GetContentRegionAvail();const float edge=std::min(available.x,available.y);
+            if(edge>0) {
+                const auto origin=ImGui::GetCursorScreenPos();
+                ImGui::SetCursorScreenPos({origin.x+(available.x-edge)*.5f,origin.y+(available.y-edge)*.5f});
+                if(bgfx::isValid(grungeCurrent_.handle))ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(grungeCurrent_.handle,true)),{edge,edge},
+                    {0,0},{static_cast<float>(node->grunge.tiling),static_cast<float>(node->grunge.tiling)});
+                else ImGui::Dummy({edge,edge});
+                const auto& io=ImGui::GetIO();
+                if(!io.WantTextInput && !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) &&
+                    ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt)selectMaterial_=true;
+            }
+            return;
+        }
+    }
     const auto available=ImGui::GetContentRegionAvail(),framebufferScale=ImGui::GetWindowViewport()->FramebufferScale;
     const auto textureEdge=static_cast<std::uint32_t>(std::clamp(std::ceil(std::max(available.x*framebufferScale.x,available.y*framebufferScale.y)),1.f,16384.f));
     const auto source=assets.references().resolveEnvironment(environment_.map);
     const auto requestId=source.empty()?std::string(StudioEnvironmentId):source;
-    if(requestedEnvironment_!=requestId || !environmentHandle_) {
+    const auto storageRevision=contentStorageRevision(assets.projectRoot());
+    if(requestedEnvironment_!=requestId || !environmentHandle_ || storageRevision_!=storageRevision) {
+        storageRevision_=storageRevision;
         requestedEnvironment_=requestId;environmentRevision_=0;
         ResourceRequestOptions options;options.variant="ibl";options.priority=ResourcePriority::Selected;
         const auto root=assets.projectRoot();
-        if(!source.empty())options.dependencies={root/pathFromUtf8(source)};
+        if(!source.empty())options.dependencies={resolveAssetPath(root,source)};
         environmentHandle_=resources.request<PreparedEnvironment>(AssetRef<PreparedEnvironment>{requestId},[root,source](std::stop_token token) {
             if(token.stop_requested())throw std::runtime_error("Material environment preparation canceled.");
             const auto bake=prepareEnvironmentCpu(root,source);
@@ -62,7 +94,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     const auto diagnose=[&](const std::string& message){if(!status_.empty())status_+='\n';status_+=message;};
     try {
         auto bindings=assets.materialPreviewBindings(material,textureEdge);
-        if(bindings.graphPending)diagnose(bindings.diagnostic);
+        if(!bindings.diagnostic.empty())diagnose(bindings.diagnostic);
         if(materialPreviewPacketReady(bindings) && (!bindings.graphPending || !current_ || !current_->bindings.graph)) {
             auto key=material.surface.graph?std::to_string(materialGraphRenderHash(material.surface)):serializeMaterialAsset(material);
             if(!current_ || definitionKey_!=key || !std::equal(current_->bindings.handles.begin(),current_->bindings.handles.end(),bindings.handles.begin(),[](auto a,auto b){return a.idx==b.idx;}) ||
@@ -82,7 +114,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
         if(!nodePrograms_)nodePrograms_=assets.createMaterialNodePreviewPrograms();
         if(!nodePrograms_)throw std::runtime_error("Node preview shader compilation is unavailable.");
         auto bindings=assets.materialNodePreviewBindings(*nodePrograms_,material,*nodePreview_,textureEdge);
-        if(bindings.graphPending)diagnose(bindings.diagnostic);
+        if(!bindings.diagnostic.empty())diagnose(bindings.diagnostic);
         if(materialPreviewPacketReady(bindings) && !bindings.graphPending && bindings.graph) {
             const auto key=std::to_string(materialGraphRenderHash(material.surface))+":"+std::to_string(nodePreview_->node)+":"+std::to_string(static_cast<unsigned>(nodePreview_->pin));
             if(!nodeCurrent_ || nodeDefinitionKey_!=key || nodeCurrent_->bindings.graph->signature!=bindings.graph->signature) {
@@ -136,5 +168,6 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
 void MaterialPreview::release(Renderer& renderer) {
     cancelInteraction();renderer.releaseMaterialPreview();current_.reset();nodeCurrent_.reset();nodePrograms_.reset();nodePreview_.reset();nodeDefinitionKey_.clear();definitionKey_.clear();environmentHandle_={};
     requestedEnvironment_.clear();environmentRevision_=0;displayedTarget_=UINT16_MAX;navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;materialContext_={};
+    grungeCurrent_={};grungeDocumentId_.clear();grungeNode_=0;
 }
 }

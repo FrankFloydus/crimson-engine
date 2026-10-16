@@ -93,7 +93,7 @@ struct ParticleEmitterDefinition {
     Vec3 color{1,1,1}; // Straight linear HDR RGB; picker hue/intensity are a view.
     float intensity{1.0f}; // Compatibility overall brightness multiplier.
     uint32_t capacity{256};
-    AssetRef<MaterialAsset> material{"builtin:material/particle"};
+    AssetRef<MaterialAsset> material{"e44b4255-ac0c-58ff-b98f-1e747aad688b"};
     float opacity{1.0f};
     ParticleShape shape{ParticleShape::Point};
     ParticleSpace space{ParticleSpace::World};

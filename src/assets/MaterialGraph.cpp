@@ -1,5 +1,6 @@
 #include "MaterialGraph.h"
 #include "math/Json.h"
+#include "resources/AssetId.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,20 @@ using Json=nlohmann::json;
 [[noreturn]] void invalid(const std::string& message) { throw std::runtime_error("Material graph: "+message); }
 bool numeric(MaterialValueType type) { return type==MaterialValueType::Scalar || type==MaterialValueType::Color || type==MaterialValueType::Vector2; }
 bool arithmetic(MaterialNodeKind kind) {return kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power;}
+bool colorInput(MaterialValueType type) {return type==MaterialValueType::Scalar||type==MaterialValueType::Color;}
+Vec3 shiftedHue(Vec3 rgb,float degrees) {
+    const float low=std::min({rgb[0],rgb[1],rgb[2]}),high=std::max({rgb[0],rgb[1],rgb[2]}),chroma=high-low;
+    const float shift=std::fmod(degrees,360.f)/360.f;
+    if(chroma<=0||shift==0)return rgb;
+    float hue=high==rgb[0]?(rgb[1]-rgb[2])/chroma:high==rgb[1]?(rgb[2]-rgb[0])/chroma+2.f:(rgb[0]-rgb[1])/chroma+4.f;
+    hue=hue/6.f+shift;hue-=std::floor(hue);
+    constexpr float offsets[]{0.f,2.f/3.f,1.f/3.f};
+    for(unsigned i=0;i<3;++i) {
+        const float phase=hue+offsets[i],wrapped=phase-std::floor(phase);
+        rgb[i]=low+chroma*std::clamp(std::abs(wrapped*6.f-3.f)-1.f,0.f,1.f);
+    }
+    return rgb;
+}
 MaterialValueType combined(MaterialValueType a,MaterialValueType b,const char* operation) {
     if(!numeric(a)||!numeric(b))invalid(std::string(operation)+" accepts only Scalar, Vector2 and Color inputs.");
     if(a!=MaterialValueType::Scalar&&b!=MaterialValueType::Scalar&&a!=b)invalid(std::string(operation)+" cannot mix Vector2 and Color inputs.");
@@ -22,6 +37,7 @@ MaterialValueType combined(MaterialValueType a,MaterialValueType b,const char* o
 }
 bool validImage(const std::string& id) {
     if(id.empty() || id=="builtin:texture/gray" || id=="builtin:texture/normal")return true;
+    if(isAssetUuid(id))return !isEngineAssetId(id)||id==canonicalAssetId("builtin:texture/gray")||id==canonicalAssetId("builtin:texture/normal");
     if(!id.starts_with("assets/") || id.find(':')!=std::string::npos || id.find('\\')!=std::string::npos)return false;
     const std::filesystem::path path{std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size())};
     if(path.is_absolute() || path.has_root_path())return false;
@@ -60,23 +76,29 @@ Json nodeJson(const MaterialNode& n,bool layout) {
         if(layout)j["uv"]["scaleLinked"]=n.uv.scaleLinked;
         break;
     case MaterialNodeKind::Texture2D:
-        j["texture"]={{"image",n.texture.image.id},{"role",static_cast<int>(n.texture.role)},
+        j["texture"]={{"image",canonicalAssetId(n.texture.image.id)},{"role",static_cast<int>(n.texture.role)},
             {"sampler",samplerJson(n.texture.sampler)},{"normalStrength",n.texture.normalStrength}};break;
     case MaterialNodeKind::Scalar:
         j["scalar"]=n.scalar;if(layout)j["range"]=n.scalarRange;break;
     case MaterialNodeKind::Color:j["color"]=n.color;break;
     case MaterialNodeKind::Vector2:j["vector2"]=n.vector2;break;
-    case MaterialNodeKind::Saturate:j["left"]=valueJson(n.left);break;
+    case MaterialNodeKind::Clamp:j["left"]=valueJson(n.left);break;
+    case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:
     case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Power:
         j["left"]=valueJson(n.left);j["right"]=valueJson(n.right);break;
     case MaterialNodeKind::Lerp:j["left"]=valueJson(n.left);j["right"]=valueJson(n.right);j["alpha"]=valueJson(n.alpha);break;
     case MaterialNodeKind::Time:j["time"]={{"ignorePause",n.time.ignorePause},{"periodEnabled",n.time.periodEnabled},{"period",n.time.period}};break;
     case MaterialNodeKind::Panner:j["panner"]={{"speed",n.panner.speed},{"fractionalPart",n.panner.fractionalPart},{"coordinate",static_cast<int>(n.panner.coordinate)}};break;
+    case MaterialNodeKind::Grunge:j["grunge"]={{"seed",n.grunge.seed},{"tiling",n.grunge.tiling},
+        {"coverage",n.grunge.coverage},{"disorder",n.grunge.disorder},{"detail",n.grunge.detail},
+        {"baseNoisiness",n.grunge.baseNoisiness},{"dirtSpecksOpacity",n.grunge.dirtSpecksOpacity},{"invertDirt",n.grunge.invertDirt},
+        {"scratchesOpacity",n.grunge.scratchesOpacity},{"sharpen",n.grunge.sharpen},{"largeVariationIntensity",n.grunge.largeVariationIntensity},
+        {"stainsOpacity",n.grunge.stainsOpacity},{"leaksOpacity",n.grunge.leaksOpacity}};break;
     case MaterialNodeKind::ParticleColor:case MaterialNodeKind::RadialGradient:break;
     }
     return j;
 }
-MaterialNode readNode(const Json& j) {
+MaterialNode readNode(const Json& j,int graphVersion) {
     MaterialNode n;n.id=j.at("id").get<MaterialNodeId>();n.kind=static_cast<MaterialNodeKind>(j.at("kind").get<int>());
     n.name=j.at("name").get<std::string>();n.position=j.at("position").get<Vec2>();
     switch(n.kind) {
@@ -96,14 +118,16 @@ MaterialNode readNode(const Json& j) {
         n.uv.scaleLinked=u.at("scaleLinked").get<bool>();break;
     }
     case MaterialNodeKind::Texture2D: {
-        const auto& t=j.at("texture");n.texture.image.id=t.at("image").get<std::string>();
+        const auto& t=j.at("texture");const auto image=t.at("image").get<std::string>();
+        if(!validImage(image))invalid("invalid Texture 2D image reference.");n.texture.image.id=canonicalAssetId(image);
         n.texture.role=static_cast<MaterialTextureRole>(t.at("role").get<int>());
         n.texture.sampler=readSampler(t.at("sampler"));n.texture.normalStrength=t.at("normalStrength").get<float>();break;
     }
     case MaterialNodeKind::Scalar:n.scalar=j.at("scalar").get<float>();n.scalarRange=j.at("range").get<Vec2>();break;
     case MaterialNodeKind::Color:n.color=j.at("color").get<Vec4>();break;
     case MaterialNodeKind::Vector2:n.vector2=j.at("vector2").get<Vec2>();break;
-    case MaterialNodeKind::Saturate:n.left=readValue(j.at("left"));break;
+    case MaterialNodeKind::Clamp:n.left=readValue(j.at("left"));break;
+    case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:
     case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Power:
         n.left=readValue(j.at("left"));n.right=readValue(j.at("right"));break;
     case MaterialNodeKind::Lerp:n.left=readValue(j.at("left"));n.right=readValue(j.at("right"));n.alpha=readValue(j.at("alpha"));break;
@@ -112,6 +136,32 @@ MaterialNode readNode(const Json& j) {
     }
     case MaterialNodeKind::Panner: {
         const auto& p=j.at("panner");n.panner={p.at("speed").get<Vec2>(),p.at("fractionalPart").get<bool>(),static_cast<MaterialUvMode>(p.at("coordinate").get<int>())};break;
+    }
+    case MaterialNodeKind::Grunge: {
+        const auto& g=j.at("grunge");
+        const auto integer=[&](const char* key,int minimum,int maximum) {
+            const auto& value=g.at(key);if(!value.is_number_integer())invalid("Grunge integer controls must be integers.");
+            const auto number=value.get<std::int64_t>();
+            if(number<minimum||number>maximum)invalid("Grunge integer setting is outside its supported range.");
+            return static_cast<int>(number);
+        };
+        n.grunge={integer("seed",0,65535),integer("tiling",1,64),
+            g.at("coverage").get<float>(),g.at("disorder").get<float>(),g.at("detail").get<float>()};
+        n.grunge.baseNoisiness=g.value("baseNoisiness",n.grunge.baseNoisiness);
+        n.grunge.dirtSpecksOpacity=g.value("dirtSpecksOpacity",n.grunge.dirtSpecksOpacity);
+        n.grunge.invertDirt=g.value("invertDirt",n.grunge.invertDirt);
+        n.grunge.scratchesOpacity=g.value("scratchesOpacity",n.grunge.scratchesOpacity);
+        n.grunge.sharpen=g.value("sharpen",n.grunge.sharpen);
+        n.grunge.largeVariationIntensity=g.value("largeVariationIntensity",n.grunge.largeVariationIntensity);
+        if(graphVersion<7) {
+            const int formerStyle=integer("style",0,3);
+            n.grunge.stainsOpacity=formerStyle==1?1.f:formerStyle==0?.35f:0.f;
+            n.grunge.leaksOpacity=formerStyle==3?1.f:0.f;
+        } else {
+            n.grunge.stainsOpacity=g.value("stainsOpacity",n.grunge.stainsOpacity);
+            n.grunge.leaksOpacity=g.value("leaksOpacity",n.grunge.leaksOpacity);
+        }
+        break;
     }
     case MaterialNodeKind::ParticleColor:case MaterialNodeKind::RadialGradient:break;
     default:invalid("unknown node kind.");
@@ -130,8 +180,16 @@ MaterialValueType outputType(const MaterialGraph& graph,MaterialNodeId id,Materi
     case MaterialNodeKind::UV:case MaterialNodeKind::Panner:if(pin==MaterialPin::UV)return MaterialValueType::Mapping;break;
     case MaterialNodeKind::Time:
     case MaterialNodeKind::Scalar:if(pin==MaterialPin::Value)return MaterialValueType::Scalar;break;
-    case MaterialNodeKind::Saturate:
+    case MaterialNodeKind::Clamp:
     case MaterialNodeKind::RadialGradient:if(pin==MaterialPin::Value)return MaterialValueType::Scalar;break;
+    case MaterialNodeKind::Contrast:case MaterialNodeKind::Grunge:
+        if(pin==MaterialPin::Value)return MaterialValueType::Scalar;
+        if(pin==MaterialPin::RGB)return MaterialValueType::Color;
+        break;
+    case MaterialNodeKind::Desaturation:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:
+        if(pin==MaterialPin::RGB)return MaterialValueType::Color;
+        if(pin==MaterialPin::R||pin==MaterialPin::G||pin==MaterialPin::B)return MaterialValueType::Scalar;
+        break;
     case MaterialNodeKind::Vector2:
         if(pin==MaterialPin::XY)return MaterialValueType::Vector2;
         if(pin==MaterialPin::X||pin==MaterialPin::Y)return MaterialValueType::Scalar;
@@ -193,7 +251,7 @@ Json activeJson(const MaterialGraph& graph,MaterialShading shading,MaterialBlend
         j["id"]=indices.at(id);
         if(!values) {
             if(node.kind==MaterialNodeKind::Texture2D)j["role"]=static_cast<int>(node.texture.role);
-            if(arithmetic(node.kind)){j["leftType"]=static_cast<int>(node.left.type);j["rightType"]=static_cast<int>(node.right.type);}
+            if(arithmetic(node.kind)||materialNodeImageAdjustment(node.kind)){j["leftType"]=static_cast<int>(node.left.type);j["rightType"]=static_cast<int>(node.right.type);}
             if(node.kind==MaterialNodeKind::Lerp)j["alphaType"]=static_cast<int>(node.alpha.type);
         }
         result["nodes"].push_back(std::move(j));
@@ -224,9 +282,14 @@ const char* materialNodeKindName(MaterialNodeKind kind) {
     switch(kind){case MaterialNodeKind::Output:return "Output";case MaterialNodeKind::UV:return "UV";
     case MaterialNodeKind::Texture2D:return "Texture 2D";case MaterialNodeKind::Scalar:return "Scalar (1D)";
     case MaterialNodeKind::Color:return "Constant";case MaterialNodeKind::Multiply:return "Multiply";case MaterialNodeKind::Vector2:return "Vector2";
-    case MaterialNodeKind::Saturate:return "Saturate";case MaterialNodeKind::ParticleColor:return "Particle Color";case MaterialNodeKind::RadialGradient:return "Radial Gradient";
+    case MaterialNodeKind::Clamp:return "Clamp";case MaterialNodeKind::ParticleColor:return "Particle Color";case MaterialNodeKind::RadialGradient:return "Radial Gradient";
     case MaterialNodeKind::Add:return "Add";case MaterialNodeKind::Lerp:return "Lerp";case MaterialNodeKind::Panner:return "Panner";
-    case MaterialNodeKind::Time:return "Time";case MaterialNodeKind::Power:return "Power";}return "Unknown";
+    case MaterialNodeKind::Time:return "Time";case MaterialNodeKind::Power:return "Power";
+    case MaterialNodeKind::Desaturation:return "Desaturation";case MaterialNodeKind::Contrast:return "Contrast";
+    case MaterialNodeKind::ContrastRGB:return "ContrastRGB";case MaterialNodeKind::HueShift:return "HueShift";case MaterialNodeKind::Grunge:return "Grunge";}return "Unknown";
+}
+bool materialNodeImageAdjustment(MaterialNodeKind kind) {
+    return kind==MaterialNodeKind::Desaturation||kind==MaterialNodeKind::Contrast||kind==MaterialNodeKind::ContrastRGB||kind==MaterialNodeKind::HueShift;
 }
 const char* materialPinName(MaterialPin pin) {
     switch(pin){case MaterialPin::Value:return "Value";case MaterialPin::RGB:return "RGB";case MaterialPin::R:return "R";
@@ -283,8 +346,13 @@ bool materialPinActive(MaterialShading shading,MaterialBlend blend,MaterialPin p
 }
 std::vector<MaterialPinDefinition> materialNodeInputs(const MaterialGraph& graph,const MaterialNode& n,MaterialShading shading,MaterialBlend blend,bool all) {
     if(n.kind==MaterialNodeKind::Output)return materialOutputInputs(shading,blend,all);
-    if(n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::RadialGradient)return {{MaterialPin::UV,"UV",MaterialValueType::Mapping}};
-    if(n.kind==MaterialNodeKind::Saturate)return {{MaterialPin::Left,"Value",MaterialValueType::Scalar}};
+    if(n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::RadialGradient||n.kind==MaterialNodeKind::Grunge)return {{MaterialPin::UV,"UV",MaterialValueType::Mapping}};
+    if(n.kind==MaterialNodeKind::Clamp)return {{MaterialPin::Left,"Value",MaterialValueType::Scalar}};
+    if(materialNodeImageAdjustment(n.kind)) {
+        const auto* link=materialInputLink(graph,n.id,MaterialPin::Left);
+        return {{MaterialPin::Left,"Input",link?materialOutputType(graph,link->fromNode,link->fromPin):n.left.type},
+            {MaterialPin::Right,n.kind==MaterialNodeKind::Desaturation?"Saturation":n.kind==MaterialNodeKind::HueShift?"Degrees":"Contrast",MaterialValueType::Scalar}};
+    }
     if(n.kind==MaterialNodeKind::UV)return {{MaterialPin::ScaleXY,"Scale XY",MaterialValueType::Vector2},{MaterialPin::OffsetXY,"Offset XY",MaterialValueType::Vector2}};
     if(n.kind==MaterialNodeKind::Panner)return {{MaterialPin::UV,"Coordinate",MaterialValueType::Mapping},
         {MaterialPin::Time,"Time",MaterialValueType::Scalar},{MaterialPin::Speed,"Speed",MaterialValueType::Vector2}};
@@ -300,8 +368,11 @@ std::vector<MaterialPinDefinition> materialNodeInputs(const MaterialGraph& graph
 std::vector<MaterialPinDefinition> materialNodeOutputs(const MaterialGraph& graph,const MaterialNode& n) {
     if(n.kind==MaterialNodeKind::Output)return {};
     if(n.kind==MaterialNodeKind::UV||n.kind==MaterialNodeKind::Panner)return {{MaterialPin::UV,"UV",MaterialValueType::Mapping}};
+    if(n.kind==MaterialNodeKind::Contrast||n.kind==MaterialNodeKind::Grunge)return {{MaterialPin::Value,"Value",MaterialValueType::Scalar},{MaterialPin::RGB,"RGB",MaterialValueType::Color}};
+    if(materialNodeImageAdjustment(n.kind))return {{MaterialPin::RGB,"RGB",MaterialValueType::Color},{MaterialPin::R,"R",MaterialValueType::Scalar},
+        {MaterialPin::G,"G",MaterialValueType::Scalar},{MaterialPin::B,"B",MaterialValueType::Scalar}};
     if(n.kind==MaterialNodeKind::Vector2)return {{MaterialPin::XY,"XY",MaterialValueType::Vector2},{MaterialPin::X,"X",MaterialValueType::Scalar},{MaterialPin::Y,"Y",MaterialValueType::Scalar}};
-    if(n.kind==MaterialNodeKind::Scalar||arithmetic(n.kind)||n.kind==MaterialNodeKind::Time||n.kind==MaterialNodeKind::RadialGradient||n.kind==MaterialNodeKind::Saturate)return {{MaterialPin::Value,"Value",materialOutputType(graph,n.id,MaterialPin::Value)}};
+    if(n.kind==MaterialNodeKind::Scalar||arithmetic(n.kind)||n.kind==MaterialNodeKind::Time||n.kind==MaterialNodeKind::RadialGradient||n.kind==MaterialNodeKind::Clamp)return {{MaterialPin::Value,"Value",materialOutputType(graph,n.id,MaterialPin::Value)}};
     if(n.kind==MaterialNodeKind::Texture2D&&n.texture.role==MaterialTextureRole::Normal)return {{MaterialPin::Normal,"Normal",MaterialValueType::Normal}};
     return {{MaterialPin::RGB,"RGB",MaterialValueType::Color},{MaterialPin::R,"R",MaterialValueType::Scalar},
         {MaterialPin::G,"G",MaterialValueType::Scalar},{MaterialPin::B,"B",MaterialValueType::Scalar},{MaterialPin::A,"A",MaterialValueType::Scalar}};
@@ -310,14 +381,15 @@ MaterialValueType materialOutputType(const MaterialGraph& graph,MaterialNodeId i
     std::unordered_set<MaterialNodeId> visiting;TypeCache cache;return outputType(graph,id,pin,visiting,cache);
 }
 MaterialValue materialInputDefault(const MaterialNode& n,MaterialPin pin) {
-    if(n.kind==MaterialNodeKind::Saturate&&pin==MaterialPin::Left)return n.left;
+    if(n.kind==MaterialNodeKind::Clamp&&pin==MaterialPin::Left)return n.left;
+    if(materialNodeImageAdjustment(n.kind)){if(pin==MaterialPin::Left)return n.left;if(pin==MaterialPin::Right)return n.right;}
     if(arithmetic(n.kind)){if(pin==MaterialPin::Left)return n.left;if(pin==MaterialPin::Right)return n.right;if(n.kind==MaterialNodeKind::Lerp&&pin==MaterialPin::Alpha)return n.alpha;}
     if(n.kind==MaterialNodeKind::Panner) {
         if(pin==MaterialPin::UV)return {MaterialValueType::Mapping,{}};
         if(pin==MaterialPin::Time)return {MaterialValueType::Scalar,{0,0,0,0}};
         if(pin==MaterialPin::Speed)return {MaterialValueType::Vector2,{n.panner.speed[0],n.panner.speed[1],0,0}};
     }
-    if((n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::RadialGradient)&&pin==MaterialPin::UV)return {MaterialValueType::Mapping,{}};
+    if((n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::RadialGradient||n.kind==MaterialNodeKind::Grunge)&&pin==MaterialPin::UV)return {MaterialValueType::Mapping,{}};
     if(n.kind==MaterialNodeKind::UV) {
         if(pin==MaterialPin::ScaleXY)return {MaterialValueType::Vector2,{n.uv.scale[0],n.uv.scale[1],0,0}};
         if(pin==MaterialPin::OffsetXY)return {MaterialValueType::Vector2,{n.uv.offset[0],n.uv.offset[1],0,0}};
@@ -341,7 +413,7 @@ bool materialExpressionUniform(const MaterialGraph& graph,MaterialNodeId id,Mate
         if(!visited.insert(current).second)return true;
         const auto& n=*findMaterialNode(graph,current);
         if(n.kind==MaterialNodeKind::Scalar||n.kind==MaterialNodeKind::Color||n.kind==MaterialNodeKind::Vector2||n.kind==MaterialNodeKind::Time)return true;
-        if(!arithmetic(n.kind)&&n.kind!=MaterialNodeKind::Saturate)return false;
+        if(!arithmetic(n.kind)&&!materialNodeImageAdjustment(n.kind)&&n.kind!=MaterialNodeKind::Clamp)return false;
         const auto& settings=materialOutputNode(graph).output;
         for(const auto& input:materialNodeInputs(graph,n,settings.shading,settings.blend))
             if(const auto* link=materialInputLink(graph,current,input.pin);link&&!self(self,link->fromNode))return false;
@@ -387,7 +459,18 @@ MaterialValue evaluateMaterialUniform(const MaterialGraph& graph,MaterialNodeId 
                 const auto* link=materialInputLink(graph,current,inputPin);return link?self(self,link->fromNode,link->fromPin):fallback;
             };
             const auto left=input(MaterialPin::Left,n.left);
-            if(n.kind==MaterialNodeKind::Saturate) {
+            if(materialNodeImageAdjustment(n.kind)) {
+                const auto right=input(MaterialPin::Right,n.right);
+                const float factor=right.value[0];
+                Vec3 rgb=left.type==MaterialValueType::Scalar?Vec3{left.value[0],left.value[0],left.value[0]}:Vec3{left.value[0],left.value[1],left.value[2]};
+                const float luminance=rgb[0]*.2126f+rgb[1]*.7152f+rgb[2]*.0722f;
+                if(n.kind==MaterialNodeKind::Desaturation)for(auto& channel:rgb)channel=luminance+(channel-luminance)*factor;
+                else if(n.kind==MaterialNodeKind::Contrast) {const float value=(luminance-.5f)*factor+.5f;rgb={value,value,value};}
+                else if(n.kind==MaterialNodeKind::ContrastRGB)for(auto& channel:rgb)channel=(channel-.5f)*factor+.5f;
+                else rgb=shiftedHue(rgb,factor);
+                if(output==MaterialPin::RGB)result.value={rgb[0],rgb[1],rgb[2],1};
+                else {const float value=rgb[output==MaterialPin::G?1:output==MaterialPin::B?2:0];result.value={value,value,value,value};}
+            } else if(n.kind==MaterialNodeKind::Clamp) {
                 const auto value=std::clamp(left.value[0],0.f,1.f);result.value={value,value,value,value};
             }else {
                 const auto right=input(MaterialPin::Right,n.right);
@@ -440,7 +523,7 @@ MaterialUvMapping resolveMaterialUvMapping(const MaterialGraph& graph,MaterialNo
 }
 MaterialUvMapping materialTextureMapping(const MaterialGraph& graph,MaterialNodeId id,MaterialEvaluationContext context) {
     const auto* node=findMaterialNode(graph,id);
-    if(!node||node->kind!=MaterialNodeKind::Texture2D)invalid("texture mapping resolver requires a Texture 2D node.");
+    if(!node||(node->kind!=MaterialNodeKind::Texture2D&&node->kind!=MaterialNodeKind::Grunge))invalid("texture mapping resolver requires a Texture 2D or Grunge node.");
     const auto* input=materialInputLink(graph,id,MaterialPin::UV);
     return input?resolveMaterialUvMapping(graph,input->fromNode,context):MaterialUvMapping{};
 }
@@ -466,7 +549,7 @@ void migrateLegacyParticleGraph(MaterialGraph& graph,bool softDisc) {
     };
     // The former shader clamped authored coverage before multiplying particle
     // alpha and the disc. Preserve this order even for HDR/negative expressions.
-    const auto bounded=addMaterialNode(candidate,MaterialNodeKind::Saturate,{root.position[0]-620,root.position[1]+100}).id;
+    const auto bounded=addMaterialNode(candidate,MaterialNodeKind::Clamp,{root.position[0]-620,root.position[1]+100}).id;
     findMaterialNode(candidate,bounded)->left=materialInputDefault(root,coveragePin);
     for(auto& previous:candidate.links)if(previous.toNode==root.id&&previous.toPin==coveragePin) {
         previous.toNode=bounded;previous.toPin=MaterialPin::Left;break;
@@ -496,6 +579,8 @@ MaterialNode& addMaterialNode(MaterialGraph& graph,MaterialNodeKind kind,Vec2 po
     MaterialNode node;node.id=graph.nextNodeId++;node.kind=kind;node.name=materialNodeKindName(kind);node.position=position;
     if(kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power)node.left.value={0,0,0,0};
     if(kind==MaterialNodeKind::Power)node.right.value={2,2,2,2};
+    if(materialNodeImageAdjustment(kind))node.left={MaterialValueType::Color,{1,1,1,1}};
+    if(kind==MaterialNodeKind::HueShift)node.right.value={0,0,0,0};
     graph.nodes.push_back(std::move(node));return graph.nodes.back();
 }
 bool removeMaterialNode(MaterialGraph& graph,MaterialNodeId id) {
@@ -542,8 +627,19 @@ void validateMaterialGraph(const MaterialGraph& graph) {
         case MaterialNodeKind::Color:if(!math::finite(n.color))invalid("Color requires finite components.");break;
         case MaterialNodeKind::Vector2:if(!math::finite(n.vector2))invalid("Vector2 requires finite components.");break;
         case MaterialNodeKind::ParticleColor:case MaterialNodeKind::RadialGradient:break;
-        case MaterialNodeKind::Saturate:
-            if(n.left.type!=MaterialValueType::Scalar||!math::finite(n.left.value))invalid("Saturate requires a finite Scalar input default.");break;
+        case MaterialNodeKind::Clamp:
+            if(n.left.type!=MaterialValueType::Scalar||!math::finite(n.left.value))invalid("Clamp requires a finite Scalar input default.");break;
+        case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:
+            if(!colorInput(n.left.type)||n.right.type!=MaterialValueType::Scalar||!math::finite(n.left.value)||!math::finite(n.right.value))
+                invalid("Image adjustments require a finite Scalar/Color Input and Scalar adjustment default.");break;
+        case MaterialNodeKind::Grunge: {
+            const auto& g=n.grunge;
+            const auto unit=[](float v){return math::finite(v)&&v>=0&&v<=1;};
+            if(g.seed<0||g.seed>65535||g.tiling<1||g.tiling>64||
+                !unit(g.coverage)||!unit(g.disorder)||!unit(g.detail)||!unit(g.baseNoisiness)||!unit(g.dirtSpecksOpacity)||
+                !unit(g.scratchesOpacity)||!unit(g.sharpen)||!unit(g.largeVariationIntensity)||!unit(g.stainsOpacity)||!unit(g.leaksOpacity))
+                invalid("Grunge requires Seed 0-65535, Tiling 1-64 and finite controls in 0-1.");break;
+        }
         case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:
             if(!numeric(n.left.type)||!numeric(n.right.type)||!math::finite(n.left.value)||!math::finite(n.right.value))invalid("Arithmetic defaults must be finite Scalar, Vector2 or Color values.");
             if(n.kind==MaterialNodeKind::Power&&n.right.type!=MaterialValueType::Scalar)invalid("Power Exponent default must be Scalar.");
@@ -575,6 +671,9 @@ void validateMaterialGraph(const MaterialGraph& graph) {
     for(const auto& node:graph.nodes)visit(visit,node.id);
     for(const auto& link:graph.links) {
         const auto& target=*findMaterialNode(graph,link.toNode);const auto type=materialOutputType(graph,link.fromNode,link.fromPin);
+        if(materialNodeImageAdjustment(target.kind)&&link.toPin==MaterialPin::Left) {
+            if(!colorInput(type))invalid("Image adjustment Input accepts only Scalar or Color.");continue;
+        }
         if(arithmetic(target.kind)&&(link.toPin==MaterialPin::Left||link.toPin==MaterialPin::Right||
             (target.kind==MaterialNodeKind::Lerp&&link.toPin==MaterialPin::Alpha))&&
             !(target.kind==MaterialNodeKind::Power&&link.toPin==MaterialPin::Right)) {
@@ -591,6 +690,16 @@ void validateMaterialGraph(const MaterialGraph& graph) {
         if(arithmetic(node.kind))(void)materialOutputType(graph,node.id,MaterialPin::Value);
         if(node.kind==MaterialNodeKind::UV||node.kind==MaterialNodeKind::Panner)(void)resolveMaterialUvMapping(graph,node.id);
     }
+    std::unordered_set<MaterialNodeId> reachable;std::size_t textureBindings{};
+    const auto& output=materialOutputNode(graph);
+    const auto sampleCount=[&](auto&& self,MaterialNodeId id)->void {
+        if(!reachable.insert(id).second)return;const auto& node=*findMaterialNode(graph,id);
+        if((node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::Grunge)&&++textureBindings>MaterialGraph::MaximumTextureBindings)
+            invalid("at most 12 active Texture 2D and Grunge samplers are supported.");
+        for(const auto& input:materialNodeInputs(graph,node,output.output.shading,output.output.blend))
+            if(const auto* link=materialInputLink(graph,id,input.pin))self(self,link->fromNode);
+    };
+    sampleCount(sampleCount,output.id);
 }
 std::vector<MaterialNodeId> materialGraphOrder(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend) {
     return branchOrder(graph,shading,blend,materialOutputNode(graph).id);
@@ -612,7 +721,7 @@ std::uint64_t materialGraphLayoutHash(const MaterialGraph& graph) {
     Json j=Json::array();for(const auto& n:graph.nodes)j.push_back({n.id,n.name,n.position,n.scalarRange,n.uv.scaleLinked});return hash(j.dump());
 }
 std::string serializeMaterialGraph(const MaterialGraph& graph) {
-    validateMaterialGraph(graph);Json j{{"version",4},{"nextNodeId",graph.nextNodeId},{"nextLinkId",graph.nextLinkId},{"nodes",Json::array()},{"links",Json::array()}};
+    validateMaterialGraph(graph);Json j{{"version",7},{"nextNodeId",graph.nextNodeId},{"nextLinkId",graph.nextLinkId},{"nodes",Json::array()},{"links",Json::array()}};
     for(const auto& n:graph.nodes)j["nodes"].push_back(nodeJson(n,true));
     for(const auto& l:graph.links)j["links"].push_back({{"id",l.id},{"fromNode",l.fromNode},{"fromPin",static_cast<int>(l.fromPin)},
         {"toNode",l.toNode},{"toPin",static_cast<int>(l.toPin)}});
@@ -620,10 +729,12 @@ std::string serializeMaterialGraph(const MaterialGraph& graph) {
 }
 MaterialGraph parseMaterialGraph(const std::string& text) {
     if(text.size()>1024u*1024u)invalid("serialized graph exceeds 1 MiB.");const auto j=Json::parse(text);
-    if((j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4)||!j.at("nodes").is_array()||!j.at("links").is_array()||
+    if((j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4&&j.at("version")!=5&&j.at("version")!=6&&j.at("version")!=7)||!j.at("nodes").is_array()||!j.at("links").is_array()||
         j.at("nodes").size()>MaterialGraph::MaximumNodes||j.at("links").size()>MaterialGraph::MaximumLinks)invalid("unsupported graph version or counts.");
     MaterialGraph graph;graph.nextNodeId=j.at("nextNodeId").get<MaterialNodeId>();graph.nextLinkId=j.at("nextLinkId").get<MaterialLinkId>();
-    for(const auto& n:j.at("nodes"))graph.nodes.push_back(readNode(n));
+    for(const auto& n:j.at("nodes"))graph.nodes.push_back(readNode(n,j.at("version").get<int>()));
+    if(j.at("version").get<int>()<5)for(auto& node:graph.nodes)
+        if(node.kind==MaterialNodeKind::Clamp&&node.name=="Saturate")node.name="Clamp";
     for(const auto& l:j.at("links"))graph.links.push_back({l.at("id").get<MaterialLinkId>(),l.at("fromNode").get<MaterialNodeId>(),
         l.at("toNode").get<MaterialNodeId>(),static_cast<MaterialPin>(l.at("fromPin").get<int>()),static_cast<MaterialPin>(l.at("toPin").get<int>())});
     if(j.at("version")==1) {

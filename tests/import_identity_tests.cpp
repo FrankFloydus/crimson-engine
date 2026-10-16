@@ -13,6 +13,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <thread>
 
@@ -25,6 +26,7 @@ void require(bool value,const std::string& text){if(!value)throw std::runtime_er
 template<class F>void rejects(F action){bool failed=false;try{action();}catch(const std::exception&){failed=true;}require(failed,"Invalid model import unexpectedly succeeded.");}
 Bytes readBytes(const fs::path& file){std::ifstream input(file,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
 Json readJson(const fs::path& file){std::ifstream input(file);return Json::parse(input);}
+std::string pathText(const fs::path& path){const auto text=path.generic_u8string();return {reinterpret_cast<const char*>(text.data()),text.size()};}
 struct Project {
     fs::path root=fs::temp_directory_path()/("crimson-import-identity-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Project(){fs::create_directories(root/"assets");}
@@ -32,6 +34,12 @@ struct Project {
         if(!error&&target.parent_path()==temporary&&target.filename().string().starts_with("crimson-import-identity-"))fs::remove_all(target,error);}
 };
 std::size_t packages(const fs::path& root,bool allowStaging=false) {
+    if(contentStorageReady(root)) {
+        std::size_t result{};for(const auto& entry:storedAssetPaths(root))if(entry.file.filename()=="manifest.json"&&fs::is_regular_file(entry.file))++result;
+        if(!allowStaging&&fs::is_directory(resolveAssetPath(root,"assets/.staging-models")))
+            require(fs::is_empty(resolveAssetPath(root,"assets/.staging-models")),"Model import leaked its private staging package.");
+        return result;
+    }
     std::size_t result{};for(const auto& entry:fs::directory_iterator(root/"assets/models")) {
         if(entry.path().filename().string().starts_with(".staging-")){require(allowStaging,"Model import leaked its staging package.");continue;}
         if(fs::is_regular_file(entry.path()/"manifest.json"))++result;
@@ -39,10 +47,10 @@ std::size_t packages(const fs::path& root,bool allowStaging=false) {
 }
 void exactRepeatAndDependencies() {
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");
-    const auto first=importModelPackage(fixture.glb,p.root);const auto original=readBytes(p.root/pathFromUtf8(first->id));
+    const auto first=importModelPackage(fixture.glb,p.root);const auto original=readBytes(resolveAssetPath(p.root,first->id));
     auto again=stageModelImport(fixture.glb,p.root);const auto repeated=publishModelImport(again);
     require(again->reused&&first->id==repeated->id&&first->images==repeated->images&&first->materialIds==repeated->materialIds,"Repeated GLB imports must reuse model, image and material identities.");
-    require(!fs::exists(again->staging)&&packages(p.root)==1&&readBytes(p.root/pathFromUtf8(first->id))==original,"Reusing a package must not rewrite it or leave staging files.");
+    require(!fs::exists(again->staging)&&packages(p.root)==1&&readBytes(resolveAssetPath(p.root,first->id))==original,"Reusing a package must not rewrite it or leave staging files.");
     const auto copy=p.root/"different-name.GLB";fs::copy_file(fixture.glb,copy);
     require(importModelPackage(copy,p.root)->id==first->id,"Identical model bytes from another filename should reuse their content identity.");
     const auto external=importModelPackage(fixture.gltf,p.root);
@@ -61,7 +69,7 @@ void exactRepeatAndDependencies() {
 }
 void legacyAndPublicationRaces() {
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");auto original=importModelPackage(fixture.glb,p.root);
-    const auto managed=p.root/pathFromUtf8(original->id);auto metadata=readJson(managed);metadata.erase("importIdentity");model_test::writeJson(managed,metadata);
+    const auto managed=resolveAssetPath(p.root,original->id);auto metadata=readJson(managed);metadata.erase("importIdentity");model_test::writeJson(managed,metadata);
     auto legacy=stageModelImport(fixture.glb,p.root);require(publishModelImport(legacy)->id==original->id&&legacy->reused,"Legacy packages must be recognized from managed bytes without rewriting them.");
     require(!readJson(managed).contains("importIdentity"),"Duplicate detection must not rewrite legacy package manifests.");
     auto stale=stageModelImport(fixture.glb,p.root);const auto buffer=managed.parent_path()/"buffers/0.bin";auto bytes=readBytes(buffer);bytes[0]^=1;
@@ -81,7 +89,7 @@ void tombstonesFailureAndCancellation() {
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");const auto original=importModelPackage(fixture.glb,p.root);
     AssetReferenceManager refs(p.root);const std::array<AssetEntry,1> deleted{{{original->id,"Deleted model",AssetKind::Model}}};refs.replace(deleted,{});refs.save();
     const auto next=importModelPackage(fixture.glb,p.root);require(next->id!=original->id&&!refs.deleted(next->id),"A tombstoned model identity must never be resurrected.");
-    require(fs::exists(p.root/pathFromUtf8(original->id)),"Importing a new version must not remove retained old package data.");
+    require(fs::exists(resolveAssetPath(p.root,original->id)),"Importing a new version must not remove retained old package data.");
     fs::remove(fixture.gltf.parent_path()/"geometry.bin");rejects([&]{importModelPackage(fixture.gltf,p.root);});
     require(packages(p.root)==2,"A missing external dependency must roll back its complete staging package.");
     {
@@ -95,15 +103,130 @@ void pumpImports(AsyncImports& imports,ResourceManager& resources,AssetLibrary& 
     while(imports.pending()&&std::chrono::steady_clock::now()<deadline){resources.pump();imports.pump(library);std::this_thread::sleep_for(std::chrono::milliseconds{1});}
     require(!imports.pending(),"Async model import batch did not complete.");
 }
-std::size_t countKind(const AssetLibrary& library,AssetKind kind){return std::count_if(library.catalog().begin(),library.catalog().end(),[&](const auto& entry){return entry.kind==kind;});}
+std::size_t countKind(const AssetLibrary& library,AssetKind kind){return std::count_if(library.catalog().begin(),library.catalog().end(),[&](const auto& entry){return entry.kind==kind&&!isEngineAssetId(entry.id);});}
+std::vector<std::string> modelImportCards(const ModelAsset& model) {
+    std::vector<std::string> ids{model.id};ids.insert(ids.end(),model.images.begin(),model.images.end());
+    ids.insert(ids.end(),model.materialIds.begin(),model.materialIds.end());return ids;
+}
+void requireFolder(AssetLibrary& library,std::span<const std::string> ids,const std::string& folder) {
+    auto& catalog=library.browserCatalog();
+    const std::string destination=folder.empty()?BrowserCatalog::ContentFolder:folder;
+    for(const auto& id:ids) {
+        require(isAssetUuid(id)&&catalog.contains(id)&&catalog.parent(id)==destination,"Imported card has the wrong folder or non-UUID identity: "+id);
+        const auto physical=resolveAssetPath(catalog.folderPath(BrowserCatalog::ContentFolder).parent_path(),id);
+        const auto parent=physical.filename()=="manifest.json"?physical.parent_path().parent_path():physical.parent_path();
+        require(parent==catalog.folderPath(destination),"Imported file is outside its displayed physical folder: "+id);
+    }
+}
+void requireSourceSlots(AssetLibrary& library,const ModelAsset& model,const Json& source) {
+    require(model.images.size()==source.at("images").size()&&model.materialIds.size()==model.materials.size()&&model.materials.size()>=source.at("materials").size(),
+        "The imported model lost source images or authored material slots.");
+    for(std::size_t i=0;i<source.at("materials").size();++i) {
+        const auto material=library.findMaterial(model.materialIds[i]);
+        require(material&&material->name==source.at("materials").at(i).at("name").get<std::string>()&&material->originModel==model.id,
+            "An authored source material was not promoted with its model identity.");
+    }
+}
+void synchronousImportDestinations() {
+    Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");ResourceManager resources;AssetLibrary library(p.root,&resources);
+    require(fs::is_regular_file(fixture.image),"The standalone image source fixture is missing before import.");
+    for(const auto* id:{DefaultMaterialId,DefaultParticleMaterialId}) {
+        const auto file=resolveAssetPath(p.root,id);require(fs::is_regular_file(file),"Protected Engine material was not materialized.");
+        const auto contents=readBytes(file);ensureEngineMaterialAssets(p.root);
+        require(readBytes(file)==contents&&loadMaterialAsset(p.root,id).id==id,"Engine material packaging changed an existing protected file.");
+    }
+    const auto destination=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Destination");
+    const auto kept=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Existing"),other=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Other");
+    const auto imported=library.importFiles({fixture.glb,fixture.image,p.root/"unsupported.xyz"},destination);
+    require(imported==2,"A failed file prevented successful synchronous batch imports: "+library.status());
+    require(library.status().find("unsupported.xyz")!=std::string::npos,"Mixed synchronous import lost its per-file diagnostic.");
+    const auto imageId=library.selectedId();const auto model=library.importModel(fixture.glb,other);require(static_cast<bool>(model),library.status());
+    const auto cards=modelImportCards(*model);requireFolder(library,cards,destination);requireFolder(library,std::array{imageId},destination);
+    requireSourceSlots(library,*model,readJson(fixture.gltf));
+    const auto imageContents=readBytes(resolveAssetPath(p.root,imageId));
+    auto wrongMaterial=defaultMaterialAsset();wrongMaterial.id=imageId;rejects([&]{saveMaterialAsset(p.root,wrongMaterial);});
+    auto wrongParticle=defaultParticleEffect();wrongParticle.id=imageId;rejects([&]{saveParticleAsset(p.root,wrongParticle);});
+    require(readBytes(resolveAssetPath(p.root,imageId))==imageContents,"A native asset save overwrote an image through its UUID.");
+    require(model->images.size()==readJson(fixture.gltf).at("images").size()&&model->materialIds.size()==model->materials.size()&&
+        model->materials.size()>=readJson(fixture.gltf).at("materials").size()&&countKind(library,AssetKind::Model)==1&&
+        countKind(library,AssetKind::Texture)==model->images.size()+1&&countKind(library,AssetKind::Material)==model->materialIds.size(),
+        "The model import did not expose its complete image and native-material dependency group.");
+    const auto writes=library.takeOwnWrites();
+    require(std::find(writes.begin(),writes.end(),resolveAssetPath(p.root,"assets/browser.json"))!=writes.end(),"Import routing did not acknowledge its browser organization write.");
+    // Give every reused dependency its own authored presentation and preserve
+    // native material edits across both public synchronous import entry points.
+    auto authored=loadMaterialAsset(p.root,model->materialIds.front());authored.name="Authored material";saveMaterialAsset(p.root,authored);
+    const auto originalPackage=readBytes(resolveAssetPath(p.root,model->id).parent_path()/"images/0.png");
+    model_test::writeBytes(resolveAssetPath(p.root,model->images.front()),model_test::png(8,8,Bytes(8*8*4,120)));
+    require(readBytes(resolveAssetPath(p.root,model->id).parent_path()/"images/0.png")==originalPackage,
+        "Editing an extracted image changed immutable model import inputs.");
+    std::map<std::string,Bytes> contents;
+    std::map<std::string,std::pair<std::string,std::string>> presentation;
+    for(std::size_t i=0;i<cards.size();++i) {
+        const auto& id=cards[i];const auto& folder=i%2?kept:destination;
+        const auto alias="Retained card "+std::to_string(i);library.browserCatalog().move(std::array{id},folder);library.browserCatalog().rename(id,alias);
+        presentation.emplace(id,std::pair{folder,alias});contents.emplace(id,readBytes(resolveAssetPath(p.root,id)));
+    }
+    const auto catalogSize=library.catalog().size();
+    require(library.importFiles({fixture.glb},other)==1,"Synchronous reimport failed.");
+    for(const auto& [id,entry]:presentation)require(library.browserCatalog().parent(id)==entry.first&&library.displayName(id)==entry.second&&readBytes(resolveAssetPath(p.root,id))==contents.at(id),
+        "Reusing a source changed an existing card's location, alias or authored file.");
+    require(library.catalog().size()==catalogSize&&library.browserCatalog().items(other).empty(),"Reimport created or relocated existing dependencies.");
+    library.browserCatalog().rename(imageId,"Retained image");
+    require(library.importTexture(resolveAssetPath(p.root,imageId),other)!=nullptr,"Reusing a managed image failed.");
+    requireFolder(library,std::array{imageId},destination);require(library.displayName(imageId)=="Retained image","Reusing a managed image changed its alias.");
+    require(library.importFiles({fixture.image},"deleted-folder")==1&&library.status().find("imported into Content")!=std::string::npos,
+        "A missing synchronous destination should retain a successful root import with a diagnostic.");
+    requireFolder(library,std::array{library.selectedId()},{});
+    require(library.importFiles({fixture.image},{})==1,"Explicit root imports must succeed.");requireFolder(library,std::array{library.selectedId()},{});
+    resources.stop();
+}
+void asynchronousImportDestinations() {
+    Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");ResourceManager resources;AssetLibrary library(p.root,&resources);AsyncImports imports(p.root,resources);
+    const auto first=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"First"),second=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Second");
+    std::string selectedFolder=first;imports.enqueue({fixture.glb},selectedFolder);selectedFolder=second;
+    imports.enqueue({fixture.gltf,fixture.image,p.root/"unsupported.xyz"},selectedFolder);selectedFolder.clear();
+    pumpImports(imports,resources,library);
+    const auto left=library.importModel(fixture.glb),right=library.importModel(fixture.gltf);
+    require(left&&right&&left->id!=right->id,"Independent queued sources did not publish their model packages.");
+    requireSourceSlots(library,*left,readJson(fixture.gltf));requireSourceSlots(library,*right,readJson(fixture.gltf));
+    requireFolder(library,modelImportCards(*left),first);requireFolder(library,modelImportCards(*right),second);
+    for(const auto& image:library.assets())if(!isEngineAssetId(image.id)&&
+        std::find(left->images.begin(),left->images.end(),image.id)==left->images.end()&&std::find(right->images.begin(),right->images.end(),image.id)==right->images.end())
+            requireFolder(library,std::array{image.id},second);
+    require(countKind(library,AssetKind::Model)==2&&countKind(library,AssetKind::Texture)==left->images.size()+right->images.size()+1&&
+        countKind(library,AssetKind::Material)==left->materialIds.size()+right->materialIds.size(),
+        "Mixed asynchronous import did not retain both complete dependency groups and its standalone image.");
+    std::map<std::string,std::pair<std::string,std::string>> presentation;
+    for(const auto& entry:library.catalog()) {
+        const auto alias=isEngineAssetId(entry.id)?library.displayName(entry.id):"Retained "+entry.id;
+        if(!isEngineAssetId(entry.id))library.browserCatalog().rename(entry.id,alias);
+        presentation.emplace(entry.id,std::pair{library.browserCatalog().parent(entry.id),alias});
+    }
+    imports.enqueue({fixture.glb,fixture.gltf},{});pumpImports(imports,resources,library);
+    require(library.catalog().size()==presentation.size(),"Asynchronous reimport appended duplicate dependency cards.");
+    for(const auto& [id,entry]:presentation)require(library.browserCatalog().parent(id)==entry.first&&library.displayName(id)==entry.second,
+        "Asynchronous reimport moved or renamed a reused model, image or native material.");
+    const auto deletedFixture=model_test::writeModelFixtures(p.root/"deleted-source");auto source=readJson(deletedFixture.gltf);
+    source["asset"]["generator"]="Deleted destination fixture";model_test::writeJson(deletedFixture.gltf,source);
+    const auto deleted=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Deleted while pending");imports.enqueue({deletedFixture.gltf},deleted);
+    library.browserCatalog().erase(std::array{deleted});pumpImports(imports,resources,library);
+    require(library.status().find("Imported 1")!=std::string::npos&&library.status().find("imported into Content")!=std::string::npos,
+        "Deleting a captured destination should retain a successful root import with a diagnostic.");
+    const auto fallback=library.importModel(deletedFixture.gltf);require(static_cast<bool>(fallback),library.status());requireFolder(library,modelImportCards(*fallback),{});
+    // Browser moves must survive reopening without changing managed identities.
+    BrowserCatalog reopened(p.root);reopened.synchronize(library.catalog());
+    for(const auto& [id,entry]:presentation)require(reopened.parent(id)==entry.first&&reopened.name(id)==entry.second,"Import presentation did not persist in browser.json.");
+    resources.stop();
+}
 void actualAsyncCatalog() {
     Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");ResourceManager resources;AssetLibrary library(p.root,&resources);AsyncImports imports(p.root,resources);
     const auto other=p.root/"OTHER.GLB";fs::copy_file(fixture.glb,other);
     imports.enqueue({fixture.glb,other,p.root/"unsupported.xyz"},{});pumpImports(imports,resources,library);
     require(countKind(library,AssetKind::Model)==1&&countKind(library,AssetKind::Texture)==3,"Mixed-batch duplicate GLBs must publish one model and one set of embedded images.");
-    require(library.status().find("reused 1")!=std::string::npos&&library.status().find("Unsupported")!=std::string::npos,"Batch results must distinguish reused imports and independent failures.");
+    require(library.status().find("reused 1")!=std::string::npos&&library.status().find("Unsupported")!=std::string::npos,"Batch results must distinguish reused imports and independent failures: "+library.status());
     const auto id=library.selectedId();const auto before=library.catalog().size();
-    const auto kept=library.browserCatalog().createFolder({},"Kept"),incoming=library.browserCatalog().createFolder({},"Incoming");
+    const auto kept=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Kept"),incoming=library.browserCatalog().createFolder(BrowserCatalog::ContentFolder,"Incoming");
     library.browserCatalog().move(std::array{id},kept);library.browserCatalog().rename(id,"Keep this alias");
     const auto materialCount=countKind(library,AssetKind::Material);const auto imageIds=library.assets();
     imports.enqueue({fixture.glb,other},incoming);pumpImports(imports,resources,library);
@@ -114,7 +237,143 @@ void actualAsyncCatalog() {
     const auto synchronous=library.importModel(fixture.glb);require(static_cast<bool>(synchronous),library.status());
     require(synchronous->id==id&&library.catalog().size()==before,"The synchronous AssetLibrary import must use the same idempotent identity.");
     require(packages(p.root)==1,"Public asynchronous and synchronous import paths must converge on one package.");
+    const auto retainedPackage=resolveAssetPath(p.root,id).parent_path(),buffer=retainedPackage/"buffers/0.bin";
+    auto changed=readBytes(buffer);changed.front()^=1;model_test::writeBytes(buffer,changed);
+    const auto replacement=library.importModel(fixture.glb,incoming);require(static_cast<bool>(replacement),library.status());
+    require(replacement->id!=id&&resolveAssetPath(p.root,id).parent_path()==retainedPackage&&readBytes(buffer)==changed,
+        "A moved, externally changed package lost its surviving UUID or was overwritten by reimport.");
+    requireFolder(library,modelImportCards(*replacement),incoming);
     resources.stop();
+}
+void startupMaterialCatalog() {
+    Project p;const auto fixture=model_test::writeModelFixtures(p.root/"source");
+    const auto imported=importModelPackage(fixture.glb,p.root);
+    auto shared=defaultMaterialAsset();shared.id="assets/materials/shared.crimson-material";shared.name="Shared native material";
+    saveMaterialAsset(p.root,shared);
+    const auto manifestFile=resolveAssetPath(p.root,imported->id);const auto originalManifest=readBytes(manifestFile);
+    auto manifest=readJson(manifestFile);manifest["materialAssets"]=Json::array();
+    for(std::size_t i=0;i<imported->materials.size();++i)manifest["materialAssets"].push_back(shared.id);
+    writeFileAtomically(manifestFile,manifest.dump());
+    {
+        ResourceManager resources;AssetLibrary library(p.root,&resources);
+        require(resources.stats().records==0,"Shared material assignments queued unnecessary model catalog decoding at startup.");
+        require(library.findMaterial(shared.id)&&countKind(library,AssetKind::Model)==1&&countKind(library,AssetKind::Material)==1,
+            "Skipping imported-sidecar migration lost the explicit native material or model catalog.");
+        auto changed=shared;changed.name="Updated shared material";saveMaterialAsset(p.root,changed);library.onFileChanged(resolveAssetPath(p.root,shared.id));
+        require(library.findMaterial(shared.id)->name==changed.name,"Explicit shared materials stopped responding to source changes.");
+        require(library.takeOwnWrites().empty(),"An unchanged startup reported authored material writes.");resources.stop();
+    }
+    model_test::writeBytes(resolveAssetPath(p.root,imported->id),originalManifest);
+    const auto sharedBytes=readBytes(resolveAssetPath(p.root,shared.id));
+    const auto pump=[&](AssetLibrary& library,ResourceManager& resources) {
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+        while(std::chrono::steady_clock::now()<deadline) {
+            resources.pump();library.updateResources(0);
+            if(resources.stats().queued==0&&resources.stats().running==0) {
+                resources.pump();library.updateResources(0);return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        throw std::runtime_error("Startup material migration did not complete.");
+    };
+    {
+        ResourceManager resources;AssetLibrary library(p.root,&resources);pump(library,resources);
+        for(const auto& id:imported->materialIds)require(library.findMaterial(id)&&fs::is_regular_file(resolveAssetPath(p.root,id)),
+            "A missing imported sidecar was not migrated and published during startup.");
+        const auto writes=library.takeOwnWrites();
+        require(writes.size()==imported->materialIds.size(),"Material migration did not acknowledge exactly the new native sidecars.");
+        require(readBytes(resolveAssetPath(p.root,shared.id))==sharedBytes,"Imported material migration rewrote an unrelated shared material.");resources.stop();
+    }
+    {
+        ResourceManager resources;AssetLibrary library(p.root,&resources);
+        const auto before=library.findMaterial(shared.id);
+        auto external=*before;external.name="Deferred source notification";saveMaterialAsset(p.root,external);
+        pump(library,resources);
+        require(library.findMaterial(shared.id)==before,"An unchanged model catalog completion rescanned unrelated material sources.");
+        require(library.takeOwnWrites().empty(),"Warm startup regenerated existing native sidecars.");
+        library.onFileChanged(resolveAssetPath(p.root,shared.id));
+        require(library.findMaterial(shared.id)->name==external.name,"A deferred source notification did not refresh its material.");resources.stop();
+    }
+}
+void externalDirectoryNotifications() {
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto hasFolder=[&](const char* name) {
+        const auto items=library.browserCatalog().items(BrowserCatalog::ContentFolder);
+        return std::any_of(items.begin(),items.end(),[&](const auto& item){return item.folder&&item.name==name;});
+    };
+    require(!hasFolder("External"),"External directory fixture was already present.");
+    const auto original=p.root/"Content/External",renamed=p.root/"Content/Renamed";
+    fs::create_directory(original);library.onFileChanged(original);
+    require(hasFolder("External"),"An externally created empty Content directory was not discovered after its notification.");
+    fs::rename(original,renamed);library.onFileChanged(original);library.onFileChanged(renamed);
+    require(!hasFolder("External")&&hasFolder("Renamed"),"External empty directory rename did not refresh cached browser folders.");
+    fs::remove(renamed);library.onFileChanged(renamed);
+    require(!hasFolder("Renamed"),"An externally removed empty Content directory remained in the cached browser.");
+    resources.stop();
+}
+Json profileMaterialCatalog(const fs::path& requestedRoot) {
+    const auto root=fs::weakly_canonical(requestedRoot),temporary=fs::weakly_canonical(fs::temp_directory_path());
+    require(root.parent_path()==temporary&&root.filename().string().starts_with("crimson-catalog-profile-"),
+        "Catalog profiling requires a disposable project directly under the system temporary directory named crimson-catalog-profile-*. Copy the project there first.");
+    require(fs::is_directory(root/"assets"),"Catalog profile project has no assets directory.");
+    const auto inside=[&](const fs::path& file) {
+        const auto relative=fs::weakly_canonical(file).lexically_relative(root);
+        return !relative.empty()&&!relative.is_absolute()&&*relative.begin()!="..";
+    };
+    const auto snapshot=[&] {
+        std::map<std::string,std::string> result;
+        for(const auto& item:fs::recursive_directory_iterator(root)) {
+            require(inside(item.path()),"Catalog profile project contains a redirected path outside its disposable root.");
+            if(item.is_regular_file())result.emplace(pathText(item.path().lexically_relative(root)),modelImportDataDigest(readBytes(item.path())));
+        }
+        return result;
+    };
+    const auto before=snapshot();Json report;Json acknowledged=Json::array();
+    using Clock=std::chrono::steady_clock;
+    const auto milliseconds=[](auto duration){return std::chrono::duration<double,std::milli>(duration).count();};
+    {
+        ResourceManager resources;
+        const auto started=Clock::now();AssetLibrary library(root,&resources);const auto constructed=Clock::now();
+        const auto initial=resources.stats();const auto initialCatalogRevision=library.catalogRevision();
+        double publicationMs{};const auto deadline=constructed+std::chrono::seconds{60};
+        for(;;) {
+            const auto tick=Clock::now();resources.pump();library.updateResources(0);publicationMs+=milliseconds(Clock::now()-tick);
+            const auto stats=resources.stats();
+            if(stats.queued==0&&stats.running==0) {
+                // A worker may have enqueued its final publication immediately
+                // before decrementing running. Drain it before recording results.
+                const auto finalTick=Clock::now();resources.pump();library.updateResources(0);publicationMs+=milliseconds(Clock::now()-finalTick);
+                const auto final=resources.stats();if(final.queued==0&&final.running==0)break;
+            }
+            require(Clock::now()<deadline,"Catalog profile did not finish its background metadata work.");
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        const auto finished=Clock::now();const auto final=resources.stats();
+        for(const auto& file:library.takeOwnWrites()) {
+            require(inside(file),"Catalog profiling wrote a sidecar outside its disposable project.");
+            acknowledged.push_back(pathText(file.lexically_relative(root)));
+        }
+        report={{"projectRoot",pathText(root)},{"scope","CPU asset catalog construction and background metadata publication; no window, renderer, shaders, geometry streaming or total editor boot timing"},
+            {"fileCacheCondition","Input preservation hashes read all files before timing; filesystem cache is warm"},
+            {"constructionMs",milliseconds(constructed-started)},{"drainMs",milliseconds(finished-constructed)},
+            {"totalMs",milliseconds(finished-started)},{"publicationMainThreadMs",publicationMs},
+            {"initialRecords",initial.records},{"initialQueued",initial.queued},{"initialRunning",initial.running},
+            {"records",final.records},{"loads",final.loads},{"cacheHits",final.cacheHits},{"failures",final.failures},
+            {"staleResults",final.staleResults},{"cpuBytes",final.cpuBytes},
+            {"catalogEntries",library.catalog().size()},{"models",countKind(library,AssetKind::Model)},
+            {"materials",countKind(library,AssetKind::Material)},
+            {"initialCatalogRevision",initialCatalogRevision},{"finalCatalogRevision",library.catalogRevision()},
+            {"acknowledgedWrites",std::move(acknowledged)},{"status",library.status()}};
+        resources.stop();
+    }
+    const auto after=snapshot();Json created=Json::array(),changed=Json::array(),removed=Json::array();
+    for(const auto& [file,hash]:after) {
+        const auto previous=before.find(file);
+        if(previous==before.end())created.push_back(file);else if(previous->second!=hash)changed.push_back(file);
+    }
+    for(const auto& [file,hash]:before) { (void)hash;if(!after.contains(file))removed.push_back(file); }
+    report["createdFiles"]=std::move(created);report["changedFiles"]=std::move(changed);report["removedFiles"]=std::move(removed);
+    return report;
 }
 fs::path collisionGrid(const fs::path& folder) {
     // A continuous surface simplifies substantially for rendering. Its two
@@ -177,12 +436,20 @@ void collisionResourceIntegration() {
                 if(ready(action()))return;
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
-            throw std::runtime_error(failure);
+            throw std::runtime_error(failure+" Model diagnostic: "+library.modelDiagnostic(imported->id)+"; asset status: "+library.status());
         };
         std::shared_ptr<const ModelAsset> metadata;
         until([&]{metadata=library.findModel(imported->id);return bool(metadata);},[](bool ready){return ready;},"Managed collision metadata did not load.");
         require(metadata->stream&&metadata->draws.size()==2&&metadata->primitives.size()==1&&metadata->primitives[0].vertices.empty()&&metadata->primitives[0].indices.empty(),
             "Collision fixture did not exercise the production metadata-only AssetLibrary path.");
+        const auto dependencies=library.modelDependencies(imported->id);
+        const auto manifest=resolveAssetPath(p.root,imported->id);
+        require(std::find(dependencies.begin(),dependencies.end(),manifest)!=dependencies.end()&&std::find(dependencies.begin(),dependencies.end(),manifest.parent_path()/"model.gltf")!=dependencies.end()&&
+            std::any_of(dependencies.begin(),dependencies.end(),[](const auto& file){return file.extension()==".bin";}),"Preview dependency snapshots omit the model manifest, normalized document, or source buffers.");
+        const auto stableRevision=library.modelRevision(imported->id);
+        registerAssetPath(p.root,newAssetId(),p.root/"Content"/(damageCache?"Unrelated-second.png":"Unrelated-first.png"));library.updateResources(0);
+        require(library.modelRevision(imported->id)==stableRevision&&library.findModel(imported->id)==metadata,
+            "An unrelated asset registration discarded the resident model or queued a repeated load.");
         const auto& levels=metadata->stream->primitives.front().levels;
         require(levels.size()>1&&levels.back().indexCount<levels.front().indexCount,"Collision fixture has no genuinely coarser render LOD.");
         const auto coarse=streaming::loadModelLod(levels.back(),0,static_cast<std::uint32_t>(levels.size()-1));
@@ -198,7 +465,7 @@ void collisionResourceIntegration() {
         if(damageCache) {
             require(readBytes(originalFile)==originalBytes,"Collision did not rebuild its damaged disposable LOD cache from managed source data.");
         } else {
-            const auto managed=p.root/pathFromUtf8(imported->id),document=managed.parent_path()/"model.gltf";
+            const auto managed=resolveAssetPath(p.root,imported->id),document=managed.parent_path()/"model.gltf";
             const auto saved=readBytes(document);require(!saved.empty(),"Managed collision fixture document is missing.");
             fs::remove(document);library.onFileChanged(document);
             CollisionMeshResult missing;
@@ -213,11 +480,17 @@ void collisionResourceIntegration() {
     run(false);run(true);
 }
 }
-int main() {
+int main(int argc,char** argv) {
     try {
+        if(argc>=2&&std::string(argv[1])=="--profile-catalog") {
+            require(argc==3||argc==4,"Use --profile-catalog DISPOSABLE_ROOT [REPORT_JSON].");
+            const auto report=profileMaterialCatalog(pathFromUtf8(argv[2])).dump(2)+"\n";
+            if(argc==4) {const auto output=fs::absolute(pathFromUtf8(argv[3]));fs::create_directories(output.parent_path());writeFileAtomically(output,report);}
+            std::cout<<report;return 0;
+        }
         const std::array<std::uint8_t,3> abc{'a','b','c'};
         require(modelImportDataDigest(abc)=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","Model import identity must use standard SHA-256.");
-        exactRepeatAndDependencies();legacyAndPublicationRaces();tombstonesFailureAndCancellation();actualAsyncCatalog();collisionResourceIntegration();
+        exactRepeatAndDependencies();legacyAndPublicationRaces();tombstonesFailureAndCancellation();actualAsyncCatalog();synchronousImportDestinations();asynchronousImportDestinations();startupMaterialCatalog();externalDirectoryNotifications();collisionResourceIntegration();
         std::cout<<"Model import identity, dependency, tombstone, concurrent publication and public catalog checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

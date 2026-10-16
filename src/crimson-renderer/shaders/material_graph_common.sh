@@ -1,4 +1,5 @@
 #include "material_mapping_functions.sh"
+#include "material_graph_adjustments.sh"
 struct GraphContext
 {
     vec4 uv;
@@ -121,3 +122,4 @@ float ccGraphRadialGradient(GraphContext context, vec4 scale, vec4 offset, vec4 
          + ccGraphRadialUv(p.xz) * weights.y
          + ccGraphRadialUv(vec2(p.x, -p.y)) * weights.z;
 }
+#include "material_graph_grunge.sh"

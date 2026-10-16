@@ -1,4 +1,5 @@
 #include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
 #include "assets/ModelAnimation.h"
 #include "resources/StreamingModel.h"
 #include <nlohmann/json.hpp>
@@ -46,7 +47,7 @@ void verify(const std::filesystem::path& root) {
     const auto original=streaming::loadModelLod(stream.primitives[0].levels[0]);
     check(original->geometry.skinWeights.size()==primitive.skinWeights.size()&&original->geometry.skinWeights[0].weights==primitive.skinWeights[0].weights&&
         original->geometry.morphTargets[0].positions==target.positions,"Original streamed geometry lost skin/morph data.");
-    const auto index=std::filesystem::directory_iterator(root/"assets/cache/mesh-lods/index")->path();
+    const auto index=std::filesystem::directory_iterator(resolveAssetPath(root,"assets/cache/mesh-lods/index"))->path();
     std::ifstream input(index);auto invalid=nlohmann::json::parse(input);input.close();
     invalid["skins"][0]["joints"][0]=1000;writeFileAtomically(index,invalid.dump());
     check(!streaming::loadModelMetadataCache(package/"manifest.json",root),"Malformed cached skeleton was admitted as valid metadata.");

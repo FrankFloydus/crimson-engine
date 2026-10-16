@@ -1,4 +1,5 @@
 #include "AssetBrowser.h"
+#include "AssetBrowserPaths.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "editor/EditorPreferences.h"
@@ -73,6 +74,10 @@ bool sameName(const std::string& a,const std::string& b) {
         return std::tolower(x)==std::tolower(y);
     });
 }
+std::string pathUtf8(const std::filesystem::path& path) {
+    const auto text=path.u8string();
+    return {reinterpret_cast<const char*>(text.data()),text.size()};
+}
 }
 
 void AssetBrowserPanel::beginRename(const std::string& id,const std::string& name) {
@@ -85,15 +90,20 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
     BrowserActions actions;
     actions.previewSize=BrowserPreviewSizes[static_cast<size_t>(EditorPreferences::previewSizeIndex(previewSize))];
     if (library_!=&assets) {
-        library_=&assets; folder_.clear(); renameId_.clear(); message_.clear(); dragIds_.clear(); deferredClick_.clear();
+        library_=&assets; folder_=BrowserCatalog::ContentFolder; renameId_.clear(); message_.clear(); dragIds_.clear(); deferredClick_.clear();
+        searchText_.fill(0);filter_=BrowserAssetFilter::All;
+        displayedRevision_=0;
     }
     auto& catalog=assets.browserCatalog();
     auto& selection=assets.browserSelection();
-    if (!folder_.empty() && !catalog.isFolder(folder_)) folder_.clear();
+    if (!folder_.empty() && !catalog.isFolder(folder_)) folder_=BrowserCatalog::ContentFolder;
+    const bool writableFolder=catalog.writableFolder(folder_);
+    const auto mutableSelection=[&] { return !selection.ids().empty()&&std::all_of(selection.ids().begin(),selection.ids().end(),[&](const auto& id){return catalog.mutableItem(id);}); };
     std::optional<std::string> navigate;
     struct Move { std::vector<std::string> ids; std::string destination; };
     std::optional<Move> move;
     const auto receiveMove=[&](const std::string& destination) {
+        if(!catalog.writableFolder(destination))return;
         if (!ImGui::BeginDragDropTarget()) return;
         for (const char* type:{ModelPayload,ModelBatchPayload,TexturePayload,TextureBatchPayload,ScenePayload,MaterialPayload,ParticlePayload,FolderPayload}) {
             if (const auto* payload=ImGui::AcceptDragDropPayload(type,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
@@ -127,6 +137,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
     };
 
     if (ImGui::Begin("Asset Browser")) {
+        ImGui::BeginDisabled(!writableFolder);
         if (ImGui::Button("Import")) assets.requestImport(window,folder_);
         ImGui::SameLine();
         if (ImGui::Button("Create")) ImGui::OpenPopup("Create native asset");
@@ -139,6 +150,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         }
         ImGui::SameLine();
         if (ImGui::Button("New Folder")) createFolder();
+        ImGui::EndDisabled();
         ImGui::SameLine();
         auto previewTick=EditorPreferences::previewSizeIndex(actions.previewSize);
         ImGui::SetNextItemWidth(150);
@@ -155,9 +167,19 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 ImGui::TextUnformatted(assets.status().c_str()); ImGui::PopTextWrapPos(); ImGui::EndPopup();
             }
         }
-        if (ImGui::SmallButton("Assets")) navigate=std::string{};
+        const float queryWidth=ImGui::GetContentRegionAvail().x;
+        const float categoryWidth=ImGui::CalcTextSize("Models (GLB/glTF)").x+ImGui::GetStyle().FramePadding.x*2+ImGui::GetFrameHeight();
+        const bool queryRow=queryWidth>=categoryWidth+160.f+ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemWidth(queryRow?queryWidth-categoryWidth-ImGui::GetStyle().ItemSpacing.x:queryWidth);
+        ImGui::InputTextWithHint("##Asset search","Search assets",searchText_.data(),searchText_.size());
+        if(queryRow)ImGui::SameLine();
+        ImGui::SetNextItemWidth(queryRow?categoryWidth:ImGui::GetContentRegionAvail().x);
+        auto category=static_cast<int>(filter_);
+        if(ImGui::Combo("##Asset category",&category,"All\0Materials\0Models (GLB/glTF)\0Textures\0Scenes\0Particles\0"))filter_=static_cast<BrowserAssetFilter>(category);
+        if (ImGui::SmallButton("Project")) navigate=std::string{};
         receiveMove({});
-        for (const auto& breadcrumb:catalog.breadcrumbs(folder_)) {
+        if(displayedRevision_!=catalog.revision()||displayedFolder_!=folder_)breadcrumbs_=catalog.breadcrumbs(folder_);
+        for (const auto& breadcrumb:breadcrumbs_) {
             ImGui::SameLine(); ImGui::TextDisabled("/"); ImGui::SameLine();
             ImGui::PushID(breadcrumb.id.c_str());
             if (ImGui::SmallButton(breadcrumb.name.c_str())) navigate=breadcrumb.id;
@@ -166,21 +188,28 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         if (!catalog.status().empty()) ImGui::TextWrapped("%s",catalog.status().c_str());
         if (!message_.empty()) ImGui::TextWrapped("%s",message_.c_str());
         ImGui::BeginChild("Asset library",ImVec2(0,0),ImGuiChildFlags_None);
-        auto items=catalog.items(folder_);
-        if (!folder_.empty()) items.insert(items.begin(),BrowserItem{ParentCard,"..",AssetKind::Texture,true});
-        std::vector<std::string> visible;
-        visible.reserve(items.size());
-        for (const auto& item:items) if (item.id!=ParentCard) visible.push_back(item.id);
+        const std::string_view search(searchText_.data());
+        const bool queryActive=filter_!=BrowserAssetFilter::All || search.find_first_not_of(" \t\r\n")!=std::string_view::npos;
+        if(displayedRevision_!=catalog.revision()||displayedFolder_!=folder_||displayedSearch_!=search||displayedFilter_!=filter_) {
+            const auto& view=catalog.itemsView(folder_,search,filter_);displayedItems_.assign(view.begin(),view.end());
+            if(!folder_.empty())displayedItems_.insert(displayedItems_.begin(),BrowserItem{ParentCard,"..",AssetKind::Texture,true});
+            visibleIds_.clear();visibleIds_.reserve(view.size());for(const auto& item:view)visibleIds_.push_back(item.id);
+            displayedRevision_=catalog.revision();displayedFolder_=folder_;displayedSearch_=search;displayedFilter_=filter_;
+        }
+        const auto& items=displayedItems_;const auto& visible=visibleIds_;
         selection.retain(visible);
+        if(!renameId_.empty() && std::find(visible.begin(),visible.end(),renameId_)==visible.end())renameId_.clear();
+        if(!deferredClick_.empty() && std::find(visible.begin(),visible.end(),deferredClick_)==visible.end())deferredClick_.clear();
         const bool keys=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
             !ImGui::IsAnyItemActive() && ImGui::GetDragDropPayload()==nullptr &&
             !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup);
         if (keys && renameId_.empty()) {
             if (ImGui::IsKeyPressed(ImGuiKey_Backspace,false) && !folder_.empty()) navigate=catalog.parent(folder_);
-            if (ImGui::IsKeyPressed(ImGuiKey_F2,false) && selection.ids().size()==1) beginRename(selection.primary(),catalog.name(selection.primary()));
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete,false) && !selection.ids().empty()) actions.deleteAssetIds=selection.ids();
+            if (ImGui::IsKeyPressed(ImGuiKey_F2,false) && selection.ids().size()==1 && catalog.mutableItem(selection.primary())) beginRename(selection.primary(),catalog.name(selection.primary()));
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete,false) && mutableSelection()) actions.deleteAssetIds=selection.ids();
             if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A,false)) {
-                selection.clear(); for (const auto& id:visible) selection.click(id,visible,true,false);
+                selection.clear();
+                for (const auto& item:items)if(item.id!=ParentCard && (!queryActive || !item.folder))selection.click(item.id,visible,true,false);
             }
         }
         const float font=ImGui::GetFontSize(),padding=font*.4f,thumbnail=static_cast<float>(actions.previewSize);
@@ -266,15 +295,26 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 if (item.folder) receiveMove(parentCard ? catalog.parent(folder_) : item.id);
                 if (!parentCard && ImGui::BeginPopupContextItem("Asset actions")) {
                     if (!selection.contains(item.id)) selection.set(item.id);
+                    if (ImGui::MenuItem("Import",nullptr,false,writableFolder)) assets.requestImport(window,folder_);
+                    ImGui::Separator();
                     if (item.folder && ImGui::MenuItem("Open folder")) navigate=item.id;
                     if (!item.folder && item.kind==AssetKind::Scene) {
                         if (ImGui::MenuItem("Open scene")) actions.openScene=item.id;
                     }
                     if (!item.folder && item.kind==AssetKind::Particle && ImGui::MenuItem("Open particle effect")) actions.openParticle=item.id;
                     if (!item.folder && item.kind==AssetKind::Material && ImGui::MenuItem("Open material")) actions.openMaterial=item.id;
-                    if (ImGui::MenuItem("Delete selected...","Delete")) actions.deleteAssetIds=selection.ids();
-                    if (ImGui::MenuItem("Rename","F2",false,selection.ids().size()==1)) beginRename(item.id,item.name);
-                    if (ImGui::MenuItem("New Folder")) createFolder();
+                    if(!item.folder) {
+                        const auto location=resolveBrowserAssetLocation(assets.projectRoot(),AssetEntry{item.id,item.name,item.kind});
+                        if(ImGui::MenuItem("Open at Location",nullptr,false,location.available)) {
+                            message_.clear();openBrowserAssetLocation(location,message_);
+                        }
+                        if(ImGui::MenuItem("Copy Path",nullptr,false,location.available))ImGui::SetClipboardText(pathUtf8(location.directory).c_str());
+                        if(ImGui::MenuItem("Copy Name",nullptr,false,!location.name.empty()))ImGui::SetClipboardText(location.name.c_str());
+                    }
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Delete selected...","Delete",false,mutableSelection())) actions.deleteAssetIds=selection.ids();
+                    if (ImGui::MenuItem("Rename","F2",false,selection.ids().size()==1&&catalog.mutableItem(item.id))) beginRename(item.id,item.name);
+                    if (ImGui::MenuItem("New Folder",nullptr,false,writableFolder)) createFolder();
                     ImGui::EndPopup();
                 }
                 auto* draw=ImGui::GetWindowDrawList();
@@ -287,9 +327,12 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 const ImVec2 well(origin.x+padding,origin.y+padding),wellEnd(well.x+thumbnail,well.y+thumbnail);
                 // Clipped cards keep their layout and selection behavior without
                 // requesting image/model payloads or binding retired GPU handles.
-                const auto* image=item.folder || !cardVisible ? nullptr : assets.find(item.id);
-                const auto model=item.kind==AssetKind::Model && !item.folder && cardVisible ? assets.findModel(item.id) : nullptr;
                 const auto preview=renderer && !item.folder && cardVisible ? renderer->thumbnailTexture(item.id) : bgfx::TextureHandle{BGFX_INVALID_HANDLE};
+                const bool imageCard=item.kind==AssetKind::Texture || item.kind==AssetKind::Environment;
+                const auto* image=item.folder || !cardVisible || !imageCard || bgfx::isValid(preview) ? nullptr : assets.find(item.id);
+                // A resident preview is sufficient to draw a model card. Source
+                // loading belongs to preview preparation or an opened tooltip.
+                const auto model=item.kind==AssetKind::Model && !item.folder && cardVisible ? assets.peekModel(item.id) : nullptr;
                 if (!item.folder && (item.kind==AssetKind::Model || item.kind==AssetKind::Scene || item.kind==AssetKind::Material) && cardVisible)
                     actions.visiblePreviewIds.push_back(item.id);
                 const auto textColor=ImGui::GetColorU32(ImGuiCol_Text);
@@ -307,19 +350,20 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 const ImVec2 label(origin.x+padding,wellEnd.y+3);
                 const auto shortName=elide(item.name,thumbnail);
                 if (!editing) draw->AddText(label,textColor,shortName.c_str());
-                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : item.kind==AssetKind::Particle ? "Particle Effect" : item.kind==AssetKind::Material ? "Material" : model ? model->format : "Image";
+                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : item.kind==AssetKind::Particle ? "Particle Effect" : item.kind==AssetKind::Material ? "Material" : item.kind==AssetKind::Model ? (model ? model->format : "Model") : "Image";
                 if (image) details=std::to_string(image->width)+" x "+std::to_string(image->height)+(image->hdr ? " HDR" : "");
                 draw->AddText({label.x,label.y+font+1},ImGui::GetColorU32(ImGuiCol_TextDisabled),elide(details,thumbnail).c_str());
                 if (!parentCard && selection.contains(item.id)) draw->AddRect(origin,end,ImGui::GetColorU32(ImGuiCol_HeaderActive),3,0,1.0f);
                 if (hovered && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                    const auto tooltipModel=model ? model : item.kind==AssetKind::Model && !item.folder ? assets.findModel(item.id) : nullptr;
                     // Fix the tooltip footprint before Begin: reused tooltip
                     // windows must not flash a previous asset's oversized rect.
                     const float wrap=font*30;
                     std::string tooltip=item.name+"\n"+(parentCard ? "Parent folder" : item.id);
-                    if (model) {
-                        const auto count=std::min<size_t>(3,model->warnings.size());
-                        for (size_t i=0;i<count;++i) tooltip+="\n"+model->warnings[i];
-                        if (model->warnings.size()>count) tooltip+="\nMore diagnostics are available in Inspector.";
+                    if (tooltipModel) {
+                        const auto count=std::min<size_t>(3,tooltipModel->warnings.size());
+                        for (size_t i=0;i<count;++i) tooltip+="\n"+tooltipModel->warnings[i];
+                        if (tooltipModel->warnings.size()>count) tooltip+="\nMore diagnostics are available in Inspector.";
                     }
                     const auto measured=ImGui::CalcTextSize(tooltip.c_str(),nullptr,false,wrap);
                     const auto paddingSize=ImGui::GetStyle().WindowPadding;
@@ -328,10 +372,10 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                     ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+wrap);
                     ImGui::TextUnformatted(item.name.c_str());
                     ImGui::TextDisabled("%s",parentCard ? "Parent folder" : item.id.c_str());
-                    if (model) {
-                        const auto count=std::min<size_t>(3,model->warnings.size());
-                        for (size_t i=0;i<count;++i) ImGui::TextWrapped("%s",model->warnings[i].c_str());
-                        if (model->warnings.size()>count) ImGui::TextDisabled("More diagnostics are available in Inspector.");
+                    if (tooltipModel) {
+                        const auto count=std::min<size_t>(3,tooltipModel->warnings.size());
+                        for (size_t i=0;i<count;++i) ImGui::TextWrapped("%s",tooltipModel->warnings[i].c_str());
+                        if (tooltipModel->warnings.size()>count) ImGui::TextDisabled("More diagnostics are available in Inspector.");
                     }
                     ImGui::PopTextWrapPos();
                     ImGui::EndTooltip();
@@ -351,13 +395,17 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
             }
             ImGui::EndTable();
         }
-        if (items.empty()) ImGui::TextDisabled("No assets in this folder.");
+        if (items.empty() || (items.size()==1 && items.front().id==ParentCard))ImGui::TextDisabled(queryActive?"No matching assets.":"No assets in this folder.");
         if (ImGui::IsWindowHovered() && !anyHovered && !ImGui::IsAnyItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && renameId_.empty()) selection.clear();
         if (ImGui::BeginPopupContextWindow("Create asset",ImGuiPopupFlags_MouseButtonRight|ImGuiPopupFlags_NoOpenOverItems)) {
+            ImGui::BeginDisabled(!writableFolder);
+            if (ImGui::MenuItem("Import")) assets.requestImport(window,folder_);
+            ImGui::Separator();
             if (ImGui::MenuItem("New Folder")) createFolder();
             if (ImGui::MenuItem("New scene")) actions.newScene=true;
             if (ImGui::MenuItem("Material")) { actions.createMaterial=true;actions.materialFolder=folder_; }
             if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         ImGui::EndChild();

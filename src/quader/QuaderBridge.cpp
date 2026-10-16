@@ -1,6 +1,8 @@
 #include "QuaderBridge.h"
 #include "SaveNotificationWatcher.h"
 #include "assets/ModelImportIdentity.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "resources/Paths.h"
 #include <algorithm>
 #include <chrono>
@@ -72,7 +74,8 @@ struct QuaderBridge::Impl {
             const auto replacement=hooks.resolveMaterial?hooks.resolveMaterial(id):id;options.materialOverrides.emplace(id,replacement);
             if(hooks.reservedAsset&&hooks.reservedAsset(id))options.reservedIds.insert(id);
             const auto importedId=availableQuaderAssetId(id,options.reservedIds);
-            if(hooks.dirtyMaterial&&hooks.dirtyMaterial(importedId))options.protectedMaterials.insert(importedId);
+            const auto published=canonicalAssetId(importedId);
+            if(hooks.dirtyMaterial&&hooks.dirtyMaterial(published))options.protectedMaterials.insert(published);
         }
         if(hooks.resolveTexture)for(const auto& id:options.reservedIds)options.imageOverrides.emplace(id,std::array<std::string,2>{hooks.resolveTexture(id,false),hooks.resolveTexture(id,true)});
         return options;
@@ -107,16 +110,19 @@ struct QuaderBridge::Impl {
                 if(current.manualBaseline)current.result->sourceKey=quaderSaveKey(*current.manualBaseline,current.request.link.importScale,current.request.link.refreshMaterials,current.request.link.syncLights);}
             if(!current.result||suspended)return;if(current.invalid){job.reset();return;}
             if(!currentCompletion(current)){states[current.request.entity].message="A newer Quader save superseded this import.";job.reset();return;}
-            if(hooks.dirtyMaterial)for(const auto& file:current.result->files)if(file.id.ends_with(".crimson-material")&&hooks.dirtyMaterial(file.id)){
+            if(hooks.dirtyMaterial)for(const auto& file:current.result->files)if(file.id.ends_with(".crimson-material")&&hooks.dirtyMaterial(canonicalAssetId(file.id))){
                 states[current.request.entity].message="Material refresh waits for the open material to be saved or closed.";return;}
             if((hooks.assetPolicyRevision&&hooks.assetPolicyRevision()!=current.assetPolicyRevision)||!currentMaterialInputs(*current.result)){
                 current.result.reset();current.blockedMaterials.clear();states[current.request.entity].message="Crimson material assets changed; preparing the current versions...";return;}
             if(!hooks.applyImport)throw std::runtime_error("No Quader scene publication owner is available.");
-            std::vector<AssetFileChange> rollback;rollback.reserve(current.result->files.size());for(const auto& file:current.result->files)rollback.push_back({file.id,previousFile(root,file.id)});
+            std::vector<AssetFileChange> rollback;rollback.reserve(current.result->files.size()+1);for(const auto& file:current.result->files)rollback.push_back({file.id,previousFile(root,file.id)});
+            rollback.push_back({".crimson/asset-locations.json",previousFile(root,".crimson/asset-locations.json")});
             auto applied=current.request.link;applied.projectId=current.source->project.id;applied.sceneId=current.source->id;
             if(!current.request.manual)if(const auto target=std::find_if(targets.begin(),targets.end(),[&](const auto& value){return value.entity==current.request.entity;});target!=targets.end())applied.autoSync=target->link.autoSync;
             commitAssetTransaction(root,current.result->files);
-            try{if(!hooks.applyImport(current.request.entity,applied,*current.result))throw std::runtime_error("The Quader scene import could not be published.");}
+            try{
+                if(contentStorageReady(root))for(const auto& file:current.result->files)if(file.contents)registerAssetPath(root,file.id,resolveAssetPath(root,file.id));
+                if(!hooks.applyImport(current.request.entity,applied,*current.result))throw std::runtime_error("The Quader scene import could not be published.");}
             catch(...){commitAssetTransaction(root,rollback);throw;}
             auto& state=states[current.request.entity];state.message=completedMessage(*current.result);state.deferred=current.result->deferredMaterials;state.failures=0;state.failedKey.clear();
             consume(state,current.result->sourceKey);consume(state,current.request.key);
@@ -125,7 +131,10 @@ struct QuaderBridge::Impl {
         }catch(const std::exception& error){if(!current.invalid)fail(current.request,error.what());job.reset();}
     }
 };
-QuaderBridge::QuaderBridge(std::filesystem::path projectRoot):impl_(std::make_unique<Impl>(std::move(projectRoot))){}
+QuaderBridge::QuaderBridge(std::filesystem::path projectRoot) {
+    initializeContentStorage(projectRoot);
+    impl_=std::make_unique<Impl>(std::move(projectRoot));
+}
 QuaderBridge::~QuaderBridge()=default;
 void QuaderBridge::requestImport(EntityId entity,const QuaderLink& link,std::uint64_t generation){
     if(!entity)return;if(!impl_->generation)impl_->generation=generation;Impl::Request request;request.entity=entity;request.link=link;request.generation=generation;request.manual=true;

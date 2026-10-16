@@ -1,11 +1,11 @@
 #include "AsyncImports.h"
 #include "AssetLibrary.h"
 #include "AssetReferenceManager.h"
+#include "ContentStorage.h"
 #include "resources/ImageDecoder.h"
 #include "resources/StreamingModel.h"
 #include "resources/Paths.h"
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -44,40 +44,48 @@ void AsyncImports::pump(AssetLibrary& library){
     for(auto& batch:batches_)for(auto& file:batch.files)if(!file.done){
         const auto sourceName=utf8(file.source.filename());
         try{
+            std::vector<std::string> importedAssets;
             if(auto* model=std::get_if<ResourceHandle<ModelImportStage>>(&file.handle)){
                 if(model->state()==ResourceState::Failed){file.error=model->diagnostic();file.done=true;continue;}
                 const auto ready=model->snapshot();if(!ready)continue;auto asset=publishModelImport(ready.shared(),[&](const auto& id){return library.references_.deleted(id);});
                 file.reused=ready->reused;
+                importedAssets=library.newModelImportAssets(*asset,file.reused);
                 const bool registered=std::any_of(library.catalog_.begin(),library.catalog_.end(),[&](const auto& existing){return existing.id==asset->id;});
                 std::unordered_set<std::string> created(asset->images.begin(),asset->images.end());created.insert(asset->id);
                 for(const auto& existing:library.catalog_)created.erase(existing.id);
                 const bool existingRuntime=std::any_of(library.models_.begin(),library.models_.end(),[&](const auto& existing){return existing->id==asset->id;});
-                std::vector<std::string> createdMaterialIds;for(const auto& id:asset->materialIds)if(!library.references_.deleted(id)&&!std::filesystem::exists(root_/pathFromUtf8(id)))createdMaterialIds.push_back(id);
+                std::vector<std::string> createdMaterialIds;for(const auto& id:asset->materialIds)if(!library.references_.deleted(id)&&!std::filesystem::exists(materialAssetPath(root_,id)))createdMaterialIds.push_back(id);
                 created.insert(createdMaterialIds.begin(),createdMaterialIds.end());
-                try{if(!file.reused || !registered)library.registerModel(asset);file.id=asset->id;}
+                try{
+                    if(!file.reused || !registered)library.registerModel(asset);
+                    else {library.ensureModelMaterials(*asset);if(library.materialCatalogDirty_)library.refreshMaterials();}
+                    file.id=asset->id;
+                }
                 catch(...){
                     for(auto it=library.assets_.begin();it!=library.assets_.end();)if(created.contains(it->id)){library.retiredTextures_.push_back(std::move(*it));it=library.assets_.erase(it);}else ++it;
                     std::erase_if(library.catalog_,[&](const auto& a){return created.contains(a.id);});if(!existingRuntime)std::erase_if(library.models_,[&](const auto& a){return a->id==asset->id;});
                     for(const auto& id:createdMaterialIds){std::error_code ignored;std::filesystem::remove(checkedManagedAssetPath(root_,id),ignored);}
-                    const auto target=checkedManagedAssetPath(root_,asset->id).parent_path(),owner=std::filesystem::weakly_canonical(root_/"assets/models");
+                    const auto target=checkedManagedAssetPath(root_,asset->id).parent_path(),owner=std::filesystem::weakly_canonical(resolveAssetPath(root_,"assets/models"));
                     if(!ready->reused&&target.parent_path()==owner&&utf8(target.filename()).starts_with("model-")){std::error_code ignored;std::filesystem::remove_all(target,ignored);}throw;
                 }
                 resources_.forget(model->reference().id);
             }else if(auto* image=std::get_if<ResourceHandle<ImageImportStage>>(&file.handle)){
                 if(image->state()==ResourceState::Failed){file.error=image->diagnostic();file.done=true;continue;}
                 const auto ready=image->snapshot();if(!ready)continue;const auto destination=publishImageImport(ready.shared(),[&](const auto& id){return library.references_.deleted(id);});
-                TextureAsset asset;asset.id=utf8(destination.lexically_relative(root_));asset.name=utf8(destination.filename());asset.width=ready->image->width;asset.height=ready->image->height;asset.hdr=extension(destination)==".hdr";
+                TextureAsset asset;asset.id=assetIdAtPath(root_,destination);asset.name=utf8(destination.filename());asset.width=ready->image->width;asset.height=ready->image->height;asset.hdr=extension(destination)==".hdr";
                 file.id=asset.id;try{library.addTexture(std::move(asset));}catch(...){std::error_code ignored;std::filesystem::remove(destination,ignored);file.id.clear();throw;}
                 ResourceRequestOptions options;options.variant="source";options.dependencies={destination};
                 resources_.seed<DecodedImage>(AssetRef<DecodedImage>{file.id},ResourceLoadResult<DecodedImage>{ready->image,ready->image->rgba.capacity(),0,{destination}},options);
+                importedAssets.push_back(file.id);
                 resources_.forget(image->reference().id);
             }else throw std::runtime_error("Import request is unavailable.");
-            if(!file.reused&&!batch.folder.empty()&&library.browserCatalog().isFolder(batch.folder))library.browserCatalog().move(std::array{file.id},batch.folder);library.select(file.id);file.done=true;
+            file.warning=library.placeImportedAssets(importedAssets,batch.folder);library.select(file.id);file.done=true;
         }catch(const std::exception& e){file.error=sourceName+": "+e.what();file.done=true;}
     }
     for(auto it=batches_.begin();it!=batches_.end();)if(std::all_of(it->files.begin(),it->files.end(),[](const auto& f){return f.done;})){
         size_t success=0,reused=0;std::ostringstream report;for(const auto& f:it->files)if(f.error.empty()){++success;if(f.reused)++reused;}
         report<<"Imported "<<(success-reused);if(reused)report<<", reused "<<reused;report<<" of "<<it->files.size()<<" asset(s).";for(const auto& f:it->files)if(!f.error.empty())report<<"\n"<<utf8(f.source.filename())<<": "<<f.error;
+        for(const auto& f:it->files)if(!f.warning.empty())report<<"\n"<<utf8(f.source.filename())<<": "<<f.warning;
         if(!completed.empty())completed+='\n';completed+=report.str();it=batches_.erase(it);
     }else ++it;
     if(!completed.empty())library.status_=std::move(completed);

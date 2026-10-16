@@ -124,8 +124,9 @@ std::size_t deleteMaterialGraphSelection(MaterialGraph& graph,std::span<const Ma
 }
 std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGraph& graph,MaterialGraphEndpoint endpoint) {
     validateMaterialGraph(graph);const auto type=endpointType(graph,endpoint);std::vector<MaterialGraphNodeChoice> result;
-    for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::Vector2,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Saturate,
-        MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power}) {
+    for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::Vector2,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Clamp,
+        MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power,
+        MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift,MaterialNodeKind::Grunge}) {
         MaterialGraphNodeChoice choice;choice.kind=kind;
         if(endpoint.input) {
             if(kind==MaterialNodeKind::UV||kind==MaterialNodeKind::Panner)choice.pin=MaterialPin::UV;
@@ -134,13 +135,15 @@ std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGrap
                     type==MaterialValueType::Scalar&&endpoint.pin!=MaterialPin::Opacity&&endpoint.pin!=MaterialPin::OpacityMask?MaterialTextureRole::Data:MaterialTextureRole::Color;
                 choice.pin=type==MaterialValueType::Normal?MaterialPin::Normal:type==MaterialValueType::Color?MaterialPin::RGB:
                     endpoint.pin==MaterialPin::Opacity||endpoint.pin==MaterialPin::OpacityMask?MaterialPin::A:MaterialPin::R;
-            } else if(kind==MaterialNodeKind::Color||kind==MaterialNodeKind::ParticleColor)choice.pin=type==MaterialValueType::Color?MaterialPin::RGB:
+            } else if(kind==MaterialNodeKind::Contrast||kind==MaterialNodeKind::Grunge)choice.pin=type==MaterialValueType::Color?MaterialPin::RGB:MaterialPin::Value;
+            else if(materialNodeImageAdjustment(kind))choice.pin=type==MaterialValueType::Color?MaterialPin::RGB:MaterialPin::R;
+            else if(kind==MaterialNodeKind::Color||kind==MaterialNodeKind::ParticleColor)choice.pin=type==MaterialValueType::Color?MaterialPin::RGB:
                 endpoint.pin==MaterialPin::Opacity||endpoint.pin==MaterialPin::OpacityMask?MaterialPin::A:MaterialPin::R;
             else if(kind==MaterialNodeKind::Vector2)choice.pin=type==MaterialValueType::Vector2?MaterialPin::XY:MaterialPin::X;
             else choice.pin=MaterialPin::Value;
         } else {
-            if(kind==MaterialNodeKind::Texture2D||kind==MaterialNodeKind::RadialGradient)choice.pin=MaterialPin::UV;
-            else if(kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power||kind==MaterialNodeKind::Saturate)choice.pin=MaterialPin::Left;
+            if(kind==MaterialNodeKind::Texture2D||kind==MaterialNodeKind::RadialGradient||kind==MaterialNodeKind::Grunge)choice.pin=MaterialPin::UV;
+            else if(kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power||kind==MaterialNodeKind::Clamp||materialNodeImageAdjustment(kind))choice.pin=MaterialPin::Left;
             else if(kind==MaterialNodeKind::Panner)choice.pin=type==MaterialValueType::Mapping?MaterialPin::UV:type==MaterialValueType::Vector2?MaterialPin::Speed:MaterialPin::Time;
             else if(kind==MaterialNodeKind::UV&&type==MaterialValueType::Vector2)choice.pin=MaterialPin::ScaleXY;
             else continue;

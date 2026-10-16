@@ -42,10 +42,16 @@ struct Lowering {
         row({uv.rotation[0]*radians,uv.rotation[1]*radians,uv.rotation[2]*radians,uv.mode==MaterialUvMode::UV1?1.f:0.f});
         return first;
     }
+    std::string expression(MaterialNodeId id,MaterialPin pin) const {
+        const auto found=expressions.find(id);
+        if(found==expressions.end())throw std::runtime_error("Material graph source order is invalid at node "+std::to_string(id)+".");
+        const auto kind=findMaterialNode(graph,id)->kind;
+        if((kind==MaterialNodeKind::Contrast||kind==MaterialNodeKind::Grunge)&&pin==MaterialPin::RGB)
+            return "vec3_splat("+found->second+")";
+        return found->second+valueSuffix(pin);
+    }
     std::string linked(const MaterialLink& link) const {
-        const auto found=expressions.find(link.fromNode);
-        if(found==expressions.end())throw std::runtime_error("Material graph source order is invalid at node "+std::to_string(link.fromNode)+".");
-        return found->second+valueSuffix(link.fromPin);
+        return expression(link.fromNode,link.fromPin);
     }
     std::string linkedAs(const MaterialLink& link,MaterialValueType destination) const {
         const auto source=materialOutputType(graph,link.fromNode,link.fromPin);
@@ -59,7 +65,7 @@ struct Lowering {
         const auto fallback=materialInputDefault(node,pin);
         if(const auto* link=materialInputLink(graph,node.id,pin))
             return node.kind==MaterialNodeKind::Multiply||node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||
-                (node.kind==MaterialNodeKind::Power&&pin==MaterialPin::Left)?linked(*link):linkedAs(*link,fallback.type);
+                ((node.kind==MaterialNodeKind::Power||materialNodeImageAdjustment(node.kind))&&pin==MaterialPin::Left)?linked(*link):linkedAs(*link,fallback.type);
         return param(row(fallback.value))+(fallback.type==MaterialValueType::Scalar?".x":fallback.type==MaterialValueType::Vector2?".xy":".rgb");
     }
     std::string promotedInput(const MaterialNode& node,MaterialPin pin,MaterialValueType destination) {
@@ -135,17 +141,23 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
     const auto identity=lower.mapping({});
     auto order=materialGraphOrder(graph,settings.shading,settings.blend);
     std::set<MaterialNodeId> coverageNodes;
-    if(!preview&&settings.blend==MaterialBlend::Mask) {
+    if(opacityActive) {
+        std::vector<MaterialNodeId> coverageOrder;
         const auto visit=[&](auto&& self,MaterialNodeId id)->void {
             if(!coverageNodes.insert(id).second)return;
             const auto& node=*findMaterialNode(graph,id);
             for(const auto& input:materialNodeInputs(graph,node,settings.shading,settings.blend))
                 if(const auto* link=materialInputLink(graph,id,input.pin))self(self,link->fromNode);
+            coverageOrder.push_back(id);
         };
-        if(const auto* link=materialInputLink(graph,output.id,MaterialPin::OpacityMask)) {
+        if(const auto* link=materialInputLink(graph,output.id,opacityPin)) {
             visit(visit,link->fromNode);
-            lower.result.dynamicCoverage=materialExpressionTimeDependent(graph,link->fromNode,link->fromPin);
+            lower.result.dynamicCoverage=settings.blend==MaterialBlend::Mask&&materialExpressionTimeDependent(graph,link->fromNode,link->fromPin);
         }
+        // Coverage owns the first parameter/texture slots. Changing an unrelated
+        // shading branch must not move the bindings used by picking or shadows.
+        for(const auto id:order)if(!coverageNodes.contains(id))coverageOrder.push_back(id);
+        order=std::move(coverageOrder);
     }
     if(preview) {
         const auto* target=findMaterialNode(graph,preview->node);
@@ -161,6 +173,7 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         };
         visit(preview->node);
     }
+    std::ostringstream surfaceCode,coverageCode;
     std::size_t number{};
     for(const auto id:order) {
         const auto& node=*findMaterialNode(graph,id);const auto expression="g"+std::to_string(number++);
@@ -169,12 +182,12 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         case MaterialNodeKind::Output:break;
         case MaterialNodeKind::UV:case MaterialNodeKind::Panner: {
             const auto row=lower.mapping(resolveMaterialUvMapping(graph,id));lower.mappings.emplace(id,row);
-            if(materialExpressionTimeDependent(graph,id,MaterialPin::UV))lower.result.runtimeParameters.push_back({id,row,true,coverageNodes.contains(id)});
+            if(materialExpressionTimeDependent(graph,id,MaterialPin::UV))lower.result.runtimeParameters.push_back({id,row,true,settings.blend==MaterialBlend::Mask&&coverageNodes.contains(id)});
             break;
         }
         case MaterialNodeKind::Time: {
             const auto row=lower.row(evaluateMaterialUniform(graph,id,MaterialPin::Value).value);
-            lower.result.runtimeParameters.push_back({id,row,false,coverageNodes.contains(id)});
+            lower.result.runtimeParameters.push_back({id,row,false,settings.blend==MaterialBlend::Mask&&coverageNodes.contains(id)});
             lower.code<<"    float "<<expression<<" = "<<param(row)<<".x;\n";break;
         }
         case MaterialNodeKind::Scalar:lower.code<<"    float "<<expression<<" = "<<param(lower.row({node.scalar,0,0,0}))<<".x;\n";break;
@@ -186,9 +199,26 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
             lower.code<<"    float "<<expression<<" = ccGraphRadialGradient(context, "<<param(mappingRow)<<", "<<param(mappingRow+1)<<", "<<param(mappingRow+2)<<");\n";break;
         }
         case MaterialNodeKind::Color:lower.code<<"    vec4 "<<expression<<" = "<<param(lower.row(node.color))<<";\n";break;
-        case MaterialNodeKind::Saturate: {
+        case MaterialNodeKind::Clamp: {
             const auto value=lower.input(node,MaterialPin::Left);
             lower.code<<"    float "<<expression<<" = clamp("<<value<<", 0.0, 1.0);\n";break;
+        }
+        case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift: {
+            const auto rgb=lower.promotedInput(node,MaterialPin::Left,MaterialValueType::Color);
+            const auto amount=lower.input(node,MaterialPin::Right);
+            const auto helper=node.kind==MaterialNodeKind::Desaturation?"ccGraphDesaturation":node.kind==MaterialNodeKind::Contrast?"ccGraphContrast":
+                node.kind==MaterialNodeKind::ContrastRGB?"ccGraphContrastRGB":"ccGraphHueShift";
+            lower.code<<"    "<<(node.kind==MaterialNodeKind::Contrast?"float ":"vec3 ")<<expression<<" = "<<helper<<"("<<rgb<<", "<<amount<<");\n";break;
+        }
+        case MaterialNodeKind::Grunge: {
+            if(lower.result.textures.size()>=MaterialGraphMaxTextureBindings)throw std::runtime_error("Material graph node "+std::to_string(id)+" exceeds 12 active texture bindings.");
+            auto mappingRow=identity;
+            if(const auto* link=materialInputLink(graph,id,MaterialPin::UV))mappingRow=lower.mappings.at(link->fromNode);
+            const auto settingsRow=lower.row({static_cast<float>(node.grunge.tiling),1,0,0});
+            const auto slot=static_cast<std::uint16_t>(lower.result.textures.size());
+            lower.result.textures.push_back({id,slot,mappingRow,settingsRow,{},MaterialTextureNode{}.sampler,MaterialGraphTextureRole::Data,node.grunge});
+            lower.code<<"    float "<<expression<<" = ccGraphGrunge("<<materialGraphSamplerName(slot)<<", context, "<<param(mappingRow)<<", "<<param(mappingRow+1)<<", "<<param(mappingRow+2)
+                <<", "<<param(settingsRow)<<");\n";break;
         }
         case MaterialNodeKind::Multiply:case MaterialNodeKind::Add: {
             const auto a=lower.input(node,MaterialPin::Left),b=lower.input(node,MaterialPin::Right);
@@ -227,9 +257,13 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
             break;
         }
         }
+        const auto code=lower.code.str();
+        surfaceCode<<code;
+        if(coverageNodes.contains(id))coverageCode<<code;
+        lower.code.str({});lower.code.clear();
     }
     std::ostringstream evaluate;
-    evaluate<<"GraphMaterial ccEvaluateGraph(GraphContext context)\n{\n"<<lower.code.str()<<"    GraphMaterial result;\n";
+    evaluate<<"GraphMaterial ccEvaluateGraph(GraphContext context)\n{\n"<<surfaceCode.str()<<"    GraphMaterial result;\n";
     evaluate<<"    result.baseColor = "<<lower.output(output,MaterialPin::BaseColor,"u_graphParams[0].rgb",!preview)<<";\n";
     evaluate<<"    result.opacity = clamp("<<lower.output(output,opacityPin,"u_graphParams[0].w",opacityActive)<<", 0.0, 1.0);\n";
     evaluate<<"    result.roughness = "<<lower.output(output,MaterialPin::Roughness,"u_graphParams[1].x",lit)<<";\n";
@@ -245,7 +279,7 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
             const auto row=lower.mappings.at(preview->node);
             evaluate<<"    result.baseColor = ccGraphChecker(context, "<<param(row)<<", "<<param(row+1)<<", "<<param(row+2)<<");\n";
         } else {
-            const auto expression=lower.expressions.at(preview->node)+valueSuffix(preview->pin);
+            const auto expression=lower.expression(preview->node,preview->pin);
             evaluate<<"    result.baseColor = ";
             if(type==MaterialValueType::Scalar)evaluate<<"vec3_splat("<<expression<<")";
             else if(type==MaterialValueType::Vector2)evaluate<<"vec3("<<expression<<", 0.0)";
@@ -266,22 +300,38 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         if(preview && pass!=MaterialGraphPass::Model)continue;
         MaterialGraphShaderVariant variant;variant.pass=pass;
         const bool model=pass==MaterialGraphPass::Model,particle=pass==MaterialGraphPass::Particle,pick=pass==MaterialGraphPass::Picking;
+        const bool surface=model||particle;
+        const bool depthCoverage=!surface&&opacityActive&&(pick||settings.blend==MaterialBlend::Mask);
         variant.vertexName=particle?"vs_particle":model?"vs_model":pick?"vs_pick":pass==MaterialGraphPass::DirectionalShadow?"vs_directional_shadow":"vs_point_shadow";
         variant.varyingName=particle?"particle.varying.def.sc":"model.varying.def.sc";
         std::ostringstream source;
         source<<((model || particle)?
             "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal\n":
             "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal\n");
-        source<<"// crimson-material-graph-generator-v15\n#define CC_GRAPH_SURFACE "<<(model || particle)<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
-            <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<lit<<"\n";
+        source<<"// crimson-material-graph-generator-v16\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
+            <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<(surface&&lit)<<"\n";
         source<<"#include <bgfx_shader.sh>\nuniform vec4 u_graphParams[208];\n";
         if(model || particle)source<<"uniform mat4 u_modelNormalMatrix;\nuniform vec4 u_modelUv;\n";
-        for(const auto& texture:lower.result.textures)source<<"SAMPLER2D("<<materialGraphSamplerName(texture.slot)<<", "<<texture.slot<<");\n";
+        for(const auto& texture:lower.result.textures)
+            if(surface||(depthCoverage&&coverageNodes.contains(texture.nodeId)))source<<"SAMPLER2D("<<materialGraphSamplerName(texture.slot)<<", "<<texture.slot<<");\n";
         source<<"#include \"material_graph_common.sh\"\n";
         source<<"float ccGraphPositivePow(float a, float b) { return a <= 2.980233e-8 ? 0.0 : pow(max(a, 2.980233e-8), b); }\n"
             "vec2 ccGraphPositivePow(vec2 a, float b) { return vec2(ccGraphPositivePow(a.x, b), ccGraphPositivePow(a.y, b)); }\n"
             "vec3 ccGraphPositivePow(vec3 a, float b) { return vec3(ccGraphPositivePow(a.x, b), ccGraphPositivePow(a.y, b), ccGraphPositivePow(a.z, b)); }\n";
-        source<<evaluate.str();
+        if(surface)source<<evaluate.str();
+        else {
+            // Depth passes consume only coverage. Keep irrelevant surface code
+            // out of their compiler input instead of asking shaderc to remove it
+            // after every color, roughness or normal topology change.
+            source<<"GraphMaterial ccEvaluateGraph(GraphContext context)\n{\n";
+            if(depthCoverage)source<<coverageCode.str();
+            source<<"    GraphMaterial result;\n"
+                "    result.baseColor = vec3_splat(0.0);\n    result.emission = vec3_splat(0.0);\n"
+                "    result.normal = context.normal;\n    result.roughness = 1.0;\n"
+                "    result.metallic = 0.0;\n    result.specular = 0.0;\n    result.occlusion = 1.0;\n"
+                "    result.opacity = clamp("<<lower.output(output,opacityPin,"u_graphParams[0].w",depthCoverage)<<", 0.0, 1.0);\n"
+                "    return result;\n}\n";
+        }
         source<<"#include \""<<(particle?"material_graph_particle.sh":model?"material_graph_model.sh":"material_graph_depth.sh")<<"\"\n";
         variant.source=source.str();variant.manifest=manifest(lower.result,pass);lower.result.variants.push_back(std::move(variant));
     }
@@ -309,7 +359,11 @@ void updateMaterialGraphRuntimeUniforms(const MaterialGraph& graph,std::span<con
 }
 ShaderCompileRecipe materialGraphShaderRecipe(const ShaderCompileConfig& config,const MaterialGraphShader& graph,const MaterialGraphShaderVariant& variant) {
     ShaderCompileRecipe result;
-    result.name=graph.topologyKey+"-"+std::to_string(static_cast<unsigned>(variant.pass));result.source=variant.source;
+    // Resource jobs and disk entries describe one compiler input, not the entire
+    // material bundle. Identical passes share pending work and cached binaries.
+    std::uint64_t hash=14695981039346656037ull;
+    for(unsigned char ch:variant.source){hash^=ch;hash*=1099511628211ull;}
+    result.name=std::string(graph.nodePreview?"graph-preview-stage-":"graph-stage-")+std::to_string(hash);result.source=variant.source;
     result.varyingDefinition=config.sourceDirectory/variant.varyingName;
     result.includeDirectories={config.sourceDirectory,config.includeDirectory};
     result.contract="crimson-material-graph-v7;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";

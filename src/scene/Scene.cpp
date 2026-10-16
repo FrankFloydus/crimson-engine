@@ -2,6 +2,7 @@
 #include "BuiltinModels.h"
 #include "EnvironmentSerialization.h"
 #include "assets/MaterialAsset.h"
+#include "resources/AssetId.h"
 
 #include <algorithm>
 #include <atomic>
@@ -55,7 +56,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
         a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
-        a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterial==b.modelMaterial &&
+        a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.meshCollider==b.meshCollider && a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation;
@@ -82,7 +83,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
     if (const auto* model = registry_.try_get<ModelReference>(entity)) {
-        record.model=model->assetId;record.modelMaterial=model->material;
+        record.model=model->assetId;record.modelMaterials=model->materials;
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
@@ -183,7 +184,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Entity names must contain 1 to 1024 UTF-8 bytes.");
         if (!math::finite(record.local) || !math::isAffine(record.local))
             throw std::runtime_error("Entity local transform must be a finite affine matrix.");
-        if (record.model && !isBuiltinModel(record.model->id) && (record.model->id.starts_with("builtin:") || !safeReference(record.model->id)))
+        if (record.model && !isBuiltinModel(record.model->id) && (isEngineAssetId(record.model->id) || record.model->id.starts_with("builtin:") || !safeReference(record.model->id)))
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
@@ -193,17 +194,21 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model animation needs a valid clip, Speed from 0 to 100 and Start Time from 0 to 1000000000 seconds.");
         if(!record.model && animation!=SceneModelAnimation{})
             throw std::runtime_error("Model animation settings require a model entity.");
-        if (!record.modelMaterial.empty()) {
-            if (!record.model || !isBuiltinModel(record.model->id))
-                throw std::runtime_error("Instance material assignment is supported only on built-in Box models.");
-            const auto& id=record.modelMaterial.id;
+        if(record.modelMaterials.size()>MaximumModelMaterialSlots)
+            throw std::runtime_error("Model material slots exceed the supported limit.");
+        if(!record.modelMaterials.empty() && !record.model)
+            throw std::runtime_error("Material slot assignment requires a model entity.");
+        if(record.model && isBuiltinModel(record.model->id) && record.modelMaterials.size()>1)
+            throw std::runtime_error("The built-in Box has only one material slot.");
+        for(const auto& material:record.modelMaterials)if(!material.empty()) {
+            const auto& id=material.id;
             const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));
-            if (id!=DefaultMaterialId && (!safeReference(id) || path.parent_path()!=std::filesystem::path("assets/materials") || path.extension()!=".crimson-material"))
+            if (canonicalAssetId(id)!=DefaultMaterialId && (isEngineAssetId(id) || (!isAssetUuid(id) && (!safeReference(id) || path.parent_path()!=std::filesystem::path("assets/materials") || path.extension()!=".crimson-material"))))
                 throw std::runtime_error("Model material must reference a managed .crimson-material asset or the protected PBR default.");
         }
         if (record.particle && !record.particle->empty()) {
             const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(record.particle->id.data()),record.particle->id.size()));
-            if (!safeReference(record.particle->id) || path.parent_path()!=std::filesystem::path("assets/particles") || path.extension()!=".crimson-particle")
+            if (isEngineAssetId(record.particle->id) || (!isAssetUuid(record.particle->id) && (!safeReference(record.particle->id) || path.parent_path()!=std::filesystem::path("assets/particles") || path.extension()!=".crimson-particle")))
                 throw std::runtime_error("Particle asset reference must be a managed .crimson-particle path under assets/particles.");
         }
         validateLight(record.directional); validateLight(record.point);
@@ -250,7 +255,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Collision color must have finite RGBA values between zero and one.");
         if (record.meshCollider) {
             const auto& source=record.meshCollider->source.id;
-            if (!source.empty() && (source.starts_with("builtin:") || !safeReference(source)))
+            if (!source.empty() && (isEngineAssetId(source) || source.starts_with("builtin:") || !safeReference(source)))
                 throw std::runtime_error("Mesh collision requires a managed model asset reference.");
             if (record.collider || record.character)
                 throw std::runtime_error("Mesh collision cannot share an entity with Box collision or a Character.");
@@ -351,7 +356,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Identity>(entity,record.id,record.name);
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterial,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);

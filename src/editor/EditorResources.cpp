@@ -23,11 +23,7 @@ bool coherent(const AssetLibrary& assets,std::span<const ModelMaterial> material
     std::unordered_map<std::string,uint64_t> versions;
     for (size_t m=0;m<materials.size();++m) {
         if(const auto graph=bindings[m].graph) {
-            for(const auto& source:graph->sources) {
-                const auto fingerprint=graph->sourceFingerprints[source.slot];if(!fingerprint)continue;
-                const auto [found,inserted]=versions.emplace(source.image.id,fingerprint);
-                if(!inserted && found->second!=fingerprint)return false;
-            }
+            if(!preparedGraphSourcesCoherent(*graph,versions))return false;
             continue;
         }
         const auto& material=materials[m]; const std::array<const ModelTexture*,5> slots{
@@ -61,9 +57,13 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
         if(material.graph) {
             const auto& graph=*material.graph;const auto& output=materialOutputNode(graph).output;
             for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
-                const auto* node=findMaterialNode(graph,id);if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
+                const auto* node=findMaterialNode(graph,id);if(node->kind!=MaterialNodeKind::Grunge&&(node->kind!=MaterialNodeKind::Texture2D||node->texture.image.empty()))continue;
                 MaterialUvMapping mapping;
                 mapping=materialTextureMapping(graph,id,context);
+                if(node->kind==MaterialNodeKind::Grunge) {
+                    mapping.scale=mapping.scale*static_cast<float>(node->grunge.tiling);
+                    mapping.offset=mapping.offset*static_cast<float>(node->grunge.tiling);
+                }
                 visit(mapping);
             }
         } else {
@@ -188,10 +188,13 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
         if (!renderer_.queueModelLod(asset.id,revision,data.shared())) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; }
 }
 std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::string& id,const Mat4& world,const Camera& camera,
-    uint32_t height,bool selected,ResourcePriority priority,float aspect,const std::string& materialOverride,float shadowTexelWorld,const ExtractedModel* presentation) {
+    uint32_t height,bool selected,ResourcePriority priority,float aspect,std::span<const AssetRef<MaterialAsset>> materialOverrides,float shadowTexelWorld,const ExtractedModel* presentation) {
     // Geometry identity remains shared. Immutable binding packets are keyed by
-    // instance material identity so two Boxes cannot overwrite each other's material.
-    const auto key=id+std::string(1,'\0')+materialOverride;
+    // the complete slot assignment so instances cannot overwrite each other.
+    // Canonicalize trailing inherited slots; embedded separators retain slot order.
+    while(!materialOverrides.empty()&&materialOverrides.back().empty())materialOverrides=materialOverrides.first(materialOverrides.size()-1);
+    auto key=id+std::string(1,'\0');
+    for(const auto& material:materialOverrides){key+=material.id;key+='\0';}
     auto& entry=entries_[key];entry.sourceId=id;entry.wanted=true; entry.used=std::chrono::steady_clock::now();
     entry.failed=false;
     const auto retain=[&](std::shared_ptr<const PreparedEditorModel> model) {
@@ -228,13 +231,13 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
             }
             if (!renderer_.modelStreamReady(asset->id,revision)) return retain(entry.current);
         } else if (!renderer_.prepareModel(*asset)) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; return retain(entry.current); }
-        auto materials=assets_.resolvedModelMaterials(*asset,materialOverride);
-        if (!assets_.modelMaterialsReady(*asset,materialOverride)) {
-            const auto error=assets_.modelMaterialsDiagnostic(*asset,materialOverride);
+        auto materials=assets_.resolvedModelMaterials(*asset,materialOverrides);
+        if (!assets_.modelMaterialsReady(*asset,materialOverrides)) {
+            const auto error=assets_.modelMaterialsDiagnostic(*asset,materialOverrides);
             if (!error.empty()) { entry.diagnostic=error; entry.failed=true; }
             return retain(entry.current);
         }
-        if(const auto diagnostic=assets_.modelMaterialsDiagnostic(*asset,materialOverride);!diagnostic.empty())entry.diagnostic=diagnostic;
+        if(const auto diagnostic=assets_.modelMaterialsDiagnostic(*asset,materialOverrides);!diagnostic.empty())entry.diagnostic=diagnostic;
         // Cached browser cards render at time zero; they do not inherit the live
         // world's animated mapping footprint when sharing this resource owner.
         const auto context=priority==ResourcePriority::Preview?MaterialEvaluationContext{}:materialContext_;
@@ -349,7 +352,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
             // Combine light demand before material/texture preparation. A room
             // lit by several points needs one coherent packet per caster, not
             // repeated material resolution and graph preparation for each light.
-            auto prepared=prepare(model.assetId,model.world,cameras.front().camera,resolution+4,false,priority,cameras.front().aspect,model.materialId,texel,&model);
+            auto prepared=prepare(model.assetId,model.world,cameras.front().camera,resolution+4,false,priority,cameras.front().aspect,model.materialOverrides,texel,&model);
             if(prepared){packet=prepared;result->models.push_back(prepared);}
             result->ready&=prepared&&prepared->ready;
             result->refined&=prepared&&prepared->ready&&prepared->refined;

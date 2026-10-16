@@ -1,4 +1,5 @@
 #include "MaterialDocument.h"
+#include "resources/AssetId.h"
 #include <fstream>
 #include <algorithm>
 #include <stdexcept>
@@ -7,7 +8,7 @@ namespace crimson {
 namespace {
 bool equal(const MaterialAsset& a,const MaterialAsset& b) { return serializeMaterialAsset(a)==serializeMaterialAsset(b); }
 uint64_t fileFingerprint(const std::filesystem::path& root,const std::string& id) {
-    if(id.starts_with("builtin:"))return 0;
+    if(isEngineAssetId(id))return 0;
     std::ifstream input(materialAssetPath(root,id),std::ios::binary);
     if (!input) throw std::runtime_error("Material file is unavailable.");
     uint64_t hash=14695981039346656037ull;
@@ -18,7 +19,7 @@ uint64_t fileFingerprint(const std::filesystem::path& root,const std::string& id
     return hash;
 }
 std::optional<uint64_t> matchingFileFingerprint(const std::filesystem::path& root,const std::string& id,const std::string& expected) {
-    if(id.starts_with("builtin:"))return {};
+    if(isEngineAssetId(id))return {};
     std::ifstream input(materialAssetPath(root,id),std::ios::binary);
     if(!input)return {};
     std::string bytes(expected.size(),'\0');
@@ -38,7 +39,7 @@ bool MaterialDocument::dirty() const {
 bool MaterialDocument::editable() const {
     // Imported model sidecars are the authored material, with a stable shared
     // identity. Their model origin is provenance, not an edit restriction.
-    return open_ && !working_.id.starts_with("builtin:") &&
+    return open_ && !isEngineAssetId(working_.id) &&
         (particleMaterialCompatible(working_) || modelMaterialCompatible(working_));
 }
 std::vector<std::string> MaterialDocument::historicalTextureReferences() const {

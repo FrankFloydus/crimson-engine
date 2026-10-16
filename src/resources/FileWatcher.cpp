@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -23,12 +24,25 @@ Stamp stamp(const std::filesystem::path& path) {
     if(result.exists) { result.size=std::filesystem::file_size(path,error); result.write=std::filesystem::last_write_time(path,error); }
     return result;
 }
-bool ignored(const std::filesystem::path& path) {
+bool ignored(const std::filesystem::path& path,const std::filesystem::path& watchedRoot) {
+    auto owner=watchedRoot.filename().generic_string();
+    std::transform(owner.begin(),owner.end(),owner.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+    bool privateTree=owner==".crimson",legacyTree=owner=="assets";
+    const bool gameRoot=owner!="content"&&owner!="engine";bool first=true;
     for(const auto& part:path) {
-        const auto name=part.generic_string();
-        if(name=="cache" || name==".transactions" || name.starts_with(".staging-") || name.ends_with(".tmp")) return true;
+        auto name=part.generic_string();
+        std::transform(name.begin(),name.end(),name.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+        if(first&&gameRoot){privateTree=privateTree||name==".crimson";legacyTree=legacyTree||name=="assets";}
+        if((privateTree||legacyTree) && (name=="cache" || name==".transactions" || name==".resource-transactions" || name.starts_with(".staging-") || name.ends_with(".tmp"))) return true;
+        first=false;
     }
-    return path.filename()=="source.glb" || path.filename()=="source.gltf";
+    auto filename=path.filename().generic_string();
+    std::transform(filename.begin(),filename.end(),filename.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+    if(filename=="source.glb"||filename=="source.gltf") {
+        const auto directory=(watchedRoot/path).parent_path();std::error_code error;
+        return std::filesystem::is_regular_file(directory/"manifest.json",error)&&std::filesystem::is_regular_file(directory/"model.gltf",error);
+    }
+    return false;
 }
 }
 struct FileWatcher::Impl {
@@ -41,7 +55,7 @@ struct FileWatcher::Impl {
         bool begin() {
             ResetEvent(event.value); overlapped={}; overlapped.hEvent=event.value;
             pending=ReadDirectoryChangesW(directory.value,bytes.data(),static_cast<DWORD>(bytes.size()),TRUE,
-                FILE_NOTIFY_CHANGE_FILE_NAME|FILE_NOTIFY_CHANGE_DIR_NAME|FILE_NOTIFY_CHANGE_SIZE|FILE_NOTIFY_CHANGE_LAST_WRITE,
+                FILE_NOTIFY_CHANGE_FILE_NAME|FILE_NOTIFY_CHANGE_DIR_NAME|FILE_NOTIFY_CHANGE_SIZE|FILE_NOTIFY_CHANGE_LAST_WRITE|FILE_NOTIFY_CHANGE_ATTRIBUTES,
                 nullptr,&overlapped,nullptr)!=FALSE;
             return pending;
         }
@@ -90,7 +104,7 @@ struct FileWatcher::Impl {
                     const auto* info=reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(root.bytes.data()+offset);
                     if(info->FileNameLength%sizeof(wchar_t) || offset+offsetof(FILE_NOTIFY_INFORMATION,FileName)+info->FileNameLength>transferred) break;
                     const auto relative=std::filesystem::path(std::wstring(info->FileName,info->FileNameLength/sizeof(wchar_t)));
-                    if(!ignored(relative)) {
+                    if(!ignored(relative,root.path)) {
                         const auto file=(root.path/relative).lexically_normal();
                         std::lock_guard lock(mutex); changes[resourcePathKey(file)]={file,std::chrono::steady_clock::now()};
                     }

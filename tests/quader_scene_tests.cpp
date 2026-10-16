@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace {
 using namespace crimson;
@@ -139,7 +140,7 @@ void independentLightSyncPolicy() {
 void directionalCompatibilityAndMeshDefaults() {
     Project project;SceneDocument document(project.root);const auto sun=document.createDirectionalLight();
     require(document.scene().find(sun)->directional->castShadows,"New directional lights must enable shadows.");
-    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==10,"New scenes did not use schema 10.");
+    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==11,"New scenes did not use schema 11.");
     serialized["version"]=8;
     for(auto& entity:serialized["entities"])if(entity.contains("directional")) {
         entity["directional"].erase("castShadows");entity["directional"].erase("shadowDistance");
@@ -210,6 +211,52 @@ void crimsonLightingRolesSurviveSourceSync() {
         document.scene().find(point)->directional->roles==SceneDirectionalLight{}.roles,
         "Changing a source light kind retained incompatible previous-kind roles.");
 }
+void materialSlotsSurviveSourceSync() {
+    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
+    QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
+    const std::string a="assets/materials/source-a.crimson-material",b="assets/materials/source-b.crimson-material",c="assets/materials/source-c.crimson-material";
+    const AssetRef<MaterialAsset> replacement{"assets/materials/instance.crimson-material"};
+    std::unordered_map<std::string,std::vector<std::string>> sources;
+    const ModelMaterialSourceQuery query=[&](const std::string& id)->std::optional<std::vector<std::string>> {
+        const auto found=sources.find(id);return found==sources.end()?std::nullopt:std::optional{found->second};
+    };
+    auto initial=lightSyncFixture("slots-a");sources[initial.meshes[0].modelId]={a,b,c};
+    require(applyQuaderSceneImport(document,owner,link,initial,query),document.status());
+    const auto visual=generatedId(document.scene(),owner,"mesh/floor");
+    auto entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,1,replacement);
+    require(document.updateEntity(visual,entity),document.status());
+    auto changed=lightSyncFixture("slots-b");sources[changed.meshes[0].modelId]={a,b,c};
+    require(applyQuaderSceneImport(document,owner,link,changed,query),document.status());
+    require(document.scene().find(visual)->modelMaterials==entity.modelMaterials,"Ordinary Quader geometry sync lost numbered slot assignments.");
+    const auto before=snapshot(document);
+    auto reordered=lightSyncFixture("slots-reordered");
+    auto prepared=std::make_shared<ModelAsset>();prepared->id=reordered.meshes[0].modelId;prepared->materialIds={b,c,a};
+    reordered.preparedModels.push_back(prepared);sources[prepared->id]=prepared->materialIds;
+    require(applyQuaderSceneImport(document,owner,link,reordered,query),document.status());
+    require(document.scene().find(visual)->modelMaterials==ModelMaterialOverrides{replacement},"Unique source material identity did not follow its reordered slot.");
+    const auto remapped=snapshot(document);require(document.undo() && snapshot(document)==before,"Slot remapping did not undo with its Quader import.");
+    require(document.redo() && snapshot(document)==remapped,"Slot remapping did not redo with its Quader import.");
+    const auto reject=[&](QuaderImportResult result,const std::vector<std::string>& ids) {
+        sources[result.meshes[0].modelId]=ids;const auto history=document.history().size();
+        require(!applyQuaderSceneImport(document,owner,link,result,query) && snapshot(document)==remapped &&
+            document.history().size()==history && !document.transactionActive(),"Ambiguous/missing material source slots partially replaced the scene.");
+        require(document.status().find("material slot")!=std::string::npos,"Rejected material remapping omitted its diagnostic.");
+    };
+    reject(lightSyncFixture("slots-ambiguous"),{b,b,c});
+    reject(lightSyncFixture("slots-removed"),{a,c});
+    require(!applyQuaderSceneImport(document,owner,link,lightSyncFixture("slots-unavailable"),query) && snapshot(document)==remapped,
+        "Unavailable source metadata discarded existing instance assignments.");
+    entity=*document.scene().find(visual);entity.modelMaterials.clear();require(document.updateEntity(visual,entity),document.status());
+    auto repeated=lightSyncFixture("slots-repeated-a");sources[repeated.meshes[0].modelId]={b,b,c};
+    require(applyQuaderSceneImport(document,owner,link,repeated,query),document.status());
+    entity=*document.scene().find(visual);setModelMaterialOverride(entity.modelMaterials,1,replacement);require(document.updateEntity(visual,entity),document.status());
+    auto repeatedNext=lightSyncFixture("slots-repeated-b");sources[repeatedNext.meshes[0].modelId]={b,b,c};
+    require(applyQuaderSceneImport(document,owner,link,repeatedNext,query) && document.scene().find(visual)->modelMaterials==entity.modelMaterials,
+        "Unchanged repeated source slots lost their numbered instance assignments.");
+    const auto repeatedBefore=snapshot(document);auto repeatedReordered=lightSyncFixture("slots-repeated-reordered");sources[repeatedReordered.meshes[0].modelId]={c,b,b};
+    require(!applyQuaderSceneImport(document,owner,link,repeatedReordered,query) && snapshot(document)==repeatedBefore,
+        "Repeated source IDs were guessed when their slot layout changed.");
 }
-int main(){try{reimportIdentityHistoryAndAtomicFailure();independentLightSyncPolicy();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();std::cout<<"Quader scene identity, atomic reimport, independent light sync, history and compatibility checks passed.\n";return 0;}
+}
+int main(){try{reimportIdentityHistoryAndAtomicFailure();independentLightSyncPolicy();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();std::cout<<"Quader scene identity, atomic reimport, independent light sync, history and compatibility checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

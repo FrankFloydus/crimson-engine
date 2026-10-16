@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "Quader reader ABI 6"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "Quader",
+  "materialAssets": [
+    "a4f99547-4ab6-5029-ba37-c2e1fce95943",
+    "e698f0ce-a518-596e-8710-ff12e009eb5d"
+  ],
+  "name": "Box",
+  "original": "source.gltf",
+  "quader": {
+    "collision": false,
+    "content": "428a23a7afbf616b399900f9bd650e9d600346f53f1e8b5b3e10176fb49919e3",
+    "project": "259235be-ca11-4751-a03b-28c7c36529bf",
+    "scene": "6aeb7097-5046-450e-a451-a8b4518aa095"
+  },
+  "version": 1
+}

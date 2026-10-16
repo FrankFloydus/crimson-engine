@@ -32,6 +32,17 @@ int main() {
         const auto reused = reopened.add(42);
         require(reopened.resolve(rasterized(reused)) == 42 && ids.resolve(rasterized(first)) == huge,
                 "Pending readbacks must retain their own entity lookup.");
+        EntityIds slots;
+        const auto firstSlot=slots.add(huge,0),secondSlot=slots.add(huge,3),otherEntity=slots.add(42,3);
+        require(firstSlot!=secondSlot&&secondSlot!=otherEntity,"Material slots or scene instances shared a dense draw ID.");
+        const auto firstHit=slots.resolveDraw(rasterized(firstSlot)),secondHit=slots.resolveDraw(rasterized(secondSlot));
+        require(firstHit&&firstHit->entityId==huge&&firstHit->materialSlot==0,"Material slot zero was confused with a background hit.");
+        require(secondHit&&secondHit->entityId==huge&&secondHit->materialSlot==3,"Picking lost the material slot within a repeated model instance.");
+        const auto otherHit=slots.resolveDraw(rasterized(otherEntity)),background=slots.resolveDraw(Pixel{});
+        require(otherHit&&otherHit->entityId==42&&otherHit->materialSlot==3,"Picking confused equivalent slots on different entities.");
+        require(background&&background->entityId==0&&background->materialSlot==UINT32_MAX,"Background picking returned an assignable material slot.");
+        require(!slots.resolveDraw(rasterized(otherEntity+1)),"An invalid readback resolved to an assignable material slot.");
+        require(slots.resolve(rasterized(secondSlot))==huge,"Slot-aware picking changed ordinary entity-selection resolution.");
         require(!frameReady(10,11) && frameReady(11,11) && frameReady(12,11),"Readback became visible before its ready frame.");
         require(!frameReady(0xfffffffeu,1) && frameReady(1,1) && frameReady(2,0xffffffffu),"Readback frame wrap was handled incorrectly.");
         std::cout << "Render scene picking checks passed.\n";

@@ -3,6 +3,8 @@
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
 #include "resources/ImageDecoder.h"
+#include "resources/TextureStreamer.h"
+#include "assets/GrungeGenerator.h"
 #include "editor/MaterialPreview.h"
 #include <chrono>
 #include <filesystem>
@@ -109,9 +111,132 @@ void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& m
         }
     }
 }
+template<class Read,class Prepare>
+void exerciseImageAdjustmentsAndGrunge(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.fog.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.background.show=false;
+    RenderScene scene{settings,{}};scene.sceneMode=true;
+    std::vector<ModelMaterial> surfaces(1);std::vector<ModelMaterialTextures> bindings(1);
+    RenderModelInstance instance;instance.model.asset=mesh;instance.materials=&surfaces;instance.textures=&bindings;
+    instance.shading=MaterialShading::Unlit;scene.instances=std::span(&instance,1);
+    const auto capture=[&](const MaterialAsset& authored) {
+        bindings[0].graph=prepare(authored);renderer.renderGame(scene);return read(renderer.gameViewportTexture());
+    };
+    const auto encoded=[](float linear) {
+        linear=std::clamp(linear,0.f,1.f);
+        const float srgb=linear<=.0031308f?linear*12.92f:1.055f*std::pow(linear,1.f/2.4f)-.055f;
+        return static_cast<int>(std::lround(srgb*255.f));
+    };
+    for(const auto kind:{MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift}) {
+        MaterialAsset authored;authored.id="native-image-adjustment-"+std::to_string(static_cast<int>(kind));
+        const auto output=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+        materialOutputNode(authored.graph).output.shading=MaterialShading::Unlit;
+        materialOutputNode(authored.graph).output.receiveFog=false;
+        const auto adjustment=addMaterialNode(authored.graph,kind).id;
+        findMaterialNode(authored.graph,adjustment)->left={MaterialValueType::Color,{.12f,.43f,.81f,1}};
+        connectMaterialNodes(authored.graph,adjustment,MaterialPin::RGB,output,MaterialPin::BaseColor);
+        const auto baseline=capture(authored);const auto program=bindings[0].graph->programs;
+        const std::array<float,4> amounts=kind==MaterialNodeKind::HueShift?std::array<float,4>{0,120,-120,360}:std::array<float,4>{0,1,.5f,1.6f};
+        for(const auto amount:amounts) {
+            findMaterialNode(authored.graph,adjustment)->right.value={amount,amount,amount,amount};
+            const auto image=capture(authored);const auto actual=sample(image,settings.camera,{});
+            const auto expected=evaluateMaterialUniform(authored.graph,adjustment,MaterialPin::RGB).value;
+            for(unsigned channel=0;channel<3;++channel)
+                check(std::abs(actual[channel]-encoded(expected[channel]))<=3,
+                    std::string(materialNodeKindName(kind))+" GPU color diverged from its CPU linear result and one sRGB encode.");
+            check(bindings[0].graph->programs==program,"An image-adjustment parameter edit recompiled unchanged topology.");
+            if(kind==MaterialNodeKind::HueShift && (amount==0||amount==360))
+                check(image.rgba==baseline.rgba,"A full HueShift turn changed the source color.");
+        }
+        if(kind==MaterialNodeKind::Contrast) {
+            const auto rgb=capture(authored);
+            const auto color=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+            findMaterialNode(authored.graph,color)->right={MaterialValueType::Color,{1,1,1,1}};
+            connectMaterialNodes(authored.graph,adjustment,MaterialPin::Value,color,MaterialPin::Left);
+            connectMaterialNodes(authored.graph,color,MaterialPin::Value,output,MaterialPin::BaseColor);
+            check(capture(authored).rgba==rgb.rgba,"Contrast Value and replicated RGB outputs produced different grayscale.");
+        }
+    }
+    MaterialAsset authored;authored.id="native-procedural-grunge";
+    const auto output=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+    materialOutputNode(authored.graph).output.shading=MaterialShading::Unlit;
+    materialOutputNode(authored.graph).output.receiveFog=false;
+    const auto grunge=addMaterialNode(authored.graph,MaterialNodeKind::Grunge).id;
+    const auto mapping=addMaterialNode(authored.graph,MaterialNodeKind::UV).id;
+    const auto color=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+    findMaterialNode(authored.graph,color)->right={MaterialValueType::Color,{1,1,1,1}};
+    connectMaterialNodes(authored.graph,mapping,MaterialPin::UV,grunge,MaterialPin::UV);
+    connectMaterialNodes(authored.graph,grunge,MaterialPin::Value,color,MaterialPin::Left);
+    connectMaterialNodes(authored.graph,color,MaterialPin::Value,output,MaterialPin::BaseColor);
+    const auto changedPixels=[](const DecodedImage& first,const DecodedImage& second,int tolerance=3) {
+        std::size_t count{};
+        for(std::size_t y=24;y<Size-24u;++y)for(std::size_t x=24;x<Size-24u;++x) {
+            const auto at=(y*Size+x)*4;
+            if(std::abs(int(first.rgba[at])-int(second.rgba[at]))>tolerance)++count;
+        }
+        return count;
+    };
+    const auto grayscale=[](const DecodedImage& image,bool varying) {
+        int minimum=255,maximum{};
+        for(std::size_t y=24;y<Size-24u;++y)for(std::size_t x=24;x<Size-24u;++x) {
+            const auto at=(y*Size+x)*4;const auto red=int(image.rgba[at]);minimum=std::min(minimum,red);maximum=std::max(maximum,red);
+            check(std::abs(red-int(image.rgba[at+1]))<=1 && std::abs(red-int(image.rgba[at+2]))<=1,
+                "Grunge grayscale outputs acquired unequal color channels.");
+        }
+        if(varying)check(maximum-minimum>12,"Grunge did not produce a spatially varying pattern.");
+        return maximum;
+    };
+    {
+        auto combined=MaterialGrungeNode{};combined.leaksOpacity=.65f;combined.stainsOpacity=.55f;
+        findMaterialNode(authored.graph,grunge)->grunge=combined;
+        findMaterialNode(authored.graph,mapping)->uv={};
+        const auto baseline=capture(authored);const auto program=bindings[0].graph->programs;
+        grayscale(baseline,true);
+        // All layers contribute to this single generated image and sampler.
+        check(bindings[0].graph->sources.size()==1,"Combined Grunge required more than one generated texture binding.");
+        for(const auto layer:{&MaterialGrungeNode::dirtSpecksOpacity,&MaterialGrungeNode::stainsOpacity,
+            &MaterialGrungeNode::scratchesOpacity,&MaterialGrungeNode::leaksOpacity}) {
+            auto reduced=combined;reduced.*layer=0;findMaterialNode(authored.graph,grunge)->grunge=reduced;
+            check(changedPixels(baseline,capture(authored),1)>20,"Disabling a Grunge layer did not change the combined image.");
+            check(bindings[0].graph->programs==program,"Editing a Grunge layer recompiled the material shader.");
+            findMaterialNode(authored.graph,grunge)->grunge=combined;
+            check(capture(authored).rgba==baseline.rgba,"Restoring a Grunge layer did not restore the combined image.");
+        }
+        findMaterialNode(authored.graph,grunge)->grunge.seed=37;const auto seeded=capture(authored);
+        check(changedPixels(baseline,seeded)>20,"Changing Grunge Seed did not change the generated pattern.");
+        findMaterialNode(authored.graph,grunge)->grunge.seed=0;
+        check(capture(authored).rgba==baseline.rgba,"Restoring Grunge Seed failed to restore the deterministic pattern.");
+        findMaterialNode(authored.graph,grunge)->grunge.coverage=0;
+        check(grayscale(capture(authored),false)<=1,"Grunge Coverage zero did not produce black.");
+        findMaterialNode(authored.graph,grunge)->grunge.coverage=.5f;
+        for(const auto tiling:{1,64}) {
+            findMaterialNode(authored.graph,grunge)->grunge.tiling=tiling;
+            findMaterialNode(authored.graph,mapping)->uv.offset={};const auto repeated=capture(authored);
+            for(const auto offset:{Vec3{1,0,0},Vec3{0,-1,0},Vec3{-2,3,0}}) {
+                findMaterialNode(authored.graph,mapping)->uv.offset=offset;const auto translated=capture(authored);
+                check(changedPixels(repeated,translated)==0,
+                    "Grunge lost seamless integer repetition under positive/negative UV translation or maximum Tiling.");
+            }
+        }
+        findMaterialNode(authored.graph,grunge)->grunge.tiling=1;
+        findMaterialNode(authored.graph,mapping)->uv.offset={};
+        for(const auto mode:{MaterialUvMode::UV0,MaterialUvMode::UV1,MaterialUvMode::LocalTriplanar,MaterialUvMode::WorldTriplanar}) {
+            findMaterialNode(authored.graph,mapping)->uv.mode=mode;grayscale(capture(authored),true);
+            check(bindings[0].graph->programs==program,"Grunge layer/settings/mapping edits recompiled unchanged topology.");
+        }
+        findMaterialNode(authored.graph,mapping)->uv={};
+        const auto scalar=capture(authored);
+        connectMaterialNodes(authored.graph,grunge,MaterialPin::RGB,output,MaterialPin::BaseColor);
+        check(capture(authored).rgba==scalar.rgba,"Grunge Value and replicated RGB outputs produced different patterns.");
+        connectMaterialNodes(authored.graph,color,MaterialPin::Value,output,MaterialPin::BaseColor);
+    }
+}
 void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     // Outstanding readback destinations must outlive Renderer on failure.
-    std::vector<std::shared_ptr<DecodedImage>> destinations;ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
+    std::vector<std::shared_ptr<DecodedImage>> destinations;ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);
+    TextureStreamer grungeTextures(resources,{});renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
     ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=902;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.5f,.5f,.5f})},environment.settings);
@@ -292,11 +417,16 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     const auto additive=sample(capture(),settings.camera,{});
     check(std::abs(additive[1]-emptyMatte[1])<=2 && additive[0]>180 && additive[2]>180,
         "Additive mesh/particle blending changed destination coverage or premultiplied twice.");
-    // Reproduce New Material 2: smoke_07 RGB * a linear Constant, with alpha
-    // connected and disconnected explicitly. Source assets are only read.
-    const auto project=config.sourceDirectory.parent_path().parent_path().parent_path();
-    const auto smokeImage=decodeManagedImage(project/"assets/textures/smoke_07.png");
-    check(smokeImage.width && smokeImage.height,"Smoke alpha regression image is unavailable.");
+    // RGB * a linear Constant with explicit partial alpha. Keep the regression
+    // self-contained so authored texture imports/deletions cannot break it.
+    DecodedImage smokeImage{8,8,std::vector<std::uint8_t>(8*8*4)};
+    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
+        const auto at=(y*8+x)*4;
+        smokeImage.rgba[at]=static_cast<std::uint8_t>(200+x*7);
+        smokeImage.rgba[at+1]=static_cast<std::uint8_t>(180+y*7);
+        smokeImage.rgba[at+2]=static_cast<std::uint8_t>(170+x*6+y);
+        smokeImage.rgba[at+3]=static_cast<std::uint8_t>((x+y)%3==0?0:48+(x*13+y*7)%81);
+    }
     const auto maximumAlpha=[&]{unsigned result{};for(std::size_t i=3;i<smokeImage.rgba.size();i+=4)result=std::max(result,unsigned(smokeImage.rgba[i]));return result;}();
     check(maximumAlpha>0 && maximumAlpha<255,"Smoke regression image no longer has partial real alpha.");
     Texture smoke{bgfx::createTexture2D(static_cast<std::uint16_t>(smokeImage.width),static_cast<std::uint16_t>(smokeImage.height),false,1,
@@ -306,7 +436,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     const auto root=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
     auto& output=materialOutputNode(authored.graph).output;output.shading=MaterialShading::Unlit;output.blend=MaterialBlend::Alpha;
     const auto texture=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
-    findMaterialNode(authored.graph,texture)->texture.image.id="assets/textures/smoke_07.png";
+    findMaterialNode(authored.graph,texture)->texture.image.id="assets/textures/partial-alpha-fixture.png";
     const auto factor=addMaterialNode(authored.graph,MaterialNodeKind::Color).id;
     findMaterialNode(authored.graph,factor)->color={.8355646729469299f,.3041378855705261f,.3041378855705261f,1};
     const auto product=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
@@ -315,22 +445,47 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     connectMaterialNodes(authored.graph,product,MaterialPin::Value,root,MaterialPin::BaseColor);
     const auto prepare=[&](const MaterialAsset& source,bgfx::TextureHandle image=BGFX_INVALID_HANDLE) {
         const auto generated=generateMaterialGraphShader(source);
+        const bool generatedImage=std::any_of(generated.textures.begin(),generated.textures.end(),[](const auto& binding){return binding.grunge.has_value();});
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(90);
         MaterialGraphProgramResult published;
+        // Recipe generation takes enough time for the ordinary interactive ->
+        // optimized replacement to finish between captures. Stabilize that
+        // expected publication before checking parameter-only program reuse.
+        const auto shaderReady=[&]{return published.current&&published.programs&&(!generatedImage||published.programs->optimized);};
         do {
             tick();published=programs.request(generated);
             if(!published.current && published.diagnostic!="Compiling material graph...")throw std::runtime_error(published.diagnostic);
-            if(!published.current)std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }while(!published.current && std::chrono::steady_clock::now()<deadline);
-        check(published.current && published.programs,"Generated sprite shader timed out.");
+            if(!shaderReady())std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }while(!shaderReady() && std::chrono::steady_clock::now()<deadline);
+        check(shaderReady(),"Generated sprite shader timed out.");
         auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=published.programs;packet->uniforms=generated.uniforms;
         packet->sources=generated.textures;packet->shading=materialOutputNode(source.graph).output.shading;packet->blend=materialOutputNode(source.graph).output.blend;
         packet->receiveFog=materialOutputNode(source.graph).output.receiveFog;
         packet->signature=published.programs->signature;
-        for(const auto& binding:generated.textures){check(bgfx::isValid(image),"Regression graph needs a supplied image.");packet->textures[binding.slot]=image;packet->flags[binding.slot]=point|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;}
+        for(const auto& binding:generated.textures) {
+            if(binding.grunge) {
+                const auto settings=*binding.grunge;PreparedTexture texture;
+                const auto key=std::to_string(grungeTextureKey(settings));
+                do {
+                    resources.pump();grungeTextures.beginFrame();
+                    texture=grungeTextures.requestGenerated(key,[settings]{return generateGrungeTexture(settings);},GrungeTextureEdge,true,GrungeTextureEdge);
+                    if(!texture.diagnostic.empty())throw std::runtime_error(texture.diagnostic);
+                    grungeTextures.advance();tick();
+                    if(!texture.complete)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }while(!texture.complete && std::chrono::steady_clock::now()<deadline);
+                check(texture.complete&&texture.sourceReady&&bgfx::isValid(texture.handle),"Grunge Texture 2D preparation timed out.");
+                packet->textures[binding.slot]=texture.handle;packet->leases[binding.slot]=texture.lease;
+                packet->sourceFingerprints[binding.slot]=texture.sourceFingerprint;packet->textureSignatures[binding.slot]=texture.signature;
+                packet->flags[binding.slot]=0;
+            } else {
+                check(bgfx::isValid(image),"Regression graph needs a supplied image.");
+                packet->textures[binding.slot]=image;packet->flags[binding.slot]=point|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
+            }
+        }
         return packet;
     };
     exerciseMaterialFog(renderer,mesh,read,prepare);
+    exerciseImageAdjustmentsAndGrunge(renderer,mesh,read,prepare);
     settings.environment.background.color={};settings.environment.enabled=false;scene.directionalLights={};scene.pointLights={};scene.instances={};
     particles[0].position={};particles[0].color={0,1,0,0};sprite=RenderParticleMaterial{};
     scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
@@ -355,7 +510,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     const auto pc=addMaterialNode(authored.graph,MaterialNodeKind::ParticleColor).id;
     connectMaterialNodes(authored.graph,pc,MaterialPin::RGB,root,MaterialPin::BaseColor);
     connectMaterialNodes(authored.graph,pc,MaterialPin::A,root,MaterialPin::Opacity);
-    const auto saturate=addMaterialNode(authored.graph,MaterialNodeKind::Saturate).id;
+    const auto saturate=addMaterialNode(authored.graph,MaterialNodeKind::Clamp).id;
     findMaterialNode(authored.graph,saturate)->left.value[0]=2;
     const auto clampedAlpha=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
     connectMaterialNodes(authored.graph,saturate,MaterialPin::Value,clampedAlpha,MaterialPin::Left);

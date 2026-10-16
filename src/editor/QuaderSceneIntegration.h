@@ -2,5 +2,7 @@
 #include "quader/QuaderBridge.h"
 #include "scene/SceneDocument.h"
 namespace crimson {
-bool applyQuaderSceneImport(SceneDocument&,EntityId,const QuaderLink&,const QuaderImportResult&);
+using ModelMaterialSourceQuery = std::function<std::optional<std::vector<std::string>>(const std::string&)>;
+bool applyQuaderSceneImport(SceneDocument&,EntityId,const QuaderLink&,const QuaderImportResult&,
+    const ModelMaterialSourceQuery& modelMaterials={});
 }

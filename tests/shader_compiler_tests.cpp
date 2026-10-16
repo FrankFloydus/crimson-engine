@@ -2,6 +2,8 @@
 #include "resources/ShaderSourceBaseline.h"
 #include "resources/Paths.h"
 #include "crimson-renderer/ShaderPreflight.h"
+#include "crimson-renderer/MaterialGraphShader.h"
+#include "assets/MaterialAsset.h"
 #include "editor/ShaderRuntimePaths.h"
 #include <chrono>
 #include <filesystem>
@@ -65,6 +67,9 @@ void runtimePathChecks(const std::filesystem::path& root) {
     const ShaderRuntimePaths missingPayload{root/"missing-payload"/"shaders",root/"missing-payload"/"include"};
     require(selectShaderRuntimePaths(false,live,missingPayload,true)==missingPayload,
         "Missing Release shader payload silently fell back to an incompatible checkout.");
+    initializeContentStorage(root);
+    require(shaderRuntimeWatchedRoots(root,release)==std::vector<std::filesystem::path>{root/"Content",root/"Engine",root/".crimson",staged.sources,staged.includes},
+        "Content watcher omitted a physical asset/metadata root or changed the selected Release shader family.");
 }
 void embeddedBaselineChecks(const std::filesystem::path& root) {
     const auto first=root/"one",second=root/"relocated";
@@ -90,10 +95,51 @@ void embeddedBaselineChecks(const std::filesystem::path& root) {
     require(!shaderSourcesMatchEmbedded(contract,entries),"Changed shader contract incorrectly reused embedded programs.");
     require(!shaderSourcesMatchEmbedded(b,{}),"Missing shader source baseline suppressed a necessary initial reload.");
 }
+void optimizationPolicyChecks(const ShaderCompileConfig& config) {
+    auto material=defaultMaterialAsset();canonicalizeMaterialAsset(material);
+    auto& graph=material.graph;const auto output=materialOutputNode(graph).id;
+    materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    const auto normal=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,normal)->texture.role=MaterialTextureRole::Normal;
+    connectMaterialNodes(graph,color,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,color,MaterialPin::A,output,MaterialPin::OpacityMask);
+    connectMaterialNodes(graph,normal,MaterialPin::Normal,output,MaterialPin::Normal);
+    const auto generated=generateMaterialGraphShader(material);
+    for(const auto& variant:generated.variants) {
+        const auto optimizedRecipe=materialGraphShaderRecipe(config,generated,variant);
+        require(optimizedRecipe.optimization==ShaderCompileOptimization::Full,"Build shader recipes stopped selecting full optimization by default.");
+        auto interactiveRecipe=optimizedRecipe;interactiveRecipe.optimization=ShaderCompileOptimization::Interactive;
+        const auto vertex=compileShader(config,variant.vertexName);
+        const auto optimized=compileShader(config,optimizedRecipe);
+        require(!ShaderCacheReadSession(config).find(interactiveRecipe),"An optimized artifact was mistaken for an interactive artifact.");
+        const auto interactive=compileShader(config,interactiveRecipe);
+        require(optimized.fingerprint!=interactive.fingerprint,"Different shader optimization policies shared a persistent cache key.");
+        std::string diagnostic;
+        if(!preflightGeneratedShaderPair(vertex.bytes,optimized.bytes,vertex.bytes,variant.manifest,diagnostic))
+            throw std::runtime_error("Optimized generated material preflight: "+diagnostic);
+        if(!preflightGeneratedShaderPair(vertex.bytes,interactive.bytes,vertex.bytes,variant.manifest,diagnostic))
+            throw std::runtime_error("Interactive generated material preflight: "+diagnostic);
+        const auto before=shaderCompilerMetrics();
+        const auto repeatedOptimized=compileShader(config,optimizedRecipe),repeatedInteractive=compileShader(config,interactiveRecipe);
+        require(shaderCompilerMetrics().compilerInvocations==before.compilerInvocations&&
+            repeatedOptimized.bytes==optimized.bytes&&repeatedInteractive.bytes==interactive.bytes,
+            "Repeated optimized/interactive shader requests did not reuse their separate binaries.");
+        ShaderCacheReadSession cache(config);
+        const auto cachedOptimized=cache.find(optimizedRecipe),cachedInteractive=cache.find(interactiveRecipe);
+        require(cachedOptimized&&cachedInteractive&&cachedOptimized->fingerprint==optimized.fingerprint&&
+            cachedInteractive->fingerprint==interactive.fingerprint&&cache.unchanged(),
+            "Cache-only startup did not distinguish optimized and interactive generated stages.");
+        cache.discard(std::span(&*cachedInteractive,1));
+        require(ShaderCacheReadSession(config).find(optimizedRecipe).has_value()&&!ShaderCacheReadSession(config).find(interactiveRecipe),
+            "Discarding an interactive stage removed its separate optimized artifact.");
+    }
+}
 void run(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
     Temp temp;
     runtimePathChecks(temp.root/"runtime selection");
     embeddedBaselineChecks(temp.root/"embedded baseline");
+    optimizationPolicyChecks({compiler,source,include,temp.root/"optimization policies"});
     const auto directory=temp.root/"shader source with spaces", cache=temp.root/"compiled cache";
     std::filesystem::create_directories(directory);
     const auto original=read(source/"fs_encode.sc");

@@ -37,7 +37,7 @@ private:
     struct File {
         std::filesystem::path source;
         std::variant<std::monostate,ResourceHandle<ModelImportStage>,ResourceHandle<ImageImportStage>> handle;
-        bool done{},reused{};std::string id,error;
+        bool done{},reused{};std::string id,error,warning;
     };
     struct Batch {uint64_t sequence{};std::string folder;std::vector<File> files;};
     std::filesystem::path root_;ResourceManager& resources_;std::vector<Batch> batches_;uint64_t sequence_{};

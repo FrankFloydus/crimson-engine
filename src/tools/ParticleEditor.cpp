@@ -4,6 +4,7 @@
 #include "ParticleEmissionEditor.h"
 #include "Tools.h"
 #include "assets/AssetLibrary.h"
+#include "assets/ContentStorage.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -204,7 +205,8 @@ void ParticleEditor::save(AssetLibrary& assets,bool saveAs) {
 }
 void ParticleEditor::filesChanged(std::span<const std::filesystem::path> paths) {
     if(!document_.isOpen()) return;
-    for(const auto& path:paths) if(path.filename()==pathFromUtf8(document_.assetId()).filename())
+    const auto file=resolveAssetPath(document_.projectRoot(),document_.assetId()).lexically_normal();
+    for(const auto& path:paths) if(resourcePathKey(path)==resourcePathKey(file))
         externalChanged_=true;
 }
 void ParticleEditor::modals(AssetLibrary& assets) {

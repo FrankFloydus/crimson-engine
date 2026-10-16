@@ -1,5 +1,6 @@
 #pragma once
 #include "assets/ModelAsset.h"
+#include "assets/ModelMaterialOverrides.h"
 #include "crimson-renderer/Renderer.h"
 #include "resources/ResourceManager.h"
 #include <chrono>
@@ -42,7 +43,7 @@ public:
     void endFrame();
     std::shared_ptr<const PreparedEditorModel> prepare(const std::string& id,const Mat4& world,const Camera&,
         uint32_t viewportHeight,bool selected,ResourcePriority priority=ResourcePriority::Visible,float viewportAspect=0,
-        const std::string& materialOverride={},float shadowTexelWorld=0,const ExtractedModel* presentation=nullptr);
+        std::span<const AssetRef<MaterialAsset>> materialOverrides={},float shadowTexelWorld=0,const ExtractedModel* presentation=nullptr);
     std::shared_ptr<const PreparedEditorShadows> prepareShadows(const ExtractedScene&,std::uint16_t resolution,
         ResourcePriority priority=ResourcePriority::Visible,std::span<const ShadowCamera> cameras={},std::span<const std::uint64_t> focusEntities={},std::optional<Vec3> priorityOrigin={},std::span<const Aabb> extraReceiverBounds={});
     void invalidate(const std::string& id);

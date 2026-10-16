@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "Quader reader ABI 6"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "Quader",
+  "materialAssets": [
+    "e698f0ce-a518-596e-8710-ff12e009eb5d",
+    "e698f0ce-a518-596e-8710-ff12e009eb5d"
+  ],
+  "name": "Cylinder_005 collision",
+  "original": "source.gltf",
+  "quader": {
+    "collision": true,
+    "content": "cc3307fcc0ffbf5863a23bf606a2841945aa97d6f6b7d454fc36cf5f7fbb0073",
+    "project": "259235be-ca11-4751-a03b-28c7c36529bf",
+    "scene": "387884c9-9fc1-48fd-b51b-76db9f6a8798"
+  },
+  "version": 1
+}

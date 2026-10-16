@@ -1,6 +1,7 @@
 #include "MaterialPreviewGeometry.h"
 #include "ModelAsset.h"
 #include "resources/StreamingModel.h"
+#include "resources/AssetId.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -119,13 +120,13 @@ std::shared_ptr<const ModelAsset> createShape(MaterialPreviewMesh kind) {
     const char* name="Plane";
     switch(kind) {
     case MaterialPreviewMesh::Cube:
-        name="Cube"; asset->id="builtin:material-preview-cube-v1"; asset->primitives.push_back(createBox(false)); break;
+        name="Cube"; asset->id=canonicalAssetId("builtin:material-preview-cube-v1"); asset->primitives.push_back(createBox(false)); break;
     case MaterialPreviewMesh::RoundedCube:
-        name="Rounded cube"; asset->id="builtin:material-preview-rounded-cube-v1"; asset->primitives.push_back(createBox(true)); break;
+        name="Rounded cube"; asset->id=canonicalAssetId("builtin:material-preview-rounded-cube-v1"); asset->primitives.push_back(createBox(true)); break;
     case MaterialPreviewMesh::Cylinder:
-        name="Cylinder"; asset->id="builtin:material-preview-cylinder-v1"; asset->primitives.push_back(createCylinder()); break;
+        name="Cylinder"; asset->id=canonicalAssetId("builtin:material-preview-cylinder-v1"); asset->primitives.push_back(createCylinder()); break;
     default:
-        asset->id="builtin:material-preview-plane-v1"; asset->primitives.push_back(createPlane()); break;
+        asset->id=canonicalAssetId("builtin:material-preview-plane-v1"); asset->primitives.push_back(createPlane()); break;
     }
     asset->name=std::string("Material preview ")+name; asset->format="BUILTIN";
     auto& primitive=asset->primitives.front();
@@ -145,7 +146,7 @@ std::shared_ptr<const ModelAsset> createShape(MaterialPreviewMesh kind) {
 
 std::shared_ptr<const ModelAsset> createSphere() {
     auto asset=std::make_shared<ModelAsset>();
-    asset->id="builtin:material-preview-sphere-v1";
+    asset->id=canonicalAssetId("builtin:material-preview-sphere-v1");
     asset->name="Material preview sphere";
     asset->format="BUILTIN";
     ModelPrimitive primitive; primitive.uvMask=3; primitive.tangentUv=0;

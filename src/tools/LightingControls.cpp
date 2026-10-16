@@ -76,7 +76,7 @@ void drawPlayerLightRigControls(PlayerLightRigSettings& rig,
     if(ImGui::CollapsingHeader("Light Rig",ImGuiTreeNodeFlags_DefaultOpen)) {
         edit(Control::Enabled,"Toggle character light rig",ImGui::Checkbox("Enabled",&rig.enabled));
         edit(Control::ShowRig,"Toggle character light rig display",ImGui::Checkbox("Show Rig",&rig.showGizmos));
-        tooltip("Show character light directions, Local World range and Darkness Reveal. Selecting the player shows them in Scene automatically.");
+        tooltip("Show character light directions, Local World range and Darkness Reveal in Scene and Game.");
         ImGui::BeginDisabled(!rig.enabled);
         if(ImGui::TreeNode("Character Lighting")) {
             const auto controls=[&](const char* label,CharacterLight& light,Control base) {

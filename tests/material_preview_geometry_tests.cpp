@@ -1,4 +1,5 @@
 #include "assets/MaterialPreviewGeometry.h"
+#include "resources/AssetId.h"
 #include "assets/ModelAsset.h"
 #include "resources/StreamingModel.h"
 #include <algorithm>
@@ -17,7 +18,7 @@ void shape(MaterialPreviewMesh kind) {
     const auto asset=materialPreviewGeometry(kind),again=materialPreviewGeometry(kind);
     const auto level=materialPreviewGeometryLevel(kind);
     check(asset==again && level==materialPreviewGeometryLevel(kind),"Each preview shape must share one immutable CPU geometry allocation.");
-    check(asset->id.starts_with("builtin:material-preview-") && asset->primitives.size()==1 && asset->materials.size()==1 &&
+    check(isAssetUuid(asset->id) && isEngineAssetId(asset->id) && asset->primitives.size()==1 && asset->materials.size()==1 &&
         asset->meshes.size()==1 && asset->nodes.size()==1 && asset->draws.size()==1,"A preview shape must have one isolated built-in primitive and material.");
     check(asset->roots==std::vector<std::uint32_t>{0} && asset->draws.front().transform==Mat4{} && asset->nodes.front().local==Mat4{},
         "Preview geometry must stay centered in its own untransformed coordinate space.");
@@ -90,7 +91,7 @@ int main() {
         constexpr std::array kinds{MaterialPreviewMesh::Sphere,MaterialPreviewMesh::Cube,MaterialPreviewMesh::RoundedCube,MaterialPreviewMesh::Cylinder,MaterialPreviewMesh::Plane};
         std::unordered_set<std::string> ids;
         for(const auto kind:kinds){shape(kind);check(ids.insert(materialPreviewGeometry(kind)->id).second,"Each preview shape needs a distinct stable cache identity.");}
-        check(materialPreviewGeometry()->id=="builtin:material-preview-sphere-v1" && materialPreviewGeometry()==materialPreviewGeometry(MaterialPreviewMesh::Sphere),
+        check(materialPreviewGeometry()->id==canonicalAssetId("builtin:material-preview-sphere-v1") && materialPreviewGeometry()==materialPreviewGeometry(MaterialPreviewMesh::Sphere),
             "The accepted material thumbnail sphere identity and default generator must remain compatible.");
         roundedCube();cylinder();
         std::cout<<"Material preview mesh geometry checks passed.\n";return 0;

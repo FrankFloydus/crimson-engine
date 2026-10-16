@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <vector>
+#include "assets/ContentStorage.h"
 
 namespace crimson {
 // Source and bgfx headers form one interface family. Release uses the payload
@@ -16,6 +17,7 @@ inline ShaderRuntimePaths selectShaderRuntimePaths(bool development,const Shader
 }
 inline std::vector<std::filesystem::path> shaderRuntimeWatchedRoots(const std::filesystem::path& project,
     const ShaderRuntimePaths& selected) {
-    return {project/"assets",selected.sources,selected.includes};
+    if(!contentStorageReady(project))return {project/"assets",selected.sources,selected.includes};
+    return {project/"Content",project/"Engine",project/".crimson",selected.sources,selected.includes};
 }
 }

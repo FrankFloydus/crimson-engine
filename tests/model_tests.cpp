@@ -1,6 +1,8 @@
 #include "assets/ModelAsset.h"
 #include "assets/ModelAnimation.h"
 #include "assets/MaterialAsset.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 #include "model_fixtures.h"
 
 #include <chrono>
@@ -32,11 +34,11 @@ template<class Action> void rejects(Action action,const std::string& fragment) {
     throw std::runtime_error("Expected rejection containing: "+fragment);
 }
 size_t packages(const fs::path& root) {
-    size_t count=0; const auto folder=root/"assets"/"models";
-    if (fs::exists(folder)) for (const auto& item:fs::directory_iterator(folder)) {
+    size_t count=0;
+    for(const auto& entry:crimson::storedAssetPaths(root))if(entry.file.filename()=="manifest.json"&&fs::is_regular_file(entry.file))++count;
+    const auto staging=crimson::resolveAssetPath(root,"assets/.staging-models");
+    if(fs::exists(staging))for(const auto& item:fs::directory_iterator(staging))
         require(!item.path().filename().string().starts_with(".staging-"),"Failed import left a staging directory");
-        if (fs::exists(item.path()/"manifest.json")) ++count;
-    }
     return count;
 }
 struct Triangle {
@@ -71,6 +73,7 @@ struct Triangle {
 void hierarchyAndManagedReopening(const fs::path& base) {
     const auto sources=base/"source"; const auto project=base/"project"; auto fixtures=writeModelFixtures(sources);
     const auto asset=crimson::importModelPackage(fixtures.gltf,project);
+    require(crimson::isAssetUuid(asset->id)&&std::all_of(asset->images.begin(),asset->images.end(),[](const auto& id){return crimson::isAssetUuid(id);}),"Model import published filesystem paths instead of UUID asset references.");
     require(asset->name=="hierarchy" && asset->format=="glTF","Model identity metadata changed");
     require(asset->primitives.size()==2 && asset->meshes.size()==1 && asset->draws.size()==4 && asset->nodes.size()==2,"Mesh sharing or hierarchy failed");
     require(asset->roots==std::vector<uint32_t>{0},"Default scene roots changed");
@@ -93,9 +96,9 @@ void hierarchyAndManagedReopening(const fs::path& base) {
     fs::rename(sources,base/"source-removed");
     const auto reopened=crimson::loadModelPackage(asset->id,project); require(reopened->id==asset->id && reopened->draws.size()==4,"Managed reopen used original source");
     const auto reopenedGlb=crimson::loadModelPackage(glb->id,project); require(reopenedGlb->images.size()==3,"Embedded GLB reopen failed");
-    for (const auto& image:reopened->images) require(fs::is_regular_file(project/image),"Managed image file missing");
+    for (const auto& image:reopened->images) require(fs::is_regular_file(crimson::resolveAssetPath(project,image)),"Managed image file missing");
     require(packages(project)==2,"Unexpected model package count");
-    const auto image=project/reopened->images[0]; fs::rename(image,image.string()+".removed");
+    const auto image=crimson::resolveAssetPath(project,reopened->images[0]); fs::rename(image,image.string()+".removed");
     rejects([&]{crimson::loadModelPackage(asset->id,project);},"cannot read file");
 }
 void trianglesAndIndices(const fs::path& base) {
@@ -319,8 +322,8 @@ void blendedMaterials(const fs::path& base) {
     const auto* alpha=materialInputLink(material.graph,expression->id,MaterialPin::Left);
     require(alpha&&alpha->fromPin==MaterialPin::A&&findMaterialNode(material.graph,alpha->fromNode)->kind==MaterialNodeKind::Texture2D,
         "BLEND opacity is not connected to the base-color texture alpha.");
-    const auto sidecar=readBytes(project/material.id);const auto repeated=importModelPackage(fixture.gltf,project);promoteModelMaterials(project,*repeated);
-    require(repeated->id==imported->id&&readBytes(project/material.id)==sidecar,"Repeated BLEND import overwrote its native sidecar.");
+    const auto sidecar=readBytes(resolveAssetPath(project,material.id));const auto repeated=importModelPackage(fixture.gltf,project);promoteModelMaterials(project,*repeated);
+    require(repeated->id==imported->id&&readBytes(resolveAssetPath(project,material.id))==sidecar,"Repeated BLEND import overwrote its native sidecar.");
     const ModelResolvers resolver{{},[&](const std::string& id)->std::optional<ModelMaterial>{return loadMaterialAsset(project,id).surface;}};
     const auto reopened=loadModelPackage(imported->id,project,resolver);
     require(reopened->materials[0].alphaBlend&&reopened->materials[0].graph&&
@@ -361,7 +364,7 @@ void uvAndPackageSafety(const fs::path& base) {
     rejects([&]{crimson::importModelPackage(fixture.gltf,project);},"beyond UV1");
     json["materials"][0]["normalTexture"]["texCoord"]=0; writeJson(fixture.gltf,json);
     const auto imported=crimson::importModelPackage(fixture.gltf,project);
-    const auto manifest=project/imported->id; auto description=readJson(manifest); description["document"]="../../../../outside.gltf"; writeJson(manifest,description);
+    const auto manifest=crimson::resolveAssetPath(project,imported->id); auto description=readJson(manifest); description["document"]="../../../../outside.gltf"; writeJson(manifest,description);
     rejects([&]{crimson::loadModelPackage(imported->id,project);},"escapes its package");
     rejects([&]{crimson::loadModelPackage(base/"manifest.json",project);},"outside the managed");
     Triangle singular; singular.json["nodes"][0]["scale"]={1,0,1}; const auto skipped=crimson::importModelPackage(singular.save(base/"singular"),project);

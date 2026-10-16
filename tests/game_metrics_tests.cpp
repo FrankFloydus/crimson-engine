@@ -1,14 +1,31 @@
 #include "editor/FrameMetrics.h"
+#include "app/FrameProfile.h"
 #include "tools/GameViewInteraction.h"
 #include <imgui_internal.h>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 namespace {
 using namespace crimson;
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+void recordedNavigation() {
+    const auto path=std::filesystem::temp_directory_path()/("crimson-frame-profile-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".json");
+    {
+        FrameProfile profile(path);
+        profile.record({std::numeric_limits<double>::quiet_NaN(),1},true,1920,1080);
+        for(unsigned i=0;i<5000;++i)profile.record({5,2},i%2==0,1920,1080);
+    }
+    std::ifstream input(path);const auto report=nlohmann::json::parse(input);input.close();std::filesystem::remove(path);
+    check(report.at("total_frames")==5000&&report.at("total_navigation_frames")==2500,"Frame recorder mixed idle and user navigation frames.");
+    check(report.at("recent").at("samples")==4096&&report.at("navigation").at("samples")==2500,"Frame recorder did not bound recent samples.");
+    check(report.at("recent").at("fps")==200.0&&report.at("navigation").at("frame_p95_ms")==5.0&&report.at("navigation").at("cpu_p95_ms")==2.0,
+        "Recorded FPS/percentiles do not match completed frame timings.");
+    check(report.at("navigation").at("frames_over_8_33ms")==0,"Fast navigation frames were classified below 120 FPS.");
+}
 void near(double actual,double expected){check(std::abs(actual-expected)<1e-9,"Unexpected metrics conversion or average.");}
 void sampling(){
     check(!validDeviceMemory(-1,1024)&&!validDeviceMemory(0,0)&&!validDeviceMemory(1025,1024),"Unavailable or invalid device memory was presented as real VRAM.");
@@ -65,5 +82,5 @@ void shortcut(){
     check(ui.tick(true)&&ui.imageHeld(),"F1 interrupted an existing gameplay click or failed while it was held.");ui.mouse(false);
 }
 }
-int main(){try{sampling();shortcut();std::cout<<"Game metrics cadence, honest unavailable counters and F1 ownership checks passed.\n";return 0;}
+int main(){try{sampling();shortcut();recordedNavigation();std::cout<<"Game metrics cadence, recorded navigation timing and F1 ownership checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

@@ -1,4 +1,5 @@
 #include "resources/StreamingModel.h"
+#include "resources/AssetId.h"
 #include "resources/TextureMipCache.h"
 #include "assets/AtomicFile.h"
 #include "assets/MaterialPreviewGeometry.h"
@@ -100,11 +101,26 @@ void concurrentTextureMipPublication(const std::filesystem::path& root) {
     for(const auto& entry:std::filesystem::directory_iterator(root))
         check(!entry.path().filename().string().starts_with("concurrent-texture.mips."),"Concurrent mip publication leaked its temporary file.");
 }
+void generatedTextureMips() {
+    using namespace crimson;using namespace crimson::streaming;
+    const std::vector<std::uint8_t> pixels{0,0,0,17,255,255,255,231};
+    const auto linear=generatedTextureMipCache(123,{2,1,pixels});
+    check(linear.file.empty()&&linear.memory.size()==2&&linear.levels.size()==2&&readTextureMip(linear,0).rgba==pixels,
+        "Generated linear mip descriptors require no disk payload and preserve source pixels.");
+    check(linear.memory.back().rgba[0]==128,"Generated data mips were not filtered in linear space.");
+    const auto display=generatedTextureThumbnail(linear);
+    check(display.key==linear.key&&display.file.empty()&&display.memory.back().rgba[0]==188&&display.memory.front().rgba[3]==17&&display.memory.front().rgba[7]==231,
+        "Generated thumbnails changed source identity/alpha or encoded before linear mip filtering.");
+    check(linear.memory.back().rgba[0]==128&&textureMipCacheBytes(linear)>=sizeof(TextureMipCache)+pixels.size()+4,
+        "Display preparation changed immutable data pixels or omitted resident CPU mip storage.");
+    rejects([&]{generatedTextureMipCache(3,{2,2,pixels});});
+    rejects([&]{generatedTextureThumbnail(TextureMipCache{});});
+}
 void materialSphere() {
     using namespace crimson;
     const auto sphere=materialPreviewGeometry(); const auto level=materialPreviewGeometryLevel();
     check(sphere==materialPreviewGeometry() && level==materialPreviewGeometryLevel(),"Material preview CPU geometry must be shared across materials.");
-    check(sphere->id.starts_with("builtin:") && sphere->primitives.size()==1 && sphere->materials.size()==1 && sphere->draws.size()==1,"Material preview sphere must have one stable built-in primitive and material.");
+    check(isAssetUuid(sphere->id) && isEngineAssetId(sphere->id) && sphere->primitives.size()==1 && sphere->materials.size()==1 && sphere->draws.size()==1,"Material preview sphere must have one stable built-in primitive and material.");
     const auto& primitive=sphere->primitives.front();
     check(primitive.vertices.size()==33*33 && primitive.indices.size()==6*32*31 && primitive.uvMask==3,"Material preview sphere must retain both UV sets and nondegenerate pole triangles.");
     for(const auto& vertex:primitive.vertices) {
@@ -228,6 +244,6 @@ void deformationCache(const std::filesystem::path& root) {
 }
 int main() {
     const auto root=std::filesystem::temp_directory_path()/("crimson-streaming-"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
-    try { std::filesystem::create_directories(root); textureMips(root); concurrentTextureMipPublication(root); geometry(root); deformationCache(root); materialSphere(); cleanup(root); std::cout<<"Streaming mip/LOD/cache/material-sphere checks passed.\n"; return 0; }
+    try { std::filesystem::create_directories(root); textureMips(root); concurrentTextureMipPublication(root); generatedTextureMips(); geometry(root); deformationCache(root); materialSphere(); cleanup(root); std::cout<<"Streaming mip/LOD/cache/material-sphere checks passed.\n"; return 0; }
     catch (const std::exception& error) { try { cleanup(root); } catch (...) {} std::cerr<<error.what()<<'\n'; return 1; }
 }

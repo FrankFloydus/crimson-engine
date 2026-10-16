@@ -5,6 +5,7 @@ Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx/Direct
 ## Task context
 
 - Use the relevant sections of [ENGINE_ARCHITECTURE.md](docs/ENGINE_ARCHITECTURE.md) for renderer, asset, scene, controller/input, simulation, and lifetime changes. It is authoritative for ownership contracts, implementation status, and the milestone marked **Next**.
+- For lighting or character-rig changes, start with [RENDERER_AND_CHARACTER_LIGHTING.md](docs/RENDERER_AND_CHARACTER_LIGHTING.md) for current controls, source ownership, shader contracts and implementation limits. Use [MATERIAL_SHADER_STARTUP.md](docs/MATERIAL_SHADER_STARTUP.md) for material compilation/cache behavior; checkpoint and D2R findings documents retain historical evidence and do not override the current architecture.
 - Keep work within the requested slice. Add later systems when their slice needs them; a planned interface is not evidence that it already exists.
 - When replacing a system, remove superseded code, settings, and UI instead of retaining a legacy mode, unless the user explicitly requests compatibility. Read existing project data through a one-time conversion when needed to avoid losing authored assets; write only the current representation.
 - Implement only features and UI the user requested. Do not add unsolicited features or explanatory text to panel bodies. When help is necessary, use a short tooltip; omit long explanations or put them in documentation.

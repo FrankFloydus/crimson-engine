@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BrowserCatalog.h"
+#include "resources/AssetId.h"
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -43,7 +44,7 @@ public:
     std::string resolveParticle(const std::string& id) const;
     std::string resolveParticleMaterial(const std::string& id) const;
     std::string resolveParticleTexture(const std::string& id) const;
-    bool deleted(const std::string& id) const { return deleted_.contains(id); }
+    bool deleted(const std::string& id) const { return deleted_.contains(id)||deleted_.contains(canonicalAssetId(id)); }
     uint64_t revision() const { return revision_; }
     const std::string& status() const { return status_; }
     const std::vector<AssetUsage>& usages() const { return usages_; }

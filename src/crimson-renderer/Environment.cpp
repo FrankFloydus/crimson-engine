@@ -1,4 +1,6 @@
 #include "Environment.h"
+#include "assets/ContentStorage.h"
+#include "resources/AssetId.h"
 
 #include <bimg/decode.h>
 #include <bx/allocator.h>
@@ -201,10 +203,10 @@ std::filesystem::path fromUtf8(const std::string& text) {
 }
 std::vector<uint8_t> readSource(const std::filesystem::path& root, const std::string& id) {
     const auto relative = fromUtf8(id).lexically_normal();
-    if (relative.is_absolute() || relative.empty() || *relative.begin() != "assets")
+    if (!isAssetUuid(id) && (relative.is_absolute() || relative.empty() || *relative.begin() != "assets"))
         throw std::runtime_error("Environment must reference a managed project asset.");
     for (const auto& part : relative) if (part == "..") throw std::runtime_error("Environment path leaves the project.");
-    std::ifstream input(root/relative, std::ios::binary|std::ios::ate);
+    std::ifstream input(resolveAssetPath(root,id), std::ios::binary|std::ios::ate);
     const auto length = input.tellg();
     if (!input || length <= 0 || length > 256*1024*1024) throw std::runtime_error("Environment source is missing, empty or exceeds 256 MiB.");
     std::vector<uint8_t> bytes(static_cast<size_t>(length));
@@ -482,7 +484,7 @@ std::shared_ptr<const PreparedEnvironment> prepareEnvironmentCpu(const std::file
     auto prepared=std::make_shared<PreparedEnvironment>();
     prepared->key=ibl::cacheKey(source,prepared->settings);
     std::ostringstream name; name << std::hex << std::setfill('0') << std::setw(16) << prepared->key << ".ibl";
-    const auto cache=projectRoot/"assets"/"cache"/"ibl"/name.str();
+    const auto cache=resolveAssetPath(projectRoot,"assets/cache/ibl")/name.str();
     const bool cached=ibl::readCache(cache,prepared->key,prepared->settings,prepared->data);
     bool saved=true;
     if (!cached) {

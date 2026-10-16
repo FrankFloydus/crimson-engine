@@ -2,6 +2,8 @@
 
 The **Shadows** section in **Scene diagnostics** reports the active world's shadow allocation and the shadow work submitted in the current renderer frame. It combines Scene and Game. It does not report every light's direct illumination cost, triangle count, total editor draw count or GPU duration. Work counters reset once at `Renderer::advanceStreaming`, and diagnostics draw after that frame's world submissions. They describe CPU submissions, not completed GPU timestamps, simulation ticks or totals since startup. If neither world view submits, allocation fields can retain their last known values while work counters reset to zero.
 
+For current feature ownership, Inspector controls and renderer limits, see [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md) and [the architecture](ENGINE_ARCHITECTURE.md). This page describes the diagnostics in the current implementation; historical benchmark evidence is linked separately.
+
 New point lights start with **Cast Shadows off**. Eight point-light entities can illuminate the scene while this panel reports zero active point-shadow lights. A shadow-casting directional light is reported separately. Current limits are six faces per point map, sixteen resident point slots and four complete point-map updates per world frame.
 
 ## Point source size and softness
@@ -14,7 +16,7 @@ Changing Source Radius updates receiver filtering without regenerating cached si
 
 ### `Lights: A / C allocated; R px per face`
 
-- **A** is the number of admitted, enabled, shadow-casting **point lights** in the active world. Directional lights are excluded. Ordinary lights with Cast Shadows off are excluded.
+- **A** is the number of admitted, enabled, shadow-casting **point lights** in the active world, including the enabled player Local World Light when eligible. Directional lights and the dedicated Key silhouette are excluded. Ordinary lights with Cast Shadows off are excluded.
 - **C** is the point-light capacity of the current GPU atlas. Each point-light slot contains six depth faces. It is a storage capacity, not a per-frame update budget or the number of faces.
 - **R** is the inner resolution of each point face and directional projection: 256, 512 or 1024 pixels. Each physical atlas tile also has two guard texels on each side, so its stored width and height are `R + 4`.
 
@@ -103,6 +105,8 @@ Replaced atlases remain explicitly owned for two renderer-frame boundaries befor
 
 ## What eight point lights and one sun should show
 
+These eight-light scheduling and allocation examples assume the player Local World Light and dedicated Key silhouette are disabled. Enabling a shadowed Local World Light adds an ordinary point-map request to the same sixteen-map/four-update budget; enabling the Key silhouette adds its separate map/counters and can change atlas padding.
+
 With all eight point lights' **Cast Shadows off**, they still illuminate the scene. On a fresh allocation expect `Lights: 0 / 0 allocated`, with the global resolution still visible. Point rendered/cached/faces and deferred/awaiting counts are all zero. The sun gives one directional context per submitted view, initially rendered and then cached. Casters, draws and memory can remain nonzero because the sun needs shadows. Enable Cast Shadows on the point lights before judging their shadow caching or update budget.
 
 The inspected saved scene had this default configuration. The [eight-point-light follow-up](SHADOW_QUALITY_CORRECTION.md#eight-point-light-follow-up) records the as-saved check and isolated copies with all eight shadows enabled. Its enabled static case reached eight cached maps, zero faces and zero deferral. During the tested moving-character path, four maps refreshed and four stayed cached, with twenty-four faces and zero deferral throughout 2,000 measured samples. That path affected four maps; it does not establish that all eight can refresh in one frame.
@@ -133,7 +137,7 @@ Eight point lights require forty-eight faces. With one sun and the active world'
 
 At 1024: pitch = **1028**, width = **12,336**, height = **5,140**, and storage = **12,336 × 5,140 × 4 = 253,628,160 bytes = 241.8787 MiB**.
 
-This table assumes eight-slot point capacity, one-slot directional capacity and no retired allocation. A previously larger atlas, more directional lights, atlas replacement or different retained slot placement changes the result. These depth targets are separate from the streamable asset-cache retention target.
+This table assumes eight-slot point capacity, one-slot directional capacity, no Local World Light or Key silhouette, and no retired allocation. A previously larger atlas, more directional lights, atlas replacement or different retained slot placement changes the result. These depth targets are separate from the streamable asset-cache retention target.
 
 ## Practical checks
 
@@ -143,7 +147,8 @@ This table assumes eight-slot point capacity, one-slot directional capacity and 
 4. **Move one point light.** Its position/radius projection changes. Expect one whole-map update/six faces when scheduled. If it is deferred, awaiting a valid map increases and that light temporarily renders without shadows. It must not sample the map from its previous position. Moving only a light's color or positive intensity should not require a depth refresh.
 5. **Adjust Depth Bias or Normal Bias.** The receiver comparison changes immediately, while the existing depth map can stay cached. This is expected. Bias controls are not a general substitute for correct projection coverage or receiver-plane calculations.
 6. **Move only the camera.** With static lights/casters and eight admitted point lights, point maps normally stay cached. Directional camera fits may refresh. New resource detail arriving because of the changed view can also trigger legitimate map updates.
-7. **Disable one point light's Cast Shadows.** Active point count decreases, while direct lighting remains. Capacity and atlas memory can remain at their prior high-water mark. Turning the light itself off or setting intensity to zero also removes it from point-shadow eligibility.
+7. **Adjust Attenuation, Range Falloff, Edge Softness or Specular Scale.** These change receiver lighting rather than stored depth. A positive-intensity, unchanged-position/radius light can retain its cached map. Source Radius behaves the same way for map reuse while changing PCSS filtering, as described above.
+8. **Disable one point light's Cast Shadows.** Active point count decreases, while direct lighting remains. Capacity and atlas memory can remain at their prior high-water mark. Turning the light itself off or setting intensity to zero also removes it from point-shadow eligibility.
 
 ## Interpretation limits
 

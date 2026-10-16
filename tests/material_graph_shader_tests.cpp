@@ -49,7 +49,7 @@ MaterialAsset rgbScalarFixture() {
     const auto rough=addMaterialNode(graph,MaterialNodeKind::Texture2D).id,metal=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
     findMaterialNode(graph,rough)->texture.role=MaterialTextureRole::Data;findMaterialNode(graph,rough)->texture.image.id="assets/textures/roughness.png";
     findMaterialNode(graph,metal)->texture.role=MaterialTextureRole::Data;findMaterialNode(graph,metal)->texture.image.id="assets/textures/metallic.png";
-    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id,product=addMaterialNode(graph,MaterialNodeKind::Multiply).id,saturate=addMaterialNode(graph,MaterialNodeKind::Saturate).id;
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id,product=addMaterialNode(graph,MaterialNodeKind::Multiply).id,saturate=addMaterialNode(graph,MaterialNodeKind::Clamp).id;
     findMaterialNode(graph,color)->color={.2f,.9f,.7f,.6f};
     connectMaterialNodes(graph,rough,MaterialPin::RGB,out,MaterialPin::Roughness);
     connectMaterialNodes(graph,metal,MaterialPin::RGB,out,MaterialPin::Metallic);
@@ -81,6 +81,67 @@ MaterialAsset animatedFixture() {
     connectMaterialNodes(graph,lerp,MaterialPin::Value,power,MaterialPin::Left);
     connectMaterialNodes(graph,power,MaterialPin::Value,output,MaterialPin::BaseColor);
     return material;
+}
+MaterialAsset grungeAdjustmentFixture() {
+    MaterialAsset material;auto& graph=material.graph;
+    const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id;
+    materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    const auto uv=addMaterialNode(graph,MaterialNodeKind::UV).id;
+    const auto panner=addMaterialNode(graph,MaterialNodeKind::Panner).id;
+    findMaterialNode(graph,panner)->panner.speed={.1f,-.2f};
+    const auto grunge=addMaterialNode(graph,MaterialNodeKind::Grunge).id;
+    const auto desaturation=addMaterialNode(graph,MaterialNodeKind::Desaturation).id;
+    const auto contrastRgb=addMaterialNode(graph,MaterialNodeKind::ContrastRGB).id;
+    const auto hue=addMaterialNode(graph,MaterialNodeKind::HueShift).id;
+    const auto contrast=addMaterialNode(graph,MaterialNodeKind::Contrast).id;
+    connectMaterialNodes(graph,uv,MaterialPin::UV,panner,MaterialPin::UV);
+    connectMaterialNodes(graph,panner,MaterialPin::UV,grunge,MaterialPin::UV);
+    connectMaterialNodes(graph,grunge,MaterialPin::RGB,desaturation,MaterialPin::Left);
+    connectMaterialNodes(graph,desaturation,MaterialPin::RGB,contrastRgb,MaterialPin::Left);
+    connectMaterialNodes(graph,contrastRgb,MaterialPin::RGB,hue,MaterialPin::Left);
+    connectMaterialNodes(graph,hue,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,grunge,MaterialPin::RGB,contrast,MaterialPin::Left);
+    connectMaterialNodes(graph,contrast,MaterialPin::Value,output,MaterialPin::OpacityMask);
+    return material;
+}
+void adjustmentChecks() {
+    auto material=grungeAdjustmentFixture();const auto original=generateMaterialGraphShader(material);
+    check(original.textures.size()==1&&original.textures.front().grunge&&original.textures.front().image.empty()&&original.dynamicCoverage,
+        "Animated Grunge did not lower to a derived Texture 2D binding with dynamic coverage.");
+    check(original.textures.front().role==MaterialGraphTextureRole::Data,"Grunge image lost its linear-data texture role.");
+    check(!materialGraphFixedSurface(material.graph),"A spatial Grunge was certified for the fixed-surface path.");
+    auto& graph=material.graph;
+    MaterialNodeId grunge{},contrast{},hue{};
+    for(auto& node:graph.nodes) {
+        if(node.kind==MaterialNodeKind::Grunge) {
+            grunge=node.id;node.grunge.seed=64;node.grunge.tiling=17;node.grunge.coverage=.2f;
+            node.grunge.disorder=.8f;node.grunge.detail=.9f;node.grunge.stainsOpacity=.7f;node.grunge.leaksOpacity=.6f;
+        }
+        if(materialNodeImageAdjustment(node.kind))node.right.value={2,2,2,2};
+        if(node.kind==MaterialNodeKind::HueShift)hue=node.id;
+        if(node.kind==MaterialNodeKind::Contrast)contrast=node.id;
+    }
+    const auto edited=generateMaterialGraphShader(material);
+    check(original.topologyKey==edited.topologyKey&&original.uniforms!=edited.uniforms,"Grunge or adjustment edits changed shader topology instead of uniforms.");
+    for(const auto& node:graph.nodes)if(materialNodeImageAdjustment(node.kind)||node.kind==MaterialNodeKind::Grunge)
+        for(const auto& pin:materialNodeOutputs(graph,node)) {
+            const auto preview=generateMaterialGraphPreviewShader(material,{node.id,pin.pin});
+            check(preview.nodePreview&&preview.textures.size()==1&&preview.textures.front().grunge,
+                "Adjustment/Grunge preview lost the shared generated image binding.");
+        }
+    for(const auto id:{grunge,contrast}) {
+        const auto rgb=generateMaterialGraphPreviewShader(material,{id,MaterialPin::RGB});
+        const auto value=generateMaterialGraphPreviewShader(material,{id,MaterialPin::Value});
+        check(rgb.variants.front().source.find("result.baseColor = vec3_splat(g")!=std::string::npos&&
+            value.variants.front().source.find("result.baseColor = vec3_splat(g")!=std::string::npos,
+            "Scalar generator RGB/Value previews did not splat their scalar result.");
+    }
+    const auto scalar=addMaterialNode(graph,MaterialNodeKind::Scalar).id;
+    connectMaterialNodes(graph,scalar,MaterialPin::Value,hue,MaterialPin::Left);
+    check(generateMaterialGraphShader(material).variants.front().source.find("ccGraphHueShift(vec3_splat(")!=std::string::npos,
+        "Adjustment scalar input did not broadcast locally to RGB.");
+    materialOutputNode(graph).output.blend=MaterialBlend::Opaque;
+    check(!generateMaterialGraphShader(material).dynamicCoverage,"Opaque Grunge color invalidated static coverage.");
 }
 void runtimeUniformChecks() {
     auto material=animatedFixture();const auto serialized=serializeMaterialGraph(material.graph);
@@ -195,8 +256,10 @@ void cpuChecks() {
         connectMaterialNodes(graph,tail,MaterialPin::Value,mul,MaterialPin::Left);
         connectMaterialNodes(graph,tex,MaterialPin::RGB,mul,MaterialPin::Right);tail=mul;
     }
-    connectMaterialNodes(graph,tail,MaterialPin::Value,materialOutputNode(graph).id,MaterialPin::BaseColor);
-    bool rejected=false;try{generateMaterialGraphShader(overloaded);}catch(const std::exception&){rejected=true;}
+    bool rejected=false;try{
+        connectMaterialNodes(graph,tail,MaterialPin::Value,materialOutputNode(graph).id,MaterialPin::BaseColor);
+        generateMaterialGraphShader(overloaded);
+    }catch(const std::exception&){rejected=true;}
     check(rejected,"More than 12 active texture bindings were accepted.");
     MaterialAsset parameters;auto& parameterGraph=parameters.graph;
     const auto parameterOutput=addMaterialNode(parameterGraph,MaterialNodeKind::Output).id;
@@ -212,7 +275,7 @@ void cpuChecks() {
     check(chained.uniforms.size()==69 && chained.uniforms.size()<=MaterialGraphMaxParameterRows,"Long scalar Multiply chain lost parameter packing.");
     auto rgbScalar=rgbScalarFixture();const auto rgbShader=generateMaterialGraphShader(rgbScalar);
     for(const auto& variant:rgbShader.variants) {
-        for(const auto name:{"roughness","metallic","specular"}) {
+        if(variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle)for(const auto name:{"roughness","metallic","specular"}) {
             const auto start=variant.source.find(std::string("result.")+name+" = (");
             check(start!=std::string::npos&&variant.source.substr(start,variant.source.find('\n',start)-start).ends_with(").x;"),
                 "RGB scalar material input lacks explicit first-component conversion.");
@@ -224,6 +287,71 @@ void cpuChecks() {
     const auto rgbEdited=generateMaterialGraphShader(rgbScalar);
     check(rgbEdited.topologyKey==rgbShader.topologyKey&&rgbEdited.uniforms!=rgbShader.uniforms,"Color parameter edits recompiled scalar conversion topology.");
 }
+void passIdentityChecks() {
+    const ShaderCompileConfig config{};
+    for(const auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha,MaterialBlend::Additive}) {
+        auto material=fixture();
+        auto& output=materialOutputNode(material.graph);output.output.blend=blend;
+        const auto outputId=output.id;
+        if(blend==MaterialBlend::Alpha||blend==MaterialBlend::Additive) {
+            const auto link=*materialInputLink(material.graph,outputId,MaterialPin::OpacityMask);
+            connectMaterialNodes(material.graph,link.fromNode,link.fromPin,outputId,MaterialPin::Opacity);
+        }
+        const auto original=generateMaterialGraphShader(material);
+        // A new color-only branch changes topology, allocations and expression
+        // numbering without changing any coverage operation or its bindings.
+        const auto color=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
+        const auto mix=addMaterialNode(material.graph,MaterialNodeKind::Lerp).id;
+        const auto previous=*materialInputLink(material.graph,outputId,MaterialPin::BaseColor);
+        connectMaterialNodes(material.graph,previous.fromNode,previous.fromPin,mix,MaterialPin::Left);
+        connectMaterialNodes(material.graph,color,MaterialPin::RGB,mix,MaterialPin::Right);
+        connectMaterialNodes(material.graph,mix,MaterialPin::Value,outputId,MaterialPin::BaseColor);
+        const auto edited=generateMaterialGraphShader(material);
+        check(edited.topologyKey!=original.topologyKey,"Color topology edit did not change its material bundle.");
+        for(std::size_t i=0;i<original.variants.size();++i) {
+            const auto& before=original.variants[i];const auto& after=edited.variants[i];
+            const bool surface=before.pass==MaterialGraphPass::Model||before.pass==MaterialGraphPass::Particle;
+            check((before.source!=after.source)==surface,"Color-only topology invalidated an unrelated depth shader.");
+            check((materialGraphShaderRecipe(config,original,before).name!=materialGraphShaderRecipe(config,edited,after).name)==surface,
+                "Shader job identity included another pass's topology.");
+        }
+        for(const auto& texture:original.textures) {
+            // The fixture's coverage uses its first texture, including UV data.
+            if(texture.nodeId!=materialInputLink(material.graph,outputId,MaterialPin::OpacityMask)->fromNode)continue;
+            const auto after=std::find_if(edited.textures.begin(),edited.textures.end(),[&](const auto& item){return item.nodeId==texture.nodeId;});
+            check(after!=edited.textures.end()&&after->slot==texture.slot&&after->mappingRow==texture.mappingRow&&after->settingsRow==texture.settingsRow,
+                "Color edit moved shared coverage bindings.");
+        }
+        if(blend!=MaterialBlend::Opaque) {
+            const auto opacity=addMaterialNode(material.graph,MaterialNodeKind::Multiply).id;
+            const auto pin=blend==MaterialBlend::Mask?MaterialPin::OpacityMask:MaterialPin::Opacity;
+            const auto previousOpacity=*materialInputLink(material.graph,outputId,pin);
+            connectMaterialNodes(material.graph,previousOpacity.fromNode,previousOpacity.fromPin,opacity,MaterialPin::Left);
+            connectMaterialNodes(material.graph,opacity,MaterialPin::Value,outputId,pin);
+            const auto changed=generateMaterialGraphShader(material);
+            check(changed.variants[1].source!=edited.variants[1].source,"Opacity topology failed to invalidate picking coverage.");
+            check((changed.variants[2].source!=edited.variants[2].source)==(blend==MaterialBlend::Mask),
+                "Shadow shader identity ignored Mask coverage or compiled unused transparent opacity.");
+        }
+    }
+    // Shared branches must be ordered from coverage itself, independently of
+    // which texture is first encountered through the BaseColor traversal.
+    MaterialAsset shared;
+    const auto output=addMaterialNode(shared.graph,MaterialNodeKind::Output).id;
+    materialOutputNode(shared.graph).output.blend=MaterialBlend::Mask;
+    const auto a=addMaterialNode(shared.graph,MaterialNodeKind::Texture2D).id;
+    const auto b=addMaterialNode(shared.graph,MaterialNodeKind::Texture2D).id;
+    const auto product=addMaterialNode(shared.graph,MaterialNodeKind::Multiply).id;
+    connectMaterialNodes(shared.graph,a,MaterialPin::R,product,MaterialPin::Left);
+    connectMaterialNodes(shared.graph,b,MaterialPin::R,product,MaterialPin::Right);
+    connectMaterialNodes(shared.graph,product,MaterialPin::Value,output,MaterialPin::OpacityMask);
+    connectMaterialNodes(shared.graph,b,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    const auto before=generateMaterialGraphShader(shared);
+    connectMaterialNodes(shared.graph,a,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    const auto after=generateMaterialGraphShader(shared);
+    for(const auto i:{1,2,4})check(before.variants[i].source==after.variants[i].source,
+        "Surface traversal order moved shared coverage expressions or bindings.");
+}
 std::map<std::filesystem::path,std::filesystem::file_time_type> cacheTimes(const std::filesystem::path& root) {
     std::map<std::filesystem::path,std::filesystem::file_time_type> result;
     for(const auto& entry:std::filesystem::directory_iterator(root))if(entry.is_regular_file())result.emplace(entry.path(),entry.last_write_time());
@@ -233,6 +361,21 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
     const auto root=std::filesystem::temp_directory_path()/("crimson-graph-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-graph-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
     const ShaderCompileConfig config{compiler,source,include,root};
+    const auto grunge=grungeAdjustmentFixture();
+    const auto grungeShader=generateMaterialGraphShader(grunge);
+    const auto compileGenerated=[&](const MaterialGraphShader& generated) {
+        for(const auto& variant:generated.variants) {
+            const auto fragment=compileShader(config,materialGraphShaderRecipe(config,generated,variant));
+            const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+            if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+                throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
+        }
+    };
+    compileGenerated(grungeShader);
+    for(const auto& node:grunge.graph.nodes)if(materialNodeImageAdjustment(node.kind)||node.kind==MaterialNodeKind::Grunge)
+        compileGenerated(generateMaterialGraphPreviewShader(grunge,{node.id,node.kind==MaterialNodeKind::Grunge||node.kind==MaterialNodeKind::Contrast?MaterialPin::Value:MaterialPin::RGB}));
+    for(const auto& node:grunge.graph.nodes)if(node.kind==MaterialNodeKind::Grunge||node.kind==MaterialNodeKind::Contrast)
+        compileGenerated(generateMaterialGraphPreviewShader(grunge,{node.id,MaterialPin::RGB}));
     MaterialAsset importedBlend;importedBlend.id="imported-blend-fixture";importedBlend.name="Imported BLEND";
     importedBlend.surface.alphaBlend=true;importedBlend.surface.baseColor={.3f,.4f,.5f,.35f};
     importedBlend.surface.baseColorTexture.image.id="assets/models/imported/images/alpha.png";
@@ -381,7 +524,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
         const auto color=addMaterialNode(explicitSprite.graph,MaterialNodeKind::ParticleColor).id;
         const auto radial=addMaterialNode(explicitSprite.graph,MaterialNodeKind::RadialGradient).id;
         const auto multiply=addMaterialNode(explicitSprite.graph,MaterialNodeKind::Multiply).id;
-        const auto saturate=addMaterialNode(explicitSprite.graph,MaterialNodeKind::Saturate).id;
+        const auto saturate=addMaterialNode(explicitSprite.graph,MaterialNodeKind::Clamp).id;
         findMaterialNode(explicitSprite.graph,saturate)->left.value[0]=2;
         const auto alphaMultiply=addMaterialNode(explicitSprite.graph,MaterialNodeKind::Multiply).id;
         connectMaterialNodes(explicitSprite.graph,saturate,MaterialPin::Value,alphaMultiply,MaterialPin::Left);
@@ -451,7 +594,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        cpuChecks();runtimeUniformChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        cpuChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }
