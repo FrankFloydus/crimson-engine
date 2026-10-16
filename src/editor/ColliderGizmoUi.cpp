@@ -8,6 +8,7 @@ namespace crimson {
 ColliderGizmoResult drawColliderGizmo(ImDrawList& draw,SceneDocument& document,ColliderGizmoDrag& drag,const Mat4& vp,const Vec4& viewport,
                                      bool visible,bool allowStart,bool focused,bool cancelRequested) {
     ColliderGizmoResult result;const auto& io=ImGui::GetIO();
+    visible=visible && document.selection().ids.size()==1 && document.scene().isVisible(document.selection().ids.front());
     if(drag.active() && (!visible || !focused || cancelRequested || io.AppFocusLost || !drag.valid(document))) {
         drag.cancel(document);result.canceled=true;
     }

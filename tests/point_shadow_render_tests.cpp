@@ -3,6 +3,7 @@
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/PointShadowMath.h"
+#include "resources/ShaderCompiler.h"
 #include "resources/ShaderReloadSession.h"
 #include "ShaderSourceBaseline.h"
 #include "assets/AtomicFile.h"
@@ -19,6 +20,11 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <nlohmann/json.hpp>
+#include <numeric>
+#include <limits>
+#include <set>
+#include "crimson-renderer/shaders/point_light.sh"
 
 namespace {
 using namespace crimson;
@@ -96,6 +102,221 @@ unsigned maximumDifference(const DecodedImage& a,const DecodedImage& b) {
         result=std::max(result,static_cast<unsigned>(std::abs(int(a.rgba[i])-int(b.rgba[i]))));
     return result;
 }
+// Diagnostics replace only a private copy of this helper, never project shader
+// sources or authored assets. Keep the old filter here as a regression control,
+// rather than retaining an alternate rendering mode in the engine.
+constexpr const char* LegacyCornerFilter=R"(
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            vec2 samplePixel = clamp(pixel + vec2(float(x), float(y)), origin + vec2_splat(0.5), origin + vec2_splat(u_shadowAtlas.w - 0.5));
+            vec2 lowerCenter = floor(samplePixel - vec2_splat(0.5)) + vec2_splat(0.5);
+            vec2 shallowCenter = lowerCenter + vec2(depthGradient.x < 0.0 ? 1.0 : 0.0, depthGradient.y < 0.0 ? 1.0 : 0.0);
+            float sampleDepth = depth + dot(depthGradient, shallowCenter - pixel);
+            visibility += shadow2D(s_pointShadow, vec3(samplePixel * u_shadowAtlas.xy, sampleDepth));
+        }
+    }
+    return visibility / 9.0;
+)";
+constexpr const char* UnfilteredCornerFilter=R"(
+    vec2 center = clamp(floor(pixel) + vec2_splat(0.5), origin + vec2_splat(0.5), origin + vec2_splat(u_shadowAtlas.w - 0.5));
+    float reference = depth + dot(depthGradient, center - pixel);
+    float stored = s_pointShadow.m_texture.Load(ivec3(ivec2(center), 0)).x;
+    return reference <= stored + comparisonTolerance ? 1.0 : 0.0;
+)";
+struct ShaderHelperRestore {
+    std::filesystem::path path;
+    std::string original;
+    ~ShaderHelperRestore(){try {writeFileAtomically(path,original);}catch(...) {}}
+};
+template<class Read> void touchingCorner(Renderer& renderer,const ShaderCompileConfig& config,
+    const std::shared_ptr<ModelAsset>& mesh,const Read& read) {
+    const auto path=config.sourceDirectory/"point_shadow.sh";
+    std::string original;
+    {std::ifstream input(path,std::ios::binary);check(bool(input),"Cannot read private point-shadow helper.");
+        original.assign(std::istreambuf_iterator<char>(input),{});}
+    ShaderHelperRestore restore{path,original};
+    const auto function=original.find("float pointShadowVisibilityPcf(");
+    const auto begin=original.find("    float visibility = 0.0;",function);
+    const auto end=original.find("\n}",begin);
+    check(function!=std::string::npos && begin!=std::string::npos && end!=std::string::npos,
+        "Cannot locate the private PCF diagnostic boundary.");
+    const auto vertex=compileShader(config,"vs_model");
+    const auto compile=[&](const char* replacement) {
+        const auto source=replacement ? original.substr(0,begin)+replacement+original.substr(end):original;
+        writeFileAtomically(path,source);
+        return RendererShaderPair{RendererProgram::Model,vertex.bytes,compileShader(config,"fs_model").bytes};
+    };
+    const auto legacy=compile(LegacyCornerFilter);
+    const auto unfiltered=compile(UnfilteredCornerFilter);
+    const auto repaired=compile(nullptr);
+    const auto publish=[&](const RendererShaderPair& pair){check(renderer.reloadPrograms(std::span(&pair,1)),renderer.shaderStatus());};
+
+    std::vector<ModelMaterial> materials=mesh->materials;materials[0].doubleSided=true;
+    RenderModelInstance receiver;receiver.entityId=9101;receiver.model.asset=mesh;
+    receiver.materials=&materials;receiver.forceFullDetail=true;
+    receiver.model.transform=math::translation({2,1.5f,0})*math::scaling({2,1.5f,1});
+    auto blocker=receiver;blocker.entityId=9102;
+    // Exact columns avoid a trigonometric epsilon opening the shared vertical
+    // edge: receiver z=0, x=[0,4]; blocker x=0, z=[0,4]; both y=[0,3].
+    blocker.model.transform={0,0,-2,0, 0,1.5f,0,0, 1,0,0,0, 0,1.5f,2,1};
+    const std::array casters{receiver,blocker};
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.ambientVisibility.enabled=false;settings.environment.glow.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    settings.camera.position={.0035f,1.5f,.012f};settings.camera.target={.0035f,1.5f,0};
+    settings.camera.nearPlane=.0001f;settings.camera.fov=45;
+    PointLight light;light.entityId=9103;light.position={-.3f,1.5f,.3f};light.radius=7.12f;
+    light.intensity=4;light.specularStrength=0;light.sourceRadius=0;light.nearFalloffRadius=1.5f;
+    light.rangeFalloffExponent=1;light.edgeSoftness=.93f;light.castShadows=true;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&receiver,1);
+    scene.shadowInstances=casters;scene.pointLights=std::span(&light,1);scene.shadowWorldId=9100;scene.shadowResolution=1024;
+    const auto capture=[&](bool game) {
+        if(game)renderer.renderGame(scene);else renderer.render(scene);
+        check(renderer.shadowStatus().empty(),renderer.shadowStatus());
+        return read(game ? renderer.gameViewportTexture():renderer.viewportTexture());
+    };
+    struct Case {
+        bool game{},savedBias{},litSide{};
+        float lightX{};
+        DecodedImage clear,old,hard,fixed;
+    };
+    std::vector<Case> cases;
+    for(bool game:{false,true})for(bool savedBias:{false,true})for(float lightX:{-.3f,-.301f,.3f})
+        cases.push_back({game,savedBias,lightX>0,lightX});
+    const auto configure=[&](const Case& test) {
+        light.position[0]=test.lightX;
+        light.shadowDepthBias=test.savedBias ? .005f:0;
+        light.shadowNormalBias=test.savedBias ? 1.f:0;
+    };
+    // Shader variants share identical captured depth and lighting equations;
+    // only the hard-PCF query changes. The unfiltered control also retains the
+    // selected authored biases, so a bias-created gap cannot be called filtering.
+    publish(legacy);
+    for(auto& test:cases){configure(test);light.castShadows=false;test.clear=capture(test.game);
+        light.castShadows=true;test.old=capture(test.game);}
+    publish(unfiltered);
+    for(auto& test:cases){configure(test);test.hard=capture(test.game);}
+    publish(repaired);
+    for(auto& test:cases){configure(test);test.fixed=capture(test.game);}
+    bool reproduced=false;
+    constexpr std::array distances{.00015f,.0003f,.0005f,.0008f,.0012f,.002f,.003f,
+        .00325f,.0035f,.00375f,.004f,.00425f,.0045f,.006f};
+    constexpr auto sampleCount=3*distances.size();
+    for(const auto& test:cases) {
+        double oldExcess=0,fixedExcess=0,hardLight=0,maxFixed=0;
+        unsigned blocked=0;
+        for(float y:{1.499f,1.5f,1.501f})for(float x:distances) {
+            const Vec3 point{x,y,0};const auto clear=linearSample(test.clear,settings.camera,point);
+            check(clear>.03 && clear<.9,"Corner reference is dark or display-clipped.");
+            const auto old=linearSample(test.old,settings.camera,point)/clear;
+            const auto hard=linearSample(test.hard,settings.camera,point)/clear;
+            const auto fixed=linearSample(test.fixed,settings.camera,point)/clear;
+            const auto context=std::string(test.game ? "Game":"Scene")+", bias="+(test.savedBias ? ".005/1":"0/0")+
+                ", lightX="+std::to_string(test.lightX)+", receiverX="+std::to_string(x)+
+                ", old="+std::to_string(old)+", unfiltered="+std::to_string(hard)+", repaired="+std::to_string(fixed);
+            if(test.litSide) {
+                check(std::abs(fixed-1)<.035,"Contact correction self-shadowed the physically lit adjacent side: "+context);
+                continue;
+            }
+            oldExcess+=std::max(old-hard,0.0);fixedExcess+=std::max(fixed-hard,0.0);hardLight+=hard;
+            maxFixed=std::max(maxFixed,fixed);
+            check(fixed<=old+.035,"Corner correction increased the old light leak: "+context);
+            if(hard<.05){++blocked;check(fixed<.05,"Filtered corner leaked across a confirmed central blocker: "+context);}
+        }
+        if(test.litSide)continue;
+        std::cout<<"Touching-corner "<<(test.game ? "Game":"Scene")<<" bias="<<(test.savedBias ? ".005/1":"0/0")
+            <<" lightX="<<test.lightX<<" old/filter excess="<<oldExcess<<'/'<<fixedExcess
+            <<" unfiltered mean="<<hardLight/sampleCount<<" repaired max="<<maxFixed<<" central blockers="<<blocked<<'/'<<sampleCount<<"\n";
+        if(!test.savedBias && test.lightX==-.3f) {
+            check(blocked==sampleCount,"Unfiltered exact-touching corner did not provide the expected opaque control.");
+            check(oldExcess>.4,"Old PCF control did not reproduce the corner halo.");
+            check(fixedExcess<oldExcess*.1+.03,"Repaired filter retained the touching-corner halo.");
+            reproduced=true;
+        }
+        if(test.savedBias && test.lightX==-.3f) {
+            check(blocked>=6 && hardLight>3,"Saved biases did not produce both an offset gap and valid farther occlusion.");
+            check(oldExcess>.2,"Saved-bias control did not isolate the additional PCF contact halo.");
+            check(fixedExcess<oldExcess*.1+.03,"Saved-bias contact retained filter-added light beyond the unfiltered gap.");
+        }
+    }
+    check(reproduced,"No exact-touching corner control ran.");
+
+    // This finite, grazing caster stops several metres before the receiver.
+    // Its infinite plane would reach z=0 close to the projected silhouette;
+    // completing that plane must not grow the real, separated shadow edge.
+    struct SeparatedCase {
+        bool game{},savedBias{};float intercept{};
+        DecodedImage clear,old,hard,fixed;
+    };
+    std::vector<SeparatedCase> separated;
+    for(bool game:{false,true})for(bool savedBias:{false,true})for(float intercept:{.0035f,.004f,.0045f})
+        separated.push_back({game,savedBias,intercept});
+    std::array<RenderModelInstance,2> separatedCasters;
+    constexpr float casterLow=.5f,casterHigh=3.2f,casterSlope=.0002f,lightZ=4;
+    const auto configureSeparated=[&](const SeparatedCase& test) {
+        const float half=(casterHigh-casterLow)*.5f,middle=(casterHigh+casterLow)*.5f;
+        const float edgeX=lightZ*(test.intercept+casterSlope*casterHigh)/(lightZ-casterHigh);
+        receiver.model.transform=math::translation({0,1.5f,0})*math::scaling({1,1.5f,1});
+        blocker.model.transform={casterSlope*half,0,half,0, 0,1.4f,0,0, -1,0,casterSlope,0,
+            test.intercept+casterSlope*middle,1.5f,middle,1};
+        separatedCasters={receiver,blocker};scene.shadowInstances=separatedCasters;
+        scene.shadowWorldId=9150;
+        settings.camera.position={edgeX,1.5f,.08f};settings.camera.target={edgeX,1.5f,0};
+        light.position={0,1.5f,lightZ};light.color={1,1,1};
+        // Calibrate a neutral, unclipped ~.2 linear reference using the same
+        // finite-range attenuation as the renderer. The earlier orange light
+        // produced only .0298 RGB mean at intensity20, below the .03 guard.
+        const float attenuation=point_lighting::pointLightAttenuation(lightZ*lightZ,light.inverseRadiusSquared(),
+            light.nearFalloffRadius*light.nearFalloffRadius,light.rangeFalloffExponent,light.edgeSoftness,light.attenuation);
+        const float diffuse=(1-.08f*materials[0].specular)*materials[0].baseColor[0]/std::acos(-1.f);
+        check(attenuation>0&&diffuse>0,"Separated silhouette has no reference light response.");
+        light.intensity=.2f/(attenuation*diffuse);settings.exposure=1;
+        light.shadowDepthBias=test.savedBias?.005f:0;light.shadowNormalBias=1;
+        const Vec3 receiverEdge{edgeX,1.5f,0},casterEdge{test.intercept+casterSlope*casterHigh,1.5f,casterHigh};
+        check(math::length(receiverEdge-casterEdge)>3 && casterLow>.4f,
+            "Separated silhouette fixture did not retain a genuine physical caster/receiver gap.");
+        return edgeX;
+    };
+    publish(legacy);
+    for(auto& test:separated){configureSeparated(test);light.castShadows=false;test.clear=capture(test.game);
+        light.castShadows=true;test.old=capture(test.game);}
+    publish(unfiltered);
+    for(auto& test:separated){configureSeparated(test);test.hard=capture(test.game);}
+    publish(repaired);
+    for(auto& test:separated){configureSeparated(test);test.fixed=capture(test.game);}
+    for(const auto& test:separated) {
+        const auto edgeX=configureSeparated(test);unsigned shadowed=0,lit=0,filtered=0,checkedOutside=0;
+        double maximumGrowth=0;
+        for(float y:{1.49f,1.5f,1.51f})for(int sample=-28;sample<=28;++sample) {
+            const float x=edgeX+float(sample)*.0005f;const Vec3 point{x,y,0};
+            const auto clear=linearSample(test.clear,settings.camera,point);
+            check(clear>.03&&clear<.9,"Separated silhouette reference is dark or display-clipped: "+
+                std::string(test.game?"Game":"Scene")+", bias="+(test.savedBias?".005/1":"0/1")+
+                ", intercept="+std::to_string(test.intercept)+", x="+std::to_string(x)+", y="+std::to_string(y)+
+                ", linear RGB mean="+std::to_string(clear)+", intensity="+std::to_string(light.intensity));
+            const auto old=linearSample(test.old,settings.camera,point)/clear;
+            const auto hard=linearSample(test.hard,settings.camera,point)/clear;
+            const auto fixed=linearSample(test.fixed,settings.camera,point)/clear;
+            shadowed+=hard<.05;lit+=hard>.95;filtered+=old>.1&&old<.9;
+            if(x>edgeX&&hard>.95) {
+                ++checkedOutside;maximumGrowth=std::max(maximumGrowth,old-fixed);
+                const auto context=std::string(test.game?"Game":"Scene")+", bias="+(test.savedBias?".005/1":"0/1")+
+                    ", intercept="+std::to_string(test.intercept)+", edge="+std::to_string(edgeX)+", x="+std::to_string(x)+
+                    ", old="+std::to_string(old)+", unfiltered="+std::to_string(hard)+", repaired="+std::to_string(fixed);
+                check(fixed>=old-.035,"Contact reconstruction grew a genuinely separated caster silhouette: "+context);
+            }
+        }
+        check(shadowed>=6&&lit>=6&&filtered>=6&&checkedOutside>=6,
+            "Separated silhouette control did not resolve opaque coverage, lit receiver and a filtered finite edge.");
+        std::cout<<"Separated grazing silhouette "<<(test.game?"Game":"Scene")<<" bias="<<(test.savedBias?".005/1":"0/1")
+            <<" intercept="<<test.intercept<<" gap=3.2m shadowed/lit/filtered="<<shadowed<<'/'<<lit<<'/'<<filtered
+            <<" maximum shadow growth="<<maximumGrowth<<'\n';
+    }
+}
+#include "point_shadow_room_fixture.h"
 void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     // Destinations outlive Renderer even if a readback times out.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
@@ -118,6 +339,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         throw std::runtime_error("Shadow fixture readback timed out.");
     };
     const auto mesh=quad();check(renderer.prepareModel(*mesh),renderer.modelStatus());
+    touchingCorner(renderer,config,mesh,read);
+    // The exposure-independent editor grid is not a shadow receiver. Isolate
+    // the room's material pixels before comparing them with triangle rays.
+    renderer.setGridVisible(false);
+    room_shadow_fixture::exercise(renderer,config,read);
+    renderer.setGridVisible(true);
     std::vector<ModelMaterial> receiverMaterials=mesh->materials,casterMaterials=mesh->materials;
     std::vector<ModelMaterialTextures> casterTextures(1);
     RenderModelInstance receiver;receiver.entityId=1;receiver.model.asset=mesh;receiver.materials=&receiverMaterials;receiver.forceFullDetail=true;
@@ -200,7 +427,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         <<", hard/contact edge="<<hardEdge.midpoint<<'/'<<nearHardEdge.midpoint<<'\n';
     caster.model.transform=plane(settings.camera,settings.camera.forward()*2,.5f);
     const auto restoredHard=capture();
-    check(maximumDifference(restoredHard,farHard)==0,"Source Radius zero did not restore the exact original 3x3 PCF image.");
+    check(maximumDifference(restoredHard,farHard)==0,"Source Radius zero did not restore the exact hard-filter image.");
     lights[0].sourceRadius=.7f;lights[0].castShadows=false;
     check(maximumDifference(capture(),softClear)==0,"Disabling Cast Shadows retained a soft occluder.");
     lights[0].castShadows=true;lights[0].sourceRadius=0;lights[0].specularStrength=1;

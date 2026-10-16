@@ -13,10 +13,11 @@ namespace crimson {
 class SceneViewport {
 public:
     EditorFrame draw(Camera&, SceneDocument&, AssetLibrary&, Renderer&, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked=false,
-                     bool showCollisions=true, bool showTransformGizmo=true);
+                     bool showCollisions=true, bool showTransformGizmo=true, bool allowCameraNavigation=true,
+                     bool cameraGestureActive=false, bool preserveCameraLens=false);
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return dragging_ || colliderDrag_.active() || materialDrop_.active(); }
-    void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect);
+    void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
     void drawPlayerLightRig(const Camera&,const Scene&);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }

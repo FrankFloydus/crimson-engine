@@ -95,6 +95,7 @@ struct RenderModelInstance {
     SurfaceLightingScopes lightingScopes{};
     std::uint32_t lightingCategory{lighting_scope::World};
     std::shared_ptr<const ModelPose> pose;
+    float opacity{1.f}; // Camera-local presentation only; shared shadow casters retain full opacity.
 };
 
 enum class PickMode { Selection, MaterialSlot };
@@ -116,7 +117,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur, DirectionalShadow, CollisionOverlay=17 };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur, DirectionalShadow, CollisionOverlay=17, OccluderComposite=18 };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -219,6 +220,7 @@ public:
     void setExternalResourceSignature(std::uint64_t);
     std::size_t modelResidentBytes() const;
     std::uint64_t collisionOverlayUploads() const;
+    std::size_t occluderLayerResidentBytes() const;
     void trimModelCache(std::size_t targetBytes,std::span<const std::string> liveIds);
     void clearModel();
     const std::string& modelStatus() const;
@@ -248,7 +250,8 @@ public:
     // Every candidate is created before any live program is replaced.
     bool reloadPrograms(std::span<const RendererShaderPair>,std::span<const std::uint8_t> proceduralCompute={},
         std::span<const std::uint8_t> clusterCompute={},std::span<const std::uint8_t> ambientEvaluate={},
-        std::span<const std::uint8_t> ambientPublish={},std::span<const std::uint8_t> deformationCompute={});
+        std::span<const std::uint8_t> ambientPublish={},std::span<const std::uint8_t> deformationCompute={},
+        std::span<const std::uint8_t> occluderDepthCompute={});
     const std::string& shaderStatus() const;
     std::uint64_t shaderSignature() const;
     bgfx::TextureHandle viewportTexture() const noexcept;

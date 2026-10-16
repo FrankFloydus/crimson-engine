@@ -14,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <stdexcept>
@@ -108,6 +109,396 @@ void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& m
                 receive(true);
                 check(capture().rgba==fogged.rgba,"Reusing the opted-in material packet did not restore fog exactly.");
             }
+        }
+    }
+}
+template<class Read,class Prepare,class Pick>
+void exerciseInstanceOpacity(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare,Pick&& pick) {
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
+    settings.environment.background.color={};settings.environment.background.show=false;
+    RenderScene scene{settings,{}};scene.sceneMode=true;
+    std::vector<ModelMaterial> frontMaterials(1),rearMaterials(1);
+    rearMaterials[0].baseColor={0,1,0,1};
+    std::vector<ModelMaterialTextures> frontBindings(1),rearBindings(1);
+    RenderModelInstance front;front.entityId=301;front.model.asset=mesh;front.materials=&frontMaterials;front.textures=&frontBindings;
+    auto rear=front;rear.entityId=302;rear.materials=&rearMaterials;rear.textures=&rearBindings;rear.shading=MaterialShading::Unlit;
+    rear.model.transform=math::translation({0,0,-.25f});
+    std::array instances{front,rear};scene.instances=instances;
+    const auto capture=[&](bool game=true){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+    const auto encoded=[](float linear){return int(std::lround(255*(linear<=.0031308f?12.92f*linear:1.055f*std::pow(linear,1/2.4f)-.055f)));};
+    const auto expect=[&](const DecodedImage& image,Vec3 position,float coverage,bool additive,const std::string& context) {
+        const auto actual=sample(image,settings.camera,position);
+        const std::array expected{encoded(coverage),encoded(additive?1.f:1-coverage),0};
+        check(difference(actual,expected)<=6,context+": RGB="+std::to_string(actual[0])+","+std::to_string(actual[1])+","+std::to_string(actual[2])+
+            ", expected="+std::to_string(expected[0])+","+std::to_string(expected[1])+",0");
+    };
+    // Low authored Opaque alpha must remain irrelevant. Mask cutoff must run
+    // before the camera fade, while Alpha/Additive multiply authored coverage
+    // by that fade exactly once in the existing shared transparency queue.
+    for(bool generated:{false,true})for(auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha,MaterialBlend::Additive}) {
+        const float authoredAlpha=blend==MaterialBlend::Opaque?.25f:blend==MaterialBlend::Mask?.75f:.4f;
+        const auto context=std::string(generated?"Generated":"Fallback")+" instance opacity, blend="+std::to_string(unsigned(blend));
+        MaterialAsset authored;addMaterialNode(authored.graph,MaterialNodeKind::Output);
+        auto& output=materialOutputNode(authored.graph).output;output.shading=MaterialShading::Unlit;output.blend=blend;
+        output.baseColor={1,0,0};output.opacity=authoredAlpha;output.opacityMask=authoredAlpha;
+        auto& material=frontMaterials[0];material=ModelMaterial{};material.baseColor={1,0,0,authoredAlpha};
+        material.alphaMask=blend==MaterialBlend::Mask;material.alphaCutoff=.5f;
+        instances[0]=front;instances[0].shading=MaterialShading::Unlit;instances[0].blend=blend;instances[1]=rear;
+        frontBindings[0].graph=generated?prepare(authored):nullptr;
+        DecodedImage full;
+        for(float opacity:{1.f,.5f,.125f,0.f}) {
+            instances[0].opacity=opacity;const auto image=capture();
+            const float coverage=opacity*((blend==MaterialBlend::Alpha||blend==MaterialBlend::Additive)?authoredAlpha:1.f);
+            expect(image,{},coverage,blend==MaterialBlend::Additive,context+", fade="+std::to_string(opacity));
+            if(opacity==1)full=image;
+        }
+        instances[0].opacity=1;check(capture().rgba==full.rgba,context+" did not restore the same full-opacity image.");
+        instances[0].opacity=.5f;
+        check(pick(scene,{},PickMode::Selection)==front.entityId,context+" lost visibly covered selection.");
+        instances[0].opacity=.005f;
+        check(pick(scene,{},PickMode::Selection)==rear.entityId,context+" retained selection below visible coverage threshold.");
+        check(pick(scene,{},PickMode::MaterialSlot)==front.entityId,context+" changed neutral material-slot targeting.");
+        instances[0].opacity=0;check(pick(scene,{},PickMode::Selection)==rear.entityId,context+" retained a hidden instance in selection.");
+        if(blend==MaterialBlend::Mask) {
+            material.baseColor[3]=.25f;output.opacityMask=.25f;
+            if(generated)frontBindings[0].graph=prepare(authored);
+            instances[0].opacity=.5f;expect(capture(),{},0,false,context+" lost authored mask cutout.");
+            check(pick(scene,{},PickMode::Selection)==rear.entityId,context+" lost authored mask cutout in selection.");
+        }
+        if(blend!=MaterialBlend::Opaque)continue;
+        for(float opacity:{std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),2.f}) {
+            instances[0].opacity=opacity;check(capture().rgba==full.rgba,context+" did not safely normalize nonfinite or excessive opacity.");
+        }
+        instances[0].opacity=-1;expect(capture(),{},0,false,context+" did not clamp negative opacity.");
+        // Lit emission provides a known radiance without depending on an IBL
+        // bake or analytic light, covering the second fallback shader branch.
+        material.baseColor={1,0,0,.25f};material.emissive={1,0,0};output.emission={1,0,0};output.shading=MaterialShading::StandardPbr;
+        instances[0].shading=MaterialShading::StandardPbr;instances[0].opacity=.5f;
+        if(generated)frontBindings[0].graph=prepare(authored);
+        expect(capture(),{},.5f,false,context+" did not fade Lit radiance.");
+        // Ambient Visibility must evaluate the faded surface analytically:
+        // it is absent from the camera's opaque depth/receiver attachments.
+        settings.environment.ambientVisibility.enabled=true;settings.environment.ambientVisibility.strength=1;
+        settings.environment.ambientVisibility.darknessFloor=.25f;settings.environment.ambientVisibility.attenuateEmission=true;
+        scene.playerReveal={{},.1f,true};
+        expect(capture(),{},.5f,false,context+" retained a stale opaque ambient receiver.");
+        settings.environment.ambientVisibility.enabled=false;settings.environment.ambientVisibility.attenuateEmission=false;scene.playerReveal={};
+        material.emissive={};output.emission={};output.shading=MaterialShading::Unlit;instances[0].shading=MaterialShading::Unlit;
+        if(generated)frontBindings[0].graph=prepare(authored);
+        // Both draws share exactly one material packet. The value is per
+        // instance, and switching Scene/Game must not retain the previous draw.
+        auto right=instances[0];right.entityId=303;
+        instances[0].model.transform=math::translation({-.5f,0,0})*math::scaling({.35f,.35f,1});instances[0].opacity=.25f;
+        right.model.transform=math::translation({.5f,0,0})*math::scaling({.35f,.35f,1});right.opacity=.75f;
+        const std::array twins{instances[0],right,rear};scene.instances=twins;
+        const auto game=capture();expect(game,{-.5f,0,0},.25f,false,context+" shared packet lost left opacity.");
+        expect(game,{.5f,0,0},.75f,false,context+" shared packet lost right opacity.");
+        auto opaqueTwins=twins;opaqueTwins[0].opacity=opaqueTwins[1].opacity=1;scene.instances=opaqueTwins;
+        expect(capture(false),{-.5f,0,0},1,false,context+" Game fade leaked into the Scene view.");
+        scene.instances=twins;check(capture().rgba==game.rgba,context+" view switching changed the Game fade.");
+        scene.instances=instances;
+    }
+}
+template<class Read,class Prepare>
+void exerciseNearestOccluderLayer(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
+    auto room=quad();room->id="eight-layer-occluder-room";room->bounds={};room->primitives.clear();room->draws.clear();room->materials.clear();
+    for(unsigned i=0;i<8;++i) {
+        auto primitive=mesh->primitives.front();primitive.material=i;
+        for(auto& vertex:primitive.vertices){vertex.position[2]=-.025f*i;math::include(room->bounds,vertex.position);}
+        // Alternate triangulation and winding-preserving triangle order. None
+        // of these internal surfaces can rely on a transparent triangle sort.
+        primitive.indices=i%2?std::vector<std::uint32_t>{1,2,3,0,1,3}:std::vector<std::uint32_t>{0,2,3,0,1,2};
+        room->primitives.push_back(std::move(primitive));room->materials.emplace_back();
+    }
+    for(unsigned i:{7u,2u,0u,6u,1u,5u,3u,4u})room->draws.push_back({i,{}});
+    check(renderer.prepareModel(*room),renderer.modelStatus());
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
+    settings.environment.background.color={};settings.environment.background.show=false;
+    std::vector<ModelMaterial> materials(8),rearMaterials(1);rearMaterials[0].baseColor={0,1,0,1};
+    std::vector<ModelMaterialTextures> bindings(8),rearBindings(1);
+    RenderModelInstance instance;instance.entityId=401;instance.model.asset=room;instance.materials=&materials;instance.textures=&bindings;instance.shading=MaterialShading::Unlit;
+    auto rear=instance;rear.entityId=402;rear.model.asset=mesh;rear.model.transform=math::translation({0,0,-.4f});rear.materials=&rearMaterials;rear.textures=&rearBindings;
+    auto player=rear;player.entityId=403;player.model.transform=math::translation({0,0,.2f})*math::scaling({.2f,.2f,1});
+    std::array instances{instance,rear};RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;
+    const auto capture=[&](bool game=true){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+    const auto expected=[](float linear){return int(std::lround(255*(linear<=.0031308f?12.92f*linear:1.055f*std::pow(linear,1/2.4f)-.055f)));};
+    const auto requireColor=[&](const DecodedImage& image,Vec3 point,std::array<int,3> rgb,const std::string& context) {
+        const auto actual=sample(image,settings.camera,point);
+        check(difference(actual,rgb)<=6,context+": RGB="+std::to_string(actual[0])+","+std::to_string(actual[1])+","+std::to_string(actual[2]));
+    };
+    const auto initialBytes=renderer.occluderLayerResidentBytes();
+    check(initialBytes==0,"Full-opacity rendering allocated an unused occluder layer.");
+    MaterialAsset authored;const auto outputId=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+    const auto output=[&]() -> MaterialOutputNode& {return materialOutputNode(authored.graph).output;};
+    output().shading=MaterialShading::Unlit;output().baseColor={1,0,0};
+    for(bool generated:{false,true}) {
+        const auto context=std::string(generated?"Generated":"Fallback")+" nearest occluder";
+        for(auto& material:materials){material=ModelMaterial{};material.baseColor={1,0,0,1};}
+        output().blend=MaterialBlend::Opaque;output().shading=MaterialShading::Unlit;output().baseColor={1,0,0};output().emission={};
+        for(auto& binding:bindings)binding.graph=generated?prepare(authored):nullptr;
+        instances[0]=instance;instances[0].opacity=1;const auto full=capture();
+        requireColor(full,{}, {255,0,0},context+" lost its opaque baseline.");
+        instances[0].opacity=std::nextafter(1.f,0.f);
+        check(capture().rgba==full.rgba,context+" popped at the full-opacity endpoint.");
+        for(bool game:{false,true}) {
+            instances[0].opacity=.12f;
+            requireColor(capture(game),{}, {expected(.12f),expected(.88f),0},context+" accumulated eight surfaces instead of fading one layer.");
+        }
+        constexpr auto LayerBytes=std::size_t(Size)*Size*20;
+        check(renderer.occluderLayerResidentBytes()==2*LayerBytes,"Scene/Game nearest layers were not allocated once per view.");
+        capture();capture(false);
+        check(renderer.occluderLayerResidentBytes()==2*LayerBytes,"Warm occluder rendering reallocated or retained extra scratch.");
+        // A different material on every hidden surface must not tint the one
+        // nearest surface, regardless of draw order or material-slot count.
+        output().baseColor={0,0,1};const auto blue=generated?prepare(authored):nullptr;
+        for(unsigned i=1;i<8;++i){materials[i].baseColor={0,0,1,1};bindings[i].graph=blue;}
+        requireColor(capture(),{}, {expected(.12f),expected(.88f),0},context+" leaked a deeper material slot.");
+        RenderParticleMaterial sprite;sprite.baseColor={0,0,1,.5f};sprite.blend=MaterialBlend::Alpha;
+        RenderParticle particle;particle.position={0,0,-.3f};particle.size=2;particle.billboardMode=ParticleBillboardMode::Enabled;
+        scene.particles=std::span(&particle,1);scene.particleMaterials=std::span(&sprite,1);
+        requireColor(capture(),{}, {expected(.12f),expected(.44f),expected(.44f)},context+" did not composite over a farther Alpha particle.");
+        particle.position={0,0,.2f};
+        requireColor(capture(),{}, {expected(.06f),expected(.44f),expected(.5f)},context+" hid a nearer Alpha particle.");
+        scene.particles={};scene.particleMaterials={};
+        const std::array withPlayer{instances[0],rear,player};scene.instances=withPlayer;
+        requireColor(capture(),{}, {0,255,0},context+" composited in front of closer opaque player depth.");scene.instances=instances;
+        // Another faded instance has independent opacity. The shared layer
+        // deliberately keeps whichever faded Opaque/Mask surface is nearest.
+        auto nearer=instances[0];nearer.model.asset=mesh;nearer.model.transform=math::translation({0,0,.1f});nearer.opacity=.65f;
+        std::vector<ModelMaterial> nearerMaterials(1);nearerMaterials[0].baseColor={0,0,1,1};
+        nearer.materials=&nearerMaterials;nearer.textures=&rearBindings;
+        const std::array twoFades{instances[0],nearer,rear};scene.instances=twoFades;
+        requireColor(capture(),{}, {0,expected(.35f),expected(.65f)},context+" accumulated independent faded instances behind the nearest one.");scene.instances=instances;
+        // Real cutout holes in the closest surface must reveal the next faded
+        // surface, whose blue color still composites exactly once.
+        constexpr std::array<std::uint8_t,8> maskPixels{255,255,255,0,255,255,255,255};
+        Texture mask{bgfx::createTexture2D(2,1,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(maskPixels.data(),8))};
+        check(bgfx::isValid(mask.handle),"Occluder mask allocation failed.");
+        output().baseColor={1,0,0};output().blend=MaterialBlend::Mask;
+        const auto texture=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(authored.graph,texture)->texture.image.id="assets/textures/occluder-mask.png";
+        connectMaterialNodes(authored.graph,texture,MaterialPin::A,outputId,MaterialPin::OpacityMask);
+        bindings[0].graph=generated?prepare(authored,mask.handle):nullptr;bindings[0].handles[0]=mask.handle;
+        bindings[0].flags[0]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
+        materials[0].alphaMask=true;instances[0].blend=MaterialBlend::Mask;
+        const auto cutout=capture();requireColor(cutout,{-.45f,0,0},{0,expected(.88f),expected(.12f)},context+" masked hole failed to reveal the next layer.");
+        requireColor(cutout,{.45f,0,0},{expected(.12f),expected(.88f),0},context+" discarded a visible masked surface during fade.");
+        disconnectMaterialInput(authored.graph,outputId,MaterialPin::OpacityMask);removeMaterialNode(authored.graph,texture);
+        output().blend=MaterialBlend::Opaque;instances[0].blend=MaterialBlend::Opaque;materials[0].alphaMask=false;bindings[0].handles[0]=BGFX_INVALID_HANDLE;bindings[0].flags[0]=UINT32_MAX;
+        // Lit HDR plus fog/ambient/glow must use the identical material/light
+        // inputs on both routes. Near-one coverage should not relight a room.
+        output().shading=MaterialShading::StandardPbr;output().emission={2,.25f,0};materials[0].emissive=output().emission;
+        instances[0].shading=MaterialShading::StandardPbr;
+        if(generated)bindings[0].graph=prepare(authored);
+        settings.environment.fog.enabled=true;settings.environment.fog.density=.1f;settings.environment.fog.color={.2f,.3f,.4f};
+        settings.environment.ambientVisibility.enabled=true;settings.environment.ambientVisibility.attenuateEmission=true;
+        settings.environment.ambientVisibility.darknessFloor=.4f;scene.playerReveal={{},.5f,true};
+        settings.environment.glow.enabled=true;settings.environment.glow.strength=.2f;
+        instances[0].opacity=1;const auto lit=capture();instances[0].opacity=std::nextafter(1.f,0.f);const auto litFaded=capture();
+        for(Vec3 point:std::array<Vec3,3>{{{-.4f,0,0},{},{.4f,.3f,0}}})
+            check(difference(sample(lit,settings.camera,point),sample(litFaded,settings.camera,point))<=6,context+" changed Lit HDR/fog/ambient/glow at the opaque endpoint.");
+        instances[0].opacity=1;check(capture().rgba==lit.rgba,context+" failed to restore opaque lighting exactly.");
+        settings.environment.fog={};settings.environment.ambientVisibility={};settings.environment.glow={};scene.playerReveal={};
+    }
+    constexpr auto LayerBytes=std::size_t(Size)*Size*20;
+    renderer.resizeGameViewport(Size+8,Size);
+    check(renderer.occluderLayerResidentBytes()==2*LayerBytes,"Resize prematurely released a submitted occluder layer.");
+    renderer.resizeGameViewport(Size,Size);instances[0].opacity=.12f;
+    for(unsigned i=0;i<4;++i)capture();
+    check(renderer.occluderLayerResidentBytes()==2*LayerBytes,"Resized occluder layer retained retired allocations beyond the frame guard.");
+}
+template<class Read,class Prepare>
+void exerciseParticlesIntersectingOccluders(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
+    settings.environment.background.color={};settings.environment.background.show=false;
+    std::vector<ModelMaterial> wallMaterials(1),rearMaterials(1),hiddenMaterials(1);
+    wallMaterials[0].baseColor={1,0,0,1};rearMaterials[0].baseColor={0,1,0,1};hiddenMaterials[0].baseColor={0,0,1,1};
+    RenderModelInstance wall;wall.model.asset=mesh;wall.materials=&wallMaterials;wall.shading=MaterialShading::Unlit;
+    auto rear=wall;rear.materials=&rearMaterials;rear.model.transform=math::translation({0,0,-1.5f})*math::scaling({2,2,1});
+    auto hidden=wall;hidden.materials=&hiddenMaterials;hidden.model.transform=math::translation({0,0,-.8f});hidden.opacity=.5f;
+    std::array instances{wall,rear,hidden};
+    std::array<RenderParticle,3> particles;
+    for(auto& particle:particles){particle.size=.62f;particle.billboardMode=ParticleBillboardMode::Enabled;}
+    particles[0].position={-.58f,0,-.12f};particles[1].position={0,0,.12f};particles[2].position={.58f,0,0};
+    particles[2].billboardMode=ParticleBillboardMode::Disabled;
+    particles[2].right=math::normalized(Vec3{1,0,1});particles[2].up={0,1,0};
+    RenderParticleMaterial sprite;sprite.baseColor={0,0,1,.6f};sprite.shading=MaterialShading::Unlit;sprite.doubleSided=true;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
+    const auto capture=[&](bool game){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+    const auto encoded=[](float linear){return int(std::lround(255*(linear<=.0031308f?12.92f*linear:1.055f*std::pow(linear,1/2.4f)-.055f)));};
+    for(bool generated:{false,true})for(auto blend:{MaterialBlend::Alpha,MaterialBlend::Additive,MaterialBlend::Opaque,MaterialBlend::Mask}) {
+        sprite.blend=blend;sprite.graph.reset();
+        if(generated) {
+            MaterialAsset authored;addMaterialNode(authored.graph,MaterialNodeKind::Output);
+            auto& output=materialOutputNode(authored.graph).output;output.shading=MaterialShading::Unlit;output.blend=blend;
+            output.baseColor={0,0,1};output.opacity=.6f;output.opacityMask=.6f;sprite.graph=prepare(authored);
+        }
+        const bool additive=blend==MaterialBlend::Additive;
+        const float coverage=blend==MaterialBlend::Opaque||blend==MaterialBlend::Mask?1.f:.6f;
+        for(bool game:{false,true})for(float opacity:{1.f,.5f,.12f,1.f}) {
+            instances[0].opacity=opacity;scene.instances=instances;
+            const auto image=capture(game);
+            const auto context=std::string(generated?"Generated":"Fallback")+" particle blend="+std::to_string(unsigned(blend))+
+                (game?" Game":" Scene")+", wall opacity="+std::to_string(opacity);
+            const auto expect=[&](Vec3 point,bool front) {
+                const float blue=coverage*(front?1.f:1-opacity);
+                const float red=opacity*(front&&!additive?1-coverage:1.f);
+                const float green=(1-opacity)*(additive?1.f:1-coverage);
+                const std::array expected{encoded(red),encoded(green),encoded(blue)};
+                const auto actual=sample(image,settings.camera,point);
+                check(difference(actual,expected)<=7,context+(front?" foreground":" background")+" particle crossed the wrong faded-wall layer: RGB="+
+                    std::to_string(actual[0])+","+std::to_string(actual[1])+","+std::to_string(actual[2])+", expected="+
+                    std::to_string(expected[0])+","+std::to_string(expected[1])+","+std::to_string(expected[2]));
+            };
+            expect(particles[0].position,false);expect(particles[1].position,true);
+            // A single oriented quad crosses the wall. Its two halves must be
+            // classified at each pixel rather than at the particle center.
+            expect(particles[2].position-particles[2].right*.17f,false);
+            expect(particles[2].position+particles[2].right*.17f,true);
+            const auto& stats=game?renderer.gameParticleStats():renderer.particleStats();
+            check(stats.requested==particles.size()&&stats.submitted==particles.size()&&!stats.dropped&&!stats.invalid,
+                context+" counted the two transparent depth phases as additional particles.");
+            if(opacity==1)continue;
+            // Moving/removing a completely hidden room part changes the old
+            // union-center sorting token but not the nearest wall at any of
+            // these pixels. This is a deterministic reproduction of the pop.
+            scene.instances=std::span(instances).first(2);const auto withoutHidden=capture(game);
+            check(image.rgba==withoutHidden.rgba,context+" changed particle visibility when an unrelated deeper wall part changed the sorting center.");
+        }
+    }
+    // Packed groups cross scanlines at odd widths. Exercise the actual GPU
+    // producer/consumer together, including Scene/Game target restoration.
+    constexpr std::uint16_t OddWidth=129,OddHeight=127;
+    renderer.resizeViewport(OddWidth,OddHeight);renderer.resizeGameViewport(OddWidth,OddHeight);
+    sprite.graph.reset();sprite.blend=MaterialBlend::Alpha;instances[0].opacity=.5f;scene.instances=instances;
+    for(bool game:{false,true}) {
+        if(game)renderer.renderGame(scene);else renderer.render(scene);
+        const auto image=read(game?renderer.gameViewportTexture():renderer.viewportTexture(),OddWidth,OddHeight);
+        for(unsigned i=0;i<particles.size();++i) {
+            const bool front=i==1;const auto point=i==2?particles[i].position-particles[i].right*.17f:particles[i].position;
+            const auto screen=math::project(point,settings.camera.projectionMatrix(float(OddWidth)/OddHeight,ClipDepth::ZeroToOne)*settings.camera.viewMatrix(),
+                {0,0,OddWidth,OddHeight},ClipDepth::ZeroToOne);
+            check(bool(screen),"Odd-sized occluder sample failed projection.");std::array<int,3> actual{};
+            const auto x=static_cast<int>((*screen)[0]),y=static_cast<int>((*screen)[1]);
+            for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)for(unsigned c=0;c<3;++c)
+                actual[c]+=image.rgba[(std::size_t(y+dy)*OddWidth+x+dx)*4+c];
+            for(auto& value:actual)value/=9;
+            const std::array expected{encoded(front?.2f:.5f),encoded(.2f),encoded(front?.6f:.3f)};
+            check(difference(actual,expected)<=7,"Odd-width packed occluder depth changed a particle's visibility.");
+        }
+    }
+    renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
+}
+template<class Read,class Prepare>
+void exerciseParticleFadeTransitions(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
+    // This target deliberately has no simulation dependency. Use presentation
+    // packets for three particles already two seconds into distinct motion,
+    // rather than newborns that could hide an accidental return to t=0.
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
+    settings.environment.background.color={};settings.environment.background.show=false;
+    std::vector<ModelMaterial> wallMaterials(1);wallMaterials[0].baseColor={1,0,0,1};
+    RenderModelInstance wall;wall.model.asset=mesh;wall.materials=&wallMaterials;wall.shading=MaterialShading::Unlit;
+    wall.model.transform=math::translation({.7f,0,0})*math::scaling({.22f,.7f,1});
+    constexpr std::array<Vec3,3> births{{{-.92f,-.75f,-.15f},{-.64f,-.6f,0},{-.36f,-.5f,.15f}}};
+    constexpr std::array<Vec3,3> velocities{{{.01f,.24f,0},{-.015f,.2f,0},{.02f,.16f,0}}};
+    std::array<RenderParticle,3> particles;
+    for(auto& particle:particles){particle.size=.14f;particle.billboardMode=ParticleBillboardMode::Enabled;}
+    RenderParticleMaterial sprite;sprite.blend=MaterialBlend::Alpha;sprite.baseColor={.22f,.4f,.7f,1};
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&wall,1);
+    scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
+    const auto capture=[&]{renderer.renderGame(scene);return read(renderer.gameViewportTexture());};
+    const auto encoded=[](double linear){return int(std::lround(255*(linear<=.0031308?12.92*linear:1.055*std::pow(linear,1/2.4)-.055)));};
+    constexpr std::array<float,7> opacities{1,.12f,1,.5f,1,.12f,1};
+    Texture particleAlpha;
+    for(unsigned materialMode=0;materialMode<4;++materialMode) {
+        const auto mode=std::string(materialMode==0?"fallback":materialMode==1?"Game Time":materialMode==2?"Real Time":"Particle Color RGB/alpha");
+        sprite.graph.reset();
+        if(materialMode==3) {
+            MaterialAsset authored;const auto output=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+            materialOutputNode(authored.graph).output.shading=MaterialShading::Unlit;
+            materialOutputNode(authored.graph).output.blend=MaterialBlend::Alpha;
+            const auto color=addMaterialNode(authored.graph,MaterialNodeKind::ParticleColor).id;
+            const auto alpha=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(authored.graph,alpha)->texture.role=MaterialTextureRole::Data;
+            findMaterialNode(authored.graph,alpha)->texture.image.id="assets/textures/particle-continuity-alpha.png";
+            constexpr std::array<std::uint8_t,4> pixels{255,255,255,204};
+            particleAlpha.handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(pixels.data(),4));
+            check(bgfx::isValid(particleAlpha.handle),"Particle fade-transition alpha texture allocation failed.");
+            const auto coverage=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+            connectMaterialNodes(authored.graph,color,MaterialPin::RGB,output,MaterialPin::BaseColor);
+            connectMaterialNodes(authored.graph,color,MaterialPin::A,coverage,MaterialPin::Left);
+            connectMaterialNodes(authored.graph,alpha,MaterialPin::A,coverage,MaterialPin::Right);
+            connectMaterialNodes(authored.graph,coverage,MaterialPin::Value,output,MaterialPin::Opacity);
+            sprite.graph=prepare(authored,particleAlpha.handle);
+        } else if(materialMode) {
+            MaterialAsset authored;const auto output=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+            materialOutputNode(authored.graph).output.shading=MaterialShading::Unlit;
+            materialOutputNode(authored.graph).output.blend=MaterialBlend::Alpha;
+            const auto time=addMaterialNode(authored.graph,MaterialNodeKind::Time).id;
+            findMaterialNode(authored.graph,time)->time.ignorePause=materialMode==2;
+            const auto factor=addMaterialNode(authored.graph,MaterialNodeKind::Scalar).id;
+            findMaterialNode(authored.graph,factor)->scalar=.15f;
+            const auto product=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+            connectMaterialNodes(authored.graph,time,MaterialPin::Value,product,MaterialPin::Left);
+            connectMaterialNodes(authored.graph,factor,MaterialPin::Value,product,MaterialPin::Right);
+            const auto white=addMaterialNode(authored.graph,MaterialNodeKind::Color).id;
+            findMaterialNode(authored.graph,white)->color={1,1,1,1};
+            const auto tint=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+            connectMaterialNodes(authored.graph,white,MaterialPin::RGB,tint,MaterialPin::Left);
+            connectMaterialNodes(authored.graph,product,MaterialPin::Value,tint,MaterialPin::Right);
+            connectMaterialNodes(authored.graph,tint,MaterialPin::Value,output,MaterialPin::BaseColor);
+            const auto lowered=generateMaterialGraphShader(authored);auto packet=prepare(authored);
+            check(lowered.runtimeGraph&&!lowered.runtimeParameters.empty(),"Particle fade-transition fixture did not lower a live Time branch.");
+            packet->runtimeGraph=lowered.runtimeGraph;packet->runtimeParameters=lowered.runtimeParameters;sprite.graph=std::move(packet);
+        }
+        std::uint64_t signature{};
+        for(std::size_t step=0;step<opacities.size();++step) {
+            const auto age=2.f+static_cast<float>(step)*.125f;
+            constexpr std::array<Vec3,3> agedColors{{{.8f,.1f,.05f},{.05f,.65f,.15f},{.1f,.05f,.7f}}};
+            for(std::size_t i=0;i<particles.size();++i) {
+                auto& particle=particles[i];particle.position=births[i]+velocities[i]*age;
+                const auto brightness=.75f+static_cast<float>(step)*.025f;
+                particle.color={agedColors[i][0]*brightness,agedColors[i][1]*brightness,agedColors[i][2]*brightness,
+                    .3f+static_cast<float>(i)*.05f+static_cast<float>(step)*.02f};
+                particle.size=.14f+static_cast<float>(i)*.01f+static_cast<float>(step)*.004f;
+            }
+            scene.materialContext={age,double(age)+1.25};
+            wall.opacity=1;const auto control=capture();
+            if(!step)signature=renderer.streamingSignature();
+            wall.opacity=opacities[step];const auto image=capture();
+            const auto context=mode+" particle continuity, step="+std::to_string(step)+", wall opacity="+std::to_string(wall.opacity);
+            // Only the wall occupies the right half. Its changing visibility
+            // must not disturb any particle or its material clock on the left.
+            for(unsigned y=0;y<Size;++y)for(unsigned x=0;x<Size/2;++x)for(unsigned c=0;c<4;++c) {
+                const auto offset=(std::size_t(y)*Size+x)*4+c;
+                if(image.rgba[offset]!=control.rgba[offset])
+                    check(false,context+" changed unrelated particle pixels at "+std::to_string(x)+","+std::to_string(y)+", channel="+
+                        std::to_string(c)+", actual="+std::to_string(image.rgba[offset])+", opaque control="+std::to_string(control.rgba[offset]));
+            }
+            const auto expectedTime=materialMode?std::array<int,3>{encoded(.15*(materialMode==1?scene.materialContext.gameSeconds:scene.materialContext.realSeconds)),
+                encoded(.15*(materialMode==1?scene.materialContext.gameSeconds:scene.materialContext.realSeconds)),
+                encoded(.15*(materialMode==1?scene.materialContext.gameSeconds:scene.materialContext.realSeconds))}:
+                std::array<int,3>{encoded(.22),encoded(.4),encoded(.7)};
+            for(std::size_t i=0;i<particles.size();++i) {
+                auto expected=expectedTime;
+                if(materialMode==3)for(unsigned c=0;c<3;++c)expected[c]=encoded(particles[i].color[c]*particles[i].color[3]*.8f);
+                const auto actual=sample(image,settings.camera,particles[i].position);
+                check(difference(actual,expected)<=6,context+" lost the aged position, material clock or color/alpha for particle "+std::to_string(i)+
+                    ": RGB="+std::to_string(actual[0])+","+std::to_string(actual[1])+","+std::to_string(actual[2]));
+                check(difference(sample(image,settings.camera,births[i]),{0,0,0})<=3,context+" rendered a particle back at its birth position.");
+            }
+            const auto& stats=renderer.gameParticleStats();
+            check(stats.requested==particles.size()&&stats.submitted==particles.size()&&!stats.dropped&&!stats.invalid,
+                context+" changed particle admission/submission counts.");
+            check(renderer.streamingSignature()==signature,context+" invalidated renderer resource/program signatures.");
         }
     }
 }
@@ -424,11 +815,11 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.5f,.5f,.5f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();};
-    const auto read=[&](bgfx::TextureHandle target){
-        Texture staging{bgfx::createTexture2D(Size,Size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
+    const auto read=[&](bgfx::TextureHandle target,std::uint16_t width=Size,std::uint16_t height=Size){
+        Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Mapping readback allocation failed.");
-        auto pixels=std::make_shared<DecodedImage>(DecodedImage{Size,Size,std::vector<std::uint8_t>(Size*Size*4)});destinations.push_back(pixels);
-        bgfx::blit(ReadView,staging.handle,0,0,target,0,0,Size,Size);const auto ready=bgfx::readTexture(staging.handle,pixels->rgba.data());
+        auto pixels=std::make_shared<DecodedImage>(DecodedImage{width,height,std::vector<std::uint8_t>(std::size_t(width)*height*4)});destinations.push_back(pixels);
+        bgfx::blit(ReadView,staging.handle,0,0,target,0,0,width,height);const auto ready=bgfx::readTexture(staging.handle,pixels->rgba.data());
         check(ready!=UINT32_MAX,"Mapping readback is unsupported.");
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *pixels;}
         throw std::runtime_error("Mapping readback timed out.");
@@ -668,6 +1059,22 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     };
     std::cerr<<"[material mapping] Material fog.\n"<<std::flush;
     exerciseMaterialFog(renderer,mesh,read,prepare);
+    std::cerr<<"[material mapping] Nearest faded room layer.\n"<<std::flush;
+    exerciseNearestOccluderLayer(renderer,mesh,read,prepare);
+    std::cerr<<"[material mapping] Particle continuity across wall fade transitions.\n"<<std::flush;
+    exerciseParticleFadeTransitions(renderer,mesh,read,prepare);
+    std::cerr<<"[material mapping] Particles intersecting faded walls.\n"<<std::flush;
+    exerciseParticlesIntersectingOccluders(renderer,mesh,read,prepare);
+    const auto pickScene=[&](const RenderScene& target,Vec3 p,PickMode mode) {
+        const auto screen=math::project(p,target.settings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*target.settings.camera.viewMatrix(),{0,0,Size,Size},ClipDepth::ZeroToOne);
+        check(bool(screen),"Instance-opacity pick point failed projection.");
+        check(renderer.requestPick({1,1,++serial,static_cast<std::uint32_t>((*screen)[0]),static_cast<std::uint32_t>((*screen)[1]),renderer.pickResourceSignature(mode),mode}),renderer.pickingStatus());
+        renderer.render(target);std::optional<PickResult> result;
+        for(unsigned i=0;i<120 && !result;++i){tick();result=renderer.pollPick(frame);}
+        check(bool(result),"Instance-opacity pick timed out.");return result->entityId;
+    };
+    std::cerr<<"[material mapping] Per-view model instance opacity.\n"<<std::flush;
+    exerciseInstanceOpacity(renderer,mesh,read,prepare,pickScene);
     std::cerr<<"[material mapping] Image adjustments and generated Grunge.\n"<<std::flush;
     exerciseImageAdjustmentsAndGrunge(renderer,mesh,read,prepare);
     exerciseCollisionOverlays(renderer,mesh,read);

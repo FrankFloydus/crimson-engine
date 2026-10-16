@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorResources.h"
+#include "PlayerOcclusion.h"
 #include "crimson-renderer/RenderFrame.h"
 #include "scene/SceneExtraction.h"
 #include "scene/MaterialSlotAssignment.h"
@@ -71,6 +72,7 @@ struct EditorRenderFrameInput {
     bool gridVisible{};
     std::optional<MaterialSlotAssignment> materialPreview;
     std::vector<RenderCollisionOverlay> sceneCollisionOverlays,gameCollisionOverlays;
+    PlayerOcclusionOpacities gameModelOpacities;
 };
 
 // A hover may replace the authored packet only after every pass and source is

@@ -191,12 +191,14 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
     }
     std::unordered_set<EntityId> keptMeshes;
     for(const auto& record:records) {
-        if(!record.collider || record.collider->shape!=ColliderShape::Trimesh || record.collider->source.empty())continue;
+        if(!record.collider || record.collider->shape!=ColliderShape::Trimesh || (!record.collider->mesh && record.collider->source.empty()))continue;
         if(underCharacter(scene,record.id) || record.character){state.report(record.id,"Static mesh collision cannot be attached beneath a Character.");continue;}
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         const auto found=state.meshColliders.find(record.id);
-        const auto pending=std::find_if(meshes.begin(),meshes.end(),[&](const auto& mesh){return mesh.entity==record.id;});
-        if(pending==meshes.end() || !pending->mesh) {
+        const auto prepared=std::find_if(meshes.begin(),meshes.end(),[&](const auto& mesh){return mesh.entity==record.id;});
+        const PhysicsMeshCollider native{record.id,record.collider->mesh,record.collider->mesh?record.collider->mesh->fingerprint:0};
+        const auto* pending=record.collider->mesh?&native:prepared!=meshes.end()?&*prepared:nullptr;
+        if(!pending || !pending->mesh) {
             if(found!=state.meshColliders.end())keptMeshes.insert(record.id);
             state.report(record.id,"Mesh collision source is not ready; retaining its last accepted geometry.");continue;
         }

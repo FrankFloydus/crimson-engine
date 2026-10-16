@@ -121,9 +121,17 @@ struct QuaderBridge::Impl {
             if(!current.request.manual)if(const auto target=std::find_if(targets.begin(),targets.end(),[&](const auto& value){return value.entity==current.request.entity;});target!=targets.end())applied.autoSync=target->link.autoSync;
             commitAssetTransaction(root,current.result->files);
             try{
-                if(contentStorageReady(root))for(const auto& file:current.result->files)if(file.contents)registerAssetPath(root,file.id,resolveAssetPath(root,file.id));
+                if(contentStorageReady(root)) {
+                    std::vector<StoredAssetPath> paths;paths.reserve(current.result->files.size());
+                    for(const auto& file:current.result->files)if(file.contents)paths.push_back({file.id,resolveAssetPath(root,file.id)});
+                    registerAssetPaths(root,paths);
+                }
                 if(!hooks.applyImport(current.request.entity,applied,*current.result))throw std::runtime_error("The Quader scene import could not be published.");}
-            catch(...){commitAssetTransaction(root,rollback);throw;}
+            catch(...){
+                try{commitAssetTransaction(root,rollback);}
+                catch(...){refreshContentStorage(root);throw;}
+                refreshContentStorage(root);throw;
+            }
             auto& state=states[current.request.entity];state.message=completedMessage(*current.result);state.deferred=current.result->deferredMaterials;state.failures=0;state.failedKey.clear();
             consume(state,current.result->sourceKey);consume(state,current.request.key);
             if(hooks.publishAssets){try{hooks.publishAssets(*current.result);}catch(const std::exception& error){state.message+=" Asset refresh: "+std::string(error.what());}}

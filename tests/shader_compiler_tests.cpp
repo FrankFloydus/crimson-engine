@@ -320,6 +320,31 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     const auto pickFragment=compileShader(shadows,"fs_pick"),particleFragment=compileShader(shadows,"fs_particle"),presentFragment=compileShader(shadows,"fs_present");
     require(dependency(pickFragment,"material_mapping.sh") && dependency(particleFragment,"material_mapping.sh"),"Shared material mapping was absent from picking/sprite reload dependencies.");
     require(dependency(presentFragment,"tone_mapping.sh"),"Tone mapping include was absent from runtime reload dependencies.");
+    require(std::find(names.begin(),names.end(),"fs_occluder_composite")!=names.end(),"Occluder composite is absent from atomic shader discovery.");
+    const auto occluderComposite=compileShader(shadows,"fs_occluder_composite");
+    const auto presentVertex=compileShader(shadows,"vs_present");
+    require(preflightShaderPair(presentVertex.bytes,occluderComposite.bytes,presentVertex.bytes,occluderComposite.bytes,diagnostic),
+        "Nearest occluder composition did not compile/preflight through runtime shader ownership.");
+    require(!preflightShaderPair(presentVertex.bytes,presentFragment.bytes,presentVertex.bytes,occluderComposite.bytes,diagnostic),
+        "Tone mapping replaced the nearest-layer color/depth sampler contract.");
+    const auto warmOccluder=compileShader(shadows,"fs_occluder_composite");
+    require(warmOccluder.bytes==occluderComposite.bytes && warmOccluder.fingerprint==occluderComposite.fingerprint,
+        "Warm occluder composite cache changed code or fingerprint.");
+    require(std::find(names.begin(),names.end(),"cs_occluder_depth")!=names.end(),"Occluder depth compute is absent from atomic shader discovery.");
+    const auto occluderDepth=compileShader(shadows,"cs_occluder_depth");
+    require(occluderDepth.bytes.size()>16&&occluderDepth.bytes[0]=='C'&&!occluderDepth.vertex,
+        "Runtime compiler did not compile occluder depth publication as compute.");
+    require(preflightComputeShader(occluderDepth.bytes,occluderDepth.bytes,diagnostic),"Valid occluder depth publication failed compute preflight.");
+    const auto warmOccluderDepth=compileShader(shadows,"cs_occluder_depth");
+    require(warmOccluderDepth.bytes==occluderDepth.bytes&&warmOccluderDepth.fingerprint==occluderDepth.fingerprint,
+        "Warm occluder depth cache changed code or fingerprint.");
+    auto depthSource=read(shadowSource/"cs_occluder_depth.sc");const auto originalDepth=depthSource;
+    const std::string depthOutput="IMAGE2D_WO(s_occluderAtlasOutput, rgba32f, 1)";
+    const auto depthSlot=depthSource.find(depthOutput);require(depthSlot!=std::string::npos,"Occluder depth fixture has no expected image slot.");
+    depthSource.replace(depthSlot,depthOutput.size(),"IMAGE2D_WO(s_occluderAtlasOutput, rgba32f, 2)");
+    write(shadowSource/"cs_occluder_depth.sc",depthSource);const auto wrongDepthSlot=compileShader(shadows,"cs_occluder_depth");
+    require(!preflightComputeShader(wrongDepthSlot.bytes,occluderDepth.bytes,diagnostic),"Changed occluder depth UAV slot escaped atomic reload validation.");
+    write(shadowSource/"cs_occluder_depth.sc",originalDepth);
     const auto glowFragment=compileShader(shadows,"fs_glow_blur");
     require(dependency(glowFragment,"glow_kernel.sh"),"Glow kernel was absent from runtime reload dependencies.");
     const auto warmGlow=compileShader(shadows,"fs_glow_blur");

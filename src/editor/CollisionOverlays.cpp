@@ -70,6 +70,7 @@ PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::spa
     PreparedCollisionOverlays result;
     if(!enabled)return result;
     for(const auto& record:scene.records()) {
+        if(!scene.isVisible(record.id))continue;
         if(!record.collider && !record.character)continue;
         const auto world=scene.worldTransform(record.id);if(!world || !math::inverse(*world))continue;
         const bool selected=std::find(selection.begin(),selection.end(),record.id)!=selection.end();
@@ -82,7 +83,13 @@ PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::spa
         if(record.collider) {
             const auto& collider=*record.collider;
             if(collider.shape==ColliderShape::Trimesh) {
-                if(query && !collider.source.empty())append(mesh(collider.source.id,query(collider.source.id)),*world,collider.collisionColor,collider.showCollisionInGame);
+                if(collider.mesh || (query && !collider.source.empty())) {
+                    const auto source=colliderMeshResult(collider,query);
+                    // A retained model identity may temporarily have no current
+                    // source snapshot. Its accepted overlay remains usable.
+                    append(mesh(collider.mesh?"native:"+std::to_string(collider.mesh->fingerprint)+":"+
+                        std::to_string(reinterpret_cast<std::uintptr_t>(collider.mesh.get())):collider.source.id,source),*world,collider.collisionColor,collider.showCollisionInGame);
+                }
             } else append(primitive(collider),*world,collider.collisionColor,collider.showCollisionInGame);
         }
         if(record.character) {

@@ -20,7 +20,8 @@ const CollisionDebugEdge& sharedEdge(const CollisionDebugMesh& mesh) {
     require(found!=mesh.edges.end(),"The shared crease was lost.");return *found;
 }
 StaticTriangleMesh quad() {
-    return {{{0,0,0},{1,0,0},{1,1,0},{0,0,0},{1,1,0},{0,1,0}}, {0,1,2,3,4,5}};
+    StaticTriangleMesh result;result.positions={{0,0,0},{1,0,0},{1,1,0},{0,0,0},{1,1,0},{0,1,0}};
+    result.indices={0,1,2,3,4,5};return result;
 }
 void boxesAndSplitSeams() {
     const auto& box=boxCollisionMesh();
@@ -49,7 +50,7 @@ void boxesAndSplitSeams() {
     require(doubled.triangles.size()==4&&doubled.edges.size()==4,"Repeated/reversed fill faces created false nonmanifold wire edges.");
 }
 void creasesBoundariesAndNonmanifold() {
-    StaticTriangleMesh source{{{0,0,0},{1,0,0},{0,1,0},{0,0,1}}, {0,1,2,1,0,3}};
+    StaticTriangleMesh source;source.positions={{0,0,0},{1,0,0},{0,1,0},{0,0,1}};source.indices={0,1,2,1,0,3};
     const auto crease=buildMeshCollisionDebug(source);
     require(crease.edges.size()==5&&crease.silhouetteEdges.empty(),"A significant crease or open boundary was hidden.");
     const auto& concave=sharedEdge(crease);unitNormals(concave);
@@ -67,7 +68,7 @@ void creasesBoundariesAndNonmanifold() {
     const auto& ambiguous=sharedEdge(nonmanifold);unitNormals(ambiguous);
     require(ambiguous.normalA==concave.normalA&&ambiguous.normalB==concave.normalB&&!ambiguous.concave&&ambiguous.planeFallback,
         "A nonmanifold edge lost its available planes or acquired a closed-wedge concavity.");
-    StaticTriangleMesh degenerate{{{0,0,0},{1,0,0},{2,0,0}}, {0,1,2,0,0,1}};
+    StaticTriangleMesh degenerate;degenerate.positions={{0,0,0},{1,0,0},{2,0,0}};degenerate.indices={0,1,2,0,0,1};
     const auto empty=buildMeshCollisionDebug(degenerate);
     require(empty.triangles.size()==2&&empty.edges.empty()&&empty.silhouetteEdges.empty(),"Degenerate fill faces generated invalid wires or were altered.");
 }

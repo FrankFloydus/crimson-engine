@@ -29,6 +29,7 @@
 #include "fs_model.h"
 #include "cs_ambient_visibility.h"
 #include "cs_ambient_publish.h"
+#include "cs_occluder_depth.h"
 #include "vs_pick.h"
 #include "fs_pick.h"
 #include "vs_present.h"
@@ -39,6 +40,7 @@
 #include "fs_grid.h"
 #include "vs_collision_overlay.h"
 #include "fs_collision_overlay.h"
+#include "fs_occluder_composite.h"
 #include "fs_encode.h"
 #include "vs_particle.h"
 #include "fs_particle.h"
@@ -66,7 +68,7 @@
 
 namespace crimson {
 namespace {
-struct TransparentMeshDraw { double depth{}; std::function<void()> submit; };
+struct TransparentMeshDraw { double depth{}; std::function<void(bool)> submit; };
 using RenderViews = RenderViewPassSlots;
 const auto MainViews=renderViewPassSlots(RenderViewPurpose::Scene);
 const auto ParticlePreviewViews=renderViewPassSlots(RenderViewPurpose::ParticlePreview);
@@ -79,6 +81,10 @@ std::uint64_t shaderContentHash(std::span<const std::uint8_t> vertex,std::span<c
 }
 float finiteOr(float value, float fallback) { return std::isfinite(value) ? value : fallback; }
 float bounded(float value, float fallback, float lo, float hi) { return std::clamp(finiteOr(value, fallback), lo, hi); }
+MaterialBlend authoredModelBlend(const RenderModelInstance& instance,const ModelMaterial& material,const ModelMaterialTextures& bindings) {
+    return bindings.graph?bindings.graph->blend:material.graph?materialOutputNode(*material.graph).output.blend:
+        material.alphaBlend?MaterialBlend::Alpha:instance.blend;
+}
 float toLinear(float value) {
     const float c = bounded(value, 0.0f, 0.0f, 1.0f);
     return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
@@ -195,6 +201,26 @@ struct GlowTargets {
     std::size_t bytes() const noexcept {return std::size_t(width)*height*16*textures.size();}
 };
 
+struct OccluderLayerTargets {
+    bgfx::TextureHandle color{BGFX_INVALID_HANDLE},depth{BGFX_INVALID_HANDLE};
+    bgfx::FrameBufferHandle framebuffer{BGFX_INVALID_HANDLE};
+    std::size_t bytes{};
+    ~OccluderLayerTargets(){destroyHandle(framebuffer);destroyHandle(color);destroyHandle(depth);}
+    void create(std::uint16_t width,std::uint16_t height) {
+        constexpr auto flags=BGFX_TEXTURE_RT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|
+            BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+        if(!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA32F,flags)||
+           !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::D24S8,flags))
+            throw std::runtime_error("Player occluder fading requires HDR color and sampleable D24S8 depth.");
+        color=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA32F,flags);
+        depth=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::D24S8,flags);
+        if(!bgfx::isValid(color)||!bgfx::isValid(depth))throw std::runtime_error("Player occluder layer allocation failed.");
+        const bgfx::TextureHandle attachments[]{color,depth};framebuffer=bgfx::createFrameBuffer(2,attachments,false);
+        if(!bgfx::isValid(framebuffer))throw std::runtime_error("Player occluder framebuffer allocation failed.");
+        bytes=std::size_t(width)*height*20;
+        bgfx::setName(color,"Nearest faded occluder HDR");bgfx::setName(depth,"Nearest faded occluder depth");
+    }
+};
 // Framebuffers borrow textures: HDR and the grid composite share one depth target.
 struct ViewportTargets {
     std::unique_ptr<ClusteredLightingGpu> clustered;
@@ -206,11 +232,12 @@ struct ViewportTargets {
     bgfx::TextureHandle display{BGFX_INVALID_HANDLE}, depth{BGFX_INVALID_HANDLE};
     bgfx::FrameBufferHandle hdrBuffer{BGFX_INVALID_HANDLE}, compositeBuffer{BGFX_INVALID_HANDLE}, displayBuffer{BGFX_INVALID_HANDLE};
     std::unique_ptr<GlowTargets> glow;
+    std::shared_ptr<OccluderLayerTargets> occluderLayer;
     std::string glowFailure; // Retry only after target recreation, avoiding allocation churn every frame.
     ~ViewportTargets() {
         ambient.reset();destroyHandle(depthPrepass);destroyHandle(readableDepth);destroyHandle(receiverScope);
         clustered.reset();
-        glow.reset();
+        glow.reset();occluderLayer.reset();
         destroyHandle(hdrBuffer); destroyHandle(compositeBuffer); destroyHandle(displayBuffer);
         destroyHandle(hdr); destroyHandle(composite); destroyHandle(display); destroyHandle(depth);
     }
@@ -325,6 +352,12 @@ struct Renderer::Impl {
     ParticleRenderStats particles,previewParticles,gameParticles;
     std::string particleStatus;
     std::vector<particle_rendering::TransparentSortKey> particleScratch;
+    struct ParticleBatch {
+        bgfx::InstanceDataBuffer instances{};
+        std::size_t index{};
+        bool mesh{};
+    };
+    std::vector<ParticleBatch> particleBatches;
     std::vector<std::shared_ptr<const void>> submittedPins,previousSubmittedPins;
     std::unordered_map<std::string,std::shared_ptr<GpuModel>> models;
     std::unique_ptr<ModelDeformationGpu> deformation;
@@ -354,7 +387,9 @@ struct Renderer::Impl {
     std::string shaderStatus,thumbnailStatus;
     std::string shadowStatus;
     std::unique_ptr<PointShadowRenderer> shadows,thumbnailShadows;
-    std::array<std::uint64_t,18> programHashes{};
+    std::array<std::uint64_t,20> programHashes{};
+    struct RetiredOccluderLayer {std::shared_ptr<OccluderLayerTargets> target;std::uint64_t after{};};
+    std::deque<RetiredOccluderLayer> retiredOccluderLayers;
     std::unique_ptr<CollisionOverlayGpu> collisionOverlays;
     bgfx::ProgramHandle collisionOverlayProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle clusterComputeProgram{BGFX_INVALID_HANDLE};
@@ -374,6 +409,10 @@ struct Renderer::Impl {
     bgfx::TextureHandle white{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pbr{BGFX_INVALID_HANDLE}, present{BGFX_INVALID_HANDLE}, gridProgram{BGFX_INVALID_HANDLE}, encode{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle modelProgram{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle occluderCompositeProgram{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle occluderDepthProgram{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle occluderColor{BGFX_INVALID_HANDLE},occluderDepth{BGFX_INVALID_HANDLE},occluderComposite{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle occluderPhase{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pickProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle particleProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle skyProgram{BGFX_INVALID_HANDLE};
@@ -387,7 +426,7 @@ struct Renderer::Impl {
     bgfx::UniformHandle pickId{BGFX_INVALID_HANDLE}, lightCounts{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle modelBase{BGFX_INVALID_HANDLE}, modelSpecular{BGFX_INVALID_HANDLE},modelSurface{BGFX_INVALID_HANDLE}, modelEmissive{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle modelUv{BGFX_INVALID_HANDLE}, modelOptions{BGFX_INVALID_HANDLE}, modelMaps{BGFX_INVALID_HANDLE}, modelEmissiveMap{BGFX_INVALID_HANDLE};
-    bgfx::UniformHandle modelNormalMatrix{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle modelNormalMatrix{BGFX_INVALID_HANDLE},instanceOpacity{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle materialUvScale{BGFX_INVALID_HANDLE},materialUvOffset{BGFX_INVALID_HANDLE},materialUvRotation{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle metallicRoughnessSampler{BGFX_INVALID_HANDLE}, occlusionSampler{BGFX_INVALID_HANDLE}, emissiveSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle baseColorMetallic{BGFX_INVALID_HANDLE}, roughness{BGFX_INVALID_HANDLE}, textureFlags{BGFX_INVALID_HANDLE};
@@ -400,7 +439,7 @@ struct Renderer::Impl {
     bgfx::UniformHandle normalSampler{BGFX_INVALID_HANDLE}, irradianceSampler{BGFX_INVALID_HANDLE}, prefilteredSampler{BGFX_INVALID_HANDLE}, brdfSampler{BGFX_INVALID_HANDLE}, environmentParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle ambientLight{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
-    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*,std::span<const TransparentMeshDraw>,bool,const std::function<void()>&,MaterialEvaluationContext,bgfx::ViewId depthView=InvalidRenderView);
+    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*,std::span<const TransparentMeshDraw>,bool,const std::function<void()>&,MaterialEvaluationContext,bgfx::ViewId depthView=InvalidRenderView,const std::function<void()>& composite={});
     std::shared_ptr<const ModelPose> poseFor(const RenderModelInstance&);
     void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId,bgfx::ViewId,bgfx::ViewId,unsigned,unsigned,float);
     bool prepareGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViewPurpose);
@@ -424,6 +463,9 @@ struct Renderer::Impl {
         if (!initialized) return;
         shadows.reset();thumbnailShadows.reset();destroyHandle(shadowProgram);
         collisionOverlays.reset();destroyHandle(collisionOverlayProgram);
+        retiredOccluderLayers.clear();destroyHandle(occluderCompositeProgram);
+        destroyHandle(occluderDepthProgram);destroyHandle(occluderPhase);
+        destroyHandle(occluderColor);destroyHandle(occluderDepth);destroyHandle(occluderComposite);
         deformation.reset();bindPoses.clear();destroyHandle(deformationProgram);
         destroyHandle(directionalShadowProgram);destroyHandle(directionalCasterViewProjection);destroyHandle(directionalCasterTile);
         sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); gameTargets.reset(); pickTargets.reset(); thumbnails.clear();
@@ -451,7 +493,7 @@ struct Renderer::Impl {
         submittedPins.clear(); previousSubmittedPins.clear();
         destroyHandle(modelProgram); destroyHandle(modelBase); destroyHandle(modelSpecular); destroyHandle(modelSurface); destroyHandle(modelEmissive);
         destroyHandle(pickProgram); destroyHandle(pickId); destroyHandle(lightCounts);
-        destroyHandle(modelUv); destroyHandle(modelOptions); destroyHandle(modelMaps); destroyHandle(modelEmissiveMap); destroyHandle(modelNormalMatrix);
+        destroyHandle(modelUv); destroyHandle(modelOptions); destroyHandle(modelMaps); destroyHandle(modelEmissiveMap); destroyHandle(modelNormalMatrix);destroyHandle(instanceOpacity);
         destroyHandle(materialUvScale);destroyHandle(materialUvOffset);destroyHandle(materialUvRotation);
         destroyHandle(metallicRoughnessSampler); destroyHandle(occlusionSampler); destroyHandle(emissiveSampler);
         destroyHandle(baseColorMetallic); destroyHandle(roughness); destroyHandle(textureFlags);
@@ -490,6 +532,12 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     init.resolution.reset = BGFX_RESET_VSYNC;
     if (!bgfx::init(init)) throw std::runtime_error("bgfx could not initialize Direct3D 11.");
     impl_->initialized = true;
+    // Driver worker callbacks can finish after bgfx releases its device and
+    // dynamically unloads D3D11. Keep their runtime code mapped until process
+    // exit; all GPU resources and COM references still follow normal teardown.
+    HMODULE d3d11Runtime{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN,L"d3d11.dll",&d3d11Runtime))
+        throw std::runtime_error("Could not retain the Direct3D 11 runtime through process shutdown.");
     if (bgfx::getRendererType() != bgfx::RendererType::Direct3D11) throw std::runtime_error("Direct3D 11 was requested but another backend was selected.");
     if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 248 view slots for lighting, shadows, Glow and editor previews.");
     if (!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_RT) ||
@@ -523,6 +571,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->modelMaps = uniform("u_modelMaps");
     impl_->modelEmissiveMap = uniform("u_modelEmissiveMap");
     impl_->modelNormalMatrix = uniform("u_modelNormalMatrix",bgfx::UniformType::Mat4);
+    impl_->instanceOpacity = uniform("u_instanceOpacity");
     impl_->surfaceLighting=uniform("u_surfaceLighting");
     impl_->surfaceCategory=uniform("u_surfaceCategory");
     impl_->directionLightingRoles=uniform("u_directionLightingRoles",bgfx::UniformType::Vec4,4);
@@ -548,6 +597,11 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->glowColor=uniform("s_glowColor",bgfx::UniformType::Sampler);
     impl_->gridProgram = program(cc_vs_grid,cc_fs_grid,"Quader analytic construction grid");
     impl_->collisionOverlayProgram=program(cc_vs_collision_overlay,cc_fs_collision_overlay,"Depth-tested collision overlays");
+    impl_->occluderCompositeProgram=program(cc_vs_present,cc_fs_occluder_composite,"Nearest player occluder composite");
+    impl_->occluderColor=uniform("s_occluderColor",bgfx::UniformType::Sampler);
+    impl_->occluderDepth=uniform("s_occluderDepth",bgfx::UniformType::Sampler);
+    impl_->occluderComposite=uniform("u_occluderComposite");
+    impl_->occluderPhase=uniform("u_occluderPhase");
     impl_->collisionOverlays=std::make_unique<CollisionOverlayGpu>();
     impl_->encode = program(cc_vs_present,cc_fs_encode,"Viewport sRGB encoding");
     impl_->particleProgram = program(cc_vs_particle,cc_fs_particle,"Unified material sprite fallback");
@@ -572,8 +626,10 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->deformation=std::make_unique<ModelDeformationGpu>(impl_->deformationProgram);
     impl_->ambientEvaluateProgram=ambientProgram(cc_cs_ambient_visibility);
     impl_->ambientPublishProgram=ambientProgram(cc_cs_ambient_publish);
+    impl_->occluderDepthProgram=ambientProgram(cc_cs_occluder_depth);
     if(!bgfx::isValid(impl_->ambientEvaluateProgram)||!bgfx::isValid(impl_->ambientPublishProgram))
         throw std::runtime_error("Ambient-visibility compute program creation failed.");
+    if(!bgfx::isValid(impl_->occluderDepthProgram))throw std::runtime_error("Nearest occluder depth publication program creation failed.");
     impl_->skyRight=uniform("u_skyRight");impl_->skyUp=uniform("u_skyUp");impl_->skyForward=uniform("u_skyForward");
     impl_->skySampler=uniform("s_skyEnvironment",bgfx::UniformType::Sampler);
     impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
@@ -582,7 +638,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
         shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur),
         shaderContentHash(cc_vs_directional_shadow,cc_fs_directional_shadow),shaderContentHash({},cc_cs_cluster_lights),shaderContentHash({},cc_cs_procedural_filter),
         shaderContentHash({},cc_cs_ambient_visibility),shaderContentHash({},cc_cs_ambient_publish),shaderContentHash({},cc_cs_model_deform),
-        shaderContentHash(cc_vs_collision_overlay,cc_fs_collision_overlay)};
+        shaderContentHash(cc_vs_collision_overlay,cc_fs_collision_overlay),shaderContentHash(cc_vs_present,cc_fs_occluder_composite),shaderContentHash({},cc_cs_occluder_depth)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
@@ -634,6 +690,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
          {.5f,.5f,0,0,0,1,1,1},{-.5f,.5f,0,0,0,1,0,1}}, {0,1,2,0,2,3}
     });
     impl_->particleScratch.reserve(MaxParticleDrawCount);
+    impl_->particleBatches.reserve(MaxParticleDrawCalls);
     if (!(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING))
         impl_->particleStatus="This adapter does not support particle instancing.";
     resizeViewport(impl_->windowWidth,impl_->windowHeight);
@@ -694,6 +751,13 @@ bool Renderer::publishThumbnailEnvironment(const PreparedEnvironment& data) {
 const std::string& Renderer::environmentStatus() const {
     return impl_->proceduralActive?impl_->proceduralEnvironment->status():impl_->environment->status();
 }
+std::size_t Renderer::occluderLayerResidentBytes() const {
+    std::size_t bytes{};
+    for(const auto* target:{impl_->targets.get(),impl_->gameTargets.get()})
+        if(target&&target->occluderLayer)bytes+=target->occluderLayer->bytes;
+    for(const auto& retired:impl_->retiredOccluderLayers)bytes+=retired.target->bytes;
+    return bytes;
+}
 std::size_t Renderer::environmentResidentBytes() const {
     auto bytes=impl_->environment->residentBytes()+impl_->thumbnailEnvironment->residentBytes()+impl_->materialPreviewEnvironment->residentBytes()+
         impl_->proceduralEnvironment->residentBytes()+impl_->thumbnailProceduralEnvironment->residentBytes();
@@ -701,9 +765,11 @@ std::size_t Renderer::environmentResidentBytes() const {
         if(target->clustered)bytes+=target->clustered->residentBytes();
         if(target->ambient)bytes+=target->ambient->residentBytes();
         bytes+=target->readableDepthBytes;
+        if(target->occluderLayer)bytes+=target->occluderLayer->bytes;
     }};
     add(impl_->targets);add(impl_->gameTargets);add(impl_->materialPreviewTargets);add(impl_->particlePreviewTargets);
     if(impl_->pendingThumbnail)add(impl_->pendingThumbnail->targets);
+    for(const auto& retired:impl_->retiredOccluderLayers)bytes+=retired.target->bytes;
     return bytes;
 }
 const ClusteredLightingStats& Renderer::clusteredLightingStats() const {return impl_->clusterStats;}
@@ -758,6 +824,8 @@ void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
     // new Scene set. Game and shadow residency do not affect pick signatures.
     impl_->streamModels->beginMainView();
     ++impl_->renderFrame;
+    while(!impl_->retiredOccluderLayers.empty()&&impl_->retiredOccluderLayers.front().after<=impl_->renderFrame)
+        impl_->retiredOccluderLayers.pop_front();
     impl_->collisionOverlays->trim(impl_->renderFrame);
     impl_->deformation->advance(impl_->renderFrame);
     std::erase_if(impl_->bindPoses,[](const auto& item){return item.second.asset.expired();});
@@ -851,12 +919,14 @@ void Renderer::trimThumbnailCache(std::size_t target) {
 const std::string& Renderer::thumbnailStatus() const { return impl_->thumbnailStatus; }
 bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::span<const std::uint8_t> proceduralCompute,
     std::span<const std::uint8_t> clusterCompute,std::span<const std::uint8_t> ambientEvaluate,
-    std::span<const std::uint8_t> ambientPublish,std::span<const std::uint8_t> deformationCompute) {
+    std::span<const std::uint8_t> ambientPublish,std::span<const std::uint8_t> deformationCompute,
+    std::span<const std::uint8_t> occluderDepthCompute) {
     std::vector<std::pair<bgfx::ProgramHandle*,bgfx::ProgramHandle>> candidates;
     std::vector<std::pair<std::size_t,std::uint64_t>> hashes;
     bgfx::ProgramHandle worldCompute{BGFX_INVALID_HANDLE},thumbnailCompute{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle nextClusterCompute{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle nextAmbientEvaluate{BGFX_INVALID_HANDLE},nextAmbientPublish{BGFX_INVALID_HANDLE},nextDeformation{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle nextOccluderDepth{BGFX_INVALID_HANDLE};
     try {
         candidates.reserve(pairs.size());hashes.reserve(pairs.size());
         const auto prepareAmbient=[&](std::span<const std::uint8_t> bytes,std::span<const std::uint8_t> contract,
@@ -871,6 +941,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
         prepareAmbient(ambientEvaluate,cc_cs_ambient_visibility,14,nextAmbientEvaluate);
         prepareAmbient(ambientPublish,cc_cs_ambient_publish,15,nextAmbientPublish);
         prepareAmbient(deformationCompute,cc_cs_model_deform,16,nextDeformation);
+        prepareAmbient(occluderDepthCompute,cc_cs_occluder_depth,19,nextOccluderDepth);
         if(!clusterCompute.empty() && shaderContentHash({},clusterCompute)!=impl_->programHashes[12]) {
             std::string diagnostic;
             if(!preflightComputeShader(clusterCompute,cc_cs_cluster_lights,diagnostic))throw std::runtime_error(diagnostic);
@@ -906,6 +977,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             case RendererProgram::GlowExtract: target=&impl_->glowExtractProgram; contractV=cc_vs_present; contractF=cc_fs_glow_extract; break;
             case RendererProgram::GlowBlur: target=&impl_->glowBlurProgram; contractV=cc_vs_present; contractF=cc_fs_glow_blur; break;
             case RendererProgram::CollisionOverlay:target=&impl_->collisionOverlayProgram;contractV=cc_vs_collision_overlay;contractF=cc_fs_collision_overlay;break;
+            case RendererProgram::OccluderComposite:target=&impl_->occluderCompositeProgram;contractV=cc_vs_present;contractF=cc_fs_occluder_composite;break;
             }
             if (!target || std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.first==target;})) throw std::runtime_error("Shader reload batch has an invalid or duplicated program.");
             std::string diagnostic;
@@ -923,7 +995,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
         // Nothing above changes a live owner or its bindings. Rejecting any
         // compute or graphics candidate leaves the entire prior group active.
         const bool programsChanged=!candidates.empty()||bgfx::isValid(nextClusterCompute)||bgfx::isValid(worldCompute)||
-            bgfx::isValid(nextAmbientEvaluate)||bgfx::isValid(nextAmbientPublish)||bgfx::isValid(nextDeformation);
+            bgfx::isValid(nextAmbientEvaluate)||bgfx::isValid(nextAmbientPublish)||bgfx::isValid(nextDeformation)||bgfx::isValid(nextOccluderDepth);
         for (auto& [target,candidate]:candidates) { destroyHandle(*target); *target=candidate; }
         if(bgfx::isValid(nextClusterCompute)) {
             destroyHandle(impl_->clusterComputeProgram);impl_->clusterComputeProgram=nextClusterCompute;
@@ -942,6 +1014,10 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             nextDeformation=BGFX_INVALID_HANDLE;impl_->programHashes[16]=shaderContentHash({},deformationCompute);
             impl_->deformation->setProgram(impl_->deformationProgram);
         }
+        if(bgfx::isValid(nextOccluderDepth)) {
+            destroyHandle(impl_->occluderDepthProgram);impl_->occluderDepthProgram=nextOccluderDepth;
+            nextOccluderDepth=BGFX_INVALID_HANDLE;impl_->programHashes[19]=shaderContentHash({},occluderDepthCompute);
+        }
         if(bgfx::isValid(worldCompute)) {
             impl_->proceduralEnvironment->publishProgramReload(worldCompute);
             impl_->thumbnailProceduralEnvironment->publishProgramReload(thumbnailCompute);
@@ -958,6 +1034,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
         destroyHandle(worldCompute);destroyHandle(thumbnailCompute);
         destroyHandle(nextClusterCompute);
         destroyHandle(nextAmbientEvaluate);destroyHandle(nextAmbientPublish);destroyHandle(nextDeformation);
+        destroyHandle(nextOccluderDepth);
         impl_->shaderStatus=error.what(); return false;
     }
 }
@@ -1032,6 +1109,7 @@ void Renderer::resizeViewport(std::uint32_t width, std::uint32_t height) {
     next->create(width,height); // Old targets survive allocation failure.
     cancelPicking();
     impl_->pickTargets.reset();
+    if(impl_->targets&&impl_->targets->occluderLayer)impl_->retiredOccluderLayers.push_back({std::move(impl_->targets->occluderLayer),impl_->renderFrame+3});
     impl_->targets = std::move(next);
     impl_->width = width; impl_->height = height; impl_->viewportDrawable = true;
 }
@@ -1042,6 +1120,7 @@ void Renderer::resizeGameViewport(std::uint32_t width,std::uint32_t height) {
         impl_->gameDrawable=true; return;
     }
     auto targets=std::make_unique<ViewportTargets>(); targets->create(width,height);
+    if(impl_->gameTargets&&impl_->gameTargets->occluderLayer)impl_->retiredOccluderLayers.push_back({std::move(impl_->gameTargets->occluderLayer),impl_->renderFrame+3});
     impl_->gameTargets=std::move(targets);
     impl_->gameWidth=width; impl_->gameHeight=height; impl_->gameDrawable=true;
 }
@@ -1202,7 +1281,7 @@ void Renderer::render(const RenderScene& scene) {
     impl_->displayedMaterialContext=scene.materialContext;
 }
 void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::span<const RenderParticleMaterial> materials,
-                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result,std::span<const TransparentMeshDraw> meshDraws,bool transparentPhase,const std::function<void()>& bindLighting,MaterialEvaluationContext context,bgfx::ViewId depthView) {
+                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result,std::span<const TransparentMeshDraw> meshDraws,bool transparentPhase,const std::function<void()>& bindLighting,MaterialEvaluationContext context,bgfx::ViewId depthView,const std::function<void()>& composite) {
     ParticleRenderStats stats=transparentPhase && result?*result:ParticleRenderStats{};
     stats.requested=input.size();
     const bool instancing=(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING)!=0;
@@ -1245,12 +1324,12 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
         offsetof(GpuInstance,right)==48 && offsetof(GpuInstance,up)==64);
     constexpr std::uint32_t BatchSize=4096;
     constexpr auto Stride=static_cast<std::uint16_t>(sizeof(GpuInstance));
+    particleBatches.clear();
     std::size_t cursor{};
     while (cursor<particleScratch.size()) {
-        if(particleScratch[cursor].mesh){meshDraws[particleScratch[cursor++].index].submit();continue;}
+        if(particleScratch[cursor].mesh){particleBatches.push_back({{},particleScratch[cursor++].index,true});continue;}
         if(stats.drawCalls>=MaxParticleDrawCalls){++stats.dropped;++cursor;continue;}
         const auto materialIndex=input[particleScratch[cursor].index].materialIndex;
-        const auto& material=materialAt(materialIndex);
         const auto limit=std::min(particleScratch.size(),cursor+BatchSize);
         auto runEnd=cursor+1;
         while(runEnd<limit && !particleScratch[runEnd].mesh && input[particleScratch[runEnd].index].materialIndex==materialIndex)++runEnd;
@@ -1265,50 +1344,66 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
                 {particle.right[0],particle.right[1],particle.right[2],0},{particle.up[0],particle.up[1],particle.up[2],0}};
             std::memcpy(instances.data+i*Stride,&value,sizeof(value));
         }
-        if(!pinned[materialIndex] && material.pinned) {
-            submittedPins.push_back(material.pinned);pinned[materialIndex]=true;
-        }
-        const bool textured=bgfx::isValid(material.colorTexture);
-        const auto shading=material.graph?material.graph->shading:material.shading;
-        const auto mode=material.graph?material.graph->blend:material.blend;
-        const float options[]{textured?1.f:0.f,0,0,0};
-        const std::array<Vec4,5> parameters{{material.baseColor,{material.roughness,material.metallic,material.occlusion,1},
-            {material.emission[0],material.emission[1],material.emission[2],material.alphaCutoff},
-            {material.doubleSided?1.f:0.f,0,shading==MaterialShading::Unlit?1.f:0.f,static_cast<float>(mode)}, {material.specular,0,0,0}}};
-        const Mat4 identity;
-        const Vec4 modelSettings{0,mode==MaterialBlend::Mask?1.f:0.f,material.doubleSided?1.f:0.f,1};
-        const Vec4 emissiveSettings{0,shading==MaterialShading::Unlit?1.f:0.f,1,0},uvSettings{};
-        if(material.graph)submittedPins.push_back(material.graph);
-        const auto bindBatch=[&](bool prepass) {
-            bgfx::setUniform(particleParameters,parameters.data(),static_cast<std::uint16_t>(parameters.size()));
-            bgfx::setUniform(particleParams,options);bindLighting();
-            const Vec4 scopes{float(lighting_scope::World),float(lighting_scope::World),prepass?1.f:0.f,1.f};
-            bgfx::setUniform(surfaceLighting,scopes.data());
-            const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
-            bindFog(fogValues,material.graph?material.graph->receiveFog:material.receiveFog);
-            bgfx::setUniform(modelNormalMatrix,identity.data());bgfx::setUniform(modelOptions,modelSettings.data());
-            bgfx::setUniform(modelUv,uvSettings.data());bgfx::setUniform(modelEmissiveMap,emissiveSettings.data());
-            bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
-            bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
-            if(material.graph)material.graph->bind(context);
-            particleQuad.bind();bgfx::setInstanceDataBuffer(&instances);
-        };
-        const auto blend=mode==MaterialBlend::Alpha ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
-            mode==MaterialBlend::Additive ? BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
-        const bool doubleSided=material.graph?material.graph->uniforms[3][0]>.5f:material.doubleSided;
-        if(depthView!=InvalidRenderView && !transparentPhase) {
-            // Both passes reference this one allocation. A transient-buffer
-            // shortage drops the same batch from depth and visible color.
-            bindBatch(true);
-            bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|(doubleSided?0:BGFX_STATE_CULL_CW));
-            bgfx::submit(depthView,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
-        }
-        bindBatch(false);
-        bgfx::setState((BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) | (transparentPhase?0:BGFX_STATE_WRITE_Z) |
-            BGFX_STATE_DEPTH_TEST_LESS | (doubleSided?0:BGFX_STATE_CULL_CW) | blend);
-        bgfx::submit(view,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
+        particleBatches.push_back({instances,materialIndex,false});
         stats.submitted+=available;cursor+=available;++stats.drawCalls;
     }
+    // Record admission, sorting and transient instances once. Both clipped
+    // phases submit those same batches, so a shortage cannot drop just one
+    // half of a sprite and the renderer never advances particle presentation.
+    const unsigned phases=composite?2u:1u;
+    for(unsigned phase=0;phase<phases;++phase) {
+        if(phase)composite();
+        const Vec4 partition{composite?(phase?1.f:-1.f):0.f,0,0,0};
+        for(const auto& batch:particleBatches) {
+            bgfx::setUniform(occluderPhase,partition.data());
+            if(batch.mesh){meshDraws[batch.index].submit(phase!=0);continue;}
+            const auto materialIndex=batch.index;
+            const auto& material=materialAt(materialIndex);
+            if(!pinned[materialIndex] && material.pinned) {
+                submittedPins.push_back(material.pinned);pinned[materialIndex]=true;
+            }
+            const bool textured=bgfx::isValid(material.colorTexture);
+            const auto shading=material.graph?material.graph->shading:material.shading;
+            const auto mode=material.graph?material.graph->blend:material.blend;
+            const float options[]{textured?1.f:0.f,0,0,0};
+            const std::array<Vec4,5> parameters{{material.baseColor,{material.roughness,material.metallic,material.occlusion,1},
+                {material.emission[0],material.emission[1],material.emission[2],material.alphaCutoff},
+                {material.doubleSided?1.f:0.f,0,shading==MaterialShading::Unlit?1.f:0.f,static_cast<float>(mode)}, {material.specular,0,0,0}}};
+            const Mat4 identity;
+            const Vec4 modelSettings{0,mode==MaterialBlend::Mask?1.f:0.f,material.doubleSided?1.f:0.f,1};
+            const Vec4 emissiveSettings{0,shading==MaterialShading::Unlit?1.f:0.f,1,0},uvSettings{};
+            if(material.graph&&!phase)submittedPins.push_back(material.graph);
+            const auto bindBatch=[&](bool prepass) {
+                bgfx::setUniform(particleParameters,parameters.data(),static_cast<std::uint16_t>(parameters.size()));
+                bgfx::setUniform(particleParams,options);bindLighting();
+                const Vec4 scopes{float(lighting_scope::World),float(lighting_scope::World),prepass?1.f:0.f,1.f};
+                bgfx::setUniform(surfaceLighting,scopes.data());
+                const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+                bindFog(fogValues,material.graph?material.graph->receiveFog:material.receiveFog);
+                bgfx::setUniform(modelNormalMatrix,identity.data());bgfx::setUniform(modelOptions,modelSettings.data());
+                bgfx::setUniform(modelUv,uvSettings.data());bgfx::setUniform(modelEmissiveMap,emissiveSettings.data());
+                bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
+                bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
+                if(material.graph)material.graph->bind(context);
+                particleQuad.bind();bgfx::setInstanceDataBuffer(&batch.instances);
+            };
+            const auto blend=mode==MaterialBlend::Alpha ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
+                mode==MaterialBlend::Additive ? BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
+            const bool doubleSided=material.graph?material.graph->uniforms[3][0]>.5f:material.doubleSided;
+            if(depthView!=InvalidRenderView && !transparentPhase) {
+                // Both passes reference this one allocation. A transient-buffer
+                // shortage drops the same batch from depth and visible color.
+                bindBatch(true);
+                bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|(doubleSided?0:BGFX_STATE_CULL_CW));
+                bgfx::submit(depthView,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
+            }
+            bindBatch(false);
+            bgfx::setState((BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) | (transparentPhase?0:BGFX_STATE_WRITE_Z) |
+                BGFX_STATE_DEPTH_TEST_LESS | (doubleSided?0:BGFX_STATE_CULL_CW) | blend);
+            bgfx::submit(view,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
+        }
+    }
+    const Vec4 noPartition{};bgfx::setUniform(occluderPhase,noPartition.data());
     if (result) *result=stats;
 }
 std::shared_ptr<const ModelPose> Renderer::Impl::poseFor(const RenderModelInstance& instance) {
@@ -1553,6 +1648,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
                 bgfx::setTransform(draw.world.data());
                 bgfx::setUniform(modelNormalMatrix,draw.normal.data());
+                const Vec4 fullOpacity{1,0,0,0};bgfx::setUniform(instanceOpacity,fullOpacity.data());
                 bgfx::setUniform(modelBase,material.baseColor.data());bgfx::setUniform(modelEmissive,emissive.data());
                 bgfx::setUniform(modelUv,uv.data());bgfx::setUniform(modelOptions,options.data());bgfx::setUniform(modelMaps,maps.data());
                 bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
@@ -1649,6 +1745,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     const bool sceneView=identity.purpose==RenderViewPurpose::Scene || identity.purpose==RenderViewPurpose::Game;
     const bool gameView=identity.purpose==RenderViewPurpose::Game;
     const bool thumbnailView=identity.purpose==RenderViewPurpose::Thumbnail;
+    const Vec4 noPartition{};bgfx::setUniform(occluderPhase,noPartition.data());
     auto& viewLods=lodSelections[gameView ? 1 : 0];
     if (scene.pinned) submittedPins.push_back(scene.pinned);
     const auto& settings = scene.settings;
@@ -1659,7 +1756,26 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     drawEnvironment=presentation.showBackground;
     const bool glowing=prepareGlow(settings,target,w,h,identity.purpose);
     const bool scheduledPick=allowPicking && scene.sceneMode && requestedPick && !pendingPick && pickTargets;
-    const auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,ambientEnabled,sceneView&&!scene.collisionOverlays.empty()});
+    bool occluderEnabled=false;
+    if(sceneView)for(const auto& instance:scene.instances) {
+        const auto opacity=bounded(instance.opacity,1,0,1);
+        if(opacity<=0||opacity>=1||!instance.model.asset)continue;
+        const auto& asset=*instance.model.asset;
+        if(!models.contains(asset.id)&&!streamModels->ready(asset.id,instance.resourceRevision))continue;
+        for(const auto& primitive:asset.primitives) {
+            const auto slot=primitive.material;
+            const auto& material=instance.materials&&slot<instance.materials->size()?(*instance.materials)[slot]:asset.materials[slot];
+            const ModelMaterialTextures empty;
+            const auto& bindings=instance.textures&&slot<instance.textures->size()?(*instance.textures)[slot]:empty;
+            const auto blend=authoredModelBlend(instance,material,bindings);
+            if(blend==MaterialBlend::Opaque||blend==MaterialBlend::Mask){occluderEnabled=true;break;}
+        }
+        if(occluderEnabled)break;
+    }
+    if(occluderEnabled&&!target.occluderLayer) {
+        auto layer=std::make_shared<OccluderLayerTargets>();layer->create(w,h);target.occluderLayer=std::move(layer);
+    }
+    const auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,ambientEnabled,sceneView&&!scene.collisionOverlays.empty(),occluderEnabled});
     if(const auto validation=validateRenderPassPlan(plan);!validation)
         throw std::logic_error(renderPassPlanErrorText(validation.error));
     const auto passView=[&](RenderPassKind kind) {
@@ -1750,7 +1866,8 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     target.clustered->setComputeProgram(clusterComputeProgram);
     target.clustered->advance(renderFrame);
     const bool clusterReady=target.clustered->prepare(settings.camera,w,h,points,shadowIndices,lighting.brdfCpu(),
-        passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference,ambientEnabled?w:0,ambientEnabled?h:0);
+        passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference,
+        ambientEnabled?w:0,ambientEnabled?h:0,occluderEnabled?w:0,occluderEnabled?h:0);
     if(sceneView){clusterStats=target.clustered->stats();clusterStatus=target.clustered->status();}
     if(!clusterReady) {
         if(!sceneView)throw std::runtime_error(target.clustered->status());
@@ -1800,6 +1917,22 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
             bindDirections();
         });
     if(!ambientReady)throw std::runtime_error(target.ambient->status());
+    if(occluderEnabled) {
+        const auto layerView=passView(RenderPassKind::OccluderLayer);
+        bgfx::setViewName(layerView,gameView?"Game ambient and nearest occluder":"Scene ambient and nearest occluder");
+        // Pinned bgfx executes compute before graphics in a physical view.
+        // Ambient compute reads its separate receiver targets, then graphics
+        // clear/write only this private layer before the main color pass.
+        bgfx::setViewFrameBuffer(layerView,target.occluderLayer->framebuffer);
+        bgfx::setViewRect(layerView,0,0,w,h);bgfx::setViewTransform(layerView,view.data(),projection.data());
+        bgfx::setViewClear(layerView,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,0u,1.f,0);bgfx::touch(layerView);
+        submittedPins.push_back(target.occluderLayer);
+    } else {
+        // This physical slot can retain the previous frame's fade framebuffer.
+        // Keep a later ambient-only dispatch independent of retired scratch.
+        const auto layerView=views.ambient;
+        if(layerView!=InvalidRenderView){bgfx::setViewFrameBuffer(layerView,BGFX_INVALID_HANDLE);bgfx::setViewClear(layerView,BGFX_CLEAR_NONE);}
+    }
     const auto bindLighting = [&](std::uint8_t firstEnvironmentSlot) {
         const std::uint8_t shadowSlot=firstEnvironmentSlot==12?15:8;
         if(shadowContext && scene.shadowWorldId)shadowContext->bind(true,shadowSlot,shadowCameraContext);else shadows->bindDisabled(shadowSlot);
@@ -1834,8 +1967,11 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
         instances = legacy;
     }
     std::vector<TransparentMeshDraw> transparentMeshes;
+    bool occluderDrawn=false;
     std::size_t skipped = 0, collapsed = 0, missing = 0;
     for (const auto& instance : instances) {
+        const float opacity=bounded(instance.opacity,1,0,1);
+        if(opacity<=0)continue;
         if (!instance.model.asset) { ++missing; continue; }
         const auto& asset = *instance.model.asset;
         const auto pose=poseFor(instance);
@@ -1896,9 +2032,11 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                     ? (*instance.textures)[materialIndex] : emptyBindings;
                 const auto graph=bindings.graph;
                 const auto shading=graph?graph->shading:material.graph?materialOutputNode(*material.graph).output.shading:instance.shading;
-                const auto blend=graph?graph->blend:material.graph?materialOutputNode(*material.graph).output.blend:material.alphaBlend?MaterialBlend::Alpha:instance.blend;
+                const auto authoredBlend=authoredModelBlend(instance,material,bindings);
+                const auto blend=opacity<1 && (authoredBlend==MaterialBlend::Opaque || authoredBlend==MaterialBlend::Mask)?MaterialBlend::Alpha:authoredBlend;
+                const bool nearestLayer=occluderEnabled&&opacity<1&&(authoredBlend==MaterialBlend::Opaque||authoredBlend==MaterialBlend::Mask);
                 if(graph)submittedPins.push_back(graph);
-                auto submitDraw=[&,world,normal,handedness,resident,legacyMesh,deformed,tangentUv,material,bindings,graph,shading,blend,samplers,instance,pickColor] {
+                auto submitDraw=[&,world,normal,handedness,resident,legacyMesh,deformed,tangentUv,material,bindings,graph,shading,blend,authoredBlend,opacity,nearestLayer,samplers,instance,pickColor](bool replay) {
                     const auto bindGeometry=[&] {if(resident)resident->bind();else legacyMesh->bind();if(deformed)deformed->bind();};
                     float mapFlags[4]{};
                     for(std::size_t slot=0;slot<4;++slot)mapFlags[slot]=bgfx::isValid(bindings.handles[slot])?1.f:0.f;
@@ -1910,12 +2048,13 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                     const float options[]{static_cast<float>(material.emissiveTexture.texCoord),material.alphaMask ? 1.0f : 0.0f,
                         material.doubleSided ? 1.0f : 0.0f,handedness};
                     const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,shading==MaterialShading::Unlit?1.f:0.f,instance.receiveShadows?1.f:0.f,
-                        blend==MaterialBlend::Additive?2.f:blend==MaterialBlend::Alpha?1.f:0.f};
+                        authoredBlend==MaterialBlend::Additive?2.f:authoredBlend==MaterialBlend::Alpha?1.f:0.f};
                     const std::uint64_t cull = material.doubleSided ? BGFX_STATE_NONE : handedness < 0 ? BGFX_STATE_CULL_CCW : BGFX_STATE_CULL_CW;
                     const bool transparent=blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive;
                     const auto bindSurface=[&](bool prepass) {
                         bgfx::setTransform(world.data());
                         bgfx::setUniform(modelNormalMatrix,normal.data());
+                        const Vec4 instanceFade{opacity,0,0,0};bgfx::setUniform(instanceOpacity,instanceFade.data());
                         bgfx::setUniform(modelBase,material.baseColor.data());
                         bgfx::setUniform(modelSpecular,specularValue.data());bgfx::setUniform(modelSurface,surface);bgfx::setUniform(modelEmissive,emissive);
                         bgfx::setUniform(modelUv,uv);bgfx::setUniform(modelOptions,options);
@@ -1939,9 +2078,9 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                     bindSurface(false);
                     const auto blending=blend==MaterialBlend::Alpha?BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
                         blend==MaterialBlend::Additive?BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
-                    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | blending);
-                    bgfx::submit(views.scene,graph?graph->program(MaterialGraphPass::Model):modelProgram);
-                    if (capturePick && instance.pickable && instance.entityId) {
+                    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent&&!nearestLayer?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | (nearestLayer?0:blending));
+                    bgfx::submit(nearestLayer?passView(RenderPassKind::OccluderLayer):views.scene,graph?graph->program(MaterialGraphPass::Model):modelProgram);
+                    if (capturePick && !replay && instance.pickable && instance.entityId) {
                         const bool geometryOnly=pendingPick->request.mode==PickMode::MaterialSlot;
                         if(graph&&!geometryOnly)pendingPick->graphMaterials.push_back(graph);
                         if (resident) pendingPick->resources.push_back(resident);
@@ -1951,6 +2090,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                         const Vec4 neutral{},opaque{1,1,1,1};
                         bgfx::setTransform(world.data());
                         bgfx::setUniform(modelNormalMatrix,normal.data());
+                        const Vec4 instanceFade{geometryOnly?1.f:opacity,0,0,0};bgfx::setUniform(instanceOpacity,instanceFade.data());
                         bgfx::setUniform(modelBase,geometryOnly?opaque.data():material.baseColor.data());
                         bgfx::setUniform(modelEmissive,geometryOnly?neutral.data():emissive);
                         bgfx::setUniform(modelUv,uv);
@@ -1967,14 +2107,17 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                         bgfx::submit(passView(RenderPassKind::Picking),graph&&!geometryOnly?graph->program(MaterialGraphPass::Picking):pickProgram);
                     }
                 };
-                if(blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive) {
+                if(nearestLayer||blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive) {
                     const auto localBounds=stream && draw.primitive<stream->primitives.size()?stream->primitives[draw.primitive].bounds:found->second->bounds[draw.primitive];
                     const auto bounds=pose?math::transformBounds(pose->bounds,instance.model.transform):math::transformBounds(localBounds,world);
                     const Vec3 center{(bounds.minimum[0]+bounds.maximum[0])*.5f,(bounds.minimum[1]+bounds.maximum[1])*.5f,(bounds.minimum[2]+bounds.maximum[2])*.5f};
                     const auto depth=particle_rendering::viewDepth(center,eye,settings.camera.forward());
-                    if(std::isfinite(depth))transparentMeshes.push_back({depth,std::move(submitDraw)});
+                    if(std::isfinite(depth)) {
+                        if(nearestLayer){occluderDrawn=true;submitDraw(false);}
+                        else transparentMeshes.push_back({depth,std::move(submitDraw)});
+                    }
                     else ++skipped;
-                } else submitDraw();
+                } else submitDraw(false);
             }
         }
     }
@@ -2017,7 +2160,24 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     auto* totals=particleStats?particleStats:&localParticleStats;
     const auto bindSpriteLighting=[&]{bindLighting(12);};
     renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,{},false,bindSpriteLighting,scene.materialContext,ambientEnabled?passView(RenderPassKind::DepthPrepass):InvalidRenderView);
-    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting,scene.materialContext);
+    std::function<void()> compositeOccluder;
+    if(occluderEnabled&&occluderDrawn) {
+        // Compute precedes graphics in this sequential color view. The prior
+        // layer view has already detached its depth, and this atlas region is
+        // disjoint from BRDF/light/ambient data read by the layer itself.
+        if(!target.clustered->publishOccluderDepth(target.occluderLayer->depth,occluderDepthProgram,passView(RenderPassKind::OccluderDepthPublish)))
+            throw std::runtime_error(target.clustered->status());
+        const auto layer=target.occluderLayer;const Vec4 parameters{caps->originBottomLeft?1.f:0.f,0,0,0};
+        compositeOccluder=[this,layer,parameters,sceneView=views.scene] {
+            bgfx::setUniform(occluderComposite,parameters.data());
+            bgfx::setTexture(0,occluderColor,layer->color);bgfx::setTexture(1,occluderDepth,layer->depth);
+            fullscreen.bind();
+            bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_DEPTH_TEST_LEQUAL|
+                BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA));
+            bgfx::submit(sceneView,occluderCompositeProgram);
+        };
+    }
+    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting,scene.materialContext,InvalidRenderView,compositeOccluder);
 
     executePost(plan,settings,target,w,h,presentation,view,projection,scene.collisionOverlays);
     const auto* readback=plan.find(RenderPassKind::ThumbnailReadback);

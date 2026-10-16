@@ -54,6 +54,9 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     EditorRenderFrameInput input,AssetLibrary& assets,EditorResources& resources,EditorRenderFramePreparationStats* stats) {
     using Clock=std::chrono::steady_clock;
     if(stats)*stats={};
+    // Clocks were reconciled against the complete extraction. Hidden models
+    // must not request receiver, caster, picking or material-preview resources.
+    std::erase_if(input.extracted.models,[](const auto& model){return !model.visible;});
     resources.setMaterialContext(input.materialContext);
     if(input.materialPreview)for(auto& model:input.extracted.models) {
         const auto& preview=*input.materialPreview;
@@ -144,7 +147,10 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
             auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,false,
                 ResourcePriority::Visible,aspect,model.materialOverrides,0,&model);
             includePreparedModel(stats,prepared);
-            if(prepared)appendModel(game,*gamePins,model,std::move(prepared),false,resources);
+            if(prepared) {
+                appendModel(game,*gamePins,model,std::move(prepared),false,resources);
+                if(const auto fade=input.gameModelOpacities.find(model.id);fade!=input.gameModelOpacities.end())game.instances.back().opacity=fade->second;
+            }
         }
         game.pinned=std::move(gamePins);frame->views.push_back(std::move(game));
     }

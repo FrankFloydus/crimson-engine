@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <set>
@@ -29,6 +30,7 @@ void run() {
     auto parent=entity(1,"Parent",0,math::translation({10,2,3})*rotation);
     auto model=entity(2,"Nested model",1,math::translation({2,0,0})*math::scaling({-2,3,4}));
     model.model=AssetRef<ModelAsset>{"assets/models/first/manifest.json"};
+    model.fadeWhenOccluding=true;
     auto other=entity(3,"Repeated model",0,math::translation({-5,0,0}));
     other.model=model.model;
     auto missing=entity(4,"Missing model",0,math::translation({7,0,0}));
@@ -45,6 +47,8 @@ void run() {
     require(extracted.models[0].id==2 && extracted.models[1].id==3 && extracted.models[2].id==4,
             "Extraction ordering must be deterministic across registry allocation order.");
     require(extracted.models[0].assetId==extracted.models[1].assetId,"Repeated models lost their shared asset identity.");
+    require(extracted.models[0].fadeWhenOccluding&&!extracted.models[1].fadeWhenOccluding&&!extracted.models[2].fadeWhenOccluding,
+        "Extraction lost per-model occlusion participation or applied it to another instance.");
     require(close(extracted.models[0].world,parent.local*model.local),"Nested model did not accumulate its parent transform.");
     require(extracted.models[2].assetId==missing.model->id,"An unresolved asset reference was discarded.");
     require(extracted.directional.size()==1 && extracted.points.size()==1,"Light components were not extracted.");
@@ -314,6 +318,60 @@ void gizmoAffineRotation() {
         require(inverseDelta && close(*inverseDelta*resultWorld,originalWorld),"Gizmo rotation discarded affine scale/shear.");
     }
 }
+void cameraPoseConversion() {
+    Mat4 parentShear;parentShear[4]=.6f;parentShear[8]=-.3f;parentShear[9]=.2f;
+    auto parent=entity(1,"Camera parent",0,math::translation({4,2,-3})*math::eulerRotationXYZ({.3f,.7f,-.2f})*parentShear*math::scaling({-2,.7f,3}));
+    Mat4 localShear;localShear[4]=-.4f;localShear[8]=.25f;localShear[9]=.5f;
+    auto authored=entity(53,"Inactive rolled Camera",1,math::translation({1,3,-2})*math::eulerRotationXYZ({.4f,-.5f,2.7f})*localShear*math::scaling({.8f,1.7f,1.2f}));
+    authored.camera=SceneCamera{73,.037f,345};authored.visible=false;
+    auto active=entity(7,"Active Camera",0,math::translation({8,0,4}));active.camera.emplace();
+    Scene scene;scene.apply({authored,parent,active},{NoEntity,active.id});
+    const auto resolved=resolveSceneCamera(scene,authored.id),game=resolveGameCamera(scene);
+    require(resolved&&game&&close(game->viewMatrix(),resolveSceneCamera(scene,active.id)->viewMatrix()),
+        "Resolving an inactive scene camera changed active Game camera semantics.");
+    require(!resolveSceneCamera(scene,parent.id)&&!resolveSceneCamera(scene,999),"A non-camera or missing entity resolved a view.");
+    const auto oldWorld=*scene.worldTransform(authored.id);const auto oldRevision=scene.revision();
+    require(close(resolved->position,math::transformPoint(oldWorld,{}))&&resolved->fov==73&&resolved->nearPlane==.037f&&resolved->farPlane==345&&
+        resolved->fovAxis==CameraFovAxis::Vertical,"Arbitrary camera resolution lost affine position or vertical lens settings.");
+    const auto unchanged=sceneCameraLocalTransform(scene,authored.id,*resolved);
+    require(unchanged&&*unchanged==authored.local,"A no-op camera pose conversion introduced transform drift.");
+    auto navigated=*resolved;navigated.position={12,3,-8};navigated.target=navigated.position+math::normalized(Vec3{.3f,-.4f,-.8f});
+    navigated.up=math::rotate(Vec3{0,1,0},navigated.forward(),2.6);
+    const auto local=sceneCameraLocalTransform(scene,authored.id,navigated);
+    require(local&&math::isAffine(*local),"Navigated camera pose could not be converted beneath a reflected/sheared parent.");
+    auto moved=authored;moved.local=*local;Scene candidate;candidate.apply({moved,parent,active},{NoEntity,active.id});
+    const auto roundTrip=resolveSceneCamera(candidate,authored.id);const auto newWorld=*candidate.worldTransform(authored.id);
+    require(roundTrip&&close(roundTrip->viewMatrix(),navigated.viewMatrix())&&close(roundTrip->position,navigated.position),
+        "Piloted camera re-resolution changed the desired world view or roll.");
+    require(roundTrip->fov==resolved->fov&&roundTrip->nearPlane==resolved->nearPlane&&roundTrip->farPlane==resolved->farPlane&&
+        roundTrip->fovAxis==CameraFovAxis::Vertical,"Camera pose conversion altered authored vertical FOV or clipping planes.");
+    const auto oldResidual=resolved->viewMatrix()*oldWorld,newResidual=roundTrip->viewMatrix()*newWorld;
+    for(unsigned column=0;column<3;++column)for(unsigned row=0;row<3;++row)
+        require(std::abs(oldResidual.at(row,column)-newResidual.at(row,column))<1e-4f,
+            "Camera piloting discarded view-relative stretch, shear or reflection.");
+    require(math::handedness(oldWorld)==math::handedness(newWorld)&&scene.revision()==oldRevision&&scene.find(authored.id)->local==authored.local,
+        "Pose conversion mutated the source scene or changed affine handedness.");
+    const auto restored=sceneCameraLocalTransform(candidate,authored.id,*resolved);
+    require(restored&&close(*restored,authored.local),"Returning to the original view did not preserve the complete authored affine transform.");
+    for(unsigned invalid=0;invalid<5;++invalid) {
+        auto bad=navigated;
+        if(invalid==0)bad.target=bad.position;
+        if(invalid==1)bad.up={};
+        if(invalid==2)bad.up=bad.target-bad.position;
+        if(invalid==3)bad.position[0]=std::numeric_limits<float>::quiet_NaN();
+        if(invalid==4)bad.up[1]=std::numeric_limits<float>::infinity();
+        require(!sceneCameraLocalTransform(scene,authored.id,bad),"Degenerate/nonfinite camera pose produced an authored transform.");
+    }
+    require(!sceneCameraLocalTransform(scene,parent.id,navigated)&&!sceneCameraLocalTransform(scene,999,navigated),
+        "Non-camera pose conversion produced an authored transform.");
+    auto singular=authored;singular.parent=NoEntity;singular.local=math::scaling({0,1,1});
+    Scene collapsed;collapsed.apply({singular},{});
+    require(resolveSceneCamera(collapsed,singular.id)&&!sceneCameraLocalTransform(collapsed,singular.id,navigated),
+        "A singular camera frame was accepted for piloting or changed existing view resolution semantics.");
+    auto collapsedParent=parent;collapsedParent.local=math::scaling({0,1,1});singular=authored;singular.local={};
+    collapsed.apply({collapsedParent,singular},{});
+    require(!sceneCameraLocalTransform(collapsed,singular.id,navigated),"A singular parent produced a piloted local transform.");
+}
 void particleExtraction() {
     Scene scene;
     auto parent=entity(1,"Parent",0,math::translation({4,2,-3})*math::scaling({-2,3,.5f}));
@@ -348,6 +406,58 @@ void particleExtraction() {
         framed.maximum[0]>stable.maximum[0],"Live particle framing changed the stable authored selection bounds.");
     auto copied=extracted;particle.local=math::translation({100,0,0});scene.apply({particle,parent},{});
     require(close(copied.particles[0].world,extracted.particles[0].world),"An extracted particle frame retained mutable scene storage.");
+}
+void hierarchicalVisibility() {
+    auto group=entity(1,"Hidden group",0,Mat4{});group.visible=false;
+    auto model=entity(2,"Hidden model",1,Mat4{});model.model=AssetRef<ModelAsset>{"assets/models/hidden/manifest.json"};
+    auto particle=entity(3,"Hidden emitter",1,Mat4{});particle.particle=AssetRef<ParticleEffectAsset>{"assets/particles/hidden.crimson-particle"};
+    auto sun=entity(4,"Hidden sun",1,Mat4{});sun.directional.emplace();
+    auto lamp=entity(5,"Hidden lamp",1,Mat4{});lamp.point.emplace();
+    auto player=entity(6,"Hidden player",1,Mat4{});player.character.emplace();
+    player.character->lightRig.enabled=true;player.character->lightRig.localWorld.enabled=true;player.character->darknessReveal.enabled=true;
+    auto visibleGroup=entity(9,"Visible group",0,Mat4{});
+    auto visible=entity(7,"Visible model",9,math::translation({2,0,0}));visible.model=AssetRef<ModelAsset>{"assets/models/visible/manifest.json"};
+    auto hidden=entity(8,"Authored hidden",0,Mat4{});hidden.model=model.model;hidden.visible=false;
+    auto farHidden=entity(10,"Hidden group child",9,math::translation({100,0,0}));farHidden.model=model.model;farHidden.visible=false;
+    auto camera=entity(11,"Hidden camera marker",1,math::translation({0,0,3}));camera.camera.emplace();
+    auto environment=entity(12,"Hidden Environment marker",1,Mat4{});environment.environment.emplace();environment.environment->exposure=2;environment.environment->sun=sun.id;
+    auto collider=entity(13,"Hidden collision",1,math::translation({0,0,-3}));collider.collider.emplace();
+    collider.collider->shape=ColliderShape::Trimesh;collider.collider->source=*model.model;
+    auto rearCollider=entity(14,"Visible collision",0,math::translation({0,0,-8}));rearCollider.collider.emplace();
+    Scene scene;const SceneProperties properties{environment.id,camera.id,player.id};
+    auto records=std::vector{group,model,particle,sun,lamp,player,visibleGroup,visible,hidden,farHidden,camera,environment,collider,rearCollider};
+    scene.apply(records,properties);const auto extracted=extractScene(scene);
+    require(extracted.models.size()==4&&extracted.models[0].id==2&&!extracted.models[0].visible&&
+        extracted.models[1].id==7&&extracted.models[1].visible&&!extracted.models[2].visible&&!extracted.models[3].visible,
+        "Hierarchical visibility dropped animation identities or failed to mark hidden models.");
+    require(extracted.particles.size()==1&&extracted.particles.front().id==particle.id&&!extracted.particles.front().visible,
+        "Hidden emitter was dropped from simulation reconciliation or retained visible presentation.");
+    require(extracted.directional.empty()&&extracted.points.empty()&&!extracted.proceduralSun.enabled&&
+        !extracted.characterLights[0].enabled&&!extracted.characterLights[1].enabled&&!extracted.characterShadow.enabled&&!extracted.playerReveal.enabled,
+        "Hidden hierarchy leaked authored or player-rig lighting contributions.");
+    require(resolveGameCamera(scene).has_value()&&extracted.environment.exposure==2&&extracted.environment.sun==sun.id,
+        "Hiding editor markers disabled the active Camera or changed global Environment settings.");
+    std::size_t modelQueries{},collisionQueries{},particleQueries{};
+    const ModelBoundsQuery bounds=[&](const std::string& id)->std::optional<Aabb>{
+        ++modelQueries;require(id==visible.model->id,"Selection requested hidden model geometry.");return Aabb{{-1,-1,-1},{1,1,1},true};
+    };
+    const CollisionMeshQuery collision=[&](const std::string&)->CollisionMeshResult{++collisionQueries;return {};};
+    require(!selectionBounds(scene,std::array<EntityId,1>{group.id},bounds,[&](EntityId)->std::optional<Aabb>{++particleQueries;return Aabb{};},collision).valid,
+        "Hidden selected hierarchy retained focus or pivot bounds.");
+    require(selectionBoxes(scene,std::array<EntityId,1>{group.id},bounds,collision).empty()&&!modelQueries&&!collisionQueries&&!particleQueries,
+        "Hidden selected hierarchy retained outline geometry or requested hidden resources.");
+    const auto boxes=selectionBoxes(scene,std::array<EntityId,2>{group.id,visibleGroup.id},bounds,collision);
+    require(boxes.size()==1&&boxes.front().id==visibleGroup.id&&close(boxes.front().local.minimum,{1,-1,-1})&&close(boxes.front().local.maximum,{3,1,1}),
+        "A hidden descendant inflated its visible parent's outline.");
+    require(pickCollisionShape(scene,{{0,0,0},{0,0,-1}},100,collision)==rearCollider.id,
+        "Hidden collider or Character intercepted editor picking.");
+    require(!collisionQueries,"Editor picking requested hidden original collision geometry.");
+    records.front().visible=true;scene.apply(records,properties);const auto restored=extractScene(scene);
+    require(restored.models[0].visible&&restored.particles.front().visible&&restored.directional.size()==1&&restored.points.size()==2&&
+        restored.proceduralSun.enabled&&restored.characterLights[0].enabled&&restored.playerReveal.enabled,
+        "Showing a hierarchy did not restore its visual contributions.");
+    require(!restored.models[2].visible&&!restored.models[3].visible,
+        "Showing a parent overwrote a child's authored hidden state.");
 }
 void collisionPicking() {
     Scene scene;
@@ -456,6 +566,6 @@ void collisionFaces() {
 }
 }
 int main() {
-    try { run(); orientedSelectionBoxes();lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();gizmoAffineRotation();particleExtraction();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); orientedSelectionBoxes();lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

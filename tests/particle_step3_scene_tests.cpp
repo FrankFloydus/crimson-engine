@@ -97,6 +97,59 @@ void interpolatedParentPresentation() {
         math::transformPoint(*tickScene.worldTransform(11),runtime.instance(11)->particles().front().position)),
         "Omitted presentation transforms did not fall back to the current source world.");
 }
+void hiddenPresentationKeepsSimulation() {
+    auto asset=std::make_shared<ParticleEffectAsset>(defaultParticleEffect());asset->id="assets/particles/visibility.crimson-particle";
+    auto& emitter=asset->emitter;emitter.rate=120;emitter.lifetime=5;emitter.space=ParticleSpace::Local;
+    emitter.gravityBehavior.enabled=false;emitter.initialVelocity={1,2,0};
+    const auto query=[&](const std::string&)->ParticleDefinitionVersion{return {asset,1,{}};};
+    EntityRecord parent;parent.id=1;parent.name="Group";
+    EntityRecord child;child.id=11;child.name="Attached effect";child.parent=parent.id;child.particle=AssetRef<ParticleEffectAsset>{asset->id};
+    auto other=child;other.id=12;other.parent=NoEntity;other.name="Unaffected effect";
+    Scene authored;authored.apply({parent,child,other},{});
+    auto sources=extractScene(authored).particles;
+    SceneParticles runtime,control;
+    runtime.reconcile(5,sources,query,ParticleFixedStep*2,NoEntity,1);
+    control.reconcile(5,sources,query,ParticleFixedStep*2,NoEntity,1);
+    const auto* retained=runtime.instance(child.id);require(retained&&!retained->particles().empty(),"Visibility fixture did not begin with aged particles.");
+    const auto firstBirth=retained->particles().front().spawnOrdinal;const auto initialTime=retained->elapsed();
+    parent.visible=false;parent.local=math::translation({4,3,2});authored.apply({parent,child,other},{});
+    sources=extractScene(authored).particles;
+    require(sources.size()==2&&!sources[0].visible&&sources[1].visible,"Hidden hierarchy removed an emitter from reconciliation.");
+    for(unsigned tick=0;tick<12;++tick) {
+        runtime.reconcile(5,sources,query,ParticleFixedStep,NoEntity,1);
+        auto visible=sources;for(auto& source:visible)source.visible=true;
+        control.reconcile(5,visible,query,ParticleFixedStep,NoEntity,1);
+    }
+    require(runtime.instance(child.id)==retained&&retained->elapsed()>initialTime&&retained->particles().front().spawnOrdinal==firstBirth,
+        "Hiding an emitter replaced its instance, restarted its clock or discarded existing births.");
+    require(runtime.groups().size()==1&&runtime.groups().front().entity==other.id&&!runtime.bounds(child.id)&&runtime.bounds(other.id),
+        "Hidden particles retained render groups/bounds or hid an unrelated emitter.");
+    const auto compare=[&] {
+        const auto* expected=control.instance(child.id);const auto* actual=runtime.instance(child.id);
+        require(actual->elapsed()==expected->elapsed()&&actual->stats().ticks==expected->stats().ticks&&actual->stats().spawned==expected->stats().spawned&&
+            actual->particles().size()==expected->particles().size(),"Visibility changed emission timing or scheduling.");
+        for(std::size_t i=0;i<actual->particles().size();++i) {
+            const auto& a=actual->particles()[i];const auto& b=expected->particles()[i];
+            require(a.spawnOrdinal==b.spawnOrdinal&&a.age==b.age&&a.birthTime==b.birthTime&&a.position==b.position&&a.velocity==b.velocity,
+                "Visibility changed authoritative particle motion, age or deterministic birth identity.");
+        }
+    };
+    compare();const auto hiddenTime=retained->elapsed();
+    parent.visible=true;authored.apply({parent,child,other},{});sources=extractScene(authored).particles;
+    runtime.reconcile(5,sources,query,0,NoEntity,1);control.reconcile(5,sources,query,0,NoEntity,1);compare();
+    require(runtime.instance(child.id)==retained&&retained->elapsed()==hiddenTime&&runtime.groups().size()==2&&runtime.bounds(child.id),
+        "Showing an emitter restarted playback or failed to restore current presentation.");
+    require(runtime.presentation().size()==control.presentation().size(),"Showing a hierarchy lost its aged particle packets.");
+    for(std::size_t i=0;i<runtime.presentation().size();++i)
+        require(runtime.presentation()[i].position==control.presentation()[i].position&&runtime.presentation()[i].spawnOrdinal==control.presentation()[i].spawnOrdinal,
+            "Showing an emitter rendered newborn positions instead of its continuously simulated state.");
+    // Play's copied presentation scene can hide the visual independently of
+    // the current tick pose; that must still leave the simulation untouched.
+    auto presented=sources;presented[0].visible=false;
+    runtime.reconcile(5,sources,query,0,NoEntity,.5,presented);compare();
+    require(runtime.groups().size()==1&&!runtime.bounds(child.id),"Presentation-only hidden state leaked local particle visuals.");
+    runtime.reconcile(5,sources,query,0,NoEntity,1);compare();
 }
-int main(){try{sceneSpacesAndRevisions();sceneOneShot();interpolatedParentPresentation();std::cout<<"Step 3 scene reconciliation, interpolated hierarchy, bounds and one-shot replay checks passed.\n";return 0;}
+}
+int main(){try{sceneSpacesAndRevisions();sceneOneShot();interpolatedParentPresentation();hiddenPresentationKeepsSimulation();std::cout<<"Step 3 scene reconciliation, interpolated hierarchy, visibility, bounds and one-shot replay checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

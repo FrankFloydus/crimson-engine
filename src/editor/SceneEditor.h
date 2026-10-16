@@ -25,11 +25,16 @@ public:
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
+    bool playerOcclusionFade() const { return preferences_.values().playerOcclusionFade; }
+    const PlayerOcclusionSettings& playerOcclusionSettings() const { return preferences_.values().playerOcclusionSettings; }
     std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     const OverlayVisibility& overlays() const { return overlays_; }
     void setOverlays(const OverlayVisibility& overlays) { overlays_=overlays; }
+    void setCameraViewState(EntityId camera, bool piloting, bool gestureActive=false) {
+        viewedCamera_=camera; pilotingCamera_=piloting; cameraGestureActive_=gestureActive;
+    }
     bool needsAuthoringDocument() const { return deferred_!=Pending::None || !deferredDeletion_.empty(); }
     bool playTransitionBlocked() const {
         return opening_ || deletion_ || pending_!=Pending::None || needsAuthoringDocument() ||
@@ -52,6 +57,8 @@ private:
     EditorPreferences preferences_;
     PanelVisibility panels_;
     OverlayVisibility overlays_;
+    EntityId viewedCamera_{};
+    bool pilotingCamera_{},cameraGestureActive_{};
     Pending pending_{Pending::None};
     Pending deferred_{Pending::None};
     std::string deferredAsset_;
@@ -70,6 +77,7 @@ private:
     bool dirtyPopup_{}, savePopup_{}, deletePopup_{}, saveConflictPopup_{}, externalPopup_{}, openingPopup_{}, saveAs_{}, continueAfterSave_{}, exitAccepted_{}, documentReplaced_{};
     enum class CommandTarget { Scene,Particle,Material,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
+    bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
     void cancelOpen();
     void pumpOpen(SceneDocument&,Renderer&);
     void request(Pending, const std::string&, SceneDocument&, Camera&, Renderer&);

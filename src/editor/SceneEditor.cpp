@@ -74,7 +74,7 @@ void SceneEditor::pumpOpen(SceneDocument& document,Renderer& renderer) {
         openingError_="The current scene changed while the requested scene was loading. Open was canceled."; opening_={}; return;
     }
     if (opening_.state()==ResourceState::Failed) { openingError_=opening_.diagnostic(); opening_={}; return; }
-    if (opening_.state()!=ResourceState::Ready || document.transactionActive() || viewport_.interacting()) return;
+    if (opening_.state()!=ResourceState::Ready || document.transactionActive() || viewportBusy()) return;
     if (const auto snapshot=opening_.snapshot()) {
         if (snapshot->id!=openingAsset_) { openingError_="The loaded scene has a different asset identity."; opening_={}; return; }
         viewport_.cancel(document,renderer);
@@ -118,7 +118,7 @@ void SceneEditor::request(Pending operation, const std::string& asset, SceneDocu
         if (editingAssets_) editingAssets_->cancelDeletion(); deletion_.reset(); replacements_.clear(); deletePopup_=false;
         ImGui::ClosePopupToLevel(0,true);
     }
-    if (viewport_.interacting()) cancelInteraction(document,renderer);
+    if (viewportBusy()) cancelInteraction(document,renderer);
     else { document.commit(); viewport_.cancel(document,renderer); }
     pending_=operation; pendingAsset_=asset;
     if (document.dirty()) dirtyPopup_=true;
@@ -126,7 +126,7 @@ void SceneEditor::request(Pending operation, const std::string& asset, SceneDocu
 }
 void SceneEditor::save(SceneDocument& document, AssetLibrary& assets, bool saveAs) {
     if(document.transient())return;
-    if (viewport_.interacting()) return;
+    if (viewportBusy()) return;
     if (document.transactionActive()) document.commit();
     if (saveAs || document.assetId().empty()) {
         saveAs_=saveAs; savePopup_=true;
@@ -326,6 +326,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const auto previousPanels=panels_;
     bool resetLayout=false;
     bool togglePlay=false;
+    EditorCameraAction cameraAction=EditorCameraAction::None;
+    EntityId cameraEntity=NoEntity;
     document.setPreviewCamera(settings.camera);
     // Resolve one document at a time so modal ownership and Cancel remain clear.
     if (quitRequested) materials.requestExit();
@@ -366,8 +368,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New scene")) request(Pending::New,{},document,settings.camera,renderer);
-            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewport_.interacting() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()))) { saveTarget(false); }
-            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewport_.interacting() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()))) { saveTarget(true); }
+            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewportBusy() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()))) { saveTarget(false); }
+            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewportBusy() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()))) { saveTarget(true); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
@@ -378,8 +380,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             else finishScenePanelEdit(document);
             const auto undo=materialFocus ? std::string("Undo material edit") : particleFocus ? std::string("Undo particle edit") : "Undo " + document.history().undoLabel();
             const auto redo=materialFocus ? std::string("Redo material edit") : particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
-            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive())) { undoTarget(); }
-            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive())) { redoTarget(); }
+            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,!viewportBusy() && (materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive()))) { undoTarget(); }
+            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,!viewportBusy() && (materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive()))) { redoTarget(); }
             if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
             if (ImGui::MenuItem("Delete selection","Delete",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
             ImGui::Separator();
@@ -391,6 +393,37 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::MenuItem("Inspector",nullptr,&panels_.inspector);
             ImGui::MenuItem("Asset Browser","Ctrl+Space",&panels_.assetBrowser);
             ImGui::MenuItem("Game",nullptr,&panels_.game);
+            if(ImGui::BeginMenu("Camera")) {
+                if(materialFocus)materials.finishInteraction();
+                else if(particleFocus)particles.finishInteraction();
+                finishScenePanelEdit(document);
+                const bool cameraActionsAllowed=!document.transient() && !playTransitionBlocked() && !navigationActive &&
+                    !viewportBusy() && !document.transactionActive() && !materials.transactionActive() &&
+                    !particles.transactionActive() && !ImGui::GetTopMostPopupModal();
+                ImGui::BeginDisabled(!cameraActionsAllowed);
+                const auto records=document.scene().records();
+                const bool hasCameras=std::any_of(records.begin(),records.end(),[](const auto& entity){return entity.camera.has_value();});
+                if(hasCameras) {
+                    if(ImGui::MenuItem("Editor Camera",nullptr,viewedCamera_==NoEntity))cameraAction=EditorCameraAction::EditorCamera;
+                    ImGui::Separator();
+                    for(const auto& entity:records)if(entity.camera) {
+                        ImGui::PushID(static_cast<int>(entity.id>>32));ImGui::PushID(static_cast<int>(entity.id));
+                        if(ImGui::MenuItem(entity.name.c_str(),nullptr,viewedCamera_==entity.id)) {
+                            cameraAction=EditorCameraAction::SelectCamera;cameraEntity=entity.id;
+                        }
+                        ImGui::PopID();ImGui::PopID();
+                    }
+                    ImGui::Separator();
+                    const auto viewed=document.scene().find(viewedCamera_);
+                    if(ImGui::MenuItem("Pilot Camera",nullptr,pilotingCamera_,viewed && viewed->camera.has_value())) {
+                        cameraAction=EditorCameraAction::TogglePilot;cameraEntity=viewedCamera_;
+                    }
+                    ImGui::Separator();
+                }
+                if(ImGui::MenuItem("Create New Camera"))cameraAction=EditorCameraAction::CreateCamera;
+                ImGui::EndDisabled();
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             ImGui::MenuItem("Collisions",nullptr,&overlays_.collisions);
             ImGui::MenuItem("Grid",nullptr,&overlays_.grid);
@@ -414,7 +447,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         ImGui::EndMainMenuBar();
     }
     if (((previousPanels.inspector && !panels_.inspector) || (previousPanels.outliner && !panels_.outliner)) &&
-        document.transactionActive() && !viewport_.interacting()) document.commit();
+        document.transactionActive() && !viewportBusy()) document.commit();
     if (resetLayout) { ImGui::DockBuilderRemoveNode(ImGui::GetID("CrimsonDockSpace")); panels_={}; }
     layout();
     preferences_.draw();
@@ -428,10 +461,11 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard;
     const bool actionPending=opening_ || openingPopup_ || deletePopup_;
     std::uint64_t playParticle{};std::string openParticle,openMaterial;
-    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewport_.interacting() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial);
-    if (panels_.outliner) drawSceneOutliner(document,!viewport_.interacting() && !actionPending);
+    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial);
+    if (panels_.outliner) drawSceneOutliner(document,!viewportBusy() && !actionPending);
+    const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,
-        overlays_.collisions,overlays_.transformGizmo);
+        overlays_.collisions,overlays_.transformGizmo,cameraNavigationAllowed,cameraGestureActive_,viewedCamera_!=NoEntity);
     BrowserActions browser;
     if (panels_.assetBrowser) {
         browser=browser_.draw(assets,window,preferences_.values().browserPreviewSize,&renderer);
@@ -460,17 +494,17 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool targetTransaction=materialKeyboardTarget?materials.transactionActive():particleKeyboardTarget?particles.transactionActive():document.transactionActive();
     const auto shortcuts=readSceneShortcuts({actionPending,preferencesKeyboard || commandTarget_==CommandTarget::Game,navigationActive,
         targetTransaction,!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty() ||
-            viewport_.interacting() || frame.materialAssignment.has_value(),particleKeyboardTarget,materialKeyboardTarget});
+            viewportBusy() || frame.materialAssignment.has_value(),particleKeyboardTarget,materialKeyboardTarget});
     if (shortcuts.toggleAssetBrowser) panels_.assetBrowser=!panels_.assetBrowser;
-    if (shortcuts.save && !viewport_.interacting() && !frame.materialAssignment)saveTarget(shortcuts.saveAs);
+    if (shortcuts.save && !viewportBusy() && !frame.materialAssignment)saveTarget(shortcuts.saveAs);
     if (shortcuts.undo)undoTarget();
     if (shortcuts.redo)redoTarget();
     if (shortcuts.duplicate) document.duplicateSelection();
     if (shortcuts.eraseSelection) document.eraseSelection();
-    if (shortcuts.focusSelection && !frame.viewport.hovered && frame.viewport.height > 0)
-        viewport_.focus(settings.camera,document,assets,frame.viewport.width/frame.viewport.height);
+    if (shortcuts.focusSelection && cameraNavigationAllowed && !frame.viewport.hovered && frame.viewport.height > 0)
+        viewport_.focus(settings.camera,document,assets,frame.viewport.width/frame.viewport.height,viewedCamera_!=NoEntity);
     if (externalScene_ && externalScene_->id!=document.assetId()) externalScene_.reset();
-    if (externalScene_ && !document.transient() && !viewport_.interacting() && !document.transactionActive() &&
+    if (externalScene_ && !document.transient() && !viewportBusy() && !document.transactionActive() &&
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)) {
         if (externalScene_->fingerprint==document.loadedFingerprint()) externalScene_.reset();
         else if (document.dirty()) externalPopup_=true;
@@ -481,9 +515,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     }
     modals(document,settings.camera,assets,renderer);
     frame.viewport.inputBlocked |= io.WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
-        ImGui::GetDragDropPayload() != nullptr || document.transactionActive() || actionPending || preferencesMouse;
+        ImGui::GetDragDropPayload() != nullptr || (document.transactionActive() && !cameraGestureActive_) || actionPending || preferencesMouse;
     frame.documentReplaced=documentReplaced_;
     frame.togglePlay=togglePlay;
+    if(!documentReplaced_ && !togglePlay && !document.transient() && !playTransitionBlocked() &&
+        !document.transactionActive() && !viewportBusy() && !ImGui::GetTopMostPopupModal()) {
+        frame.cameraAction=cameraAction;frame.cameraEntity=cameraEntity;
+    }
     return frame;
 }
 }

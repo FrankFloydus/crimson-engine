@@ -23,7 +23,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),collisionOverlays_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),collisionOverlays_(resources_),playerOcclusion_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -93,7 +93,7 @@ void EditorSession::restoreSession(AssetLibrary& assets) {
 }
 void EditorSession::saveSession() noexcept {
     try {
-        if (!document_.assetId().empty()) cameras_[document_.assetId()]=play_.playing()?editCameraBeforePlay_:settings_.camera;
+        if (!document_.assetId().empty()) cameras_[document_.assetId()]=play_.playing()?editCameraBeforePlay_:cameraPilot_.freeCamera().value_or(settings_.camera);
         Json cameras=Json::object();
         for (const auto& [id,camera] : cameras_) cameras[id]={{"position",camera.position},{"target",camera.target},{"up",camera.up},
             {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane}};
@@ -119,7 +119,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     std::vector<QuaderTarget> targets;
     const auto records=document_.scene().records();
     for(const auto& record:records) {
-        if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->source.empty())(void)collisions_.query(record.collider->source.id);
+        if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->mesh && !record.collider->source.empty())(void)collisions_.query(record.collider->source.id);
         if(record.quader) {
             const bool imported=std::any_of(records.begin(),records.end(),[&](const auto& child){return child.quaderGenerated && child.quaderGenerated->owner==record.id;});
             targets.push_back({record.id,*record.quader,imported,record.quader->saveKey});
@@ -185,10 +185,13 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     previews_->pump(bgfxFrame,visiblePreviewIds_,editor_.thumbnailDemand());
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
+    cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
     editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
+    cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
+    playerOcclusion_.clear();
     playAnimations_.clear();animationPlayTick_=0;
     waitingForCollision_=false;
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
@@ -216,8 +219,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(forceStop || document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_ || playActionPending_==PlayAction::Stop)waitingForCollision_=false;
         else {
             bool ready=true;
-            for(const auto& record:document_.scene().records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->source.empty()) {
-                const auto source=collisions_.query(record.collider->source.id);
+            for(const auto& record:document_.scene().records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
+                const auto source=colliderMeshResult(*record.collider,[this](const auto& id){return collisions_.query(id);});
                 if(!source.mesh || !source.current) {
                     ready=false;playStatus_=source.diagnostic;
                     if(!playStatus_.starts_with("Preparing mesh collision"))waitingForCollision_=false;
@@ -231,12 +234,18 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     else if(!play_.playing() && !forceStop && playActionPending_==PlayAction::Start)transitionPlay(renderer,navigation,false);
     playActionPending_=PlayAction::None;
     auto& document=activeDocument();
+    if(cameraGestureCancel_) {
+        cameraPilot_.cancelGesture(document,settings_.camera);navigation.cancel();cameraGestureCancel_=false;
+    }
+    if(quitRequested) {cameraPilot_.useEditorCamera(document,settings_.camera);navigation.cancel();}
+    cameraPilot_.sync(document,settings_.camera);
+    editor_.setCameraViewState(cameraPilot_.selectedCamera(),cameraPilot_.piloting(),cameraPilot_.gestureActive());
     const auto previousAsset=document.assetId();
     const float simulationSeconds=simulationSuspended_ || skipSimulationTime_?0.f:ImGui::GetIO().DeltaTime;
     materialRealSeconds_=std::chrono::duration<double>(std::chrono::steady_clock::now()-materialClockStart_).count();
     if(!play_.playing())materialGameSeconds_+=simulationSeconds;
     skipSimulationTime_=false;
-    const auto previousCamera=settings_.camera;
+    const auto previousCamera=cameraPilot_.freeCamera().value_or(settings_.camera);
     document.setPreviewCamera(settings_.camera);
     const auto interactionDocument=document.documentGeneration();
     const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_);
@@ -250,6 +259,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     materialEditor_.draw(assets,renderer,resources_,simulationSeconds);
     status_=startupStatus_+playStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
+        cameraPilot_.sync(document,settings_.camera);
         if (!previousAsset.empty()) cameras_[previousAsset]=previousCamera;
         cameraScene_=document.assetId(); navigation.cancel(); renderer.cancelPicking();
         unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();
@@ -314,10 +324,27 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         (!gameCamera || gameInput_.ownsKeyboard());
     focusGame_=focusGame_ && gameOpen && play_.playing() && !focusComplete;
     if(gameInput_.ownsKeyboard())navigation.cancel();
-    auto sceneRegion=frame.viewport;sceneRegion.inputBlocked|=gameInput_.ownsKeyboard();
+    if(frame.cameraAction!=EditorCameraAction::None) {
+        navigation.cancel();renderer.cancelPicking();
+        switch(frame.cameraAction) {
+        case EditorCameraAction::EditorCamera:cameraPilot_.useEditorCamera(document,settings_.camera);break;
+        case EditorCameraAction::SelectCamera:cameraPilot_.selectCamera(document,frame.cameraEntity,settings_.camera);break;
+        case EditorCameraAction::TogglePilot:cameraPilot_.setPiloting(document,settings_.camera,!cameraPilot_.piloting());break;
+        case EditorCameraAction::CreateCamera: {
+            const auto aspect=frame.viewport.height>0?frame.viewport.width/frame.viewport.height:1.f;
+            if(const auto id=document.createCamera(sceneCamera,aspect))cameraPilot_.selectCamera(document,id,settings_.camera);
+            break;
+        }
+        case EditorCameraAction::None:break;
+        }
+    }
+    const bool readOnlyCamera=cameraPilot_.selectedCamera()!=NoEntity && !cameraPilot_.piloting();
+    auto sceneRegion=frame.viewport;sceneRegion.inputBlocked|=gameInput_.ownsKeyboard() || readOnlyCamera ||
+        frame.cameraAction!=EditorCameraAction::None || interactionDocument!=document.documentGeneration();
     // Input still uses current-frame panel ownership. Its new pose becomes
     // visible next frame, keeping this image aligned with its overlays/picks.
-    navigation.update(settings_.camera,sceneRegion,ImGui::GetIO().DeltaTime,false);
+    navigation.update(settings_.camera,sceneRegion,ImGui::GetIO().DeltaTime,false,cameraPilot_.piloting());
+    cameraPilot_.apply(document,settings_.camera,navigation.active());
     for(auto iterator=pendingDrops_.begin();iterator!=pendingDrops_.end();) {
         if(iterator->documentEpoch!=documentEpoch_) { iterator=pendingDrops_.erase(iterator);continue; }
         std::vector<ModelPlacement> placements;bool waiting=false;
@@ -387,6 +414,12 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.sceneCamera=sceneCamera;renderInput.gameCamera=gameCamera;
     renderInput.sceneWidth=renderer.width();renderInput.sceneHeight=renderer.height();
     renderInput.gameWidth=game.pixelWidth;renderInput.gameHeight=game.pixelHeight;
+    if(editor_.playerOcclusionFade()&&gameOpen&&game.pixelWidth&&game.pixelHeight&&gameCamera)
+        renderInput.gameModelOpacities=playerOcclusion_.update(renderScene,renderInput.extracted.models,*gameCamera,
+            (document.documentGeneration()<<1)|static_cast<std::uint64_t>(play_.playing()),ImGui::GetIO().DeltaTime,[&assets](const std::string& id)->std::optional<Aabb> {
+                if(const auto model=assets.peekModel(id))return model->bounds;return std::nullopt;
+            },[this](const std::string& id){return collisions_.query(id);},editor_.playerOcclusionSettings());
+    else playerOcclusion_.clear();
     renderInput.sceneAspect=std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height);
     renderInput.sceneVisible=frame.viewport.width>0 && frame.viewport.height>0;renderInput.gameVisible=gameOpen;
     renderInput.selection=document.selection().ids;renderInput.placementIds=frame.placementPreviewIds;
@@ -408,7 +441,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         gameView_.drawPlayerLightRig(*gameCamera,renderScene);
         if(play_.playing()) {
             const auto player=renderScene.find(renderScene.properties().playerCharacter);
-            if(player && player->character && player->character->showRoute) {
+            if(player && renderScene.isVisible(player->id) && player->character && player->character->showRoute) {
                 std::optional<Vec3> position;
                 if(const auto world=renderScene.worldTransform(player->id))position=math::transformPoint(*world,{0,0,0});
                 gameView_.drawRoute(*gameCamera,play_.lastClickedGround(),play_.remainingPath(),position);
@@ -444,6 +477,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         status_+=environmentStatus+'\n';
     if(!resourceStatus_.empty()) { if(!status_.empty())status_+='\n';status_+=resourceStatus_; }
     status_+=materialDropStatus_;
+    if(!cameraPilot_.status().empty())status_+=cameraPilot_.status()+'\n';
     drawSceneDiagnostics(status_,renderer.pickingStatus(),renderer.modelStatus(),&renderer.shadowStats());
 }
 }

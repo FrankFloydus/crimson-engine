@@ -29,11 +29,11 @@ struct LookRotation {
     Vec3 right{1,0,0};
     Vec3 apply(const Vec3& v) const { return rotate(rotate(rotate(v,WorldUp,yaw),right,pitch),right,correction); }
 };
-LookRotation lookRotation(const Camera& camera, float dx, float dy, double sensitivity) {
+LookRotation lookRotation(const Camera& camera, float dx, float dy, double sensitivity,bool preserveRoll) {
     LookRotation rotation{-double(dx)*sensitivity,-double(dy)*sensitivity,0,{}};
     rotation.right = normalized(rotate(camera.right(),WorldUp,rotation.yaw),{1,0,0});
     const Vec3 nextUp = rotation.apply(camera.up);
-    if (dot(nextUp,WorldUp) < 0) {
+    if (!preserveRoll && dot(nextUp,WorldUp) < 0) {
         const Vec3 horizontalUp = normalized(sub(nextUp,scale(WorldUp,dot(nextUp,WorldUp))),{1,0,0});
         const Vec3 nextForward = rotation.apply(camera.forward());
         rotation.correction = std::acos(std::clamp(dot(horizontalUp,nextUp),-1.0,1.0)) * (nextForward[1] > 0 ? -1 : 1);
@@ -102,10 +102,11 @@ bool Camera::frameBounds(const Vec3& minimum, const Vec3& maximum, float aspect)
     prepare(*this);
     return true;
 }
-void Camera::orbit(float dx, float dy, const Vec3& pivot) {
+void Camera::orbit(float dx, float dy, const Vec3& pivot,bool preserveRoll) {
     if (!std::isfinite(dx) || !std::isfinite(dy) || !finite(pivot)) return;
+    if(std::abs(dx)<1e-6f&&std::abs(dy)<1e-6f)return;
     prepare(*this);
-    const auto rotation = lookRotation(*this,dx,dy,.006);
+    const auto rotation = lookRotation(*this,dx,dy,.006,preserveRoll);
     position = add(pivot,rotation.apply(sub(position,pivot)));
     target = add(pivot,rotation.apply(sub(target,pivot)));
     up = normalized(rotation.apply(up),WorldUp);
@@ -118,11 +119,12 @@ void Camera::pan(float dx, float dy, float width, float height) {
     const Vec3 motion = add(scale(right(),-dx*worldPerPixel),scale(up,dy*worldPerPixel));
     position = add(position,motion); target = add(target,motion);
 }
-void Camera::flyLook(float dx, float dy) {
+void Camera::flyLook(float dx, float dy,bool preserveRoll) {
     if (!std::isfinite(dx) || !std::isfinite(dy)) return;
+    if(std::abs(dx)<1e-6f&&std::abs(dy)<1e-6f)return;
     prepare(*this);
     const float preservedDistance = distance();
-    const auto rotation = lookRotation(*this,dx,dy,.004);
+    const auto rotation = lookRotation(*this,dx,dy,.004,preserveRoll);
     target = add(position,scale(normalized(rotation.apply(forward()),{0,0,-1}),preservedDistance));
     up = normalized(rotation.apply(up),WorldUp);
     prepare(*this);

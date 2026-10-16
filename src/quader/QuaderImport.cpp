@@ -32,6 +32,14 @@ std::string bytes(const std::filesystem::path& path) {
     std::string out(static_cast<std::size_t>(count),'\0');input.seekg(0);if(!out.empty())input.read(out.data(),static_cast<std::streamsize>(out.size()));require(static_cast<bool>(input),"Managed Quader asset changed while reading.");return out;
 }
 std::string digest(const std::string& text){return modelImportDataDigest({reinterpret_cast<const std::uint8_t*>(text.data()),text.size()});}
+void omitNames(Json& value){
+    if(value.is_object()){value.erase("name");for(auto& child:value)omitNames(child);}
+    else if(value.is_array())for(auto& child:value)omitNames(child);
+}
+std::string visualIdentity(Json document,Json materials){
+    omitNames(document);for(auto& id:materials)id=canonicalAssetId(id.get<std::string>());
+    return document.dump()+"\n"+materials.dump();
+}
 std::string identity(const QuaderSourceScene& scene,const QuaderSourceTexture& texture,std::size_t slot,bool directX){
     return scene.project.id+"|"+texture.id+"|"+(texture.id.empty()?scene.id+"|"+texture.path:"")+"|"+(slot==3?"normal":slot==0?"color":"data")+"|"+std::to_string(texture.srgb)+"|"+std::to_string(slot==3&&directX);
 }
@@ -84,8 +92,11 @@ MaterialAsset materialAsset(const QuaderSourceMaterial& source,const std::string
     canonicalizeMaterialAsset(material);validateMaterialAsset(material);return material;
 }
 struct Preparation {
+    struct Package {std::string id,gltf,buffer,manifest,identity;std::array<std::string,4> inputs;};
     const QuaderSourceScene& scene;const QuaderPrepareOptions& options;std::stop_token stop;QuaderImportResult out;
     std::unordered_map<std::string,std::size_t> fileIndexes,inputIndexes;std::unordered_map<std::string,MaterialAsset> materials;std::filesystem::path stage;
+    std::unordered_map<std::string,std::vector<Package>> packages;
+    std::unordered_set<std::string> preparedPackages;bool indexedPackages{};
     explicit Preparation(const QuaderSourceScene& source,const QuaderPrepareOptions& settings,std::stop_token token):scene(source),options(settings),stop(token){
         static std::atomic<std::uint64_t> sequence{};const auto id=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
         stage=resolveAssetPath(options.projectRoot,"assets/.staging-quader-"+id);std::filesystem::create_directories(stage);
@@ -155,8 +166,39 @@ struct Preparation {
         return result;
     }
     std::string identityKey(const QuaderSourceTexture& texture,std::size_t slot,bool directX)const{return identity(scene,texture,slot,directX);}
+    bool reservedPackage(const std::string& id)const{
+        const auto legacy=legacyAssetId(options.projectRoot,id);const auto base=pathFromUtf8(legacy).parent_path();
+        for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"}){
+            const auto value=(base/member).generic_string();
+            if(options.reservedIds.contains(value)||options.reservedIds.contains(canonicalAssetId(value)))return true;
+        }
+        return options.reservedIds.contains(id)||options.reservedIds.contains(canonicalAssetId(id));
+    }
+    void indexPackages(){
+        if(indexedPackages)return;indexedPackages=true;
+        // Imports run on a worker. Inspect the immutable package catalog once,
+        // not once per occurrence; physical placement and display names are not
+        // geometry identity. Old UUID-migrated packages keep their original bytes.
+        for(const auto& entry:storedAssetPaths(options.projectRoot)){
+            canceled(stop);if(entry.file.filename()!="manifest.json"||!std::filesystem::is_regular_file(entry.file)||reservedPackage(entry.id))continue;
+            try{
+                Package package;package.id=entry.id;package.manifest=bytes(entry.file);const auto manifest=Json::parse(package.manifest);
+                if(manifest.value("format",std::string{})!="Quader"||!manifest.contains("quader"))continue;
+                const auto& source=manifest.at("quader");if(source.value("project",std::string{})!=scene.project.id||source.value("scene",std::string{})!=scene.id||source.value("collision",false))continue;
+                if(manifest.value("document",std::string{})!="model.gltf"||manifest.value("original",std::string{})!="source.gltf")continue;
+                const auto directory=entry.file.parent_path();package.gltf=bytes(directory/"model.gltf");
+                if(bytes(directory/"source.gltf")!=package.gltf)continue;
+                package.buffer=bytes(directory/"buffers/0.bin");
+                package.identity=visualIdentity(Json::parse(package.gltf),manifest.at("materialAssets"));
+                const std::array<std::filesystem::path,4> files{entry.file,directory/"model.gltf",directory/"source.gltf",directory/"buffers/0.bin"};
+                for(std::size_t i=0;i<files.size();++i)package.inputs[i]=assetIdAtPath(options.projectRoot,files[i]);
+                const auto key=digest(package.identity+"\n"+package.buffer);packages[key].push_back(std::move(package));
+            }catch(const std::exception&){/* Unrelated invalid packages cannot be reused. Direct identity conflicts still fail in file(). */}
+        }
+        for(auto& [key,candidates]:packages){(void)key;std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.id<b.id;});}
+    }
     std::string package(const std::string& name,const std::vector<QuaderSourceVertex>& vertices,const std::vector<std::uint32_t>& indices,
-        const std::vector<QuaderSourceSurface>& surfaces,const std::vector<std::string>& materialIds,bool collision){
+        const std::vector<QuaderSourceSurface>& surfaces,const std::vector<std::string>& materialIds){
         if(indices.empty())return {};require(!vertices.empty()&&indices.size()%3==0,"Quader mesh does not contain valid triangles.");
         std::string buffer;Json views=Json::array(),accessors=Json::array();const auto append=[&](const void* data,std::size_t count){const auto offset=buffer.size();buffer.append(static_cast<const char*>(data),count);return offset;};
         Vec3 minimum{std::numeric_limits<float>::max(),std::numeric_limits<float>::max(),std::numeric_limits<float>::max()},maximum{-minimum[0],-minimum[1],-minimum[2]};
@@ -165,40 +207,58 @@ struct Preparation {
         const auto accessor=[&](const void* data,std::size_t byteCount,std::size_t count,const char* type,int component,int target){const auto offset=append(data,byteCount);const auto view=views.size();views.push_back({{"buffer",0},{"byteOffset",offset},{"byteLength",byteCount},{"target",target}});
             const auto value=accessors.size();accessors.push_back({{"bufferView",view},{"componentType",component},{"count",count},{"type",type}});return value;};
         const auto position=accessor(positions.data(),positions.size()*sizeof(Vec3),positions.size(),"VEC3",5126,34962);accessors[position]["min"]={minimum[0],minimum[1],minimum[2]};accessors[position]["max"]={maximum[0],maximum[1],maximum[2]};
-        std::optional<std::size_t> normal,uv;if(!collision){normal=accessor(normals.data(),normals.size()*sizeof(Vec3),normals.size(),"VEC3",5126,34962);uv=accessor(uvs.data(),uvs.size()*sizeof(Vec2),uvs.size(),"VEC2",5126,34962);}
+        const auto normal=accessor(normals.data(),normals.size()*sizeof(Vec3),normals.size(),"VEC3",5126,34962);
+        const auto uv=accessor(uvs.data(),uvs.size()*sizeof(Vec2),uvs.size(),"VEC2",5126,34962);
         Json primitives=Json::array(),gltfMaterials=Json::array(),nativeMaterials=Json::array();
         for(const auto& surface:surfaces){if(!surface.count)continue;require(surface.count%3==0&&std::uint64_t(surface.offset)+surface.count<=indices.size(),"Invalid Quader primitive range.");
             const auto slot=gltfMaterials.size();std::string id=surface.material==UINT32_MAX?DefaultMaterialId:materialIds.at(surface.material);nativeMaterials.push_back(id);
             gltfMaterials.push_back({{"name",id},{"pbrMetallicRoughness",{{"baseColorFactor",{1,1,1,1}},{"metallicFactor",0},{"roughnessFactor",1}}}});
             const auto index=accessor(indices.data()+surface.offset,surface.count*sizeof(std::uint32_t),surface.count,"SCALAR",5125,34963);
-            Json attributes{{"POSITION",position}};if(normal)attributes["NORMAL"]=*normal;if(uv)attributes["TEXCOORD_0"]=*uv;
+            Json attributes{{"POSITION",position},{"NORMAL",normal},{"TEXCOORD_0",uv}};
             primitives.push_back({{"attributes",std::move(attributes)},{"indices",index},{"material",slot},{"mode",4}});}
         if(primitives.empty())return {};nativeMaterials.push_back(DefaultMaterialId);
         Json document{{"asset",{{"version","2.0"},{"generator","Crimson Quader bridge ABI 6"}}},{"scene",0},{"scenes",Json::array({{{"nodes",{0}}}})},
             {"nodes",Json::array({{{"name",name},{"mesh",0}}})},{"meshes",Json::array({{{"name",name},{"primitives",std::move(primitives)}}})},
             {"materials",std::move(gltfMaterials)},{"buffers",Json::array({{{"uri","buffers/0.bin"},{"byteLength",buffer.size()}}})},{"bufferViews",std::move(views)},{"accessors",std::move(accessors)}};
-        const auto gltf=document.dump();const auto content=digest(scene.project.id+"|"+scene.id+"|"+gltf+"\n"+nativeMaterials.dump()+"\n"+buffer);
+        auto gltf=document.dump();const auto exactContent=digest(scene.project.id+"|"+scene.id+"|"+gltf+"\n"+nativeMaterials.dump()+"\n"+buffer);
+        const auto normalized=visualIdentity(document,nativeMaterials),key=digest(normalized+"\n"+buffer);
+        auto content=digest("Quader visual geometry v2|"+scene.project.id+"|"+scene.id+"|"+normalized+"\n"+buffer);
+        // Prefer the exact legacy package when present, so corruption of its
+        // immutable members is still reported rather than hidden by a new ID.
+        const auto oldBase="assets/models/quader-"+exactContent;
+        const auto generationBase=[&](const std::string& original){
+            for(std::size_t generation=0;;++generation){const auto value=original+(generation?"-"+std::to_string(generation):std::string{});
+                if(!reservedPackage(value+"/manifest.json"))return value;}
+        };
+        const auto legacyBase=generationBase(oldBase);
+        const bool exactLegacy=std::filesystem::is_regular_file(checkedManagedAssetPath(options.projectRoot,legacyBase+"/manifest.json"));
+        if(exactLegacy)content=exactContent;
         const auto originalBase="assets/models/quader-"+content;
         std::string base;
         // Deletion reserves old references, not the right to import the source
         // again. Reuse the first live generation and never revive a deleted ID.
-        for(std::size_t generation=0;;++generation){
-            base=originalBase+(generation?"-"+std::to_string(generation):std::string{});
-            bool reserved=false;
-            for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"})
-                reserved|=options.reservedIds.contains(base+"/"+member)||options.reservedIds.contains(canonicalAssetId(base+"/"+member));
-            if(!reserved)break;
-        }
-        const auto id=base+"/manifest.json";
+        base=generationBase(originalBase);auto id=base+"/manifest.json";
         Json manifest{{"version",1},{"name",name},{"format","Quader"},{"document","model.gltf"},{"original","source.gltf"},
             {"dependencies",Json::array({{{"kind","buffer"},{"index",0},{"path","buffers/0.bin"},{"source","Quader reader ABI 6"}}})},{"materialAssets",nativeMaterials},
-            {"quader",{{"project",scene.project.id},{"scene",scene.id},{"collision",collision},{"content",content}}}};
-        const auto manifestText=manifest.dump(2)+"\n";file(base+"/model.gltf",gltf,false,true);file(base+"/source.gltf",gltf,false,true);file(base+"/buffers/0.bin",buffer,false,true);file(id,manifestText,false,true);
+            {"quader",{{"project",scene.project.id},{"scene",scene.id},{"collision",false},{"content",content}}}};
+        auto manifestText=manifest.dump(2)+"\n";indexPackages();
+        const auto candidates=packages.find(key);const Package* reused{};
+        if(!exactLegacy&&candidates!=packages.end())for(const auto& candidate:candidates->second)if(candidate.identity==normalized&&candidate.buffer==buffer){reused=&candidate;break;}
+        if(reused){
+            id=reused->id;gltf=reused->gltf;buffer=reused->buffer;manifestText=reused->manifest;
+            const std::array<const std::string*,4> values{&manifestText,&gltf,&gltf,&buffer};
+            for(std::size_t i=0;i<values.size();++i)if(!reused->inputs[i].empty())input(reused->inputs[i],*values[i]);
+        }else{
+            file(base+"/model.gltf",gltf,false,true);file(base+"/source.gltf",gltf,false,true);file(base+"/buffers/0.bin",buffer,false,true);file(id,manifestText,false,true);
+            packages[key].push_back({publishedId(id),gltf,buffer,manifestText,normalized,{}});
+        }
+        const auto published=publishedId(id);out.assetIds.push_back(published);
+        if(!preparedPackages.insert(published).second)return published;
         const auto local=stage/content;std::filesystem::create_directories(local/"buffers");writeFileAtomically(local/"model.gltf",gltf);writeFileAtomically(local/"source.gltf",gltf);writeFileAtomically(local/"buffers/0.bin",buffer);writeFileAtomically(local/"manifest.json",manifestText);
         ModelResolvers resolvers;resolvers.material=[&](const std::string& material)->std::optional<ModelMaterial>{const auto found=materials.find(canonicalAssetId(material));if(found!=materials.end())return found->second.surface;return std::nullopt;};
         auto asset=loadModelPackage(local/"manifest.json",options.projectRoot,resolvers);asset->id=publishedId(id);canceled(stop);
         auto stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*asset,options.projectRoot,false));asset->stream=std::move(stream);
-        out.preparedModels.push_back(std::move(asset));out.assetIds.push_back(publishedId(id));return publishedId(id);
+        out.preparedModels.push_back(std::move(asset));return published;
     }
 };
 }
@@ -225,13 +285,13 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
         std::vector<QuaderSourceSurface> surfaces=source.surfaces;if(surfaces.empty()&&!source.indices.empty())surfaces.push_back({UINT32_MAX,0,static_cast<std::uint32_t>(source.indices.size())});
         for(const auto& surface:surfaces){require(surface.count%3==0&&std::uint64_t(surface.offset)+surface.count<=source.indices.size(),"Invalid Quader surface indices.");
             for(std::uint32_t i=0;i<surface.count;i+=3){const auto a=source.indices[surface.offset+i],b=source.indices[surface.offset+i+1],c=source.indices[surface.offset+i+2];require(a<source.vertices.size()&&b<source.vertices.size()&&c<source.vertices.size(),"Invalid Quader vertex index.");triangle(source.vertices[a].position,source.vertices[b].position,source.vertices[c].position,options.scale,mesh.local);}}
-        mesh.modelId=context.package(source.name,source.vertices,source.indices,surfaces,materialIds,false);
+        mesh.modelId=context.package(source.name,source.vertices,source.indices,surfaces,materialIds);
         if(source.collision==QuaderCollision::Unsupported)++out.skippedCollisions;
         if(source.collision==QuaderCollision::StaticTriangles&&!source.collisionPoints.empty()){
-            require(source.collisionPoints.size()%3==0,"Invalid Quader static collision triangles.");std::vector<QuaderSourceVertex> vertices;std::vector<std::uint32_t> indices;vertices.reserve(source.collisionPoints.size());indices.reserve(source.collisionPoints.size());
-            for(std::size_t i=0;i<source.collisionPoints.size();i+=3){triangle(source.collisionPoints[i],source.collisionPoints[i+1],source.collisionPoints[i+2],options.scale,mesh.local);const auto normal=math::normalized(math::cross(source.collisionPoints[i+1]-source.collisionPoints[i],source.collisionPoints[i+2]-source.collisionPoints[i]),{0,1,0});
-                for(std::size_t corner=0;corner<3;++corner){indices.push_back(static_cast<std::uint32_t>(vertices.size()));vertices.push_back({source.collisionPoints[i+corner],normal,{}});}}
-            mesh.collisionModelId=context.package(source.name+" collision",vertices,indices,{{UINT32_MAX,0,static_cast<std::uint32_t>(indices.size())}},{},true);}
+            require(source.collisionPoints.size()%3==0,"Invalid Quader static collision triangles.");std::vector<Vec3> positions;std::vector<std::uint32_t> indices;positions.reserve(source.collisionPoints.size());indices.reserve(source.collisionPoints.size());
+            for(std::size_t i=0;i<source.collisionPoints.size();i+=3){triangle(source.collisionPoints[i],source.collisionPoints[i+1],source.collisionPoints[i+2],options.scale,mesh.local);
+                for(std::size_t corner=0;corner<3;++corner){indices.push_back(static_cast<std::uint32_t>(positions.size()));positions.push_back(scaled(source.collisionPoints[i+corner],options.scale));}}
+            mesh.collision=makeCollisionMesh(std::move(positions),std::move(indices));}
         out.meshes.push_back(std::move(mesh));}
     std::size_t directional{},points{};std::set<std::uint64_t> lightIds;
     if(options.syncLights)for(const auto& source:scene.lights){canceled(stop);if(source.type==2){++out.skippedSpots;continue;}require(source.type<=1,"Unsupported Quader light type.");require(lightIds.insert(source.entity).second,"Duplicate Quader light identity.");

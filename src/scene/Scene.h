@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Math.h"
+#include "CollisionMesh.h"
 #include "crimson-renderer/RenderTypes.h"
 #include "resources/AssetRef.h"
 #include "assets/ModelMaterialOverrides.h"
@@ -38,6 +39,7 @@ struct ModelReference {
     bool castShadows{true},receiveShadows{true};
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation animation{};
+    bool fadeWhenOccluding{false};
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -91,7 +93,11 @@ struct SceneCollider {
     ColliderShape shape{ColliderShape::Box};
     float radius{.5f},height{1.f}; // Height includes both capsule hemispheres.
     AssetRef<ModelAsset> source; // Retained when changing shape; used by Trimesh.
-    bool operator==(const SceneCollider&) const = default;
+    std::shared_ptr<const CollisionMesh> mesh; // Native triangles, retained across primitive shape edits.
+    bool operator==(const SceneCollider& other) const {
+        return size==other.size && showCollisionInGame==other.showCollisionInGame && collisionColor==other.collisionColor &&
+            shape==other.shape && radius==other.radius && height==other.height && source==other.source && sameCollisionMesh(mesh,other.mesh);
+    }
 };
 struct QuaderLink {
     std::string projectPath,projectId,sceneId;
@@ -137,6 +143,8 @@ struct EntityRecord {
     std::optional<QuaderGenerated> quaderGenerated;
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation modelAnimation{};
+    bool fadeWhenOccluding{false}; // Per-model participation in Game player occlusion fading.
+    bool visible{true}; // Authored rendering visibility, inherited by descendants.
 };
 struct SceneProperties {
     EntityId activeEnvironment{NoEntity};
@@ -157,6 +165,7 @@ public:
     std::vector<EntityRecord> records() const;
     std::optional<EntityRecord> find(EntityId id) const;
     bool contains(EntityId id) const { return entities_.contains(id); }
+    bool isVisible(EntityId id) const; // Cached authored visibility AND all ancestors; false for missing IDs.
     std::optional<Mat4> worldTransform(EntityId id) const;
     std::vector<EntityId> children(EntityId parent = NoEntity) const;
     std::vector<EntityId> preorder() const;

@@ -17,6 +17,10 @@ constexpr std::uint64_t AtlasFlags=BGFX_TEXTURE_COMPUTE_WRITE|BGFX_TEXTURE_BLIT_
     BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|BGFX_SAMPLER_MIP_POINT;
 // bgfx adds one vertex stride when allocating this standalone dynamic buffer.
 constexpr std::size_t LightBufferBytes=(std::size_t(ClusteredLightingGpu::MaxLights)*RecordTexels+1)*sizeof(Vec4);
+// The largest adapter atlas remains below 2^32 texels. 256-texel alignment
+// keeps this integer exactly representable in a float uniform at every size.
+constexpr std::uint64_t OccluderAlignment=256;
+std::uint64_t occluderBase(std::uint64_t afterAmbient){return (afterAmbient+OccluderAlignment-1)&~(OccluderAlignment-1);}
 template<class Handle> void destroyHandle(Handle& handle){if(bgfx::isValid(handle))bgfx::destroy(handle);handle=BGFX_INVALID_HANDLE;}
 float linear(float value) {
     const float color=std::isfinite(value)?std::clamp(value,0.f,1.f):0.f;
@@ -47,6 +51,9 @@ ClusteredLightingGpu::ClusteredLightingGpu(bgfx::ProgramHandle computeProgram):c
     recordLayoutUniform_=bgfx::createUniform("u_clusterRecordLayoutV5",bgfx::UniformType::Vec4);
     viewUniform_=bgfx::createUniform("u_clusterView",bgfx::UniformType::Mat4);
     ambientUniform_=bgfx::createUniform("u_ambientAtlas",bgfx::UniformType::Vec4);
+    occluderUniform_=bgfx::createUniform("u_occluderDepthAtlas",bgfx::UniformType::Vec4);
+    occluderOptionsUniform_=bgfx::createUniform("u_occluderDepthOptions",bgfx::UniformType::Vec4);
+    occluderDepthSampler_=bgfx::createUniform("s_occluderPublishDepth",bgfx::UniformType::Sampler);
 }
 ClusteredLightingGpu::~ClusteredLightingGpu() {
     destroyHandle(atlas_);destroyHandle(lightInput_);
@@ -55,6 +62,7 @@ ClusteredLightingGpu::~ClusteredLightingGpu() {
     destroyHandle(atlasUniform_);destroyHandle(optionsUniform_);destroyHandle(viewUniform_);
     destroyHandle(recordLayoutUniform_);
     destroyHandle(ambientUniform_);
+    destroyHandle(occluderUniform_);destroyHandle(occluderOptionsUniform_);destroyHandle(occluderDepthSampler_);
 }
 void ClusteredLightingGpu::advance(std::uint64_t frame) {
     frame_=frame;
@@ -67,7 +75,7 @@ std::size_t ClusteredLightingGpu::residentBytes() const {
     for(const auto& old:retired_)bytes+=old.bytes;
     return bytes;
 }
-bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels) {
+bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels,std::uint64_t occluderTexels) {
     const auto* caps=bgfx::getCaps();
     if(!caps || !(caps->supported&BGFX_CAPS_COMPUTE) || !bgfx::isValid(computeProgram_))
         throw std::runtime_error("Clustered Forward+ requires a valid compute program and compute-capable adapter.");
@@ -86,7 +94,9 @@ bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t br
     std::uint32_t width=std::bit_ceil(std::max<std::uint32_t>(brdfSize,atlasWidth_));
     auto requiredHeight=[&](std::uint32_t extent) {
         const auto lightRows=point_lighting::pointLightRecordRows(MaxLights,extent);
-        return std::uint64_t(brdfSize)+lightRows+(maskTexels+ambientTexels+extent-1)/extent;
+        const auto afterAmbient=(std::uint64_t(brdfSize)+lightRows)*extent+maskTexels+ambientTexels;
+        const auto end=occluderTexels?occluderBase(afterAmbient)+occluderTexels:afterAmbient;
+        return (end+extent-1)/extent;
     };
     while(width<=limit && requiredHeight(width)>limit)width*=2;
     if(width>limit || width==0 || requiredHeight(width)>limit)
@@ -98,7 +108,7 @@ bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t br
     auto next=bgfx::createTexture2D(static_cast<std::uint16_t>(width),static_cast<std::uint16_t>(height),false,1,
         bgfx::TextureFormat::RGBA32F,AtlasFlags);
     if(!bgfx::isValid(next))throw std::runtime_error("Clustered Forward+ atlas allocation failed.");
-    bgfx::setName(next,"Forward+ BRDF, point lights, cluster masks and ambient visibility");
+    bgfx::setName(next,"Forward+ BRDF, lights, masks, ambient visibility and occluder depth");
     if(bgfx::isValid(atlas_)) {
         try {retired_.push_back({atlas_,std::size_t(atlasWidth_)*atlasHeight_*sizeof(Vec4),frame_+2});}
         catch(...) {destroyHandle(next);throw;}
@@ -109,13 +119,16 @@ bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t br
 }
 bool ClusteredLightingGpu::prepare(const Camera& camera,std::uint16_t width,std::uint16_t height,
     std::span<const PointLight> lights,std::span<const std::int32_t> shadowIndices,
-    std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights,std::uint16_t ambientWidth,std::uint16_t ambientHeight) {
+    std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights,std::uint16_t ambientWidth,std::uint16_t ambientHeight,
+    std::uint16_t occluderWidth,std::uint16_t occluderHeight) {
     const auto begin=std::chrono::steady_clock::now();
-    usable_=false;status_.clear();stats_={};ambientValues_={};
+    usable_=false;status_.clear();stats_={};ambientValues_={};occluderValues_={};
+    occluderOptionsValues_={bgfx::getCaps()->originBottomLeft?1.f:0.f,0,0,0};
     stats_.totalLights=static_cast<std::uint32_t>(std::min<std::size_t>(lights.size(),UINT32_MAX));
     try {
         if(!width || !height)throw std::runtime_error("Clustered Forward+ requires a nonempty viewport.");
         if(bool(ambientWidth)!=bool(ambientHeight))throw std::runtime_error("Ambient visibility requires both target dimensions.");
+        if(bool(occluderWidth)!=bool(occluderHeight))throw std::runtime_error("Occluder depth requires both target dimensions.");
         if(lights.size()>MaxLights){stats_.overflow=true;throw std::runtime_error("Clustered Forward+ source capacity of 4096 point lights exceeded.");}
         const auto brdfSize=static_cast<std::uint32_t>(std::llround(std::sqrt(double(brdfRG.size()/2))));
         if(brdfSize==0 || brdfSize>UINT16_MAX || std::size_t(brdfSize)*brdfSize*2!=brdfRG.size())
@@ -176,11 +189,13 @@ bool ClusteredLightingGpu::prepare(const Camera& camera,std::uint16_t width,std:
         const auto words=((count+127)/128)*4;
         const auto maskTexels=std::uint64_t(clusters)*(words/4);
         const auto ambientTexels=ambient_visibility::packedTexelCount(ambientWidth,ambientHeight);
-        ensureAtlas(maskTexels,static_cast<std::uint16_t>(brdfSize),ambientTexels);
+        const auto occluderTexels=ambient_visibility::packedTexelCount(occluderWidth,occluderHeight);
+        ensureAtlas(maskTexels,static_cast<std::uint16_t>(brdfSize),ambientTexels,occluderTexels);
         const auto lightBase=std::uint32_t(brdfSize_)*atlasWidth_;
         const auto lightRows=point_lighting::pointLightRecordRows(MaxLights,atlasWidth_);
         const auto maskBase=lightBase+lightRows*atlasWidth_;
         if(ambientTexels)ambientValues_={float(maskBase+maskTexels),float(ambientWidth),float(ambientHeight),0};
+        if(occluderTexels)occluderValues_={float(occluderBase(maskBase+maskTexels+ambientTexels)),float(occluderWidth),float(occluderHeight),0};
         const Vec4 nextGrid{float(tilesX),float(tilesY),float(DepthSlices),float(words)};
         const Vec4 nextDepth{scale,bias,nearPlane,farPlane};
         const Vec4 nextViewport{float(width),float(height),tanY*aspect,tanY};
@@ -221,6 +236,7 @@ bool ClusteredLightingGpu::prepare(const Camera& camera,std::uint16_t width,std:
         // A partially submitted update must never make a later prepare reuse
         // snapshots that were not published coherently with its masks.
         sourceSnapshotValid_=recordsUploaded_=inputUploaded_=masksValid_=false;
+        occluderValues_={};
         brdfSnapshot_.clear();
         status_=error.what();stats_.allocatedBytes=residentBytes();
         stats_.buildCpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();return false;
@@ -232,6 +248,20 @@ void ClusteredLightingGpu::setUniforms() const {
     bgfx::setUniform(optionsUniform_,optionsValues_.data());bgfx::setUniform(viewUniform_,viewValues_.data());
     const Vec4 recordLayout{float(RecordTexels),0,0,0};bgfx::setUniform(recordLayoutUniform_,recordLayout.data());
     bgfx::setUniform(ambientUniform_,ambientValues_.data());
+    bgfx::setUniform(occluderUniform_,occluderValues_.data());bgfx::setUniform(occluderOptionsUniform_,occluderOptionsValues_.data());
+}
+bool ClusteredLightingGpu::publishOccluderDepth(bgfx::TextureHandle depth,bgfx::ProgramHandle program,bgfx::ViewId view) {
+    if(!occluderWidth()||!occluderHeight())return true;
+    occluderValues_[3]=0;
+    if(!usable_||!bgfx::isValid(depth)||!bgfx::isValid(program)||view==UINT16_MAX) {
+        status_="Nearest occluder depth publication requires coherent targets and a compute program.";return false;
+    }
+    constexpr auto sampling=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|
+        BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+    setUniforms();bgfx::setTexture(0,occluderDepthSampler_,depth,static_cast<std::uint32_t>(sampling));
+    bgfx::setImage(1,atlas_,0,bgfx::Access::Write,bgfx::TextureFormat::RGBA32F);
+    bgfx::dispatch(view,program,(std::uint32_t(occluderWidth())+31)/32,(std::uint32_t(occluderHeight())+7)/8,1);
+    occluderValues_[3]=1;return true;
 }
 void ClusteredLightingGpu::bind(std::uint8_t samplerStage) const {
     if(!usable_)return;

@@ -12,6 +12,7 @@ uniform vec4 u_modelUv; // Base color, metallic roughness, normal, occlusion UV 
 uniform vec4 u_modelOptions; // Emissive UV, alpha mask, double sided, determinant sign.
 uniform vec4 u_modelMaps; // Base color, metallic roughness, normal, occlusion present.
 uniform vec4 u_modelEmissiveMap;
+uniform vec4 u_instanceOpacity;
 uniform vec4 u_cameraPos;
 uniform vec4 u_direction[4];
 uniform vec4 u_directionColor[4];
@@ -26,6 +27,7 @@ SAMPLERCUBE(s_irradiance, 5);
 SAMPLERCUBE(s_prefiltered, 6);
 SAMPLER2D(s_brdfLut, 7);
 #include "clustered_lighting.sh"
+#include "occluder_partition.sh"
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
 #include "character_shadow.sh"
@@ -98,7 +100,8 @@ void main()
     if (u_modelEmissiveMap.y > 0.5)
     {
         vec3 color = applyDistanceFog(baseColor.rgb, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
-        float coverage = u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0;
+        float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
+        occluderPartition(gl_FragCoord.xyz);
         gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
         return;
     }
@@ -166,6 +169,7 @@ void main()
     if (u_modelEmissiveMap.x > 0.5) emissive *= materialSample(s_emissive, slotUv(uv, u_modelOptions.x), mappingPosition, mappingNormal).rgb;
     color += emissive * (u_lightingResponse.x > 0.5 ? darkness : 1.0);
     color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
-    float coverage = u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0;
+    float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
+    occluderPartition(gl_FragCoord.xyz);
     gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
 }

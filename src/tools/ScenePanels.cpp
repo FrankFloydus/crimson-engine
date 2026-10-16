@@ -25,14 +25,14 @@
 namespace crimson {
 namespace {
 constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
-enum class Edit { None, Name, InlineName,
+enum class Edit { None, Name, InlineName, Visible,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
     DirectionEnabled, DirectionColor, DirectionIntensity,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,
     PointEnabled, PointColor, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointAttenuation,
     DirectionReceivers,DirectionCasters,DirectionRevealReceivers,DirectionReveal,DirectionRevealStrength,
     PointReceivers,PointCasters,PointRevealReceivers,PointReveal,PointRevealStrength,
-    ModelCastShadows, ModelReceiveShadows,
+    ModelCastShadows, ModelReceiveShadows,ModelFadeWhenOccluding,
     ModelDirectReceivers,ModelCasterScope,ModelAmbientReceivers,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
     Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
@@ -905,6 +905,11 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
     ImGui::BeginDisabled(blocked);
     if (const auto record=document.scene().find(document.selection().primary)) {
         drawName(document,state,*record);
+        auto visible=record->visible;
+        const bool visibilityChanged=ImGui::Checkbox("Visible",&visible);
+        propertyEdit(document,state,Edit::Visible,"Toggle entity visibility",visibilityChanged,
+            changeEntity(record->id,[visible](auto& entity){entity.visible=visible;}));
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Show this entity and its descendants.");
         const InspectorTransformTransactions transformTransactions{
             [&](unsigned field,const char* label) {
                 return beginEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field),label);
@@ -945,6 +950,10 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
             propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
                 changeEntity(record->id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
+            auto fadeWhenOccluding=record->fadeWhenOccluding;
+            const bool fadeChanged=ImGui::Checkbox("Fade when blocking player",&fadeWhenOccluding);
+            propertyEdit(document,state,Edit::ModelFadeWhenOccluding,"Toggle player occlusion fading",fadeChanged,
+                changeEntity(record->id,[fadeWhenOccluding](auto& entity){entity.fadeWhenOccluding=fadeWhenOccluding;}));
             auto scopes=record->lightingScopes;
             bool activeScopeDrawn=false;
             const auto scopeEdit=[&](Edit property,const char* label,bool changed) {

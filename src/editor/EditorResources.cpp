@@ -290,7 +290,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
     const std::array<ShadowCamera,1> fallback{{{Camera{},1.f}}};if(cameras.empty())cameras=fallback;
     const auto focused=[&](std::uint64_t id){return std::find(focusEntities.begin(),focusEntities.end(),id)!=focusEntities.end();};
     const auto characterCaster=[&](const ExtractedModel& model) {
-        return model.castShadows && model.lightingCategory==lighting_scope::Character &&
+        return model.visible && model.castShadows && model.lightingCategory==lighting_scope::Character &&
             (model.lightingScopes.shadowCasterMask&lighting_scope::Character)!=0 &&
             (focusEntities.empty()||focused(model.id));
     };
@@ -303,6 +303,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
     if(directional){allBounds.reserve(scene.models.size());worldCasterBounds.reserve(scene.models.size());result->receiverBounds.reserve(scene.models.size()+extraReceiverBounds.size());
         result->receiverBounds.insert(result->receiverBounds.end(),extraReceiverBounds.begin(),extraReceiverBounds.end());}
     if(directional)for(const auto& model:scene.models) {
+        if(!model.visible)continue;
         const auto asset=assets_.findModel(model.assetId);
         const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
         // Freeze receiver metadata before residency/camera preparation so both
@@ -321,7 +322,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
         }
     std::vector<Aabb> footprintBounds;
     for(const auto& model:scene.models) {
-        if(!model.castShadows)continue;
+        if(!model.visible || !model.castShadows)continue;
         const auto asset=assets_.findModel(model.assetId);
         const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
         footprintBounds.clear();footprintBounds.push_back(bounds);

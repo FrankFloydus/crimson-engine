@@ -35,6 +35,9 @@ std::string assetIdAtPath(const std::filesystem::path& root, const std::filesyst
 // this string as an AssetRef. New references and index keys are UUIDs.
 std::string legacyAssetId(const std::filesystem::path& root, std::string_view id);
 std::vector<StoredAssetPath> storedAssetPaths(const std::filesystem::path& root);
+// Validate a complete registration group before publishing one index update.
+// An unchanged group does not write the index or advance its revision.
+void registerAssetPaths(const std::filesystem::path& root, std::span<const StoredAssetPath> paths);
 void registerAssetPath(const std::filesystem::path& root, const std::string& id,
                        const std::filesystem::path& file);
 std::uint64_t contentStorageRevision(const std::filesystem::path& root);

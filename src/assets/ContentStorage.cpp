@@ -491,13 +491,28 @@ std::string legacyAssetId(const fs::path& root,std::string_view id) {
 std::vector<StoredAssetPath> storedAssetPaths(const fs::path& root) {
     std::lock_guard lock(storageMutex);(void)index(root);return snapshot(root).entries;
 }
+void registerAssetPaths(const fs::path& root,std::span<const StoredAssetPath> paths) {
+    std::lock_guard lock(storageMutex);if(paths.empty())return;
+    auto j=index(root);const auto base=normalized(root);bool changed=false;
+    std::unordered_map<std::string,std::string> assignments;assignments.reserve(paths.size());
+    for(const auto& entry:paths) {
+        if(entry.id.empty())throw std::runtime_error("Cannot register an empty asset identity.");
+        const auto relative=normalized(entry.file).lexically_relative(base);(void)checkedRelative(root,relative);
+        if(*relative.begin()=="Engine"&&!isEngineAssetId(entry.id))throw std::runtime_error("Only protected engine identities can own Engine files.");
+        const auto key=canonicalAssetId(entry.id),value=utf8(relative);
+        const auto [assignment,inserted]=assignments.emplace(key,value);
+        if(!inserted&&assignment->second!=value)throw std::runtime_error("One asset identity cannot register multiple files in the same group.");
+        if(j["assets"].contains(key)&&j["assets"][key]==value)continue;
+        j["assets"][key]=value;if(key!=entry.id)j["aliases"][entry.id]=key;changed=true;
+    }
+    if(!changed)return;
+    std::unordered_map<std::string,std::string> owners;owners.reserve(j["assets"].size());
+    for(auto it=j["assets"].begin();it!=j["assets"].end();++it)
+        if(!owners.emplace(lower(it.value().get<std::string>()),it.key()).second)throw std::runtime_error("Two asset identities cannot own the same file.");
+    j["revision"]=j.value("revision",std::uint64_t{})+1;writeIndex(root,std::move(j));
+}
 void registerAssetPath(const fs::path& root,const std::string& id,const fs::path& file) {
-    std::lock_guard lock(storageMutex);if(id.empty())throw std::runtime_error("Cannot register an empty asset identity.");
-    const auto relative=normalized(file).lexically_relative(normalized(root));(void)checkedRelative(root,relative);
-    if(*relative.begin()=="Engine"&&!isEngineAssetId(id))throw std::runtime_error("Only protected engine identities can own Engine files.");
-    auto j=index(root);const auto key=canonicalAssetId(id),value=utf8(relative);if(j["assets"].contains(key)&&j["assets"][key]==value)return;
-    for(auto it=j["assets"].begin();it!=j["assets"].end();++it)if(it.key()!=key&&lower(it.value().get<std::string>())==lower(value))throw std::runtime_error("Two asset identities cannot own the same file.");
-    j["assets"][key]=value;if(key!=id)j["aliases"][id]=key;j["revision"]=j.value("revision",std::uint64_t{})+1;writeIndex(root,std::move(j));
+    const StoredAssetPath entry{id,file};registerAssetPaths(root,std::span(&entry,1));
 }
 std::uint64_t contentStorageRevision(const fs::path& root){std::lock_guard lock(storageMutex);return snapshot(root).revision;}
 fs::path checkedContentPath(const fs::path& root,const fs::path& file) {

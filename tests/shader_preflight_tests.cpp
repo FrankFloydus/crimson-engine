@@ -5,6 +5,7 @@
 #include "fs_pick.h"
 #include "vs_present.h"
 #include "fs_present.h"
+#include "fs_occluder_composite.h"
 #include "fs_glow_extract.h"
 #include "fs_glow_blur.h"
 #include "vs_grid.h"
@@ -23,6 +24,7 @@
 #include "fs_directional_shadow.h"
 #include "cs_procedural_filter.h"
 #include "cs_model_deform.h"
+#include "cs_occluder_depth.h"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -32,7 +34,7 @@ int main() {
     try {
         const auto check=[](bool success,const std::string& message){if (!success) throw std::runtime_error(message);}; std::string diagnostic;
         const auto pair=[&](auto& vertex,auto& fragment){check(crimson::preflightShaderPair(vertex,fragment,vertex,fragment,diagnostic),diagnostic);};
-        pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_collision_overlay,cc_fs_collision_overlay); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
+        pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_present,cc_fs_occluder_composite); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_collision_overlay,cc_fs_collision_overlay); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
         pair(cc_vs_particle,cc_fs_particle);
         pair(cc_vs_present,cc_fs_sky);
         pair(cc_vs_point_shadow,cc_fs_point_shadow);
@@ -48,6 +50,8 @@ int main() {
         check(!crimson::preflightShaderPair(wrong,cc_fs_model,cc_vs_model,cc_fs_model,diagnostic),"Wrong shader stage should fail safely.");
         check(crimson::preflightComputeShader(cc_cs_procedural_filter,cc_cs_procedural_filter,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_model_deform,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_occluder_depth,cc_cs_occluder_depth,diagnostic),diagnostic);
+        check(!crimson::preflightComputeShader(cc_cs_occluder_depth,cc_cs_model_deform,diagnostic),"Occluder depth publication must retain its independent image/uniform contract.");
         check(!crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_procedural_filter,diagnostic),"Deformation compute must retain its independent buffer/uniform contract.");
         std::vector<std::uint8_t> compute(std::begin(cc_cs_procedural_filter),std::end(cc_cs_procedural_filter));
         auto cutCompute=compute;cutCompute.pop_back();

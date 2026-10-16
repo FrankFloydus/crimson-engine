@@ -84,6 +84,32 @@ void primitiveIdentityAndVisibility(){
     }
     require(queries==0&&resources.stats().loads==0&&resources.stats().queued==0&&resources.stats().running==0,"Primitive display changes queued resource preparation.");
 }
+void hierarchicalVisibility(){
+    ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;
+    EntityRecord group;group.id=10;group.name="Hidden group";group.visible=false;
+    auto mesh=collider(1,ColliderShape::Trimesh);mesh.parent=group.id;mesh.collider->source=AssetRef<ModelAsset>{canonicalAssetId("assets/models/hidden/manifest.json")};
+    mesh.collider->showCollisionInGame=true;
+    auto primitive=collider(2,ColliderShape::Box);primitive.parent=group.id;primitive.collider->showCollisionInGame=true;
+    EntityRecord actor;actor.id=3;actor.name="Character";actor.parent=group.id;actor.character.emplace();actor.character->showCollisionInGame=true;
+    auto child=collider(4,ColliderShape::Sphere);child.parent=group.id;child.visible=false;child.collider->showCollisionInGame=true;
+    const auto publish=[&]{scene.apply({group,mesh,primitive,actor,child},{});};publish();unsigned queries{};
+    const CollisionMeshQuery query=[&](const std::string&)->CollisionMeshResult{++queries;throw std::runtime_error("Hidden collider requested triangle geometry.");};
+    const std::array selected{mesh.id,primitive.id,actor.id,child.id};
+    const auto hidden=overlays.prepare(scene,selected,true,query);
+    require(hidden.scene.empty()&&hidden.game.empty()&&queries==0&&resources.stats().queued==0,
+        "A hidden hierarchy emitted overlays or scheduled Trimesh preparation.");
+    group.visible=true;mesh.visible=false;publish();
+    const auto shown=overlays.prepare(scene,selected,true,query);
+    require(shown.scene.size()==2&&shown.game.size()==2&&queries==0&&!scene.find(child.id)->visible,
+        "Showing a parent failed to restore eligible overlays or overwrote a hidden child's own setting.");
+    const auto geometry=shown.scene.front().geometry;group.visible=false;publish();
+    const auto hiddenAgain=overlays.prepare(scene,selected,true,query);
+    require(hiddenAgain.scene.empty()&&hiddenAgain.game.empty()&&queries==0,
+        "Hiding a parent retained selected collision overlays.");
+    group.visible=true;publish();const auto restored=overlays.prepare(scene,selected,true,query);
+    require(restored.scene.size()==2&&restored.game.size()==2&&restored.scene.front().geometry==geometry&&resources.stats().loads==0,
+        "Restoring primitive overlays rebuilt their immutable geometry or lost the visibility state.");
+}
 void disabledOverlaysDoNoWork(){
     ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;auto mesh=collider(1,ColliderShape::Trimesh);
     mesh.collider->source=AssetRef<ModelAsset>{canonicalAssetId("assets/models/floor/manifest.json")};mesh.collider->showCollisionInGame=true;
@@ -94,6 +120,26 @@ void disabledOverlaysDoNoWork(){
     resources.pump();require(queries==0&&resources.stats().loads==0&&resources.stats().queued==0&&resources.stats().running==0,"Global Collisions off scheduled CPU preparation.");
     mesh.local=math::scaling({0,1,1});scene.apply({mesh},{});const auto singular=overlays.prepare(scene,{},true,query);
     require(singular.scene.empty()&&singular.game.empty()&&queries==0,"A singular collision transform requested or published geometry.");
+}
+void nativeMeshWithoutAssetQuery(){
+    ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;
+    auto record=collider(1,ColliderShape::Trimesh);const auto original=plane();
+    record.collider->mesh=makeCollisionMesh(original->positions,original->indices);record.collider->showCollisionInGame=true;
+    auto second=record;second.id=2;second.collider->mesh=makeCollisionMesh(original->positions,original->indices);
+    require(second.collider->mesh!=record.collider->mesh,"Native overlay fixture did not create distinct payload identities.");
+    scene.apply({record,second},{});
+    const CollisionMeshQuery forbidden=[](const std::string&)->CollisionMeshResult {throw std::runtime_error("Native collision queried a model asset.");};
+    PreparedCollisionOverlays packets;
+    await(resources,[&]{packets=overlays.prepare(scene,{},true,forbidden);return packets.scene.size()==2;});
+    require(packets.game.size()==2&&!packets.scene.front().geometry->vertices.empty(),"Native collision omitted Scene/Game geometry.");
+    const auto accepted=packets.scene.front().geometry;const auto loads=resources.stats().loads;
+    for(unsigned frame=0;frame<8;++frame){resources.pump();packets=overlays.prepare(scene,{},true,forbidden);}
+    require(packets.scene.size()==2&&packets.game.size()==2&&packets.scene.front().geometry==accepted&&resources.stats().loads==loads,
+        "Native collision lost packets or rebuilt unchanged overlay geometry.");
+    auto raised=original->positions;for(auto& point:raised)point[1]=2;
+    record.collider->mesh=makeCollisionMesh(std::move(raised),original->indices);scene.apply({record},{});
+    await(resources,[&]{packets=overlays.prepare(scene,{},true,forbidden);return packets.scene.size()==1&&packets.scene.front().geometry!=accepted;});
+    for(const auto& point:packets.scene.front().geometry->vertices)near(point[1],2,"Native collision overlay retained its old payload.");
 }
 void characterFeetAndSharedCapsule(){
     ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;EntityRecord actor;actor.id=1;actor.name="Character";actor.character.emplace();
@@ -143,7 +189,14 @@ void asynchronousMeshReuseAndReplacement(){
     require(replaced.scene[1].geometry==replaced.scene[0].geometry&&replaced.game[0].geometry==replaced.scene[0].geometry,"Replacement publication tore the shared Scene/Game source version.");
     require(resources.stats().loads==loads+1,"One source revision produced more than one adjacency job.");
     require(source->positions==positions&&source->indices==triangles&&geometry->vertices==positions&&geometry->triangles==triangles,"A new source mutated original collision inputs or a leased prepared version.");
-    current={};const auto unavailable=overlays.prepare(scene,{},true,query);require(unavailable.scene.front().geometry==replaced.scene.front().geometry,"A temporarily unavailable source discarded its last-good overlay.");
+    current={};
+    for(unsigned frame=0;frame<4;++frame) {
+        resources.pump();const auto unavailable=overlays.prepare(scene,{},true,query);
+        require(unavailable.scene.size()==2&&unavailable.game.size()==2&&
+            unavailable.scene.front().geometry==replaced.scene.front().geometry&&unavailable.game.front().geometry==replaced.scene.front().geometry,
+            "A temporarily unavailable source discarded its last-good Scene/Game overlays.");
+    }
+    require(resources.stats().loads==loads+1,"A temporarily unavailable source scheduled replacement preparation.");
     record.collider->source={};second.collider->source={};scene.apply({record,second},{});const auto calls=queries;const auto cleared=overlays.prepare(scene,{},true,query);
     require(cleared.scene.empty()&&cleared.game.empty()&&queries==calls,"Clearing Trimesh source retained a packet or queried a missing reference.");
 }
@@ -183,6 +236,6 @@ void resourceLeasesOutlivePreparation(){
         "Released collision overlay geometry or resource interests survived pressure trimming.");
 }
 }
-int main(){try{primitiveIdentityAndVisibility();disabledOverlaysDoNoWork();characterFeetAndSharedCapsule();asynchronousMeshReuseAndReplacement();preparedCreasePlanes();resourceLeasesOutlivePreparation();
+int main(){try{primitiveIdentityAndVisibility();hierarchicalVisibility();disabledOverlaysDoNoWork();nativeMeshWithoutAssetQuery();characterFeetAndSharedCapsule();asynchronousMeshReuseAndReplacement();preparedCreasePlanes();resourceLeasesOutlivePreparation();
     std::cout<<"Collision overlay cache, opacity, async replacement and lifetime preparation passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

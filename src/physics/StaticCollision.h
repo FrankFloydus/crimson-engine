@@ -7,12 +7,7 @@
 
 namespace crimson {
 // Original CPU geometry, independent of render residency and camera LOD.
-struct StaticTriangleMesh {
-    std::vector<Vec3> positions;
-    std::vector<std::uint32_t> indices;
-    Aabb bounds;
-    std::uint64_t fingerprint{};
-};
+using StaticTriangleMesh = CollisionMesh;
 struct CollisionMeshResult {
     std::shared_ptr<const StaticTriangleMesh> mesh;
     std::uint64_t revision{};
@@ -20,6 +15,10 @@ struct CollisionMeshResult {
     std::string diagnostic;
 };
 using CollisionMeshQuery=std::function<CollisionMeshResult(const std::string&)>;
+inline CollisionMeshResult colliderMeshResult(const SceneCollider& collider,const CollisionMeshQuery& query={}) {
+    if(collider.mesh)return {collider.mesh,collider.mesh->fingerprint,true,{}};
+    return !collider.source.empty() && query ? query(collider.source.id) : CollisionMeshResult{};
+}
 struct PhysicsMeshCollider {
     EntityId entity{};
     std::shared_ptr<const StaticTriangleMesh> mesh;

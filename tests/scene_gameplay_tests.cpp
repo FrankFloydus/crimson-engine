@@ -36,6 +36,40 @@ void pose(SceneDocument& document,EntityId id,const Vec3& location){
 void move(SceneDocument& document,EntityId id,const Vec3& location){auto record=*document.scene().find(id);record.local=*math::withAffinePosition(record.local,location);require(document.updateEntity(id,record),document.status());}
 void same(const std::vector<EntityRecord>& a,const std::vector<EntityRecord>& b){require(a.size()==b.size(),"Record count changed.");for(size_t i=0;i<a.size();++i)require(sameEntity(a[i],b[i]),"Authored records changed.");}
 
+void nativeColliderStorageAndValidation() {
+    TempProject project;
+    const std::vector<Vec3> positions{{-2,0,-2},{2,0,-2},{2,0,2},{-2,0,2}};
+    const std::vector<std::uint32_t> indices{0,2,1,0,3,2};
+    const auto geometry=makeCollisionMesh(positions,indices);
+    require(geometry->validated()&&geometry->bounds.valid&&sameCollisionMesh(geometry,makeCollisionMesh(positions,indices)),"Native collider factory did not produce stable validated geometry.");
+    SceneDocument document(project.root);
+    require(document.edit("Native collision",[&](auto& records,auto& properties){
+        records.clear();properties={};EntityRecord record;record.id=1;record.name="Native collision";record.collider.emplace();
+        record.collider->shape=ColliderShape::Trimesh;record.collider->mesh=geometry;records.push_back(std::move(record));
+    }),document.status());
+    document.select({1});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->collider->mesh==geometry,"Native collision duplication copied triangle arrays or lost the payload.");
+    require(document.undo()&&document.scene().records().size()==1&&document.redo(),document.status());
+    require(document.scene().find(document.selection().primary)->collider->mesh==geometry,"Native collision redo did not retain its immutable payload.");
+    require(document.save("Native collision"),document.status());
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());
+    require(snapshot.records.size()==2&&sameCollisionMesh(snapshot.records[0].collider->mesh,geometry)&&snapshot.records[0].collider->source.empty(),"Native collision persistence required a model asset or changed its triangles.");
+    auto json=Json::parse(serializeSceneSnapshot(snapshot));
+    require(json.at("version")==15&&json["entities"][0]["collider"].contains("mesh"),"Native collision did not write schema15 triangle data.");
+    for(const auto index:Json::array({-1,4294967296ull,.5})) {
+        auto malformed=json;malformed["entities"][0]["collider"]["mesh"]["indices"][0]=index;
+        {std::ofstream output(sceneAssetPath(project.root,document.assetId()),std::ios::binary);output<<malformed.dump();}
+        bool rejected=false;try{(void)readSceneSnapshot(project.root,document.assetId());}catch(const std::exception&){rejected=true;}
+        require(rejected,"Native collision accepted a negative, overflowing or fractional index.");
+    }
+    for(const auto& bad:std::vector<std::vector<std::uint32_t>>{{0,1},{0,0,0},{0,1,9}}) {
+        bool rejected=false;try{(void)makeCollisionMesh(positions,bad);}catch(const std::exception&){rejected=true;}
+        require(rejected,"Native collision accepted incomplete, degenerate or invalid triangles.");
+    }
+    auto invalid=positions;invalid[0][0]=std::numeric_limits<float>::infinity();
+    bool rejected=false;try{(void)makeCollisionMesh(invalid,indices);}catch(const std::exception&){rejected=true;}
+    require(rejected,"Native collision accepted a nonfinite position.");
+}
 void componentsAndStorage(){
     TempProject project;SceneDocument document(project.root);
     const auto character=document.createCharacter(),second=document.createCharacter("Other");
@@ -49,7 +83,7 @@ void componentsAndStorage(){
     auto characterRecord=*document.scene().find(character);characterRecord.character->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==12,"Scene writer did not use version 12.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==15,"Scene writer did not use version 15.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=Json::parse(serializeSceneSnapshot(snapshot));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -133,7 +167,7 @@ void unifiedColliderStorageHistoryAndCompatibility() {
         require(document.save("Unified colliders"),document.status());SceneDocument loaded(project.root);
         require(loaded.load(document.assetId())&&loaded.scene().find(id)->collider==authored.collider,"A collider shape lost retained dimensions/source/display on save/reopen.");
         const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-        require(json.at("version")==12&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
+        require(json.at("version")==15&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
         SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&runtime.scene().find(id)->collider==authored.collider,"Play copy lost unified collider settings.");
     }
     auto invalid=authored;invalid.collider->shape=static_cast<ColliderShape>(255);
@@ -159,7 +193,7 @@ void unifiedColliderStorageHistoryAndCompatibility() {
     writeLegacy();loaded=readSceneSnapshot(project.root,legacyId);
     require(loaded.records[0].collider&&loaded.records[0].collider->shape==ColliderShape::Trimesh&&loaded.records[0].collider->showCollisionInGame&&
         loaded.records[0].collider->collisionColor==Vec4{.2f,.3f,.4f,.5f}&&!loaded.records[0].collider->source.empty(),"A v11 meshCollider did not migrate its source/display to Trimesh.");
-    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==12&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
+    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==15&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
 }
 
 void runtimePatches(){
@@ -338,6 +372,108 @@ void importedMaterialSlots() {
     bool rejected=false;try{setModelMaterialOverride(edited.modelMaterials,MaximumModelMaterialSlots,AssetRef<MaterialAsset>{red});}catch(const std::exception&){rejected=true;}
     require(rejected,"Out-of-range slot assignment was accepted.");
 }
+void modelFadeParticipationStorageAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto wall=document.createBox("Wall"),pillar=document.createBox("Pillar"),empty=document.createEmpty("Empty");
+    require(wall&&pillar&&empty&&!document.scene().find(wall)->fadeWhenOccluding&&!document.scene().find(pillar)->fadeWhenOccluding,
+        "New model instances must default to no player-occlusion participation.");
+    require(document.save("Fade participation"),document.status());
+    const auto originalFingerprint=sceneFileFingerprint(project.root,document.assetId());
+    const auto before=*document.scene().find(wall);auto edited=before;edited.fadeWhenOccluding=true;
+    require(!sameEntity(before,edited)&&document.updateEntity(wall,edited)&&document.dirty(),"Fade participation was omitted from model equality or document edits.");
+    require(document.undo()&&!document.scene().find(wall)->fadeWhenOccluding&&!document.dirty(),"Undo did not restore disabled participation and clean state.");
+    require(document.redo()&&document.scene().find(wall)->fadeWhenOccluding,"Redo lost authored fade participation.");
+    const auto extracted=extractScene(document.scene());
+    for(const auto& model:extracted.models)require(model.fadeWhenOccluding==(model.id==wall),"Participation was shared by another instance of the same asset.");
+    document.select({wall});require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
+    require(document.scene().find(duplicate)->fadeWhenOccluding&&!document.scene().find(pillar)->fadeWhenOccluding,
+        "Duplication lost participation or changed an unrelated model.");
+    require(document.save(),document.status());
+    require(sceneFileFingerprint(project.root,document.assetId())!=originalFingerprint,"Participation save did not invalidate the scene preview fingerprint.");
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
+    require(serialized.at("version")==15,"Fade participation did not use the current scene schema.");
+    for(const auto& entity:serialized.at("entities")) {
+        if(entity.contains("model"))require(entity.at("fadeWhenOccluding").is_boolean(),"A model did not write its explicit boolean participation.");
+        else require(!entity.contains("fadeWhenOccluding"),"A nonmodel wrote model-only fade settings.");
+    }
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&runtime.scene().find(wall)->fadeWhenOccluding,
+        "Play copy lost authored participation.");
+    auto live=*runtime.scene().find(wall);live.fadeWhenOccluding=false;require(runtime.updateEntity(wall,live),runtime.status());
+    pose(runtime,wall,{3,4,5});require(runtime.undo()&&runtime.scene().find(wall)->fadeWhenOccluding,"Live participation undo did not restore its authored value.");
+    near(position(runtime.scene(),wall),{3,4,5});
+    require(runtime.redo()&&!runtime.scene().find(wall)->fadeWhenOccluding,"Live participation redo failed.");near(position(runtime.scene(),wall),{3,4,5});
+    require(document.scene().find(wall)->fadeWhenOccluding&&!document.dirty(),"Play changes modified the authored document.");
+    for(const auto version:{9,12}) {
+        auto legacy=serialized;legacy["version"]=version;for(auto& entity:legacy["entities"])entity.erase("fadeWhenOccluding");
+        const auto id="assets/scenes/legacy-fade-"+std::to_string(version)+".crimson-scene";const auto bytes=legacy.dump();
+        std::filesystem::create_directories((project.root/id).parent_path());{std::ofstream file(project.root/id);file<<bytes;}
+        require(reopened.load(id),reopened.status());
+        for(const auto& record:reopened.scene().records())require(!record.fadeWhenOccluding,"An older scene acquired opt-in fading.");
+        std::ifstream file(project.root/id);const std::string retained{std::istreambuf_iterator<char>(file),{}};
+        require(retained==bytes&&!reopened.dirty(),"Reading an older scene rewrote authored bytes or marked migration dirty.");
+    }
+    const auto badRecord=*document.scene().find(empty);auto invalid=badRecord;invalid.fadeWhenOccluding=true;
+    require(!document.updateEntity(empty,invalid)&&sameEntity(*document.scene().find(empty),badRecord),"A nonmodel accepted fade participation.");
+}
+void entityVisibilityStorageAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto group=document.createEmpty("Visibility group"),model=document.createBox("Hidden model");
+    const auto collider=document.createCollider("Collider",model),actor=document.createCharacter(),camera=document.createCamera();
+    const auto light=document.createPointLight(),particle=document.createParticle("assets/particles/visibility.crimson-particle","Particles");
+    const auto environment=document.createEnvironment();
+    document.select({model,actor,camera,light,particle,environment});require(document.reparentSelection(group),document.status());
+    require(group&&model&&collider&&actor&&camera&&light&&particle&&environment,document.status());
+    for(const auto& record:document.scene().records())require(record.visible&&document.scene().isVisible(record.id),"New entity did not start visible.");
+    const auto properties=document.scene().properties();const auto settings=resolveEnvironment(document.scene());
+    require(document.save("Entity visibility"),document.status());
+    const auto initialFingerprint=sceneFileFingerprint(project.root,document.assetId());
+    const auto before=*document.scene().find(group);auto hidden=before;hidden.visible=false;
+    require(!sameEntity(before,hidden)&&document.updateEntity(group,hidden,"Hide group")&&document.dirty(),"Visibility edit was omitted from equality or history.");
+    for(const auto id:document.scene().subtree(group))require(!document.scene().isVisible(id),"Hidden group left a descendant effectively visible.");
+    require(document.scene().find(model)->visible&&sameProperties(properties,document.scene().properties())&&resolveGameCamera(document.scene())&&
+        sameEnvironment(settings,resolveEnvironment(document.scene()))&&document.scene().find(actor)->character&&document.scene().find(collider)->collider,
+        "Visibility changed descendant choices, active camera/environment, Character or Collider data.");
+    require(document.undo()&&!document.dirty()&&document.scene().isVisible(model),"Visibility Undo did not restore the clean saved hierarchy.");
+    require(document.redo()&&!document.scene().isVisible(model),"Visibility Redo failed to hide descendants.");
+    auto authoredModel=*document.scene().find(model);authoredModel.visible=false;require(document.updateEntity(model,authoredModel,"Hide model"),document.status());
+    document.select({group});require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
+    require(duplicate!=group&&!document.scene().find(duplicate)->visible&&!document.scene().isVisible(duplicate),"Duplicating a hidden group lost authored visibility.");
+    bool copiedModel{};for(const auto id:document.scene().subtree(duplicate)) {
+        require(!document.scene().isVisible(id),"Duplicating a hidden hierarchy left a descendant visible.");
+        if(document.scene().find(id)->model){copiedModel=true;require(!document.scene().find(id)->visible,"Duplicating a hierarchy lost a child's own visibility flag.");}
+    }
+    require(copiedModel,"Visibility duplication fixture lost its model.");
+    auto shown=*document.scene().find(group);shown.visible=true;require(document.updateEntity(group,shown,"Show group"),document.status());
+    require(document.scene().isVisible(actor)&&!document.scene().isVisible(model)&&!document.scene().isVisible(collider)&&!document.scene().isVisible(duplicate),
+        "Showing the original group ignored child overrides or changed its independent duplicate.");
+    require(document.save(),document.status());require(sceneFileFingerprint(project.root,document.assetId())!=initialFingerprint,"Visibility save left the scene fingerprint unchanged.");
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
+    require(serialized.at("version")==15,"Entity visibility did not write scene schema 15.");
+    for(const auto& entity:serialized.at("entities"))require(entity.at("visible").is_boolean(),"An entity did not write its authored visibility flag.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
+    require(reopened.scene().isVisible(actor)&&!reopened.scene().isVisible(model)&&!reopened.scene().isVisible(duplicate),"Save/load lost effective hierarchy visibility.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(runtime.scene().find(group)->visible&&!runtime.scene().find(model)->visible&&!runtime.scene().isVisible(model),"Play copy lost authored visibility.");
+    auto live=*runtime.scene().find(group);live.visible=false;require(runtime.updateEntity(group,live,"Hide during Play"),runtime.status());
+    pose(runtime,actor,{3,4,5});require(runtime.undo()&&runtime.scene().isVisible(actor)&&!runtime.scene().isVisible(model),"Live visibility Undo failed to restore only its authored field.");
+    near(position(runtime.scene(),actor),{3,4,5});require(runtime.redo()&&!runtime.scene().isVisible(actor),"Live visibility Redo failed.");near(position(runtime.scene(),actor),{3,4,5});
+    require(document.scene().isVisible(actor)&&!document.dirty()&&sameProperties(properties,document.scene().properties()),"Play visibility edits changed the authored scene or gameplay properties.");
+    for(const auto version:{12,13,14}) {
+        auto legacy=serialized;legacy["version"]=version;for(auto& entity:legacy["entities"])entity.erase("visible");
+        const auto id="assets/scenes/legacy-visible-"+std::to_string(version)+".crimson-scene";const auto bytes=legacy.dump();
+        const auto file=project.root/id;std::filesystem::create_directories(file.parent_path());{std::ofstream output(file);output<<bytes;}
+        require(reopened.load(id),reopened.status());for(const auto& record:reopened.scene().records())require(record.visible&&reopened.scene().isVisible(record.id),"Missing visibility did not retain legacy all-visible behavior.");
+        {std::ifstream input(file);const std::string retained{std::istreambuf_iterator<char>(input),{}};require(retained==bytes&&!reopened.dirty(),"Reading a legacy scene rewrote authored visibility or marked migration dirty.");}
+    }
+    const auto retained=reopened.scene().records();const auto history=reopened.history().size();
+    for(const auto& value:std::array<Json,4>{Json(0),Json("false"),Json::array(),Json(nullptr)}) {
+        auto invalid=serialized;invalid["entities"][0]["visible"]=value;const std::string id="assets/scenes/invalid-visibility.crimson-scene";
+        {std::ofstream output(project.root/id);output<<invalid.dump();}
+        require(!reopened.load(id),"A nonboolean saved visibility flag was accepted.");same(retained,reopened.scene().records());
+        require(reopened.history().size()==history,"Rejected visibility load changed history.");
+    }
+}
 void pointFalloffAndSpecularStorageAndRuntime() {
     TempProject project;SceneDocument document(project.root);const auto light=document.createPointLight();
     require(light,document.status());
@@ -353,7 +489,7 @@ void pointFalloffAndSpecularStorageAndRuntime() {
         "Point falloff/specular redo lost the authored values.");
     require(document.save("Point falloff"),document.status());const auto authored=document.scene().records();
     const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(serialized.at("version")==12&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
+    require(serialized.at("version")==15&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
         serialized["entities"][0]["point"].at("specularStrength")==.35f&&serialized["entities"][0]["point"].at("attenuation")==1.25f,
         "Point falloff/specular fields did not persist in the current scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
@@ -448,7 +584,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==12,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==15,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=serialized;legacy["version"]=version;
@@ -1036,7 +1172,7 @@ void modelAnimationStorageAndRuntime() {
         "Animation controls did not participate in scene history.");
     require(document.save("Animated scene"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==12,"Animation writer did not use scene schema 12.");
+    require(json.at("version")==15,"Animation writer did not use scene schema 15.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());
     const auto history=document.history().size();const auto records=document.scene().records();
@@ -1073,4 +1209,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();modelFadeParticipationStorageAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

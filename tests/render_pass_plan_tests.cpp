@@ -28,7 +28,7 @@ void error(const RenderPassPlan& plan,Error expected,const char* message) { chec
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool ambient:{false,true})for(bool collisions:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool ambient:{false,true})for(bool collisions:{false,true})for(bool occluders:{false,true}) {
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game || purpose==RenderViewPurpose::Thumbnail;
             config.ambientVisibility=ambient&&config.worldShadows;
@@ -36,12 +36,15 @@ void profiles() {
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
+            config.occluderLayer=occluders&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported view profile has an invalid plan.");
             check(plan.has(Kind::SceneColor) && plan.has(Kind::ModelDeformation) && plan.has(Kind::LightAssignment) && plan.has(Kind::ToneMap) && plan.has(Kind::Encode),"View lost a mandatory rendering stage.");
             check(plan.has(Kind::GlowExtract)==config.glow && plan.has(Kind::GlowHorizontal)==config.glow && plan.has(Kind::GlowVertical)==config.glow,"Glow feature did not add exactly the complete chain.");
             check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::Picking)==config.picking && plan.has(Kind::PickReadback)==config.picking,"Grid or picking did not follow the view profile.");
             check(plan.has(Kind::ThumbnailReadback)==config.thumbnailReadback,"Thumbnail readback escaped its isolated profile.");
             check(plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Collision overlays escaped their active view profile.");
+            check(plan.has(Kind::OccluderLayer)==config.occluderLayer,"Occluder layer escaped its active view profile.");
+            check(plan.has(Kind::OccluderDepthPublish)==config.occluderLayer,"Packed occluder depth escaped its active view profile.");
             check(plan.has(Kind::DepthPrepass)==config.ambientVisibility&&plan.has(Kind::AmbientVisibility)==config.ambientVisibility&&
                 plan.has(Kind::AmbientPublish)==config.ambientVisibility,"Ambient feature did not add exactly its complete chain.");
             const auto& display=plan.bindings[static_cast<std::size_t>(Resource::Display)];
@@ -83,7 +86,7 @@ void ambientDependencies() {
         config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
         config.collisionOverlays=purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Complete ambient chain is invalid.");
-        if(purpose==RenderViewPurpose::Scene&&shadows)check(correct.count==RenderPassPlan::MaximumPasses,"Maximum Scene feature profile lost fixed-capacity coverage.");
+        if(purpose==RenderViewPurpose::Scene&&shadows)check(correct.count==RenderPassPlan::MaximumPasses-2,"Scene profile without an occluder layer lost fixed-capacity coverage.");
         const auto& depth=*correct.find(Kind::DepthPrepass);const auto& evaluate=*correct.find(Kind::AmbientVisibility);
         const auto& publish=*correct.find(Kind::AmbientPublish);const auto& color=*correct.find(Kind::SceneColor);
         check(depth.physicalView<evaluate.physicalView&&evaluate.physicalView==publish.physicalView&&publish.physicalView<color.physicalView,
@@ -155,6 +158,49 @@ void collisionComposition() {
     }
 }
 
+void occluderDependencies() {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ambient:{false,true})for(bool shadows:{false,true}) {
+        RenderPassPlanConfig config;config.view.purpose=purpose;config.ambientVisibility=ambient;config.worldShadows=shadows;
+        config.occluderLayer=true;config.glow=true;config.grid=purpose==RenderViewPurpose::Scene;
+        config.picking=config.grid;config.collisionOverlays=true;config.prepareEnvironment=true;
+        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Nearest occluder layer has invalid dependencies.");
+        const auto& layer=*correct.find(Kind::OccluderLayer);
+        const auto& depthPublish=*correct.find(Kind::OccluderDepthPublish);
+        check(layer.physicalView==renderViewPassSlots(purpose).ambient && layer.physicalView<correct.find(Kind::SceneColor)->physicalView,
+            "Occluder layer must use its camera's pre-color ambient slot without consuming native window slots.");
+        check(depthPublish.physicalView==correct.find(Kind::SceneColor)->physicalView && layer.physicalView<depthPublish.physicalView,
+            "Packed depth must publish after detached layer depth and before graphics in the existing color slot.");
+        if(purpose==RenderViewPurpose::Scene&&ambient&&shadows)
+            check(correct.count==RenderPassPlan::MaximumPasses,"Maximum occluder profile no longer fits the pass capacity.");
+        if(ambient) {
+            const auto& publish=*correct.find(Kind::AmbientPublish);
+            check(publish.physicalView==layer.physicalView,"The pinned compute-before-draw slot contract changed.");
+            auto reversed=correct;
+            for(std::size_t i=0;i<reversed.count;++i)if(reversed.entries[i].kind==Kind::OccluderLayer) {
+                std::swap(reversed.entries[i],reversed.entries[i-1]);break;
+            }
+            error(reversed,Error::PhysicalOrder,"Ambient publication accepted a preceding occluder draw in its logical view.");
+        }
+        auto missingLayer=correct;erase(missingLayer,Kind::OccluderLayer);
+        error(missingLayer,Error::MissingProducer,"Scene composition read an unproduced occluder layer.");
+        auto missingPublish=correct;erase(missingPublish,Kind::OccluderDepthPublish);
+        error(missingPublish,Error::MissingProducer,"Transparent phases sampled an unpublished packed depth region.");
+        auto reversedPublish=correct;std::swap(pass(reversedPublish,Kind::OccluderDepthPublish),pass(reversedPublish,Kind::SceneColor));
+        error(reversedPublish,Error::MissingProducer,"Scene graphics ran before same-view packed depth compute.");
+        auto destructivePublish=correct;pass(destructivePublish,Kind::OccluderDepthPublish).resources[1].access=Access::Write;
+        error(destructivePublish,Error::InvalidAccess,"Packed depth publication may overwrite the BRDF/light/ambient atlas contents.");
+        auto feedback=correct;auto& color=pass(feedback,Kind::SceneColor);
+        for(auto& use:color.resources)if(use.resource==Resource::OccluderDepth)use.access=Access::DepthWrite;
+        error(feedback,Error::InvalidAccess,"Occluder composition may overwrite the layer depth it samples.");
+        auto falseLayer=correct;falseLayer.bindings[static_cast<std::size_t>(Resource::OccluderHdr)].initiallyAvailable=true;
+        error(falseLayer,Error::InvalidExternalState,"Retained layer allocation was treated as current-frame content.");
+    }
+    for(const auto purpose:{RenderViewPurpose::Thumbnail,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview}) {
+        RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.occluderLayer=true;
+        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"Occluder layer escaped into an isolated preview.");
+    }
+}
+
 void ownershipAndOrderFailures() {
     RenderPassPlanConfig config;config.view={RenderViewPurpose::Scene,4};config.worldShadows=true;config.prepareEnvironment=true;
     const auto correct=buildRenderPassPlan(config);
@@ -190,7 +236,7 @@ void ownershipAndOrderFailures() {
 int main() {
     try {
         static_assert(std::is_trivially_copyable_v<RenderPassPlan>,"Pass plans must remain fixed-size CPU values.");
-        profiles();ambientDependencies();dependencyAndAccessFailures();collisionComposition();ownershipAndOrderFailures();
+        profiles();ambientDependencies();dependencyAndAccessFailures();collisionComposition();occluderDependencies();ownershipAndOrderFailures();
         std::cout<<"Renderer pass-plan checks passed.\n";return 0;
     } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
 }

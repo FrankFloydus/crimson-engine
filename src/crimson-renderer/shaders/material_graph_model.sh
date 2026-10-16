@@ -5,10 +5,14 @@ uniform vec4 u_lightCounts;
 uniform vec4 u_environment;
 uniform vec4 u_modelOptions;
 uniform vec4 u_modelEmissiveMap;
+#if CC_GRAPH_MODEL
+uniform vec4 u_instanceOpacity;
+#endif
 SAMPLERCUBE(s_irradiance, 12);
 SAMPLERCUBE(s_prefiltered, 13);
 SAMPLER2D(s_brdfLut, 14);
 #include "clustered_lighting.sh"
+#include "occluder_partition.sh"
 #define CC_POINT_SHADOW_SLOT 15
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
@@ -115,6 +119,10 @@ void main()
 #endif
     color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_graphParams[3].w > 2.5 ? 1.0 : 0.0);
     float coverage = u_graphParams[3].w > 1.5 ? opacity : 1.0;
+#if CC_GRAPH_MODEL
+    coverage *= u_instanceOpacity.x;
+#endif
+    occluderPartition(gl_FragCoord.xyz);
 #if CC_GRAPH_PARTICLE
     gl_FragColor = vec4(fogPremultipliedChannel(color.x, coverage), fogPremultipliedChannel(color.y, coverage), fogPremultipliedChannel(color.z, coverage), coverage);
 #else

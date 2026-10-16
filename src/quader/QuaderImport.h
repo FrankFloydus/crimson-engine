@@ -3,13 +3,15 @@
 #include "QuaderReader.h"
 #include "assets/AssetReferenceManager.h"
 #include "assets/MaterialAsset.h"
+#include "scene/CollisionMesh.h"
 #include <set>
 #include <stop_token>
 
 namespace crimson {
 
 struct QuaderImportedMesh {
-    std::string sourceKey,name,modelId,collisionModelId;
+    std::string sourceKey,name,modelId;
+    std::shared_ptr<const CollisionMesh> collision;
     Mat4 local;
     bool visible{true};
 };

@@ -36,7 +36,10 @@ float pointShadowVisibilityPcf(int lightIndex, vec4 lightPosition, vec4 lightCol
     vec3 L = -relative / radial;
     float axial = max(max(abs(relative.x), abs(relative.y)), abs(relative.z));
     float texelWorld = 2.0 * axial / u_shadowAtlas.z;
-    relative += geometricNormal * (settings.w * texelWorld * (1.0 - max(dot(geometricNormal, L), 0.0)));
+    float normalCosine = clamp(dot(geometricNormal, L), 0.0, 1.0);
+    // Normal offset scales with sin(theta), not 1-cos(theta): the latter
+    // loses protection quadratically around the directly facing point.
+    relative += geometricNormal * (settings.w * texelWorld * sqrt(max(0.0, 1.0 - normalCosine * normalCosine)));
     vec3 magnitude = abs(relative);
     vec2 coordinates;
     vec2 planeAxes; // -dot(plane normal, face right), dot(plane normal, face up).
@@ -85,22 +88,180 @@ float pointShadowVisibilityPcf(int lightIndex, vec4 lightPosition, vec4 lightCol
     // Two guard texels are rendered with an expanded projection, so every
     // 3x3 bilinear comparison footprint contains real geometry across edges.
     vec2 pixel = origin + vec2_splat(2.0) + (coordinates * 0.5 + 0.5) * u_shadowAtlas.z;
+    // Bound numerical comparison error separately from authored metre/texel
+    // offsets. gamma(8) covers the perspective coefficients, divide and plane
+    // reference arithmetic, using IEEE single-precision unit roundoff 2^-24.
+    // One ULP per world input also accounts for absolute-coordinate rounding;
+    // propagate that world-plane error through the perspective-depth derivative.
+    // A fixed number of D32 units alone misses translated near-light surfaces.
+    float unitRoundoff = 0.000000059604644775390625;
+    float gamma8 = (8.0 * unitRoundoff) / (1.0 - 8.0 * unitRoundoff);
+    float inverseDepthTerm = farPlane * settings.y / ((farPlane - settings.y) * biasedAxial);
+    vec3 worldRoundoff = (2.0 * unitRoundoff) * (abs(position) + abs(lightPosition.xyz));
+    float relativePlaneRoundoff = abs(planeDistance) > max(radial * 0.000001, 0.000001) ?
+        dot(abs(planeNormal), worldRoundoff) / abs(planeDistance) :
+        max(max(worldRoundoff.x, worldRoundoff.y), worldRoundoff.z) / biasedAxial;
+    float comparisonTolerance = gamma8 * (abs(farPlane / (farPlane - settings.y)) + abs(inverseDepthTerm)) +
+        abs(inverseDepthTerm) * relativePlaneRoundoff;
     float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y)
+    // The nine bilinear taps cover only sixteen unique texels. Compare each
+    // stored depth against the receiver plane at that SAME texel center, then
+    // apply the equivalent separable weights. A single shallow reference for
+    // four different centers turns an adjacent wall into light at a join.
+    vec2 lower = floor(pixel - vec2_splat(0.5)) + vec2_splat(0.5);
+    vec2 fraction = pixel - lower;
+    vec4 weightsX = vec4(1.0 - fraction.x, 1.0, 1.0, fraction.x) / 3.0;
+    vec4 weightsY = vec4(1.0 - fraction.y, 1.0, 1.0, fraction.y) / 3.0;
+    vec2 central = floor(pixel) + vec2_splat(0.5);
+    float centralVisibility = 1.0;
+    float centralReceiver = 0.0;
+    float contactSeparationSquared = 16.0;
+    float storedDepths[16];
+    for (int y = 0; y < 4; ++y)
     {
-        for (int x = -1; x <= 1; ++x)
+        for (int x = 0; x < 4; ++x)
         {
-            vec2 samplePixel = clamp(pixel + vec2(float(x), float(y)), origin + vec2_splat(0.5), origin + vec2_splat(u_shadowAtlas.w - 0.5));
-            // Hardware bilinear PCF compares four texel centers against one
-            // reference. Use the shallowest receiver-plane depth among those
-            // centers; the footprint is phase-dependent, not always +/-0.5.
-            vec2 lowerCenter = floor(samplePixel - vec2_splat(0.5)) + vec2_splat(0.5);
-            vec2 shallowCenter = lowerCenter + vec2(depthGradient.x < 0.0 ? 1.0 : 0.0, depthGradient.y < 0.0 ? 1.0 : 0.0);
-            float sampleDepth = depth + dot(depthGradient, shallowCenter - pixel);
-            visibility += shadow2D(s_pointShadow, vec3(samplePixel * u_shadowAtlas.xy, sampleDepth));
+            vec2 center = clamp(lower + vec2(float(x - 1), float(y - 1)), origin + vec2_splat(0.5), origin + vec2_splat(u_shadowAtlas.w - 0.5));
+            float reference = depth + dot(depthGradient, center - pixel);
+            float stored = s_pointShadow.m_texture.Load(ivec3(ivec2(center), 0)).x;
+            storedDepths[y * 4 + x] = stored;
+            float sampleVisibility = reference <= stored + comparisonTolerance ? 1.0 : 0.0;
+            float weight = weightsX[x] * weightsY[y];
+            visibility += sampleVisibility * weight;
+            if (center.x == central.x && center.y == central.y)
+            {
+                centralVisibility = sampleVisibility;
+                centralReceiver = stored > 0.0 && stored < 1.0 && abs(reference - stored) <= comparisonTolerance ? 1.0 : 0.0;
+            }
+            // Decode the physical gap only for a real blocker on this texel's
+            // own receiver-plane ray. The ratio below is algebraically
+            // (receiverAxial-blockerAxial)*rayLength/(2*receiverAxial/resolution),
+            // avoiding two reciprocal perspective-depth reconstructions.
+            if (weight > 0.0 && stored > 0.0 && stored < 1.0 && reference < 1.0 &&
+                reference > stored + comparisonTolerance)
+            {
+                float numerator = (reference - stored) * (farPlane - settings.y) * (0.5 * u_shadowAtlas.z);
+                float denominator = max(farPlane - stored * (farPlane - settings.y), settings.y);
+                // Ray length is at least one. Reject farther blockers before
+                // dividing; only a sub-four-texel axial gap can tighten PCF.
+                if (numerator < 4.0 * denominator)
+                {
+                    vec2 coordinatesAtCenter = ((center - origin - vec2_splat(2.0)) / u_shadowAtlas.z) * 2.0 - 1.0;
+                    float axialSeparation = numerator / denominator;
+                    float separationSquared = axialSeparation * axialSeparation * (1.0 + dot(coordinatesAtCenter, coordinatesAtCenter));
+                    contactSeparationSquared = min(contactSeparationSquared, separationSquared);
+                }
+            }
         }
     }
-    return visibility / 9.0;
+    // Near a projected join, the closest texel can miss the blocker even
+    // though the actual fragment ray intersects it. Perspective depth of a
+    // planar blocker is affine in shadow pixels, just like the receiver.
+    // Recover that depth from a coherent 2x2 patch already in the footprint.
+    // This is only a one-shadow-texel coverage completion at mixed contact
+    // edges. Observed receiver coverage below rejects a remote finite edge
+    // whose extrapolated plane would incorrectly extend across that receiver.
+    // gamma(32) bounds the weight products and sixteen-term accumulation;
+    // a fully lit sum rounded just below one is not a mixed footprint.
+    float filterUnitRoundoff = 0.000000059604644775390625;
+    float filterRoundoff = (32.0 * filterUnitRoundoff) / (1.0 - 32.0 * filterUnitRoundoff);
+    if (visibility > filterRoundoff && visibility < 1.0 - filterRoundoff)
+    {
+        float originalPlaneDistance = dot(planeNormal, position - lightPosition.xyz);
+        bool originalPlaneValid = abs(originalPlaneDistance) > max(radial * 0.000001, 0.000001);
+        float originalReferenceRatio = originalPlaneValid ? planeDistance / originalPlaneDistance : 0.0;
+        float perspectiveConstant = farPlane / (farPlane - settings.y);
+        float bestExtrapolation = 3.0;
+        float reconstructedDepth = 1.0;
+        float reconstructedContact = 4.0;
+        bool reconstructed = false;
+        for (int y = 0; y < 3; ++y)
+        {
+            for (int x = 0; x < 3; ++x)
+            {
+                if (!originalPlaneValid) continue;
+                vec2 firstCenter = lower + vec2(float(x - 1), float(y - 1));
+                vec2 outside = max(max(firstCenter - pixel, pixel - firstCenter - vec2_splat(1.0)), vec2_splat(0.0));
+                if (max(outside.x, outside.y) > 1.0) continue;
+                float d00 = storedDepths[y * 4 + x];
+                float d10 = storedDepths[y * 4 + x + 1];
+                float d01 = storedDepths[(y + 1) * 4 + x];
+                float d11 = storedDepths[(y + 1) * 4 + x + 1];
+                if (min(min(d00, d10), min(d01, d11)) <= 0.0 ||
+                    max(max(d00, d10), max(d01, d11)) >= 1.0) continue;
+                float reference00 = depth + dot(depthGradient, firstCenter - pixel);
+                // Every supporting sample must be a real nearer blocker.
+                // A numerically displaced receiver or a clear texel cannot
+                // establish a plane or fill a gap in its coverage.
+                if (reference00 <= d00 + comparisonTolerance ||
+                    reference00 + depthGradient.x <= d10 + comparisonTolerance ||
+                    reference00 + depthGradient.y <= d01 + comparisonTolerance ||
+                    reference00 + depthGradient.x + depthGradient.y <= d11 + comparisonTolerance) continue;
+                float planeTolerance = 4.0 * comparisonTolerance;
+                if (abs((d00 + d11) - (d10 + d01)) > planeTolerance) continue;
+                vec2 blockerGradient = vec2(d10 - d00, d01 - d00);
+                vec2 differenceGradient = depthGradient - blockerGradient;
+                float differenceSquared = dot(differenceGradient, differenceGradient);
+                if (differenceSquared <= planeTolerance * planeTolerance) continue;
+                float candidateDepth = d00 + dot(blockerGradient, pixel - firstCenter);
+                if (candidateDepth <= 0.0 || candidateDepth >= 1.0) continue;
+                // The difference of the two depth planes is affine. Its value
+                // divided by its gradient is the exact distance in shadow
+                // pixels to their intersection, including grazing +/-Y faces.
+                float contact = abs(depth - candidateDepth) * inversesqrt(differenceSquared);
+                if (contact >= 4.0) continue;
+                float extrapolation = dot(outside, outside);
+                if (reconstructed && (extrapolation > bestExtrapolation ||
+                    (extrapolation == bestExtrapolation && candidateDepth >= reconstructedDepth))) continue;
+                bool contradictsReceiver = false;
+                for (int sampleY = 0; sampleY < 4; ++sampleY)
+                {
+                    for (int sampleX = 0; sampleX < 4; ++sampleX)
+                    {
+                        float observed = storedDepths[sampleY * 4 + sampleX];
+                        if (observed <= 0.0 || observed >= 1.0) continue;
+                        vec2 sampleCenter = lower + vec2(float(sampleX - 1), float(sampleY - 1));
+                        float biasedReference = depth + dot(depthGradient, sampleCenter - pixel);
+                        // Match the actual receiver, before authored offsets.
+                        // Perspective depth is c-k*(N.ray)/planeDistance, so
+                        // this ratio removes the normal/radial plane offset.
+                        float originalReference = perspectiveConstant +
+                            (biasedReference - perspectiveConstant) * originalReferenceRatio;
+                        float predicted = d00 + dot(blockerGradient, sampleCenter - firstCenter);
+                        if (abs(originalReference - observed) <= comparisonTolerance &&
+                            predicted < observed - comparisonTolerance)
+                            contradictsReceiver = true;
+                    }
+                }
+                if (contradictsReceiver) continue;
+                if (!reconstructed || extrapolation < bestExtrapolation ||
+                    (extrapolation == bestExtrapolation && candidateDepth < reconstructedDepth))
+                {
+                    reconstructed = true;
+                    bestExtrapolation = extrapolation;
+                    reconstructedDepth = candidateDepth;
+                    reconstructedContact = contact;
+                }
+            }
+        }
+        if (reconstructed)
+        {
+            float reconstructedVisibility = depth <= reconstructedDepth + comparisonTolerance ? 1.0 : 0.0;
+            // Coverage completion may recover a missed blocker. Brightening
+            // still requires independent receiver evidence: a fitted plane
+            // alone must not enlarge an authored bias-created separation.
+            if (reconstructedVisibility < 0.5 || centralReceiver > 0.5)
+                return mix(reconstructedVisibility, visibility, smoothstep(2.0, 4.0, reconstructedContact));
+        }
+    }
+    // A fixed footprint mixes both sides of a touching join: light into the
+    // blocked side and shadow into the lit side. A confirmed nearby blocker
+    // tightens BOTH toward the central comparison. To brighten the lit side,
+    // require actual receiver coverage: empty depth is an ambiguous raster
+    // miss, not evidence of a lit surface. Full filtering returns smoothly
+    // between two and four receiver texels of physical separation.
+    if (centralVisibility > 0.5 && centralReceiver < 0.5) return visibility;
+    return mix(centralVisibility, visibility, smoothstep(2.0, 4.0, sqrt(contactSeparationSquared)));
 }
 
 // Fixed Vogel disk, in world/light space. No screen-space or animated rotation:
@@ -175,30 +336,27 @@ float pointShadowPerspectiveDepth(float axial, float nearPlane, float farPlane)
     return farPlane / (farPlane - nearPlane) - farPlane * nearPlane / ((farPlane - nearPlane) * axial);
 }
 
-float pointShadowVisibility(int lightIndex, vec4 lightPosition, vec4 lightColor, vec3 position,
-    vec3 geometricNormal, vec3 planeNormal, float sourceRadius)
+bool tryPointShadowVisibilitySoft(int lightIndex, vec4 lightPosition, vec4 lightColor, vec3 position,
+    vec3 geometricNormal, vec3 planeNormal, float sourceRadius, out float softResult)
 {
-    // Source zero retains the original complete 3x3 comparison path and its
-    // arithmetic. The Character Key uses its separate projection and filter.
-    BRANCH if (sourceRadius <= 0.0)
-        return pointShadowVisibilityPcf(lightIndex, lightPosition, lightColor, position, geometricNormal, planeNormal);
-    if (lightIndex < 0) return 1.0;
+    if (lightIndex < 0) { softResult = 1.0; return true; }
     vec4 settings = u_pointShadow[lightIndex];
-    if (settings.x < 0.0 || u_shadowAtlas.z < 1.0) return 1.0;
+    if (settings.x < 0.0 || u_shadowAtlas.z < 1.0) { softResult = 1.0; return true; }
     vec3 relative = position - lightPosition.xyz;
     float radial = length(relative);
     float nearPlane = settings.y;
     float farPlane = inversesqrt(max(lightColor.w, 1.0 / (100000.0 * 100000.0)));
-    if (radial <= nearPlane || radial >= farPlane) return 1.0;
+    if (radial <= nearPlane || radial >= farPlane) { softResult = 1.0; return true; }
     vec3 L = -relative / radial;
     float axial = max(max(abs(relative.x), abs(relative.y)), abs(relative.z));
     float texelWorld = 2.0 * axial / u_shadowAtlas.z;
-    relative += geometricNormal * (settings.w * texelWorld * (1.0 - max(dot(geometricNormal, L), 0.0)));
+    float normalCosine = clamp(dot(geometricNormal, L), 0.0, 1.0);
+    relative += geometricNormal * (settings.w * texelWorld * sqrt(max(0.0, 1.0 - normalCosine * normalCosine)));
     float receiverDistance = length(relative);
     float biasScale = max(0.0, 1.0 - settings.z / max(receiverDistance, 0.000001));
     float planeDistance = dot(planeNormal, relative) * biasScale;
     if (abs(planeDistance) <= max(receiverDistance * 0.000001, 0.000001))
-        return pointShadowVisibilityPcf(lightIndex, lightPosition, lightColor, position, geometricNormal, planeNormal);
+        return false;
 
     vec3 direction = relative / max(receiverDistance, 0.000001);
     // Anchor the disk to the fixed receiving triangle, rather than switching
@@ -217,7 +375,7 @@ float pointShadowVisibility(int lightIndex, vec4 lightPosition, vec4 lightColor,
     vec3 tangent = fixedTangent - direction * dot(fixedTangent, direction);
     float tangentSquared = dot(tangent, tangent);
     if (tangentSquared <= 0.00000001)
-        return pointShadowVisibilityPcf(lightIndex, lightPosition, lightColor, position, geometricNormal, planeNormal);
+        return false;
     tangent *= inversesqrt(tangentSquared);
     vec3 bitangent = cross(direction, tangent);
     float blockerSum = 0.0;
@@ -248,12 +406,12 @@ float pointShadowVisibility(int lightIndex, vec4 lightPosition, vec4 lightColor,
         blockerSum += blockerDistance;
         blockerCount += 1.0;
     }
-    if (blockerCount <= 0.0) return 1.0;
+    if (blockerCount <= 0.0) { softResult = 1.0; return true; }
     float blockerDistance = max(blockerSum / blockerCount, nearPlane);
     float penumbra = sourceRadius * max(receiverDistance - blockerDistance, 0.0) / blockerDistance;
     // Contact and sub-texel penumbras use the existing stable comparison filter.
     if (penumbra <= texelWorld)
-        return pointShadowVisibilityPcf(lightIndex, lightPosition, lightColor, position, geometricNormal, planeNormal);
+        return false;
 
     float visibility = 0.0;
     LOOP for (int sampleIndex = 0; sampleIndex < 16; ++sampleIndex)
@@ -288,5 +446,22 @@ float pointShadowVisibility(int lightIndex, vec4 lightPosition, vec4 lightColor,
         float sampleDepth = depth + dot(gradient, shallowCenter - pixel);
         visibility += shadow2D(s_pointShadow, vec3(pixel * u_shadowAtlas.xy, sampleDepth));
     }
-    return visibility / 16.0;
+    softResult = visibility / 16.0;
+    return true;
+}
+
+float pointShadowVisibility(int lightIndex, vec4 lightPosition, vec4 lightColor, vec3 position,
+    vec3 geometricNormal, vec3 planeNormal, float sourceRadius)
+{
+    // Keep one PCF call site: SM5 inlines this substantial contact filter at
+    // every call, including each soft-shadow fallback. The Character Key
+    // retains its separate projection and filter.
+    BRANCH if (!(sourceRadius <= 0.0))
+    {
+        float softVisibility;
+        if (tryPointShadowVisibilitySoft(lightIndex, lightPosition, lightColor, position,
+            geometricNormal, planeNormal, sourceRadius, softVisibility))
+            return softVisibility;
+    }
+    return pointShadowVisibilityPcf(lightIndex, lightPosition, lightColor, position, geometricNormal, planeNormal);
 }

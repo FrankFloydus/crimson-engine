@@ -13,7 +13,7 @@ public:
     // ImGui native viewports use desktop positions; SDL events remain window-local.
     void setDesktopCoordinates(bool enabled);
     void handleEvent(const SDL_Event& event);
-    void update(Camera& camera, const ViewportRegion& region, float dt, bool sphereVisible = true);
+    void update(Camera& camera, const ViewportRegion& region, float dt, bool sphereVisible = true, bool preserveRoll = false);
     void cancel();
     bool active() const { return mode_ != Mode::None; }
     bool flying() const { return mode_ == Mode::Fly; }
@@ -22,7 +22,7 @@ private:
     enum class Mode { None, Orbit, Pan, Fly };
     struct Event { SDL_Event value{}; SDL_Keymod modifiers{}; };
     void releaseCapture();
-    void motion(Camera& camera, const ViewportRegion& region, float x, float y);
+    void motion(Camera& camera, const ViewportRegion& region, float x, float y, bool preserveRoll);
     SDL_WindowID baseWindowId_{}, ownerWindowId_{}, captureWindowId_{};
     std::vector<Event> events_;
     std::array<bool, SDL_SCANCODE_COUNT> keys_{};

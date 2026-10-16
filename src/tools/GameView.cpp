@@ -91,7 +91,7 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
 void GameView::drawPlayerLightRig(const Camera& camera,const Scene& scene) {
     if(!imageDrawList_ || !imageWidth_ || !imageHeight_)return;
     const auto player=scene.find(scene.properties().playerCharacter);
-    if(!player || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled) ||
+    if(!player || !scene.isVisible(player->id) || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled) ||
         !player->character->lightRig.showGizmos)return;
     const auto transform=scene.worldTransform(player->id);if(!transform)return;
     const auto position=math::transformPoint(*transform,{});

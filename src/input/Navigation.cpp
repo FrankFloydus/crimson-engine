@@ -87,7 +87,7 @@ void Navigation::releaseCapture() {
 void Navigation::cancel() {
     releaseCapture(); mode_ = Mode::None; anchorPending_ = false; keys_.fill(false); events_.clear();
 }
-void Navigation::motion(Camera& camera,const ViewportRegion& region,float x,float y) {
+void Navigation::motion(Camera& camera,const ViewportRegion& region,float x,float y,bool preserveRoll) {
     const float dx = x-lastX_, dy = y-lastY_; lastX_ = x; lastY_ = y;
     if (!std::isfinite(dx) || !std::isfinite(dy) || (std::abs(dx) < 1e-6f && std::abs(dy) < 1e-6f)) return;
     if (anchorPending_) {
@@ -98,10 +98,10 @@ void Navigation::motion(Camera& camera,const ViewportRegion& region,float x,floa
             pivot_ = mode_ == Mode::Orbit ? anchor_ : camera.target;
         }
     }
-    if (mode_ == Mode::Orbit) camera.orbit(dx,dy,pivot_);
+    if (mode_ == Mode::Orbit) camera.orbit(dx,dy,pivot_,preserveRoll);
     else if (mode_ == Mode::Pan) camera.pan(dx,dy,region.width,region.height);
 }
-void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,bool sphereVisible) {
+void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,bool sphereVisible,bool preserveRoll) {
     auto queued = std::move(events_); events_.clear();
     const auto owner = region.windowId ? region.windowId : baseWindowId_;
     if (owner != ownerWindowId_) { cancel(); ownerWindowId_ = owner; }
@@ -140,12 +140,12 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,boo
                 if (window) captureActive_ = SDL_CaptureMouse(true);
             }
         } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
-            if (flying()) { if (!flyStarted) camera.flyLook(event.motion.xrel,event.motion.yrel); }
-            else if (active()) motion(camera,region,event.motion.x,event.motion.y);
+            if (flying()) { if (!flyStarted) camera.flyLook(event.motion.xrel,event.motion.yrel,preserveRoll); }
+            else if (active()) motion(camera,region,event.motion.x,event.motion.y,preserveRoll);
         } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
             const bool owns = flying() ? event.button.button == SDL_BUTTON_RIGHT : active() && event.button.button == SDL_BUTTON_MIDDLE;
             if (owns) {
-                if (!flying()) motion(camera,region,event.button.x,event.button.y);
+                if (!flying()) motion(camera,region,event.button.x,event.button.y,preserveRoll);
                 releaseCapture(); mode_ = Mode::None; anchorPending_ = false;
             }
         } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {

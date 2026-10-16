@@ -668,6 +668,30 @@ void cameraPanAndFly() {
     near(length(camera.eye()[0]-beforeClamp[0],camera.eye()[1]-beforeClamp[1],camera.eye()[2]-beforeClamp[2]),6.25,1e-4);
 }
 
+void cameraPilotRoll() {
+    using namespace crimson;
+    for(double roll:{2.0,std::numbers::pi,1.58}) {
+        Camera camera;camera.position={0,0,5};camera.target={};camera.up={std::sin(roll),std::cos(roll),0};
+        const auto original=camera;
+        camera.orbit(0,0,camera.target,true);camera.flyLook(0,0,true);
+        require(camera.position==original.position&&camera.target==original.target&&camera.up==original.up,
+            "A no-op pilot gesture changed an authored rolled camera pose.");
+        camera.flyLook(1,-2,true);
+        require(math::dot(camera.forward(),original.forward())>.999&&math::dot(camera.up,original.up)>.999,
+            "Piloting a camera rolled beyond 90 degrees introduced an orientation jump.");
+        near(camera.distance(),original.distance(),1e-5);require(camera.position==original.position,"Pilot fly-look moved the camera eye.");
+        camera=original;camera.orbit(1,-2,camera.target,true);
+        require(math::dot(camera.forward(),original.forward())>.999&&math::dot(camera.up,original.up)>.999,
+            "Pilot orbit discarded an upside-down camera's roll.");
+        near(camera.distance(),original.distance(),1e-5);
+    }
+    Camera upright;upright.position={0,0,5};upright.target={};upright.up={0,1,0};
+    auto pilot=upright;
+    for(unsigned step=0;step<20;++step){pilot.flyLook(0,25,true);upright.flyLook(0,25);}
+    require(pilot.up[1]<-.3f&&upright.up[1]>=-1e-5f,
+        "Pilot free pitch retained the editor upright limit or changed ordinary navigation.");
+}
+
 void cameraNonfiniteInput() {
     const auto invalid = std::numeric_limits<float>::quiet_NaN();
     crimson::Camera camera; const auto original = camera;
@@ -950,6 +974,7 @@ int main() {
     run("Game vertical FOV preserves projection and rays across window aspects", gameCameraVerticalFraming);
     run("camera orbit signs, upright lock and reversible soft zoom", cameraOrbitAndZoomBounds);
     run("camera pan, fly look and normalized time-based movement", cameraPanAndFly);
+    run("camera pilot retains roll, no-op poses and continuous upside-down navigation", cameraPilotRoll);
     run("camera finite-input handling and stored-state fallback", cameraNonfiniteInput);
     run("navigation viewport ownership, lazy sphere anchor and release", navigationOwnershipAndAnchor);
     run("navigation latched pan and same-frame pointer edges", navigationPanAndShortEdges);

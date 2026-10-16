@@ -13,10 +13,11 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
     };
     for(const auto& mesh:result.meshes) {
         auto& visual=append(mesh.sourceKey,mesh.name,mesh.local);const auto parent=visual.id;
-        if(mesh.visible && !mesh.modelId.empty())visual.model=AssetRef<ModelAsset>{mesh.modelId};
-        if(!mesh.collisionModelId.empty()) {
+        visual.visible=mesh.visible;
+        if(!mesh.modelId.empty())visual.model=AssetRef<ModelAsset>{mesh.modelId};
+        if(mesh.collision) {
             auto& collision=append(mesh.sourceKey+"/collision","Mesh Collider",Mat4{},parent);collision.collider.emplace();
-            collision.collider->shape=ColliderShape::Trimesh;collision.collider->source=AssetRef<ModelAsset>{mesh.collisionModelId};
+            collision.collider->shape=ColliderShape::Trimesh;collision.collider->mesh=mesh.collision;
         }
     }
     if(requested.syncLights)for(const auto& light:result.lights) {
@@ -42,9 +43,10 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
         for(std::size_t index=0;index<after->size();++index){++afterCounts[(*after)[index]];afterSlots[(*after)[index]]=index;}
         ModelMaterialOverrides remapped;
         for(std::size_t index=0;index<previous.modelMaterials.size();++index)if(!previous.modelMaterials[index].empty()) {
+            // Removed or ambiguous source slots no longer own an instance
+            // assignment. Drop only those overrides and import the new layout.
             if(index>=before->size() || beforeCounts[(*before)[index]]!=1 || afterCounts[(*before)[index]]!=1)
-                throw std::runtime_error("Quader sync cannot preserve material slot "+std::to_string(index+1)+" on "+incoming.name+
-                    ": its source slot was removed or became ambiguous. Clear that instance assignment before syncing.");
+                continue;
             setModelMaterialOverride(remapped,afterSlots.at((*before)[index]),previous.modelMaterials[index]);
         }
         return remapped;

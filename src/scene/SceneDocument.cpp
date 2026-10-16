@@ -326,7 +326,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>12) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>15) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -350,6 +350,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             throw std::runtime_error("Scene has an invalid sibling order.");
         record.order = order.get<uint32_t>();
         record.local = entity.at("local").get<Mat4>();
+        if(version>=14)record.visible=entity.value("visible",true);
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
         if(version>=10 && entity.contains("modelAnimation")) {
             const auto& source=entity.at("modelAnimation");
@@ -375,6 +376,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         } else if(entity.contains("modelMaterial"))
             setModelMaterialOverride(record.modelMaterials,0,entity.at("modelMaterial").get<AssetRef<MaterialAsset>>());
         record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
+        if(version>=13)record.fadeWhenOccluding=entity.value("fadeWhenOccluding",false);
         if(entity.contains("lightingScopes")) {
             const auto& scopes=entity.at("lightingScopes");
             if(!scopes.is_object())throw std::runtime_error("Surface lighting scopes must be an object.");
@@ -426,6 +428,15 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
                 record.collider->radius=c.value("radius",record.collider->radius);
                 record.collider->height=c.value("height",record.collider->height);
                 if(c.contains("source"))record.collider->source=c.at("source").get<AssetRef<ModelAsset>>();
+                if(version>=15 && c.contains("mesh")) {
+                    const auto& mesh=c.at("mesh");
+                    if(!mesh.is_object() || !mesh.at("positions").is_array() || mesh.at("positions").size()>4u*1024u*1024u ||
+                       !mesh.at("indices").is_array() || mesh.at("indices").size()>12u*1024u*1024u)
+                        throw std::runtime_error("Native collider mesh exceeds its storage limits.");
+                    for(const auto& index:mesh.at("indices"))if(!index.is_number_integer() || index.get<std::uint64_t>()>UINT32_MAX)
+                        throw std::runtime_error("Native collider mesh indices must be nonnegative 32-bit integers.");
+                    record.collider->mesh=makeCollisionMesh(mesh.at("positions").get<std::vector<Vec3>>(),mesh.at("indices").get<std::vector<std::uint32_t>>());
+                }
             }
             record.collider->showCollisionInGame=c.value("showCollisionInGame",false);
             record.collider->collisionColor=readCollisionColor(c,record.collider->collisionColor);
@@ -496,10 +507,11 @@ Json writeScene(const SceneSnapshot& snapshot) {
     Json entities = Json::array();
     for (const auto& record : snapshot.records) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
-            {"order",record.order}, {"local",record.local}};
+            {"order",record.order}, {"local",record.local}, {"visible",record.visible}};
         if (record.model) {
             entity["model"] = *record.model;
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
+            entity["fadeWhenOccluding"]=record.fadeWhenOccluding;
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
                 {"shadowCasterMask",record.lightingScopes.shadowCasterMask},{"ambientReceiverMask",record.lightingScopes.ambientReceiverMask}};
             const auto& animation=record.modelAnimation;
@@ -518,7 +530,8 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.collider) { const auto& c=*record.collider;
             const auto shape=c.shape==ColliderShape::Box?"box":c.shape==ColliderShape::Sphere?"sphere":c.shape==ColliderShape::Cylinder?"cylinder":c.shape==ColliderShape::Capsule?"capsule":"trimesh";
             entity["collider"]={{"shape",shape},{"size",c.size},{"radius",c.radius},{"height",c.height},{"source",c.source},
-                {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
+                {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};
+            if(c.mesh)entity["collider"]["mesh"]={{"positions",c.mesh->positions},{"indices",c.mesh->indices}}; }
         if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane},
             {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
         if(record.quader) {const auto& q=*record.quader;entity["quader"]={{"projectPath",q.projectPath},{"projectId",q.projectId},
@@ -527,7 +540,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",12},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",15},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
@@ -544,7 +557,7 @@ enum EntityField : uint32_t {
     Directional=1u<<6, Point=1u<<7, Environment=1u<<8, Character=1u<<9, Collider=1u<<10, CameraField=1u<<11,
     ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14,
     QuaderField=1u<<15,QuaderGeneratedField=1u<<16,LightingScopesField=1u<<17,
-    ModelAnimationField=1u<<18,AllEntityFields=(1u<<19)-1
+    ModelAnimationField=1u<<18,FadeWhenOccludingField=1u<<19,VisibleField=1u<<20,AllEntityFields=(1u<<21)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -563,6 +576,8 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
+    if(a.fadeWhenOccluding!=b.fadeWhenOccluding)fields|=FadeWhenOccludingField;
+    if(a.visible!=b.visible)fields|=VisibleField;
     return fields;
 }
 void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields) {
@@ -577,6 +592,8 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
+    if(fields&FadeWhenOccludingField)target.fadeWhenOccluding=source.fadeWhenOccluding;
+    if(fields&VisibleField)target.visible=source.visible;
 }
 uint32_t changedProperties(const SceneProperties& a,const SceneProperties& b) {
     return (a.activeEnvironment!=b.activeEnvironment?ActiveEnvironment:0u) |
@@ -685,7 +702,9 @@ std::string serializeSceneSnapshot(const SceneSnapshot& snapshot) {
         throw std::runtime_error("Scene name must contain 1 to 1024 UTF-8 bytes.");
     auto current=snapshot;
     if(isAssetUuid(current.id))canonicalizeSceneAssetRefs(current);
-    return writeScene(current).dump(2)+"\n";
+    auto contents=writeScene(current).dump(2)+"\n";
+    if(contents.size()>64u*1024u*1024u)throw std::runtime_error("Scene file exceeds the 64 MiB storage limit.");
+    return contents;
 }
 void saveSceneSnapshot(const std::filesystem::path& root,const std::string& id,const SceneSnapshot& snapshot) {
     const auto file=scenePath(root,id);
@@ -961,7 +980,7 @@ bool SceneDocument::commitExternalAssetChanges(PreparedExternalChange&& p)noexce
 }
 bool SceneDocument::begin(const std::string& label) {
     if (transaction_) { status_ = "Finish the active edit first."; return false; }
-    transaction_.emplace();transaction_->command.label=label;
+    transaction_.emplace();transaction_->id=++transactionSerial_;transaction_->command.label=label;
     transaction_->command.beforeSelection=transaction_->command.afterSelection=selection_;
     status_.clear(); return true;
 }
@@ -1066,6 +1085,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         };
         EntityRecord imported;imported.id=allocate("Imported");imported.name="Imported";imported.parent=owner;
         imported.order=nextOrder(records,owner);imported.quaderGenerated=QuaderGenerated{owner,"Imported"};
+        if(const auto previous=scene_.find(imported.id))imported.visible=previous->visible;
         replacements.push_back(imported);
         for(const auto& input:generated) {
             if(!input.id || !input.quaderGenerated)throw std::runtime_error("Quader import record has no temporary identity.");
@@ -1078,8 +1098,10 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
             // those authored values on matching source identities/kinds while
             // source transforms, energy, geometry and shadow flags still sync.
             if(const auto previous=scene_.find(record.id)) {
+                record.visible=previous->visible;
                 if(record.model && previous->model) {
                     record.lightingScopes=previous->lightingScopes;
+                    record.fadeWhenOccluding=previous->fadeWhenOccluding;
                     if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);
                     else if(record.model==previous->model)record.modelMaterials=previous->modelMaterials;
                     else if(!previous->modelMaterials.empty())
@@ -1089,7 +1111,8 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 if(record.directional && previous->directional)record.directional->roles=previous->directional->roles;
                 if(record.collider && previous->collider) {
                     const auto source=record.collider->source;
-                    record.collider=previous->collider;record.collider->source=source;
+                    const auto mesh=record.collider->mesh;
+                    record.collider=previous->collider;record.collider->source=source;record.collider->mesh=mesh;
                     // Primitive overrides own their local center/orientation as
                     // well as dimensions. One-sided resizing moves that center.
                     // The visual parent and generated mesh source still sync.
@@ -1174,6 +1197,27 @@ EntityId SceneDocument::createCamera(const std::string& name) {
     const auto selected=scene_.worldTransform(selection_.primary);
     const auto target=selected?math::transformPoint(*selected,{0,0,0}):Vec3{};
     record.local=math::inverse(math::lookAt(target+Vec3{8,10,8},target)).value_or(Mat4{});
+    if(!update([&](auto& records,auto& properties){
+        record.order=nextOrder(records,NoEntity);records.push_back(record);
+        if(!properties.activeCamera)properties.activeCamera=record.id;
+    })){cancel();return NoEntity;}
+    selection_={{record.id},record.id};commit();return record.id;
+}
+EntityId SceneDocument::createCamera(const Camera& view,float aspect,const std::string& name) {
+    const auto direction=view.target-view.position;
+    const auto forward=math::normalized(direction,{0,0,0},0),up=math::normalized(view.up,{0,0,0},0);
+    if(!math::finite(view.position)||!math::finite(direction)||!math::finite(view.up)||
+        math::length(forward)<1e-8||math::length(math::cross(forward,up))<1e-8||
+        !std::isfinite(aspect)||aspect<=0||!std::isfinite(view.fov)||view.fov<=0||view.fov>=180||
+        !std::isfinite(view.nearPlane)||!std::isfinite(view.farPlane)||view.nearPlane<=0||view.farPlane<=view.nearPlane||
+        (view.fovAxis!=CameraFovAxis::Vertical&&view.fovAxis!=CameraFovAxis::ShorterDimension)) {
+        status_="Camera creation requires a finite view, valid projection and positive viewport aspect.";return NoEntity;
+    }
+    const auto local=math::inverse(view.viewMatrix());
+    if(!local){status_="Camera view is not invertible.";return NoEntity;}
+    if(!begin("Create camera"))return NoEntity;
+    EntityRecord record;record.id=unusedId(scene_.records());record.name=name;record.local=*local;record.camera.emplace();
+    record.camera->verticalFov=view.verticalFov(aspect);record.camera->nearPlane=view.nearPlane;record.camera->farPlane=view.farPlane;
     if(!update([&](auto& records,auto& properties){
         record.order=nextOrder(records,NoEntity);records.push_back(record);
         if(!properties.activeCamera)properties.activeCamera=record.id;

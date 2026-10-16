@@ -17,7 +17,7 @@ SceneCollider colliderForShape(const Scene& scene,EntityId id,const SceneCollide
         result.radius=std::clamp(result.radius,MinimumDimension,MaximumDimension*.5f);
         result.height=std::clamp(std::max(result.height,result.radius*2),MinimumDimension*2,MaximumDimension);
     }
-    if(shape==ColliderShape::Trimesh && result.source.empty()) {
+    if(shape==ColliderShape::Trimesh && result.source.empty() && !result.mesh) {
         for(auto current=scene.find(id);current;current=scene.find(current->parent)) {
             if(current->model && !current->model->empty()){result.source=*current->model;break;}
             if(!current->parent)break;
@@ -91,6 +91,8 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
             edit(ColliderControl::Height,"Resize collision height",height);
             if(capsule&&ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Total height, including both rounded caps.");
         }
+    } else if(value.mesh) {
+        ImGui::TextUnformatted("Source");ImGui::TextUnformatted("Imported collision");
     } else {
         ImGui::TextUnformatted("Source");
         const auto name=[&](const std::string& id){return isBuiltinModel(id)?std::string("Box"):models.name?models.name(id):id;};
@@ -136,7 +138,7 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
             if(transactions.begin(ColliderControl::Source,"Generate trimesh collision")) {
                 document.update([id=record.id,source=value.source](auto& records,auto&){
                     const auto found=std::find_if(records.begin(),records.end(),[id](const auto& item){return item.id==id;});
-                    if(found!=records.end()&&found->collider)found->collider->source=source;
+                    if(found!=records.end()&&found->collider){found->collider->source=source;found->collider->mesh.reset();}
                 });
                 transactions.finish(ColliderControl::Source);state.editing=false;
             }

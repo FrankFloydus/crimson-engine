@@ -14,6 +14,22 @@
 namespace crimson {
 namespace {
 std::atomic<uint64_t> nextGeneration{1};
+struct Visibility { bool authored{true},effective{true},resolved{}; };
+void cacheVisibility(entt::registry& registry,const std::unordered_map<EntityId,entt::entity>& entities) {
+    std::vector<EntityId> chain;
+    for(const auto& [id,entity]:entities) {
+        if(registry.get<Visibility>(entity).resolved)continue;
+        chain.clear();auto current=id;
+        while(current&&!registry.get<Visibility>(entities.at(current)).resolved) {
+            chain.push_back(current);current=registry.get<Relationship>(entities.at(current)).parent;
+        }
+        bool visible=!current||registry.get<Visibility>(entities.at(current)).effective;
+        for(auto entry=chain.rbegin();entry!=chain.rend();++entry) {
+            auto& visibility=registry.get<Visibility>(entities.at(*entry));
+            visible=visible&&visibility.authored;visibility.effective=visible;visibility.resolved=true;
+        }
+    }
+}
 bool safeReference(const std::string& id) {
     if (id.empty()) return false;
     const std::filesystem::path path(std::u8string(reinterpret_cast<const char8_t*>(id.data()), id.size()));
@@ -59,7 +75,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
-        a.modelAnimation==b.modelAnimation;
+        a.modelAnimation==b.modelAnimation && a.fadeWhenOccluding==b.fadeWhenOccluding && a.visible==b.visible;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -82,11 +98,13 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& identity = registry_.get<Identity>(entity);
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
+    record.visible=registry_.get<Visibility>(entity).authored;
     if (const auto* model = registry_.try_get<ModelReference>(entity)) {
         record.model=model->assetId;record.modelMaterials=model->materials;
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
+        record.fadeWhenOccluding=model->fadeWhenOccluding;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
@@ -98,6 +116,10 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* link = registry_.try_get<QuaderLink>(entity)) record.quader = *link;
     if (const auto* generated = registry_.try_get<QuaderGenerated>(entity)) record.quaderGenerated = *generated;
     return record;
+}
+bool Scene::isVisible(EntityId id) const {
+    const auto found=entities_.find(id);
+    return found!=entities_.end()&&registry_.get<Visibility>(found->second).effective;
 }
 
 std::vector<EntityRecord> Scene::records() const {
@@ -187,6 +209,8 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
+        if(!record.model&&record.fadeWhenOccluding)
+            throw std::runtime_error("Player occlusion fading requires a model entity.");
         const auto& animation=record.modelAnimation;
         if(animation.clip<-1 || !std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
             !std::isfinite(animation.startTime) || animation.startTime<0 || animation.startTime>1e9f)
@@ -244,6 +268,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         }
         if (record.collider) {
             const auto& c=*record.collider;
+            if(c.mesh && !c.mesh->validated())throw std::runtime_error("Native collider triangles must be constructed through the validated mesh factory.");
             if(c.shape>ColliderShape::Trimesh)throw std::runtime_error("Collider shape is invalid.");
             if(!math::finite(c.size)||std::any_of(c.size.begin(),c.size.end(),[](float size){return size<=0;})||
                 !std::isfinite(c.radius)||c.radius<=0||!std::isfinite(c.height)||c.height<=0)
@@ -357,7 +382,8 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Identity>(entity,record.id,record.name);
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation);
+        candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.fadeWhenOccluding);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
@@ -369,6 +395,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.quaderGenerated) candidate.emplace<QuaderGenerated>(entity,*record.quaderGenerated);
         entities.emplace(record.id,entity);
     }
+    cacheVisibility(candidate,entities);
     Scene prepared;
     prepared.registry_=std::move(candidate);prepared.entities_=std::move(entities);prepared.properties_=properties;
     prepared.cameraFollowOrder_=std::move(followOrder);prepared.resolveCameraFollow();

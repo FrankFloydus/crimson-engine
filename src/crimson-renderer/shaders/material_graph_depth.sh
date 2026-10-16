@@ -1,5 +1,6 @@
 #if CC_GRAPH_PICK
 uniform vec4 u_pickId;
+uniform vec4 u_instanceOpacity;
 #else
 uniform vec4 u_surfaceLighting;
 #endif
@@ -23,7 +24,8 @@ void main()
     if (material.opacity * v_color0.a < u_graphParams[2].w) discard;
 #endif
 #if CC_GRAPH_PICK
-    if (u_graphParams[3].w > 1.5 && material.opacity * v_color0.a < 0.01) discard;
+    float coverage = (u_graphParams[3].w > 1.5 ? material.opacity * v_color0.a : 1.0) * u_instanceOpacity.x;
+    if (coverage < 0.01) discard;
     gl_FragColor = u_pickId;
 #else
     gl_FragColor = u_surfaceLighting.z > 0.5 ?

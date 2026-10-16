@@ -3,6 +3,7 @@
 #include "assets/AssetReferenceManager.h"
 #include "resources/AssetId.h"
 #include <nlohmann/json.hpp>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -109,5 +110,39 @@ void watcherSnapshots() {
     rejects([&]{storedAssetPaths(f.root);},"A rejected external index retained an enumerable stale catalog.");
     f.write(".crimson/asset-locations.json",before);require(refreshContentStorage(f.root)&&resolveAssetPath(f.root,id)==original,"A repaired external index did not recover the snapshot.");
 }
+void registrationGroups() {
+    Fixture f;initializeContentStorage(f.root);
+    const auto index=f.root/".crimson/asset-locations.json";
+    const std::string first="assets/textures/group-first.png";const auto second=newAssetId();
+    const std::array paths{StoredAssetPath{first,f.root/"Content/First.png"},StoredAssetPath{second,f.root/"Content/Second.png"}};
+    const auto before=contentStorageRevision(f.root);registerAssetPaths(f.root,paths);
+    require(contentStorageRevision(f.root)==before+1,"A registration group published more than one index revision.");
+    require(resolveAssetPath(f.root,first)==paths[0].file&&resolveAssetPath(f.root,canonicalAssetId(first))==paths[0].file&&
+        resolveAssetPath(f.root,second)==paths[1].file&&assetIdAtPath(f.root,paths[0].file)==canonicalAssetId(first)&&legacyAssetId(f.root,canonicalAssetId(first))==first,
+        "A registration group lost canonical identities, reverse lookup or legacy provenance.");
+    const auto bytes=read(index);const auto revision=contentStorageRevision(f.root);const auto count=storedAssetPaths(f.root).size();
+    fs::last_write_time(index,fs::last_write_time(index)-std::chrono::seconds{5});const auto timestamp=fs::last_write_time(index);
+    registerAssetPaths(f.root,paths);registerAssetPaths(f.root,{});registerAssetPath(f.root,first,paths[0].file);
+    require(read(index)==bytes&&contentStorageRevision(f.root)==revision&&fs::last_write_time(index)==timestamp,
+        "Unchanged/empty registrations rewrote the index or advanced its revision.");
+    const auto pending=newAssetId(),other=newAssetId();
+    const auto unchanged=[&] {
+        require(read(index)==bytes&&contentStorageRevision(f.root)==revision&&storedAssetPaths(f.root).size()==count&&resolveAssetPath(f.root,second)==paths[1].file,
+            "A rejected registration group partially changed the index or cached snapshot.");
+        rejects([&]{resolveAssetPath(f.root,pending);},"A rejected registration group retained a new cached asset location.");
+    };
+    const std::array duplicateFile{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{other,f.root/"Content/Third.png"}};
+    rejects([&]{registerAssetPaths(f.root,duplicateFile);},"Two identities in one registration group claimed the same file.");unchanged();
+    const std::array existingFile{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{second,paths[0].file}};
+    rejects([&]{registerAssetPaths(f.root,existingFile);},"A registration group claimed another asset's existing location.");unchanged();
+    const std::array duplicateIdentity{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{pending,f.root/"Content/Fourth.png"}};
+    rejects([&]{registerAssetPaths(f.root,duplicateIdentity);},"One identity claimed conflicting files in a registration group.");unchanged();
+    const std::array protectedFile{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{other,f.root/"Engine/Unprotected.png"}};
+    rejects([&]{registerAssetPaths(f.root,protectedFile);},"A registration group assigned an unprotected identity to Engine content.");unchanged();
+    const std::array outside{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{other,f.root/"../Outside.png"}};
+    rejects([&]{registerAssetPaths(f.root,outside);},"A registration group accepted a location outside its project.");unchanged();
+    const std::array emptyIdentity{StoredAssetPath{pending,f.root/"Content/Third.png"},StoredAssetPath{{},f.root/"Content/Fourth.png"}};
+    rejects([&]{registerAssetPaths(f.root,emptyIdentity);},"A registration group accepted an empty identity.");unchanged();
 }
-int main(){try{uuidIdentity();migrationAndMoves();modelPackageAndRecovery();watcherSnapshots();std::cout<<"Content storage checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+}
+int main(){try{uuidIdentity();migrationAndMoves();modelPackageAndRecovery();watcherSnapshots();registrationGroups();std::cout<<"Content storage checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

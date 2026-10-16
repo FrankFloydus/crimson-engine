@@ -72,9 +72,9 @@ target_compile_options(crimson-resources PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-resources PUBLIC crimson-math crimson-animation PRIVATE crimson-storage meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx)
 target_link_libraries(crimson-resources PRIVATE bcrypt)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/SceneDocument.cpp src/scene/SceneExtraction.cpp src/runtime/PlayerLightRig.cpp src/runtime/SceneAnimations.cpp)
+add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneExtraction.cpp src/runtime/PlayerLightRig.cpp src/runtime/SceneAnimations.cpp)
 target_include_directories(crimson-scene PUBLIC src)
-target_link_libraries(crimson-scene PUBLIC crimson-math crimson-storage EnTT::EnTT nlohmann_json::nlohmann_json)
+target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
@@ -149,6 +149,7 @@ function(cc_shader NAME TYPE VARYING)
                 "${CC_SHADER_DIR}/point_light.sh"
                 "${CC_SHADER_DIR}/point_light_record.sh"
                 "${CC_SHADER_DIR}/clustered_lighting.sh"
+                "${CC_SHADER_DIR}/occluder_partition.sh"
                 "${CC_SHADER_DIR}/ambient_visibility.sh"
                 "${CC_SHADER_DIR}/ambient_visibility_response.sh"
                 "${CC_SHADER_DIR}/prepass_receiver.sh"
@@ -187,11 +188,13 @@ cc_shader(vs_directional_shadow vertex model.varying.def.sc)
 cc_shader(fs_directional_shadow fragment model.varying.def.sc)
 cc_shader(vs_present vertex varying.def.sc)
 cc_shader(fs_present fragment varying.def.sc)
+cc_shader(fs_occluder_composite fragment varying.def.sc)
 cc_shader(fs_glow_extract fragment varying.def.sc)
 cc_shader(fs_glow_blur fragment varying.def.sc)
 cc_shader(fs_sky fragment varying.def.sc)
 cc_shader(cs_procedural_filter compute varying.def.sc)
 cc_shader(cs_cluster_lights compute varying.def.sc)
+cc_shader(cs_occluder_depth compute varying.def.sc)
 cc_shader(cs_ambient_visibility compute varying.def.sc)
 cc_shader(cs_ambient_publish compute varying.def.sc)
 cc_shader(cs_model_deform compute varying.def.sc)
@@ -247,12 +250,12 @@ add_executable(crimson-renderer WIN32
     src/main.cpp
     src/App.cpp src/App.h
     src/app/Options.cpp src/app/DiagnosticSession.cpp src/app/FrameProfile.cpp
-    src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
+    src/editor/EditorSession.cpp src/editor/CameraPilot.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
     src/editor/PlayerLightRigOverlay.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
-    src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
+    src/editor/CollisionResources.cpp src/editor/PlayerOcclusion.cpp src/editor/QuaderSceneIntegration.cpp
     src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp src/editor/PlayShortcuts.cpp
     src/resources/ShaderReloadSession.cpp src/resources/TextureStreamer.cpp
     src/platform/WindowIcon.cpp src/platform/WindowIcon.h
@@ -324,6 +327,11 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(atomic_file_tests tests/atomic_file_tests.cpp)
+    target_link_libraries(atomic_file_tests PRIVATE crimson-storage)
+    target_compile_options(atomic_file_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME atomic_file_core COMMAND atomic_file_tests)
+    set_tests_properties(atomic_file_core PROPERTIES TIMEOUT 15)
     add_executable(project_material_cache_tests tests/project_material_cache_tests.cpp)
     target_link_libraries(project_material_cache_tests PRIVATE crimson-project-material-cache)
     target_compile_options(project_material_cache_tests PRIVATE /W4 /permissive- /utf-8)
@@ -557,6 +565,10 @@ if(BUILD_TESTING)
     target_link_libraries(scene_extraction_tests PRIVATE crimson-scene)
     target_compile_options(scene_extraction_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME scene_extraction_core COMMAND scene_extraction_tests)
+    add_executable(camera_pilot_tests tests/camera_pilot_tests.cpp src/editor/CameraPilot.cpp)
+    target_link_libraries(camera_pilot_tests PRIVATE crimson-scene)
+    target_compile_options(camera_pilot_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME camera_pilot_core COMMAND camera_pilot_tests)
 
     add_executable(render_pass_plan_tests tests/render_pass_plan_tests.cpp)
     target_link_libraries(render_pass_plan_tests PRIVATE crimson-camera)
@@ -645,6 +657,10 @@ if(BUILD_TESTING)
     target_link_libraries(native_resource_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME native_resource_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(native_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 90)
+    add_test(NAME shader_reload_render_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --shader-reload-only)
+    set_tests_properties(shader_reload_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 240)
+    add_test(NAME d3d11_shutdown_core COMMAND native_resource_tests --shutdown-only)
+    set_tests_properties(d3d11_shutdown_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 45)
 
     add_executable(point_shadow_math_tests tests/point_shadow_math_tests.cpp)
     target_compile_options(point_shadow_math_tests PRIVATE /W4 /permissive- /utf-8)
@@ -659,11 +675,13 @@ if(BUILD_TESTING)
         src/assets/MaterialPreviewGeometry.cpp ${CC_SHADER_HEADERS})
     target_include_directories(point_shadow_render_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_sources(point_shadow_render_tests PRIVATE "${CC_SHADER_BASELINE_HEADER}")
-    target_compile_definitions(point_shadow_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_definitions(point_shadow_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+        CC_SHADOW_ROOM_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/quader_shadow_room.json"
+        CC_SHADOW_ROOM_RESULTS="${CMAKE_CURRENT_SOURCE_DIR}/build/diagnostics/actual-room-shadows")
     target_compile_options(point_shadow_render_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(point_shadow_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME point_shadow_render_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
-    set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
+    set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 240)
     add_executable(directional_shadow_quality_tests tests/directional_shadow_quality_tests.cpp
         src/crimson-renderer/Renderer.cpp src/crimson-renderer/ModelDeformationGpu.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/PointShadowRenderer.cpp
         src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
@@ -811,6 +829,10 @@ if(BUILD_TESTING)
     target_link_libraries(collision_overlay_preparation_tests PRIVATE crimson-resources crimson-scene)
     target_compile_options(collision_overlay_preparation_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME collision_overlay_preparation_core COMMAND collision_overlay_preparation_tests)
+    add_executable(player_occlusion_tests tests/player_occlusion_tests.cpp src/editor/PlayerOcclusion.cpp)
+    target_link_libraries(player_occlusion_tests PRIVATE crimson-resources crimson-scene)
+    target_compile_options(player_occlusion_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME player_occlusion_core COMMAND player_occlusion_tests)
     # Explicit performance fixture: the real editor runs hidden against a frozen
     # disposable project, including browser previews, workers, UI and GPU frames.
     get_target_property(CC_EDITOR_PERF_SOURCES crimson-renderer SOURCES)

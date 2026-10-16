@@ -122,6 +122,7 @@ int main() {
         PreparedRenderView game;game.identity={RenderViewPurpose::Game,0};game.width=960;game.height=540;
         game.settings=scene.settings;game.settings.camera.position={11,12,13};
         game.instances.push_back(frozen->shadowInstances.front());game.instances.front().entityId=72;
+        game.instances.front().opacity=.25f;
         frame->views.push_back(std::move(scene));frame->views.push_back(std::move(game));
         std::shared_ptr<const PreparedRenderFrame> queued=frame;
         require(queued->views[0].settings.camera.position==Vec3{4,5,6} && queued->views[1].settings.camera.position==Vec3{11,12,13} &&
@@ -139,6 +140,9 @@ int main() {
                 gameAdapter.instances.data()==queued->views[1].instances.data() &&
                 sceneAdapter.instances.front().entityId==71 && gameAdapter.instances.front().entityId==72,
                 "Execution adapters mixed receiver arrays between cameras.");
+            require(sceneAdapter.instances.front().opacity==1 && gameAdapter.instances.front().opacity==.25f &&
+                sceneAdapter.shadowInstances.front().opacity==1 && gameAdapter.shadowInstances.front().opacity==1,
+                "A Game-camera fade changed Scene receivers or the shared full-opacity shadow snapshot.");
             require(sceneAdapter.directionalLights.data()==queued->world->directional.data() &&
                 gameAdapter.directionalLights.data()==sceneAdapter.directionalLights.data() &&
                 sceneAdapter.pointLights.data()==queued->world->points.data() &&

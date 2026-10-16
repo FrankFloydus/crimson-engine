@@ -4,8 +4,10 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <algorithm>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -17,6 +19,32 @@
 #endif
 
 namespace crimson {
+namespace {
+#ifdef _WIN32
+void publish(const std::filesystem::path& temporary,const std::filesystem::path& destination,const char* operation) {
+    // A short-lived reader or scanner may deny replacement after our own
+    // output handle has closed. Retain the complete temporary and old file
+    // while retrying the same atomic rename; never delete/truncate the target.
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds{500};
+    auto delay=std::chrono::milliseconds{1};
+    for(;;) {
+        if(MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))return;
+        const auto error=GetLastError();
+        const bool retryable=error==ERROR_ACCESS_DENIED||error==ERROR_SHARING_VIOLATION||error==ERROR_LOCK_VIOLATION;
+        const auto attributes=GetFileAttributesW(destination.c_str());
+        const bool protectedTarget=attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&(FILE_ATTRIBUTE_READONLY|FILE_ATTRIBUTE_DIRECTORY));
+        const auto now=std::chrono::steady_clock::now();
+        if(!retryable||protectedTarget||now>=deadline) {
+            const auto encoded=destination.generic_u8string();
+            throw std::runtime_error(std::string("Could not ")+operation+" the file '"+std::string(encoded.begin(),encoded.end())+
+                "' (Windows error "+std::to_string(error)+").");
+        }
+        std::this_thread::sleep_until(std::min(deadline,now+delay));
+        delay=std::min(delay*2,std::chrono::milliseconds{25});
+    }
+}
+#endif
+}
 
 void copyFileAtomically(const std::filesystem::path& source,const std::filesystem::path& destination) {
     if(!destination.parent_path().empty())std::filesystem::create_directories(destination.parent_path());
@@ -25,8 +53,7 @@ void copyFileAtomically(const std::filesystem::path& source,const std::filesyste
     try{
         std::filesystem::copy_file(source,temporary);
 #ifdef _WIN32
-        if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
-            throw std::runtime_error("Could not restore the asset file (Windows error "+std::to_string(GetLastError())+").");
+        publish(temporary,destination,"restore");
 #else
         std::filesystem::rename(temporary,destination);
 #endif
@@ -53,10 +80,7 @@ void writeFileAtomically(const std::filesystem::path& path, std::string_view con
             if (!output) throw std::runtime_error("Could not close the temporary file.");
         }
 #ifdef _WIN32
-        if (!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            const auto error=GetLastError();const auto encoded=path.generic_u8string();
-            throw std::runtime_error("Could not publish the file '"+std::string(encoded.begin(),encoded.end())+"' (Windows error "+std::to_string(error)+").");
-        }
+        publish(temporary,path,"publish");
 #else
         std::filesystem::rename(temporary,path);
 #endif

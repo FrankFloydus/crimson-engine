@@ -92,6 +92,32 @@ void playReadinessAndStaticOwnership() {
     const std::array sources{PhysicsMeshCollider{1,mesh,1}};physics.reconcile(scene,{},sources);
     require(physics.colliderCount()==0&&!physics.status().empty(),"A Character accepted a nested static mesh body.");
 }
+void nativeTrianglesWithoutAssets() {
+    const auto geometry=plane();auto floor=collider();floor.collider->source={};
+    floor.collider->mesh=makeCollisionMesh(geometry->positions,geometry->indices);
+    Scene scene;scene.apply({floor},{});PhysicsWorld physics;physics.reconcile(scene);
+    require(physics.colliderCount()==1&&physics.status().empty(),"Native triangles required a model asset: "+physics.status());
+    const auto hit=physics.raycast({{0,3,0},{0,-1,0}},10);
+    require(hit&&hit->entity==1&&near(hit->position[1],0),"Native triangles were not used by physics raycasts.");
+    require(pickCollisionShape(scene,{{0,3,0},{0,-1,0}},10)==1,"Native triangles required an asset query for editor picking.");
+    const std::array<EntityId,1> selected{1};const auto bounds=selectionBounds(scene,selected,{});
+    require(bounds.valid&&bounds.minimum==geometry->bounds.minimum&&bounds.maximum==geometry->bounds.maximum,"Native collision bounds were omitted.");
+    NavigationMesh navigation;navigation.reconcile(physics,{});
+    require(navigation.findPath({-3,0,0},{3,0,0}).has_value(),"Native triangles did not generate navigation.");
+    const auto revision=physics.geometryRevision();auto raised=geometry->positions;for(auto& point:raised)point[1]=.5f;
+    floor.collider->mesh=makeCollisionMesh(std::move(raised),geometry->indices);scene.apply({floor},{});physics.reconcile(scene);
+    const auto raisedHit=physics.raycast({{0,3,0},{0,-1,0}},10);
+    require(physics.geometryRevision()>revision&&raisedHit&&near(raisedHit->position[1],.5),"Native payload replacement retained stale physics.");
+    floor.collider->shape=ColliderShape::Box;scene.apply({floor},{});physics.reconcile(scene);
+    floor.collider->shape=ColliderShape::Trimesh;scene.apply({floor},{});physics.reconcile(scene);
+    require(physics.colliderCount()==1&&physics.staticMeshes().size()==1&&physics.staticBoxes().empty(),"Native shape switching left duplicate bodies.");
+    SceneDocument authored(std::filesystem::temp_directory_path()/"crimson-native-collision-transient");
+    require(authored.edit("Native collision Play",[&](auto& records,auto& properties){records={floor,character()};properties={};properties.playerCharacter=2;}),authored.status());
+    PlaySession play(authored.projectRoot());require(play.start(authored),"Native Play needed a model lookup: "+play.status());
+    Camera camera;for(unsigned frame=0;frame<180;++frame)play.advance(1.0/60,Vec2{},camera,true);
+    require(near(play.document().scene().worldTransform(2)->at(1,3),.5),"Native Play collision did not hold the Character.");
+    play.stop();
+}
 void primitiveShapesAndNavigation() {
     for(const auto shape:{ColliderShape::Sphere,ColliderShape::Cylinder,ColliderShape::Capsule}) {
         EntityRecord obstacle;obstacle.id=1;obstacle.name="Primitive";obstacle.collider.emplace();
@@ -169,5 +195,5 @@ void shapeSwitchesReplaceOneBody() {
     }
 }
 }
-int main(){try{floorNavigationAndAcceptedReplacement();affineMeshTransformsAndRamps();playReadinessAndStaticOwnership();primitiveShapesAndNavigation();primitiveTransformsPickingAndDebug();shapeSwitchesReplaceOneBody();std::cout<<"Collider shapes, affine transforms, picking, debug geometry, accepted navigation and Play ownership checks passed.\n";return 0;}
+int main(){try{floorNavigationAndAcceptedReplacement();affineMeshTransformsAndRamps();playReadinessAndStaticOwnership();nativeTrianglesWithoutAssets();primitiveShapesAndNavigation();primitiveTransformsPickingAndDebug();shapeSwitchesReplaceOneBody();std::cout<<"Collider shapes, native triangles, affine transforms, picking, debug geometry, accepted navigation and Play ownership checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

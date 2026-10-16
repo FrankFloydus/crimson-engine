@@ -18,11 +18,14 @@ struct ExtractedModel {
     std::uint32_t lightingCategory{lighting_scope::World};
     SceneModelAnimation animation{};
     double animationSeconds{}; // Transient sample time; never scene-authored.
+    bool fadeWhenOccluding{false};
+    bool visible{true}; // Hidden models retain transient animation clocks.
 };
 struct ExtractedParticle {
     EntityId id{};
     std::string assetId;
     Mat4 world{};
+    bool visible{true}; // Retained for simulation; only presentation is hidden.
 };
 struct ExtractedScene {
     std::vector<ExtractedModel> models;
@@ -39,9 +42,15 @@ struct ExtractedScene {
 // The scene owns ECS traversal. Rendering receives copied presentation values,
 // with no EnTT handles, registry pointers, component pointers, or GPU ownership.
 ExtractedScene extractScene(const Scene& scene);
-// Resolves the active entity camera, including positional follow. Editor camera
-// and persisted thumbnail preview camera remain independent.
+// Resolve any authored camera, including positional follow and full affine
+// parenting. Visibility controls its marker, not its view/control behavior.
+std::optional<Camera> resolveSceneCamera(const Scene& scene,EntityId id);
+// Resolves the active entity camera. Editor and thumbnail cameras are independent.
 std::optional<Camera> resolveGameCamera(const Scene& scene);
+// Convert a navigated world view into this camera's local affine pose. The
+// camera's view-relative stretch/shear/reflection is retained; lens and follow
+// settings are not authored here. Invalid frames/singular ancestry return none.
+std::optional<Mat4> sceneCameraLocalTransform(const Scene& scene,EntityId id,const Camera& navigated);
 
 // Direction in which emitted light travels. Use the authored local -Z axis,
 // including affine parent transforms; scale affects its length, not intensity.

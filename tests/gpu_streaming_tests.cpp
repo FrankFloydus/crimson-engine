@@ -5,6 +5,7 @@
 #include "resources/ImageDecoder.h"
 #include "resources/TextureStreamer.h"
 #include "assets/AtomicFile.h"
+#include "assets/MaterialAsset.h"
 #include <bgfx/platform.h>
 #include <lodepng.h>
 #include <array>
@@ -73,6 +74,28 @@ void textures(const std::filesystem::path& root) {
     manager.pump();manager.trim();
     check(manager.stats().cpuBytes==0,"Completed mip jobs must not retain captured source pixels or CPU mip interests.");
     for(int i=0;i<3;++i) bgfx::frame();
+}
+void repeatedBuiltinTextures(const std::filesystem::path& root) {
+    ResourceManager manager;TextureStreamer streamer(manager,root);
+    const auto request=[&] {
+        return streamer.request(NeutralNormalTextureId,{},streaming::TextureRole::Normal,false,1,ResourcePriority::Selected);
+    };
+    PreparedTexture ready;const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{5};
+    do {
+        manager.pump();streamer.beginFrame();ready=request();(void)request();streamer.advance();bgfx::frame();
+        check(ready.diagnostic.empty(),"Repeated built-in texture requests failed with an empty physical source.");
+        if(ready.complete)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<deadline);
+    check(ready.complete,"Built-in normal texture did not finish preparing.");
+    const auto handle=ready.handle;const auto loads=manager.stats().loads;
+    for(unsigned i=0;i<8;++i) {
+        manager.pump();streamer.beginFrame();const auto reused=request();streamer.advance();bgfx::frame();
+        check(reused.complete&&reused.handle.idx==handle.idx&&reused.diagnostic.empty(),
+            "A repeated built-in texture request replaced its stable GPU allocation.");
+    }
+    check(manager.stats().loads==loads,"Repeated built-in requests queued unnecessary source work.");
+    manager.stop();
 }
 void uploadBudget(const std::filesystem::path& root) {
     ResourceManager manager;TextureStreamer textures(manager,root);
@@ -275,6 +298,56 @@ void models(const std::filesystem::path& root) {
     resident.reset();check(cache.bytes()==0,"Unleased retired mesh buffers should release their GPU allocation.");
     for(int i=0;i<3;++i)bgfx::frame();
 }
+void modelReopenedRevisions(const std::filesystem::path& root) {
+    ModelAsset asset;asset.id="model-scene-reopen-fixture";ModelPrimitive primitive;
+    primitive.vertices.resize(3);primitive.vertices[1].position={1,0,0};primitive.vertices[2].position={0,1,0};primitive.indices={0,1,2};
+    asset.primitives.push_back(primitive);
+    const auto descriptor=streaming::buildModelCache(asset,root,false);
+    const auto source=streaming::loadModelLod(descriptor.primitives[0].levels[0]);
+    ModelGpuCache cache;cache.configure(asset.id,1,descriptor);
+    check(cache.queue(asset.id,1,source),"Initial scene model could not queue its GPU upload.");
+    for(unsigned i=0;i<16&&!cache.ready(asset.id,1);++i){cache.advance(1024*1024,10);bgfx::frame();}
+    check(cache.ready(asset.id,1),"Initial scene model failed to publish before reopening.");
+    cache.markRendered(asset.id,1);
+    auto first=cache.resident(asset.id,1,0,0);const auto* original=first.get();const auto bytes=cache.bytes();
+    const std::array<std::string,1> live{asset.id};
+    constexpr auto NoPressure=std::numeric_limits<std::size_t>::max();
+
+    // Closing a scene can release its CPU metadata. Reloading that same asset
+    // receives a newer resource revision while the old GPU level is cached.
+    // EditorResources trims at the end of preparation, before the next advance.
+    cache.configure(asset.id,2,descriptor);check(cache.queue(asset.id,2,source),"Reopened scene failed to queue a shared GPU admission.");
+    check(!cache.ready(asset.id,2)&&cache.bytes()==bytes,"Reopened scene shared geometry published early or allocated duplicate buffers.");
+    cache.trim(NoPressure,live);
+    check(cache.descriptor(asset.id,2)&&cache.ready(asset.id,1),"End-of-frame cleanup deleted a newer scene revision before its shared admission.");
+    for(unsigned i=0;i<16&&!cache.ready(asset.id,2);++i)cache.advance(0,10);
+    check(cache.ready(asset.id,2)&&cache.resident(asset.id,2,0,0).get()==original,
+        "Reopened scene did not publish its reused GPU buffers at the next frame boundary.");
+    cache.markRendered(asset.id,2);cache.markRendered(asset.id,1,false);first.reset();
+    cache.trim(NoPressure,live);
+    check(!cache.descriptor(asset.id,1)&&cache.ready(asset.id,2)&&cache.bytes()==bytes,
+        "An older last-good view regressed the rendered revision or prevented superseded scene cleanup.");
+
+    // A replacement whose content changed must survive the same preparation
+    // boundary as an actual pending upload, not just a shared-buffer admission.
+    asset.primitives[0].vertices[1].position={2,0,0};
+    const auto changed=streaming::buildModelCache(asset,root,false);
+    check(changed.primitives[0].levels[0].key!=descriptor.primitives[0].levels[0].key,"Scene replacement fixture did not change geometry identity.");
+    const auto replacement=streaming::loadModelLod(changed.primitives[0].levels[0]);
+    cache.configure(asset.id,3,changed);check(cache.queue(asset.id,3,replacement),"New scene revision failed to queue a fresh GPU upload.");
+    check(!cache.ready(asset.id,3)&&cache.bytes()>bytes,"Replacement fixture failed to retain an incomplete new GPU allocation.");
+    cache.trim(NoPressure,live);cache.advance(sizeof(ModelVertex)-1,10);
+    check(cache.descriptor(asset.id,3)&&!cache.ready(asset.id,3)&&cache.ready(asset.id,2),
+        "Preparation discarded the new upload or exposed it before the upload budget allowed a vertex.");
+    cache.trim(NoPressure,live);
+    for(unsigned i=0;i<16&&!cache.ready(asset.id,3);++i){cache.advance(512,10);bgfx::frame();}
+    check(cache.ready(asset.id,3)&&cache.ready(asset.id,2),"A fresh scene revision could not complete while the last-good version remained drawable.");
+    cache.markRendered(asset.id,3);cache.markRendered(asset.id,2,false);cache.trim(NoPressure,live);
+    check(!cache.descriptor(asset.id,2)&&cache.ready(asset.id,3)&&cache.bytes()==bytes,
+        "Publishing a newer scene failed to retire the superseded GPU allocation.");
+    cache.evict(asset.id);check(cache.bytes()==0,"Scene readmission regression retained unleased GPU allocations.");
+    for(unsigned i=0;i<3;++i)bgfx::frame();
+}
 void deformationUploadBudget(const std::filesystem::path& root) {
     ModelAsset asset;asset.id="deformation-budget-fixture";ModelPrimitive primitive;
     primitive.vertices.resize(3);primitive.vertices[1].position={1,0,0};primitive.vertices[2].position={0,1,0};primitive.indices={0,1,2};
@@ -304,7 +377,7 @@ int main() {
     try {
         std::filesystem::create_directories(root);bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
         check(bgfx::init(init),"Could not initialize noninteractive Noop graphics checks.");initialized=true;
-        textures(root);uploadBudget(root);thumbnailImages(root);thumbnailTextures(root);generatedTextures(root);models(root);deformationUploadBudget(root);bgfx::shutdown();initialized=false;cleanup(root);
+        textures(root);repeatedBuiltinTextures(root);uploadBudget(root);thumbnailImages(root);thumbnailTextures(root);generatedTextures(root);models(root);modelReopenedRevisions(root);deformationUploadBudget(root);bgfx::shutdown();initialized=false;cleanup(root);
         std::cout<<"Noop texture/mesh streaming lifetime checks passed.\n";return 0;
     } catch(const std::exception& error) {
         if(initialized)bgfx::shutdown();try { cleanup(root); } catch (...) {} std::cerr<<error.what()<<'\n';return 1;

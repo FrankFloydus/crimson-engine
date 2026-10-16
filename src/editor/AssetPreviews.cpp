@@ -337,6 +337,7 @@ struct AssetPreviews::Impl {
             sceneSnapshot=snapshot.shared(); hash(sourceKey,snapshot->fingerprint);
             Scene candidate; candidate.apply(snapshot->records,snapshot->properties); auto extracted=extractScene(candidate);
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
+            std::erase_if(models,[](const auto& model){return !model.visible;});
             for(auto& model:models)model.animationSeconds=model.animation.startTime;
             playerReveal=extracted.playerReveal;
             characterLights=extracted.characterLights;

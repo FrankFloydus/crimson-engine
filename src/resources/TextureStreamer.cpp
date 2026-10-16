@@ -283,7 +283,7 @@ PreparedTexture TextureStreamer::request(const std::string& id,const std::filesy
     const auto variant=std::to_string(static_cast<unsigned>(role))+":"+(mipmapped ? "mips" : "single")+(thumbnail ? ":thumb" : "");
     auto [iterator,inserted]=impl_->entries.try_emplace(id+'\0'+variant); auto& entry=iterator->second;
     if(inserted) { entry.id=id;entry.source=source;entry.role=role;entry.mipmapped=mipmapped;entry.thumbnail=thumbnail;entry.variant=variant;entry.priority=priority;impl_->requestDescriptor(entry); }
-    else if(resourcePathKey(entry.source)!=resourcePathKey(source)) {
+    else if(entry.source!=source && (entry.source.empty()||source.empty()||resourcePathKey(entry.source)!=resourcePathKey(source))) {
         // A physical move preserves the asset ID and the last drawable lease,
         // while new requests must validate and load its current location.
         entry.source=source;entry.pending.reset();entry.original={};entry.descriptor={};

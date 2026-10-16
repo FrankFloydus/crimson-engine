@@ -127,6 +127,39 @@ void registryAndHierarchy() {
     require(scene.generation()!=generation && scene.revision()==revision+1,"Registry replacement did not invalidate old handles.");
 }
 
+void cachedHierarchicalVisibility() {
+    require(EntityRecord{}.visible,"New entity visibility must default to true.");
+    EntityRecord root;root.id=1;root.name="Group";root.visible=false;
+    EntityRecord child;child.id=2;child.name="Child";child.parent=1;
+    EntityRecord leaf;leaf.id=3;leaf.name="Leaf";leaf.parent=2;
+    EntityRecord hidden;hidden.id=4;hidden.name="Hidden child";hidden.parent=1;hidden.visible=false;
+    EntityRecord other;other.id=5;other.name="Other root";
+    Scene scene;scene.apply({leaf,other,child,hidden,root},{});
+    require(!scene.isVisible(1)&&!scene.isVisible(2)&&!scene.isVisible(3)&&!scene.isVisible(4)&&scene.isVisible(5)&&
+        !scene.isVisible(NoEntity)&&!scene.isVisible(999),"Out-of-order hierarchy visibility or missing-entity handling is incorrect.");
+    require(scene.find(2)->visible&&scene.find(3)->visible&&!scene.find(4)->visible,
+        "Inherited visibility overwrote a descendant's authored choice.");
+    auto records=scene.records();records[0].visible=true;scene.apply(records,{});
+    require(scene.isVisible(1)&&scene.isVisible(2)&&scene.isVisible(3)&&!scene.isVisible(4),
+        "Showing a parent failed to restore eligible descendants or enabled an explicitly hidden child.");
+    records[1].parent=4;scene.apply(records,{});
+    require(!scene.isVisible(2)&&!scene.isVisible(3),"Reparenting left a stale effective visibility cache.");
+    records[3].visible=true;scene.apply(records,{});
+    require(scene.isVisible(2)&&scene.isVisible(3),"Showing the new parent did not refresh its descendants.");
+    const auto before=scene.records();const std::array poses{ScenePoseUpdate{4,math::translation({9,8,7})}};
+    scene.applyRuntimePoses(poses);require(scene.isVisible(3)&&scene.find(3)->visible,"Runtime poses changed authored or inherited visibility.");
+    auto invalid=scene.records();invalid[3].parent=3;rejects([&]{scene.apply(invalid,{});});
+    require(scene.isVisible(3)&&scene.find(4)->parent==1,"Rejected hierarchy mutation changed cached visibility.");
+    Scene replacement;records[0].visible=false;replacement.apply(records,{});scene.adoptPrepared(replacement);
+    require(!scene.isVisible(3)&&scene.find(3)->visible&&!scene.find(1)->visible,"Prepared scene publication lost authored or cached visibility.");
+    auto shown=before.front();shown.visible=!shown.visible;require(!sameEntity(before.front(),shown),"Entity equality omitted authored visibility.");
+    std::vector<EntityRecord> deep;deep.reserve(4000);
+    for(EntityId id=1;id<=4000;++id){EntityRecord record;record.id=id;record.parent=id-1;record.name="Nested";deep.push_back(std::move(record));}
+    deep.front().visible=false;scene.apply(deep,{});
+    for(unsigned query=0;query<10000;++query)require(!scene.isVisible(4000)&&scene.find(4000)->visible,"Deep visibility cache lost inherited/authored separation.");
+    deep.front().visible=true;scene.apply(deep,{});require(scene.isVisible(4000),"Deep hierarchy visibility was not recomputed iteratively.");
+}
+
 void reparentPreservesAffine() {
     TempProject project; SceneDocument document(project.root);
     const auto parent=document.createEmpty("Rotated scaled parent");
@@ -485,7 +518,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==12,"Explicit save did not write scene version 12.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==15,"Explicit save did not write scene version 15.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -593,7 +626,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==12,"Environment writer did not use scene v12.");
+    require(Json::parse(saved).at("version")==15,"Environment writer did not use scene v15.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -823,7 +856,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==12,"Particle scene writer did not use version 12.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==15,"Particle scene writer did not use version 15.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -835,7 +868,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==12,"Explicit version-two save did not migrate to version twelve.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==15,"Explicit version-two save did not migrate to version fifteen.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -1050,7 +1083,7 @@ void inspectorZeroScaleHistory() {
 
 int main() {
     try {
-        registryAndHierarchy();physicalSceneStorage();
+        registryAndHierarchy();cachedHierarchicalVisibility();physicalSceneStorage();
         reparentPreservesAffine();
         transactionsAndSelection();
         viewportParentSelection();
@@ -1061,7 +1094,7 @@ int main() {
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();
         particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 21 groups passed.\n";
+        std::cout << "Scene core: 22 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

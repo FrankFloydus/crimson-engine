@@ -94,7 +94,8 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         addBinding(result,"u_modelNormalMatrix",ShaderUniformKind::Mat4);
         addBinding(result,"u_direction",ShaderUniformKind::Vec4,4);addBinding(result,"u_directionColor",ShaderUniformKind::Vec4,4);
         for(auto name:{"u_clusterGrid","u_clusterDepth","u_clusterViewport","u_clusterAtlas","u_clusterOptions","u_clusterRecordLayoutV5",
-            "u_surfaceLighting","u_surfaceCategory","u_ambientAtlas","u_ambientSettings","u_ambientTransition","u_playerReveal","u_lightingResponse"})addBinding(result,name);
+            "u_surfaceLighting","u_surfaceCategory","u_ambientAtlas","u_ambientSettings","u_ambientTransition","u_playerReveal","u_lightingResponse",
+            "u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase"})addBinding(result,name);
         addBinding(result,"u_directionLightingRoles",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_clusterView",ShaderUniformKind::Mat4);
         addBinding(result,"u_pointShadow",ShaderUniformKind::Vec4,16);
@@ -114,6 +115,7 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
     if(pass==MaterialGraphPass::Model||pass==MaterialGraphPass::Particle)
         for(auto name:{"u_fogColorDensity","u_fogDepth","u_fogHeight"})addBinding(result,name);
     if(pass==MaterialGraphPass::Picking)addBinding(result,"u_pickId");
+    if(pass==MaterialGraphPass::Model || pass==MaterialGraphPass::Picking)addBinding(result,"u_instanceOpacity");
     if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow)addBinding(result,"u_surfaceLighting");
     if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow || pass==MaterialGraphPass::Particle)
         addBinding(result,"u_invView",ShaderUniformKind::Mat4);
@@ -367,6 +369,8 @@ ShaderCompileRecipe materialGraphShaderRecipe(const ShaderCompileConfig& config,
     result.varyingDefinition=config.sourceDirectory/variant.varyingName;
     result.includeDirectories={config.sourceDirectory,config.includeDirectory};
     result.contract="crimson-material-graph-v7;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";
+    if(variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Picking)result.contract+=";model-instance-opacity-v1";
+    if(variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle)result.contract+=";occluder-depth-partition-v1";
     return result;
 }
 }

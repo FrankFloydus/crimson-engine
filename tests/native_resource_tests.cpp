@@ -9,7 +9,9 @@
 #include "assets/AtomicFile.h"
 #include "assets/MaterialAsset.h"
 #include "assets/MaterialPreviewGeometry.h"
+#include <Windows.h>
 #include <SDL3/SDL.h>
+#include <bgfx/platform.h>
 #include <imgui_impl_sdl3.h>
 #include <lodepng.h>
 #include <chrono>
@@ -920,7 +922,7 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
     check(callback.error.empty(),callback.error);
 }
 
-void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shaderConfig,SDL_Window* window) {
+void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shaderConfig,SDL_Window* window,bool shaderReloadOnly) {
     std::vector<std::shared_ptr<DecodedImage>> readbackDestinations;
     ScreenshotCallback screenshots;
     ResourceManager resources;Renderer renderer(window,&screenshots);ImGuiOwner context(window);
@@ -934,7 +936,6 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     const auto copy=[&](bgfx::TextureHandle texture,std::uint16_t width,std::uint16_t height,bgfx::ViewId view) {
         return readTarget(texture,width,height,view,frame,tick,readbackDestinations);
     };
-    ParticleGraphFixtures particleGraphs(resources,shaderConfig,tick);
     PreparedTexture color,normal;const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{20};
     do {
         textures.beginFrame();color=textures.request("native-image",source,streaming::TextureRole::Color,false,256,ResourcePriority::Selected);
@@ -943,6 +944,55 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
         if(!color.diagnostic.empty())throw std::runtime_error(color.diagnostic);if(!normal.diagnostic.empty())throw std::runtime_error(normal.diagnostic);
     }while((!color.complete || !normal.complete) && std::chrono::steady_clock::now()<deadline);
     check(color.complete && normal.complete,"Native texture streaming did not publish complete resources.");
+    if(shaderReloadOnly) {
+        phase("focused shader reload");
+        // Only the disposable composite source changes. Its valid candidate
+        // must affect the published program signature, proving that this new
+        // program belongs to the atomic renderer group rather than just the
+        // compiler's list of stages.
+        const auto composite=shaderConfig.sourceDirectory/"fs_occluder_composite.sc";
+        std::ifstream input(composite);check(bool(input),"Focused shader reload could not read its composite source.");
+        const std::string original(std::istreambuf_iterator<char>{input},{});input.close();
+        auto candidate=original;const std::string assignment="gl_FragColor = color;";
+        const auto position=candidate.find(assignment);
+        check(position!=std::string::npos,"Focused shader reload could not locate the composite output.");
+        candidate.replace(position,assignment.size(),"gl_FragColor = vec4(color.rgb * 0.75, color.a);");
+        const auto embedded=renderer.shaderSignature();
+        try {
+            writeFileAtomically(composite,candidate);
+            ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);
+            check(shaders.available()&&shaders.pending(),"Focused shader reload did not request a coherent candidate group: "+shaders.status());
+            const auto awaitReload=[&] {
+                const auto limit=std::chrono::steady_clock::now()+std::chrono::seconds{90};
+                do {tick();shaders.pump();}while(shaders.pending()&&std::chrono::steady_clock::now()<limit);
+                check(!shaders.pending(),"Focused shader reload timed out: "+shaders.status());
+            };
+            awaitReload();
+            check(shaders.revision()==1,"Valid focused shader candidates did not publish: "+shaders.status());
+            const auto healthy=renderer.shaderSignature();
+            check(healthy!=embedded,"The changed occluder composite did not enter the atomic renderer program group.");
+            writeFileAtomically(composite,candidate+"\nTHIS_IS_NOT_VALID_SHADER_CODE\n");
+            const std::array<std::filesystem::path,1> changed{composite};shaders.changed(changed);
+            check(shaders.pending(),"Changing the occluder composite did not start shader reload.");
+            awaitReload();
+            check(shaders.revision()==1&&renderer.shaderSignature()==healthy,
+                "A failed occluder composite compilation changed the last-good renderer program group.");
+            check(shaders.status().find("fs_occluder_composite")!=std::string::npos,
+                "Focused shader reload failed outside its deliberately invalid composite: "+shaders.status());
+            check(screenshots.error.empty(),screenshots.error);
+            resources.stop();
+            writeFileAtomically(composite,original);
+            frame=renderer.drainPending(frame);
+            check(screenshots.error.empty(),screenshots.error);
+        } catch(...) {
+            resources.stop();
+            try {writeFileAtomically(composite,original);}catch(...){}
+            throw;
+        }
+        phase("focused shader reload retained last-good programs");
+        return;
+    }
+    ParticleGraphFixtures particleGraphs(resources,shaderConfig,tick);
     auto asset=quad();auto descriptor=streaming::buildModelCache(*asset,root);renderer.configureModelStream(asset->id,1,descriptor);
     check(renderer.queueModelLod(asset->id,1,streaming::loadModelLod(descriptor.primitives[0].levels[0])),"Native mesh streaming queue failed.");
     for(unsigned i=0;i<100 && !renderer.modelStreamReady(asset->id,1);++i)tick();
@@ -1042,9 +1092,60 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     renderer.evictThumbnail("cached");renderer.evictModel(asset->id);renderer.evictModel(sphere->id);resources.stop();frame=renderer.drainPending(frame);
     phase("persistent native surfaces");exercisePlatformWindows(renderer,tools,screenshots,frame,tick,window);
 }
+void exerciseShutdown() {
+    SdlOwner sdl;
+    std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Crimson hidden D3D11 shutdown check",96,64,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
+    check(!!window,SDL_GetError());ScreenshotCallback callback;HMODULE runtime{};
+    // No shader compilation, files, ImGui context or application windows. The
+    // borrowed module queries below never add their own reference or pin.
+    const auto loadedRuntime=[] {
+        HMODULE module{};
+        check(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,L"d3d11.dll",&module)!=FALSE,
+            "D3D11 runtime was unmapped after renderer shutdown.");
+        return module;
+    };
+    for(unsigned iteration=0;iteration<2;++iteration) {
+        phase(iteration?"repeat D3D11 initialization/shutdown":"D3D11 initialization/shutdown");
+        {
+            Renderer renderer(window.get(),&callback);
+            const auto current=loadedRuntime();
+            if(runtime)check(current==runtime,"Repeated renderer initialization changed the pinned D3D11 mapping.");
+            runtime=current;
+            renderer.resizeViewport(96,64);renderer.setGridVisible(false);
+            SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.environment.enabled=false;
+            auto asset=quad();RenderModelInstance instance{77,{asset,{}}};instance.shading=MaterialShading::Unlit;
+            RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);
+            const auto baseline=renderer.modelResidentBytes();
+            check(renderer.prepareModel(*asset),renderer.modelStatus());
+            check(renderer.modelResidentBytes()>baseline,"Shutdown fixture did not allocate tracked model buffers.");
+            std::uint32_t frame{};
+            for(unsigned i=0;i<4;++i) {renderer.advanceStreaming();renderer.render(scene);frame=bgfx::frame();}
+            scene.instances={};renderer.evictModel(asset->id);
+            for(unsigned i=0;i<3;++i) {renderer.advanceStreaming();renderer.render(scene);frame=bgfx::frame();}
+            check(renderer.modelResidentBytes()==baseline,"Shutdown fixture retained evicted model buffers.");
+            frame=renderer.drainPending(frame);(void)frame;
+            check(callback.error.empty(),callback.error);
+        }
+        check(bgfx::renderFrame(0)==bgfx::RenderFrame::NoContext,"Renderer destruction left a live bgfx context.");
+        check(loadedRuntime()==runtime,"Renderer destruction changed the pinned D3D11 module address.");
+        // Give late driver workers a short observation window while keeping the
+        // hidden native owner alive; every query remains reference-neutral.
+        for(unsigned i=0;i<4;++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{25});
+            check(loadedRuntime()==runtime,"D3D11 runtime unloaded during late driver teardown.");
+        }
+    }
+}
 }
 int main(int argc,char** argv) {
-    if(argc!=4){std::cerr<<"Pass shaderc, source and include directories.\n";return 1;}
+    const bool shutdownOnly=argc==2&&std::strcmp(argv[1],"--shutdown-only")==0;
+    if(shutdownOnly) {
+        try {exerciseShutdown();std::cout<<"Hidden D3D11 shutdown, resource release and process-lifetime runtime mapping checks passed.\n";return 0;}
+        catch(const std::exception& exception){std::cerr<<exception.what()<<'\n';return 1;}
+    }
+    const bool shaderReloadOnly=argc==5&&std::strcmp(argv[4],"--shader-reload-only")==0;
+    if(argc!=4&&!shaderReloadOnly){std::cerr<<"Pass --shutdown-only, or shaderc, source and include directories, optionally followed by --shader-reload-only.\n";return 1;}
     const auto root=std::filesystem::temp_directory_path()/("crimson-native-resources-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     try {
         std::filesystem::create_directories(root);
@@ -1052,7 +1153,8 @@ int main(int argc,char** argv) {
         std::filesystem::copy(std::filesystem::path(argv[2]),config.sourceDirectory,std::filesystem::copy_options::recursive);
         std::filesystem::copy(std::filesystem::path(argv[3]),config.includeDirectory,std::filesystem::copy_options::recursive);
         SdlOwner sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson native resource checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-        check(!!window,SDL_GetError());exercise(root,config,window.get());window.reset();cleanup(root);
-        std::cout<<"Hidden native DX11 streaming/shader/normal/cutout/material-thumbnail/live-material-preview/particle/platform-window checks passed.\n";return 0;
+        check(!!window,SDL_GetError());exercise(root,config,window.get(),shaderReloadOnly);window.reset();cleanup(root);
+        std::cout<<(shaderReloadOnly?"Hidden native DX11 built-in texture/atomic shader reload checks passed.\n":
+            "Hidden native DX11 streaming/shader/normal/cutout/material-thumbnail/live-material-preview/particle/platform-window checks passed.\n");return 0;
     }catch(const std::exception& exception){std::error_code ignored;if(std::filesystem::exists(root,ignored))try{cleanup(root);}catch(...){}std::cerr<<exception.what()<<'\n';return 1;}
 }

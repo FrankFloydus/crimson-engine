@@ -19,6 +19,7 @@ struct SceneParticleGroup {
 };
 // Live scene state uses persistent IDs and document replacement generation.
 // Ordinary registry rebuilds, selection and transform edits preserve playback.
+// Effective visibility suppresses packets/bounds, never simulation admission.
 class SceneParticles {
 public:
     using DefinitionQuery=std::function<ParticleDefinitionVersion(const std::string&)>;
@@ -37,6 +38,7 @@ private:
     struct Instance {
         std::string assetId;std::uint64_t revision{};CpuParticleSystem simulation;
         Mat4 presentationWorld{}; // Copied view of the interpolated hierarchy, independent of the tick transform.
+        bool visible{true};
     };
     std::unordered_map<EntityId,Instance> instances_;
     std::uint64_t generation_{};

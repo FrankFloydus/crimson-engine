@@ -16,11 +16,15 @@ class Renderer;
 class AssetLibrary;
 struct ModelInstance;
 
+enum class EditorCameraAction { None, EditorCamera, SelectCamera, TogglePilot, CreateCamera };
+
 struct EditorFrame {
     ViewportRegion viewport;
     // Pose used by this frame's overlays and pick requests. Navigation may
     // advance the editor camera after current-frame UI ownership is resolved.
     std::optional<Camera> viewportCamera;
+    EditorCameraAction cameraAction{EditorCameraAction::None};
+    std::uint64_t cameraEntity{};
     bool togglePlay{false};
     bool materialChanged{false};
     bool environmentChanged{false};

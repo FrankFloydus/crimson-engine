@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crimson-renderer/RenderTypes.h"
+#include "PlayerOcclusionSettings.h"
 #include <array>
 #include <filesystem>
 #include <string>
@@ -12,6 +13,8 @@ struct EditorPreferenceValues {
     ViewportAppearance appearance{};
     int browserPreviewSize{128};
     int pointShadowResolution{1024};
+    bool playerOcclusionFade{false};
+    PlayerOcclusionSettings playerOcclusionSettings{};
 };
 // Application preferences are independent from authored scenes and dock state.
 class EditorPreferences {

@@ -22,6 +22,7 @@ struct RenderViewPassSlots {
     std::uint16_t pointShadow{},directionalShadow{};
     std::uint16_t depthPrepass{InvalidRenderView},ambient{InvalidRenderView},characterShadow{InvalidRenderView};
     std::uint16_t collisions{InvalidRenderView};
+    std::uint16_t occluderLayer{InvalidRenderView};
 };
 // The current backend requires identity view order. This is the one table of
 // existing slots; the plan does not introduce remapping or allocate view IDs.
@@ -32,14 +33,14 @@ RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept;
 enum class RenderPassKind : std::uint8_t {
     EnvironmentPreparation, ModelDeformation, LightAssignment, PointShadowUpdates, DirectionalShadowUpdates, CharacterShadowUpdates,
     DepthPrepass, AmbientVisibility, AmbientPublish,
-    SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
+    OccluderLayer, OccluderDepthPublish, SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
     Picking, PickReadback, ThumbnailReadback, Count
 };
 enum class RenderResource : std::uint8_t {
     PreparedScene, EnvironmentLighting, ShadowAtlas, ClusteredLighting, SceneHdr,
     SceneDepth, GlowA, GlowB, Composite, Display, PickColor, PickDepth,
     PickReadback, ThumbnailReadback, ReadableSceneDepth, ReceiverScopes,
-    AmbientScratch, AmbientVisibility, DeformedGeometry, Count
+    AmbientScratch, AmbientVisibility, DeformedGeometry, OccluderHdr, OccluderDepth, OccluderDepthAtlas, Count
 };
 enum class RenderResourceOwner : std::uint8_t {
     PreparedFrame, Environment, ModelGeometry, ActiveWorldShadows, ThumbnailWorldShadows, ViewTargets, Readback
@@ -66,9 +67,10 @@ struct RenderPassPlanConfig {
     bool glow{},grid{},picking{},thumbnailReadback{},worldShadows{},prepareEnvironment{};
     bool ambientVisibility{};
     bool collisionOverlays{};
+    bool occluderLayer{};
 };
 struct RenderPass {
-    static constexpr std::size_t MaximumResourceUses = 8;
+    static constexpr std::size_t MaximumResourceUses = 11;
     RenderPassKind kind{};
     std::uint16_t physicalView{};
     std::uint16_t viewCount{1}; // Shadow updates reserve their existing face/cascade range.
@@ -78,7 +80,7 @@ struct RenderPass {
     std::uint16_t lastPhysicalView() const noexcept { return static_cast<std::uint16_t>(physicalView+viewCount-1); }
 };
 struct RenderPassPlan {
-    static constexpr std::size_t MaximumPasses = 19;
+    static constexpr std::size_t MaximumPasses = 21;
     static constexpr std::size_t ResourceCount = static_cast<std::size_t>(RenderResource::Count);
     RenderPassPlanConfig config{};
     std::array<RenderResourceBinding,ResourceCount> bindings{};

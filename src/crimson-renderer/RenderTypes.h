@@ -141,9 +141,11 @@ struct Camera {
     Mat4 viewMatrix() const;
     Mat4 projectionMatrix(float aspect, ClipDepth depth) const;
     std::optional<Ray> screenRay(float x, float y, const ViewportRegion& viewport) const;
-    void orbit(float deltaX, float deltaY, const Vec3& pivot);
+    // Pilot navigation retains authored roll; ordinary editor navigation keeps
+    // its existing world-up correction.
+    void orbit(float deltaX, float deltaY, const Vec3& pivot,bool preserveRoll=false);
     void pan(float deltaX, float deltaY, float viewportWidth, float viewportHeight);
-    void flyLook(float deltaX, float deltaY);
+    void flyLook(float deltaX, float deltaY,bool preserveRoll=false);
     void flyMove(float forwardInput, float horizontalInput, float dt, float speed);
     void zoom(float wheel);
     bool frameBounds(const Vec3& minimum, const Vec3& maximum, float aspect);

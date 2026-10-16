@@ -97,6 +97,7 @@ public:
     const std::string& status() const { return status_; }
     bool dirty() const;
     bool transactionActive() const { return transaction_.has_value(); }
+    uint64_t transactionId() const { return transaction_?transaction_->id:0; }
     bool transient() const { return transient_; }
     bool resetTransientFrom(const SceneDocument& source);
     bool applyRuntimePoses(std::span<const ScenePoseUpdate> poses);
@@ -150,6 +151,7 @@ public:
     EntityId createCharacter(const std::string& name = "Character");
     EntityId createCollider(const std::string& name = "Collider", EntityId parent = NoEntity);
     EntityId createCamera(const std::string& name = "Camera");
+    EntityId createCamera(const Camera& view,float aspect,const std::string& name = "Camera");
     EntityId createBox(const std::string& name = "Box");
     bool setActiveEnvironment(EntityId id);
     bool setActiveCamera(EntityId id);
@@ -168,6 +170,7 @@ private:
     struct Transaction {
         SceneCommand command;
         std::vector<EntityId> transformRoots;
+        uint64_t id{};
     };
     std::filesystem::path projectRoot_;
     Scene scene_;
@@ -177,6 +180,7 @@ private:
     std::optional<Camera> previewCamera_;
     uint64_t loadedFingerprint_{};
     uint64_t documentGeneration_{};
+    uint64_t transactionSerial_{};
     std::optional<Transaction> transaction_;
     bool transient_{};
     EntityId create(EntityRecord record, const std::string& label);

@@ -40,8 +40,8 @@ void PlaySession::stop() {
 }
 bool PlaySession::prepareMeshColliders(const Scene& scene,bool requireReady) {
     std::vector<PhysicsMeshCollider> prepared;
-    for(const auto& record:scene.records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->source.empty()) {
-        const auto source=collisionMeshes_?collisionMeshes_(record.collider->source.id):CollisionMeshResult{};
+    for(const auto& record:scene.records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
+        const auto source=colliderMeshResult(*record.collider,collisionMeshes_);
         if(!source.mesh || (requireReady && !source.current)) {
             if(requireReady){status_=source.diagnostic.empty()?"Mesh collision is unavailable.":source.diagnostic;return false;}
             continue;

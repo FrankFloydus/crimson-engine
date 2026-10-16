@@ -11,8 +11,8 @@
 
 namespace crimson {
 
-std::optional<Camera> resolveGameCamera(const Scene& scene) {
-    const auto record=scene.find(scene.properties().activeCamera);
+std::optional<Camera> resolveSceneCamera(const Scene& scene,EntityId id) {
+    const auto record=scene.find(id);
     const auto world=record?scene.worldTransform(record->id):std::nullopt;
     if(!record || !record->camera || !world)return std::nullopt;
     const auto forward=math::transformDirection(*world,{0,0,-1});
@@ -25,6 +25,35 @@ std::optional<Camera> resolveGameCamera(const Scene& scene) {
     result.fov=record->camera->verticalFov;result.nearPlane=record->camera->nearPlane;result.farPlane=record->camera->farPlane;
     result.fovAxis=CameraFovAxis::Vertical;
     return result;
+}
+
+std::optional<Camera> resolveGameCamera(const Scene& scene) {
+    return resolveSceneCamera(scene,scene.properties().activeCamera);
+}
+
+std::optional<Mat4> sceneCameraLocalTransform(const Scene& scene,EntityId id,const Camera& navigated) {
+    const auto record=scene.find(id);
+    const auto previous=resolveSceneCamera(scene,id);
+    const auto world=record?scene.worldTransform(id):std::nullopt;
+    if(!record||!previous||!world||math::handedness(*world)==0 ||
+        !math::finite(navigated.position)||!math::finite(navigated.target)||!math::finite(navigated.up))return {};
+    const auto forward=navigated.target-navigated.position;
+    if(!math::finite(forward)||math::length(forward)<=1e-8||math::length(navigated.up)<=1e-8 ||
+        math::length(math::cross(math::normalized(forward),math::normalized(navigated.up)))<=1e-8)return {};
+    const auto parent=record->parent?scene.worldTransform(record->parent):std::optional{Mat4{}};
+    const auto parentInverse=parent?math::inverse(*parent):std::nullopt;
+    auto nextFrame=math::inverse(navigated.viewMatrix());
+    if(!parentInverse||!nextFrame)return {};
+    if(navigated.position==previous->position&&navigated.viewMatrix()==previous->viewMatrix())return record->local;
+    // Camera view orientation is defined by -Z and the orthogonalized Y axis,
+    // not by an X-first affine decomposition. Rotate the complete old linear
+    // block between these two view frames, preserving its residual exactly.
+    auto oldView=previous->viewMatrix();auto linear=*world;
+    for(unsigned axis=0;axis<3;++axis){oldView[12+axis]=0;(*nextFrame)[12+axis]=0;linear[12+axis]=0;}
+    auto desired=*nextFrame*oldView*linear;
+    for(unsigned axis=0;axis<3;++axis)desired[12+axis]=navigated.position[axis];
+    const auto local=*parentInverse*desired;
+    return math::isAffine(local)&&math::handedness(local)!=0?std::optional{local}:std::nullopt;
 }
 
 Vec3 directionalLightDirection(const Mat4& world) {
@@ -51,14 +80,18 @@ ExtractedScene extractScene(const Scene& scene) {
         const auto id = registry.get<Identity>(entity).id;
         const auto world = scene.worldTransform(id);
         if (!world) continue;
+        const bool visible=scene.isVisible(id);
         if (const auto* model = registry.try_get<ModelReference>(entity)) {
             auto scopes=model->lightingScopes;
             const auto category=characterEntities.contains(id)?lighting_scope::Character:lighting_scope::World;
             scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;scopes.ambientReceiverMask&=category;
             result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
+            result.models.back().fadeWhenOccluding=model->fadeWhenOccluding;
+            result.models.back().visible=visible;
         }
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
-            result.particles.push_back({id,particle->assetId.id,*world});
+            result.particles.push_back({id,particle->assetId.id,*world,visible});
+        if(!visible)continue;
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             const auto direction=directionalLightDirection(*world);
             result.directional.push_back({direction,light->color,light->intensity,light->enabled,id,light->castShadows,
@@ -73,7 +106,7 @@ ExtractedScene extractScene(const Scene& scene) {
                 light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation});
         }
     }
-    if (player && player->character) {
+    if (player && player->character && scene.isVisible(player->id)) {
         const auto& character=*player->character;
         const auto world=scene.worldTransform(player->id);
         if(character.lightRig.enabled&&world) {
@@ -94,14 +127,15 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
     const std::vector<EntityId> selected(selection.begin(),selection.end());
     for (auto root : scene.topmost(selected)) {
         for (auto id : scene.subtree(root)) {
+            if(!scene.isVisible(id))continue;
             const auto record = scene.find(id);
             const auto world = scene.worldTransform(id);
             if (!record || !world) continue;
             bool hasBounds = false;
             if(record->collider) {
                 auto bounds=primitiveColliderBounds(*record->collider);
-                if(record->collider->shape==ColliderShape::Trimesh && meshCollision)
-                    if(const auto geometry=meshCollision(record->collider->source.id);geometry.mesh)bounds=geometry.mesh->bounds;
+                if(record->collider->shape==ColliderShape::Trimesh)
+                    if(const auto geometry=colliderMeshResult(*record->collider,meshCollision);geometry.mesh)bounds=geometry.mesh->bounds;
                 bounds=math::transformBounds(bounds,*world);math::include(result,bounds);hasBounds=bounds.valid;
             }
             if (record->model && modelBounds) {
@@ -136,6 +170,7 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
     if(selection.empty())return result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
     for(const auto root:scene.topmost(selected)) {
+        if(!scene.isVisible(root))continue;
         const auto world=scene.worldTransform(root);if(!world||!math::finite(*world))continue;
         const auto inverse=math::inverse(*world);
         const auto descendants=scene.subtree(root);
@@ -143,6 +178,7 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
         Aabb visuals,markers,shapes;
         const auto usable=[](const Aabb& bounds){return bounds.valid&&math::finite(bounds.minimum)&&math::finite(bounds.maximum);};
         for(const auto id:descendants) {
+            if(!scene.isVisible(id))continue;
             const auto record=scene.find(id);if(!record)continue;
             const auto local=id==root?Mat4{}:relative.at(record->parent)*record->local;
             relative.emplace(id,local);
@@ -159,11 +195,12 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
         // Do not load collision geometry or inflate an ordinary mesh outline
         // merely because a larger, editable collision child exists beneath it.
         if(!usable(visuals))for(const auto id:descendants) {
+            if(!scene.isVisible(id))continue;
             const auto record=scene.find(id);if(!record)continue;const auto& local=relative.at(id);
             if(record->collider) {
                 auto bounds=primitiveColliderBounds(*record->collider);
-                if(record->collider->shape==ColliderShape::Trimesh&&!record->collider->source.empty()&&meshCollision)
-                    if(const auto source=meshCollision(record->collider->source.id);source.mesh)bounds=source.mesh->bounds;
+                if(record->collider->shape==ColliderShape::Trimesh)
+                    if(const auto source=colliderMeshResult(*record->collider,meshCollision);source.mesh)bounds=source.mesh->bounds;
                 if(usable(bounds))math::include(shapes,math::transformBounds(bounds,local));
             }
             if(record->character) {
@@ -182,6 +219,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
     double closest=maximumDistance;
     std::optional<EntityId> result;
     for(const auto& record:scene.records()) {
+        if(!scene.isVisible(record.id))continue;
         if(!record.collider && !record.character)continue;
         const auto world=scene.worldTransform(record.id);
         const auto inverse=world?math::inverse(*world):std::nullopt;
@@ -191,7 +229,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
         // Keep the transformed direction unnormalized, so all hit parameters
         // remain comparable world-ray distances under affine/nonuniform parents.
         double hit=std::numeric_limits<double>::infinity();
-        if(record.collider && record.collider->shape==ColliderShape::Trimesh && meshCollision)if(const auto source=meshCollision(record.collider->source.id);source.mesh) {
+        if(record.collider && record.collider->shape==ColliderShape::Trimesh)if(const auto source=colliderMeshResult(*record.collider,meshCollision);source.mesh) {
             const auto& mesh=*source.mesh;
             for(std::size_t index=0;index+2<mesh.indices.size();index+=3) {
                 const auto a=mesh.positions[mesh.indices[index]],b=mesh.positions[mesh.indices[index+1]],c=mesh.positions[mesh.indices[index+2]];

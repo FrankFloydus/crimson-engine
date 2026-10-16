@@ -27,7 +27,11 @@ public:
     bool prepare(const Camera&,std::uint16_t width,std::uint16_t height,
         std::span<const PointLight>,std::span<const std::int32_t> shadowIndices,
         std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights=false,
-        std::uint16_t ambientWidth=0,std::uint16_t ambientHeight=0);
+        std::uint16_t ambientWidth=0,std::uint16_t ambientHeight=0,
+        std::uint16_t occluderWidth=0,std::uint16_t occluderHeight=0);
+    // Publish four normalized nearest-layer depths per atlas texel, after the
+    // private layer has detached and before transparent SceneColor draws.
+    bool publishOccluderDepth(bgfx::TextureHandle depth,bgfx::ProgramHandle,bgfx::ViewId);
     void bind(std::uint8_t samplerStage) const;
     void bindUniforms() const {setUniforms();}
     std::size_t residentBytes() const;
@@ -41,6 +45,9 @@ public:
     std::uint16_t ambientWidth() const{return static_cast<std::uint16_t>(ambientValues_[1]);}
     std::uint16_t ambientHeight() const{return static_cast<std::uint16_t>(ambientValues_[2]);}
     void setAmbientVisibilityReady(bool ready){ambientValues_[3]=ready?1.f:0.f;}
+    std::uint32_t occluderBaseTexel() const{return static_cast<std::uint32_t>(occluderValues_[0]);}
+    std::uint16_t occluderWidth() const{return static_cast<std::uint16_t>(occluderValues_[1]);}
+    std::uint16_t occluderHeight() const{return static_cast<std::uint16_t>(occluderValues_[2]);}
 private:
     struct Retired {bgfx::TextureHandle texture;std::size_t bytes;std::uint64_t after;};
     bgfx::ProgramHandle computeProgram_{BGFX_INVALID_HANDLE};
@@ -48,7 +55,9 @@ private:
     bgfx::DynamicVertexBufferHandle lightInput_{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle sampler_{BGFX_INVALID_HANDLE},gridUniform_{BGFX_INVALID_HANDLE},depthUniform_{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle viewportUniform_{BGFX_INVALID_HANDLE},atlasUniform_{BGFX_INVALID_HANDLE},optionsUniform_{BGFX_INVALID_HANDLE},recordLayoutUniform_{BGFX_INVALID_HANDLE},viewUniform_{BGFX_INVALID_HANDLE},ambientUniform_{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle occluderUniform_{BGFX_INVALID_HANDLE},occluderOptionsUniform_{BGFX_INVALID_HANDLE},occluderDepthSampler_{BGFX_INVALID_HANDLE};
     Vec4 gridValues_{},depthValues_{},viewportValues_{},atlasValues_{},optionsValues_{},ambientValues_{};
+    Vec4 occluderValues_{},occluderOptionsValues_{};
     Mat4 viewValues_{};
     std::vector<Vec4> records_,publishedRecords_,inputSpheres_,currentSpheres_,uploadRows_,brdfPixels_;
     std::vector<PointLight> lightSnapshot_;
@@ -61,7 +70,7 @@ private:
     ClusteredLightingStats stats_{};
     std::string status_;
     bool usable_{},sourceSnapshotValid_{},recordsUploaded_{},inputUploaded_{},masksValid_{};
-    bool ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels);
+    bool ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels,std::uint64_t occluderTexels);
     void setUniforms() const;
 };
 }

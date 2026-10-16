@@ -1,5 +1,6 @@
 #pragma once
 #include "SceneEditor.h"
+#include "CameraPilot.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
 #include "tools/ParticleEditor.h"
@@ -12,6 +13,7 @@
 #include "tools/GameView.h"
 #include "CollisionResources.h"
 #include "CollisionOverlays.h"
+#include "PlayerOcclusion.h"
 #include "quader/QuaderBridge.h"
 #include <filesystem>
 #include <unordered_map>
@@ -35,6 +37,12 @@ public:
     bool handleEvent(const SDL_Event& event) {
         playShortcuts_.handleEvent(event);
         if(event.type==SDL_EVENT_KEY_DOWN && event.key.scancode==SDL_SCANCODE_ESCAPE)focusGame_=false;
+        const bool cancelCameraKey=event.type==SDL_EVENT_KEY_DOWN && event.key.scancode==SDL_SCANCODE_ESCAPE && !event.key.repeat &&
+            (!viewportRegion_.windowId || event.key.windowID==viewportRegion_.windowId);
+        const bool cancelCameraWindow=(event.type==SDL_EVENT_WINDOW_FOCUS_LOST || event.type==SDL_EVENT_WINDOW_HIDDEN ||
+            event.type==SDL_EVENT_WINDOW_MINIMIZED || event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED || event.type==SDL_EVENT_WINDOW_DESTROYED) &&
+            (!viewportRegion_.windowId || event.window.windowID==viewportRegion_.windowId);
+        if(cameraPilot_.gestureActive() && (cancelCameraKey || cancelCameraWindow))cameraGestureCancel_=true;
         return gameInput_.handleEvent(event);
     }
     void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested);
@@ -51,6 +59,7 @@ private:
     GameInput gameInput_;
     GameView gameView_;
     SceneEditor editor_;
+    CameraPilot cameraPilot_;
     ParticleEditor particleEditor_;
     MaterialEditor materialEditor_;
     SceneParticles particles_;
@@ -61,6 +70,7 @@ private:
     EditorResources prepared_;
     CollisionResources collisions_;
     CollisionOverlays collisionOverlays_;
+    PlayerOcclusion playerOcclusion_;
     QuaderBridge quader_;
     double materialGameSeconds_{},materialRealSeconds_{};
     std::chrono::steady_clock::time_point materialClockStart_{std::chrono::steady_clock::now()};
@@ -79,6 +89,7 @@ private:
     bool simulationSuspended_{},skipSimulationTime_{true};
     PlayAction playActionPending_{PlayAction::None};
     bool focusGame_{},deferredSceneReload_{};
+    bool cameraGestureCancel_{};
     bool waitingForCollision_{};
     std::uint64_t waitingSceneGeneration_{},waitingSceneRevision_{};
     Camera editCameraBeforePlay_;

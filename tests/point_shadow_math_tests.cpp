@@ -80,6 +80,55 @@ void projectionChecks() {
     const Aabb unit{{-1,-1,-1},{1,1,1},true};
     check(intersectsLight(unit,{2,0,0},1) && !intersectsLight(unit,{3,0,0},1),"Sphere/AABB range culling is incorrect.");
 }
+// Deliberately round each stage like a float GPU transform. Engine math uses
+// double intermediates, which would hide the lost translation/depth term.
+Vec4 gpuTransform(const Mat4& matrix,const Vec4& value) {
+    Vec4 result;
+    for(unsigned row=0;row<4;++row) {
+        volatile float sum=0;
+        for(unsigned column=0;column<4;++column)sum=sum+matrix.at(row,column)*value[column];
+        result[row]=sum;
+    }
+    return result;
+}
+Mat4 gpuProduct(const Mat4& projection,const Mat4& view) {
+    auto result=Mat4::zero();
+    for(unsigned column=0;column<4;++column) {
+        const auto value=gpuTransform(projection,{view.at(0,column),view.at(1,column),view.at(2,column),view.at(3,column)});
+        for(unsigned row=0;row<4;++row)result.at(row,column)=value[row];
+    }
+    return result;
+}
+void translatedCasterProjectionChecks() {
+    using namespace point_shadow;
+    double oldRoomError=0,oldLargeWorldError=0,newMaximumError=0;
+    for(float origin:{0.f,6.113813877105713f,1000.f})for(unsigned face=0;face<6;++face) {
+        const auto camera=faceCamera({origin,1.75f,origin},7.12f,face,1024);
+        const auto view=camera.viewMatrix(),projection=camera.projectionMatrix(1,ClipDepth::ZeroToOne);
+        const auto combined=gpuProduct(projection,view);
+        for(float gap:{.051f,.3f,1.f,3.f}) {
+            const auto point=camera.position+camera.forward()*gap+camera.right()*.013f+camera.up*.027f;
+            const Vec4 world{point[0],point[1],point[2],1};
+            const auto lightView=gpuTransform(view,world);
+            const auto oldClip=gpuTransform(combined,world),splitClip=gpuTransform(projection,lightView);
+            const auto expected=projectedDepth(-lightView[2],camera.nearPlane,camera.farPlane);
+            const auto oldDepth=oldClip[2]/oldClip[3],newDepth=splitClip[2]/splitClip[3];
+            const auto oldError=std::abs(double(oldDepth)-expected),newError=std::abs(double(newDepth)-expected);
+            check(math::finite(splitClip)&&splitClip[3]>0&&newError<1.8e-7,
+                "A translated point caster lost receiver-depth precision after splitting view/projection.");
+            newMaximumError=std::max(newMaximumError,newError);
+            if(origin==6.113813877105713f)oldRoomError=std::max(oldRoomError,oldError);
+            if(origin==1000.f)oldLargeWorldError=std::max(oldLargeWorldError,oldError);
+            const auto uv=faceCoordinates(point-camera.position);
+            const auto tangent=faceTanHalfFov(1024);
+            check(close(splitClip[0]/splitClip[3],(uv[0]*2-1)/tangent,2e-6)&&
+                close(splitClip[1]/splitClip[3],(1-uv[1]*2)/tangent,2e-6),
+                "Split caster projection changed its face coordinates or guard coverage.");
+        }
+    }
+    check(oldRoomError>3e-7&&oldLargeWorldError>1e-5&&oldRoomError>newMaximumError*2,
+        "The translated caster fixture no longer exposes combined-matrix shadow depth cancellation.");
+}
 void receiverPlaneChecks() {
     using namespace point_shadow;
     constexpr float near=.05f,far=30;
@@ -187,5 +236,5 @@ void casterFootprintChecks() {
     check(casterTexelWorld(bounds,{10,0,0},0)<1e-10f,"Invalid resolution reduced caster detail.");
 }
 }
-int main() {try {layoutChecks();projectionChecks();receiverPlaneChecks();softShadowGeometryChecks();casterFootprintChecks();std::cout<<"Point-shadow atlas, projection, blocker reconstruction, contact hardening, receiver plane, guard, culling and caster-demand checks passed.\n";return 0;}
+int main() {try {layoutChecks();projectionChecks();translatedCasterProjectionChecks();receiverPlaneChecks();softShadowGeometryChecks();casterFootprintChecks();std::cout<<"Point-shadow atlas, projection, translated caster precision, blocker reconstruction, contact hardening, receiver plane, guard, culling and caster-demand checks passed.\n";return 0;}
     catch (const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}}
