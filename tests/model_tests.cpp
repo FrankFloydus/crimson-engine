@@ -1,5 +1,7 @@
 #include "assets/ModelAsset.h"
 #include "assets/ModelAnimation.h"
+#include "assets/ModelMaterialOverrides.h"
+#include "assets/ModelMaterialSlots.h"
 #include "assets/MaterialAsset.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
@@ -123,6 +125,116 @@ void trianglesAndIndices(const fs::path& base) {
     large.primitive()["indices"]=large.accessor(large.view(high),3,"SCALAR",5125);
     const auto imported=crimson::importModelPackage(large.save(base/"large"),base/"large-project");
     require(imported->primitives[0].vertices.size()==65538 && imported->primitives[0].indices[2]==65536,"32-bit indices were truncated");
+}
+void usedMaterialSlotPresentation(const fs::path& base) {
+    using namespace crimson;
+    const auto project=base/"project";
+    Triangle explicitMaterial;
+    explicitMaterial.json["materials"]=Json::array({{{"name","Source material"}}});
+    explicitMaterial.primitive()["material"]=0;
+    const auto one=importModelPackage(explicitMaterial.save(base/"explicit"),project);
+    require(one->materials.size()==1&&one->materialIds.size()==1&&one->primitives[0].material==0,
+        "A fully assigned mesh created an unused fallback material slot.");
+    require(one->legacyUnusedMaterialSlot==1,"Implicit imported slots lost their legacy override compatibility index.");
+    const auto manifest=resolveAssetPath(project,one->id);
+    const auto manifestBefore=readBytes(manifest);
+    const auto materialIds=one->materialIds;
+    require(usedModelMaterialSlots(*one)==std::vector<std::size_t>{0},
+        "An unused imported fallback appeared as an editable material slot.");
+    require(one->materialIds==materialIds&&one->materials.size()==1&&readBytes(manifest)==manifestBefore,
+        "Presenting used slots changed immutable package data or material identities.");
+    require(usedModelMaterialSlots(*loadModelPackage(one->id,project))==std::vector<std::size_t>{0},
+        "Managed reopen exposed an unused fallback slot.");
+
+    Triangle noMaterial;
+    const auto fallback=importModelPackage(noMaterial.save(base/"unassigned"),project);
+    require(fallback->materials.size()==1&&fallback->primitives[0].material==0&&
+        usedModelMaterialSlots(*fallback)==std::vector<std::size_t>{0},
+        "A fallback actually used by materialless geometry was hidden.");
+
+    Triangle sparse;
+    sparse.json["materials"]=Json::array({{{"name","Unused first"}},{{"name","Same name"}},
+        {{"name","Unused middle"}},{{"name","Same name"}}});
+    sparse.primitive()["material"]=3;
+    const auto first=sparse.primitive();auto second=first;second["material"]=1;
+    sparse.json["meshes"][0]["primitives"].push_back(second);
+    sparse.json["meshes"][0]["primitives"].push_back(first);
+    const auto multiple=importModelPackage(sparse.save(base/"sparse"),project);
+    ModelMaterialOverrides overrides;
+    setModelMaterialOverride(overrides,3,AssetRef<MaterialAsset>{multiple->materialIds[1]});
+    const auto overridesBefore=overrides;
+    const auto idsBefore=multiple->materialIds;
+    const auto slots=usedModelMaterialSlots(*multiple);
+    require(slots==std::vector<std::size_t>{1,3},
+        "Material slots were renumbered, repeated per primitive or merged by equal names.");
+    require(multiple->materials[slots[0]].name==multiple->materials[slots[1]].name&&
+        multiple->materialIds[slots[0]]!=multiple->materialIds[slots[1]],
+        "Sparse fixture must retain distinct source slots with equal display names.");
+    require(overrides[slots[1]].id==multiple->materialIds[1]&&overrides==overridesBefore&&
+        multiple->materialIds==idsBefore&&multiple->primitives[0].material==3&&multiple->primitives[1].material==1,
+        "Used-slot presentation changed original material/override indices.");
+    auto metadata=*multiple;
+    for(auto& primitive:metadata.primitives){primitive.vertices.clear();primitive.indices.clear();}
+    require(usedModelMaterialSlots(metadata)==slots,
+        "Metadata-only streamed primitives lost their editable material slots.");
+    require(multiple->materials.size()==4&&multiple->materialIds.size()==4,
+        "Removing the unused loader fallback compacted authored material slots.");
+}
+void materialSlotCompatibility(const fs::path& base) {
+    using namespace crimson;
+    const auto project=base/"project";
+    Triangle assigned;assigned.json["materials"]=Json::array({{{"name","Authored material"}}});assigned.primitive()["material"]=0;
+    const auto imported=importModelPackage(assigned.save(base/"assigned"),project);
+    const auto manifest=resolveAssetPath(project,imported->id);
+    const auto original=readJson(manifest);auto description=original;
+    const auto authoredId=imported->materialIds.at(0);
+    const std::array<std::string,2> legacyFallbacks{DefaultMaterialId,importedMaterialId(imported->id,1)};
+    for(const auto& fallbackId:legacyFallbacks) {
+        description["materialAssets"]=Json::array({authoredId,fallbackId});writeJson(manifest,description);
+        const auto immutableBytes=readBytes(manifest);
+        std::vector<std::string> resolved;
+        const ModelResolvers resolver{{},[&](const std::string& id)->std::optional<ModelMaterial>{
+            resolved.push_back(id);ModelMaterial material;material.name="Retained native assignment";material.roughness=.37f;return material;
+        }};
+        const auto old=loadModelPackage(imported->id,project,resolver);
+        require(old->materials.size()==1&&old->materialIds==std::vector<std::string>{authoredId}&&old->primitives[0].material==0&&
+            old->legacyUnusedMaterialSlot==1,"Legacy fallback conversion changed actual slots or their persistent identities.");
+        require(resolved==std::vector<std::string>{authoredId}&&old->materials[0].name=="Retained native assignment",
+            "Legacy loading resolved the unused fallback or lost an assigned native material.");
+        near(old->materials[0].roughness,.37f);
+        const auto metadata=loadModelMaterialMetadata(imported->id,project);
+        require(metadata->materials.size()==1&&metadata->materialIds==old->materialIds&&metadata->legacyUnusedMaterialSlot==1,
+            "Material-only loading disagreed with legacy full-model slot conversion.");
+        require(readBytes(manifest)==immutableBytes,"Legacy material conversion rewrote an immutable package.");
+    }
+    description["materialAssets"]=Json::array({authoredId});writeJson(manifest,description);
+    const auto current=loadModelPackage(imported->id,project);
+    require(current->materials.size()==1&&current->materialIds==std::vector<std::string>{authoredId}&&!current->legacyUnusedMaterialSlot,
+        "Current explicit slot mappings created a phantom fallback or compatibility slot.");
+    description["materialAssets"].push_back(derivedAssetId(imported->id,"unexpected-material"));writeJson(manifest,description);
+    rejects([&]{loadModelPackage(imported->id,project);},"unexpected extra material slot");
+    description["materialAssets"]=Json::array({authoredId,DefaultMaterialId,DefaultMaterialId});writeJson(manifest,description);
+    rejects([&]{loadModelPackage(imported->id,project);},"must match the material slots");
+    description["materialAssets"]=Json::array({authoredId,7});writeJson(manifest,description);
+    rejects([&]{loadModelPackage(imported->id,project);},"array of material identities");
+    description["materialAssets"]=Json::array();writeJson(manifest,description);
+    rejects([&]{loadModelPackage(imported->id,project);},"must match the material slots");
+    writeJson(manifest,original);
+
+    Triangle mixed;mixed.json["materials"]=Json::array({{{"name","Assigned"}}});mixed.primitive()["material"]=0;
+    auto unassigned=mixed.primitive();unassigned.erase("material");mixed.json["meshes"][0]["primitives"].push_back(unassigned);
+    const auto actualFallback=importModelPackage(mixed.save(base/"mixed"),project);
+    require(actualFallback->materials.size()==2&&actualFallback->materialIds.size()==2&&actualFallback->primitives[0].material==0&&
+        actualFallback->primitives[1].material==1&&!actualFallback->legacyUnusedMaterialSlot,
+        "Materialless geometry lost its real default slot or changed authored material indices.");
+    const auto mixedManifest=resolveAssetPath(project,actualFallback->id);auto mixedDescription=readJson(mixedManifest);
+    mixedDescription["materialAssets"]=Json::array({actualFallback->materialIds[0],DefaultMaterialId});writeJson(mixedManifest,mixedDescription);
+    const auto explicitFallback=loadModelPackage(actualFallback->id,project);
+    require(explicitFallback->materials.size()==2&&explicitFallback->materialIds[1]==DefaultMaterialId&&
+        explicitFallback->primitives[1].material==1&&!explicitFallback->legacyUnusedMaterialSlot,
+        "Explicit mapping discarded a fallback that geometry really references.");
+    mixedDescription["materialAssets"].push_back(DefaultMaterialId);writeJson(mixedManifest,mixedDescription);
+    rejects([&]{loadModelPackage(actualFallback->id,project);},"must match the material slots");
 }
 void sparseAndInterleaved(const fs::path& base) {
     Triangle t; const auto position=t.primitive()["attributes"]["POSITION"].get<size_t>();
@@ -375,7 +487,8 @@ void uvAndPackageSafety(const fs::path& base) {
 int main() {
     const auto root=fs::temp_directory_path()/("crimson-model-tests-"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
     try {
-        hierarchyAndManagedReopening(root/"managed"); trianglesAndIndices(root/"triangles");
+        hierarchyAndManagedReopening(root/"managed"); trianglesAndIndices(root/"triangles"); usedMaterialSlotPresentation(root/"material-slots");
+        materialSlotCompatibility(root/"material-compatibility");
         sparseAndInterleaved(root/"sparse"); embeddedDataAndSceneChoice(root/"data");
         generatedTangentsAndOptionalExtensions(root/"tangents"); animationSkinAndMorph(root/"animation"); blendedMaterials(root/"transparent");invalidInputsAndRollback(root/"invalid"); uvAndPackageSafety(root/"safety");
         fs::remove_all(root); std::cout<<"Model importer checks passed\n"; return 0;

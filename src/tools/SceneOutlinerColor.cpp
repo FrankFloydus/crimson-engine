@@ -1,5 +1,4 @@
 #include "SceneOutlinerColor.h"
-#include "scene/SceneComponents.h"
 #include <imgui.h>
 #include <algorithm>
 
@@ -7,7 +6,7 @@ namespace crimson {
 namespace {
 bool present(const SceneDocument& document,const SceneOutlinerColorTarget& target) {
     const auto record=document.scene().find(target.entity);
-    return record && (!target.component || hasSceneComponent(*record,*target.component));
+    return record.has_value();
 }
 ImVec4 rgba(const Vec4& value){return {value[0],value[1],value[2],value[3]};}
 }
@@ -48,7 +47,7 @@ bool requestSceneOutlinerColor(SceneDocument& document,SceneOutlinerColorPopupSt
     state={};state.document=&document;state.documentGeneration=document.documentGeneration();
     state.targets=std::move(targets);state.pending=true;
     const auto first=*document.scene().find(state.targets.front().entity);
-    const auto existing=sceneOutlinerColor(first,state.targets.front().component);
+    const auto existing=sceneOutlinerColor(first);
     if(existing)state.color=*existing;
     else {
         const auto initial=ImGui::GetStyleColorVec4(ImGuiCol_Header);

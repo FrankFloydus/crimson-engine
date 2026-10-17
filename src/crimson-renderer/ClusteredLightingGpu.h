@@ -29,7 +29,9 @@ public:
         std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights=false,
         std::uint16_t ambientWidth=0,std::uint16_t ambientHeight=0,
         std::uint16_t occluderWidth=0,std::uint16_t occluderHeight=0,
-        std::span<const DarknessRevealSource> reveals={});
+        std::span<const DarknessRevealSource> reveals={},
+        std::uint16_t ssgiWidth=0,std::uint16_t ssgiHeight=0,
+        std::uint16_t ssaoWidth=0,std::uint16_t ssaoHeight=0);
     // Publish four normalized nearest-layer depths per atlas texel, after the
     // private layer has detached and before transparent SceneColor draws.
     bool publishOccluderDepth(bgfx::TextureHandle depth,bgfx::ProgramHandle,bgfx::ViewId);
@@ -41,11 +43,17 @@ public:
     bgfx::TextureHandle texture() const{return atlas_;}
     std::uint16_t atlasWidth() const{return atlasWidth_;}
     std::uint16_t atlasHeight() const{return atlasHeight_;}
+    std::uint16_t viewportWidth() const{return static_cast<std::uint16_t>(viewportValues_[0]);}
+    std::uint16_t viewportHeight() const{return static_cast<std::uint16_t>(viewportValues_[1]);}
     std::uint32_t maskBaseTexel() const{return static_cast<std::uint32_t>(atlasValues_[3]);}
     std::uint32_t ambientBaseTexel() const{return static_cast<std::uint32_t>(ambientValues_[0]);}
     std::uint16_t ambientWidth() const{return static_cast<std::uint16_t>(ambientValues_[1]);}
     std::uint16_t ambientHeight() const{return static_cast<std::uint16_t>(ambientValues_[2]);}
     void setAmbientVisibilityReady(bool ready){ambientValues_[3]=ready?1.f:0.f;}
+    std::uint32_t ssgiBaseTexel() const{return ssgiBase_;}
+    std::uint32_t ssaoBaseTexel() const{return ssaoBase_;}
+    std::uint16_t ssaoWidth() const{return ssaoWidth_;}
+    std::uint16_t ssaoHeight() const{return ssaoHeight_;}
     std::uint32_t occluderBaseTexel() const{return static_cast<std::uint32_t>(occluderValues_[0]);}
     std::uint16_t occluderWidth() const{return static_cast<std::uint16_t>(occluderValues_[1]);}
     std::uint16_t occluderHeight() const{return static_cast<std::uint16_t>(occluderValues_[2]);}
@@ -73,7 +81,10 @@ private:
     ClusteredLightingStats stats_{};
     std::string status_;
     bool usable_{},sourceSnapshotValid_{},recordsUploaded_{},inputUploaded_{},masksValid_{};
-    bool ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels,std::uint64_t occluderTexels,std::size_t revealCount);
+    bool ssgiAllocation_{},ssaoAllocation_{};
+    std::uint32_t ssgiBase_{},ssaoBase_{};
+    std::uint16_t ssaoWidth_{},ssaoHeight_{};
+    bool ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels,std::uint64_t occluderTexels,std::size_t revealCount,std::uint64_t ssgiTexels,std::uint64_t ssaoTexels);
     void setUniforms() const;
 };
 }

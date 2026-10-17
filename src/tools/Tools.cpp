@@ -3,6 +3,7 @@
 #include "LightingControls.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "assets/AssetLibrary.h"
+#include "assets/ModelMaterialSlots.h"
 #include "crimson-renderer/Renderer.h"
 
 #include <imgui.h>
@@ -186,6 +187,7 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     if(ImGui::CollapsingHeader("Ambient Light"))
         drawAmbientLightControls(environment.ambientLight,[&](AmbientLightControl,bool edited){changed|=edited;});
     changed |= drawToneMappingControl(environment.toneMapping);
+    changed |= drawToneMappingParameterControls(environment.toneMapping,environment.toneMappingParameters);
     changed |= drawGlowControls(environment.glow);
     if (!renderer.environmentStatus().empty()) ImGui::TextWrapped("%s", renderer.environmentStatus().c_str());
     if (!renderer.glowStatus().empty()) ImGui::TextWrapped("%s", renderer.glowStatus().c_str());
@@ -244,7 +246,7 @@ void modelControls(const ModelAsset& model, EditorFrame& frame) {
         for (const auto& warning : model.warnings) ImGui::TextWrapped("%s", warning.c_str());
     }
     sectionTitle("MATERIALS");
-    for (size_t index = 0; index < model.materials.size(); ++index) {
+    for (const auto index:usedModelMaterialSlots(model)) {
         ImGui::PushID(static_cast<int>(index));
         const auto& material = model.materials[index];
         const auto title = material.name.empty() ? "Material " + std::to_string(index + 1) : material.name;
@@ -303,6 +305,35 @@ bool drawToneMappingControl(ToneMapping& mode) {
     if(changed)mode=static_cast<ToneMapping>(selected);
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Maps scene brightness to the display after exposure.");
+    return changed;
+}
+
+bool drawToneMappingParameterControls(ToneMapping mode,ToneMappingParameters& parameters,const ToneMappingParameterEdit& edit) {
+    bool changed=false;
+    const auto field=[&](ToneMappingParameterControl control,bool updated) {
+        changed|=updated;
+        if(edit)edit(control,updated);
+    };
+    ImGui::PushID("ToneMappingParameters");
+    ImGui::PushID(static_cast<int>(mode));
+    if(mode==ToneMapping::Reinhard) {
+        field(ToneMappingParameterControl::ReinhardWhite,
+            ImGui::DragFloat("White Point",&parameters.reinhardWhite,.05f,0,64,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scene-linear brightness mapped to white. 0 keeps the original unlimited Reinhard curve.");
+    } else if(mode==ToneMapping::ACES) {
+        field(ToneMappingParameterControl::AcesWhite,
+            ImGui::DragFloat("White Point",&parameters.acesWhite,.05f,1,64,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Highlight white-point scale. Higher values retain more bright detail.");
+    } else if(mode==ToneMapping::AgX) {
+        field(ToneMappingParameterControl::AgxWhite,
+            ImGui::DragFloat("White Point",&parameters.agxWhite,.05f,2,64,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scene-linear highlight limit of the AgX curve.");
+        field(ToneMappingParameterControl::AgxContrast,
+            ImGui::SliderFloat("Contrast",&parameters.agxContrast,1,4,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("AgX contrast around middle gray. Higher values deepen shadows and strengthen highlights.");
+    }
+    ImGui::PopID();
+    ImGui::PopID();
     return changed;
 }
 

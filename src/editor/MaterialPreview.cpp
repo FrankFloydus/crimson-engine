@@ -25,6 +25,7 @@ void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     ImGui::SliderFloat("Intensity",&environment_.intensity,0,10,"%.2f");
     ImGui::SliderFloat("Rotation",&environment_.rotation,-180,180,"%.1f deg");
     drawToneMappingControl(environment_.toneMapping);
+    drawToneMappingParameterControls(environment_.toneMapping,environment_.toneMappingParameters);
     drawGlowControls(environment_.glow);
     ImGui::Checkbox("Show background",&showBackground_);
     if(ImGui::MenuItem("Reset environment")){environment_=EnvironmentSettings{};showBackground_=true;}

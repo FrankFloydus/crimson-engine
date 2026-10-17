@@ -94,9 +94,9 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         for(auto name:{"u_cameraPos","u_lightCounts","u_environment","u_ambientLight","u_modelOptions","u_modelEmissiveMap","u_modelUv","u_shadowAtlas","u_shadowLayout"})addBinding(result,name);
         addBinding(result,"u_modelNormalMatrix",ShaderUniformKind::Mat4);
         addBinding(result,"u_direction",ShaderUniformKind::Vec4,4);addBinding(result,"u_directionColor",ShaderUniformKind::Vec4,4);
-        for(auto name:{"u_clusterGrid","u_clusterDepth","u_clusterViewport","u_clusterAtlas","u_clusterOptions","u_clusterRecordLayoutV5",
+        for(auto name:{"u_clusterGrid","u_clusterDepth","u_clusterViewport","u_clusterAtlas","u_clusterOptions","u_clusterRecordLayoutV6",
             "u_surfaceLighting","u_surfaceCategory","u_ambientAtlas","u_ambientSettings","u_ambientTransition","u_revealAtlas","u_lightingResponse",
-            "u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase"})addBinding(result,name);
+            "u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase","u_ssgiAtlas","u_ssgiSettings","u_ssgiDraw","u_ssaoAtlas","u_ssaoSettings","u_debugView"})addBinding(result,name);
         addBinding(result,"u_directionLightingRoles",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_clusterView",ShaderUniformKind::Mat4);
         addBinding(result,"u_pointShadow",ShaderUniformKind::Vec4,16);
@@ -113,12 +113,17 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         addBinding(result,"s_brdfLut",ShaderUniformKind::Sampler,1,14);
         addBinding(result,"s_pointShadow",ShaderUniformKind::Sampler,1,15,ShaderTextureDimension::Texture2D,true);
     }
-    if(pass==MaterialGraphPass::Model||pass==MaterialGraphPass::Particle)
-        for(auto name:{"u_fogColorDensity","u_fogDepth","u_fogHeight"})addBinding(result,name);
+    if(pass==MaterialGraphPass::Model||pass==MaterialGraphPass::Particle) {
+        for(auto name:{"u_fogColorDensity","u_fogDepth","u_fogHeight","u_fogSky"})addBinding(result,name);
+        addBinding(result,"u_fogSunDirection",ShaderUniformKind::Vec4,4);
+        addBinding(result,"u_fogSunColor",ShaderUniformKind::Vec4,4);
+    }
     if(pass==MaterialGraphPass::Picking)addBinding(result,"u_pickId");
     if(pass==MaterialGraphPass::Model || pass==MaterialGraphPass::Picking)addBinding(result,"u_instanceOpacity");
-    if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow)addBinding(result,"u_surfaceLighting");
-    if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow || pass==MaterialGraphPass::Particle)
+    if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow) {
+        addBinding(result,"u_surfaceLighting");addBinding(result,"u_ssgiDraw");
+    }
+    if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow || pass==MaterialGraphPass::Particle || pass==MaterialGraphPass::Model)
         addBinding(result,"u_invView",ShaderUniformKind::Mat4);
     if(pass==MaterialGraphPass::DirectionalShadow) {
         addBinding(result,"u_directionalCasterViewProjection",ShaderUniformKind::Mat4);
@@ -311,7 +316,7 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         source<<((model || particle)?
             "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal\n":
             "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal\n");
-        source<<"// crimson-material-graph-generator-v17\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
+        source<<"// crimson-material-graph-generator-v23\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
             <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<(surface&&lit)<<"\n";
         source<<"#include <bgfx_shader.sh>\nuniform vec4 u_graphParams[208];\n";
         if(model || particle)source<<"uniform mat4 u_modelNormalMatrix;\nuniform vec4 u_modelUv;\n";

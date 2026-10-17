@@ -26,10 +26,10 @@ void separatedDefaultsAndPresentedFollow() {
         "Old scenes acquired enabled player lighting.");
     require(settings.localWorld.intensity==64.f/9.f&&settings.localWorld.height==2&&settings.localWorld.radius==8&&
         settings.localWorld.nearFalloffRadius==1.5f&&settings.localWorld.rangeFalloffExponent==1&&
-        settings.localWorld.edgeSoftness==1&&settings.localWorld.specularStrength==0&&settings.localWorld.sourceRadius==0&&settings.localWorld.attenuation==2,
+        settings.localWorld.edgeSoftness==1&&settings.localWorld.specularStrength==0&&settings.localWorld.sourceRadius==0&&settings.localWorld.attenuation==2&&settings.localWorld.indirectEnergy==1,
         "Default Local World Light attenuation controls changed.");
     require(PointLight{}.nearFalloffRadius==0&&PointLight{}.specularStrength==1&&PointLight{}.rangeFalloffExponent==4&&
-        PointLight{}.edgeSoftness==1&&PointLight{}.sourceRadius==0&&PointLight{}.attenuation==2,
+        PointLight{}.edgeSoftness==1&&PointLight{}.sourceRadius==0&&PointLight{}.attenuation==2&&PointLight{}.indirectEnergy==1&&DirectionalLight{}.indirectEnergy==1,
         "Player light defaults changed ordinary point lighting.");
     auto disabled=evaluateRig(settings,{}, {},{});
     require(disabled.valid()&&!disabled.localWorld&&!disabled.characterLights[0].enabled&&!disabled.characterShadow.enabled,
@@ -53,11 +53,11 @@ void separatedDefaultsAndPresentedFollow() {
         "Local World Light lost its independent finite range or attenuation settings.");
     settings.localWorld.radius=13;settings.localWorld.nearFalloffRadius=2.25f;
     settings.localWorld.rangeFalloffExponent=.7f;settings.localWorld.edgeSoftness=.4f;
-    settings.localWorld.specularStrength=.3f;settings.localWorld.sourceRadius=.6f;settings.localWorld.attenuation=1.25f;
+    settings.localWorld.specularStrength=.3f;settings.localWorld.sourceRadius=.6f;settings.localWorld.attenuation=1.25f;settings.localWorld.indirectEnergy=3.5f;
     const auto tuned=evaluateRig(settings,presented,{},{});
     require(tuned.localWorld&&tuned.localWorld->radius==13&&tuned.localWorld->nearFalloffRadius==2.25f&&
         tuned.localWorld->rangeFalloffExponent==.7f&&tuned.localWorld->edgeSoftness==.4f&&
-        tuned.localWorld->specularStrength==.3f&&tuned.localWorld->sourceRadius==.6f&&tuned.localWorld->attenuation==1.25f&&
+        tuned.localWorld->specularStrength==.3f&&tuned.localWorld->sourceRadius==.6f&&tuned.localWorld->attenuation==1.25f&&tuned.localWorld->indirectEnergy==3.5f&&
         tuned.localWorld->position==first.localWorld->position&&tuned.localWorld->roles==first.localWorld->roles&&
         tuned.characterLights==first.characterLights&&tuned.characterShadow==first.characterShadow,
         "Editing the world point's response changed independent character lighting or source placement.");
@@ -121,6 +121,17 @@ void validation() {
     for(const auto bad:{nan,infinity,.249f,8.001f}){value={};value.localWorld.rangeFalloffExponent=bad;invalid(value);}
     for(const auto bad:{nan,infinity,.049f,1.001f}){value={};value.localWorld.edgeSoftness=bad;invalid(value);}
     for(const auto bad:{nan,infinity,-10.001f,10.001f}){value={};value.localWorld.attenuation=bad;invalid(value);}
+    for(const auto bad:{nan,infinity,-.001f,16.001f}){value={};value.localWorld.indirectEnergy=bad;invalid(value);}
+    for(const auto energy:{0.f,1.f,16.f}) {
+        value=fullRig();const auto original=evaluateRig(value,{1,2,3},{},{});value.localWorld.indirectEnergy=energy;
+        const auto result=evaluateRig(value,{1,2,3},{},{});
+        require(validActorLightRigSettings(value)&&result.valid()&&result.localWorld&&result.localWorld->indirectEnergy==energy,
+            "A supported GI energy was rejected or lost by Local World Light evaluation.");
+        require(result.localWorld->intensity==original.localWorld->intensity&&result.localWorld->color==original.localWorld->color&&
+            result.localWorld->radius==original.localWorld->radius&&result.localWorld->roles==original.localWorld->roles&&
+            result.characterLights==original.characterLights&&result.characterShadow==original.characterShadow,
+            "Tuning Local World GI changed its direct response, private Character Key/Fill or silhouette.");
+    }
     for(const auto valid:{-10.f,0.f,1.f,2.f,10.f}) {
         value=fullRig();value.localWorld.attenuation=valid;
         require(validActorLightRigSettings(value)&&evaluateRig(value,{}, {},{}).localWorld->attenuation==valid,

@@ -1,10 +1,12 @@
 #include "ContentStorage.h"
 #include "AtomicFile.h"
+#include "QuaderSceneBundle.h"
 #include "resources/Paths.h"
 #include "resources/AssetId.h"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -437,6 +439,7 @@ void initializeContentStorage(const fs::path& rootValue) {
     else {auto j=index(root);const auto before=j;defaultTextures(root,j);if(j!=before)writeIndex(root,std::move(j));}
     if(restored){auto j=index(root);j["uuidReferences"]=false;writeIndex(root,std::move(j));}
     migrateUuidReferences(root);
+    initializeQuaderSceneBundles(root);
 }
 fs::path resolveAssetPath(const fs::path& root,std::string_view id) {
     std::lock_guard lock(storageMutex);
@@ -541,5 +544,155 @@ void relocateContentPaths(const fs::path& root,std::span<const ContentPathMove> 
     for(auto it=j["assets"].begin();it!=j["assets"].end();++it)
         if(!destinations.insert(lower(it.value().get<std::string>())).second)throw std::runtime_error("The destination is reserved by another asset identity.");
     publishMoves(root,effective,std::move(j),browser);
+}
+
+void initializeQuaderSceneBundles(const fs::path& rootValue) {
+    std::lock_guard lock(storageMutex);const auto root=normalized(rootValue);
+    // The storage initializer calls this only after its recovery/index boundary.
+    // Do not call initializeContentStorage here: browser/store constructors may
+    // independently revisit that boundary during ordinary project startup.
+    (void)index(root);
+    constexpr std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+    const auto boundedRead=[&](const fs::path& file){
+        if(!fs::is_regular_file(file)||fs::file_size(file)>std::uint64_t{2}*1024*1024*1024)
+            throw std::runtime_error("Quader bundle input is missing or exceeds its supported size: "+utf8(file));
+        return read(file);
+    };
+    std::set<std::string> deleted;
+    const auto references=root/".crimson/references.json";
+    if(fs::is_regular_file(references)) {
+        // Invalid deletion metadata is never grounds for silently resurrecting
+        // an asset, or for destructively changing its former package files.
+        // AssetReferenceManager reports its existing read-only policy diagnostic
+        // later; preserve that graceful startup without changing storage first.
+        try {
+            const auto policy=Json::parse(boundedRead(references));
+            if(policy.at("version")!=1||!policy.at("deleted").is_array()||!policy.at("replacements").is_object())return;
+            for(const auto& value:policy.at("deleted")) {
+                const auto id=canonicalAssetId(value.get<std::string>());if(!isAssetUuid(id)||isEngineAssetId(id))return;deleted.insert(id);
+            }
+            for(auto it=policy.at("replacements").begin();it!=policy.at("replacements").end();++it) {
+                if(!deleted.contains(canonicalAssetId(it.key()))||!it.value().is_string())return;
+            }
+        }catch(const std::exception&){return;}
+    }
+    struct Group {fs::path file;QuaderSceneBundle bundle;bool changed{};};
+    struct Legacy {std::string bundleId;QuaderBundleModel model;std::array<fs::path,4> paths;};
+    std::map<std::string,Group> groups;std::vector<fs::path> legacyManifests;
+    const auto content=checkedRelative(root,"Content");
+    if(fs::is_directory(content))for(auto it=fs::recursive_directory_iterator(content);it!=fs::recursive_directory_iterator{};++it) {
+        if(it->is_symlink()) {if(it->is_directory())it.disable_recursion_pending();continue;}
+        if(it->is_directory()&&fs::is_regular_file(it->path()/"manifest.json")) {
+            legacyManifests.push_back(checkedContentPath(root,it->path()/"manifest.json"));it.disable_recursion_pending();continue;
+        }
+        if(!it->is_regular_file()||it->path().extension()!=".crimson-quader")continue;
+        const auto file=checkedContentPath(root,it->path());auto bundle=decodeQuaderSceneBundle(boundedRead(file));
+        const auto id=bundle.id;if(!groups.emplace(id,Group{file,std::move(bundle),false}).second)throw std::runtime_error("Two Quader scene bundles claim the same source identity.");
+    }
+    std::vector<Legacy> legacy;std::vector<fs::path> oldDirectories;
+    for(const auto& file:legacyManifests) {
+        const auto text=boundedRead(file);Json manifest;
+        try{manifest=Json::parse(text);}catch(const std::exception&){continue;}
+        if(manifest.value("format",std::string{})!="Quader"||!manifest.contains("quader"))continue;
+        const auto& source=manifest.at("quader");if(source.value("collision",false))continue;
+        const auto project=source.at("project").get<std::string>(),scene=source.at("scene").get<std::string>();
+        const auto owner=quaderSceneBundleId(project,scene),modelId=canonicalAssetId(assetIdAtPath(root,file));
+        if(deleted.contains(owner)||deleted.contains(modelId))continue;
+        Legacy item;item.bundleId=owner;item.model.id=modelId;item.model.legacyManifest=legacyAssetId(root,modelId);
+        if(!item.model.legacyManifest.starts_with("assets/"))item.model.legacyManifest="assets/"+utf8(file.lexically_relative(content));
+        bool reserved=false;
+        for(std::size_t i=0;i<members.size();++i){
+            item.paths[i]=checkedContentPath(root,file.parent_path()/members[i]);item.model.memberIds[i]=canonicalAssetId(assetIdAtPath(root,item.paths[i]));reserved|=deleted.contains(item.model.memberIds[i]);
+        }
+        if(reserved)continue;
+        item.model.memberIds[0]=modelId;item.model.manifest=text;item.model.gltf=boundedRead(item.paths[1]);
+        if(boundedRead(item.paths[2])!=item.model.gltf)throw std::runtime_error("Quader package has distinct original geometry; its files were preserved: "+utf8(file.parent_path()));
+        item.model.buffer=boundedRead(item.paths[3]);
+        auto found=groups.find(owner);
+        if(found==groups.end()) {
+            QuaderSceneBundle bundle{owner,project,scene,"Quader Scene",{}};
+            const auto destination=defaultQuaderSceneBundlePath(root,bundle);
+            found=groups.emplace(owner,Group{destination,std::move(bundle),true}).first;
+        }
+        auto& group=found->second;const auto prior=std::find_if(group.bundle.models.begin(),group.bundle.models.end(),[&](const auto& model){return model.id==modelId;});
+        if(prior!=group.bundle.models.end()) {
+            if(prior->manifest!=item.model.manifest||prior->gltf!=item.model.gltf||prior->buffer!=item.model.buffer||prior->memberIds!=item.model.memberIds)
+                throw std::runtime_error("Quader model identity has conflicting bundle/package bytes; both sources were preserved.");
+        }else {group.bundle.models.push_back(item.model);group.changed=true;}
+        oldDirectories.push_back(file.parent_path()/"buffers");oldDirectories.push_back(file.parent_path());legacy.push_back(std::move(item));
+    }
+    // Validate the entire publication before touching any authored source. An
+    // unrelated file inside an old package stays in Content; only these four
+    // proven import inputs participate in migration.
+    std::set<std::string> allIds;
+    for(auto& [id,group]:groups) {
+        (void)id;std::sort(group.bundle.models.begin(),group.bundle.models.end(),[](const auto& a,const auto& b){return a.id<b.id;});
+        (void)encodeQuaderSceneBundle(group.bundle);
+        if(!allIds.insert(group.bundle.id).second)throw std::runtime_error("Duplicate Quader bundle identity.");
+        for(const auto& model:group.bundle.models)for(const auto& member:model.memberIds)if(!allIds.insert(member).second)throw std::runtime_error("Multiple Quader bundles claim one immutable model member.");
+    }
+    const auto registerLocations=[&](Json& next,const Group& group) {
+        next["assets"][group.bundle.id]=utf8(group.file.lexically_relative(root));
+        for(const auto& model:group.bundle.models) {
+            if(deleted.contains(model.id))continue;
+            const auto directory=quaderBundleCacheDirectory(root,group.bundle.id,model.id);
+            const auto legacyParent=pathFromUtf8(model.legacyManifest).parent_path();
+            for(std::size_t i=0;i<members.size();++i) {
+                if(deleted.contains(model.memberIds[i]))continue;
+                next["assets"][model.memberIds[i]]=utf8((directory/members[i]).lexically_relative(root));
+                if(!model.legacyManifest.empty())next["aliases"][utf8(legacyParent/members[i])]=model.memberIds[i];
+            }
+        }
+    };
+    if(!legacy.empty()) {
+        const auto stage=checkedRelative(root,fs::path(".crimson")/pathFromUtf8(".staging-quader-bundle-"+newAssetId()));
+        fs::create_directories(stage);std::vector<ContentPathMove> moves;auto next=index(root);
+        try {
+            for(auto& [id,group]:groups) {
+                registerLocations(next,group);if(!group.changed)continue;
+                const auto prepared=stage/pathFromUtf8(id+".crimson-quader");writeFileAtomically(prepared,encodeQuaderSceneBundle(group.bundle));
+                if(fs::exists(group.file)) {
+                    if(decodeQuaderSceneBundle(boundedRead(group.file)).id!=id)throw std::runtime_error("A different authored asset already owns the Quader bundle destination.");
+                    moves.push_back({group.file,stage/"previous"/pathFromUtf8(id+".crimson-quader"),false});
+                }
+                moves.push_back({prepared,group.file,false});
+            }
+            for(const auto& item:legacy) {
+                const auto destination=quaderBundleCacheDirectory(root,item.bundleId,item.model.id);
+                for(std::size_t i=0;i<members.size();++i) {
+                    const auto target=destination/members[i];
+                    if(fs::exists(target))moves.push_back({target,stage/"previous-cache"/pathFromUtf8(item.model.id)/members[i],false});
+                    moves.push_back({item.paths[i],target,false});
+                }
+            }
+            publishMoves(root,moves,std::move(next),{});
+            // The journal is durably committed before deleting retired duplicate
+            // cache/bundle bytes. Its Content sources have been captured above.
+            removeOwned(root,stage);
+        }catch(...){if(!fs::exists(root/".crimson/content-move.json")){try{removeOwned(root,stage);}catch(...){/* Retain staging evidence if cleanup fails. */}}throw;}
+        std::sort(oldDirectories.begin(),oldDirectories.end(),[](const auto& a,const auto& b){return a.native().size()>b.native().size();});
+        for(const auto& directory:oldDirectories){std::error_code ignored;if(fs::is_directory(directory)&&fs::is_empty(directory))fs::remove(directory,ignored);}
+    }
+    // The bundle is the sole durable geometry source. Private cache removal,
+    // partial writes and missing location metadata all recover from it without
+    // the external Quader project or its reader library.
+    auto next=index(root);
+    for(const auto& [id,group]:groups) {
+        if(deleted.contains(id))continue;registerLocations(next,group);
+        for(const auto& model:group.bundle.models) {
+            if(deleted.contains(model.id))continue;const auto directory=quaderBundleCacheDirectory(root,id,model.id);
+            const std::array<const std::string*,4> values{&model.manifest,&model.gltf,&model.gltf,&model.buffer};
+            for(std::size_t i=0;i<members.size();++i) {
+                if(deleted.contains(model.memberIds[i]))continue;
+                const auto file=checkedRelative(root,(directory/members[i]).lexically_relative(root));
+                if(!fs::is_regular_file(file)||fs::file_size(file)!=values[i]->size()||boundedRead(file)!=*values[i])writeFileAtomically(file,*values[i]);
+            }
+        }
+    }
+    if(next!=index(root)){
+        std::set<std::string> owners;for(auto it=next["assets"].begin();it!=next["assets"].end();++it)
+            if(!owners.insert(lower(it.value().get<std::string>())).second)throw std::runtime_error("Two identities claim the same Quader bundle/cache file.");
+        next["revision"]=next.value("revision",std::uint64_t{})+1;writeIndex(root,std::move(next));
+    }
 }
 } // namespace crimson

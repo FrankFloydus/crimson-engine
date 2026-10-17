@@ -744,32 +744,86 @@ void shadowSettingsStorageHistoryAndExtraction(){
 }
 }
 namespace {
+void lightIndirectEnergyExtractionAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto point=document.createPointLight(),directional=document.createDirectionalLight(),actor=addControlledActor(document);
+    require(point&&directional&&actor,document.status());
+    require(document.edit("Author light GI energy",[&](auto& records,auto&){for(auto& record:records) {
+        if(record.id==point)record.point->indirectEnergy=2.5f;
+        if(record.id==directional)record.directional->indirectEnergy=0;
+        if(record.id==actor){record.lightRig->enabled=true;record.lightRig->localWorld.indirectEnergy=4;}
+    }})&&document.save("Light GI runtime"),document.status());
+    const auto authored=document.scene().records();const auto authoredHistory=document.history().size();const auto authoredSelection=document.selection();
+    const auto authoredCharacterLights=extractScene(document.scene()).actorLighting.front().lights;
+    const auto checkEnergy=[&](const Scene& scene,float pointEnergy,float directionalEnergy,float localEnergy) {
+        require(scene.find(point)->point->indirectEnergy==pointEnergy&&scene.find(directional)->directional->indirectEnergy==directionalEnergy&&
+            scene.find(actor)->lightRig->localWorld.indirectEnergy==localEnergy,"Scene lost independent per-light GI tuning.");
+        const auto extracted=extractScene(scene);
+        require(extracted.points.size()==2&&extracted.directional.size()==1,"GI energy changed eligible source count.");
+        for(const auto& source:extracted.points)require(source.indirectEnergy==(source.entityId==point?pointEnergy:localEnergy)&&
+            source.enabled&&source.intensity>0,"Point or Local World GI energy was lost during extraction or changed direct illumination.");
+        require(extracted.directional.front().indirectEnergy==directionalEnergy&&extracted.directional.front().enabled&&
+            extracted.directional.front().intensity>0,"Directional GI energy was lost during extraction or changed direct illumination.");
+        require(extracted.actorLighting.size()==1&&extracted.actorLighting.front().lights==authoredCharacterLights,
+            "Per-light GI tuning changed private Character Key/Fill.");
+    };
+    checkEnergy(document.scene(),2.5f,0,4);
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&!runtime.dirty()&&!runtime.history().canUndo(),runtime.status());
+    checkEnergy(runtime.scene(),2.5f,0,4);
+    require(runtime.begin("Tune GI during Play")&&runtime.update([&](auto& records,auto&){for(auto& record:records) {
+        if(record.id==point)record.point->indirectEnergy=0;
+        if(record.id==directional)record.directional->indirectEnergy=3;
+        if(record.id==actor)record.lightRig->localWorld.indirectEnergy=16;
+    }}),runtime.status());
+    pose(runtime,actor,{7,0,2});require(runtime.commit(),runtime.status());checkEnergy(runtime.scene(),0,3,16);
+    require(runtime.undo(),runtime.status());checkEnergy(runtime.scene(),2.5f,0,4);near(position(runtime.scene(),actor),{7,0,2});
+    require(runtime.redo(),runtime.status());checkEnergy(runtime.scene(),0,3,16);near(position(runtime.scene(),actor),{7,0,2});
+    const auto committedHistory=runtime.history().size();
+    require(runtime.begin("Cancel Play light GI")&&runtime.update([&](auto& records,auto&){for(auto& record:records) {
+        if(record.point)record.point->indirectEnergy=8;if(record.directional)record.directional->indirectEnergy=8;
+        if(record.lightRig)record.lightRig->localWorld.indirectEnergy=8;
+    }}),runtime.status());
+    pose(runtime,actor,{8,0,3});runtime.cancel();checkEnergy(runtime.scene(),0,3,16);near(position(runtime.scene(),actor),{8,0,3});
+    require(runtime.history().size()==committedHistory,"Canceling Play GI tuning added a history command.");
+    same(authored,document.scene().records());require(document.history().size()==authoredHistory&&!document.dirty()&&
+        document.selection().ids==authoredSelection.ids&&document.selection().primary==authoredSelection.primary,
+        "Play GI tuning changed authored data, history, dirty state or selection.");
+    require(runtime.resetTransientFrom(document)&&!runtime.dirty()&&!runtime.history().canUndo(),runtime.status());checkEnergy(runtime.scene(),2.5f,0,4);
+}
 void environmentToneMappingStorageAndRuntime() {
     TempProject project;SceneDocument document(project.root);
     const auto environment=document.createEnvironment(),actor=addControlledActor(document);
     require(environment && actor,document.status());
     require(resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"New environment changed legacy appearance.");
     const GlowSettings authoredGlow{true,2.25f,3.5f,.65f};
+    const ToneMappingParameters authoredTone{4,2.5f,24,1.7f};
     auto record=*document.scene().find(environment);record.environment->environment.toneMapping=ToneMapping::AgX;
+    record.environment->environment.toneMappingParameters=authoredTone;
     record.environment->environment.glow=authoredGlow;
     require(document.updateEntity(environment,record),document.status());
     require(document.undo() && resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"Tone mapping equality omitted history.");
+    require(resolveEnvironment(document.scene()).environment.toneMappingParameters==ToneMappingParameters{},"Tone mapping undo lost the previous curve parameters.");
     require(resolveEnvironment(document.scene()).environment.glow==GlowSettings{},"Environment undo lost the original disabled Glow defaults.");
     require(document.redo() && document.save("Tone mapping"),document.status());
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::AgX,"Tone mapping did not round-trip.");
+    require(resolveEnvironment(reopened.scene()).environment.toneMappingParameters==authoredTone,"Tone mapping parameters did not round-trip.");
     require(resolveEnvironment(reopened.scene()).environment.glow==authoredGlow,"Nondefault Glow did not survive scene persistence.");
     document.select({environment});require(document.duplicateSelection(),document.status());
     for(const auto& entity:document.scene().records())if(entity.environment) {
         require(entity.environment->environment.toneMapping==ToneMapping::AgX,"Environment duplication lost tone mapping.");
+        require(entity.environment->environment.toneMappingParameters==authoredTone,"Environment duplication lost tone mapping parameters.");
         require(entity.environment->environment.glow==authoredGlow,"Environment duplication lost authored Glow values.");
     }
     auto legacy=legacyComposition(Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId()))));
-    for(auto& entity:legacy["entities"])if(entity.contains("environment"))entity["environment"]["environment"].erase("toneMapping");
+    for(auto& entity:legacy["entities"])if(entity.contains("environment")) {
+        entity["environment"]["environment"].erase("toneMapping");entity["environment"]["environment"].erase("toneMappingParameters");
+    }
     const std::string legacyId="assets/scenes/legacy-tone.crimson-scene";
     {std::ofstream output(project.root/legacyId);output<<legacy.dump();}
     require(reopened.load(legacyId),reopened.status());
     require(resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::Reinhard,"Missing tone mapping did not preserve old scenes.");
+    require(resolveEnvironment(reopened.scene()).environment.toneMappingParameters==ToneMappingParameters{},"Missing tone mapping parameters changed old curve defaults.");
     require(resolveEnvironment(reopened.scene()).environment.glow==authoredGlow,"Missing tone mapping reset unrelated Glow settings.");
     record.environment->environment.toneMapping=static_cast<ToneMapping>(99);
     require(!document.updateEntity(environment,record),"Invalid tone mapping entered the scene.");
@@ -778,14 +832,25 @@ void environmentToneMappingStorageAndRuntime() {
     SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
     require(resolveEnvironment(runtime.scene()).environment.glow==authoredGlow && !runtime.dirty() && !runtime.history().canUndo(),
         "Play clone discarded Glow or inherited authored dirty/history state.");
+    require(resolveEnvironment(runtime.scene()).environment.toneMappingParameters==authoredTone,"Play clone lost authored tone mapping tuning.");
+    const ToneMappingParameters runtimeTone{8,4,32,2.2f};
     require(runtime.begin("Tone mapping during Play"),runtime.status());
-    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)entity.environment->environment.toneMapping=ToneMapping::ACES;}),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment) {
+        entity.environment->environment.toneMapping=ToneMapping::ACES;entity.environment->environment.toneMappingParameters=runtimeTone;}}),runtime.status());
     pose(runtime,actor,{7,0,2});require(runtime.commit(),runtime.status());
+    require(extractScene(runtime.scene()).environment.environment.toneMappingParameters==runtimeTone,"Render extraction lost live tone mapping parameters.");
     require(runtime.undo() && resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX,"Runtime tone mapping undo failed.");
+    require(resolveEnvironment(runtime.scene()).environment.toneMappingParameters==authoredTone,"Runtime tone mapping undo lost authored tuning.");
     near(position(runtime.scene(),actor),{7,0,2});
     require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::ACES,"Runtime tone mapping redo failed.");
+    require(resolveEnvironment(runtime.scene()).environment.toneMappingParameters==runtimeTone,"Runtime tone mapping redo lost live tuning.");
     near(position(runtime.scene(),actor),{7,0,2});
     require(resolveEnvironment(runtime.scene()).environment.glow==authoredGlow,"Runtime tone mapping changed unrelated Glow.");
+    require(runtime.begin("Cancel tone mapping tuning")&&runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)
+        entity.environment->environment.toneMappingParameters.agxContrast=3;}),runtime.status());
+    pose(runtime,actor,{8,0,3});runtime.cancel();
+    require(resolveEnvironment(runtime.scene()).environment.toneMappingParameters==runtimeTone,"Canceled Play tone mapping tuning changed committed parameters.");
+    near(position(runtime.scene(),actor),{8,0,3});
 
     const GlowSettings runtimeGlow{true,4.25f,1.5f,2.5f};
     const auto beforeGlowHistory=runtime.history().size();
@@ -817,7 +882,8 @@ void environmentToneMappingStorageAndRuntime() {
         document.selection().primary==authoredSelection.primary,"Runtime Glow changed authored dirty state or selection.");
     require(runtime.resetTransientFrom(document),runtime.status());same(authored,runtime.scene().records());
     require(resolveEnvironment(runtime.scene()).environment.glow==authoredGlow &&
-        resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX && !runtime.history().canUndo() && !runtime.dirty(),
+        resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX && resolveEnvironment(runtime.scene()).environment.toneMappingParameters==authoredTone &&
+        !runtime.history().canUndo() && !runtime.dirty(),
         "Starting Play again retained runtime Glow, tone mapping or history.");
 }
 void environmentAmbientLightRuntime() {
@@ -849,6 +915,36 @@ void environmentAmbientLightRuntime() {
     require(document.history().size()==authoredHistory,"Runtime ambient light edit mutated the authored document.");
     require(runtime.resetTransientFrom(document) && resolveEnvironment(runtime.scene()).environment.ambientLight==authoredAmbient &&
         !runtime.history().canUndo() && !runtime.dirty(),"Restarting Play retained runtime ambient light edits.");
+}
+void environmentSsgiRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto environment=document.createEnvironment(),actor=addControlledActor(document);
+    SsgiSettings authoredSsgi{true,1.4f,4.f,.15f,.8f,SsgiQuality::Custom,4};
+    authoredSsgi.rays=6;authoredSsgi.steps=30;authoredSsgi.rayBias=.03f;authoredSsgi.denoiseRadius=2;authoredSsgi.denoiseStrength=.7f;authoredSsgi.radianceClamp=24;
+    const SsaoSettings authoredSsao{true,1.3f,.7f,SsaoQuality::High};
+    auto record=*document.scene().find(environment);record.environment->environment.ssgi=authoredSsgi;record.environment->environment.ssao=authoredSsao;
+    require(document.updateEntity(environment,record),document.status());
+    const auto authored=document.scene().records();const auto history=document.history().size();
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(resolveEnvironment(runtime.scene()).environment.ssgi==authoredSsgi&&resolveEnvironment(runtime.scene()).environment.ssao==authoredSsao,"Play clone lost authored GI tuning.");
+    SsgiSettings liveSsgi{false,.7f,2.f,.075f,.55f,SsgiQuality::Custom,2};
+    liveSsgi.rays=3;liveSsgi.steps=11;liveSsgi.rayBias=.015f;liveSsgi.denoiseRadius=1;liveSsgi.denoiseStrength=.3f;liveSsgi.radianceClamp=0;
+    const SsaoSettings liveSsao{false,.5f,.2f,SsaoQuality::Low};
+    require(runtime.begin("Tune GI during Play") && runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment) {
+        entity.environment->environment.ssgi=liveSsgi;entity.environment->environment.ssao=liveSsao;}}),runtime.status());
+    pose(runtime,actor,{8,0,3});require(runtime.commit(),runtime.status());
+    require(extractScene(runtime.scene()).environment.environment.ssgi==liveSsgi&&extractScene(runtime.scene()).environment.environment.ssao==liveSsao,"Render extraction lost live GI values.");
+    require(runtime.undo() && resolveEnvironment(runtime.scene()).environment.ssgi==authoredSsgi&&resolveEnvironment(runtime.scene()).environment.ssao==authoredSsao,"Play GI undo lost authored values.");
+    near(position(runtime.scene(),actor),{8,0,3});
+    require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.ssgi==liveSsgi&&resolveEnvironment(runtime.scene()).environment.ssao==liveSsao,"Play GI redo lost live values.");
+    require(runtime.begin("Cancel live GI") && runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment) {
+        entity.environment->environment.ssgi.enabled=true;entity.environment->environment.ssao.radius=3;}}),runtime.status());
+    pose(runtime,actor,{9,0,4});runtime.cancel();
+    require(resolveEnvironment(runtime.scene()).environment.ssgi==liveSsgi&&resolveEnvironment(runtime.scene()).environment.ssao==liveSsao,"Canceled Play GI edit changed committed values.");
+    near(position(runtime.scene(),actor),{9,0,4});same(authored,document.scene().records());
+    require(document.history().size()==history,"Play GI edits mutated authored history.");
+    require(runtime.resetTransientFrom(document) && resolveEnvironment(runtime.scene()).environment.ssgi==authoredSsgi&&resolveEnvironment(runtime.scene()).environment.ssao==authoredSsao &&
+        !runtime.history().canUndo() && !runtime.dirty(),"Restarting Play retained runtime GI tuning or history.");
 }
 void lightingRolesRigStorageAndRuntime() {
     TempProject project;SceneDocument document(project.root);
@@ -1319,4 +1415,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();modelFadeParticipationStorageAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();modelFadeParticipationStorageAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

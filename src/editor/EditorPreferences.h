@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crimson-renderer/RenderTypes.h"
+#include "crimson-renderer/GraphicsBackend.h"
 #include "PlayerOcclusionSettings.h"
 #include <array>
 #include <filesystem>
@@ -15,6 +16,7 @@ struct EditorPreferenceValues {
     int pointShadowResolution{1024};
     bool playerOcclusionFade{false};
     PlayerOcclusionSettings playerOcclusionSettings{};
+    GraphicsBackend graphicsBackend{GraphicsBackend::Direct3D12};
 };
 // Application preferences are independent from authored scenes and dock state.
 class EditorPreferences {
@@ -26,7 +28,7 @@ public:
     void open() { open_=true; focusRequested_=true; }
     bool isOpen() const { return open_; }
     void close() { open_=false; focusRequested_=false; }
-    void draw();
+    void draw(std::optional<GraphicsBackend> activeBackend = std::nullopt);
     const std::string& status() const { return status_; }
     bool save();
     static int previewSizeIndex(int size);

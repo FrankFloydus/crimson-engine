@@ -89,11 +89,11 @@ ImGuiBgfx::ImGuiBgfx(std::function<void(const std::string&)> diagnostic):diagnos
     ImGuiIO& io = ImGui::GetIO();
     if (io.BackendRendererUserData) throw std::runtime_error("An ImGui renderer backend is already installed.");
     const bool platformWindowsSupported=(bgfx::getCaps()->supported & BGFX_CAPS_SWAP_CHAIN) &&
-        bgfx::getCaps()->limits.maxViews>FirstPlatformView;
+        platformViewLimit()>FirstPlatformView;
     if ((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) && !platformWindowsSupported)
         throw std::runtime_error("This GPU backend cannot render Dear ImGui platform windows.");
     if(platformWindowsSupported) {
-        const auto capacity=std::min<std::uint32_t>(bgfx::getCaps()->limits.maxViews,UINT16_MAX)-FirstPlatformView;
+        const auto capacity=platformViewLimit()-FirstPlatformView;
         viewports_.reserve(capacity);retiredSurfaces_.reserve(capacity);
     }
     static_assert(sizeof(ImDrawVert) == 20 && offsetof(ImDrawVert, pos) == 0 &&
@@ -115,6 +115,17 @@ ImGuiBgfx::ImGuiBgfx(std::function<void(const std::string&)> diagnostic):diagnos
         if (bgfx::isValid(program_)) bgfx::destroy(program_);
         if (bgfx::isValid(sampler_)) bgfx::destroy(sampler_);
         throw std::runtime_error("Could not initialize the ImGui renderer resources.");
+    }
+    if(platformWindowsSupported && bgfx::getRendererType()==bgfx::RendererType::Direct3D12) {
+        platformTerminalTexture_=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT);
+        if(bgfx::isValid(platformTerminalTexture_))platformTerminalFramebuffer_=bgfx::createFrameBuffer(1,&platformTerminalTexture_,false);
+        if(!bgfx::isValid(platformTerminalFramebuffer_)) {
+            if(bgfx::isValid(platformTerminalTexture_))bgfx::destroy(platformTerminalTexture_);
+            bgfx::destroy(program_);bgfx::destroy(sampler_);
+            throw std::runtime_error("Could not initialize the DX12 platform terminal framebuffer.");
+        }
+        bgfx::setName(platformTerminalFramebuffer_,"ImGui platform terminal framebuffer");
+        platformTerminalBytes_=PlatformSurface::colorTargetAllocationBytes(1,1);
     }
     io.BackendRendererName = "crimson-renderer-imgui-bgfx";
     io.BackendRendererUserData = this;
@@ -186,6 +197,17 @@ void ImGuiBgfx::collectRetiredSurfaces(std::uint32_t frame) {
 
 bool ImGuiBgfx::hasPendingRetirements() const noexcept {return !retiredSurfaces_.empty();}
 
+std::uint32_t ImGuiBgfx::platformViewLimit() const noexcept {
+    const auto limit=std::min<std::uint32_t>(bgfx::getCaps()->limits.maxViews,UINT16_MAX);
+    return limit-(bgfx::getRendererType()==bgfx::RendererType::Direct3D12?1u:0u);
+}
+std::uint64_t ImGuiBgfx::platformResidentBytes() const noexcept {
+    std::uint64_t bytes=platformTerminalBytes_+PlatformSurface::quarantinedResidentBytes();
+    for(const auto* viewport:viewports_)bytes+=viewport->surface->residentBytes();
+    for(const auto& surface:retiredSurfaces_)bytes+=surface->residentBytes();
+    return bytes;
+}
+
 bgfx::FrameBufferHandle ImGuiBgfx::platformViewportFramebuffer(ImGuiID id) const noexcept {
     const auto found=std::find_if(viewports_.begin(),viewports_.end(),[id](const auto* value){return value->viewport->ID==id;});
     if (found==viewports_.end()) return BGFX_INVALID_HANDLE;
@@ -216,8 +238,8 @@ void ImGuiBgfx::resizeViewport(ViewportResource& resource,ImVec2 size,ImVec2 sca
 void ImGuiBgfx::createPlatformWindow(ImGuiViewport* viewport) {
     auto* renderer=static_cast<ImGuiBgfx*>(ImGui::GetIO().BackendRendererUserData);
     if (!renderer || viewport->RendererUserData) throw std::runtime_error("Dear ImGui platform framebuffer ownership is invalid.");
-    const auto maxViews=std::min<std::uint32_t>(bgfx::getCaps()->limits.maxViews,UINT16_MAX);
-    if(renderer->viewports_.size()+renderer->retiredSurfaces_.size()>=maxViews-FirstPlatformView)
+    const auto maxViews=renderer->platformViewLimit();
+    if(renderer->viewports_.size()+renderer->retiredSurfaces_.size()+PlatformSurface::quarantinedSurfaceCount()>=maxViews-FirstPlatformView)
         throw std::runtime_error("Dear ImGui platform windows exhausted the pending surface capacity.");
     std::uint32_t view=FirstPlatformView;
     while (view<maxViews && std::any_of(renderer->viewports_.begin(),renderer->viewports_.end(),[view](const auto* value){return value->view==view;})) ++view;
@@ -259,6 +281,17 @@ void ImGuiBgfx::renderPlatformWindow(ImGuiViewport* viewport,void*) {
     bgfx::setViewClear(resource->view,(viewport->Flags & ImGuiViewportFlags_NoRendererClear) ? BGFX_CLEAR_NONE : BGFX_CLEAR_COLOR,0x000000ff);
     renderer->renderTo(viewport->DrawData,resource->view,framebuffer);
     resource->surface->rendered(renderer->completedFrame_+1);
+    if(bgfx::isValid(renderer->platformTerminalFramebuffer_)) {
+        // Pinned D3D12 setFrameBuffer transitions the preceding ordinary color
+        // framebuffer to PIXEL_SHADER_RESOURCE. Reserve the final view so all
+        // native copy barriers can use and restore that known state. A private
+        // target also works while the main native window is minimized.
+        const auto terminal=static_cast<bgfx::ViewId>(renderer->platformViewLimit());
+        bgfx::setViewName(terminal,"ImGui platform copy boundary");
+        bgfx::setViewFrameBuffer(terminal,renderer->platformTerminalFramebuffer_);
+        bgfx::setViewRect(terminal,0,0,1,1);bgfx::setViewClear(terminal,BGFX_CLEAR_NONE);
+        bgfx::touch(terminal);
+    }
 }
 
 void ImGuiBgfx::swapPlatformWindow(ImGuiViewport*,void*) {
@@ -413,6 +446,12 @@ void ImGuiBgfx::shutdown() {
     if (ImGui::GetCurrentContext() && ImGui::GetIO().BackendRendererUserData==this) ImGui::DestroyPlatformWindows();
     while (!viewports_.empty()) destroyViewport(viewports_.back());
     while (!textures_.empty()) destroyTexture(textures_.back());
+    if(bgfx::isValid(platformTerminalFramebuffer_)) {
+        bgfx::resetView(static_cast<bgfx::ViewId>(platformViewLimit()));
+        bgfx::destroy(platformTerminalFramebuffer_);
+    }
+    if(bgfx::isValid(platformTerminalTexture_))bgfx::destroy(platformTerminalTexture_);
+    platformTerminalFramebuffer_=BGFX_INVALID_HANDLE;platformTerminalTexture_=BGFX_INVALID_HANDLE;platformTerminalBytes_=0;
     if (bgfx::isValid(sampler_)) bgfx::destroy(sampler_);
     if (bgfx::isValid(program_)) bgfx::destroy(program_);
     sampler_ = BGFX_INVALID_HANDLE; program_ = BGFX_INVALID_HANDLE;

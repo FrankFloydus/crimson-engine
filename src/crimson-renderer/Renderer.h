@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "GraphicsBackend.h"
 #include "CollisionOverlayTypes.h"
 #include "ParticleRenderTypes.h"
 #include "MaterialGraphGpu.h"
@@ -25,6 +26,7 @@ namespace bgfx { struct CallbackI; }
 namespace crimson {
 struct PreparedEnvironment;
 struct PreparedRenderFrame;
+enum class RenderViewPurpose : std::uint8_t;
 
 struct MaterialTextures {
     bgfx::TextureHandle albedo{BGFX_INVALID_HANDLE};
@@ -154,13 +156,15 @@ struct RenderScene {
     std::span<const ActorLighting> actorLighting;
     std::span<const CharacterShadowSource> actorShadows;
     std::span<const RenderCollisionOverlay> collisionOverlays;
+    std::uint64_t giWorldId{},giCameraId{},giEnvironmentId{};
 };
 
 // Owns the bgfx lifetime. Destroy ImGui's GPU resources before this object.
 // The application calls bgfx::frame exactly once after render and the tools UI.
 class Renderer final {
 public:
-    explicit Renderer(SDL_Window* window, bgfx::CallbackI* callback = nullptr);
+    explicit Renderer(SDL_Window* window, bgfx::CallbackI* callback = nullptr,
+        GraphicsBackend backend = GraphicsBackend::Direct3D12);
     ~Renderer();
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
@@ -237,6 +241,8 @@ public:
     void render(const SceneSettings& settings, const MaterialTextures& textures = {});
     void setAppearance(const ViewportAppearance&);
     void setGridVisible(bool visible);
+    void setDebugView(RenderViewPurpose,RenderDebugView);
+    RenderDebugView debugView(RenderViewPurpose) const noexcept;
     // Consumes the scene immediately; the pinned owner survives asynchronous readback.
     bool renderThumbnail(const std::string& id,std::uint64_t signature,const RenderScene&,
         std::uint16_t size = 512,std::shared_ptr<const void> pinned = {});
@@ -252,7 +258,13 @@ public:
     bool reloadPrograms(std::span<const RendererShaderPair>,std::span<const std::uint8_t> proceduralCompute={},
         std::span<const std::uint8_t> clusterCompute={},std::span<const std::uint8_t> ambientEvaluate={},
         std::span<const std::uint8_t> ambientPublish={},std::span<const std::uint8_t> deformationCompute={},
-        std::span<const std::uint8_t> occluderDepthCompute={});
+        std::span<const std::uint8_t> occluderDepthCompute={},std::span<const std::uint8_t> ssgiTrace={},
+        std::span<const std::uint8_t> ssgiTemporal={},std::span<const std::uint8_t> ssgiFilter={},std::span<const std::uint8_t> ssgiPublish={},
+        std::span<const std::uint8_t> ssaoEvaluate={},std::span<const std::uint8_t> ssaoPublish={});
+    const std::string& ssgiStatus() const;
+    std::size_t ssgiResidentBytes() const;
+    const std::string& ssaoStatus() const;
+    std::size_t ssaoResidentBytes() const;
     const std::string& shaderStatus() const;
     std::uint64_t shaderSignature() const;
     bgfx::TextureHandle viewportTexture() const noexcept;
@@ -260,6 +272,7 @@ public:
     std::uint32_t height() const noexcept;
     bool drawable() const noexcept;
     const char* backendName() const noexcept;
+    GraphicsBackend graphicsBackend() const noexcept;
 
 private:
     struct Impl;

@@ -15,7 +15,7 @@ uniform vec4 u_modelEmissiveMap;
 uniform vec4 u_instanceOpacity;
 uniform vec4 u_cameraPos;
 uniform vec4 u_direction[4];
-uniform vec4 u_directionColor[4];
+uniform vec4 u_directionColor[4]; // Linear RGB; W is GI energy minus one.
 uniform vec4 u_lightCounts;
 uniform vec4 u_environment;
 SAMPLER2D(s_albedo, 0);
@@ -26,6 +26,7 @@ SAMPLER2D(s_emissive, 4);
 SAMPLERCUBE(s_irradiance, 5);
 SAMPLERCUBE(s_prefiltered, 6);
 SAMPLER2D(s_brdfLut, 7);
+#include "fog_environment.sh"
 #include "clustered_lighting.sh"
 #include "occluder_partition.sh"
 #include "point_shadow.sh"
@@ -37,6 +38,9 @@ uniform mat4 u_modelNormalMatrix;
 
 #include "model_lighting.sh"
 #include "character_lighting.sh"
+#include "ssgi_material.sh"
+#include "ssao_material.sh"
+#include "debug_view.sh"
 
 vec2 slotUv(vec4 uv, float index)
 {
@@ -91,20 +95,15 @@ vec3 materialNormal(vec3 normal, vec4 tangent, vec2 uv, float faceSign, vec3 map
 void main()
 {
     vec3 shadowPlaneNormal = pointShadowPlaneNormal(v_worldPosition, v_normal);
+    bool captureSsgi = ssgiCaptureSurface(u_modelEmissiveMap.w, u_instanceOpacity.x);
+    vec3 sourceWorld = vec3_splat(0.0), sourceCharacter = vec3_splat(0.0);
+    vec3 sourceResponse = vec3_splat(0.0);
     vec3 mappingPosition = u_materialUvOffset.w > 0.5 ? v_worldPosition : v_localPosition;
     vec3 mappingNormal = u_materialUvOffset.w > 0.5 ? v_normal : v_localNormal;
     vec4 uv = vec4(v_texcoord0, v_texcoord1);
     vec4 baseColor = u_modelBase * v_color0;
     if (u_modelMaps.x > 0.5) baseColor *= materialSample(s_albedo, slotUv(uv, u_modelUv.x), mappingPosition, mappingNormal);
     if (u_modelOptions.y > 0.5 && baseColor.a < u_modelEmissive.w) discard;
-    if (u_modelEmissiveMap.y > 0.5)
-    {
-        vec3 color = applyDistanceFog(baseColor.rgb, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
-        float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
-        occluderPartition(gl_FragCoord.xyz);
-        gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
-        return;
-    }
     float metallic = u_modelSurface.x;
     float roughness = u_modelSurface.y;
     if (u_modelMaps.y > 0.5)
@@ -117,6 +116,17 @@ void main()
     metallic = clamp(metallic, 0.0, 1.0);
     vec3 base = baseColor.rgb;
     vec3 N = materialNormal(v_normal, v_tangent, slotUv(uv, u_modelUv.z), gl_FrontFacing ? -1.0 : 1.0, mappingPosition, mappingNormal);
+    if (u_modelEmissiveMap.y > 0.5)
+    {
+        vec3 color = debugViewColor(base, base, roughness, metallic, N, vec3_splat(0.0), vec3_splat(0.0));
+        if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
+        float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
+        occluderPartition(gl_FragCoord.xyz);
+        gl_FragData[0] = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
+        ssgiWriteSources(sourceWorld, sourceCharacter, sourceResponse, v_worldPosition, shadowPlaneNormal, gl_FragCoord.z, captureSsgi,
+            gl_FragData[1], gl_FragData[2], gl_FragData[3]);
+        return;
+    }
     vec3 V = safeNormalize(u_cameraPos.xyz - v_worldPosition, N);
     float darkness = ambientVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
     vec3 color = vec3_splat(0.0);
@@ -129,6 +139,9 @@ void main()
         vec3 radiance = u_directionColor[i].rgb * u_direction[i].w;
         if (u_modelEmissiveMap.z > 0.5) radiance *= directionalShadowVisibility(i, v_worldPosition, shadowNormal, shadowPlaneNormal);
         color += evaluateLight(N, V, normalize(-u_direction[i].xyz),radiance, base, metallic, roughness, u_modelSpecular.x);
+        if (captureSsgi)
+            ssgiAccumulateSource(evaluateLightDiffuse(N, V, normalize(-u_direction[i].xyz), radiance, base, metallic, u_modelSpecular.x)*(1.0+u_directionColor[i].w),
+                uint(u_directionLightingRoles[i].x), sourceWorld, sourceCharacter);
     }
     uint cluster = forwardPlusCluster(v_worldPosition);
     for (uint word = 0u; word < forwardPlusWordCount(); ++word)
@@ -153,13 +166,34 @@ void main()
         if (u_modelEmissiveMap.z > 0.5) radiance *= pointShadowVisibility(forwardPlusShadowIndex(i), pointPosition, pointColor, v_worldPosition, shadowNormal, shadowPlaneNormal, forwardPlusSourceRadius(i));
         float softSourceSinSquared = pointLightSourceSinSquared(distanceSquared, forwardPlusSourceRadius(i));
         color += evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, u_modelSpecular.x, 1.0, pointResponse.y, softSourceSinSquared);
+        if (captureSsgi)
+            ssgiAccumulateSource(evaluateLightDiffuse(N, V, L, radiance, base, metallic, u_modelSpecular.x)*forwardPlusPointIndirectEnergy(i),
+                uint(forwardPlusPointRoles(i).z), sourceWorld, sourceCharacter);
       }
     }
+    vec3 directLighting = color;
     float occlusion = 1.0;
     if (u_modelMaps.w > 0.5)
         occlusion = mix(1.0, materialSample(s_occlusion, slotUv(uv, u_modelUv.w), mappingPosition, mappingNormal).r, u_modelSurface.w);
-    color += evaluateEnvironment(N, V, base, metallic, roughness, u_modelSpecular.x) * occlusion;
-    color += characterLighting(N, V, base, metallic, roughness, u_modelSpecular.x);
+    float screenOcclusion = u_instanceOpacity.x >= 1.0 ? ssaoVisibility(v_worldPosition) : 1.0;
+    vec3 environmentDiffuse;
+    vec3 indirectLighting = evaluateEnvironment(N, V, base, metallic, roughness, u_modelSpecular.x, environmentDiffuse) * (occlusion * screenOcclusion);
+    color += indirectLighting;
+    if (captureSsgi)
+    {
+        sourceWorld += environmentDiffuse * (occlusion * screenOcclusion);
+        sourceCharacter += environmentDiffuse * (occlusion * screenOcclusion);
+    }
+    if (giReceiverSurface(u_modelEmissiveMap.w, u_instanceOpacity.x))
+    {
+        sourceResponse = ssgiDiffuseResponse(N, V, base, metallic, u_modelSpecular.x, occlusion);
+        vec3 bounceLighting = ssgiDiffuse(v_worldPosition, sourceResponse) * screenOcclusion;
+        color += bounceLighting;
+        indirectLighting += bounceLighting;
+    }
+    vec3 characterDirect = characterLighting(N, V, base, metallic, roughness, u_modelSpecular.x);
+    color += characterDirect;
+    directLighting += characterDirect;
     vec3 characterReceiverNormal = safeNormalize(v_normal, vec3(0.0, 1.0, 0.0));
     if (u_modelOptions.z > 0.5) characterReceiverNormal *= (gl_FrontFacing ? -1.0 : 1.0) * u_modelOptions.w;
     float characterVisibility = characterShadowVisibility(v_worldPosition, characterReceiverNormal, shadowPlaneNormal, u_modelEmissiveMap.z);
@@ -167,9 +201,16 @@ void main()
     color *= darkness;
     vec3 emissive = u_modelEmissive.rgb;
     if (u_modelEmissiveMap.x > 0.5) emissive *= materialSample(s_emissive, slotUv(uv, u_modelOptions.x), mappingPosition, mappingNormal).rgb;
-    color += emissive * (u_lightingResponse.x > 0.5 ? darkness : 1.0);
-    color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
+    emissive *= u_lightingResponse.x > 0.5 ? darkness : 1.0;
+    color += emissive;
+    sourceWorld = sourceWorld * (characterVisibility * darkness) + emissive;
+    sourceCharacter = sourceCharacter * (characterVisibility * darkness) + emissive;
+    sourceResponse *= characterVisibility * darkness;
+    color = debugViewColor(color, base, roughness, metallic, N, directLighting, indirectLighting);
+    if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
     float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
     occluderPartition(gl_FragCoord.xyz);
-    gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
+    gl_FragData[0] = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
+    ssgiWriteSources(sourceWorld, sourceCharacter, sourceResponse, v_worldPosition, shadowPlaneNormal, gl_FragCoord.z, captureSsgi,
+        gl_FragData[1], gl_FragData[2], gl_FragData[3]);
 }

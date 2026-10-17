@@ -284,6 +284,32 @@ void viewportParentSelection() {
     require(document.history().size()==history,"Viewport selection added authored history.");
 }
 
+void viewportEntityHierarchySelection() {
+    TempProject project;SceneDocument document(project.root);
+    const auto model=document.createBox("Independent model");
+    const auto light=document.createPointLight("Independent light");
+    document.select({light});require(document.reparentSelection(model),document.status());
+    const auto player=document.createPlayer("Player");
+    const auto visual=document.createBox("Player visual");
+    document.select({visual});require(document.reparentSelection(player),document.status());
+    EntityId camera{};
+    for(const auto child:document.scene().children(player))if(document.scene().find(child)->camera)camera=child;
+    require(camera!=NoEntity,"Player camera fixture is missing.");
+    const auto before=document.scene().records();const auto history=document.history().size();
+    require(viewportSelectionRoot(document.scene(),light)==model,
+        "Viewport selection discarded an ordinary model's actual child hierarchy.");
+    require(viewportSelectionRoot(document.scene(),visual)==player && viewportSelectionRoot(document.scene(),camera)==player,
+        "Player visual/camera hits did not resolve to the single Player entity.");
+    require(selectViewportHit(document,light,false,false) && document.selection().primary==model,
+        "An attached light did not select its assembled object in the viewport.");
+    require(selectViewportHit(document,visual,false,false) && document.selection().primary==player,
+        "The Player visual exposed an internal authoring record.");
+    require(selectViewportHit(document,camera,true,false) && document.selection().ids.empty(),
+        "Ctrl-click on the Player camera did not toggle the same Player entity.");
+    sameRecords(document.scene().records(),before);
+    require(document.history().size()==history,"Hierarchy viewport selection mutated scene history.");
+}
+
 void subtreeCommands() {
     TempProject project; SceneDocument document(project.root);
     const auto parent=document.createEmpty("Parent");
@@ -647,6 +673,9 @@ void environmentModesPersistenceAndValidation() {
     const auto original=*document.scene().find(id);
     require(original.environment->environment.background.show && !original.environment->environment.debanding,
         "New Environment did not show its background or enabled Debanding by default.");
+    require(original.environment->environment.fog.skyAffect==1.f&&
+        original.environment->environment.fog.aerialPerspective==0.f&&original.environment->environment.fog.sunScatter==0.f,
+        "Fog sky controls changed their compatibility defaults.");
     auto edited=original;auto& environment=edited.environment->environment;
     edited.environment->sun=sun;edited.environment->exposure=1.8f;
     environment.source=EnvironmentSource::ProceduralSky;environment.map="assets/textures/retained.hdr";
@@ -657,6 +686,7 @@ void environmentModesPersistenceAndValidation() {
     environment.fog.mode=FogMode::Depth;environment.fog.depthBegin=12;environment.fog.depthEnd=160;
     environment.fog.depthCurve=1.7f;environment.fog.depthOpacity=.65f;
     environment.fog.height=-3.5f;environment.fog.heightDensity=-.08f;environment.fog.lightEnergy=2.25f;
+    environment.fog.skyAffect=.35f;environment.fog.aerialPerspective=.6f;environment.fog.sunScatter=.8f;
     environment.debanding=true;
     const auto history=document.history().size();
     require(document.begin("Tune environment"),document.status());
@@ -687,6 +717,7 @@ void environmentModesPersistenceAndValidation() {
             record.environment->environment.debanding=false;
             auto& fog=record.environment->environment.fog;fog.color={1,0,0};fog.mode=FogMode::Exponential;
             fog.height=8;fog.heightDensity=.3f;fog.lightEnergy=5;
+            fog.skyAffect=.9f;fog.aerialPerspective=.2f;fog.sunScatter=.1f;
         }
     }),document.status());document.cancel();
     require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled fog edit changed authored settings.");
@@ -697,7 +728,8 @@ void environmentModesPersistenceAndValidation() {
         rejects([&]{auto json=environmentSettingsJson(environment);json["source"]=invalidSource;(void)readEnvironmentSettings(json);});
     for(const auto invalidMode:{Json(2),Json(-1),Json(1.5),Json(true),Json("Depth"),Json(nullptr)})
         rejects([&]{auto json=environmentSettingsJson(environment);json["fog"]["mode"]=invalidMode;(void)readEnvironmentSettings(json);});
-    for(const auto* field:{"density","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy"})
+    for(const auto* field:{"density","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy",
+            "skyAffect","aerialPerspective","sunScatter"})
         for(const auto invalidValue:{Json(true),Json("1"),Json(nullptr)})
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
@@ -707,6 +739,27 @@ void environmentModesPersistenceAndValidation() {
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
     require(play.transient() && sameEnvironment(resolveEnvironment(play.scene()),*edited.environment),"Play clone lost environment settings or sun link.");
+    auto playEnvironment=*play.scene().find(id);
+    playEnvironment.environment->environment.fog.skyAffect=.95f;
+    playEnvironment.environment->environment.fog.aerialPerspective=.05f;
+    playEnvironment.environment->environment.fog.sunScatter=.15f;
+    require(play.updateEntity(id,playEnvironment)&&sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),
+        "Tuning fog sky controls in Play changed the authored Environment.");
+    document.select({id});require(document.duplicateSelection(),document.status());
+    const auto duplicateEnvironment=document.scene().find(document.selection().primary);
+    require(duplicateEnvironment&&sameEnvironment(*duplicateEnvironment->environment,*edited.environment)&&
+        document.scene().properties().activeEnvironment==id,"Duplicating Environment lost fog sky settings or changed activation.");
+    require(document.undo(),document.status());
+    auto oldFog=Json::parse(saved);
+    for(auto& record:oldFog["entities"])if(record.contains("environment"))
+        for(const auto* field:{"skyAffect","aerialPerspective","sunScatter"})record["environment"]["environment"]["fog"].erase(field);
+    const auto oldFogId="assets/scenes/environment-missing-fog-sky-controls.crimson-scene";
+    const auto oldFogText=oldFog.dump();
+    writeText(project.root/oldFogId,oldFogText);require(reopened.load(oldFogId),reopened.status());
+    auto oldFogExpected=*edited.environment;oldFogExpected.environment.fog.skyAffect=1.f;
+    oldFogExpected.environment.fog.aerialPerspective=0.f;oldFogExpected.environment.fog.sunScatter=0.f;
+    require(!reopened.dirty()&&sameEnvironment(resolveEnvironment(reopened.scene()),oldFogExpected)&&
+        readText(project.root/oldFogId)==oldFogText,"Missing fog sky controls changed their defaults, dirtied or rewrote an older scene.");
     for(int version=1;version<=5;++version) {
         auto legacy=Json::parse(saved);legacy["version"]=version;
         if(version==1) {
@@ -726,7 +779,8 @@ void environmentModesPersistenceAndValidation() {
     auto versionSix=Json::parse(saved);versionSix["version"]=6;
     for(auto& record:versionSix["entities"])if(record.contains("environment")) {
         record["environment"]["environment"].erase("debanding");
-        for(const auto* field:{"mode","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy"})
+        for(const auto* field:{"mode","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy",
+                "skyAffect","aerialPerspective","sunScatter"})
             record["environment"]["environment"]["fog"].erase(field);
     }
     const auto versionSixId="assets/scenes/environment-v6.crimson-scene";const auto versionSixText=versionSix.dump();
@@ -788,7 +842,8 @@ void environmentModesPersistenceAndValidation() {
     rejectEdit([](auto& value){value.environment.procedural.sunHaloExtent=181;});
     rejectEdit([](auto& value){value.environment.procedural.sunHaloExtent=std::numeric_limits<float>::quiet_NaN();});
     for(const auto member:{&FogSettings::depthBegin,&FogSettings::depthEnd,&FogSettings::depthCurve,&FogSettings::depthOpacity,
-            &FogSettings::height,&FogSettings::heightDensity,&FogSettings::lightEnergy})
+            &FogSettings::height,&FogSettings::heightDensity,&FogSettings::lightEnergy,
+            &FogSettings::skyAffect,&FogSettings::aerialPerspective,&FogSettings::sunScatter})
         for(float invalid:{std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})
             rejectEdit([&](auto& value){value.environment.fog.*member=invalid;});
     rejectEdit([](auto& value){value.environment.fog.depthBegin=-1;});
@@ -800,9 +855,15 @@ void environmentModesPersistenceAndValidation() {
     rejectEdit([](auto& value){value.environment.fog.depthOpacity=-.1f;});
     rejectEdit([](auto& value){value.environment.fog.depthOpacity=1.1f;});
     rejectEdit([](auto& value){value.environment.fog.lightEnergy=-1;});
+    for(const auto member:{&FogSettings::skyAffect,&FogSettings::aerialPerspective,&FogSettings::sunScatter})
+        for(const float invalid:{-.01f,1.01f})rejectEdit([&](auto& value){value.environment.fog.*member=invalid;});
     auto boundary=environment;boundary.fog.density=0;boundary.procedural.sunDiameter=0;boundary.procedural.sunHaloExtent=180;
     boundary.fog.depthBegin=200;boundary.fog.depthEnd=0;boundary.fog.depthOpacity=0;boundary.fog.lightEnergy=0;boundary.fog.heightDensity=.2f;
     require(readEnvironmentSettings(environmentSettingsJson(boundary))==boundary,"Valid zero density/diameter or maximum halo angle was rejected.");
+    for(const float limit:{0.f,1.f}) {
+        boundary.fog.skyAffect=limit;boundary.fog.aerialPerspective=limit;boundary.fog.sunScatter=limit;
+        require(readEnvironmentSettings(environmentSettingsJson(boundary))==boundary,"Valid fog sky-control boundaries did not round-trip.");
+    }
     auto invalid=Json::parse(saved);
     for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["fog"]["density"]=-1;
     const auto invalidId="assets/scenes/invalid-environment.crimson-scene";writeText(project.root/invalidId,invalid.dump());
@@ -903,6 +964,253 @@ void environmentAmbientLightStorageAndHistory() {
     for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["ambientLight"]["energy"]=-1;
     const auto invalidId="assets/scenes/ambient-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
     require(!reopened.load(invalidId),"Invalid ambient light replaced a working scene.");sameRecords(before,reopened.scene().records());
+}
+void lightIndirectEnergyStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    const auto point=document.createPointLight(),directional=document.createDirectionalLight(),player=document.createPlayer();
+    require(point&&directional&&player,document.status());
+    require(document.scene().find(point)->point->indirectEnergy==1&&document.scene().find(directional)->directional->indirectEnergy==1&&
+        document.scene().find(player)->lightRig->localWorld.indirectEnergy==1,"New lights changed default GI contribution.");
+    const auto original=document.scene().records();const auto beforeHistory=document.history().size();
+    const auto tune=[&](auto& records,auto&){for(auto& record:records) {
+        if(record.id==point)record.point->indirectEnergy=2.5f;
+        if(record.id==directional)record.directional->indirectEnergy=0;
+        if(record.id==player)record.lightRig->localWorld.indirectEnergy=4;
+    }};
+    require(document.begin("Tune light GI")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==point)record.point->indirectEnergy=1.5f;})&&
+        document.update(tune)&&document.commit(),document.status());
+    const auto edited=document.scene().records();
+    require(document.history().size()==beforeHistory+1,"Light GI energy gesture did not form one command.");
+    require(document.undo(),document.status());sameRecords(original,document.scene().records());
+    require(document.redo(),document.status());sameRecords(edited,document.scene().records());
+    require(document.begin("Cancel light GI")&&document.update([&](auto& records,auto&){for(auto& record:records) {
+        if(record.point)record.point->indirectEnergy=0;if(record.directional)record.directional->indirectEnergy=8;
+        if(record.lightRig)record.lightRig->localWorld.indirectEnergy=0;}}),document.status());
+    document.cancel();sameRecords(edited,document.scene().records());
+    require(document.save("Light GI energy"),document.status());const auto savedText=readText(project.root/document.assetId());const auto saved=Json::parse(savedText);
+    require(saved.at("version")==17,"Per-light GI energy unnecessarily changed the scene format version.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty(),reopened.status());sameRecords(edited,reopened.scene().records());
+    for(const auto& record:saved["entities"]) {
+        if(record.contains("point"))require(record["point"].at("indirectEnergy")==2.5f,"Point GI energy was not persisted.");
+        if(record.contains("directional"))require(record["directional"].at("indirectEnergy")==0,"Directional GI energy was not persisted.");
+        if(record.contains("lightRig"))require(record["lightRig"]["localWorld"].at("indirectEnergy")==4&&
+            !record["lightRig"]["key"].contains("indirectEnergy")&&!record["lightRig"]["fill"].contains("indirectEnergy"),
+            "Local World GI energy was lost or added to private Character Key/Fill.");
+    }
+    document.select({point,directional,player});require(document.duplicateSelection(),document.status());
+    for(const auto& record:document.scene().records()) {
+        if(record.point)require(record.point->indirectEnergy==2.5f,"Point duplication lost GI energy.");
+        if(record.directional)require(record.directional->indirectEnergy==0,"Directional duplication lost disabled GI energy.");
+        if(record.lightRig)require(record.lightRig->localWorld.indirectEnergy==4,"Player duplication lost Local World GI energy.");
+    }
+    auto missing=saved;for(auto& record:missing["entities"]) {
+        if(record.contains("point"))record["point"].erase("indirectEnergy");
+        if(record.contains("directional"))record["directional"].erase("indirectEnergy");
+        if(record.contains("lightRig"))record["lightRig"]["localWorld"].erase("indirectEnergy");
+    }
+    const auto missingId="assets/scenes/light-gi-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
+    require(reopened.load(missingId)&&!reopened.dirty()&&readText(project.root/missingId)==missingText,
+        "Reading missing optional GI energy dirtied or rewrote an existing scene.");
+    auto expected=edited;for(auto& record:expected) {
+        if(record.point)record.point->indirectEnergy=1;if(record.directional)record.directional->indirectEnergy=1;
+        if(record.lightRig)record.lightRig->localWorld.indirectEnergy=1;
+    }
+    sameRecords(expected,reopened.scene().records());
+    require(reopened.load(document.assetId()),reopened.status());const auto beforeInvalid=reopened.scene().records();
+    for(const auto owner:{point,directional,player}) {
+        for(const auto bad:{Json(-.01f),Json(16.01f),Json(true),Json("2"),Json(nullptr),Json::array(),Json::object()}) {
+            auto invalid=saved;for(auto& record:invalid["entities"]) {
+                if(owner==point&&record.contains("point"))record["point"]["indirectEnergy"]=bad;
+                if(owner==directional&&record.contains("directional"))record["directional"]["indirectEnergy"]=bad;
+                if(owner==player&&record.contains("lightRig"))record["lightRig"]["localWorld"]["indirectEnergy"]=bad;
+            }
+            const auto invalidId="assets/scenes/light-gi-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+            require(!reopened.load(invalidId),"Invalid persisted light GI energy was accepted.");sameRecords(beforeInvalid,reopened.scene().records());
+        }
+        for(const float bad:{-.01f,16.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+            auto candidate=*document.scene().find(owner);
+            if(candidate.point)candidate.point->indirectEnergy=bad;if(candidate.directional)candidate.directional->indirectEnergy=bad;
+            if(candidate.lightRig)candidate.lightRig->localWorld.indirectEnergy=bad;
+            require(!document.updateEntity(owner,candidate),"Invalid finite range or nonfinite light GI energy entered a scene.");
+        }
+        for(const float boundary:{0.f,16.f}) {
+            auto candidate=*document.scene().find(owner);
+            if(candidate.point)candidate.point->indirectEnergy=boundary;if(candidate.directional)candidate.directional->indirectEnergy=boundary;
+            if(candidate.lightRig)candidate.lightRig->localWorld.indirectEnergy=boundary;
+            Scene::validate({candidate},{});
+        }
+    }
+}
+void environmentToneMappingParametersStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    require(resolveEnvironment(document.scene()).environment.toneMappingParameters==ToneMappingParameters{},
+        "Empty scenes changed their existing tone mapping curves.");
+    const auto id=document.createEnvironment("Tone mapping controls");const auto original=*document.scene().find(id);
+    auto edited=original;auto& settings=edited.environment->environment;
+    settings.toneMapping=ToneMapping::AgX;settings.toneMappingParameters={4,2.5f,24,1.7f};
+    const auto beforeHistory=document.history().size();
+    require(document.begin("Tune tone mapping")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment->environment.toneMappingParameters.agxContrast=1.5f;})&&
+        document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)record.environment->environment=settings;})&&
+        document.commit(),document.status());
+    require(document.history().size()==beforeHistory+1,"Tone mapping gesture did not form one Environment command.");
+    require(document.undo()&&sameEnvironment(resolveEnvironment(document.scene()),*original.environment),"Tone mapping tuning undo lost the original curve.");
+    require(document.redo()&&sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Tone mapping tuning redo lost white points or contrast.");
+    require(document.begin("Cancel tone mapping")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id) {
+        record.environment->environment.toneMappingParameters={8,4,32,2.2f};}}),document.status());
+    document.cancel();require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled tone mapping gesture changed committed parameters.");
+    for(const auto mode:{ToneMapping::Linear,ToneMapping::Reinhard,ToneMapping::ACES,ToneMapping::AgX}) {
+        auto candidate=edited;candidate.environment->environment.toneMapping=mode;
+        require(document.updateEntity(id,candidate)&&document.save("Tone mapping controls"),document.status());
+        SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+        require(!reopened.dirty()&&sameEnvironment(resolveEnvironment(reopened.scene()),*candidate.environment),
+            "Changing tone mapping mode or reopening discarded inactive curve parameters.");
+        require(readEnvironmentSettings(environmentSettingsJson(candidate.environment->environment))==candidate.environment->environment,
+            "Shared environment serialization changed tone mapping parameters.");
+    }
+    document.select({id});require(document.duplicateSelection(),document.status());
+    require(document.scene().properties().activeEnvironment==id&&document.scene().find(document.selection().primary)->environment->environment==settings,
+        "Environment duplication lost curve parameters or changed active Environment selection.");
+    require(document.save("Tone mapping controls"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
+    require(saved.at("version")==17,"Tone mapping controls unnecessarily changed the scene format version.");
+    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("toneMappingParameters");
+    const auto missingId="assets/scenes/tone-parameters-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
+    SceneDocument reopened(project.root);require(reopened.load(missingId),reopened.status());
+    require(!reopened.dirty()&&readText(project.root/missingId)==missingText&&resolveEnvironment(reopened.scene()).environment.toneMappingParameters==ToneMappingParameters{}&&
+        resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::AgX,
+        "Missing curve parameters changed the previous tone mapper, dirtied the scene or rewrote its source.");
+    const auto encoded=environmentSettingsJson(settings);
+    auto partial=encoded;partial["toneMappingParameters"]={{"agxContrast",2.f}};
+    auto partialExpected=settings;partialExpected.toneMappingParameters=ToneMappingParameters{};partialExpected.toneMappingParameters.agxContrast=2;
+    require(readEnvironmentSettings(partial)==partialExpected,"Partial tone mapping tuning did not retain defaults for omitted fields.");
+    for(const auto bad:{Json(true),Json(1),Json("curve"),Json(nullptr),Json::array()})
+        rejects([&]{auto json=encoded;json["toneMappingParameters"]=bad;(void)readEnvironmentSettings(json);});
+    const std::array members{&ToneMappingParameters::reinhardWhite,&ToneMappingParameters::acesWhite,&ToneMappingParameters::agxWhite,&ToneMappingParameters::agxContrast};
+    constexpr std::array<const char*,4> names{"reinhardWhite","acesWhite","agxWhite","agxContrast"};
+    constexpr std::array<float,4> minimum{0,1,2,1},maximum{64,64,64,4};
+    for(std::size_t index=0;index<members.size();++index) {
+        for(const auto bad:{Json(true),Json("2"),Json(nullptr),Json::array(),Json::object()})
+            rejects([&]{auto json=encoded;json["toneMappingParameters"][names[index]]=bad;(void)readEnvironmentSettings(json);});
+        for(const float bad:{minimum[index]-.01f,maximum[index]+.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+            auto candidate=settings;candidate.toneMappingParameters.*members[index]=bad;
+            rejects([&]{validateEnvironmentSettings(candidate);});
+            auto json=encoded;json["toneMappingParameters"][names[index]]=bad;rejects([&]{(void)readEnvironmentSettings(json);});
+            auto record=edited;record.environment->environment=candidate;
+            require(!document.updateEntity(id,record),"Invalid tone mapping tuning entered the authored document.");
+        }
+        for(const float boundary:{minimum[index],maximum[index]}) {
+            auto candidate=settings;candidate.toneMappingParameters.*members[index]=boundary;
+            require(readEnvironmentSettings(environmentSettingsJson(candidate))==candidate,"Valid tone mapping parameter boundary was rejected.");
+        }
+    }
+    require(reopened.load(document.assetId()),reopened.status());const auto before=reopened.scene().records();
+    auto invalid=saved;for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["toneMappingParameters"]["agxContrast"]=0;
+    const auto invalidId="assets/scenes/tone-parameters-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+    require(!reopened.load(invalidId),"Invalid stored curve tuning replaced a working scene.");sameRecords(before,reopened.scene().records());
+}
+void environmentSsgiStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    const auto defaults=resolveEnvironment(document.scene()).environment;
+    require(defaults.ssgi==SsgiSettings{}&&defaults.ssao==SsaoSettings{}&&!effectiveSsgi(defaults.ssgi)&&!effectiveSsao(defaults.ssao),
+        "Empty scenes unexpectedly enable screen-space lighting.");
+    const auto id=document.createEnvironment("GI and AO");const auto original=*document.scene().find(id);
+    auto edited=original;auto& settings=edited.environment->environment;
+    settings.ssgi={true,1.75f,5.5f,.175f,.72f,SsgiQuality::High,3};settings.ssao={true,1.3f,.8f,SsaoQuality::High};
+    settings.ssgi.quality=SsgiQuality::Custom;settings.ssgi.rays=7;settings.ssgi.steps=28;settings.ssgi.rayBias=.035f;
+    settings.ssgi.denoiseRadius=2;settings.ssgi.denoiseStrength=.6f;settings.ssgi.radianceClamp=18;
+    require(document.begin("Tune screen-space lighting")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment->environment=settings;})&&document.commit(),document.status());
+    require(document.history().undoLabel()=="Tune screen-space lighting"&&effectiveSsgi(resolveEnvironment(document.scene()).environment.ssgi),
+        "Screen-space lighting edit did not commit as one Environment command.");
+    require(document.undo()&&sameEnvironment(resolveEnvironment(document.scene()),*original.environment),"Lighting undo lost disabled defaults.");
+    require(document.redo()&&sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Lighting redo lost authored tuning.");
+    require(document.begin("Cancel lighting")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id) {
+        record.environment->environment.ssgi.strength=.2f;record.environment->environment.ssao.radius=2;}}),document.status());
+    document.cancel();require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled lighting gesture changed committed tuning.");
+    for(const bool giEnabled:{false,true})for(const bool aoEnabled:{false,true}) {
+        auto candidate=edited;candidate.environment->environment.ssgi.enabled=giEnabled;candidate.environment->environment.ssao.enabled=aoEnabled;
+        require(document.updateEntity(id,candidate)&&document.save("GI and AO"),document.status());
+        SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+        require(!reopened.dirty()&&sameEnvironment(resolveEnvironment(reopened.scene()),*candidate.environment),"Inactive GI/AO tuning was lost on Save/reopen.");
+        const auto encoded=environmentSettingsJson(candidate.environment->environment);
+        require(encoded.contains("ssgi")&&encoded.contains("ssao")&&!encoded.contains("gi")&&readEnvironmentSettings(encoded)==candidate.environment->environment,
+            "Environment writer retained the removed GI method representation or lost tuning.");
+    }
+    const auto current=*document.scene().find(id);document.select({id});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->environment->environment==current.environment->environment,
+        "Duplicating an Environment lost screen-space lighting tuning.");
+    require(document.save("GI and AO"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
+    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment")) {
+        record["environment"]["environment"].erase("ssgi");record["environment"]["environment"].erase("ssao");
+    }
+    const auto missingId="assets/scenes/gi-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
+    SceneDocument reopened(project.root);require(reopened.load(missingId),reopened.status());
+    require(!reopened.dirty()&&readText(project.root/missingId)==missingText&&resolveEnvironment(reopened.scene()).environment.ssgi==SsgiSettings{}&&
+        resolveEnvironment(reopened.scene()).environment.ssao==SsaoSettings{},"Old scenes enabled GI/AO, became dirty or rewrote their source.");
+    auto encoded=environmentSettingsJson(settings);auto previousWrapper=encoded;previousWrapper.erase("ssgi");
+    previousWrapper["gi"]={{"enabled",settings.ssgi.enabled},{"strength",settings.ssgi.strength},{"bounces",settings.ssgi.bounces},{"method",1},
+        {"screenSpace",{{"maxDistance",settings.ssgi.maxDistance},{"thickness",settings.ssgi.thickness},{"quality",static_cast<int>(settings.ssgi.quality)},
+            {"temporalStability",settings.ssgi.temporalStability}}},{"dynamicWorld",{{"coverage",32},{"quality",2},{"temporalStability",.8}}}};
+    previousWrapper["gi"]["screenSpace"]=encoded["ssgi"];
+    require(readEnvironmentSettings(previousWrapper)==settings,"Removed GI wrapper conversion lost common or screen-space tuning.");
+    auto oldOneBounce=encoded;oldOneBounce["ssgi"].erase("bounces");auto oneExpected=settings;oneExpected.ssgi.bounces=1;
+    require(readEnvironmentSettings(oldOneBounce)==oneExpected,"Older SSGI acquired extra bounces.");
+    auto preferred=encoded;preferred["gi"]=Json(false);require(readEnvironmentSettings(preferred)==settings,"Removed GI wrapper overrode the current SSGI object.");
+    auto previousScene=saved;for(auto& record:previousScene["entities"])if(record.contains("environment"))record["environment"]["environment"]=previousWrapper;
+    const auto previousId="assets/scenes/gi-wrapper.crimson-scene";const auto previousText=previousScene.dump();writeText(project.root/previousId,previousText);
+    require(reopened.load(previousId)&&!reopened.dirty()&&readText(project.root/previousId)==previousText&&
+        resolveEnvironment(reopened.scene()).environment==settings,"Loading the removed GI wrapper changed its source or screen-space tuning.");
+    for(const auto bad:{Json(-1),Json(0),Json(5),Json(1.5),Json(true),Json("2"),Json(nullptr),Json(std::numeric_limits<std::uint64_t>::max())})
+        rejects([&]{auto json=encoded;json["ssgi"]["bounces"]=bad;(void)readEnvironmentSettings(json);});
+    for(const auto* section:{"ssgi","ssao"}) {
+        for(const auto bad:{Json(1),Json("true"),Json(nullptr)})rejects([&]{auto json=encoded;json[section]["enabled"]=bad;(void)readEnvironmentSettings(json);});
+        for(const auto bad:{Json(-1),Json(4),Json(1.5),Json(true),Json("High"),Json(nullptr)})
+            rejects([&]{auto json=encoded;json[section]["quality"]=bad;(void)readEnvironmentSettings(json);});
+        for(const auto bad:{Json(true),Json(1),Json(nullptr),Json::array()})
+            rejects([&]{auto json=encoded;json[section]=bad;(void)readEnvironmentSettings(json);});
+    }
+    for(const auto bad:{Json(true),Json("1"),Json(nullptr)}) {
+        for(const auto* field:{"strength","maxDistance","thickness","temporalStability","rayBias","denoiseStrength","radianceClamp"})
+            rejects([&]{auto json=encoded;json["ssgi"][field]=bad;(void)readEnvironmentSettings(json);});
+        for(const auto* field:{"strength","radius"})rejects([&]{auto json=encoded;json["ssao"][field]=bad;(void)readEnvironmentSettings(json);});
+    }
+    for(const auto* field:{"rays","steps","denoiseRadius"})for(const auto bad:{Json(-1),Json(100),Json(1.5),Json(true),Json("4"),Json(nullptr)})
+        rejects([&]{auto json=encoded;json["ssgi"][field]=bad;(void)readEnvironmentSettings(json);});
+    rejects([&]{auto json=encoded;json["ssao"]["quality"]=3;(void)readEnvironmentSettings(json);});
+    for(const float bad:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})for(int field=0;field<9;++field) {
+        auto invalid=settings;if(field==0)invalid.ssgi.strength=bad;if(field==1)invalid.ssgi.maxDistance=bad;if(field==2)invalid.ssgi.thickness=bad;
+        if(field==3)invalid.ssgi.temporalStability=bad;if(field==4)invalid.ssao.strength=bad;if(field==5)invalid.ssao.radius=bad;
+        if(field==6)invalid.ssgi.rayBias=bad;if(field==7)invalid.ssgi.denoiseStrength=bad;if(field==8)invalid.ssgi.radianceClamp=bad;
+        rejects([&]{validateEnvironmentSettings(invalid);});
+    }
+    for(int field=0;field<8;++field) {
+        auto invalid=settings;if(field==0)invalid.ssgi.strength=4.01f;if(field==1)invalid.ssgi.maxDistance=20.01f;if(field==2)invalid.ssgi.thickness=2.01f;
+        if(field==3)invalid.ssgi.temporalStability=.99f;if(field==4)invalid.ssao.strength=2.01f;if(field==5)invalid.ssao.radius=5.01f;
+        if(field==6)invalid.ssgi.bounces=0;if(field==7)invalid.ssgi.bounces=5;rejects([&]{validateEnvironmentSettings(invalid);});
+    }
+    auto invalid=settings;invalid.ssgi.quality=static_cast<SsgiQuality>(99);rejects([&]{validateEnvironmentSettings(invalid);});
+    invalid=settings;invalid.ssao.quality=static_cast<SsaoQuality>(99);rejects([&]{validateEnvironmentSettings(invalid);});
+    for(const float radius:{.05f,5.f})for(const float strength:{0.f,2.f}) {auto boundary=settings;boundary.ssao.radius=radius;boundary.ssao.strength=strength;
+        require(readEnvironmentSettings(environmentSettingsJson(boundary))==boundary,"Valid SSAO tuning boundary was rejected.");}
+    invalid=settings;invalid.ssao.radius=.049f;rejects([&]{validateEnvironmentSettings(invalid);});
+    for(int field=0;field<10;++field) {
+        auto bad=settings;if(field==0)bad.ssgi.rays=0;if(field==1)bad.ssgi.rays=17;if(field==2)bad.ssgi.steps=7;if(field==3)bad.ssgi.steps=65;
+        if(field==4)bad.ssgi.denoiseRadius=-1;if(field==5)bad.ssgi.denoiseRadius=5;if(field==6)bad.ssgi.rayBias=.0009f;
+        if(field==7)bad.ssgi.rayBias=.501f;if(field==8)bad.ssgi.denoiseStrength=1.01f;if(field==9)bad.ssgi.radianceClamp=100.01f;
+        rejects([&]{validateEnvironmentSettings(bad);});
+    }
+    auto previousTuning=encoded;for(const auto* field:{"rays","steps","rayBias","denoiseRadius","denoiseStrength","radianceClamp"})previousTuning["ssgi"].erase(field);
+    auto defaultTuning=settings;const SsgiSettings newDefaults;defaultTuning.ssgi.rays=newDefaults.rays;defaultTuning.ssgi.steps=newDefaults.steps;
+    defaultTuning.ssgi.rayBias=newDefaults.rayBias;defaultTuning.ssgi.denoiseRadius=newDefaults.denoiseRadius;
+    defaultTuning.ssgi.denoiseStrength=newDefaults.denoiseStrength;defaultTuning.ssgi.radianceClamp=newDefaults.radianceClamp;
+    require(readEnvironmentSettings(previousTuning)==defaultTuning,"Earlier SSGI did not inherit new tuning defaults.");
+    auto bypass=settings;bypass.ssgi.strength=0;bypass.ssao.strength=0;require(!effectiveSsgi(bypass.ssgi)&&!effectiveSsao(bypass.ssao),"Zero strength did not bypass screen-space work.");
+    auto partial=encoded;partial["ssgi"]=Json::object();partial["ssao"]=Json::object();
+    require(readEnvironmentSettings(partial).ssgi==SsgiSettings{}&&readEnvironmentSettings(partial).ssao==SsaoSettings{},"Partial lighting objects lost opt-in defaults.");
+    const auto before=reopened.scene().records();auto malformed=saved;
+    for(auto& record:malformed["entities"])if(record.contains("environment"))record["environment"]["environment"]["ssao"]["radius"]=0;
+    const auto invalidId="assets/scenes/gi-invalid.crimson-scene";writeText(project.root/invalidId,malformed.dump());
+    require(!reopened.load(invalidId),"Invalid saved SSAO replaced a working scene.");sameRecords(before,reopened.scene().records());
 }
 void particleReferencesAndPersistence() {
     TempProject project;SceneDocument document(project.root);
@@ -1163,14 +1471,15 @@ int main() {
         reparentPreservesAffine();
         transactionsAndSelection();
         viewportParentSelection();
+        viewportEntityHierarchySelection();
         subtreeCommands();duplicateNameFamilies();duplicateTransformTransactions();
         persistenceAndCatalog();
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
-        environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();
+        environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
         particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 24 groups passed.\n";
+        std::cout << "Scene core checks passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

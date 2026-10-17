@@ -3,31 +3,28 @@
 #include "SceneDocument.h"
 
 namespace crimson {
-enum class SceneOutlinerRowKind { Component,Child };
+// One row per authored entity, retaining its real hierarchy. Only an Actor's
+// direct following camera is edited inline rather than as a duplicate row.
 struct SceneOutlinerRow {
-    SceneOutlinerRowKind kind{SceneOutlinerRowKind::Component};
-    SceneComponentKind component{SceneComponentKind::Transform};
-    EntityId child{};
+    EntityId entity{};
+    EntityId parent{};
     bool operator==(const SceneOutlinerRow&) const = default;
-    static SceneOutlinerRow componentRow(SceneComponentKind value) {return {SceneOutlinerRowKind::Component,value,NoEntity};}
-    static SceneOutlinerRow childRow(EntityId value) {return {SceneOutlinerRowKind::Child,SceneComponentKind::Transform,value};}
 };
-// Transform belongs to the owning entity row. All actual children are returned;
-// actor visual children may be displayed within the Visual Root by the editor.
-std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene&,EntityId owner);
-// The editor already owns an indexed/sorted snapshot; avoid scanning the scene
-// registry for each visible row by building directly from those child pointers.
-std::vector<SceneOutlinerRow> sceneOutlinerRows(const EntityRecord& owner,
-                                             std::span<const EntityRecord* const> orderedChildren);
-// Reorder rows within their current owner, preserving actual entity hierarchy,
-// transforms, camera follow/lens values and scene roles. Missing before = end.
-bool reorderSceneOutlinerRow(SceneDocument&,EntityId owner,SceneOutlinerRow moving,
-                             std::optional<SceneOutlinerRow> before=std::nullopt);
+bool isSceneGroup(const EntityRecord&);
+// Stable hierarchy preorder. A child of an inline actor camera uses its nearest
+// visible ancestor; model and particle attachments keep their real rows.
+std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene&);
+// A direct Actor-follow camera selects its actor. Authored models, emitters and
+// other entities always retain their own authoring identity.
+EntityId sceneEntityOwner(const Scene&,EntityId);
+// The selected entity first. For an Actor (or its inline following camera), also
+// include owned visual and camera properties in authored hierarchy order.
+std::vector<EntityId> sceneEntityParts(const Scene&,EntityId);
+
 struct SceneOutlinerColorTarget {
     EntityId entity{};
-    std::optional<SceneComponentKind> component;
     bool operator==(const SceneOutlinerColorTarget&) const = default;
 };
-std::optional<Vec4> sceneOutlinerColor(const EntityRecord&,std::optional<SceneComponentKind> component=std::nullopt);
+std::optional<Vec4> sceneOutlinerColor(const EntityRecord&);
 bool setSceneOutlinerColors(SceneDocument&,std::span<const SceneOutlinerColorTarget>,std::optional<Vec4> color);
 }

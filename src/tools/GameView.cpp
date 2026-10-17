@@ -1,5 +1,6 @@
 #include "GameView.h"
 #include "GameViewInteraction.h"
+#include "RenderDebugControls.h"
 #include "editor/CollisionWire.h"
 #include "editor/ActorLightRigOverlay.h"
 #include "scene/SceneDocument.h"
@@ -57,6 +58,7 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
     if(visible) {
         if(gameMetricsToggleRequested(playing))metricsVisible_=!metricsVisible_;
         if(playing)updateMetrics(renderer,textureAndProgramBytes);
+        drawRenderDebugControls(renderer,RenderViewPurpose::Game);
         const auto size=ImGui::GetContentRegionAvail();
         if(size.x>0 && size.y>0) {
             const auto* host=ImGui::GetWindowViewport();const auto origin=ImGui::GetCursorScreenPos();

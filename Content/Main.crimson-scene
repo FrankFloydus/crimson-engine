@@ -1,0 +1,5350 @@
+{
+  "entities": [
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "026d48f154bcbf30",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 33,
+      "parent": "ffe6a9a0b08b6ae4",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:72:72:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -4.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -4.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              -4.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "0939ab3300507678",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 9,
+      "parent": "165faca6113693bd",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:55:55:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "actor": {},
+      "controller": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.7999999523162842,
+        "radius": 0.30000001192092896,
+        "showCollisionInGame": true
+      },
+      "darknessReveal": {
+        "enabled": false,
+        "spread": 8.0,
+        "version": 2
+      },
+      "id": "0ef73fe233641b37",
+      "lightRig": {
+        "characterShadow": {
+          "distance": 20.0,
+          "enabled": true,
+          "shadowDepthBias": 0.004999999888241291,
+          "shadowNormalBias": 1.0,
+          "strength": 0.800000011920929
+        },
+        "enabled": true,
+        "fill": {
+          "color": [
+            0.550000011920929,
+            0.6499999761581421,
+            1.0
+          ],
+          "diffuse": 1.0,
+          "direction": [
+            0.699999988079071,
+            -0.4000000059604645,
+            0.6000000238418579
+          ],
+          "enabled": true,
+          "intensity": 0.3499999940395355,
+          "specular": 1.0
+        },
+        "key": {
+          "color": [
+            1.0,
+            0.9599999785423279,
+            0.8999999761581421
+          ],
+          "diffuse": 1.0,
+          "direction": [
+            -0.25999999046325684,
+            -0.3700000047683716,
+            0.019999999552965164
+          ],
+          "enabled": true,
+          "intensity": 1.5,
+          "specular": 1.0
+        },
+        "localWorld": {
+          "attenuation": 2.0,
+          "castShadows": true,
+          "color": [
+            1.0,
+            0.9599999785423279,
+            0.8999999761581421
+          ],
+          "edgeSoftness": 1.0,
+          "enabled": false,
+          "height": 2.0,
+          "indirectEnergy": 1.0,
+          "intensity": 7.111111164093018,
+          "nearFalloffRadius": 1.5,
+          "radius": 8.0,
+          "rangeFalloffExponent": 1.0,
+          "shadowDepthBias": 0.004999999888241291,
+          "shadowNormalBias": 1.0,
+          "sourceRadius": 0.0,
+          "specularStrength": 0.0
+        },
+        "showGizmos": false,
+        "version": 4
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        1.9763579368591309,
+        0.0,
+        2.868222713470459,
+        1.0
+      ],
+      "motor": {
+        "enabled": true,
+        "moveSpeed": 5.0
+      },
+      "name": "Player",
+      "navigation": {
+        "enabled": true,
+        "showRoute": true
+      },
+      "order": 4,
+      "outlinerStyle": {
+        "color": [
+          1.0,
+          0.22360247373580933,
+          0.22360247373580933,
+          1.0
+        ]
+      },
+      "parent": "0000000000000000",
+      "playerInput": {
+        "enabled": true
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "10eee8a37c4e954a",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.4000000059604645,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.5399999618530273,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.3199999928474426,
+        0.0,
+        0.0,
+        0.7692846059799194,
+        0.0,
+        1.0
+      ],
+      "model": "ec337913-e4bd-5069-af3a-f18227b0209f",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "PlayerVisial",
+      "order": 1,
+      "parent": "0ef73fe233641b37",
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "165faca6113693bd",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        0.9999999403953552,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        9.0,
+        1.1920928955078125e-07,
+        -11.0,
+        1.0
+      ],
+      "model": "0cec69bc-a72c-5582-8a0a-802af6cf1296",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_006",
+      "order": 8,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:55:55:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "1ad5eb0d9bdcb51d",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 41,
+      "parent": "c3e6a8e87729a6b2",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:76:76:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "20bfe8a1b49f0e13",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        10.0,
+        0.5,
+        -2.0,
+        1.0
+      ],
+      "model": "7c077cde-2a50-5e3f-a0b6-c2a4409120f3",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_008",
+      "order": 12,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:57:57:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "23729238acddb494",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        -1.5099578831723193e-07,
+        0.0,
+        0.0,
+        1.5099578831723193e-07,
+        -0.9999999403953552,
+        0.0,
+        16.0,
+        1.5,
+        6.0,
+        1.0
+      ],
+      "model": "2a688822-0606-5066-8f48-58684b4a2686",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_038",
+      "order": 70,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:92:92:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "279d5de83f86d4b1",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 51,
+      "parent": "ecaa0176566e4844",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:82:82:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "298418eef7906797",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -5.0,
+        0.5,
+        -11.0,
+        1.0
+      ],
+      "model": "eb77b900-7eec-526d-93f2-6b775ddb6e94",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_007",
+      "order": 10,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:56:56:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "environment": {
+        "environment": {
+          "ambientLight": {
+            "color": [
+              0.1627018302679062,
+              0.17588113248348236,
+              0.1813725233078003
+            ],
+            "energy": 1.0,
+            "skyContribution": 1.0,
+            "source": 1
+          },
+          "ambientVisibility": {
+            "attenuateEmission": false,
+            "darknessFloor": 0.0,
+            "enabled": false,
+            "shadowAware": true,
+            "strength": 1.0,
+            "threshold": 0.10000000149011612,
+            "transition": 0.25
+          },
+          "background": {
+            "color": [
+              0.08235294371843338,
+              0.08235294371843338,
+              0.08235294371843338
+            ],
+            "overrideColor": false,
+            "show": true
+          },
+          "debanding": true,
+          "enabled": false,
+          "fog": {
+            "aerialPerspective": 0.0,
+            "color": [
+              0.5176470875740051,
+              0.5529412031173706,
+              0.6078431606292725
+            ],
+            "density": 0.04179999977350235,
+            "depthBegin": 10.0,
+            "depthCurve": 1.0,
+            "depthEnd": 100.0,
+            "depthOpacity": 1.0,
+            "enabled": false,
+            "height": 0.0,
+            "heightDensity": 0.0,
+            "lightEnergy": 1.0,
+            "mode": 1,
+            "skyAffect": 1.0,
+            "sunScatter": 0.0
+          },
+          "glow": {
+            "enabled": false,
+            "radius": 1.0,
+            "strength": 0.800000011920929,
+            "threshold": 1.0
+          },
+          "intensity": 0.0,
+          "map": "",
+          "procedural": {
+            "groundBottom": [
+              0.20000000298023224,
+              0.16899999976158142,
+              0.13300000131130219
+            ],
+            "groundCurve": 0.019999999552965164,
+            "groundHorizon": [
+              0.6463000178337097,
+              0.6557999849319458,
+              0.670799970626831
+            ],
+            "skyCurve": 0.15000000596046448,
+            "skyHorizon": [
+              0.6463000178337097,
+              0.6557999849319458,
+              0.670799970626831
+            ],
+            "skyTop": [
+              0.38499999046325684,
+              0.45399999618530273,
+              0.550000011920929
+            ],
+            "sunDiameter": 0.5,
+            "sunHaloCurve": 0.15000000596046448,
+            "sunHaloExtent": 30.0
+          },
+          "rotation": 0.0,
+          "source": 1,
+          "ssao": {
+            "enabled": true,
+            "quality": 1,
+            "radius": 0.44999998807907104,
+            "strength": 1.440000057220459
+          },
+          "ssgi": {
+            "bounces": 2,
+            "denoiseRadius": 3,
+            "denoiseStrength": 1.0,
+            "enabled": false,
+            "maxDistance": 3.0,
+            "quality": 1,
+            "radianceClamp": 10.0,
+            "rayBias": 0.019999999552965164,
+            "rays": 4,
+            "steps": 16,
+            "strength": 1.0,
+            "temporalStability": 0.8500000238418579,
+            "thickness": 0.10000000149011612
+          },
+          "toneMapping": 2,
+          "toneMappingParameters": {
+            "acesWhite": 1.0,
+            "agxContrast": 1.25,
+            "agxWhite": 16.290000915527344,
+            "reinhardWhite": 0.0
+          }
+        },
+        "exposure": 1.0,
+        "sun": "0000000000000000"
+      },
+      "id": "29cf3b97ea57954b",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Environment",
+      "order": 5,
+      "outlinerStyle": {
+        "color": [
+          0.25999999046325684,
+          0.859254777431488,
+          0.9800000190734863,
+          1.0
+        ]
+      },
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "2ab103018efbb5b5",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        0.9999999403953552,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        10.0,
+        2.0,
+        -3.5,
+        1.0
+      ],
+      "model": "5752d539-36a1-5db7-9d3f-3c1a6439b5fe",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_010",
+      "order": 16,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:59:59:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "2b6d04538937d859",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        -1.5099578831723193e-07,
+        0.0,
+        0.0,
+        1.5099578831723193e-07,
+        -0.9999999403953552,
+        0.0,
+        -4.0,
+        1.5,
+        -2.0,
+        1.0
+      ],
+      "model": "26087cca-d47d-55c1-8785-10e298969496",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_036",
+      "order": 66,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:90:90:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "358852f17a3cf893",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 11,
+      "parent": "298418eef7906797",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:56:56:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -1.5,
+              1.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "35aa8cdf46e9fb7f",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 35,
+      "parent": "90aa63480bf9a6b7",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:73:73:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "3798ab1946f30575",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 3,
+      "parent": "8432f82bcddb0b6b",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:50:50:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "3eb1be88970c92a4",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.0,
+        0.5,
+        2.0,
+        1.0
+      ],
+      "model": "0c7eee90-69f4-5dfd-9c30-6e743a0ea4d2",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_016",
+      "order": 28,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:69:69:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "420bfa6c537c6fdf",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.1920928955078125e-07,
+        0.0,
+        -0.9999998807907104,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        0.0,
+        0.0,
+        0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        -9.5,
+        2.0,
+        2.000000476837158,
+        1.0
+      ],
+      "model": "1cacbf5a-b83e-5db1-8676-8ae56e5e711e",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_033",
+      "order": 60,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:87:87:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "4a465a80c75be750",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.1920928955078125e-07,
+        0.0,
+        0.9999998807907104,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        10.0,
+        1.1920928955078125e-07,
+        -4.0,
+        1.0
+      ],
+      "model": "771bc4bc-0f03-5909-b8d5-a7bebbeeff96",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_011",
+      "order": 18,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:62:62:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "4b2fc102e7fdc110",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -2.0,
+        0.5,
+        6.0,
+        1.0
+      ],
+      "model": "e2883c1c-90ba-561a-86a6-a2523a18c288",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_025",
+      "order": 44,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:78:78:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "4b74ce2667e2939b",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 29,
+      "parent": "3eb1be88970c92a4",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:69:69:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "4cc75bfedd52e1a4",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        0.9999999403953552,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        -6.0,
+        2.0,
+        8.5,
+        1.0
+      ],
+      "model": "075eaf72-e56e-5878-a02b-dd938f715068",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_032",
+      "order": 58,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:86:86:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "4d99cdb54cb31e6f",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 1,
+      "parent": "d8958500950d8a4b",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:49:49:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -1.0
+            ],
+            [
+              0.0,
+              -0.5,
+              -1.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -1.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "4e801d7bdbef20e9",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 59,
+      "parent": "4cc75bfedd52e1a4",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:86:86:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "4ed59831cfb822a8",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 23,
+      "parent": "bc93eaf3a8891222",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:66:66:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "id": "50d2e591f4fc9ed2",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.473324775695801,
+        2.169553279876709,
+        0.19558990001678467,
+        1.0
+      ],
+      "name": "Point Light",
+      "order": 6,
+      "parent": "0000000000000000",
+      "point": {
+        "attenuation": 2.0,
+        "castShadows": false,
+        "color": [
+          1.0,
+          0.7050173282623291,
+          0.08823531866073608
+        ],
+        "edgeSoftness": 1.0,
+        "enabled": true,
+        "indirectEnergy": 1.0,
+        "intensity": 20.0,
+        "nearFalloffRadius": 0.0,
+        "radius": 20.0,
+        "rangeFalloffExponent": 4.0,
+        "roles": {
+          "ambientReveal": true,
+          "ambientRevealMask": 3,
+          "ambientRevealStrength": 1.0,
+          "receiverMask": 3,
+          "shadowCasterMask": 3
+        },
+        "shadowDepthBias": 0.004999999888241291,
+        "shadowNormalBias": 1.0,
+        "sourceRadius": 0.0,
+        "specularStrength": 1.0
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -4.0,
+              -1.5,
+              2.0
+            ],
+            [
+              4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -4.0,
+              -1.5,
+              2.0
+            ],
+            [
+              4.0,
+              -1.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "52d8f6f8d89338e6",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 67,
+      "parent": "2b6d04538937d859",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:90:90:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -1.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -1.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              -1.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "54d49082314b29d7",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 17,
+      "parent": "2ab103018efbb5b5",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:59:59:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "camera": {
+        "far": 2048.0,
+        "near": 0.10000000149011612,
+        "verticalFov": 35.0
+      },
+      "cameraFollow": {
+        "offset": [
+          6.5,
+          13.100000381469727,
+          6.5
+        ],
+        "target": "0ef73fe233641b37",
+        "worldBasis": [
+          0.7071067690849304,
+          0.0,
+          -0.7071067690849304,
+          0.0,
+          -0.5792279839515686,
+          0.5735764503479004,
+          -0.5792279243469238,
+          0.0,
+          0.4055798053741455,
+          0.8191520571708679,
+          0.4055797755718231,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "id": "559ac92d64c09b54",
+      "local": [
+        0.7071067690849304,
+        0.0,
+        -0.7071067690849304,
+        0.0,
+        -0.5792279839515686,
+        0.5735764503479004,
+        -0.5792279243469238,
+        0.0,
+        0.4055798053741455,
+        0.8191520571708679,
+        0.4055797755718231,
+        0.0,
+        6.500000476837158,
+        13.100000381469727,
+        6.500000476837158,
+        1.0
+      ],
+      "name": "Camera",
+      "order": 0,
+      "parent": "0ef73fe233641b37",
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "5c6f2297b3be7ebb",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 15,
+      "parent": "cf6eabe09c620422",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:58:58:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -1.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "648342af675a7a6e",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 69,
+      "parent": "719dada4775c5e11",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:91:91:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "6528be428fbbd0c9",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 39,
+      "parent": "e4ab1681b4f29ea5",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:75:75:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "6702bf8420f9a190",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        -1.5099578831723193e-07,
+        0.0,
+        0.0,
+        1.5099578831723193e-07,
+        -0.9999999403953552,
+        0.0,
+        -2.0,
+        1.5,
+        10.0,
+        1.0
+      ],
+      "model": "147880f1-315a-58ab-8d00-19bf4931d083",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_005",
+      "order": 6,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:54:54:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              -3.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "6837f6bc0282d60f",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 25,
+      "parent": "94263add7824fdeb",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:67:67:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "6bc3803734e76899",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 37,
+      "parent": "f4f97959cb5a895f",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:74:74:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "6d3ae5d486a466fb",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.9999998807907104,
+        0.0,
+        -1.1920928955078125e-07,
+        0.0,
+        1.1920928244535389e-07,
+        5.960463411724959e-08,
+        0.9999998211860657,
+        0.0,
+        1.4210852174103162e-14,
+        -0.9999998211860657,
+        5.960463411724959e-08,
+        0.0,
+        10.0,
+        1.1920928955078125e-07,
+        0.0,
+        1.0
+      ],
+      "model": "8bdaafb9-f36d-58f8-8344-f50b41f8cc1f",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_012",
+      "order": 20,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:65:65:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "719dada4775c5e11",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        -1.5099578831723193e-07,
+        0.0,
+        0.0,
+        1.5099578831723193e-07,
+        -0.9999999403953552,
+        0.0,
+        16.0,
+        1.5,
+        -2.0,
+        1.0
+      ],
+      "model": "49ed5bc5-6d97-5679-9ba1-bc9e8e76b7dd",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_037",
+      "order": 68,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:91:91:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "71a774f71c8c8072",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        10.0,
+        0.5,
+        6.0,
+        1.0
+      ],
+      "model": "ef018faa-b665-5c00-b217-8ff9b6d7de8f",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_027",
+      "order": 48,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:81:81:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              1.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "75b7753cc9f84729",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 57,
+      "parent": "e8b8ca6e12b28c8f",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:85:85:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "7ab42e4e7897fea1",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 43,
+      "parent": "f4ba923342a3d6c5",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:77:77:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "8432f82bcddb0b6b",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        6.0,
+        0.5,
+        -2.0,
+        1.0
+      ],
+      "model": "0416ebbd-2c01-5d53-b89f-7a0ae13572b0",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_001",
+      "order": 2,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:50:50:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -1.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "85aaa0ba49d0a9b2",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 71,
+      "parent": "23729238acddb494",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:92:92:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "88961476fb104b2c",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 45,
+      "parent": "4b2fc102e7fdc110",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:78:78:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "90aa63480bf9a6b7",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        -0.9999999403953552,
+        0.0,
+        0.0,
+        0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        -2.0,
+        2.0,
+        -1.500000238418579,
+        1.0
+      ],
+      "model": "7c6f7fe4-3191-5723-b56d-26b8b0f06f08",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_020",
+      "order": 34,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:73:73:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "9113536119ebbdaf",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 27,
+      "parent": "928e6b1118ae54de",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:68:68:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "928e6b1118ae54de",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        6.0,
+        0.5,
+        2.0,
+        1.0
+      ],
+      "model": "1e61b674-7c1a-5e0e-9884-1a37d98e0cd0",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_015",
+      "order": 26,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:68:68:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "94263add7824fdeb",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.1920928955078125e-07,
+        0.0,
+        0.9999998807907104,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        14.0,
+        1.1920928955078125e-07,
+        0.0,
+        1.0
+      ],
+      "model": "c9622fcd-31ce-5857-ba23-d71b147c8483",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_014",
+      "order": 24,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:67:67:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "994085c045ec57ca",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        -0.9999999403953552,
+        0.0,
+        0.0,
+        0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        8.0,
+        2.0,
+        6.5,
+        1.0
+      ],
+      "model": "b7abbe15-53cc-5c8a-b50b-4f9493714cd8",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_030",
+      "order": 54,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:84:84:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -1.5,
+              1.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "a1a4a8f98160fd3a",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 61,
+      "parent": "420bfa6c537c6fdf",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:87:87:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "bb7b6c6e4f70d6aa",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 31,
+      "parent": "dbd070ad1460df7c",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:70:70:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "bc93eaf3a8891222",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        12.0,
+        0.5,
+        2.0,
+        1.0
+      ],
+      "model": "a76c67b0-b5be-51f6-8064-baa7ac2b9a3b",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_013",
+      "order": 22,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:66:66:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "id": "bf403a68f6248fe8",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Quader",
+      "order": 7,
+      "parent": "0000000000000000",
+      "quader": {
+        "autoSync": true,
+        "importScale": 1.0,
+        "projectId": "259235be-ca11-4751-a03b-28c7c36529bf",
+        "projectPath": "C:\\Users\\Drako\\Desktop\\q-test\\q-test.qproj",
+        "refreshMaterials": false,
+        "saveKey": "quader:v1:c686b9348d772b468f3b35b912d1f107558b6474ef6b76fdd2f6cd6e5dc5d7d6",
+        "sceneId": "a445c956-38bf-4b04-bb2e-72e2d628c6c4",
+        "syncLights": false
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "c3e6a8e87729a6b2",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        6.0,
+        0.5,
+        6.0,
+        1.0
+      ],
+      "model": "562bdd60-d3db-5cf9-9959-6363a519e01b",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_023",
+      "order": 40,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:76:76:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              4.0,
+              -1.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "c5b73d439cdc577f",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 65,
+      "parent": "e20344626a1fe19e",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:89:89:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              2.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "c7ecedd379cff470",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 47,
+      "parent": "d05c925a92f3ae36",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:79:79:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "c96cd971924b7d23",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 49,
+      "parent": "71a774f71c8c8072",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:81:81:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              -3.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "ccf51fe71fe4a4a8",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 19,
+      "parent": "4a465a80c75be750",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:62:62:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "cf6eabe09c620422",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        0.9999999403953552,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        16.0,
+        2.0,
+        -10.5,
+        1.0
+      ],
+      "model": "0cd2528c-ee42-5965-ba73-d6093658f3fd",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_009",
+      "order": 14,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:58:58:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "d05c925a92f3ae36",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -6.0,
+        0.5,
+        6.0,
+        1.0
+      ],
+      "model": "3ce64c0b-00b4-517e-90d5-961e1410a2d0",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_026",
+      "order": 46,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:79:79:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "d49450fc42b465ed",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        -1.5099578831723193e-07,
+        0.0,
+        0.0,
+        1.5099578831723193e-07,
+        -0.9999999403953552,
+        0.0,
+        6.0,
+        1.5,
+        10.0,
+        1.0
+      ],
+      "model": "cce32ada-d3da-58fc-835f-7c58406f7337",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_034",
+      "order": 62,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:88:88:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "d8958500950d8a4b",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.0,
+        0.5,
+        -2.0,
+        1.0
+      ],
+      "model": "846bf774-4a3a-5132-bc2d-2e090b64d9f4",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box",
+      "order": 0,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:49:49:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              2.0,
+              -1.5,
+              1.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "dab3a117cd40c495",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 5,
+      "parent": "e0834904d259603e",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:52:52:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "dbd070ad1460df7c",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        10.0,
+        0.5,
+        2.0,
+        1.0
+      ],
+      "model": "4276f4c0-ee0e-58d5-8cfd-525c02bdb842",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_017",
+      "order": 30,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:70:70:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "e0834904d259603e",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        -0.9999999403953552,
+        0.0,
+        0.0,
+        0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        6.0,
+        2.0,
+        -5.5,
+        1.0
+      ],
+      "model": "3bc801e1-5ac2-59da-aeee-763daabc7000",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_003",
+      "order": 4,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:52:52:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "e20344626a1fe19e",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999999403953552,
+        -1.5099578831723193e-07,
+        0.0,
+        0.0,
+        1.5099578831723193e-07,
+        -0.9999999403953552,
+        0.0,
+        6.0,
+        1.5,
+        -6.0,
+        1.0
+      ],
+      "model": "e8e674d7-8cca-5a49-b56f-f50d5340707d",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_035",
+      "order": 64,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:89:89:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "e4ab1681b4f29ea5",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -6.0,
+        0.5,
+        2.0,
+        1.0
+      ],
+      "model": "078d782c-e60e-5951-8fad-cb8790cef136",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_022",
+      "order": 38,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:75:75:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              2.0,
+              -1.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "e65ba37e89e5189e",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 7,
+      "parent": "6702bf8420f9a190",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:54:54:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              4.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              2.0
+            ],
+            [
+              4.0,
+              -1.5,
+              2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "e694791b19d7b612",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 63,
+      "parent": "d49450fc42b465ed",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:88:88:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "e8b8ca6e12b28c8f",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.960464477539063e-08,
+        -0.9999999403953552,
+        0.0,
+        0.0,
+        0.9999999403953552,
+        5.960464477539063e-08,
+        0.0,
+        0.0,
+        2.0,
+        6.5,
+        1.0
+      ],
+      "model": "b7fc7d1e-b213-5c2b-ae74-c222f034533a",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_031",
+      "order": 56,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:85:85:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              -3.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "eb2e420219089f05",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 53,
+      "parent": "f2e155d8b7da55cb",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:83:83:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "ecaa0176566e4844",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.9999998807907104,
+        0.0,
+        -1.1920928955078125e-07,
+        0.0,
+        1.1920928244535389e-07,
+        5.960463411724959e-08,
+        0.9999998211860657,
+        0.0,
+        1.4210852174103162e-14,
+        -0.9999998211860657,
+        5.960463411724959e-08,
+        0.0,
+        10.0,
+        1.1920928955078125e-07,
+        4.0,
+        1.0
+      ],
+      "model": "fceb8422-135d-52bd-93cf-08bf09d64671",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_028",
+      "order": 50,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:82:82:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              -3.0
+            ],
+            [
+              4.0,
+              0.0,
+              0.0
+            ],
+            [
+              4.0,
+              0.0,
+              -3.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "ed9e528e54664db7",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 21,
+      "parent": "6d3ae5d486a466fb",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:65:65:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              -2.0,
+              -0.5,
+              -2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              2.0
+            ],
+            [
+              0.0,
+              -0.5,
+              -2.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "f216c2dae41bb459",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 13,
+      "parent": "20bfe8a1b49f0e13",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:57:57:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mesh": {
+          "indices": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "positions": [
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              -2.0
+            ],
+            [
+              -6.0,
+              -1.5,
+              1.0
+            ],
+            [
+              2.0,
+              -1.5,
+              1.0
+            ]
+          ]
+        },
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "f27f3b871ed1c334",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Mesh Collider",
+      "order": 55,
+      "parent": "994085c045ec57ca",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:84:84:0/collision"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "f2e155d8b7da55cb",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.1920928955078125e-07,
+        0.0,
+        0.9999998807907104,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        10.0,
+        1.1920928955078125e-07,
+        4.0,
+        1.0
+      ],
+      "model": "c3ae2438-4ad0-55c5-9262-cc029709d261",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_029",
+      "order": 52,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:83:83:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "f4ba923342a3d6c5",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.0,
+        0.5,
+        6.0,
+        1.0
+      ],
+      "model": "811940ef-3a10-5270-9260-cdf7e96075d5",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_024",
+      "order": 42,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:77:77:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "f4f97959cb5a895f",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -2.0,
+        0.5,
+        2.0,
+        1.0
+      ],
+      "model": "d03fe33e-aa9d-5f3e-9cc2-35c8a07498f5",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_021",
+      "order": 36,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:74:74:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "id": "fe9c66b15b071b15",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Imported",
+      "order": 1,
+      "parent": "bf403a68f6248fe8",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "Imported"
+      },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "ffe6a9a0b08b6ae4",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        1.1920928955078125e-07,
+        0.0,
+        0.9999998807907104,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        0.0,
+        0.0,
+        -0.9999998211860657,
+        1.1920928244535389e-07,
+        0.0,
+        0.0,
+        1.1920928955078125e-07,
+        -4.0,
+        1.0
+      ],
+      "model": "962e40d8-6268-5a53-bc91-ffc1e18920aa",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box_019",
+      "order": 32,
+      "parent": "fe9c66b15b071b15",
+      "quaderGenerated": {
+        "owner": "bf403a68f6248fe8",
+        "sourceKey": "mesh:72:72:0"
+      },
+      "receiveShadows": true,
+      "visible": true
+    }
+  ],
+  "id": "60e71f25-8a23-4ad6-857d-9593589b6844",
+  "name": "Main",
+  "previewCamera": {
+    "far": 2048.0,
+    "fov": 45.0,
+    "near": 0.009999999776482582,
+    "position": [
+      8.453076362609863,
+      8.995922088623047,
+      7.24618673324585
+    ],
+    "target": [
+      6.147088527679443,
+      6.440763473510742,
+      4.83927059173584
+    ],
+    "up": [
+      -0.420885294675827,
+      0.7936481833457947,
+      -0.43929269909858704
+    ]
+  },
+  "settings": {
+    "activeCamera": "559ac92d64c09b54",
+    "activeEnvironment": "29cf3b97ea57954b",
+    "playerCharacter": "0ef73fe233641b37"
+  },
+  "type": "crimson-scene",
+  "version": 17
+}

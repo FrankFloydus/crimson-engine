@@ -20,11 +20,14 @@ SAMPLER2D(s_normal, 3);
 SAMPLERCUBE(s_irradiance, 4);
 SAMPLERCUBE(s_prefiltered, 5);
 SAMPLER2D(s_brdfLut, 6);
+#include "fog_environment.sh"
 #include "clustered_lighting.sh"
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
 #include "character_shadow.sh"
 #include "ambient_visibility.sh"
+#include "debug_view.sh"
+#include "ssao_material.sh"
 
 // CONST is static const on HLSL: a plain global const becomes an unset uniform.
 CONST(float PI = 3.141592653589793);
@@ -170,12 +173,21 @@ void main()
         color += evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, u_roughness.z, 1.0, pointResponse.y, softSourceSinSquared);
       }
     }
-    color += evaluateEnvironment(N, V, base, metallic, roughness);
-    color += characterLighting(N, V, base, metallic, roughness, u_roughness.z);
+    vec3 directLighting = color;
+    vec3 indirectLighting = evaluateEnvironment(N, V, base, metallic, roughness) * ssaoVisibility(v_worldPosition);
+    vec3 characterDirect = characterLighting(N, V, base, metallic, roughness, u_roughness.z);
+    color += indirectLighting;
+    color += characterDirect;
+    directLighting += characterDirect;
     float characterVisibility = characterShadowVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal, 1.0);
     color *= characterVisibility;
     color *= darkness;
     // Keep extreme near-light highlights finite in half-float HDR storage.
-    color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, 0.0);
-    gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)), 1.0);
+    color = debugViewColor(color, base, roughness, metallic, N, directLighting, indirectLighting);
+    if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, 0.0);
+    gl_FragData[0] = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)), 1.0);
+    // The legacy sphere is isolated preview content, never a GI source.
+    gl_FragData[1] = vec4_splat(0.0);
+    gl_FragData[2] = vec4_splat(0.0);
+    gl_FragData[3] = vec4_splat(0.0);
 }

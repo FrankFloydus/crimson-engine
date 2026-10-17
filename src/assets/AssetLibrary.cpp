@@ -13,6 +13,8 @@
 #include "MaterialGraphReferences.h"
 #include "GrungeGenerator.h"
 #include "ContentStorage.h"
+#include "QuaderSceneBundle.h"
+#include "ModelMaterialSlots.h"
 #include "resources/AssetId.h"
 
 #include <SDL3/SDL.h>
@@ -299,6 +301,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
                 const auto packageRoot=projectRoot_;const auto resolvers=modelResolvers();
                 ResourceRequestOptions metadataOptions;metadataOptions.variant="material-catalog";metadataOptions.priority=ResourcePriority::Background;
                 metadataOptions.dependencies={file,file.parent_path()/"model.gltf"};
+                if(const auto bundle=quaderBundleSource(projectRoot_,id))metadataOptions.dependencies.push_back(*bundle);
                 materialCatalogResources_[id]=resources_->request<ModelAsset>(AssetRef<ModelAsset>{id},[file,packageRoot,resolvers](std::stop_token token){
                     if(token.stop_requested())throw std::runtime_error("Material catalog scan canceled.");
                     auto data=loadModelMaterialMetadata(file,packageRoot,resolvers);
@@ -436,6 +439,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
             const auto forceCold=modelCacheRebuilds_.erase(resolved)!=0;
             const auto policy=references_;
             ResourceRequestOptions options; options.dependencies={file,file.parent_path()/"model.gltf",resolveAssetPath(root,"assets/references.json")};
+            if(const auto bundle=quaderBundleSource(root,resolved))options.dependencies.push_back(*bundle);
             // Missing optional policy files are not source dependencies.
             std::erase_if(options.dependencies,[](const auto& dependency){return !std::filesystem::is_regular_file(dependency);});
             std::ifstream manifestInput(file); if(manifestInput) try {
@@ -556,7 +560,7 @@ ModelResolvers AssetLibrary::modelResolvers()const {
 std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides)const {
     auto result=model.materials;
     for(size_t i=result.size();i<materialOverrides.size();++i)
-        if(!materialOverrides[i].empty())throw std::runtime_error("An assigned material slot no longer exists in this model.");
+        if(!materialOverrides[i].empty()&&!isLegacyUnusedMaterialSlot(model,i))throw std::runtime_error("An assigned material slot no longer exists in this model.");
     for(size_t i=0;i<result.size();++i) {
         const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
             i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
@@ -673,6 +677,34 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
     const auto message=textureStreamer_->diagnostic(); if(!message.empty()) status_=message;
 }
 void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
+    if(changed.extension()==".crimson-quader") {
+        try {
+            // Rebuild derived files before any request can observe the source
+            // notification. Cache writes themselves are excluded by the watcher.
+            initializeQuaderSceneBundles(projectRoot_);
+            const auto source=std::filesystem::weakly_canonical(changed);
+            for(const auto& entry:storedAssetPaths(projectRoot_)) {
+                if(entry.file.filename()!="manifest.json")continue;
+                const auto bundle=quaderBundleSource(projectRoot_,entry.id);
+                if(!bundle||std::filesystem::weakly_canonical(*bundle)!=source)continue;
+                if(resources_)resources_->invalidate(entry.id);
+                modelResources_.erase(entry.id);materialCatalogResources_.erase(entry.id);registeredModelRevisions_.erase(entry.id);
+                std::erase_if(models_,[&](const auto& model){return model->id==entry.id;});
+                if(references_.deleted(entry.id))continue;
+                if(!resources_)registerModel(loadModelPackage(entry.file,projectRoot_,modelResolvers()),false);
+                else {
+                    std::ifstream input(entry.file);const auto manifest=nlohmann::json::parse(input);
+                    const auto item=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& asset){return asset.id==entry.id;});
+                    if(item==catalog_.end())catalog_.push_back({entry.id,manifest.at("name").get<std::string>(),AssetKind::Model});
+                    else item->name=manifest.at("name").get<std::string>();
+                }
+            }
+            if(materialCatalogDirty_)refreshMaterials();
+            if(resources_)resources_->invalidatePath(changed);
+            ++catalogRevision_;
+        }catch(const std::exception& error){status_="Quader bundle refresh failed: "+std::string(error.what());}
+        return;
+    }
     const auto relative=std::filesystem::absolute(changed).lexically_normal().lexically_relative(projectRoot_);
     if(!relative.empty()&&!relative.has_root_path()&&(*relative.begin()=="Content"||*relative.begin()=="Engine")) {
         std::error_code error;const auto state=std::filesystem::status(changed,error);
@@ -708,7 +740,8 @@ bool AssetLibrary::modelBindingsReady(const std::vector<ModelMaterialTextures>& 
 }
 bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides) const {
     const auto slots=std::max(model.materials.size(),model.materialIds.size());
-    for(size_t i=slots;i<materialOverrides.size();++i)if(!materialOverrides[i].empty())return false;
+    for(size_t i=slots;i<materialOverrides.size();++i)
+        if(!materialOverrides[i].empty()&&!isLegacyUnusedMaterialSlot(model,i))return false;
     for(size_t i=0;i<slots;++i) {
         const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
             i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
@@ -722,7 +755,7 @@ bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,std::span<const A
 std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,std::span<const AssetRef<MaterialAsset>> materialOverrides) const {
     const auto slots=std::max(model.materials.size(),model.materialIds.size());
     for(size_t i=slots;i<materialOverrides.size();++i)
-        if(!materialOverrides[i].empty())return "An assigned material slot no longer exists in this model.";
+        if(!materialOverrides[i].empty()&&!isLegacyUnusedMaterialSlot(model,i))return "An assigned material slot no longer exists in this model.";
     for(size_t i=0;i<slots;++i) {
         const auto id=i<materialOverrides.size()&&!materialOverrides[i].empty()?materialOverrides[i].id:
             i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
@@ -832,6 +865,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
         auto compact=std::make_shared<ModelAsset>();
         compact->id=model->id;compact->name=model->name;compact->format=model->format;compact->meshes=model->meshes;compact->nodes=model->nodes;
         compact->roots=model->roots;compact->draws=model->draws;compact->materials=model->materials;compact->materialIds=model->materialIds;
+        compact->legacyUnusedMaterialSlot=model->legacyUnusedMaterialSlot;
         compact->images=model->images;compact->bounds=model->bounds;compact->warnings=model->warnings;compact->stream=model->stream;
         compact->skins=model->skins;compact->animations=model->animations;
         for(const auto& primitive:model->primitives) {
@@ -844,6 +878,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
         }
         if(model->stream) {
             ResourceRequestOptions options;options.dependencies={resolveAssetPath(projectRoot_,model->id),resolveAssetPath(projectRoot_,model->id).parent_path()/"model.gltf"};
+            if(const auto bundle=quaderBundleSource(projectRoot_,model->id))options.dependencies.push_back(*bundle);
             resources_->seed<ModelAsset>(AssetRef<ModelAsset>{model->id},{compact,modelCpuBytes(*compact),0,{}},std::move(options));
             const auto root=projectRoot_;ResourceRequestOptions indexOptions;indexOptions.variant="metadata-index";indexOptions.priority=ResourcePriority::Background;indexOptions.retainLoader=false;
             (void)resources_->request<streaming::ModelStream>(AssetRef<streaming::ModelStream>{model->id},[compact,root](std::stop_token token){
@@ -1545,6 +1580,8 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         std::unordered_set<std::string> models,particles,materials;
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
+            if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
+                throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
             plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);}
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
@@ -1612,6 +1649,8 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(!particleDocumentId_.empty()&&deletedIds.contains(particleDocumentId_))throw std::runtime_error("Close the particle document before deleting its asset.");
         if(!materialDocumentId_.empty()&&deletedIds.contains(materialDocumentId_))throw std::runtime_error("Close the material document before deleting its asset.");
         for(const auto& id:plan.assetIds){const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Deletion target disappeared.");
+            if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
+                throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
             deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);
             if(const auto chosen=replacements.find(id);chosen!=replacements.end()&&!chosen->second.empty()){
                 const auto options=fallbackCandidates(id);if(std::none_of(options.begin(),options.end(),[&](const auto& option){return option.id==chosen->second;}))throw std::runtime_error("Fallback has an incompatible asset type.");}}

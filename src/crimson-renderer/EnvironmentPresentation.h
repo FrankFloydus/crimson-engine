@@ -51,6 +51,13 @@ inline std::uint64_t thumbnailEnvironmentKey(const EnvironmentSettings& value,co
     const auto color=[&](const Vec3& v){for(const auto c:v)scalar(c);};
     word(static_cast<std::uint64_t>(value.source));word(value.enabled);scalar(value.intensity);
     word(static_cast<std::uint64_t>(value.toneMapping));
+    const auto& tone=value.toneMappingParameters;
+    switch(value.toneMapping) {
+    case ToneMapping::Reinhard:scalar(tone.reinhardWhite);break;
+    case ToneMapping::ACES:scalar(tone.acesWhite);break;
+    case ToneMapping::AgX:scalar(tone.agxWhite);scalar(tone.agxContrast);break;
+    default:break;
+    }
     word(value.debanding);
     const auto ambient=environmentAmbientLight(value,true);
     for(const float component:ambient)scalar(component);
@@ -61,6 +68,7 @@ inline std::uint64_t thumbnailEnvironmentKey(const EnvironmentSettings& value,co
     word(value.fog.enabled);
     if(value.fog.enabled) {
         color(value.fog.color);scalar(value.fog.lightEnergy);
+        scalar(value.fog.skyAffect);scalar(value.fog.aerialPerspective);scalar(value.fog.sunScatter);
         word(static_cast<std::uint64_t>(value.fog.mode));
         if(value.fog.mode==FogMode::Depth) {
             scalar(value.fog.depthBegin);scalar(value.fog.depthEnd);

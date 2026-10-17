@@ -30,8 +30,8 @@
 namespace crimson {
 namespace {
 using Json = nlohmann::json;
-// Schema-v16 optional editor metadata. Tokens are stable independently of labels.
-constexpr std::array<std::string_view,AllSceneComponentKinds.size()> ComponentOrderTokens{
+// Legacy component-row metadata is validated during conversion, never written.
+constexpr std::array<std::string_view,AllSceneComponentKinds.size()> LegacyComponentTokens{
     "transform","actor","motor","controller","navigation","playerInput","lightRig",
     "darknessReveal","camera","cameraFollow","model","collider","directional","point",
     "environment","particle","quader"};
@@ -138,6 +138,14 @@ CharacterLight readCharacterLight(const Json& source,CharacterLight value) {
     if(!validCharacterLight(value))throw std::runtime_error("Character light settings are invalid.");
     return value;
 }
+float readIndirectEnergy(const Json& source,float fallback=1.f) {
+    if(!source.contains("indirectEnergy"))return fallback;
+    const auto& encoded=source.at("indirectEnergy");
+    if(!encoded.is_number())throw std::runtime_error("Light GI energy must be a number.");
+    const auto value=encoded.get<float>();
+    if(!validIndirectEnergy(value))throw std::runtime_error("Light GI energy must be finite and between zero and sixteen.");
+    return value;
+}
 Json lightRigJson(const ActorLightRigSettings& value) {
     const auto& local=value.localWorld;const auto& shadow=value.characterShadow;
     return {{"version",4},{"enabled",value.enabled},{"showGizmos",value.showGizmos},
@@ -146,7 +154,7 @@ Json lightRigJson(const ActorLightRigSettings& value) {
             {"intensity",local.intensity},{"radius",local.radius},{"nearFalloffRadius",local.nearFalloffRadius},
             {"specularStrength",local.specularStrength},{"rangeFalloffExponent",local.rangeFalloffExponent},
             {"edgeSoftness",local.edgeSoftness},{"sourceRadius",local.sourceRadius},{"attenuation",local.attenuation},{"castShadows",local.castShadows},
-            {"shadowDepthBias",local.shadowDepthBias},{"shadowNormalBias",local.shadowNormalBias}}},
+            {"shadowDepthBias",local.shadowDepthBias},{"shadowNormalBias",local.shadowNormalBias},{"indirectEnergy",local.indirectEnergy}}},
         {"characterShadow",{{"enabled",shadow.enabled},{"strength",shadow.strength},
             {"distance",shadow.distance},{"shadowDepthBias",shadow.shadowDepthBias},{"shadowNormalBias",shadow.shadowNormalBias}}}};
 }
@@ -197,6 +205,7 @@ ActorLightRigSettings readLightRig(const Json& source,const DarknessRevealSettin
             const Json empty=Json::object();const auto& old=source.contains(worldKey)?source.at(worldKey):empty;
             if(!old.is_object())throw std::runtime_error("Local World Light must be an object.");
             auto& local=value.localWorld;
+            local.indirectEnergy=readIndirectEnergy(old,local.indirectEnergy);
             local.enabled=old.value("enabled",local.enabled);local.height=old.value("height",local.height);
             local.color=old.value("color",local.color);
             local.intensity=old.value("intensity",version==2?4.f:version==3?.64f:local.intensity);
@@ -255,7 +264,7 @@ ActorLightRigSettings readLightRig(const Json& source,const DarknessRevealSettin
     return value;
 }
 template<class Light> Json lightJson(const Light& light) {
-    Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled}};
+    Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled},{"indirectEnergy",light.indirectEnergy}};
     if constexpr(requires { light.radius; })result["radius"]=light.radius;
     if constexpr(requires { light.nearFalloffRadius; }) {
         result["nearFalloffRadius"]=light.nearFalloffRadius;result["specularStrength"]=light.specularStrength;
@@ -276,6 +285,7 @@ template<class Light> Light readLight(const Json& json) {
     result.color = json.at("color").get<Vec3>();
     result.intensity = json.at("intensity").get<float>();
     result.enabled = json.at("enabled").get<bool>();
+    result.indirectEnergy=readIndirectEnergy(json);
     if constexpr(requires { result.radius; })result.radius=json.value("radius",20.f);
     if constexpr(requires { result.nearFalloffRadius; }) {
         result.nearFalloffRadius=json.value("nearFalloffRadius",0.f);result.specularStrength=json.value("specularStrength",1.f);
@@ -502,21 +512,18 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             std::array<bool,AllSceneComponentKinds.size()> seen{};
             for(const auto& item:authored) {
                 const auto token=item.get<std::string>();
-                const auto found=std::find(ComponentOrderTokens.begin(),ComponentOrderTokens.end(),token);
-                if(found==ComponentOrderTokens.end())throw std::runtime_error("Unknown component display-order identity.");
-                const auto index=static_cast<size_t>(found-ComponentOrderTokens.begin());
+                const auto found=std::find(LegacyComponentTokens.begin(),LegacyComponentTokens.end(),token);
+                if(found==LegacyComponentTokens.end())throw std::runtime_error("Unknown component display-order identity.");
+                const auto index=static_cast<size_t>(found-LegacyComponentTokens.begin());
                 if(seen[index])throw std::runtime_error("Duplicate component display-order identity.");
-                seen[index]=true;record.componentOrder.push_back(AllSceneComponentKinds[index]);
+                seen[index]=true;
             }
-            normalizeSceneComponentOrder(record);
-            normalizeSceneOutlinerStyle(record);
         }
         if(version>=17&&entity.contains("outlinerBefore")) {
             const auto token=entity.at("outlinerBefore").get<std::string>();
-            const auto found=std::find(ComponentOrderTokens.begin(),ComponentOrderTokens.end(),token);
-            if(found==ComponentOrderTokens.end()||found==ComponentOrderTokens.begin())
+            const auto found=std::find(LegacyComponentTokens.begin(),LegacyComponentTokens.end(),token);
+            if(found==LegacyComponentTokens.end()||found==LegacyComponentTokens.begin())
                 throw std::runtime_error("Invalid Outliner child anchor.");
-            record.outlinerBefore=AllSceneComponentKinds[static_cast<size_t>(found-ComponentOrderTokens.begin())];
         }
         if(version>=17&&entity.contains("outlinerStyle")) {
             const auto& style=entity.at("outlinerStyle");
@@ -526,11 +533,18 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             if(style.contains("components")) {
                 const auto& colors=style.at("components");
                 if(!colors.is_object()||colors.size()>AllSceneComponentKinds.size())throw std::runtime_error("Invalid component Outliner colors.");
+                std::array<std::optional<Vec4>,AllSceneComponentKinds.size()> legacyColors{};
                 for(const auto& [token,value]:colors.items()) {
-                    const auto found=std::find(ComponentOrderTokens.begin(),ComponentOrderTokens.end(),token);
-                    if(found==ComponentOrderTokens.end())throw std::runtime_error("Unknown component Outliner color identity.");
-                    record.outlinerStyle->componentColors[static_cast<size_t>(found-ComponentOrderTokens.begin())]=value.get<Vec4>();
+                    const auto found=std::find(LegacyComponentTokens.begin(),LegacyComponentTokens.end(),token);
+                    if(found==LegacyComponentTokens.end())throw std::runtime_error("Unknown component Outliner color identity.");
+                    const auto color=value.get<Vec4>();
+                    if(!math::finite(color)||std::any_of(color.begin(),color.end(),[](float channel){return channel<0||channel>1;}))
+                        throw std::runtime_error("Outliner colors require finite RGBA values from zero to one.");
+                    legacyColors[static_cast<size_t>(found-LegacyComponentTokens.begin())]=color;
                 }
+                // Entity overrides win; otherwise retain the first canonical
+                // component color as the single entity appearance.
+                if(!record.outlinerStyle->color)for(const auto& color:legacyColors)if(color) {record.outlinerStyle->color=color;break;}
             }
             normalizeSceneOutlinerStyle(record);
         }
@@ -613,20 +627,8 @@ Json writeScene(const SceneSnapshot& snapshot) {
     for (const auto& record : snapshot.records) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
             {"order",record.order}, {"local",record.local}, {"visible",record.visible}};
-        if(!record.componentOrder.empty()) {
-            auto& order=entity["componentOrder"];order=Json::array();
-            for(const auto kind:sceneComponents(record))order.push_back(ComponentOrderTokens[static_cast<size_t>(kind)]);
-        }
-        if(record.outlinerBefore)entity["outlinerBefore"]=ComponentOrderTokens[static_cast<size_t>(*record.outlinerBefore)];
-        if(record.outlinerStyle) {
-            Json style=Json::object();
-            if(record.outlinerStyle->color)style["color"]=*record.outlinerStyle->color;
-            Json colors=Json::object();
-            for(size_t index=0;index<record.outlinerStyle->componentColors.size();++index)
-                if(record.outlinerStyle->componentColors[index])colors[std::string(ComponentOrderTokens[index])]=*record.outlinerStyle->componentColors[index];
-            if(!colors.empty())style["components"]=std::move(colors);
-            if(!style.empty())entity["outlinerStyle"]=std::move(style);
-        }
+        if(record.outlinerStyle && record.outlinerStyle->color)
+            entity["outlinerStyle"]={{"color",*record.outlinerStyle->color}};
 
         if (record.model) {
             entity["model"] = *record.model;
@@ -682,8 +684,8 @@ enum EntityField : uint32_t {
     ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14,
     QuaderField=1u<<15,QuaderGeneratedField=1u<<16,LightingScopesField=1u<<17,
     ModelAnimationField=1u<<18,FadeWhenOccludingField=1u<<19,VisibleField=1u<<20,MotorField=1u<<21,ControllerField=1u<<22,NavigationField=1u<<23,
-    PlayerInputField=1u<<24,LightRigField=1u<<25,DarknessRevealField=1u<<26,CameraFollowField=1u<<27,ComponentOrderField=1u<<28,
-    OutlinerBeforeField=1u<<29,OutlinerStyleField=1u<<30,AllEntityFields=(1u<<31)-1
+    PlayerInputField=1u<<24,LightRigField=1u<<25,DarknessRevealField=1u<<26,CameraFollowField=1u<<27,
+    OutlinerStyleField=1u<<28,AllEntityFields=(1u<<29)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -711,8 +713,6 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.lightRig!=b.lightRig)fields|=LightRigField;
     if(a.darknessReveal!=b.darknessReveal)fields|=DarknessRevealField;
     if(a.cameraFollow!=b.cameraFollow)fields|=CameraFollowField;
-    if(a.componentOrder!=b.componentOrder)fields|=ComponentOrderField;
-    if(a.outlinerBefore!=b.outlinerBefore)fields|=OutlinerBeforeField;
     if(a.outlinerStyle!=b.outlinerStyle)fields|=OutlinerStyleField;
     return fields;
 }
@@ -737,8 +737,6 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&LightRigField)target.lightRig=source.lightRig;
     if(fields&DarknessRevealField)target.darknessReveal=source.darknessReveal;
     if(fields&CameraFollowField)target.cameraFollow=source.cameraFollow;
-    if(fields&ComponentOrderField)target.componentOrder=source.componentOrder;
-    if(fields&OutlinerBeforeField)target.outlinerBefore=source.outlinerBefore;
     if(fields&OutlinerStyleField)target.outlinerStyle=source.outlinerStyle;
 }
 uint32_t changedProperties(const SceneProperties& a,const SceneProperties& b) {
@@ -1132,14 +1130,7 @@ bool SceneDocument::update(const Mutation& mutation) {
         const auto before=scene_.records();const auto beforeProperties=scene_.properties();
         auto records = before; auto properties = beforeProperties;
         mutation(records,properties);
-        for(auto& record:records) {
-            normalizeSceneComponentOrder(record);
-            normalizeSceneOutlinerStyle(record);
-            if(record.outlinerBefore) {
-                const auto previous=std::lower_bound(before.begin(),before.end(),record.id,[](const auto& value,EntityId id){return value.id<id;});
-                if(previous!=before.end()&&previous->id==record.id&&previous->parent!=record.parent)record.outlinerBefore.reset();
-            }
-        }
+        for(auto& record:records)normalizeSceneOutlinerStyle(record);
         updateFollowOffsets(scene_,records,properties);
         auto command=transaction_->command;
         mergeCommand(command,difference(command.label,before,records,beforeProperties,properties,selection_,selection_));
@@ -1181,7 +1172,7 @@ bool SceneDocument::applyHistory(const SceneCommand& command, bool forward) {
         }
         const auto& restoredProperties = forward ? command.afterProperties : command.beforeProperties;
         if (restoredProperties) copyProperties(properties,*restoredProperties,command.propertyFields);
-        for(auto& record:records){normalizeSceneComponentOrder(record);normalizeSceneOutlinerStyle(record);}
+        for(auto& record:records)normalizeSceneOutlinerStyle(record);
         scene_.apply(records,properties);
         selection_ = forward ? command.afterSelection : command.beforeSelection;
         sanitizeSelection(); status_.clear(); return true;
@@ -1236,7 +1227,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         };
         EntityRecord imported;imported.id=allocate("Imported");imported.name="Imported";imported.parent=owner;
         imported.order=nextOrder(records,owner);imported.quaderGenerated=QuaderGenerated{owner,"Imported"};
-        if(const auto previous=scene_.find(imported.id)){imported.visible=previous->visible;imported.componentOrder=previous->componentOrder;imported.outlinerBefore=previous->outlinerBefore;imported.outlinerStyle=previous->outlinerStyle;}
+        if(const auto previous=scene_.find(imported.id)){imported.visible=previous->visible;imported.outlinerStyle=previous->outlinerStyle;}
         replacements.push_back(imported);
         for(const auto& input:generated) {
             if(!input.id || !input.quaderGenerated)throw std::runtime_error("Quader import record has no temporary identity.");
@@ -1245,13 +1236,11 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         }
         for(const auto& input:generated) {
             auto record=input;record.id=remap.at(input.id);record.parent=input.parent?remap.at(input.parent):imported.id;
-            // Quader has no representation for Crimson's lighting roles. Keep
+            // Quader has no representation for Crimson's lighting roles or GI energy. Keep
             // those authored values on matching source identities/kinds while
             // source transforms, energy, geometry and shadow flags still sync.
             if(const auto previous=scene_.find(record.id)) {
                 record.visible=previous->visible;
-                record.componentOrder=previous->componentOrder;
-                record.outlinerBefore=previous->outlinerBefore;
                 record.outlinerStyle=previous->outlinerStyle;
                 record.actor=previous->actor;
                 record.motor=previous->motor;
@@ -1270,8 +1259,14 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                     else if(!previous->modelMaterials.empty())
                         throw std::runtime_error("Quader sync needs source material slots to preserve assignments on "+record.name+".");
                 }
-                if(record.point && previous->point)record.point->roles=previous->point->roles;
-                if(record.directional && previous->directional)record.directional->roles=previous->directional->roles;
+                if(record.point && previous->point) {
+                    record.point->roles=previous->point->roles;
+                    record.point->indirectEnergy=previous->point->indirectEnergy;
+                }
+                if(record.directional && previous->directional) {
+                    record.directional->roles=previous->directional->roles;
+                    record.directional->indirectEnergy=previous->directional->indirectEnergy;
+                }
                 if(record.collider && previous->collider) {
                     const auto source=record.collider->source;
                     const auto mesh=record.collider->mesh;

@@ -9,7 +9,7 @@ uniform vec4 u_clusterDepth; // Log2 scale/bias, near/far planes.
 uniform vec4 u_clusterViewport; // Width/height, tan half FOV X/Y.
 uniform vec4 u_clusterAtlas; // Atlas extent, light-record and mask base texels.
 uniform vec4 u_clusterOptions; // Light count, all-lights reference, BRDF size, tile size.
-uniform vec4 u_clusterRecordLayoutV5; // Reflected CPU record ABI: texels per light, reserved YZW.
+uniform vec4 u_clusterRecordLayoutV6; // Reflected CPU record ABI: texels per light, reserved YZW.
 uniform mat4 u_clusterView;
 uniform vec4 u_ambientAtlas; // Packed visibility base, screen width/height, published.
 uniform vec4 u_surfaceLighting; // Direct mask, ambient mask, depth prepass, analytical ambient.
@@ -61,13 +61,15 @@ int forwardPlusFirstBit(uint mask)
     return findLSB(mask);
 #endif
 }
-vec4 forwardPlusPointPosition(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV5.x));}
-vec4 forwardPlusPointColor(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV5.x)+1);}
-int forwardPlusShadowIndex(int index){return int(forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV5.x)+3).x);}
-vec4 forwardPlusPointRoles(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV5.x)+3);}
+vec4 forwardPlusPointPosition(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x));}
+vec4 forwardPlusPointColor(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x)+1);}
+int forwardPlusShadowIndex(int index){return int(forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x)+3).x);}
+vec4 forwardPlusPointRoles(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x)+3);}
 float forwardPlusSourceRadius(int index){return forwardPlusPointRoles(index).y;}
-vec4 forwardPlusPointResponse(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV5.x)+4);}
-float forwardPlusPointAttenuation(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV5.x)+5).x;}
+vec4 forwardPlusPointResponse(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x)+4);}
+float forwardPlusPointAttenuation(int index){return forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x)+5).x;}
+// Delta-from-one encoding retains legacy record and directional color bytes.
+float forwardPlusPointIndirectEnergy(int index){return 1.0+forwardPlusFetch(int(u_clusterAtlas.z)+index*int(u_clusterRecordLayoutV6.x)+5).y;}
 bool forwardPlusReceivesPoint(int index)
 {
     return (uint(forwardPlusPointRoles(index).z) & uint(u_surfaceLighting.x) & 3u) != 0u;

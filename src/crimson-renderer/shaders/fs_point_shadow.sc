@@ -29,5 +29,5 @@ void main()
     if (u_modelOptions.y > 0.5 && alpha < u_modelEmissive.w) discard;
     // The framebuffer has only depth; raster depth is stored by fixed function.
     gl_FragColor = u_surfaceLighting.z > 0.5 ?
-        vec4(u_surfaceLighting.y / 255.0, prepassReceiverNormal(v_worldPosition, receiverPlane)) : vec4_splat(0.0);
+        vec4(prepassReceiverFlags(u_surfaceLighting.y, u_surfaceLighting.x), prepassReceiverNormal(v_worldPosition, receiverPlane)) : vec4_splat(0.0);
 }

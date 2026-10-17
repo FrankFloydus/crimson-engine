@@ -24,6 +24,15 @@ vec3 receiverNormalDecode(vec3 encoded)
     return normalize(normal);
 }
 #ifndef CC_LIGHTING_COMPUTE
+uniform vec4 u_ssgiDraw; // Capture allowed, reactive geometry/material, reserved ZW.
+
+float prepassReceiverFlags(float ambientMask, float directMask)
+{
+    uint flags = (uint(ambientMask) & 3u) | ((uint(directMask) & 3u) << 2u);
+    if (u_ssgiDraw.y > 0.5) flags |= 16u;
+    return float(flags) / 255.0;
+}
+
 // Evaluate derivative normals before discard. Encode the actual triangle plane
 // rather than rebuilding a noisy normal from quantized distant-camera depth.
 vec3 prepassReceiverPlane(vec3 position, vec3 fallback)

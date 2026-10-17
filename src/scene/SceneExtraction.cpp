@@ -107,7 +107,7 @@ ExtractedScene extractScene(const Scene& scene) {
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             const auto direction=directionalLightDirection(*world);
             result.directional.push_back({direction,light->color,light->intensity,light->enabled,id,light->castShadows,
-                light->shadowDistance,light->shadowDepthBias,light->shadowNormalBias,light->roles});
+                light->shadowDistance,light->shadowDepthBias,light->shadowNormalBias,light->roles,light->indirectEnergy});
             if (id==result.environment.sun)
                 result.proceduralSun={direction*-1.f,light->color,light->intensity,light->enabled};
         }
@@ -115,7 +115,7 @@ ExtractedScene extractScene(const Scene& scene) {
             const auto position = math::transformPoint(*world,{0,0,0});
             result.points.push_back({position,light->color,light->intensity,light->enabled,light->radius,id,
                 light->castShadows,light->shadowDepthBias,light->shadowNormalBias,light->roles,
-                light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation});
+                light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation,light->indirectEnergy});
         }
     }
     // Ordinary scene sources were gathered first, so derived source IDs cannot

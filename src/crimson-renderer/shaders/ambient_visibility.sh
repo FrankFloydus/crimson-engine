@@ -15,7 +15,11 @@ float ambientVisibilityResponse(float energy)
 {
     return ambientVisibilityResponse(energy,u_ambientTransition.x,u_ambientTransition.y,u_ambientSettings.z,u_ambientSettings.y);
 }
+#ifdef CC_SHADOW_COMPUTE
+float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal, uint receiverMask, float reconstructionUncertainty)
+#else
 float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal, uint receiverMask)
+#endif
 {
     if ((receiverMask & 3u) == 0u) return 1.0;
     float energy = 0.0;
@@ -23,10 +27,18 @@ float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal,
     {
         if (float(light) >= u_lightCounts.x) break;
         vec4 roles = u_directionLightingRoles[light];
-        if ((uint(roles.y) & receiverMask & 3u) == 0u || roles.z <= 0.0) continue;
+        if ((uint(roles.y) & receiverMask & 3u) == 0u || roles.z <= 0.0 || u_direction[light].w <= 0.0) continue;
         float visibility = 1.0;
         if (u_ambientSettings.w > 0.5 && roles.w > 0.5)
+        {
+#ifdef CC_SHADOW_COMPUTE
+            vec4 shadow = u_directionalShadowParameters[light];
+            float shadowDepth = dot(u_shadowCameraForward.xyz, position) + u_shadowCameraForward.w;
+            if (shadow.x > 0.5 && u_shadowAtlas.z >= 1.0 && shadowDepth > 0.0 && shadowDepth < shadow.w &&
+                reconstructionUncertainty > shadow.y) return -1.0;
+#endif
             visibility = directionalShadowVisibility(light, position, geometricNormal, planeNormal);
+        }
         energy += u_direction[light].w * roles.z * visibility;
     }
     int cluster = forwardPlusCluster(position);
@@ -41,14 +53,31 @@ float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal,
             uint flags = uint(roles.z);
             if ((flags & 16u) == 0u || (((flags >> 2u) & receiverMask & 3u) == 0u) || roles.w <= 0.0) continue;
             vec4 pointPosition = forwardPlusPointPosition(light);
+            if (pointPosition.w <= 0.0) continue;
             vec4 pointColor = forwardPlusPointColor(light);
             vec4 pointResponse = forwardPlusPointResponse(light);
             vec3 delta = pointPosition.xyz - position;
-            float attenuation = pointLightAttenuation(max(dot(delta, delta), 0.000001), pointColor.w, pointResponse.x, pointResponse.z, pointResponse.w, forwardPlusPointAttenuation(light));
+            float distanceSquared = max(dot(delta, delta), 0.000001);
+            float attenuation = pointLightAttenuation(distanceSquared, pointColor.w, pointResponse.x, pointResponse.z, pointResponse.w, forwardPlusPointAttenuation(light));
             if (attenuation <= 0.0) continue;
             float visibility = 1.0;
             if (u_ambientSettings.w > 0.5 && (flags & 32u) != 0u)
+            {
+#ifdef CC_SHADOW_COMPUTE
+                // Reuse the source's normal scope/range/reveal gates. An
+                // unrelated admitted shadow map must not force exact work.
+                int shadowIndex = int(roles.x);
+                if (shadowIndex >= 0 && u_shadowAtlas.z >= 1.0)
+                {
+                    vec4 shadow = u_pointShadow[shadowIndex];
+                    float radial = sqrt(distanceSquared);
+                    float farPlane = inversesqrt(max(pointColor.w, 1.0 / (100000.0 * 100000.0)));
+                    if (shadow.x >= 0.0 && radial > shadow.y && radial < farPlane && reconstructionUncertainty > shadow.z)
+                        return -1.0;
+                }
+#endif
                 visibility = pointShadowVisibility(int(roles.x), pointPosition, pointColor, position, geometricNormal, planeNormal, roles.y);
+            }
             energy += pointPosition.w * attenuation * roles.w * visibility;
         }
     }
@@ -68,18 +97,32 @@ float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal,
     }
     return visibility;
 }
+#ifdef CC_SHADOW_COMPUTE
+float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal, uint receiverMask)
+{
+    return ambientVisibilityAt(position, geometricNormal, planeNormal, receiverMask, 0.0);
+}
+#endif
 float ambientVisibility(vec3 position, vec3 geometricNormal, vec3 planeNormal)
 {
     if (u_ambientSettings.x < 0.5) return 1.0;
-    if (u_surfaceLighting.w > 0.5 || u_ambientAtlas.w < 0.5)
+    float visibility = -1.0;
+    if (u_surfaceLighting.w < 0.5 && u_ambientAtlas.w > 0.5)
+    {
+        vec3 view = mul(u_clusterView, vec4(position, 1.0)).xyz;
+        float depth = max(-view.z, u_clusterDepth.z);
+        vec2 ndc = view.xy / (depth * u_clusterViewport.zw);
+        ivec2 pixel = ivec2(clamp(floor(vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * u_ambientAtlas.yz),
+            vec2_splat(0.0), u_ambientAtlas.yz - vec2_splat(1.0)));
+        int pixelIndex = pixel.y * int(u_ambientAtlas.y) + pixel.x;
+        vec4 values = forwardPlusFetch(int(u_ambientAtlas.x) + pixelIndex / 4);
+        visibility = values[pixelIndex - 4 * (pixelIndex / 4)];
+    }
+    // A negative value marks an unsafe depth reconstruction, not darkness.
+    // Only these receivers evaluate from their original fragment geometry;
+    // their compute invocation skipped the corresponding light/shadow work.
+    if (visibility < 0.0)
         return ambientVisibilityAt(position, geometricNormal, planeNormal, uint(u_surfaceLighting.y));
-    vec3 view = mul(u_clusterView, vec4(position, 1.0)).xyz;
-    float depth = max(-view.z, u_clusterDepth.z);
-    vec2 ndc = view.xy / (depth * u_clusterViewport.zw);
-    ivec2 pixel = ivec2(clamp(floor(vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * u_ambientAtlas.yz),
-        vec2_splat(0.0), u_ambientAtlas.yz - vec2_splat(1.0)));
-    int pixelIndex = pixel.y * int(u_ambientAtlas.y) + pixel.x;
-    vec4 values = forwardPlusFetch(int(u_ambientAtlas.x) + pixelIndex / 4);
-    return values[pixelIndex - 4 * (pixelIndex / 4)];
+    return visibility;
 }
 #endif

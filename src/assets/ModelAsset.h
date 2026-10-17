@@ -124,6 +124,9 @@ struct ModelAsset {
     std::vector<ModelDraw> draws;
     std::vector<ModelMaterial> materials;
     std::vector<std::string> materialIds; // Stable imported material asset identities, parallel to materials.
+    // Compatibility only: the former loader appended an unused fallback at this
+    // index. Existing overrides may retain that entry; it is not a real slot.
+    std::optional<std::size_t> legacyUnusedMaterialSlot;
     std::vector<std::string> images; // All managed package images, including unreferenced images.
     ModelBounds bounds;
     std::vector<std::string> warnings;

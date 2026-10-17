@@ -5,7 +5,7 @@
 
 namespace crimson {
 // Only explicit row metadata affects this scope. Ordinary ImGui rows retain
-// their default theme; components and descendants never inherit entity tint.
+// their default theme; descendants never inherit entity tint.
 class SceneOutlinerRowColorScope {
 public:
     explicit SceneOutlinerRowColorScope(std::optional<Vec4> color);

@@ -1,6 +1,7 @@
 #include "DeletionPreparation.h"
 #include "MaterialAsset.h"
 #include "ContentStorage.h"
+#include "QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "MaterialGraphReferences.h"
 #include "ParticleAsset.h"
@@ -30,6 +31,7 @@ void materialDependencies(const std::filesystem::path& root,const MaterialAsset&
 std::vector<std::filesystem::path> dependencies(const std::filesystem::path& root,std::span<const AssetEntry> models,const AssetReferenceManager& policy,std::span<const AssetEntry> particles){
     std::vector<std::filesystem::path> result;
     for(const auto& model:models){const auto file=checkedManagedAssetPath(root,model.id);result.push_back(file);std::ifstream input(file);if(!input)throw std::runtime_error("Model manifest is unavailable: "+model.id);
+        if(const auto bundle=quaderBundleSource(root,model.id))result.push_back(*bundle);
         const auto manifest=nlohmann::json::parse(input);const auto document=file.parent_path()/pathFromUtf8(manifest.at("document").get<std::string>());result.push_back(document);
         for(const auto& dependency:manifest.at("dependencies")){const auto identity=derivedAssetId(model.id,"image:"+dependency.at("path").get<std::string>());
             if(dependency.at("kind")=="image"){const auto target=policy.resolveTexture(identity);if(!target.empty()&&!isEngineAssetId(target))result.push_back(checkedManagedAssetPath(root,target));}

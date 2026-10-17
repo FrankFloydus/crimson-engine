@@ -3,6 +3,7 @@
 #include "scene/Scene.h"
 #include "assets/AtomicFile.h"
 #include "assets/ModelImportIdentity.h"
+#include "assets/QuaderSceneBundle.h"
 #include "resources/Paths.h"
 #include "resources/AssetId.h"
 #include "resources/StreamingModel.h"
@@ -25,6 +26,7 @@
 namespace crimson {
 namespace {
 using Json=nlohmann::json;
+std::string pathText(const std::filesystem::path& path){const auto value=path.generic_u8string();return {reinterpret_cast<const char*>(value.data()),value.size()};}
 void require(bool value,const std::string& text){if(!value)throw std::runtime_error(text);}
 void canceled(std::stop_token token){if(token.stop_requested())throw std::runtime_error("Quader import canceled.");}
 std::string bytes(const std::filesystem::path& path) {
@@ -36,9 +38,28 @@ void omitNames(Json& value){
     if(value.is_object()){value.erase("name");for(auto& child:value)omitNames(child);}
     else if(value.is_array())for(auto& child:value)omitNames(child);
 }
-std::string visualIdentity(Json document,Json materials){
+std::string rawVisualIdentity(Json document,Json materials){
     omitNames(document);for(auto& id:materials)id=canonicalAssetId(id.get<std::string>());
     return document.dump()+"\n"+materials.dump();
+}
+bool unusedLegacyFallback(const Json& document,const Json& materials){
+    const auto source=document.find("materials"),meshes=document.find("meshes");
+    if(source==document.end()||!source->is_array()||source->empty()||!materials.is_array()||materials.size()!=source->size()+1||
+        !materials.back().is_string()||canonicalAssetId(materials.back().get<std::string>())!=DefaultMaterialId||
+        meshes==document.end()||!meshes->is_array()||meshes->empty())return false;
+    bool geometry{};
+    for(const auto& mesh:*meshes){if(!mesh.is_object())return false;const auto primitives=mesh.find("primitives");
+        if(primitives==mesh.end()||!primitives->is_array())return false;
+        for(const auto& primitive:*primitives){if(!primitive.is_object())return false;const auto slot=primitive.find("material");
+            if(slot==primitive.end()||!slot->is_number_integer()||*slot<0||slot->get<std::uint64_t>()>=source->size())return false;
+            geometry=true;}}
+    return geometry;
+}
+std::string visualIdentity(Json document,Json materials){
+    // Former Quader packages appended one native fallback beyond the glTF table.
+    // Ignore only that proven-unused record when comparing immutable packages.
+    if(unusedLegacyFallback(document,materials))materials.erase(materials.end()-1);
+    return rawVisualIdentity(std::move(document),std::move(materials));
 }
 std::string identity(const QuaderSourceScene& scene,const QuaderSourceTexture& texture,std::size_t slot,bool directX){
     return scene.project.id+"|"+texture.id+"|"+(texture.id.empty()?scene.id+"|"+texture.path:"")+"|"+(slot==3?"normal":slot==0?"color":"data")+"|"+std::to_string(texture.srgb)+"|"+std::to_string(slot==3&&directX);
@@ -97,17 +118,30 @@ struct Preparation {
     std::unordered_map<std::string,std::size_t> fileIndexes,inputIndexes;std::unordered_map<std::string,MaterialAsset> materials;std::filesystem::path stage;
     std::unordered_map<std::string,std::vector<Package>> packages;
     std::unordered_set<std::string> preparedPackages;bool indexedPackages{};
+    QuaderSceneBundle bundle;std::filesystem::path bundlePath,canonicalRoot;
     explicit Preparation(const QuaderSourceScene& source,const QuaderPrepareOptions& settings,std::stop_token token):scene(source),options(settings),stop(token){
+        canonicalRoot=std::filesystem::weakly_canonical(std::filesystem::absolute(options.projectRoot));
         static std::atomic<std::uint64_t> sequence{};const auto id=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
-        stage=resolveAssetPath(options.projectRoot,"assets/.staging-quader-"+id);std::filesystem::create_directories(stage);
+        stage=resolveAssetPath(options.projectRoot,"assets/.staging-quader-"+id);
         for(const auto& [id,material]:options.existingMaterials)materials[canonicalAssetId(id)]=material;
         auto fallback=defaultMaterialAsset();canonicalizeMaterialAsset(fallback);materials[DefaultMaterialId]=std::move(fallback);
+        if(auto existing=findQuaderSceneBundle(options.projectRoot,scene.project.id,scene.id)){
+            bundlePath=existing->first;bundle=std::move(existing->second);
+            input(pathText(bundlePath.lexically_relative(canonicalRoot)),bytes(bundlePath));
+        }else{
+            bundle.id=quaderSceneBundleId(scene.project.id,scene.id);bundle.projectId=scene.project.id;bundle.sceneId=scene.id;
+            bundle.name=pathText(pathFromUtf8(scene.relativePath).stem());if(bundle.name.empty())bundle.name=scene.project.name;
+            bundlePath=defaultQuaderSceneBundlePath(options.projectRoot,bundle);
+            input(pathText(bundlePath.lexically_relative(canonicalRoot)),std::nullopt);
+        }
+        std::filesystem::create_directories(stage);
     }
     std::string publishedId(const std::string& id)const{return canonicalAssetId(id);}
     ~Preparation(){try{const auto target=std::filesystem::weakly_canonical(stage),parent=std::filesystem::weakly_canonical(resolveAssetPath(options.projectRoot,"assets/.staging-quader").parent_path());
         if(target.parent_path()!=parent||!target.filename().string().starts_with(".staging-quader-"))return;
         std::error_code ignored;std::filesystem::remove_all(target,ignored);}catch(...){/* Never widen cleanup after a path-resolution failure. */}}
     void input(const std::string& id,const std::optional<std::string>& prior){
+        require(!id.empty(),"Quader import produced an empty input identity.");
         const auto fingerprint=prior?std::optional{digest(*prior)}:std::nullopt;
         if(const auto found=inputIndexes.find(id);found!=inputIndexes.end()){
             require(out.materialInputs[found->second].digest==fingerprint,"Crimson material assets changed during Quader preparation. Import again.");return;}
@@ -123,7 +157,7 @@ struct Preparation {
         return availableQuaderAssetId(original,options.reservedIds);
     }
     void file(const std::string& id,std::string data,bool preserve=false,bool immutable=false){
-        canceled(stop);const auto path=checkedManagedAssetPath(options.projectRoot,id);
+        canceled(stop);require(!id.empty(),"Quader import produced an empty output identity.");const auto path=checkedManagedAssetPath(options.projectRoot,id);
         if(options.reservedIds.contains(id)||options.reservedIds.contains(canonicalAssetId(id)))throw std::runtime_error("Quader import would recreate an explicitly deleted asset: "+id);
         if(const auto found=fileIndexes.find(id);found!=fileIndexes.end()){require(out.files[found->second].contents==data,"Conflicting Quader asset identities.");return;}
         const auto prior=std::filesystem::exists(path)?std::optional{bytes(path)}:std::nullopt;
@@ -167,6 +201,13 @@ struct Preparation {
     }
     std::string identityKey(const QuaderSourceTexture& texture,std::size_t slot,bool directX)const{return identity(scene,texture,slot,directX);}
     bool reservedPackage(const std::string& id)const{
+        for(const auto& model:bundle.models)if(model.id==canonicalAssetId(id)||model.legacyManifest==id){
+            const auto directory=pathFromUtf8(model.legacyManifest).parent_path();
+            const std::array<const char*,4> names{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+            for(std::size_t index=0;index<names.size();++index){const auto legacy=pathText(directory/names[index]);
+                if(options.reservedIds.contains(model.memberIds[index])||options.reservedIds.contains(legacy)||
+                    options.reservedIds.contains(canonicalAssetId(legacy)))return true;}
+        }
         const auto legacy=legacyAssetId(options.projectRoot,id);const auto base=pathFromUtf8(legacy).parent_path();
         for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"}){
             const auto value=(base/member).generic_string();
@@ -176,11 +217,18 @@ struct Preparation {
     }
     void indexPackages(){
         if(indexedPackages)return;indexedPackages=true;
+        for(const auto& model:bundle.models){
+            canceled(stop);if(reservedPackage(model.id))continue;
+            Package package;package.id=model.id;package.manifest=model.manifest;package.gltf=model.gltf;package.buffer=model.buffer;
+            package.identity=visualIdentity(Json::parse(package.gltf),Json::parse(package.manifest).at("materialAssets"));
+            packages[digest(package.identity+"\n"+package.buffer)].push_back(std::move(package));
+        }
         // Imports run on a worker. Inspect the immutable package catalog once,
         // not once per occurrence; physical placement and display names are not
         // geometry identity. Old UUID-migrated packages keep their original bytes.
         for(const auto& entry:storedAssetPaths(options.projectRoot)){
             canceled(stop);if(entry.file.filename()!="manifest.json"||!std::filesystem::is_regular_file(entry.file)||reservedPackage(entry.id))continue;
+            if(std::any_of(bundle.models.begin(),bundle.models.end(),[&](const auto& model){return model.id==entry.id;}))continue;
             try{
                 Package package;package.id=entry.id;package.manifest=bytes(entry.file);const auto manifest=Json::parse(package.manifest);
                 if(manifest.value("format",std::string{})!="Quader"||!manifest.contains("quader"))continue;
@@ -216,13 +264,17 @@ struct Preparation {
             const auto index=accessor(indices.data()+surface.offset,surface.count*sizeof(std::uint32_t),surface.count,"SCALAR",5125,34963);
             Json attributes{{"POSITION",position},{"NORMAL",normal},{"TEXCOORD_0",uv}};
             primitives.push_back({{"attributes",std::move(attributes)},{"indices",index},{"material",slot},{"mode",4}});}
-        if(primitives.empty())return {};nativeMaterials.push_back(DefaultMaterialId);
+        if(primitives.empty())return {};
         Json document{{"asset",{{"version","2.0"},{"generator","Crimson Quader bridge ABI 6"}}},{"scene",0},{"scenes",Json::array({{{"nodes",{0}}}})},
             {"nodes",Json::array({{{"name",name},{"mesh",0}}})},{"meshes",Json::array({{{"name",name},{"primitives",std::move(primitives)}}})},
             {"materials",std::move(gltfMaterials)},{"buffers",Json::array({{{"uri","buffers/0.bin"},{"byteLength",buffer.size()}}})},{"bufferViews",std::move(views)},{"accessors",std::move(accessors)}};
-        auto gltf=document.dump();const auto exactContent=digest(scene.project.id+"|"+scene.id+"|"+gltf+"\n"+nativeMaterials.dump()+"\n"+buffer);
+        // Preserve the former hash recipe, including its virtual fallback, so
+        // removing the unused manifest entry does not change existing package IDs
+        // or conceal immutable-member corruption behind a replacement package.
+        auto legacyMaterials=nativeMaterials;legacyMaterials.push_back(DefaultMaterialId);
+        auto gltf=document.dump();const auto exactContent=digest(scene.project.id+"|"+scene.id+"|"+gltf+"\n"+legacyMaterials.dump()+"\n"+buffer);
         const auto normalized=visualIdentity(document,nativeMaterials),key=digest(normalized+"\n"+buffer);
-        auto content=digest("Quader visual geometry v2|"+scene.project.id+"|"+scene.id+"|"+normalized+"\n"+buffer);
+        auto content=digest("Quader visual geometry v2|"+scene.project.id+"|"+scene.id+"|"+rawVisualIdentity(document,legacyMaterials)+"\n"+buffer);
         // Prefer the exact legacy package when present, so corruption of its
         // immutable members is still reported rather than hidden by a new ID.
         const auto oldBase="assets/models/quader-"+exactContent;
@@ -239,7 +291,7 @@ struct Preparation {
         // again. Reuse the first live generation and never revive a deleted ID.
         base=generationBase(originalBase);auto id=base+"/manifest.json";
         Json manifest{{"version",1},{"name",name},{"format","Quader"},{"document","model.gltf"},{"original","source.gltf"},
-            {"dependencies",Json::array({{{"kind","buffer"},{"index",0},{"path","buffers/0.bin"},{"source","Quader reader ABI 6"}}})},{"materialAssets",nativeMaterials},
+            {"dependencies",Json::array({{{"kind","buffer"},{"index",0},{"path","buffers/0.bin"},{"source","Quader reader ABI 6"}}})},{"materialAssets",exactLegacy?legacyMaterials:nativeMaterials},
             {"quader",{{"project",scene.project.id},{"scene",scene.id},{"collision",false},{"content",content}}}};
         auto manifestText=manifest.dump(2)+"\n";indexPackages();
         const auto candidates=packages.find(key);const Package* reused{};
@@ -249,16 +301,54 @@ struct Preparation {
             const std::array<const std::string*,4> values{&manifestText,&gltf,&gltf,&buffer};
             for(std::size_t i=0;i<values.size();++i)if(!reused->inputs[i].empty())input(reused->inputs[i],*values[i]);
         }else{
-            file(base+"/model.gltf",gltf,false,true);file(base+"/source.gltf",gltf,false,true);file(base+"/buffers/0.bin",buffer,false,true);file(id,manifestText,false,true);
+            // Loose packages are immutable source data until startup migration
+            // has adopted them. Never mask a conflicting source package with a
+            // fresh bundle record. Expanded bundle caches, in contrast, are
+            // disposable and are repaired from their authoritative payload.
+            if(std::filesystem::is_regular_file(checkedManagedAssetPath(options.projectRoot,id))&&
+                std::none_of(bundle.models.begin(),bundle.models.end(),[&](const auto& model){return model.id==publishedId(id);})){
+                require(bytes(checkedManagedAssetPath(options.projectRoot,base+"/model.gltf"))==gltf&&
+                    bytes(checkedManagedAssetPath(options.projectRoot,base+"/source.gltf"))==gltf&&
+                    bytes(checkedManagedAssetPath(options.projectRoot,base+"/buffers/0.bin"))==buffer,
+                    "Managed Quader geometry was modified; repair the conflicting source package before importing again.");
+            }
             packages[key].push_back({publishedId(id),gltf,buffer,manifestText,normalized,{}});
         }
         const auto published=publishedId(id);out.assetIds.push_back(published);
         if(!preparedPackages.insert(published).second)return published;
+        if(std::none_of(bundle.models.begin(),bundle.models.end(),[&](const auto& model){return model.id==published;})){
+            QuaderBundleModel model;model.id=published;model.manifest=manifestText;model.gltf=gltf;model.buffer=buffer;
+            model.legacyManifest=reused?legacyAssetId(options.projectRoot,reused->id):base+"/manifest.json";
+            require(!isAssetUuid(model.legacyManifest),"Quader geometry has lost its source identity provenance.");
+            const auto directory=pathFromUtf8(model.legacyManifest).parent_path();
+            const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+            for(std::size_t index=0;index<members.size();++index)model.memberIds[index]=
+                reused&&!reused->inputs[index].empty()?publishedId(reused->inputs[index]):publishedId(pathText(directory/members[index]));
+            model.memberIds[0]=published;bundle.models.push_back(std::move(model));
+        }
         const auto local=stage/content;std::filesystem::create_directories(local/"buffers");writeFileAtomically(local/"model.gltf",gltf);writeFileAtomically(local/"source.gltf",gltf);writeFileAtomically(local/"buffers/0.bin",buffer);writeFileAtomically(local/"manifest.json",manifestText);
         ModelResolvers resolvers;resolvers.material=[&](const std::string& material)->std::optional<ModelMaterial>{const auto found=materials.find(canonicalAssetId(material));if(found!=materials.end())return found->second.surface;return std::nullopt;};
         auto asset=loadModelPackage(local/"manifest.json",options.projectRoot,resolvers);asset->id=publishedId(id);canceled(stop);
         auto stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*asset,options.projectRoot,false));asset->stream=std::move(stream);
         out.preparedModels.push_back(std::move(asset));return published;
+    }
+    void finish(){
+        if(preparedPackages.empty())return;
+        // One durable file owns every immutable generation for this source
+        // scene. Older generations remain available to scene references/Undo.
+        file(pathText(bundlePath.lexically_relative(canonicalRoot)),encodeQuaderSceneBundle(bundle));
+        out.locations.push_back({bundle.id,bundlePath});
+        const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+        for(const auto& model:bundle.models){
+            if(reservedPackage(model.id))continue;
+            const auto directory=quaderBundleCacheDirectory(options.projectRoot,bundle.id,model.id);
+            const std::array<const std::string*,4> values{&model.manifest,&model.gltf,&model.gltf,&model.buffer};
+            for(std::size_t index=0;index<members.size();++index){
+                const auto path=directory/members[index];
+                file(pathText(path.lexically_relative(canonicalRoot)),*values[index]);
+                out.locations.push_back({model.memberIds[index],path});
+            }
+        }
     }
 };
 }
@@ -303,6 +393,6 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
         const auto right=math::normalized(math::cross(direction,up),{1,0,0});up=math::normalized(math::cross(right,direction),{0,1,0});
         light.local={right[0],right[1],right[2],0,up[0],up[1],up[2],0,-direction[0],-direction[1],-direction[2],0,
             scaled(source.transform[12],options.scale),scaled(source.transform[13],options.scale),scaled(source.transform[14],options.scale),1};out.lights.push_back(std::move(light));}
-    std::sort(out.assetIds.begin(),out.assetIds.end());out.assetIds.erase(std::unique(out.assetIds.begin(),out.assetIds.end()),out.assetIds.end());return std::move(out);
+    context.finish();std::sort(out.assetIds.begin(),out.assetIds.end());out.assetIds.erase(std::unique(out.assetIds.begin(),out.assetIds.end()),out.assetIds.end());return std::move(out);
 }
 } // namespace crimson

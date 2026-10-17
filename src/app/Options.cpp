@@ -1,5 +1,5 @@
 #include "App.h"
-#include "DiagnosticSession.h"
+#include "crimson-renderer/RenderTypes.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -88,6 +88,10 @@ AppOptions parseOptions(int argc, char** argv) {
         else if (argument == "--scenario") options.scenario = std::string(value);
         else if (argument == "--project-root") options.projectRoot = std::string(value);
         else if (argument == "--frame-profile") options.frameProfile = std::string(value);
+        else if (argument == "--renderer") {
+            options.rendererBackend=parseGraphicsBackend(value);
+            if(!options.rendererBackend)throw std::runtime_error("Renderer must be dx11 or dx12.");
+        }
         else if (argument == "--ui-scale") {
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.uiScale);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||

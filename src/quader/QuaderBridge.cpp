@@ -23,9 +23,10 @@ std::string pathKey(const std::filesystem::path& path){const auto text=std::file
     std::transform(result.begin(),result.end(),result.begin(),[](unsigned char c){return c>='A'&&c<='Z'?static_cast<char>(c+'a'-'A'):static_cast<char>(c);});return result;}
 template<class T> bool ready(const std::future<T>& future){return future.valid()&&future.wait_for(std::chrono::seconds{0})==std::future_status::ready;}
 bool sameConfiguration(QuaderLink left,QuaderLink right){left.saveKey.clear();right.saveKey.clear();return left==right;}
-std::optional<std::string> previousFile(const std::filesystem::path& root,const std::string& id){const auto path=checkedManagedAssetPath(root,id);if(!std::filesystem::exists(path))return std::nullopt;
+std::optional<std::string> previousFile(const std::filesystem::path& root,const std::string& id){try{const auto path=checkedManagedAssetPath(root,id);if(!std::filesystem::exists(path))return std::nullopt;
     std::ifstream input(path,std::ios::binary|std::ios::ate);const auto size=input.tellg();if(!input||size<0||size>512ll*1024*1024)throw std::runtime_error("Cannot snapshot a previous Quader asset.");
-    std::string data(static_cast<std::size_t>(size),'\0');input.seekg(0);if(!data.empty())input.read(data.data(),static_cast<std::streamsize>(data.size()));if(!input)throw std::runtime_error("Previous Quader asset changed while reading.");return data;}
+    std::string data(static_cast<std::size_t>(size),'\0');input.seekg(0);if(!data.empty())input.read(data.data(),static_cast<std::streamsize>(data.size()));if(!input)throw std::runtime_error("Previous Quader asset changed while reading.");return data;
+    }catch(const std::exception& error){throw std::runtime_error("Cannot snapshot Quader input '"+id+"': "+error.what());}}
 std::string completedMessage(const QuaderImportResult& result){std::ostringstream out;out<<"Imported "<<result.meshes.size()<<" meshes and "<<result.lights.size()<<" lights.";
     if(result.skippedCollisions)out<<' '<<result.skippedCollisions<<" unsupported collisions skipped.";
     if(result.skippedSpots)out<<' '<<result.skippedSpots<<" spot lights skipped.";
@@ -122,8 +123,8 @@ struct QuaderBridge::Impl {
             commitAssetTransaction(root,current.result->files);
             try{
                 if(contentStorageReady(root)) {
-                    std::vector<StoredAssetPath> paths;paths.reserve(current.result->files.size());
-                    for(const auto& file:current.result->files)if(file.contents)paths.push_back({file.id,resolveAssetPath(root,file.id)});
+                    auto paths=current.result->locations;paths.reserve(paths.size()+current.result->files.size());
+                    for(const auto& file:current.result->files)if(file.contents&&file.id.starts_with("assets/"))paths.push_back({file.id,resolveAssetPath(root,file.id)});
                     registerAssetPaths(root,paths);
                 }
                 if(!hooks.applyImport(current.request.entity,applied,*current.result))throw std::runtime_error("The Quader scene import could not be published.");}

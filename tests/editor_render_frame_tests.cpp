@@ -121,6 +121,8 @@ int main() {
         auto frame=std::make_shared<PreparedRenderFrame>();frame->world=frozen;
         PreparedRenderView scene;scene.identity={RenderViewPurpose::Scene,0};scene.width=1280;scene.height=720;
         scene.settings.camera.position={4,5,6};scene.settings.environment.fog.enabled=true;
+        scene.settings.environment.ssgi={true,1.5f,4.f,.12f,.8f,SsgiQuality::High,2};
+        scene.settings.environment.ssao={true,1.2f,.7f,SsaoQuality::High};
         scene.instances.push_back(frozen->shadowInstances.front());
         PreparedRenderView game;game.identity={RenderViewPurpose::Game,0};game.width=960;game.height=540;
         game.settings=scene.settings;game.settings.camera.position={11,12,13};
@@ -136,6 +138,9 @@ int main() {
         {
             const auto sceneAdapter=preparedRenderScene(*queued,queued->views[0]);
             const auto gameAdapter=preparedRenderScene(*queued,queued->views[1]);
+            require(sceneAdapter.settings.environment.ssgi==gameAdapter.settings.environment.ssgi&&
+                sceneAdapter.settings.environment.ssao==gameAdapter.settings.environment.ssao&&sceneAdapter.settings.environment.ssao.enabled,
+                "Prepared Scene/Game adapters lost authored screen-space lighting controls.");
             require(&sceneAdapter.settings==&queued->views[0].settings && &gameAdapter.settings==&queued->views[1].settings &&
                 sceneAdapter.settings.camera.position==Vec3{4,5,6} && gameAdapter.settings.camera.position==Vec3{11,12,13},
                 "Execution adapters lost their owning view's settings or camera.");

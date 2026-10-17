@@ -1,6 +1,7 @@
 #include "StreamingModel.h"
 #include "assets/ModelAnimation.h"
 #include "assets/ContentStorage.h"
+#include "assets/QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "CacheIO.h"
 #include "math/Json.h"
@@ -41,6 +42,14 @@ Json dependencies(const std::filesystem::path& root,const std::string& id) {
         const auto canonical=std::filesystem::weakly_canonical(file);
         if (!inside(canonical,manifest.parent_path())) throw std::runtime_error("Model metadata cache dependency escaped its package.");
         result.push_back({{"file",utf8(canonical.lexically_relative(root))},{"hash",fileHash(canonical)}});
+    }
+    // The expanded package is disposable. A warm metadata entry also belongs
+    // to the exact tracked bundle generation that supplied its geometry.
+    if(const auto bundle=quaderBundleSource(root,id)) {
+        const auto source=std::filesystem::weakly_canonical(*bundle);
+        if(!inside(source,std::filesystem::weakly_canonical(root/"Content"))||source.extension()!=".crimson-quader")
+            throw std::runtime_error("Model metadata cache bundle source escaped Content.");
+        result.push_back({{"file",utf8(source.lexically_relative(root))},{"hash",fileHash(source)}});
     }
     return result;
 }
@@ -93,6 +102,7 @@ void writeModelMetadataCache(const ModelAsset& asset,const ModelStream& stream,c
         {"bounds",bounds(asset.bounds)},{"images",asset.images},{"materialIds",asset.materialIds},{"roots",asset.roots},{"warnings",asset.warnings},
         {"dependencies",dependencies(root,asset.id)}};
     data["materials"]=Json::array(); for (const auto& value:asset.materials) data["materials"].push_back(material(value));
+    data["legacyUnusedMaterialSlot"]=asset.legacyUnusedMaterialSlot?Json(*asset.legacyUnusedMaterialSlot):Json(nullptr);
     data["nodes"]=Json::array(); for (const auto& value:asset.nodes) data["nodes"].push_back({{"name",value.name},{"local",value.local},{"children",value.children},{"mesh",value.mesh},
         {"skin",value.skin},{"parent",value.parent},{"translation",value.translation},{"rotation",value.rotation},{"scale",value.scale},{"matrixAuthored",value.matrixAuthored},{"weights",value.weights}});
     data["meshes"]=Json::array(); for (const auto& value:asset.meshes) data["meshes"].push_back({{"name",value.name},{"primitives",value.primitives},{"weights",value.weights}});
@@ -128,6 +138,11 @@ std::shared_ptr<ModelAsset> loadModelMetadataCache(const std::filesystem::path& 
         asset->images=data.at("images").get<std::vector<std::string>>(); asset->materialIds=data.at("materialIds").get<decltype(asset->materialIds)>();
         asset->roots=data.at("roots").get<std::vector<std::uint32_t>>(); asset->warnings=data.at("warnings").get<std::vector<std::string>>();
         for (const auto& value:data.at("materials")) asset->materials.push_back(material(value));
+        const auto& legacySlot=data.at("legacyUnusedMaterialSlot");
+        if(!legacySlot.is_null()) {
+            if(!legacySlot.is_number_unsigned() || legacySlot.get<std::uint64_t>()!=asset->materials.size()) return {};
+            asset->legacyUnusedMaterialSlot=asset->materials.size();
+        }
         for (const auto& value:data.at("nodes")) {
             ModelNode node{value.at("name").get<std::string>(),value.at("local").get<Mat4>(),value.at("children").get<std::vector<std::uint32_t>>(),value.at("mesh").get<std::int32_t>()};
             node.skin=value.at("skin").get<std::int32_t>();node.parent=value.at("parent").get<std::int32_t>();

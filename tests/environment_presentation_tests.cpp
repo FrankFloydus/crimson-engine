@@ -3,12 +3,19 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <numbers>
+#include <source_location>
 #include <stdexcept>
+#include <string>
 
 namespace {
 using namespace crimson;
 void check(bool ok,const char* message) {if(!ok)throw std::runtime_error(message);}
-void near(float actual,float expected) {check(std::isfinite(actual) && std::abs(actual-expected)<2e-6f,"Fog equation mismatch.");}
+void near(float actual,float expected,const std::source_location location=std::source_location::current()) {
+    if(!std::isfinite(actual) || std::abs(actual-expected)>=2e-6f)
+        throw std::runtime_error(std::string("Fog equation mismatch in ")+location.function_name()+":"+
+            std::to_string(location.line())+", actual="+std::to_string(actual)+", expected="+std::to_string(expected));
+}
 void fogComposition() {
     FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.density=0;
     auto params=fog::parameters(settings,1000);const Vec3 source{4,2,1};
@@ -110,7 +117,9 @@ void fogLightEnergy() {
     const auto extremeParams=fog::parameters(settings,1000);
     for(float opacity:{0.f,.25f,1.f}) {
         const auto extreme=fog::premultiplied({0,0,0},opacity,extremeParams,1000,0,false);
-        for(std::size_t c=0;c<3;++c)near(extreme[c],60000.f*opacity);
+        // The shared fog light color is bounded before applying the finite
+        // optical path; maximum Energy cannot bypass its residual transmission.
+        for(std::size_t c=0;c<3;++c)near(extreme[c],60000.f*(1-std::exp(-10.f))*opacity);
         near(extreme[3],opacity);
     }
 }
@@ -138,6 +147,81 @@ void materialFogReception() {
         near(fog::transmittance(fog::forMaterial(fog::parameters(settings,1000),true),100,-1000),1);
     }
 }
+void backgroundFog() {
+    FogSettings settings;settings.color={.5f,.25f,1};settings.lightEnergy=2;
+    const Vec3 sky{4,2,.25f};
+    const auto disabled=fog::parameters(settings,2048);
+    check(fog::background(disabled,sky,true,32)==Vec4{4,2,.25f,1},
+        "Disabled fog changed the visible sky's radiance or coverage.");
+    check(fog::background(disabled,sky,false,32)==Vec4{},
+        "Hidden background wrote radiance or coverage without fog.");
+
+    settings.enabled=true;settings.density=0;settings.heightDensity=0;
+    auto params=fog::parameters(settings,2048);
+    check(fog::background(params,sky,true,32)==fog::background(disabled,sky,true,32) &&
+        fog::background(params,sky,false,32)==fog::background(disabled,sky,false,32),
+        "Zero Density with height fog disabled failed to restore the unfogged background.");
+    settings.density=std::log(2.f)/32;params=fog::parameters(settings,2048);
+    const auto partial=fog::background(params,sky,false,32);
+    near(partial[0],.21404114f);near(partial[1],.05087609f);near(partial[2],1);near(partial[3],.5f);
+    const auto visible=fog::background(params,sky,true,32);
+    for(unsigned channel=0;channel<3;++channel)near(visible[channel],sky[channel]*.5f+partial[channel]);
+    near(visible[3],1);
+    near(fog::background(params,sky,false,64)[3],.75f);
+    // Values remain premultiplied linear HDR for the ordinary exposure/tone
+    // path; hidden matte coverage must not multiply fog's RGB a second time.
+    const Vec3 fogRadiance{partial[0],partial[1],partial[2]};
+    near(toneMap(fogRadiance*.5f,ToneMapping::Reinhard)[2],1.f/3.f);
+    for(const auto mode:{ToneMapping::Linear,ToneMapping::Reinhard,ToneMapping::ACES,ToneMapping::AgX})
+        for(const float channel:toneMap(fogRadiance*0.f,mode))near(channel,0);
+    settings.skyAffect=.5f;params=fog::parameters(settings,2048);
+    const auto halfSky=fog::background(params,sky,false,32);
+    for(unsigned channel=0;channel<3;++channel)near(halfSky[channel],partial[channel]*.5f);
+    near(halfSky[3],.25f);
+    settings.skyAffect=0;params=fog::parameters(settings,2048);
+    check(fog::background(params,sky,true,32)==Vec4{4,2,.25f,1} && fog::background(params,sky,false,32)==Vec4{},
+        "Sky Affect zero failed to exclude background fog.");
+    settings.skyAffect=1;settings.mode=FogMode::Depth;settings.depthBegin=0;settings.depthEnd=64;
+    settings.depthOpacity=.8f;params=fog::parameters(settings,2048);
+    near(fog::background(params,sky,false,32)[3],.4f);
+    settings.depthOpacity=0;params=fog::parameters(settings,2048);
+    check(fog::background(params,sky,false,32)==Vec4{},"Depth opacity zero left background fog.");
+    settings.mode=FogMode::Exponential;settings.density=0;settings.height=1;settings.heightDensity=.1f;
+    params=fog::parameters(settings,2048);
+    near(fog::background(params,sky,false,32,-9)[3],1-std::exp(-1.f));
+    near(fog::background(params,sky,false,32,11)[3],0);
+    settings.heightDensity=0;settings.density=std::log(2.f)/32;
+    settings.aerialPerspective=1;params=fog::parameters(settings,2048);
+    const auto skyHaze=fog::background(params,sky,false,32);
+    for(unsigned channel=0;channel<3;++channel)near(skyHaze[channel],sky[channel]*.5f);
+    near(skyHaze[3],.5f);
+    check(fog::background(params,sky,true,32)==Vec4{4,2,.25f,1},
+        "Full Aerial Perspective tinted a constant visible sky instead of using its radiance.");
+    settings.aerialPerspective=.25f;params=fog::parameters(settings,2048);
+    const auto mixedHaze=fog::background(params,sky,false,32);
+    for(unsigned channel=0;channel<3;++channel)near(mixedHaze[channel],partial[channel]*.75f+sky[channel]*.125f);
+    settings.aerialPerspective=0;settings.sunScatter=1;params=fog::parameters(settings,2048);
+    params.sunDirections[0]={0,0,-1,1};params.sunColors[0]={.1f,.2f,.3f,0};
+    const auto towardSun=fog::background(params,sky,false,32,0,{0,0,-1});
+    for(unsigned channel=0;channel<3;++channel)
+        near(towardSun[channel],partial[channel]+params.sunColors[0][channel]*std::numbers::pi_v<float>*.5f);
+    check(fog::background(params,sky,false,32,0,{0,0,1})==partial,
+        "Sun Scatter added radiance when viewing away from the sun.");
+    params.sunDirections[0][3]=0;
+    check(fog::background(params,sky,false,32)==partial,"A disabled directional light still contributed Sun Scatter.");
+    params.sunDirections[0][3]=1;params.sky[2]=0;
+    check(fog::background(params,sky,false,32)==partial,"Sun Scatter zero still contributed directional radiance.");
+    settings.sunScatter=0;
+    settings.lightEnergy=0;
+    const auto black=fog::background(fog::parameters(settings,2048),sky,false,32);
+    for(unsigned channel=0;channel<3;++channel)near(black[channel],0);
+    near(black[3],.5f);
+    settings.color={1,1,1};settings.lightEnergy=std::numeric_limits<float>::max();
+    settings.density=2;
+    const auto bounded=fog::background(fog::parameters(settings,2048),sky,false,32);
+    for(unsigned channel=0;channel<3;++channel)near(bounded[channel],60000.f);
+    near(bounded[3],1);
+}
 void independentPresentation() {
     EnvironmentSettings environment;ViewportAppearance appearance;
     environment.source=EnvironmentSource::ProceduralSky;environment.fog.enabled=true;
@@ -149,6 +233,9 @@ void independentPresentation() {
     check(presentation.showBackground && presentation.procedural && presentation.fog.enabled,"Disabling IBL also disabled background or fog.");
     check(presentation.debanding,"Disabling environment lighting also disabled Debanding.");
     check(presentation.fog==environment.fog,"Authored fog parameters were lost during presentation extraction.");
+    const auto fogBackground=fog::background(fog::parameters(presentation.fog,2048),{},presentation.showBackground,2048);
+    check(fogBackground[3]==1 && fogBackground[0]>0,
+        "Disabling environment illumination also disabled background fog.");
     environment.enabled=true;environment.background.show=false;
     presentation=environmentPresentation(environment,appearance,true);
     check(!presentation.showBackground && presentation.procedural && presentation.matte==environment.background.color,"Hidden sky lost its independent matte or lighting source.");
@@ -160,6 +247,9 @@ void independentPresentation() {
         check(preview.showBackground==previewSky && !preview.procedural && !preview.fog.enabled && !preview.debanding && preview.matte==appearance.backgroundSrgb,
             "Asset previews inherited scene background, fog or linked sky.");
         near(fog::transmittance(fog::parameters(preview.fog,1000),1000,-1000),1);
+        const Vec3 previewSource{2,1,.25f};
+        check(fog::background(fog::parameters(preview.fog,1000),previewSource,previewSky,1000)==
+            (previewSky?Vec4{2,1,.25f,1}:Vec4{}),"Asset preview background inherited scene fog.");
     }
     EnvironmentSettings fallback;
     check(!environmentPresentation(fallback,appearance,true).showBackground && fallback.enabled && fallback.source==EnvironmentSource::Hdri,
@@ -192,6 +282,22 @@ void thumbnailInvalidation() {
     check(thumbnailEnvironmentKey(environment,sun)!=signature,"Linked-sun intensity did not invalidate thumbnail.");
     signature=thumbnailEnvironmentKey(environment,sun);sun.enabled=false;
     check(thumbnailEnvironmentKey(environment,sun)!=signature,"Disabling linked sun did not invalidate thumbnail.");
+}
+void toneMappingThumbnailInvalidation() {
+    EnvironmentSettings environment;ProceduralSun sun;
+    for(const auto mode:{ToneMapping::Reinhard,ToneMapping::Linear,ToneMapping::ACES,ToneMapping::AgX}) {
+        environment.toneMapping=mode;
+        const auto key=thumbnailEnvironmentKey(environment,sun);
+        for(const auto member:{&ToneMappingParameters::reinhardWhite,&ToneMappingParameters::acesWhite,
+                &ToneMappingParameters::agxWhite,&ToneMappingParameters::agxContrast}) {
+            auto changed=environment;changed.toneMappingParameters.*member+=.5f;
+            const bool active=(mode==ToneMapping::Reinhard && member==&ToneMappingParameters::reinhardWhite) ||
+                (mode==ToneMapping::ACES && member==&ToneMappingParameters::acesWhite) ||
+                (mode==ToneMapping::AgX && (member==&ToneMappingParameters::agxWhite || member==&ToneMappingParameters::agxContrast));
+            check((thumbnailEnvironmentKey(changed,sun)!=key)==active,
+                "Tone parameter thumbnail invalidation did not match the selected operator.");
+        }
+    }
 }
 void fogThumbnailInvalidation() {
     EnvironmentSettings environment;ProceduralSun sun;
@@ -248,7 +354,7 @@ void ambientLightControls() {
 }
 }
 int main() {
-    try {fogComposition();depthAndHeightFog();fogLightEnergy();materialFogReception();independentPresentation();thumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
+    try {fogComposition();depthAndHeightFog();fogLightEnergy();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
         std::cout<<"Environment presentation and fog checks passed.\n";return 0;}
     catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

@@ -13,5 +13,8 @@ void main()
     // Sampled D24 is already normalized device depth. Test the nearest faded
     // surface against opaque/player depth without changing that depth buffer.
     gl_FragDepth = depth;
-    gl_FragColor = color;
+    gl_FragData[0] = color;
+    gl_FragData[1] = vec4_splat(0.0);
+    gl_FragData[2] = vec4_splat(0.0);
+    gl_FragData[3] = vec4_splat(0.0);
 }

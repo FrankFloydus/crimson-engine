@@ -421,6 +421,7 @@ struct AssetPreviews::Impl {
         // Browser thumbnails deliberately omit post-process halos. Their cache
         // stays stable when a scene's Glow is tuned in its full-size views.
         settings.environment.glow.enabled=false;
+        settings.environment.ssgi.enabled=false;settings.environment.ssao.enabled=false;
         const auto source=settings.environment.source==EnvironmentSource::Hdri?
             assets.references().resolveEnvironment(settings.environment.map):std::string{};
         if(!source.empty())validationFiles.push_back(sourceFile(source));

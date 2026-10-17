@@ -4,7 +4,10 @@
 #include <array>
 
 namespace crimson {
-struct SceneOutlinerColorTarget;
+struct SceneComponentTarget {
+    EntityId entity{};
+    SceneComponentKind component{SceneComponentKind::Transform};
+};
 inline constexpr std::array EditableActorComponents{
     SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Motor,
     SceneComponentKind::Navigation,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,
@@ -17,5 +20,5 @@ bool editableSceneComponent(SceneComponentKind);
 // Other capabilities and all entity children retain their authored values.
 bool addSceneComponent(SceneDocument&,EntityId,SceneComponentKind);
 bool removeSceneComponent(SceneDocument&,EntityId,SceneComponentKind);
-bool removeSceneComponents(SceneDocument&,std::span<const SceneOutlinerColorTarget>);
+bool removeSceneComponents(SceneDocument&,std::span<const SceneComponentTarget>);
 }

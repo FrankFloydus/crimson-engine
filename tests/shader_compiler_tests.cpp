@@ -277,9 +277,9 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     require(dependency(modelFragment,"directional_shadow.sh"),"Directional receiver changes do not invalidate shader reload.");
     require(dependency(modelFragment,"point_light_record.sh"),"Point record layout changes do not invalidate fragment shader reload.");
     {
-        // The prior World Fill record has incompatible response semantics. Its
-        // reflected V3 binding must reject the finite-point V4 family before
-        // publication even though the buffer stride itself is unchanged.
+        // V6 gives the former reserved record component GI-energy semantics.
+        // Reject V5 programs in either publication direction even though the
+        // six-texel stride itself is unchanged.
         const auto clusteredSource=read(shadowSource/"clustered_lighting.sh");
         const auto assignmentSource=read(shadowSource/"cs_cluster_lights.sc");
         const auto assignment=compileShader(shadows,"cs_cluster_lights");
@@ -288,12 +288,12 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
         require(dependency(ambient,"point_light_record.sh"),"Point record layout changes do not invalidate ambient shader reload.");
         require(preflightComputeShader(assignment.bytes,assignment.bytes,diagnostic),"Current clustered record layout failed its compute contract.");
         const auto priorLayout=[](std::string text) {
-            const std::string declaration="uniform vec4 u_clusterRecordLayoutV5;";
+            const std::string declaration="uniform vec4 u_clusterRecordLayoutV6;";
             const auto at=text.find(declaration);
             require(at!=std::string::npos,"Clustered ABI fixture has no reflected layout guard.");
-            const std::string stride="int(u_clusterRecordLayoutV5.x)";
+            const std::string stride="int(u_clusterRecordLayoutV6.x)";
             require(text.find(stride)!=std::string::npos,"Clustered layout guard is declared but does not affect record indexing.");
-            const std::string current="u_clusterRecordLayoutV5",previous="u_clusterRecordLayoutV4";
+            const std::string current="u_clusterRecordLayoutV6",previous="u_clusterRecordLayoutV5";
             for(std::size_t offset=0;(offset=text.find(current,offset))!=std::string::npos;offset+=previous.size()) {
                 text.replace(offset,current.size(),previous);
             }
@@ -345,6 +345,55 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     write(shadowSource/"cs_occluder_depth.sc",depthSource);const auto wrongDepthSlot=compileShader(shadows,"cs_occluder_depth");
     require(!preflightComputeShader(wrongDepthSlot.bytes,occluderDepth.bytes,diagnostic),"Changed occluder depth UAV slot escaped atomic reload validation.");
     write(shadowSource/"cs_occluder_depth.sc",originalDepth);
+    {
+        constexpr std::array ssaoNames{"cs_ssao_evaluate","cs_ssao_publish"};
+        std::array<ShaderBinary,ssaoNames.size()> ssao;
+        for(std::size_t i=0;i<ssaoNames.size();++i) {
+            require(std::find(names.begin(),names.end(),ssaoNames[i])!=names.end(),
+                "A SSAO compute stage is absent from atomic shader discovery.");
+            ssao[i]=compileShader(shadows,ssaoNames[i]);
+            require(ssao[i].bytes.size()>16&&ssao[i].bytes[0]=='C'&&!ssao[i].vertex,
+                "Runtime compiler did not compile a SSAO stage as compute.");
+            require(preflightComputeShader(ssao[i].bytes,ssao[i].bytes,diagnostic),
+                "Valid SSAO compute stage failed runtime preflight.");
+            require(dependency(ssao[i],"ssao_compute.sh"),
+                "Shared SSAO traversal was absent from runtime reload dependencies.");
+        }
+        const auto warmBefore=shaderCompilerMetrics();
+        ShaderCacheReadSession ssaoCache(shadows);
+        for(std::size_t i=0;i<ssaoNames.size();++i) {
+            const auto warm=compileShader(shadows,ssaoNames[i]);
+            const auto cached=ssaoCache.find(ssaoNames[i]);
+            require(warm.bytes==ssao[i].bytes&&warm.fingerprint==ssao[i].fingerprint&&
+                cached&&cached->bytes==ssao[i].bytes&&cached->fingerprint==ssao[i].fingerprint,
+                "Warm SSAO cache changed code or failed cache-only hydration.");
+        }
+        require(shaderCompilerMetrics().compilerInvocations==warmBefore.compilerInvocations&&ssaoCache.unchanged(),
+            "Unchanged SSAO shaders invoked the runtime compiler or lost cache coherence.");
+        const auto ssaoShared=read(shadowSource/"ssao_compute.sh");
+        write(shadowSource/"ssao_compute.sh",ssaoShared+"\n// Disposable shared SSAO dependency change.\n");
+        require(!ssaoCache.unchanged(),"Shared SSAO edits left an earlier cache snapshot coherent.");
+        ShaderCacheReadSession changedSsaoCache(shadows);
+        for(std::size_t i=0;i<ssaoNames.size();++i) {
+            require(!changedSsaoCache.find(ssaoNames[i]),"Shared SSAO edit reused a stale cache-only artifact.");
+            const auto changedSsao=compileShader(shadows,ssaoNames[i]);
+            require(changedSsao.fingerprint!=ssao[i].fingerprint&&
+                preflightComputeShader(changedSsao.bytes,ssao[i].bytes,diagnostic),
+                "Shared SSAO edit did not invalidate every stage while preserving its compute contract.");
+        }
+        write(shadowSource/"ssao_compute.sh",ssaoShared);
+        const auto originalPublish=read(shadowSource/"cs_ssao_publish.sc");
+        auto publishSource=originalPublish;
+        const std::string ssaoOutput="IMAGE2D_WO(s_ssaoAtlasOutput,rgba32f,3)";
+        const auto ssaoSlot=publishSource.find(ssaoOutput);
+        require(ssaoSlot!=std::string::npos,"SSAO publication fixture has no expected image slot.");
+        publishSource.replace(ssaoSlot,ssaoOutput.size(),"IMAGE2D_WO(s_ssaoAtlasOutput,rgba32f,4)");
+        write(shadowSource/"cs_ssao_publish.sc",publishSource);
+        const auto wrongSsaoSlot=compileShader(shadows,"cs_ssao_publish");
+        require(!preflightComputeShader(wrongSsaoSlot.bytes,ssao.back().bytes,diagnostic),
+            "Changed SSAO publication UAV slot escaped atomic reload validation.");
+        write(shadowSource/"cs_ssao_publish.sc",originalPublish);
+    }
     const auto glowFragment=compileShader(shadows,"fs_glow_blur");
     require(dependency(glowFragment,"glow_kernel.sh"),"Glow kernel was absent from runtime reload dependencies.");
     const auto warmGlow=compileShader(shadows,"fs_glow_blur");

@@ -92,7 +92,9 @@ void ShaderReloadSession::pump() {
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }
     if (!renderer_.reloadPrograms(pairs,ready.at("cs_procedural_filter")->bytes,ready.at("cs_cluster_lights")->bytes,
         ready.at("cs_ambient_visibility")->bytes,ready.at("cs_ambient_publish")->bytes,ready.at("cs_model_deform")->bytes,
-        ready.at("cs_occluder_depth")->bytes)) {
+        ready.at("cs_occluder_depth")->bytes,ready.at("cs_ssgi_trace")->bytes,ready.at("cs_ssgi_temporal")->bytes,
+        ready.at("cs_ssgi_filter")->bytes,ready.at("cs_ssgi_publish")->bytes,
+        ready.at("cs_ssao_evaluate")->bytes,ready.at("cs_ssao_publish")->bytes)) {
         bgfx::destroy(ui); pending_=false; status_="Shader reload: "+renderer_.shaderStatus(); return;
     }
     // The renderer accepted its whole candidate group; this commit cannot fail.

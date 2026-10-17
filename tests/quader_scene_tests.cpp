@@ -1,7 +1,12 @@
 #include "scene/SceneDocument.h"
+#include "scene/SceneOutlinerRows.h"
 #include "editor/QuaderSceneIntegration.h"
+#include "assets/AtomicFile.h"
+#include "assets/ContentStorage.h"
+#include "assets/QuaderSceneBundle.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -49,7 +54,6 @@ void reimportIdentityHistoryAndAtomicFailure() {
     require(document.scene().find(manual)->parent==owner&&document.scene().find(manual)->local==manualRecord.local,"Import changed a manual sibling.");
     require(!document.scene().find(visual)->fadeWhenOccluding,"New Quader models must not participate in fading automatically.");
     auto wall=*document.scene().find(visual);wall.fadeWhenOccluding=true;wall.outlinerStyle.emplace();wall.outlinerStyle->color=Vec4{.2f,.5f,.7f,1};
-    wall.outlinerStyle->componentColors[static_cast<size_t>(SceneComponentKind::Model)]=Vec4{.7f,.2f,.5f,1};
     require(document.updateEntity(visual,wall),document.status());
     auto custom=*document.scene().find(collision);custom.collider->shape=ColliderShape::Capsule;
     custom.collider->radius=.7f;custom.collider->height=3.2f;custom.collider->size={2,3,4};
@@ -101,6 +105,57 @@ QuaderImportResult lightSyncFixture(const std::string& generation) {
     QuaderImportedLight point;point.sourceKey="light/point";point.name="Imported point";point.point=true;point.radius=7;
     point.intensity=3;point.color={.5f,.7f,1};point.local=math::translation({4,5,6});result.lights.push_back(point);
     return result;
+}
+void quaderMeshOwnsColliderHierarchy() {
+    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
+    QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
+    auto initial=lightSyncFixture("hierarchy-a");
+    auto wall=initial.meshes.front();wall.sourceKey="mesh/wall";wall.name="Wall";
+    wall.modelId="assets/models/hierarchy-a-wall/manifest.json";wall.local=math::translation({-4,1,2});
+    initial.meshes.push_back(wall);
+    require(applyQuaderSceneImport(document,owner,link,initial),document.status());
+    const auto imported=generatedId(document.scene(),owner,"Imported");
+    const std::array keys{"mesh/floor","mesh/wall"};
+    const std::array visuals{generatedId(document.scene(),owner,keys[0]),generatedId(document.scene(),owner,keys[1])};
+    const std::array collisions{generatedId(document.scene(),owner,std::string(keys[0])+"/collision"),
+        generatedId(document.scene(),owner,std::string(keys[1])+"/collision")};
+    require(visuals[0]!=visuals[1]&&collisions[0]!=collisions[1],"Distinct Quader source meshes shared a scene entity or collider.");
+    const auto hierarchy=[&](const Scene& scene) {
+        const auto importedRecord=scene.find(imported);
+        require(importedRecord&&importedRecord->parent==owner&&generatedId(scene,owner,"Imported")==imported,
+            "Quader/Imported hierarchy or its persistent identity changed.");
+        for(size_t index=0;index<keys.size();++index) {
+            const auto visualRecord=scene.find(visuals[index]),collisionRecord=scene.find(collisions[index]);
+            require(visualRecord&&collisionRecord&&visualRecord->parent==imported&&collisionRecord->parent==visuals[index],
+                "Each Quader mesh must remain the real parent of its own collider under Quader/Imported.");
+            require(generatedId(scene,owner,keys[index])==visuals[index]&&
+                generatedId(scene,owner,std::string(keys[index])+"/collision")==collisions[index],
+                "Quader hierarchy replacement changed stable mesh/collider source entity identities.");
+            require(collisionRecord->local==Mat4{},"A generated collider left its own mesh-local coordinate system.");
+        }
+        const auto records=scene.records();const auto rows=sceneOutlinerRows(scene);
+        require(rows.size()==records.size(),"Quader hierarchy added synthetic component rows or hid an imported entity.");
+        std::unordered_map<EntityId,EntityId> displayedParents;
+        for(const auto row:rows)require(displayedParents.emplace(row.entity,row.parent).second,"A Quader entity appeared in more than one Outliner row.");
+        for(const auto& record:records)require(displayedParents.contains(record.id)&&displayedParents.at(record.id)==record.parent,
+            "The Outliner flattened an actual imported parent/child relationship.");
+        for(size_t index=0;index<keys.size();++index)
+            require(displayedParents.at(visuals[index])==imported&&displayedParents.at(collisions[index])==visuals[index],
+                "Each imported mesh and its own collider must display as nested real entities.");
+    };
+    hierarchy(document.scene());
+    require(document.save("Quader hierarchy"),document.status());SceneDocument loaded(project.root);
+    require(loaded.load(document.assetId()),loaded.status());hierarchy(loaded.scene());
+    auto replacement=lightSyncFixture("hierarchy-b");replacement.meshes.front().name="Updated floor";
+    replacement.meshes.front().local=math::translation({5,6,7});replacement.meshes.front().local.at(0,1)=.25f;
+    wall.modelId="assets/models/hierarchy-b-wall/manifest.json";wall.name="Updated wall";
+    wall.local=math::translation({-6,2,-3});wall.local.at(2,0)=-.15f;replacement.meshes.push_back(wall);
+    require(applyQuaderSceneImport(loaded,owner,link,replacement),loaded.status());hierarchy(loaded.scene());
+    for(size_t index=0;index<keys.size();++index)
+        require(loaded.scene().find(visuals[index])->local==replacement.meshes[index].local,
+            "Reimport did not retain the updated affine pose on the corresponding mesh.");
+    require(loaded.save(),loaded.status());SceneDocument reopened(project.root);
+    require(reopened.load(loaded.assetId()),reopened.status());hierarchy(reopened.scene());
 }
 void independentLightSyncPolicy() {
     Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
@@ -303,12 +358,13 @@ void crimsonLightingRolesSurviveSourceSync() {
     auto model=*document.scene().find(visual);model.lightingScopes={lighting_scope::World,0,lighting_scope::Character};model.castShadows=false;
     require(document.updateEntity(visual,model),document.status());
     auto lamp=*document.scene().find(point);lamp.point->roles={lighting_scope::Character,lighting_scope::World,lighting_scope::Character,false,.3f};
-    lamp.point->intensity=99;lamp.point->radius=99;lamp.point->castShadows=true;lamp.local=math::translation({99,99,99});
+    lamp.point->intensity=99;lamp.point->radius=99;lamp.point->castShadows=true;lamp.point->indirectEnergy=2.5f;lamp.local=math::translation({99,99,99});
     require(document.updateEntity(point,lamp),document.status());
     auto directional=*document.scene().find(sun);directional.directional->roles={lighting_scope::World,lighting_scope::Character,lighting_scope::World,true,.7f};
-    directional.directional->castShadows=false;require(document.updateEntity(sun,directional),document.status());
+    directional.directional->castShadows=false;directional.directional->indirectEnergy=0;require(document.updateEntity(sun,directional),document.status());
     const auto before=snapshot(document);
     auto replacement=lightSyncFixture("lighting-b");replacement.lights[1].intensity=11;replacement.lights[1].radius=17;
+    replacement.lights[0].intensity=5;replacement.lights[0].color={.25f,.5f,.75f};replacement.lights[1].color={1,.25f,.1f};
     replacement.lights[1].local=math::translation({5,7,9});
     auto added=replacement.lights[1];added.sourceKey="light/new-point";replacement.lights.push_back(added);
     require(applyQuaderSceneImport(document,owner,link,replacement),document.status());
@@ -316,21 +372,28 @@ void crimsonLightingRolesSurviveSourceSync() {
         generatedId(document.scene(),owner,"light/sun")==sun,"Role-preserving import changed persistent source identities.");
     require(document.scene().find(visual)->lightingScopes==model.lightingScopes && document.scene().find(visual)->castShadows &&
         document.scene().find(visual)->model->id==replacement.meshes[0].modelId,"Source sync lost Crimson scopes or retained unrelated source-owned model fields.");
-    require(document.scene().find(point)->point->roles==lamp.point->roles && document.scene().find(point)->point->intensity==11 &&
+    require(document.scene().find(point)->point->roles==lamp.point->roles && document.scene().find(point)->point->indirectEnergy==2.5f &&
+        document.scene().find(point)->point->intensity==11 && document.scene().find(point)->point->color==replacement.lights[1].color &&
         document.scene().find(point)->point->radius==17 && !document.scene().find(point)->point->castShadows &&
-        document.scene().find(point)->local==replacement.lights[1].local,"Point role preservation blocked source light/transform synchronization.");
-    require(document.scene().find(sun)->directional->roles==directional.directional->roles && document.scene().find(sun)->directional->castShadows,
-        "Directional role preservation lost roles or blocked source shadow synchronization.");
+        document.scene().find(point)->local==replacement.lights[1].local,"Point role/GI preservation blocked source light/transform synchronization.");
+    require(document.scene().find(sun)->directional->roles==directional.directional->roles && document.scene().find(sun)->directional->indirectEnergy==0 &&
+        document.scene().find(sun)->directional->intensity==5 && document.scene().find(sun)->directional->color==replacement.lights[0].color &&
+        document.scene().find(sun)->directional->castShadows,"Directional role/GI preservation lost authored values or blocked source lighting/shadow synchronization.");
     const auto fresh=generatedId(document.scene(),owner,"light/new-point");
-    require(fresh && document.scene().find(fresh)->point->roles==ScenePointLight{}.roles,"A new source inherited another light's custom roles.");
+    require(fresh && document.scene().find(fresh)->point->roles==ScenePointLight{}.roles && document.scene().find(fresh)->point->indirectEnergy==1,
+        "A new source inherited another light's custom roles or GI energy.");
     const auto after=snapshot(document);require(document.undo() && snapshot(document)==before,"Role-preserving import undo was not exact.");
     require(document.redo() && snapshot(document)==after,"Role-preserving import redo lost scopes or source fields.");
     require(document.save("Scoped bridge lighting"),document.status());SceneDocument loaded(project.root);
     require(loaded.load(document.assetId()) && snapshot(loaded)==snapshot(document),"Source-synchronized Crimson roles did not survive save/reopen.");
-    replacement.lights[1].point=false;require(applyQuaderSceneImport(document,owner,link,replacement),document.status());
+    const auto beforeKinds=snapshot(document);replacement.lights[1].point=false;replacement.lights[0].point=true;replacement.lights[0].radius=9;
+    require(applyQuaderSceneImport(document,owner,link,replacement),document.status());
     require(document.scene().find(point)->directional && !document.scene().find(point)->point &&
-        document.scene().find(point)->directional->roles==SceneDirectionalLight{}.roles,
-        "Changing a source light kind retained incompatible previous-kind roles.");
+        document.scene().find(point)->directional->roles==SceneDirectionalLight{}.roles && document.scene().find(point)->directional->indirectEnergy==1 &&
+        document.scene().find(sun)->point && !document.scene().find(sun)->directional && document.scene().find(sun)->point->roles==ScenePointLight{}.roles &&
+        document.scene().find(sun)->point->indirectEnergy==1,"Changing a source light kind retained incompatible previous-kind roles or GI energy.");
+    const auto afterKinds=snapshot(document);require(document.undo()&&snapshot(document)==beforeKinds,"Light-kind sync undo lost previous GI energy.");
+    require(document.redo()&&snapshot(document)==afterKinds,"Light-kind sync redo lost reset GI energy.");
 }
 void materialSlotsSurviveSourceSync() {
     Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
@@ -404,6 +467,102 @@ void materialSlotsSurviveSourceSync() {
     require(loaded.load(document.assetId())&&snapshot(loaded)==snapshot(document)&&loaded.scene().find(visual)->modelMaterials==expected,
         "Automatically cleaned and remapped source slots did not survive save/reopen.");
 }
+void singleMaterialLegacyFallbackSync() {
+    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
+    QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
+    const std::string sourceMaterial="assets/materials/one-quader-material.crimson-material";
+    const AssetRef<MaterialAsset> authoredMaterial{"assets/materials/authored-instance.crimson-material"};
+    const AssetRef<MaterialAsset> unusedOverride{"assets/materials/old-unused-slot.crimson-material"};
+    auto initial=lightSyncFixture("one-material-legacy");
+    auto legacy=std::make_shared<ModelAsset>();legacy->id=initial.meshes.front().modelId;
+    legacy->materials.resize(1);legacy->materialIds={sourceMaterial};legacy->legacyUnusedMaterialSlot=1;
+    initial.preparedModels.push_back(legacy);
+    const ModelMaterialSourceQuery query=[&](const std::string& id)->std::optional<std::vector<std::string>> {
+        return id==legacy->id?std::optional{legacy->materialIds}:std::nullopt;
+    };
+    require(applyQuaderSceneImport(document,owner,link,initial,query),document.status());
+    const auto visual=generatedId(document.scene(),owner,"mesh/floor");
+    auto entity=*document.scene().find(visual);entity.modelMaterials={authoredMaterial,unusedOverride};
+    require(document.updateEntity(visual,entity),document.status());
+    auto unchanged=initial;unchanged.sourceKey="same-geometry-refresh";unchanged.meshes.front().local=math::translation({4,5,6});
+    require(applyQuaderSceneImport(document,owner,link,unchanged,query),document.status());
+    require(document.scene().find(visual)->model->id==legacy->id&&document.scene().find(visual)->modelMaterials==entity.modelMaterials,
+        "Reusing an immutable legacy package discarded the original real or unused slot assignment.");
+    const auto before=snapshot(document);
+    auto changed=lightSyncFixture("one-material-current");
+    auto current=std::make_shared<ModelAsset>();current->id=changed.meshes.front().modelId;
+    current->materials.resize(1);current->materialIds={sourceMaterial};changed.preparedModels.push_back(current);
+    require(applyQuaderSceneImport(document,owner,link,changed,query),document.status());
+    const ModelMaterialOverrides expected{authoredMaterial};
+    require(generatedId(document.scene(),owner,"mesh/floor")==visual&&document.scene().find(visual)->model->id==current->id&&
+        document.scene().find(visual)->modelMaterials==expected,
+        "A changed one-material Quader mesh lost its real override or carried a nonexistent legacy fallback into the new package.");
+    const auto after=snapshot(document);
+    require(document.undo()&&snapshot(document)==before&&document.scene().find(visual)->modelMaterials==entity.modelMaterials,
+        "Undo did not restore the old immutable package and its exact authored override vector.");
+    require(document.redo()&&snapshot(document)==after,"Redo did not preserve the one real material assignment after replacing legacy geometry.");
+    require(document.save("Single-material Quader compatibility"),document.status());SceneDocument loaded(project.root);
+    require(loaded.load(document.assetId())&&!loaded.dirty()&&loaded.scene().find(visual)->modelMaterials==expected&&snapshot(loaded)==snapshot(document),
+        "One-material Quader package replacement changed real assignments during save/reopen.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(loaded)&&runtime.scene().find(visual)->modelMaterials==expected,
+        "Play isolation lost the real material assignment after legacy fallback removal.");
 }
-int main(){try{reimportIdentityHistoryAndAtomicFailure();independentLightSyncPolicy();nativeCollisionHistoryAndRefresh();authoredVisibilitySurvivesSourceSync();sourceHiddenMeshesRemainEditable();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();std::cout<<"Quader scene identity, native collision, atomic reimport, visibility, independent light sync, history and compatibility checks passed.\n";return 0;}
+void bundleMigrationPreservesSceneHierarchyAndAssignments() {
+    using Json=nlohmann::json;
+    Project project;initializeContentStorage(project.root);SceneDocument document(project.root);const auto owner=document.createQuader();
+    QuaderSceneBundle bundle;bundle.projectId="project-id";bundle.sceneId="scene-id";bundle.name="Room";
+    bundle.id=quaderSceneBundleId(bundle.projectId,bundle.sceneId);
+    QuaderBundleModel model;model.legacyManifest="assets/models/quader-scene-storage/manifest.json";
+    const auto legacyDirectory=fs::path(model.legacyManifest).parent_path();
+    const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+    for(std::size_t index=0;index<members.size();++index)model.memberIds[index]=canonicalAssetId((legacyDirectory/members[index]).generic_string());
+    model.id=model.memberIds[0];model.buffer="mesh";
+    model.gltf=Json{{"asset",{{"version","2.0"}}},{"buffers",Json::array({{{"uri","buffers/0.bin"},{"byteLength",model.buffer.size()}}})}}.dump();
+    model.manifest=Json{{"version",1},{"name","Floor"},{"format","Quader"},{"document","model.gltf"},{"original","source.gltf"},
+        {"materialAssets",Json::array({DefaultMaterialId})},{"dependencies",Json::array({{{"kind","buffer"},{"index",0},{"path","buffers/0.bin"}}})},
+        {"quader",{{"project",bundle.projectId},{"scene",bundle.sceneId},{"collision",false}}}}.dump();
+    const std::array<std::string,4> contents{model.manifest,model.gltf,model.gltf,model.buffer};
+    std::vector<StoredAssetPath> locations;
+    for(std::size_t index=0;index<members.size();++index) {
+        const auto legacy=(legacyDirectory/members[index]).generic_string();const auto file=resolveAssetPath(project.root,legacy);
+        writeFileAtomically(file,contents[index]);locations.push_back({legacy,file});
+    }
+    registerAssetPaths(project.root,locations);
+    auto imported=lightSyncFixture("bundle-storage");imported.meshes.front().modelId=model.id;
+    QuaderLink link{"C:/unavailable/source/project.qproj",bundle.projectId,bundle.sceneId,1,false,false};
+    require(applyQuaderSceneImport(document,owner,link,imported),document.status());
+    const auto visual=generatedId(document.scene(),owner,"mesh/floor");
+    const auto collider=generatedId(document.scene(),owner,"mesh/floor/collision");
+    const ModelMaterialOverrides assignments{AssetRef<MaterialAsset>{canonicalAssetId("assets/materials/custom-floor.crimson-material")},
+        AssetRef<MaterialAsset>{canonicalAssetId("assets/materials/old-unused-slot.crimson-material")}};
+    auto edited=*document.scene().find(visual);edited.modelMaterials=assignments;
+    require(document.updateEntity(visual,edited)&&document.save("Bundled room"),document.status());
+    const auto before=snapshot(document);
+    const auto read=[](const fs::path& file){std::ifstream input(file,std::ios::binary);return std::string{std::istreambuf_iterator<char>(input),{}};};
+    const auto sceneFile=resolveAssetPath(project.root,document.assetId());const auto saved=read(sceneFile);
+    initializeContentStorage(project.root);
+    const auto migrated=findQuaderSceneBundle(project.root,bundle.projectId,bundle.sceneId);
+    require(migrated&&migrated->second.models.size()==1&&migrated->second.models.front().id==model.id,
+        "Legacy scene import did not migrate to one bundle with its original model identity.");
+    require(snapshot(document)==before&&read(sceneFile)==saved&&document.scene().find(collider)->parent==visual&&
+        document.scene().find(visual)->modelMaterials==assignments,
+        "Storage migration changed scene bytes, mesh/collider hierarchy, IDs or authored material assignments.");
+    require(!fs::exists(locations.front().file.parent_path()),"Migration retained the loose authored mesh package.");
+    const auto cache=fs::weakly_canonical(project.root/".crimson/cache");
+    require(cache.parent_path()==fs::weakly_canonical(project.root/".crimson"),"Test cache cleanup escaped the disposable project.");
+    fs::remove_all(cache);initializeContentStorage(project.root);
+    require(read(sceneFile)==saved&&read(resolveAssetPath(project.root,model.id))==model.manifest,
+        "Cache regeneration lost a referenced model or rewrote the saved scene.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&snapshot(reopened)==before,
+        "Reopening regenerated geometry changed the imported scene.");
+    require(reopened.scene().find(collider)->parent==visual&&reopened.scene().find(visual)->modelMaterials==assignments&&
+        sameCollisionMesh(reopened.scene().find(collider)->collider->mesh,imported.meshes.front().collision),
+        "Bundle regeneration lost individual mesh ownership, native collision or material overrides.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(reopened)&&runtime.scene().find(visual)->modelMaterials==assignments&&
+        runtime.scene().find(collider)->parent==visual,"Play copying changed regenerated bundle references or hierarchy.");
+    require(document.undo()&&document.scene().find(visual)->modelMaterials.empty()&&document.redo()&&snapshot(document)==before,
+        "Bundle storage migration invalidated existing material-assignment undo/redo.");
+}
+}
+int main(){try{reimportIdentityHistoryAndAtomicFailure();quaderMeshOwnsColliderHierarchy();independentLightSyncPolicy();nativeCollisionHistoryAndRefresh();authoredVisibilitySurvivesSourceSync();sourceHiddenMeshesRemainEditable();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();singleMaterialLegacyFallbackSync();bundleMigrationPreservesSceneHierarchyAndAssignments();std::cout<<"Quader scene identity, mesh/collider hierarchy, native collision, atomic reimport, visibility, independent light sync, history and compatibility checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

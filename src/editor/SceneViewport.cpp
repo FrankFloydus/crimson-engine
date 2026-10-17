@@ -1,4 +1,5 @@
 #include "SceneViewport.h"
+#include "tools/RenderDebugControls.h"
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
 #include "CollisionWire.h"
@@ -148,6 +149,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) waitForRelease_ = false;
     if(!ImGui::GetDragDropPayload())materialDropCanceled_=false;
     if (ImGui::Begin("Viewport",nullptr,ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        drawRenderDebugControls(renderer,RenderViewPurpose::Scene);
         const bool blockKeys = ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
             navigationActive || ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle);
         const ImVec2 size = ImGui::GetContentRegionAvail();

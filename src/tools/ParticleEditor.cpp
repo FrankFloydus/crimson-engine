@@ -684,6 +684,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
         },[&] {
             ImGui::SetNextItemWidth(ImGui::GetFontSize()*14);
             drawToneMappingControl(preview_.environment.toneMapping);
+            drawToneMappingParameterControls(preview_.environment.toneMapping,preview_.environment.toneMappingParameters);
             drawGlowControls(preview_.environment.glow);
         });
         switch(action) {

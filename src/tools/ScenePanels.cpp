@@ -1,6 +1,5 @@
 #include "ScenePanels.h"
-#include "SceneComponentSelection.h"
-#include "SceneComponentRow.h"
+#include "SceneInspectorSections.h"
 #include "SceneOutlinerColor.h"
 #include "CameraAuthoringControls.h"
 #include "InspectorTransform.h"
@@ -15,6 +14,7 @@
 #include "scene/CameraTemplates.h"
 #include "scene/BuiltinModels.h"
 #include "assets/AssetLibrary.h"
+#include "assets/ModelMaterialSlots.h"
 #include "crimson-renderer/Renderer.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 
@@ -37,9 +37,9 @@ namespace {
 constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName, Visible,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
-    DirectionEnabled, DirectionColor, DirectionIntensity,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,
+    DirectionEnabled, DirectionColor, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,
     PointEnabled, PointColor, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
-    PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointAttenuation,
+    PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
     DirectionReceivers,DirectionCasters,DirectionRevealReceivers,DirectionReveal,DirectionRevealStrength,
     PointReceivers,PointCasters,PointRevealReceivers,PointReveal,PointRevealStrength,
     ModelCastShadows, ModelReceiveShadows,ModelFadeWhenOccluding,
@@ -53,9 +53,14 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentFogEnabled, EnvironmentFogMode, EnvironmentFogColor, EnvironmentFogLightEnergy, EnvironmentFogDensity,
     EnvironmentFogDepthBegin, EnvironmentFogDepthEnd, EnvironmentFogDepthCurve, EnvironmentFogDepthOpacity,
     EnvironmentFogHeight, EnvironmentFogHeightDensity,
-    EnvironmentToneMapping, EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
+    EnvironmentFogSkyAffect, EnvironmentFogAerialPerspective, EnvironmentFogSunScatter,
+    EnvironmentToneMapping, EnvironmentReinhardWhite, EnvironmentAcesWhite, EnvironmentAgxWhite, EnvironmentAgxContrast,
+    EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
     EnvironmentAmbientEnabled,EnvironmentAmbientStrength,EnvironmentAmbientFloor,EnvironmentAmbientThreshold,EnvironmentAmbientTransition,EnvironmentAmbientShadows,EnvironmentAmbientEmission,
+    EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
+    EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
+    EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
     CharacterHeight, CharacterRadius, CharacterSpeed, CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
     MotorEnabled,NavigationEnabled,PlayerInputEnabled,
     CharacterRigEnabled,
@@ -70,7 +75,7 @@ Panel owner(Edit edit) {
     return Panel::Inspector;
 }
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
-bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentAmbientEmission; }
+bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentSsaoQuality; }
 bool rigEdit(Edit edit) { return edit>=Edit::CharacterRigEnabled && edit<=Edit::CharacterRigLast; }
 bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointRevealStrength; }
 static_assert(static_cast<unsigned>(Edit::CharacterRigLast)-static_cast<unsigned>(Edit::CharacterRigEnabled)==
@@ -82,44 +87,49 @@ struct PanelsState {
     std::vector<EntityId> lastSelection;
     std::vector<EntityId> dragged;
     std::unordered_set<EntityId> expand;
-    std::unordered_set<EntityId> expandVisual;
     EntityId anchor{}, nameId{}, renameId{}, pendingClick{}, lastPrimary{};
     bool renameFocus{}, pendingCtrl{}, pendingShift{};
     std::array<char,1025> name{};
     std::array<char,1025> rename{};
     Edit active{Edit::None};
-    InspectorTransformState transform;
-    ColliderInspectorState collider;
+    std::unordered_map<EntityId,InspectorTransformState> transforms;
+    EntityId inspectorEntity{},editingEntity{};
+    std::optional<SceneComponentTarget> removeComponent;
+    std::unordered_map<EntityId,ColliderInspectorState> colliders;
     std::string materialDiagnostic;
-    SceneComponentSelection componentSelection;
     SceneOutlinerColorPopupState outlinerColor;
-    EntityId inspectedEntity{};
-    std::optional<SceneComponentKind> inspectedComponent;
-    bool componentChanged{};
-    CameraAuthoringControlsState cameraControls;
+    std::unordered_map<EntityId,CameraAuthoringControlsState> cameraControls;
     std::vector<CameraTemplate> cameraTemplates;
     std::array<char,129> cameraTemplateName{};
     std::string cameraTemplateStatus;
     bool cameraTemplatesLoaded{};
     bool cameraTemplatesAvailable{};
 };
+void releasePanelColliders(PanelsState& state) {
+    for(auto& [id,collider]:state.colliders)releaseColliderInspector(collider);
+}
 PanelsState& stateFor(SceneDocument& document) {
     static PanelsState state;
     if (state.document!=&document || state.documentGeneration!=document.documentGeneration()) {
         state={}; state.document=&document;state.documentGeneration=document.documentGeneration();
     }
-    state.componentSelection.sync(document);
+    std::erase_if(state.transforms,[&](const auto& entry){return !document.scene().contains(entry.first);});
+    std::erase_if(state.cameraControls,[&](const auto& entry){return !document.scene().contains(entry.first);});
+    for(auto it=state.colliders.begin();it!=state.colliders.end();) {
+        if(document.scene().contains(it->first)){++it;continue;}
+        releaseColliderInspector(it->second);it=state.colliders.erase(it);
+    }
     if (!document.transactionActive()) {
-        releaseColliderInspector(state.collider);
+        releasePanelColliders(state);
         // An editor-level cancel/open can end our transaction before this panel
         // runs. Never revive the buffered inline rename after that boundary.
         if (state.active==Edit::InlineName) { state.renameId=NoEntity; state.renameFocus=false; }
-        if (state.transform.editing) {
-            const auto current=document.scene().find(state.transform.entity);
-            if (current && current->local==state.transform.baseline) {
-                state.transform.fields=state.transform.captured; state.transform.degrees=state.transform.capturedDegrees;
+        for(auto& [id,transform]:state.transforms)if(transform.editing) {
+            const auto current=document.scene().find(id);
+            if(current && current->local==transform.baseline) {
+                transform.fields=transform.captured;transform.degrees=transform.capturedDegrees;
             }
-            state.transform.editing=false; state.transform.refresh=true;
+            transform.editing=false;transform.refresh=true;
         }
         state.active=Edit::None;
     }
@@ -133,7 +143,7 @@ bool selected(const SceneDocument& document, EntityId id) {
 }
 const char* kind(const EntityRecord& record) {
     if(record.quader)return "Quader";
-    if (record.playerInput) return "Player Input";
+    if (record.playerInput) return "Player";
     if (record.actor) return "Actor";
     if (record.controller) return "Character Controller";
     if (record.collider) return record.collider->shape==ColliderShape::Trimesh?"Mesh Collider":"Collider";
@@ -143,11 +153,10 @@ const char* kind(const EntityRecord& record) {
     if (record.directional) return "Directional light";
     if (record.point) return "Point light";
     if (record.environment) return "Environment";
-    return "Empty";
+    return isSceneGroup(record)?"Group":"Empty";
 }
 void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool toggle, bool range) {
     finishScenePanelEdit(document);
-    state.componentSelection.clear();
     auto ids=document.selection().ids;
     if (range && state.anchor) {
         const auto first=std::find(state.visible.begin(),state.visible.end(),state.anchor);
@@ -169,13 +178,7 @@ void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool to
 void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
     if (ImGui::MenuItem("Box")) document.createBox();
     if (ImGui::MenuItem("Collider")) document.createCollider("Collider",parent);
-    if (ImGui::MenuItem("Player")) {
-        if(const auto player=document.createPlayer()) {
-            auto& state=stateFor(document);state.expand.insert(player);
-            for(const auto child:document.scene().children(player))if(const auto record=document.scene().find(child);record && record->camera)
-                state.expand.insert(child);
-        }
-    }
+    if (ImGui::MenuItem("Player")) document.createPlayer();
     if (ImGui::MenuItem("Enemy")) document.createEnemy();
     if (ImGui::MenuItem("Camera")) document.createCamera();
     if (ImGui::MenuItem("Quader")) document.createQuader();
@@ -199,43 +202,26 @@ std::vector<std::string> modelDropIds(const ImGuiPayload& payload,bool batch) {
     return result;
 }
 void reparentTarget(SceneDocument& document, PanelsState& state, EntityId parent, std::function<void()>& action,
-                    AssetLibrary* assets=nullptr) {
+                    AssetLibrary* assets=nullptr,bool actorVisual=false) {
+    const auto target=parent?document.scene().find(parent):std::nullopt;
+    if(parent && (!target || (actorVisual && !target->actor)))return;
     if (!ImGui::BeginDragDropTarget()) return;
     if (const auto* payload=ImGui::AcceptDragDropPayload(EntityPayload,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
         if (payload->DataSize==sizeof(DraggedEntities)) {
             const auto dragged=*static_cast<const DraggedEntities*>(payload->Data);
-            if (dragged.document==&document && dragged.generation==document.scene().generation() && document.scene().contains(dragged.source)) {
-                const auto target=document.scene().find(parent);
+            const bool visuals=std::all_of(state.dragged.begin(),state.dragged.end(),[&](const auto id){
+                const auto record=document.scene().find(id);return record && !record->actor && (record->model || record->particle);});
+            if (dragged.document==&document && dragged.generation==document.scene().generation() && document.scene().contains(dragged.source) && (!actorVisual || visuals)) {
                 ImGui::SetTooltip(parent && target ? "Parent to %s" : "Move to scene root",target ? target->name.c_str() : "");
                 if (payload->IsDelivery()) {
                     const auto ids=state.dragged;
-                    action=[&document,&state,parent,ids,generation=dragged.generation] {
+                    action=[&document,&state,parent,ids,actorVisual,generation=dragged.generation] {
                         if (document.scene().generation()!=generation) return;
-                        finishScenePanelEdit(document);state.componentSelection.clear();
+                        finishScenePanelEdit(document);
                         document.select(ids,ids.empty() ? NoEntity : ids.back());
-                        if (document.reparentSelection(parent) && parent) {
-                            state.expand.insert(parent);state.expandVisual.insert(parent);
-                        }
-                    };
-                }
-            }
-        }
-    } else if(const auto* mixed=ImGui::GetDragDropPayload();mixed && mixed->IsDataType(SceneOutlinerRowPayload)) {
-        if(mixed->Data && mixed->DataSize==sizeof(DraggedSceneOutlinerRow)) {
-            const auto dragged=*static_cast<const DraggedSceneOutlinerRow*>(mixed->Data);
-            const auto source=document.scene().find(dragged.row.child);
-            if(dragged.document==&document && dragged.documentGeneration==document.documentGeneration() &&
-                dragged.row.kind==SceneOutlinerRowKind::Child && dragged.owner!=parent && dragged.row.child!=parent &&
-                source && source->parent==dragged.owner) {
-                if(const auto* payload=ImGui::AcceptDragDropPayload(SceneOutlinerRowPayload,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
-                    const auto target=document.scene().find(parent);
-                    ImGui::SetTooltip(parent && target?"Parent to %s":"Move to scene root",target?target->name.c_str():"");
-                    if(payload->IsDelivery())action=[&document,&state,parent,dragged] {
-                        if(dragged.documentGeneration!=document.documentGeneration())return;
-                        finishScenePanelEdit(document);state.componentSelection.clear();
-                        document.select({dragged.row.child},dragged.row.child);
-                        if(document.reparentSelection(parent) && parent) {
-                            state.expand.insert(parent);state.expandVisual.insert(parent);
+                        if(document.reparentSelection(parent)) {
+                            if(parent)state.expand.insert(parent);
+                            if(actorVisual)document.select({parent},parent);
                         }
                     };
                 }
@@ -250,14 +236,15 @@ void reparentTarget(SceneDocument& document, PanelsState& state, EntityId parent
             const auto& catalog=assets->catalog();
             std::erase_if(ids,[&](const auto& id){return std::none_of(catalog.begin(),catalog.end(),[&](const auto& entry){return entry.id==id && entry.kind==AssetKind::Model;});});
             if(!ids.empty()) {
-                if(const auto target=document.scene().find(parent))ImGui::SetTooltip("Add model to %s",target->name.c_str());
-                if(model->IsDelivery())action=[&document,&state,parent,ids=std::move(ids),assets] {
+                if(const auto modelParent=document.scene().find(parent))ImGui::SetTooltip("Add model to %s",modelParent->name.c_str());
+                if(model->IsDelivery())action=[&document,&state,parent,ids=std::move(ids),assets,actorVisual] {
                     if(parent && !document.scene().contains(parent))return;
-                    finishScenePanelEdit(document);state.componentSelection.clear();
+                    finishScenePanelEdit(document);
                     std::vector<ModelPlacement> placements;
                     for(const auto& id:ids)placements.push_back({id,assets->displayName(id),Mat4{}});
-                    if(!document.createModels(placements,parent).empty() && parent) {
-                        state.expand.insert(parent);state.expandVisual.insert(parent);
+                    if(!document.createModels(placements,parent).empty()) {
+                        if(parent)state.expand.insert(parent);
+                        if(actorVisual)document.select({parent},parent);
                     }
                     ImGui::SetWindowFocus();
                 };
@@ -266,17 +253,18 @@ void reparentTarget(SceneDocument& document, PanelsState& state, EntityId parent
     }
     ImGui::EndDragDropTarget();
 }
-bool beginEdit(SceneDocument& document, PanelsState& state, Edit edit, const char* label) {
-    if (state.active==edit && document.transactionActive()) return true;
+bool beginEdit(SceneDocument& document, PanelsState& state, Edit edit, const char* label,EntityId target=NoEntity) {
+    if(!target)target=state.inspectorEntity?state.inspectorEntity:document.selection().primary;
+    if (state.active==edit && state.editingEntity==target && document.transactionActive()) return true;
     if (state.active!=Edit::None && document.transactionActive()) document.commit();
     state.active=Edit::None;
-    if (!(transformEdit(edit) ? document.beginTransform(label,{document.selection().primary}) : document.begin(label))) return false;
-    state.active=edit; return true;
+    if (!(transformEdit(edit) ? document.beginTransform(label,{target}) : document.begin(label))) return false;
+    state.active=edit;state.editingEntity=target; return true;
 }
 void finishEdit(SceneDocument& document, PanelsState& state, Edit edit) {
-    if (state.active!=edit) return;
+    if (state.active!=edit || (state.inspectorEntity && state.editingEntity!=state.inspectorEntity)) return;
     document.commit(); state.active=Edit::None;
-    if (transformEdit(edit)) { state.transform.editing=false; state.transform.refresh=true; }
+    if (transformEdit(edit)) { auto& transform=state.transforms[state.editingEntity];transform.editing=false;transform.refresh=true; }
 }
 void propertyEdit(SceneDocument& document, PanelsState& state, Edit edit, const char* label,
                   bool changed, const SceneDocument::Mutation& mutation) {
@@ -327,6 +315,10 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     const bool intensityChanged=ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
     propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
         changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
+    auto indirectEnergy=directional ? record->directional->indirectEnergy : record->point->indirectEnergy;
+    const bool indirectChanged=drawIndirectEnergyControl(indirectEnergy);
+    propertyEdit(document,state,directional ? Edit::DirectionIndirectEnergy : Edit::PointIndirectEnergy,"Change light GI energy",indirectChanged,
+        changeEntity(id,[directional,indirectEnergy](auto& entity){if(directional)entity.directional->indirectEnergy=indirectEnergy;else entity.point->indirectEnergy=indirectEnergy;}));
     if(directional) {
         auto light=*record->directional;
         const bool shadows=ImGui::Checkbox("Cast Shadows",&light.castShadows);
@@ -527,7 +519,7 @@ void modelInformation(SceneDocument& document,PanelsState& state,const EntityRec
     }
     for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
     if (ImGui::TreeNodeEx("Materials",ImGuiTreeNodeFlags_DefaultOpen)) {
-        for (std::size_t index=0;index<model->materials.size();++index) {
+        for (const auto index:usedModelMaterialSlots(*model)) {
             ImGui::PushID(static_cast<int>(index));
             materialSlotControl(document,state,record,*model,index,assets,renderer,openMaterial);
             ImGui::PopID();
@@ -622,6 +614,74 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             field(properties[static_cast<unsigned>(control)],"Change ambient light",changed);
         });
     }
+    if(ImGui::CollapsingHeader("Global Illumination")) {
+        ImGui::PushID("GI");auto& gi=value.ssgi;
+        field(Edit::EnvironmentGiEnabled,"Toggle global illumination",ImGui::Checkbox("Enabled",&gi.enabled));
+        ImGui::BeginDisabled(!gi.enabled);
+        field(Edit::EnvironmentGiStrength,"Change global illumination strength",
+            ImGui::SliderFloat("Strength",&gi.strength,0,4,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(Edit::EnvironmentGiBounces,"Change global illumination bounces",
+            ImGui::SliderInt("Bounces",&gi.bounces,1,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Additional diffuse bounces increase GPU work.");
+        field(Edit::EnvironmentGiDistance,"Change global illumination distance",
+            ImGui::DragFloat("Max Distance (m)",&gi.maxDistance,.05f,.1f,20,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Maximum search distance per bounce. Offscreen surfaces remain unavailable.");
+        int quality=static_cast<int>(gi.quality);const char* qualities[]{"Low","Medium","High","Custom"};
+        const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,4);
+        if(qualityChanged)gi.quality=static_cast<SsgiQuality>(quality);
+        field(Edit::EnvironmentGiQuality,"Change screen-space GI quality",qualityChanged);
+        if(ImGui::TreeNode("Advanced")) {
+            auto budget=ssgiQualityBudget(gi);int rays=static_cast<int>(budget.rays);
+            const bool raysChanged=ImGui::SliderInt("Samples Per Pixel",&rays,1,16,"%d",ImGuiSliderFlags_AlwaysClamp);
+            if(raysChanged){gi.rays=rays;gi.steps=static_cast<int>(budget.steps);gi.quality=SsgiQuality::Custom;}
+            field(Edit::EnvironmentGiRays,"Change global illumination samples",raysChanged);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Rays traced per half-resolution pixel. Editing selects Custom quality.");
+            budget=ssgiQualityBudget(gi);int steps=static_cast<int>(budget.steps);
+            const bool stepsChanged=ImGui::SliderInt("Ray Steps",&steps,8,64,"%d",ImGuiSliderFlags_AlwaysClamp);
+            if(stepsChanged){gi.steps=steps;gi.rays=static_cast<int>(budget.rays);gi.quality=SsgiQuality::Custom;}
+            field(Edit::EnvironmentGiSteps,"Change global illumination ray steps",stepsChanged);
+            field(Edit::EnvironmentGiBias,"Change global illumination ray bias",
+                ImGui::DragFloat("Ray Bias (m)",&gi.rayBias,.001f,.001f,.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Offsets ray origins from the receiver to reduce self-intersection.");
+            field(Edit::EnvironmentGiThickness,"Change global illumination thickness",
+                ImGui::DragFloat("Thickness (m)",&gi.thickness,.005f,.01f,2,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Depth hit tolerance. Higher values can leak through thin walls.");
+            field(Edit::EnvironmentGiTemporal,"Change global illumination temporal stability",
+                ImGui::SliderFloat("Temporal Stability",&gi.temporalStability,0,.98f,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("History reuse. Higher values reduce noise and respond more slowly to changes.");
+            field(Edit::EnvironmentGiDenoiseRadius,"Change global illumination denoise radius",
+                ImGui::SliderInt("Denoise Radius (px)",&gi.denoiseRadius,0,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+            field(Edit::EnvironmentGiDenoiseStrength,"Change global illumination denoise strength",
+                ImGui::SliderFloat("Denoise Strength",&gi.denoiseStrength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Spatial noise filtering. Zero preserves unfiltered samples.");
+            field(Edit::EnvironmentGiRadianceClamp,"Change global illumination radiance clamp",
+                ImGui::DragFloat("Radiance Clamp",&gi.radianceClamp,.1f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Limits bright HDR donor samples to reduce fireflies. Zero disables the clamp.");
+            ImGui::TreePop();
+        }
+        ImGui::EndDisabled();
+        if(gi.enabled && document.scene().properties().activeEnvironment==record.id && !renderer.ssgiStatus().empty())
+            ImGui::TextWrapped("%s",renderer.ssgiStatus().c_str());
+        ImGui::PopID();
+    }
+    if(ImGui::CollapsingHeader("Screen Space Ambient Occlusion")) {
+        ImGui::PushID("SSAO");auto& ao=value.ssao;
+        field(Edit::EnvironmentSsaoEnabled,"Toggle screen-space ambient occlusion",ImGui::Checkbox("Enabled",&ao.enabled));
+        ImGui::BeginDisabled(!ao.enabled);
+        field(Edit::EnvironmentSsaoStrength,"Change screen-space ambient occlusion strength",
+            ImGui::SliderFloat("Strength",&ao.strength,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(Edit::EnvironmentSsaoRadius,"Change screen-space ambient occlusion radius",
+            ImGui::DragFloat("Radius (m)",&ao.radius,.01f,.05f,5,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("World-space radius used to find nearby screen-space occluders.");
+        int quality=static_cast<int>(ao.quality);const char* qualities[]{"Low","Medium","High"};
+        const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,3);
+        if(qualityChanged)ao.quality=static_cast<SsaoQuality>(quality);
+        field(Edit::EnvironmentSsaoQuality,"Change screen-space ambient occlusion quality",qualityChanged);
+        ImGui::EndDisabled();
+        if(ao.enabled && document.scene().properties().activeEnvironment==record.id && !renderer.ssaoStatus().empty())
+            ImGui::TextWrapped("%s",renderer.ssaoStatus().c_str());
+        ImGui::PopID();
+    }
     if(ImGui::CollapsingHeader("Background",ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushID("Background");
         field(Edit::EnvironmentBackgroundShow,"Toggle environment background",ImGui::Checkbox("Show Background",&value.background.show));
@@ -646,6 +706,15 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         field(Edit::EnvironmentFogLightEnergy,"Change fog light energy",
             ImGui::DragFloat("Light Energy",&fog.lightEnergy,.01f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Brightness of the fog color.");
+        field(Edit::EnvironmentFogSkyAffect,"Change fog sky affect",
+            ImGui::SliderFloat("Sky Affect",&fog.skyAffect,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("How much fog covers the sky and empty background.");
+        field(Edit::EnvironmentFogAerialPerspective,"Change fog aerial perspective",
+            ImGui::SliderFloat("Aerial Perspective",&fog.aerialPerspective,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Blends distant fog toward the sky color.");
+        field(Edit::EnvironmentFogSunScatter,"Change fog sun scatter",
+            ImGui::SliderFloat("Sun Scatter",&fog.sunScatter,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Scatters directional light into fog when looking toward its source.");
         if(fog.mode==FogMode::Exponential) {
             field(Edit::EnvironmentFogDensity,"Change fog density",
                 ImGui::DragFloat("Density",&fog.density,.0001f,0,1000,"%.4f",ImGuiSliderFlags_AlwaysClamp));
@@ -679,6 +748,11 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         field(Edit::Exposure,"Change exposure",
             ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8,"%.2f",ImGuiSliderFlags_Logarithmic));
         field(Edit::EnvironmentToneMapping,"Change tone mapping",drawToneMappingControl(value.toneMapping));
+        drawToneMappingParameterControls(value.toneMapping,value.toneMappingParameters,[&](ToneMappingParameterControl control,bool changed) {
+            constexpr std::array<Edit,4> properties{Edit::EnvironmentReinhardWhite,Edit::EnvironmentAcesWhite,Edit::EnvironmentAgxWhite,Edit::EnvironmentAgxContrast};
+            constexpr std::array<const char*,4> labels{"Change Reinhard white point","Change ACES white point","Change AgX white point","Change AgX contrast"};
+            const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
+        });
         field(Edit::EnvironmentDebanding,"Toggle debanding",ImGui::Checkbox("Debanding",&value.debanding));
         drawGlowControls(value.glow,[&](GlowControl control,bool changed) {
             constexpr std::array<Edit,4> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold};
@@ -700,18 +774,22 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
     // Collapsing a section or switching sources removes its active widget.
     if(environmentEdit(state.active) && (!activeFieldDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
 }
-bool componentHeader(PanelsState& state,const EntityRecord&,SceneComponentKind component,ImGuiTreeNodeFlags flags=ImGuiTreeNodeFlags_DefaultOpen) {
-    if(!state.componentSelection.allows(component))return false;
-    if(state.componentChanged)ImGui::SetNextItemOpen(true);
-    return ImGui::CollapsingHeader(sceneComponentName(component),flags);
+bool componentHeader(PanelsState& state,const EntityRecord& record,SceneComponentKind component,ImGuiTreeNodeFlags flags=ImGuiTreeNodeFlags_DefaultOpen) {
+    const bool open=ImGui::CollapsingHeader(sceneComponentName(component),flags);
+    if(editableSceneComponent(component) && ImGui::BeginPopupContextItem()) {
+        if(ImGui::MenuItem("Remove"))state.removeComponent=SceneComponentTarget{record.id,component};
+        if(component==SceneComponentKind::Camera && record.cameraFollow && ImGui::MenuItem("Remove Follow"))
+            state.removeComponent=SceneComponentTarget{record.id,SceneComponentKind::CameraFollow};
+        ImGui::EndPopup();
+    }
+    return open;
 }
 bool cameraEdit(Edit edit) {return edit>=Edit::CameraOffset && edit<=Edit::CameraFar;}
 void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId cameraId,bool actorShortcut) {
     const auto camera=document.scene().find(cameraId);
     if(!camera || !camera->camera)return;
     ImGui::PushID(static_cast<int>(cameraId>>32));ImGui::PushID(static_cast<int>(cameraId));
-    if(state.componentChanged)ImGui::SetNextItemOpen(true);
-    if(!ImGui::CollapsingHeader("Camera",ImGuiTreeNodeFlags_DefaultOpen)) {
+    if(!componentHeader(state,*camera,SceneComponentKind::Camera)) {
         if(cameraEdit(state.active))finishEdit(document,state,state.active);
         ImGui::PopID();ImGui::PopID();return;
     }
@@ -765,7 +843,7 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
         ImGui::EndPopup();
     }
     if(!state.cameraTemplateStatus.empty())ImGui::TextWrapped("%s",state.cameraTemplateStatus.c_str());
-    drawCameraAuthoringControls(state.cameraControls,cameraId,value,[&](CameraAuthoringControl control,bool changed) {
+    drawCameraAuthoringControls(state.cameraControls[cameraId],cameraId,value,[&](CameraAuthoringControl control,bool changed) {
         constexpr std::array properties{Edit::CameraOffset,Edit::CameraRotation,Edit::CameraFov,Edit::CameraNear,Edit::CameraFar};
         constexpr std::array labels{"Change camera offset","Change camera rotation","Change camera FOV","Change camera clipping","Change camera clipping"};
         const auto index=static_cast<std::size_t>(control);const auto property=properties[index];
@@ -788,14 +866,6 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
                     finishScenePanelEdit(document);document.setCameraFollow(cameraId,dragged.source);
                 }
             }
-            if(const auto* payload=ImGui::AcceptDragDropPayload(SceneOutlinerRowPayload))if(payload->DataSize==sizeof(DraggedSceneOutlinerRow)) {
-                const auto dragged=*static_cast<const DraggedSceneOutlinerRow*>(payload->Data);
-                const auto source=document.scene().find(dragged.row.child);
-                if(dragged.document==&document && dragged.documentGeneration==document.documentGeneration() &&
-                    dragged.row.kind==SceneOutlinerRowKind::Child && source && source->parent==dragged.owner) {
-                    finishScenePanelEdit(document);document.setCameraFollow(cameraId,dragged.row.child);
-                }
-            }
             ImGui::EndDragDropTarget();
         }
         ImGui::SameLine(0,gap);if(ImGui::Button("X##camera-target",{height,height})) {finishScenePanelEdit(document);document.setCameraFollow(cameraId,NoEntity);}
@@ -815,12 +885,8 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
     if(cameraEdit(state.active) && !ImGui::IsAnyItemActive())finishEdit(document,state,state.active);
     ImGui::PopID();ImGui::PopID();
 }
-void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record) {
-    if(record.actor && state.componentSelection.allows(SceneComponentKind::Actor)) {
-        componentHeader(state,record,SceneComponentKind::Actor);
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Descendant models share this actor's lighting scope. Nested Visual Roots begin a separate scope.");
-    }
-    if(record.playerInput && state.componentSelection.allows(SceneComponentKind::PlayerInput)) {
+void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,SceneComponentKind section) {
+    if(record.playerInput && section==SceneComponentKind::PlayerInput) {
         if(componentHeader(state,record,SceneComponentKind::PlayerInput)) {
             auto value=*record.playerInput;
             const bool enabled=ImGui::Checkbox("Enabled##player-input",&value.enabled);
@@ -830,7 +896,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
         } else if(state.active==Edit::PlayerInputEnabled)finishEdit(document,state,state.active);
     }
-    if(record.motor && state.componentSelection.allows(SceneComponentKind::Motor)) {
+    if(record.motor && section==SceneComponentKind::Motor) {
         auto value=*record.motor;
         if(componentHeader(state,record,SceneComponentKind::Motor)) {
             const bool enabled=ImGui::Checkbox("Enabled##motor",&value.enabled);
@@ -843,7 +909,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             finishEdit(document,state,state.active);
         }
     }
-    if(record.navigation && state.componentSelection.allows(SceneComponentKind::Navigation)) {
+    if(record.navigation && section==SceneComponentKind::Navigation) {
         auto value=*record.navigation;
         if(componentHeader(state,record,SceneComponentKind::Navigation)) {
             const bool enabled=ImGui::Checkbox("Enabled##navigation",&value.enabled);
@@ -856,7 +922,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             finishEdit(document,state,state.active);
         }
     }
-    if(record.controller && state.componentSelection.allows(SceneComponentKind::Controller)) {
+    if(record.controller && section==SceneComponentKind::Controller) {
         auto value=*record.controller;
         if(componentHeader(state,record,SceneComponentKind::Controller)) {
             const bool height=ImGui::DragFloat("Capsule Height (m)",&value.height,.02f,2*value.radius,100.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
@@ -876,18 +942,18 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             finishEdit(document,state,state.active);
         }
     }
-    if(record.lightRig && state.componentSelection.allows(SceneComponentKind::LightRig)) {
-        if(state.componentChanged)ImGui::SetNextItemOpen(true);
+    if(record.lightRig && section==SceneComponentKind::LightRig) {
         auto value=*record.lightRig;bool activeRigDrawn=false;
-        drawActorLightRigControls(value,[&](ActorLightRigControl control,const char* label,bool changed) {
-            const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::CharacterRigEnabled)+static_cast<unsigned>(control));
-            propertyEdit(document,state,property,label,changed,
-                changeEntity(record.id,[rig=value](auto& entity){entity.lightRig=rig;}));
-            activeRigDrawn|=state.active==property;
-        });
+        if(componentHeader(state,record,SceneComponentKind::LightRig))
+            drawActorLightRigControls(value,[&](ActorLightRigControl control,const char* label,bool changed) {
+                const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::CharacterRigEnabled)+static_cast<unsigned>(control));
+                propertyEdit(document,state,property,label,changed,
+                    changeEntity(record.id,[rig=value](auto& entity){entity.lightRig=rig;}));
+                activeRigDrawn|=state.active==property;
+            },false);
         if(rigEdit(state.active) && (!activeRigDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     }
-    if(record.darknessReveal && state.componentSelection.allows(SceneComponentKind::DarknessReveal)) {
+    if(record.darknessReveal && section==SceneComponentKind::DarknessReveal) {
         auto value=*record.darknessReveal;
         if(componentHeader(state,record,SceneComponentKind::DarknessReveal,0)) {
             const bool enabled=ImGui::Checkbox("Enabled##character-reveal",&value.enabled);
@@ -909,12 +975,12 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
 namespace {
 bool cancelPanelEdit(SceneDocument& document, PanelsState& state, Panel panel, bool allowEdits) {
     if (owner(state.active)!=panel || (allowEdits && !ImGui::IsKeyPressed(ImGuiKey_Escape,false) && !ImGui::GetIO().AppFocusLost)) return false;
-    releaseColliderInspector(state.collider);
+    releasePanelColliders(state);
     if(cameraEdit(state.active)){ImGui::ClearActiveID();state.cameraControls={};}
     document.cancel(); state.active=Edit::None; state.nameId=NoEntity;
-    if (state.transform.editing) {
-        state.transform.fields=state.transform.captured; state.transform.degrees=state.transform.capturedDegrees;
-        state.transform.editing=false; state.transform.refresh=true;
+    for(auto& [id,transform]:state.transforms)if(transform.editing) {
+        transform.fields=transform.captured;transform.degrees=transform.capturedDegrees;
+        transform.editing=false;transform.refresh=true;
     }
     state.renameId=NoEntity; state.renameFocus=false; state.pendingClick=NoEntity;
     return true;
@@ -962,380 +1028,327 @@ bool finishScenePanelEdit(SceneDocument& document) {
     if (state.active==Edit::None || !document.transactionActive()) return false;
     const bool transform=transformEdit(state.active);
     if (transform) {
-        if (!finishInspectorTransform(document,state.transform)) return false;
+        const auto cached=state.transforms.find(state.editingEntity);
+        if(cached==state.transforms.end() || !finishInspectorTransform(document,cached->second))return false;
     } else {
-        releaseColliderInspector(state.collider);
+        releasePanelColliders(state);
         if (!document.commit()) return false;
     }
     state.active=Edit::None; state.nameId=NoEntity;
-    if (transform) { state.transform.editing=false; state.transform.refresh=true; }
+    if (transform) { auto& cached=state.transforms[state.editingEntity];cached.editing=false;cached.refresh=true; }
     state.renameId=NoEntity; state.renameFocus=false;
     return true;
 }
-bool scenePanelComponentFocused(SceneDocument& document) {
-    return stateFor(document).componentSelection.component().has_value();
-}
-void clearScenePanelComponentSelection(SceneDocument& document) {
-    finishScenePanelEdit(document);
-    stateFor(document).componentSelection.clear();
-}
-bool deleteScenePanelSelection(SceneDocument& document) {
-    auto& state=stateFor(document);
-    if(!state.componentSelection.component())return document.eraseSelection();
-    return state.componentSelection.erase(document);
-}
-
 void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEdits) {
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Outliner,allowEdits);
-    if ((state.lastSelection!=document.selection().ids || state.lastPrimary!=document.selection().primary) && !state.pendingClick)
+    if((state.lastSelection!=document.selection().ids || state.lastPrimary!=document.selection().primary) && !state.pendingClick)
         state.anchor=document.selection().primary;
-    // A click that changes the inspected target finishes an Inspector gesture.
-    // A viewport-owned transaction still prevents Outliner edits.
     const bool blocked=!allowEdits || canceled || (document.transactionActive() && owner(state.active)!=Panel::Inspector);
-    if (!ImGui::Begin("Outliner")) {
-        if (state.active==Edit::InlineName) { document.cancel(); state.active=Edit::None; state.renameId=NoEntity; }
-        ImGui::End(); return;
+    if(!ImGui::Begin("Outliner")) {
+        if(state.active==Edit::InlineName){document.cancel();state.active=Edit::None;state.renameId=NoEntity;}
+        ImGui::End();return;
     }
-    if (!blocked && !state.componentSelection.component() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
-        !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_F2,false))
+    if(!blocked && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+       !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && ImGui::IsKeyPressed(ImGuiKey_F2,false))
         startRename(document,state,document.selection().primary);
-
     const auto records=document.scene().records();
     std::unordered_map<EntityId,const EntityRecord*> byId;
-    std::unordered_map<EntityId,std::vector<EntityId>> children,visualChildren;
-    std::unordered_map<EntityId,std::vector<const EntityRecord*>> orderedChildrenByOwner;
-    for (const auto& record:records) { byId[record.id]=&record; children[record.parent].push_back(record.id); }
-    for (auto& [parent,ids]:children) {
-        std::sort(ids.begin(),ids.end(),[&](auto a,auto b){const auto& x=*byId[a]; const auto& y=*byId[b]; return x.order!=y.order ? x.order<y.order : a<b;});
-        auto& ordered=orderedChildrenByOwner[parent];ordered.reserve(ids.size());
-        for(const auto child:ids)ordered.push_back(byId.at(child));
-        const auto ownerRecord=byId.find(parent);
-        if(ownerRecord!=byId.end() && ownerRecord->second->actor) {
-            for(const auto id:ids)if(!byId[id]->camera)visualChildren[parent].push_back(id);
-            std::erase_if(ids,[&](const auto id){return !byId[id]->camera;});
-        }
-    }
-    enum class WorkKind { Entity,Component,Close };
-    struct Work {
-        WorkKind kind;EntityId id;SceneComponentKind component{SceneComponentKind::Transform};
-        EntityId rowOwner{};std::optional<SceneOutlinerRow> next;
-    };
+    for(const auto& record:records)byId.emplace(record.id,&record);
+    std::unordered_map<EntityId,std::vector<EntityId>> children;
+    for(const auto& row:sceneOutlinerRows(document.scene()))children[row.parent].push_back(row.entity);
+    struct Work {EntityId id{};bool close{};};
     std::vector<Work> pending;
-    for (auto it=children[NoEntity].rbegin();it!=children[NoEntity].rend();++it) pending.push_back({WorkKind::Entity,*it});
+    for(auto it=children[NoEntity].rbegin();it!=children[NoEntity].rend();++it)pending.push_back({*it});
     std::vector<EntityId> visible;
     std::function<void()> action;
-    const auto reorderTarget=[&](EntityId owner,SceneOutlinerRow hovered,std::optional<SceneOutlinerRow> next) {
-        if(blocked)return;
-        if(const auto drop=acceptSceneOutlinerRowReorder(document,owner,hovered,next))action=[&document,&state,owner,drop=*drop] {
-            finishScenePanelEdit(document);
-            if(reorderSceneOutlinerRow(document,owner,drop.row,drop.before)) {
-                if(drop.row.kind==SceneOutlinerRowKind::Component)state.componentSelection.select(document,owner,drop.row.component);
-                else {state.componentSelection.clear();document.select({drop.row.child},drop.row.child);}
-            }
-        };
-    };
-    while (!pending.empty()) {
-        const auto item=pending.back(); pending.pop_back();
-        if (item.kind==WorkKind::Close) { ImGui::TreePop(); continue; }
-        const auto& record=*byId[item.id];
-        const auto id=std::to_string(record.id);
-        if(item.kind==WorkKind::Component) {
-            ImGui::BeginDisabled(blocked);
-            const bool visual=item.component==SceneComponentKind::Actor;
-            const bool expandable=visual && !visualChildren[record.id].empty();
-            const bool focused=state.componentSelection.selected(record.id,item.component);
-            if(expandable) {
-                if(state.expandVisual.erase(record.id))ImGui::SetNextItemOpen(true);
-                else ImGui::SetNextItemOpen(true,ImGuiCond_Once);
-            }
-            const auto row=drawSceneComponentRow(document,record.id,item.component,focused,expandable,sceneOutlinerColor(record,item.component));
-            if(row.clicked && !blocked) {
-                finishScenePanelEdit(document);state.componentSelection.select(document,record.id,item.component,ImGui::GetIO().KeyCtrl);
-                state.anchor=record.id;state.pendingClick=NoEntity;
-            }
-            if(visual && !blocked)reparentTarget(document,state,record.id,action,&assets);
-            reorderTarget(record.id,SceneOutlinerRow::componentRow(item.component),item.next);
-            ImGui::PushID(id.c_str());ImGui::PushID(static_cast<int>(item.component));
-            if(!blocked && ImGui::BeginPopupContextItem("Component")) {
-                if(ImGui::IsWindowAppearing()) {
-                    finishScenePanelEdit(document);state.componentSelection.focus(document,record.id,item.component);
-                }
-                if(ImGui::MenuItem("Set Color")) {
-                    const auto selectedRows=state.componentSelection.targets();
-                    std::vector<SceneOutlinerColorTarget> targets(selectedRows.begin(),selectedRows.end());
-                    action=[&document,&state,targets=std::move(targets)] {
-                        finishScenePanelEdit(document);requestSceneOutlinerColor(document,state.outlinerColor,targets);
-                    };
-                }
-                const auto selectedTargets=state.componentSelection.targets();
-                const bool removable=!selectedTargets.empty() && std::all_of(selectedTargets.begin(),selectedTargets.end(),[](const auto& target){return target.component&&editableSceneComponent(*target.component);});
-                if(ImGui::MenuItem(selectedTargets.size()>1?"Remove Components":"Remove Component",nullptr,false,removable))action=[&document,&state] {
-                    finishScenePanelEdit(document);
-                    state.componentSelection.erase(document);
-                };
-                ImGui::EndPopup();
-            }
-            ImGui::PopID();ImGui::PopID();ImGui::EndDisabled();
-            if(expandable && row.open) {
-                pending.push_back({WorkKind::Close,record.id});
-                const auto& descendants=visualChildren[record.id];
-                for(auto it=descendants.rbegin();it!=descendants.rend();++it)pending.push_back({WorkKind::Entity,*it});
-            }
-            continue;
-        }
+    while(!pending.empty()) {
+        const auto item=pending.back();pending.pop_back();
+        if(item.close){ImGui::TreePop();continue;}
+        const auto& record=*byId.at(item.id);
         visible.push_back(record.id);
+        const auto id=std::to_string(record.id);
         const bool renaming=state.renameId==record.id;
         const bool ownsRename=renaming && (state.active==Edit::InlineName || !document.transactionActive());
         ImGui::BeginDisabled(!allowEdits || canceled || (blocked && !ownsRename));
+        const bool entitySelected=selected(document,record.id);
+        const bool leaf=children[record.id].empty();
         auto flags=ImGuiTreeNodeFlags_OpenOnArrow|ImGuiTreeNodeFlags_OpenOnDoubleClick|
             ImGuiTreeNodeFlags_SpanAvailWidth|ImGuiTreeNodeFlags_FramePadding;
-        const bool entitySelected=selected(document,record.id) && !state.componentSelection.component();
         if(entitySelected)flags|=ImGuiTreeNodeFlags_Selected;
-        const auto ordered=orderedChildrenByOwner.find(record.id);
-        const auto rows=visibleSceneOutlinerRows(record,ordered==orderedChildrenByOwner.end()?
-            std::span<const EntityRecord* const>{}:std::span<const EntityRecord* const>{ordered->second});
-        const bool leaf=rows.empty() && visualChildren[record.id].empty();
-        if (leaf) flags|=ImGuiTreeNodeFlags_Leaf|ImGuiTreeNodeFlags_NoTreePushOnOpen;
-        if (renaming) flags|=ImGuiTreeNodeFlags_AllowOverlap;
-        if (state.expand.erase(record.id)) ImGui::SetNextItemOpen(true);
-        const bool mixedCamera=record.camera && item.rowOwner && !renaming;
+        if(leaf)flags|=ImGuiTreeNodeFlags_Leaf|ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        if(renaming)flags|=ImGuiTreeNodeFlags_AllowOverlap;
+        if(state.expand.erase(record.id))ImGui::SetNextItemOpen(true);
         bool open{};
-        if(mixedCamera)open=drawSceneOutlinerRow(document,item.rowOwner,SceneOutlinerRow::childRow(record.id),
-            record.name.c_str(),entitySelected,!leaf,false,sceneOutlinerColor(record)).open;
-        else {
+        {
             SceneOutlinerRowColorScope appearance(sceneOutlinerColor(record));
             open=ImGui::TreeNodeEx(id.c_str(),flags,"%s",renaming?"":record.name.c_str());appearance.finish(entitySelected);
         }
-        const auto rowMin=ImGui::GetItemRectMin(), rowMax=ImGui::GetItemRectMax();
+        const auto rowMin=ImGui::GetItemRectMin(),rowMax=ImGui::GetItemRectMax();
         const bool hovered=ImGui::IsItemHovered();
-        if (hovered && !renaming) ImGui::SetTooltip("%s",kind(record));
-        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen() && !blocked && !renaming) {
-            finishScenePanelEdit(document);const bool componentMode=state.componentSelection.component().has_value();state.componentSelection.clear();
-            // Retain the selected group until the press becomes a drag.
+        if(hovered && !renaming)ImGui::SetTooltip("%s",kind(record));
+        if(ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen() && !blocked && !renaming) {
+            finishScenePanelEdit(document);
             const auto& io=ImGui::GetIO();
-            if(componentMode) {document.select({record.id},record.id);state.anchor=record.id;state.pendingClick=NoEntity;}
-            else if (selected(document,record.id) && !io.KeyShift) {
-                state.pendingClick=record.id; state.pendingCtrl=io.KeyCtrl; state.pendingShift=io.KeyShift;
+            if(selected(document,record.id) && !io.KeyShift) {
+                state.pendingClick=record.id;state.pendingCtrl=io.KeyCtrl;state.pendingShift=io.KeyShift;
             } else selectRow(document,state,record.id,io.KeyCtrl,io.KeyShift);
         }
-        if (!blocked && !renaming && ImGui::BeginDragDropSource()) {
-            finishScenePanelEdit(document);state.componentSelection.clear();state.pendingClick=NoEntity;
-            if (!selected(document,record.id)) document.select({record.id},record.id);
+        if(!blocked && !renaming && ImGui::BeginDragDropSource()) {
+            finishScenePanelEdit(document);state.pendingClick=NoEntity;
+            if(!selected(document,record.id))document.select({record.id},record.id);
             const auto* existing=ImGui::GetDragDropPayload();
-            if (!existing || !existing->IsDataType(EntityPayload)) state.dragged=document.selection().ids;
-            if(record.camera && item.rowOwner && state.dragged.size()==1)
-                setSceneOutlinerRowDragPayload(document,item.rowOwner,SceneOutlinerRow::childRow(record.id));
-            else {
-                const DraggedEntities payload{&document,document.scene().generation(),record.id};
-                ImGui::SetDragDropPayload(EntityPayload,&payload,sizeof(payload),ImGuiCond_Once);
-            }
-            ImGui::Text("%zu selected entities",state.dragged.size());
-            ImGui::EndDragDropSource();
+            if(!existing || !existing->IsDataType(EntityPayload))state.dragged=document.selection().ids;
+            const DraggedEntities payload{&document,document.scene().generation(),record.id};
+            ImGui::SetDragDropPayload(EntityPayload,&payload,sizeof(payload),ImGuiCond_Once);
+            ImGui::Text("%zu selected entities",state.dragged.size());ImGui::EndDragDropSource();
         }
-        if (!blocked && !renaming)reparentTarget(document,state,record.id,action,&assets);
-        if(item.rowOwner)reorderTarget(item.rowOwner,SceneOutlinerRow::childRow(record.id),item.next);
-        if (!renaming && ImGui::BeginPopupContextItem()) {
-            if (!blocked) {
-                finishScenePanelEdit(document);state.componentSelection.focusEntity(document,record.id);
+        if(!blocked && !renaming)reparentTarget(document,state,record.id,action,&assets);
+        if(!renaming && ImGui::BeginPopupContextItem()) {
+            if(!blocked) {
+                finishScenePanelEdit(document);
+                if(!selected(document,record.id))document.select({record.id},record.id);
+                else document.select(document.selection().ids,record.id);
             }
-            if (ImGui::MenuItem("Rename","F2")) action=[&document,&state,id=record.id]{startRename(document,state,id);};
-            if (ImGui::MenuItem("Duplicate","Ctrl+D")) action=[&document]{document.duplicateSelection();};
-            if (ImGui::MenuItem("Delete","Delete")) action=[&document]{document.eraseSelection();};
+            if(ImGui::MenuItem("Rename","F2"))action=[&document,&state,id=record.id]{startRename(document,state,id);};
+            if(ImGui::MenuItem("Duplicate","Ctrl+D"))action=[&document]{document.duplicateSelection();};
+            if(ImGui::MenuItem("Delete","Delete"))action=[&document]{document.eraseSelection();};
             if(ImGui::MenuItem("Set Color")) {
                 std::vector<SceneOutlinerColorTarget> targets;
-                for(const auto entity:document.selection().ids)targets.push_back({entity,std::nullopt});
-                action=[&document,&state,targets=std::move(targets)] {
-                    finishScenePanelEdit(document);requestSceneOutlinerColor(document,state.outlinerColor,targets);
-                };
+                for(const auto entity:document.selection().ids)targets.push_back({entity});
+                action=[&document,&state,targets=std::move(targets)]{finishScenePanelEdit(document);requestSceneOutlinerColor(document,state.outlinerColor,targets);};
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Group selection")) action=[&document]{document.groupSelection();};
+            if(ImGui::MenuItem("Group selection"))action=[&document]{document.groupSelection();};
             bool canUngroup=false;
-            for (auto root:document.scene().topmost(document.selection().ids)) {
-                const auto group=document.scene().find(root);
-                if (group && !group->model && !group->particle && !group->directional && !group->point && !group->environment &&
-                    !group->actor && !group->motor && !group->controller && !group->navigation && !group->playerInput && !group->lightRig && !group->darknessReveal && !group->collider && !group->quader && !group->quaderGenerated && !group->camera && !document.scene().children(root).empty()) canUngroup=true;
-            }
-            if (ImGui::MenuItem("Ungroup",nullptr,false,canUngroup)) action=[&document]{document.ungroupSelection();};
-            if (ImGui::MenuItem("Unparent",nullptr,false,record.parent!=NoEntity)) action=[&document]{document.reparentSelection(NoEntity);};
-            if (record.environment && ImGui::MenuItem("Make active environment",nullptr,false,
-                document.scene().properties().activeEnvironment!=record.id))
+            for(const auto root:document.scene().topmost(document.selection().ids))
+                if(const auto group=document.scene().find(root);group && isSceneGroup(*group) && !document.scene().children(root).empty())canUngroup=true;
+            if(ImGui::MenuItem("Ungroup",nullptr,false,canUngroup))action=[&document]{document.ungroupSelection();};
+            if(ImGui::MenuItem("Unparent",nullptr,false,record.parent!=NoEntity))action=[&document]{document.reparentSelection(NoEntity);};
+            if(record.environment && ImGui::MenuItem("Make active environment",nullptr,false,document.scene().properties().activeEnvironment!=record.id))
                 action=[&document,id=record.id]{document.setActiveEnvironment(id);};
             ImGui::Separator();
-            if (ImGui::BeginMenu("Add")) { addMenu(document,record.id); ImGui::EndMenu(); }
+            if(ImGui::BeginMenu("Add")){addMenu(document,record.id);ImGui::EndMenu();}
             ImGui::EndPopup();
         }
-        if (!blocked && state.pendingClick==record.id && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-            if (hovered && ImGui::GetDragDropPayload()==nullptr)
-                selectRow(document,state,record.id,state.pendingCtrl,state.pendingShift);
+        if(!blocked && state.pendingClick==record.id && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            if(hovered && ImGui::GetDragDropPayload()==nullptr)selectRow(document,state,record.id,state.pendingCtrl,state.pendingShift);
             state.pendingClick=NoEntity;
         }
-        if (renaming) inlineRename(document,state,record.id,
-            ImVec2(rowMin.x+ImGui::GetTreeNodeToLabelSpacing(),rowMin.y),rowMax.x-rowMin.x-ImGui::GetTreeNodeToLabelSpacing());
+        if(renaming)inlineRename(document,state,record.id,{rowMin.x+ImGui::GetTreeNodeToLabelSpacing(),rowMin.y},rowMax.x-rowMin.x-ImGui::GetTreeNodeToLabelSpacing());
         ImGui::EndDisabled();
-        if (open && !leaf) {
-            pending.push_back({WorkKind::Close,record.id});
-            for(std::size_t index=rows.size();index-->0;) {
-                const auto next=index+1<rows.size()?std::optional{rows[index+1]}:std::nullopt;
-                const auto& row=rows[index];
-                if(row.kind==SceneOutlinerRowKind::Component)
-                    pending.push_back({WorkKind::Component,record.id,row.component,record.id,next});
-                else pending.push_back({WorkKind::Entity,row.child,SceneComponentKind::Transform,record.id,next});
-            }
+        if(open && !leaf) {
+            pending.push_back({record.id,true});
+            for(auto it=children[record.id].rbegin();it!=children[record.id].rend();++it)pending.push_back({*it});
         }
     }
     state.visible=std::move(visible);
     ImGui::BeginDisabled(blocked);
     const auto remaining=ImGui::GetContentRegionAvail();
-    if (ImGui::InvisibleButton("##outliner_background",ImVec2(std::max(remaining.x,1.0f),std::max(remaining.y,1.0f)))) {
-        finishScenePanelEdit(document);state.componentSelection.clear();document.select({}); state.anchor=NoEntity;
+    if(ImGui::InvisibleButton("##outliner_background",{std::max(remaining.x,1.f),std::max(remaining.y,1.f)})) {
+        finishScenePanelEdit(document);document.select({});state.anchor=NoEntity;
     }
-    if (!blocked) reparentTarget(document,state,NoEntity,action,&assets);
-    if (ImGui::BeginPopupContextItem("Outliner background")) {
-        if (ImGui::BeginMenu("Add")) { finishScenePanelEdit(document);addMenu(document); ImGui::EndMenu(); }
+    if(!blocked)reparentTarget(document,state,NoEntity,action,&assets);
+    if(ImGui::BeginPopupContextItem("Outliner background")) {
+        if(ImGui::BeginMenu("Add")){finishScenePanelEdit(document);addMenu(document);ImGui::EndMenu();}
         ImGui::EndPopup();
     }
     ImGui::EndDisabled();
-    if (action && !blocked) action();
+    if(action && !blocked)action();
     drawSceneOutlinerColorPopup(document,state.outlinerColor);
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) state.pendingClick=NoEntity;
-    state.lastSelection=document.selection().ids;
-    state.lastPrimary=document.selection().primary;
+    if(ImGui::IsMouseReleased(ImGuiMouseButton_Left))state.pendingClick=NoEntity;
+    state.lastSelection=document.selection().ids;state.lastPrimary=document.selection().primary;
     ImGui::End();
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
                         std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial) {
     auto& state=stateFor(document);
-    const auto selectedComponent=state.componentSelection.component();
-    state.componentChanged=state.inspectedEntity!=document.selection().primary || state.inspectedComponent!=selectedComponent;
-    state.inspectedEntity=document.selection().primary;state.inspectedComponent=selectedComponent;
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
-    if (!ImGui::Begin("Inspector")) {
-        releaseColliderInspector(state.collider);
-        if (owner(state.active)==Panel::Inspector) { document.cancel(); state.active=Edit::None; state.nameId=NoEntity; }
-        ImGui::End(); return;
+    if(!ImGui::Begin("Inspector")) {
+        releasePanelColliders(state);
+        if(owner(state.active)==Panel::Inspector){document.cancel();state.active=Edit::None;state.nameId=NoEntity;}
+        ImGui::End();return;
     }
     const bool blocked=!allowEdits || canceled || (document.transactionActive() && owner(state.active)!=Panel::Inspector);
     ImGui::BeginDisabled(blocked);
-    if (const auto record=document.scene().find(document.selection().primary)) {
-        if(!selectedComponent) {
-            drawName(document,state,*record);
-            auto visible=record->visible;
-            const bool visibilityChanged=ImGui::Checkbox("Visible",&visible);
-            propertyEdit(document,state,Edit::Visible,"Toggle entity visibility",visibilityChanged,
-                changeEntity(record->id,[visible](auto& entity){entity.visible=visible;}));
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("Show this entity and its descendants.");
-        }
-        const InspectorTransformTransactions transformTransactions{
-            [&](unsigned field,const char* label) {
-                return beginEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field),label);
-            },
-            [&](unsigned field) {
-                finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));
-            }};
-        if(state.componentSelection.allows(SceneComponentKind::Transform))drawInspectorTransform(document,state.transform,*record,transformTransactions);
-        gameplayControls(document,state,*record);
-        if(record->camera && (!selectedComponent || selectedComponent==SceneComponentKind::Camera || selectedComponent==SceneComponentKind::CameraFollow))
-            drawCameraSection(document,state,record->id,false);
-        else if(record->actor && !selectedComponent) {
-            if(const auto ownedCamera=resolveOwnedActorCamera(document.scene(),record->id))drawCameraSection(document,state,ownedCamera,true);
-        }
-        if(record->quader && quader && componentHeader(state,*record,SceneComponentKind::Quader))drawQuaderInspector(document,*record,*quader);
-        if(record->collider && state.componentSelection.allows(SceneComponentKind::Collider)) {
-            if(componentHeader(state,*record,SceneComponentKind::Collider)) {
-                static_assert(static_cast<unsigned>(Edit::ColliderColor)-static_cast<unsigned>(Edit::ColliderShape)==static_cast<unsigned>(ColliderControl::Color));
-                const auto property=[](ColliderControl control){return static_cast<Edit>(static_cast<unsigned>(Edit::ColliderShape)+static_cast<unsigned>(control));};
-                const ColliderInspectorTransactions transactions{
-                    [&](ColliderControl control,const char* label){return beginEdit(document,state,property(control),label);},
-                    [&](ColliderControl control){finishEdit(document,state,property(control));}};
-                drawColliderInspector(document,state.collider,*record,{assets.catalog(),[&assets](const std::string& id){return assets.displayName(id);}},transactions);
-            } else if(state.active>=Edit::ColliderShape&&state.active<=Edit::ColliderColor) {
-                releaseColliderInspector(state.collider);finishEdit(document,state,state.active);
+    std::function<void()> action;
+    const auto drawSections=[&](const EntityRecord& record,bool ownedCamera=false) {
+        state.inspectorEntity=record.id;
+        ImGui::PushID(static_cast<int>(record.id>>32));ImGui::PushID(static_cast<int>(record.id));
+        for(const auto section:sceneInspectorSections(record)) {
+            if(section==SceneComponentKind::Transform && !ownedCamera) {
+                const InspectorTransformTransactions transactions{
+                    [&](unsigned field,const char* label){return beginEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field),label,record.id);},
+                    [&](unsigned field){finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));}};
+                drawInspectorTransform(document,state.transforms[record.id],record,transactions);
+            }
+            gameplayControls(document,state,record,section);
+            if(section==SceneComponentKind::Camera)drawCameraSection(document,state,record.id,ownedCamera);
+            if(section==SceneComponentKind::Quader && record.quader && quader && componentHeader(state,record,SceneComponentKind::Quader))drawQuaderInspector(document,record,*quader);
+            if(section==SceneComponentKind::Collider && record.collider) {
+                if(componentHeader(state,record,SceneComponentKind::Collider)) {
+                    static_assert(static_cast<unsigned>(Edit::ColliderColor)-static_cast<unsigned>(Edit::ColliderShape)==static_cast<unsigned>(ColliderControl::Color));
+                    const auto property=[](ColliderControl control){return static_cast<Edit>(static_cast<unsigned>(Edit::ColliderShape)+static_cast<unsigned>(control));};
+                    const ColliderInspectorTransactions transactions{
+                        [&](ColliderControl control,const char* label){return beginEdit(document,state,property(control),label);},
+                        [&](ColliderControl control){finishEdit(document,state,property(control));}};
+                    drawColliderInspector(document,state.colliders[record.id],record,{assets.catalog(),[&assets](const std::string& id){return assets.displayName(id);}},transactions);
+                } else if(state.active>=Edit::ColliderShape&&state.active<=Edit::ColliderColor) {
+                    releaseColliderInspector(state.colliders[record.id]);finishEdit(document,state,state.active);
+                }
+            }
+            if(section==SceneComponentKind::Directional && record.directional) {
+                if(componentHeader(state,record,SceneComponentKind::Directional))lightControls(document,state,record.id,true);
+                else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionNormalBias) ||
+                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionRevealStrength))finishEdit(document,state,state.active);
+            }
+            if(section==SceneComponentKind::Point && record.point) {
+                if(componentHeader(state,record,SceneComponentKind::Point))lightControls(document,state,record.id,false);
+                else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
+                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointRevealStrength))finishEdit(document,state,state.active);
+            }
+            if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
+                auto castShadows=record.castShadows,receiveShadows=record.receiveShadows;
+                const bool castChanged=ImGui::Checkbox("Cast Shadows",&castShadows);
+                propertyEdit(document,state,Edit::ModelCastShadows,"Toggle model shadow casting",castChanged,
+                    changeEntity(record.id,[castShadows](auto& entity){entity.castShadows=castShadows;}));
+                const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
+                propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
+                    changeEntity(record.id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
+                auto fadeWhenOccluding=record.fadeWhenOccluding;
+                const bool fadeChanged=ImGui::Checkbox("Fade when blocking player",&fadeWhenOccluding);
+                propertyEdit(document,state,Edit::ModelFadeWhenOccluding,"Toggle player occlusion fading",fadeChanged,
+                    changeEntity(record.id,[fadeWhenOccluding](auto& entity){entity.fadeWhenOccluding=fadeWhenOccluding;}));
+                auto scopes=record.lightingScopes;
+                bool activeScopeDrawn=false;
+                const auto scopeEdit=[&](Edit property,const char* label,bool changed) {
+                    propertyEdit(document,state,property,label,changed,changeEntity(record.id,[scopes](auto& entity){entity.lightingScopes=scopes;}));
+                    activeScopeDrawn|=state.active==property;
+                };
+                if(ImGui::TreeNode("Advanced Lighting")) {
+                    scopeEdit(Edit::ModelDirectReceivers,"Change model direct-light scope",drawLightingMaskControl("Direct Lighting",scopes.directReceiverMask));
+                    scopeEdit(Edit::ModelCasterScope,"Change model shadow-caster scope",drawLightingMaskControl("Shadow Casting",scopes.shadowCasterMask));
+                    scopeEdit(Edit::ModelAmbientReceivers,"Change model ambient scope",drawLightingMaskControl("Ambient Darkness",scopes.ambientReceiverMask));
+                    ImGui::TreePop();
+                }
+                if(state.active>=Edit::ModelDirectReceivers && state.active<=Edit::ModelAmbientReceivers &&
+                   (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+                modelAnimationControls(document,state,record,assets);
+                modelInformation(document,state,record,assets,renderer,openMaterial);
+            } else if(section==SceneComponentKind::Model && record.model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart)finishEdit(document,state,state.active);
+            if(section==SceneComponentKind::Particle && record.particle && componentHeader(state,record,SceneComponentKind::Particle)) {
+                auto assigned=record.particle->id;
+                const auto resolved=assets.references().resolve(assigned);
+                const auto effect=assets.findParticle(assigned);
+                bool changed=false;
+                const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+                const auto width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-2*gap);
+                const auto label=effect?assets.displayName(resolved):assigned.empty()?std::string("None (Particle Effect)"):std::string("Missing: ")+assigned;
+                if(ImGui::Button(label.c_str(),{width,height})) { if(openParticle && effect)*openParticle=resolved; }
+                if(ImGui::BeginDragDropTarget()) {
+                    if(const auto* payload=ImGui::AcceptDragDropPayload("CC_PARTICLE_ASSET"))
+                        if(payload->Data && payload->DataSize>1 && static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
+                            const std::string id(static_cast<const char*>(payload->Data),static_cast<size_t>(payload->DataSize-1));
+                            if(assets.findParticle(id)) { assigned=id;changed=true; }
+                        }
+                    ImGui::EndDragDropTarget();
+                }
+                ImGui::SameLine(0,gap);
+                if(ImGui::Button("...##effect-picker",{height,height})) ImGui::OpenPopup("Select particle effect");
+                ImGui::SameLine(0,gap);
+                if(ImGui::Button("X##clear-effect",{height,height})) { assigned.clear();changed=true; }
+                if(ImGui::BeginPopup("Select particle effect")) {
+                    static ImGuiTextFilter filter;filter.Draw("Search");
+                    for(const auto& entry:assets.catalog()) if(entry.kind==AssetKind::Particle && filter.PassFilter(assets.displayName(entry.id).c_str()))
+                        if(ImGui::Selectable(assets.displayName(entry.id).c_str(),assigned==entry.id)) { assigned=entry.id;changed=true;ImGui::CloseCurrentPopup(); }
+                    ImGui::EndPopup();
+                }
+                if(changed) { auto next=record;next.particle=AssetRef<ParticleEffectAsset>{assigned};document.updateEntity(record.id,next,"Assign particle effect"); }
+                ImGui::BeginDisabled(!effect);
+                if(ImGui::Button("Play Effect") && playParticle) *playParticle=record.id;
+                ImGui::SameLine();if(ImGui::Button("Edit Effect") && openParticle) *openParticle=resolved;
+                ImGui::EndDisabled();
+                const auto diagnostic=assets.particleDiagnostic(assigned);
+                if(!diagnostic.empty()) ImGui::TextWrapped("%s",diagnostic.c_str());
+            }
+            if(section==SceneComponentKind::Environment && record.environment) {
+                if(componentHeader(state,record,SceneComponentKind::Environment))
+                    sceneEnvironmentControls(document,state,record,assets,renderer);
+                else if(environmentEdit(state.active))finishEdit(document,state,state.active);
             }
         }
-        if(record->directional && state.componentSelection.allows(SceneComponentKind::Directional)) {
-            if(componentHeader(state,*record,SceneComponentKind::Directional))lightControls(document,state,record->id,true);
-            else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionNormalBias) ||
-                    (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionRevealStrength))finishEdit(document,state,state.active);
-        }
-        if(record->point && state.componentSelection.allows(SceneComponentKind::Point)) {
-            if(componentHeader(state,*record,SceneComponentKind::Point))lightControls(document,state,record->id,false);
-            else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
-                    (state.active>=Edit::PointReceivers && state.active<=Edit::PointRevealStrength))finishEdit(document,state,state.active);
-        }
-        if (record->model && componentHeader(state,*record,SceneComponentKind::Model)) {
-            auto castShadows=record->castShadows,receiveShadows=record->receiveShadows;
-            const bool castChanged=ImGui::Checkbox("Cast Shadows",&castShadows);
-            propertyEdit(document,state,Edit::ModelCastShadows,"Toggle model shadow casting",castChanged,
-                changeEntity(record->id,[castShadows](auto& entity){entity.castShadows=castShadows;}));
-            const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
-            propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
-                changeEntity(record->id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
-            auto fadeWhenOccluding=record->fadeWhenOccluding;
-            const bool fadeChanged=ImGui::Checkbox("Fade when blocking player",&fadeWhenOccluding);
-            propertyEdit(document,state,Edit::ModelFadeWhenOccluding,"Toggle player occlusion fading",fadeChanged,
-                changeEntity(record->id,[fadeWhenOccluding](auto& entity){entity.fadeWhenOccluding=fadeWhenOccluding;}));
-            auto scopes=record->lightingScopes;
-            bool activeScopeDrawn=false;
-            const auto scopeEdit=[&](Edit property,const char* label,bool changed) {
-                propertyEdit(document,state,property,label,changed,changeEntity(record->id,[scopes](auto& entity){entity.lightingScopes=scopes;}));
-                activeScopeDrawn|=state.active==property;
-            };
-            if(ImGui::TreeNode("Advanced Lighting")) {
-                scopeEdit(Edit::ModelDirectReceivers,"Change model direct-light scope",drawLightingMaskControl("Direct Lighting",scopes.directReceiverMask));
-                scopeEdit(Edit::ModelCasterScope,"Change model shadow-caster scope",drawLightingMaskControl("Shadow Casting",scopes.shadowCasterMask));
-                scopeEdit(Edit::ModelAmbientReceivers,"Change model ambient scope",drawLightingMaskControl("Ambient Darkness",scopes.ambientReceiverMask));
-                ImGui::TreePop();
-            }
-            if(state.active>=Edit::ModelDirectReceivers && state.active<=Edit::ModelAmbientReceivers &&
-               (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
-            modelAnimationControls(document,state,*record,assets);
-            modelInformation(document,state,*record,assets,renderer,openMaterial);
-        } else if(record->model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart)finishEdit(document,state,state.active);
-        if(record->particle && componentHeader(state,*record,SceneComponentKind::Particle)) {
-            auto assigned=record->particle->id;
-            const auto resolved=assets.references().resolve(assigned);
-            const auto effect=assets.findParticle(assigned);
-            bool changed=false;
-            const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
-            const auto width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-2*gap);
-            const auto label=effect?assets.displayName(resolved):assigned.empty()?std::string("None (Particle Effect)"):std::string("Missing: ")+assigned;
-            if(ImGui::Button(label.c_str(),{width,height})) { if(openParticle && effect)*openParticle=resolved; }
-            if(ImGui::BeginDragDropTarget()) {
-                if(const auto* payload=ImGui::AcceptDragDropPayload("CC_PARTICLE_ASSET"))
-                    if(payload->Data && payload->DataSize>1 && static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
-                        const std::string id(static_cast<const char*>(payload->Data),static_cast<size_t>(payload->DataSize-1));
-                        if(assets.findParticle(id)) { assigned=id;changed=true; }
-                    }
-                ImGui::EndDragDropTarget();
-            }
-            ImGui::SameLine(0,gap);
-            if(ImGui::Button("...##effect-picker",{height,height})) ImGui::OpenPopup("Select particle effect");
-            ImGui::SameLine(0,gap);
-            if(ImGui::Button("X##clear-effect",{height,height})) { assigned.clear();changed=true; }
-            if(ImGui::BeginPopup("Select particle effect")) {
-                static ImGuiTextFilter filter;filter.Draw("Search");
-                for(const auto& entry:assets.catalog()) if(entry.kind==AssetKind::Particle && filter.PassFilter(assets.displayName(entry.id).c_str()))
-                    if(ImGui::Selectable(assets.displayName(entry.id).c_str(),assigned==entry.id)) { assigned=entry.id;changed=true;ImGui::CloseCurrentPopup(); }
+        ImGui::PopID();ImGui::PopID();
+    };
+    if(const auto record=document.scene().find(document.selection().primary)) {
+        state.inspectorEntity=record->id;
+        drawName(document,state,*record);
+        auto visible=record->visible;
+        const bool visibilityChanged=ImGui::Checkbox("Visible",&visible);
+        propertyEdit(document,state,Edit::Visible,"Toggle entity visibility",visibilityChanged,
+            changeEntity(record->id,[visible](auto& entity){entity.visible=visible;}));
+        if(ImGui::IsItemHovered())ImGui::SetTooltip("Show this entity and its descendants.");
+        drawSections(*record);
+        const auto parts=sceneEntityParts(document.scene(),record->id);
+        for(const auto partId:parts)if(partId!=record->id)
+            if(const auto part=document.scene().find(partId);part && part->camera)drawSections(*part,true);
+        if(record->actor) {
+            const bool visualsOpen=ImGui::CollapsingHeader("Visuals",ImGuiTreeNodeFlags_DefaultOpen);
+            if(ImGui::BeginPopupContextItem()) {
+                if(ImGui::MenuItem("Remove Visual Ownership"))state.removeComponent=SceneComponentTarget{record->id,SceneComponentKind::Actor};
                 ImGui::EndPopup();
             }
-            if(changed) { auto next=*record;next.particle=AssetRef<ParticleEffectAsset>{assigned};document.updateEntity(record->id,next,"Assign particle effect"); }
-            ImGui::BeginDisabled(!effect);
-            if(ImGui::Button("Play Effect") && playParticle) *playParticle=record->id;
-            ImGui::SameLine();if(ImGui::Button("Edit Effect") && openParticle) *openParticle=resolved;
-            ImGui::EndDisabled();
-            const auto diagnostic=assets.particleDiagnostic(assigned);
-            if(!diagnostic.empty()) ImGui::TextWrapped("%s",diagnostic.c_str());
-        }
-        if(record->environment && state.componentSelection.allows(SceneComponentKind::Environment)) {
-            if(componentHeader(state,*record,SceneComponentKind::Environment))
-                sceneEnvironmentControls(document,state,*record,assets,renderer);
-            else if(environmentEdit(state.active))finishEdit(document,state,state.active);
+            if(visualsOpen) {
+                ImGui::PushID("Actor visuals");
+                if(ImGui::Button("Add Model..."))ImGui::OpenPopup("Choose visual model");
+                if(!blocked)reparentTarget(document,state,record->id,action,&assets,true);
+                if(ImGui::BeginPopup("Choose visual model")) {
+                    static ImGuiTextFilter filter;filter.Draw("Search");
+                    for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Model && filter.PassFilter(assets.displayName(entry.id).c_str())) {
+                        ImGui::PushID(entry.id.c_str());
+                        if(ImGui::Selectable(assets.displayName(entry.id).c_str())) {
+                            const auto asset=entry.id,name=assets.displayName(entry.id);const auto owner=record->id;
+                            action=[&document,asset,name,owner]{finishScenePanelEdit(document);document.createModels({ModelPlacement{asset,name,Mat4{}}},owner);document.select({owner},owner);};
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+                for(const auto partId:parts)if(partId!=record->id)if(const auto part=document.scene().find(partId);part && !part->camera) {
+                    ImGui::PushID(static_cast<int>(partId>>32));ImGui::PushID(static_cast<int>(partId));
+                    const bool open=ImGui::CollapsingHeader(part->name.c_str(),ImGuiTreeNodeFlags_DefaultOpen);
+                    if(ImGui::BeginPopupContextItem()) {
+                        if(ImGui::MenuItem("Remove")) {
+                            const auto owner=record->id;
+                            action=[&document,partId,owner]{finishScenePanelEdit(document);document.select({partId},partId);document.eraseSelection();document.select({owner},owner);};
+                        }
+                        ImGui::EndPopup();
+                    }
+                    if(open) {
+                        state.inspectorEntity=partId;
+                        auto partVisible=part->visible;
+                        const bool partVisibilityChanged=ImGui::Checkbox("Visible",&partVisible);
+                        propertyEdit(document,state,Edit::Visible,"Toggle visual visibility",partVisibilityChanged,
+                            changeEntity(partId,[partVisible](auto& entity){entity.visible=partVisible;}));
+                        drawSections(*part);
+                    } else if(state.editingEntity==partId && document.transactionActive())finishScenePanelEdit(document);
+                    ImGui::PopID();ImGui::PopID();
+                }
+            } else if(document.transactionActive() && std::any_of(parts.begin(),parts.end(),[&](const auto id) {
+                const auto part=document.scene().find(id);
+                return id!=record->id && id==state.editingEntity && part && !part->camera;
+            }))finishScenePanelEdit(document);
         }
     } else ImGui::TextUnformatted("No selection");
+    state.inspectorEntity=NoEntity;
     ImGui::EndDisabled();
+    if(state.removeComponent && !blocked) {
+        const auto target=*state.removeComponent;state.removeComponent.reset();
+        finishScenePanelEdit(document);removeSceneComponent(document,target.entity,target.component);
+    }
+    if(action && !blocked)action();
     ImGui::End();
 }
 } // namespace crimson

@@ -42,6 +42,7 @@ ActorLightRigEvaluation evaluateActorLightRig(const ActorLightRigSettings& setti
         value.edgeSoftness=settingsLight.edgeSoftness;
         value.sourceRadius=settingsLight.sourceRadius;
         value.attenuation=settingsLight.attenuation;
+        value.indirectEnergy=settingsLight.indirectEnergy;
         value.castShadows=settingsLight.castShadows;value.shadowDepthBias=settingsLight.shadowDepthBias;
         value.shadowNormalBias=settingsLight.shadowNormalBias;
         value.roles.receiverMask=lighting_scope::World;value.roles.shadowCasterMask=lighting_scope::World;

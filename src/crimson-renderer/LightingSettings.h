@@ -54,6 +54,7 @@ struct LocalWorldLightSettings {
     float attenuation{2}; // Distance decay exponent, independent of the finite range window.
     bool castShadows{true};
     float shadowDepthBias{.005f},shadowNormalBias{1};
+    float indirectEnergy{1.f};
     bool operator==(const LocalWorldLightSettings&) const = default;
 };
 // The Key owns this silhouette. Its direction and effective enable state are
@@ -140,6 +141,7 @@ inline bool validLightDirection(const Vec3& direction) noexcept {
         std::all_of(direction.begin(),direction.end(),[](float v){return std::abs(v)<=1000000;});
 }
 inline bool validLightIntensity(float v) noexcept {return std::isfinite(v)&&v>=0&&v<=10000;}
+inline bool validIndirectEnergy(float v) noexcept {return std::isfinite(v)&&v>=0&&v<=16;}
 inline bool validLightRange(float v) noexcept {return std::isfinite(v)&&v>=.01f&&v<=100000;}
 inline bool validShadowBiases(float depth,float normal) noexcept {
     return std::isfinite(depth)&&depth>=0&&std::isfinite(normal)&&normal>=0;
@@ -161,7 +163,7 @@ inline bool validLocalWorldLightSettings(const LocalWorldLightSettings& value) n
     return std::isfinite(value.height)&&value.height>=.01f&&value.height<=100000&&
         validLightColor(value.color)&&std::isfinite(value.intensity)&&value.intensity>=0&&value.intensity<=1000000&&validLightRange(value.radius)&&
         validPointLightResponse(value.nearFalloffRadius,value.specularStrength,value.rangeFalloffExponent,value.edgeSoftness,value.sourceRadius,value.attenuation)&&
-        validShadowBiases(value.shadowDepthBias,value.shadowNormalBias);
+        validShadowBiases(value.shadowDepthBias,value.shadowNormalBias)&&validIndirectEnergy(value.indirectEnergy);
 }
 inline bool validCharacterShadowSettings(const CharacterShadowSettings& value) noexcept {
     return std::isfinite(value.strength)&&value.strength>=0&&value.strength<=1&&

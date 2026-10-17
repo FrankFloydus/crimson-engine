@@ -2,6 +2,7 @@
 
 #include "QuaderReader.h"
 #include "assets/AssetReferenceManager.h"
+#include "assets/ContentStorage.h"
 #include "assets/MaterialAsset.h"
 #include "scene/CollisionMesh.h"
 #include <set>
@@ -34,6 +35,9 @@ struct QuaderImportResult {
     std::vector<QuaderImportedLight> lights;
     std::vector<std::string> deferredMaterials;
     std::vector<AssetFileChange> files;
+    // Bundle members retain their authored UUIDs while their expanded files
+    // live in the disposable import cache.
+    std::vector<StoredAssetPath> locations;
     std::vector<QuaderMaterialInput> materialInputs;
     std::vector<std::string> assetIds;
     std::vector<std::shared_ptr<const ModelAsset>> preparedModels;

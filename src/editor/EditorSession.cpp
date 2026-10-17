@@ -141,7 +141,16 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     hooks.publishAssets=[this,&assets](const QuaderImportResult& result) {
         assets.publishManagedModels(result.preparedModels);
         std::vector<std::filesystem::path> changed;
-        for(const auto& file:result.files) {const auto path=resolveAssetPath(root_,file.id);assets.noteAssetWrite(file.id);assets.onFileChanged(path);changed.push_back(path);}
+        for(const auto& file:result.files) {
+            const auto path=checkedManagedAssetPath(root_,file.id);
+            const auto relative=path.lexically_relative(root_).generic_string();
+            // Prepared models already publish the complete bundle generation.
+            // Its expanded cache is private and must not invalidate that seed.
+            if(relative.starts_with(".crimson/cache/"))continue;
+            assets.noteAssetWrite(assetIdAtPath(root_,path));
+            if(path.extension()!=".crimson-quader")assets.onFileChanged(path);
+            changed.push_back(path);
+        }
         materialEditor_.filesChanged(changed);
     };
     quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks);
@@ -427,6 +436,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.placementPosition=placement(frame.placementPreviewPosition);
     renderInput.particles=std::move(particlePackets);renderInput.particleMaterials=std::move(particleMaterials);
     renderInput.particlePins=std::move(particlePins);renderInput.worldId=document.documentGeneration();
+    renderInput.giWorldId=(document.documentGeneration()<<1)|static_cast<std::uint64_t>(play_.playing());
+    renderInput.gameCameraId=renderScene.properties().activeCamera;renderInput.environmentId=renderScene.properties().activeEnvironment;
     if(renderScene.properties().playerCharacter)renderInput.shadowFocusEntities=renderScene.subtree(renderScene.properties().playerCharacter);
     renderInput.shadowResolution=editor_.pointShadowResolution();renderInput.materialContext=materialContext;
     renderInput.appearance=editor_.appearance();renderInput.gridVisible=editor_.overlays().grid;
@@ -460,6 +471,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     assets.trimTextureCache(retained>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-retained);
     if(!prepared_.status().empty())status_+=prepared_.status();
     if(!renderer.clusteredLightingStatus().empty())status_+=renderer.clusteredLightingStatus();
+    if(!renderer.ssgiStatus().empty())status_+=renderer.ssgiStatus();
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
     if(play_.playing()) {
         status_+=play_.status();

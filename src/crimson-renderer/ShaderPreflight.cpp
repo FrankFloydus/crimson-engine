@@ -27,10 +27,16 @@ struct ResourceBinding {
     D3D_RESOURCE_RETURN_TYPE returnType{};D3D_SRV_DIMENSION dimension{};UINT samples{};
     bool operator==(const ResourceBinding&) const=default;
 };
+struct OutputBinding {
+    std::string semantic;UINT index{},registerIndex{},stream{};
+    D3D_NAME systemValue{};D3D_REGISTER_COMPONENT_TYPE componentType{};BYTE mask{};
+    bool operator==(const OutputBinding&) const=default;
+};
 struct Interface {
     std::uint32_t input{},output{};std::vector<Binding> bindings;
     std::vector<ResourceBinding> resources;std::vector<std::uint16_t> attributes;
     std::vector<std::string> executableResources;
+    std::vector<OutputBinding> outputs;
     std::array<UINT,3> groupSize{};
 };
 struct Reader {
@@ -96,6 +102,13 @@ Interface inspect(std::span<const std::uint8_t> bytes,char stage) {
             count!=result.groupSize[0]*result.groupSize[1]*result.groupSize[2])
             throw std::runtime_error("Compute shader thread-group dimensions are invalid.");
     }
+    for(UINT i=0;i<description.OutputParameters;++i) {
+        D3D11_SIGNATURE_PARAMETER_DESC parameter{};
+        if(FAILED(reflection->GetOutputParameterDesc(i,&parameter)) || !parameter.SemanticName)
+            throw std::runtime_error("Shader output signature reflection failed.");
+        result.outputs.push_back({parameter.SemanticName,parameter.SemanticIndex,parameter.Register,parameter.Stream,
+            parameter.SystemValueType,parameter.ComponentType,parameter.Mask});
+    }
     for (UINT i=0;i<description.BoundResources;++i) {
         D3D11_SHADER_INPUT_BIND_DESC binding{};
         if (FAILED(reflection->GetResourceBindingDesc(i,&binding))) throw std::runtime_error("Shader resource reflection failed.");
@@ -132,9 +145,10 @@ bool preflightShaderPair(std::span<const std::uint8_t> vertex,std::span<const st
         if (v.output!=f.input) throw std::runtime_error("Vertex/fragment varying interfaces differ.");
         if (v.bindings!=originalV.bindings || f.bindings!=originalF.bindings || v.resources!=originalV.resources || f.resources!=originalF.resources ||
             v.executableResources!=originalV.executableResources || f.executableResources!=originalF.executableResources ||
+            v.outputs!=originalV.outputs || f.outputs!=originalF.outputs ||
             v.attributes!=originalV.attributes || f.attributes!=originalF.attributes ||
             v.input!=originalV.input || v.output!=originalV.output || f.input!=originalF.input || f.output!=originalF.output)
-            throw std::runtime_error("Hot reload changed shader uniforms, sampler bindings, vertex attributes or varyings; restart with a rebuilt engine for interface changes.");
+            throw std::runtime_error("Hot reload changed shader uniforms, sampler bindings, vertex attributes, varyings or render targets; restart with a rebuilt engine for interface changes.");
         diagnostic.clear(); return true;
     } catch (const std::exception& error) { diagnostic=error.what(); return false; }
 }
@@ -143,7 +157,7 @@ bool preflightGeneratedShaderPair(std::span<const std::uint8_t> vertex,std::span
     try {
         const auto v=inspect(vertex,'V'),f=inspect(fragment,'F'),original=inspect(contractVertex,'V');
         if(v.bindings!=original.bindings || v.resources!=original.resources || v.executableResources!=original.executableResources ||
-            v.attributes!=original.attributes || v.input!=original.input || v.output!=original.output)
+            v.outputs!=original.outputs || v.attributes!=original.attributes || v.input!=original.input || v.output!=original.output)
             throw std::runtime_error("Generated material vertex program changed the engine contract.");
         if(v.output!=f.input)throw std::runtime_error("Generated material vertex/fragment varyings differ.");
         std::map<std::string,ShaderUniformContract> allowed;std::set<unsigned> samplerSlots,activeSlots;
@@ -154,6 +168,16 @@ bool preflightGeneratedShaderPair(std::span<const std::uint8_t> vertex,std::span
             if(binding.kind==ShaderUniformKind::Sampler && (binding.samplerSlot>=16 || binding.count!=1 || !samplerSlots.insert(binding.samplerSlot).second))
                 throw std::runtime_error("Generated material sampler manifest exceeds or aliases the Direct3D binding budget.");
             if(binding.kind==ShaderUniformKind::Sampler)samplerContracts.emplace(binding.samplerSlot,binding);
+        }
+        if(allowed.contains("u_ssgiAtlas")) {
+            std::array<bool,4> targets{};
+            if(f.outputs.size()!=targets.size())throw std::runtime_error("Generated surface must retain all four SSGI render targets.");
+            for(const auto& output:f.outputs) {
+                if(output.systemValue!=D3D_NAME_TARGET || output.index>=targets.size() || targets[output.index] ||
+                    output.componentType!=D3D_REGISTER_COMPONENT_FLOAT32 || output.mask!=15)
+                    throw std::runtime_error("Generated surface changed the four-float SSGI render target signature.");
+                targets[output.index]=true;
+            }
         }
         for(const auto& binding:f.bindings) {
             const auto expected=allowed.find(binding.name);

@@ -1,4 +1,5 @@
 #include "crimson-renderer/Renderer.h"
+#include "GpuTestBackend.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "crimson-renderer/Picking.h"
@@ -26,7 +27,6 @@ constexpr std::uint16_t Size=256,ReadView=254;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Sdl {Sdl(){require(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
-struct Context {ID3D11DeviceContext* value{};~Context(){if(value)value->Release();}};
 struct Temporary {
     fs::path path=fs::temp_directory_path()/("crimson-directional-quality-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Temporary(){fs::create_directories(path);}
@@ -76,14 +76,13 @@ void litSamples(const DecodedImage& reference,const DecodedImage& shadowed,const
 void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture){
     // Readback storage survives exceptional renderer shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
-    ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);
+    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
     renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);renderer.setGridVisible(false);
-    bgfx::reset(Size,Size,BGFX_RESET_NONE);Context context;
-    static_cast<ID3D11Device*>(bgfx::getInternalData()->context)->GetImmediateContext(&context.value);
+    bgfx::reset(Size,Size,BGFX_RESET_NONE);TestGpuContext context;
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x4453485155;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.1f,.1f,.1f})},environment.settings);
     require(renderer.publishEnvironment(environment),renderer.environmentStatus());
-    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.value->Flush();};
+    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle source){
         Texture staging{bgfx::createTexture2D(Size,Size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         require(bgfx::isValid(staging.handle),"Directional quality readback allocation failed.");

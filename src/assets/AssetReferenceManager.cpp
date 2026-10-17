@@ -48,7 +48,7 @@ void restore(const std::filesystem::path& root,const std::filesystem::path& dire
 }
 }
 std::filesystem::path checkedManagedAssetPath(const std::filesystem::path& root,const std::string& id){
-    const auto relative=path(id);if(relative.empty()||relative.has_root_path()||(!isAssetUuid(id)&&*relative.begin()!="assets"&&*relative.begin()!="Content"&&*relative.begin()!=".crimson"))throw std::runtime_error("Asset file must stay under Content or private game metadata.");
+    const auto relative=path(id);if(relative.empty()||relative.has_root_path()||(!isAssetUuid(id)&&*relative.begin()!="assets"&&*relative.begin()!="Content"&&*relative.begin()!=".crimson"))throw std::runtime_error("Asset file must stay under Content or private game metadata: '"+id+"'.");
     for(const auto& part:relative)if(part=="..")throw std::runtime_error("Asset path cannot contain parent traversal.");
     const auto canonicalRoot=std::filesystem::weakly_canonical(root),result=isAssetUuid(id)||*relative.begin()=="assets"?resolveAssetPath(root,id):std::filesystem::weakly_canonical(root/relative),within=result.lexically_relative(canonicalRoot);
     if(within.empty()||within.is_absolute()||*within.begin()==".."||*within.begin()=="Engine"||(*within.begin()!="assets"&&*within.begin()!="Content"&&*within.begin()!=".crimson"))throw std::runtime_error("Asset path escapes writable game content.");return result;

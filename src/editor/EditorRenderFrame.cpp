@@ -108,6 +108,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
 
     PreparedRenderView scene;
     scene.identity={RenderViewPurpose::Scene,0};scene.settings=input.settings;scene.settings.camera=input.sceneCamera;
+    scene.giWorldId=input.giWorldId;scene.giEnvironmentId=input.environmentId;
     scene.width=input.sceneWidth;scene.height=input.sceneHeight;
     scene.collisionOverlays=std::move(input.sceneCollisionOverlays);
     auto scenePins=std::make_shared<ViewPins>();
@@ -138,6 +139,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     if(gameVisible) {
         PreparedRenderView game;
         game.identity={RenderViewPurpose::Game,0};game.settings=input.settings;game.settings.camera=*input.gameCamera;
+        game.giWorldId=input.giWorldId;game.giCameraId=input.gameCameraId;game.giEnvironmentId=input.environmentId;
         game.width=input.gameWidth;game.height=input.gameHeight;
         game.collisionOverlays=std::move(input.gameCollisionOverlays);
         const auto aspect=static_cast<float>(input.gameWidth)/input.gameHeight;

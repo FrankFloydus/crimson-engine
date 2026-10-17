@@ -1,5 +1,6 @@
 #include "assets/BrowserCatalog.h"
 #include "resources/AssetId.h"
+#include "quader_bundle_fixture.h"
 
 #include <array>
 #include <algorithm>
@@ -383,11 +384,29 @@ void physicalRootsAndPackageImages() {
     require(!catalog.mutableItem(unavailable)&&std::any_of(missingResults.begin(),missingResults.end(),[&](const auto& item){return item.id==unavailable;}),
         "An unavailable UUID card crashed the catalog, became writable or disappeared from name search.");
 }
+void bundledModelOwnership() {
+    TemporaryProject project;const auto fixture=bundle_test::writeFixture(project.root);
+    const auto cache=resolveAssetPath(project.root,fixture.modelId);const auto bundleBytes=read(fixture.file);
+    BrowserCatalog catalog(project.root);const std::array assets{AssetEntry{fixture.modelId,"Triangle",AssetKind::Model}};
+    catalog.synchronize(assets);
+    const auto parent=catalog.parent(fixture.modelId);
+    require(catalog.name(parent)=="Levels"&&catalog.items(parent).size()==1&&catalog.items(parent).front().id==fixture.modelId,
+        "A bundled mesh was not presented beside its authored scene bundle.");
+    require(!catalog.mutableItem(fixture.modelId),"A disposable bundle member was independently mutable.");
+    rejects([&]{catalog.rename(fixture.modelId,"Renamed mesh");},"A bundle member was independently renamed.");
+    rejects([&]{catalog.move(std::array{fixture.modelId},BrowserCatalog::ContentFolder);},"A bundle member was independently moved.");
+    rejects([&]{catalog.serializeWithout(std::array{fixture.modelId});},"A bundle member could be independently deleted.");
+    catalog.rename(parent,"Renamed levels");catalog.synchronize(assets);
+    const auto source=quaderBundleSource(project.root,fixture.modelId);
+    require(source&&*source==project.root/"Content/Renamed levels/Bundle fixture.crimson-quader"&&read(*source)==bundleBytes&&
+        resolveAssetPath(project.root,fixture.modelId)==cache&&catalog.parent(fixture.modelId)==parent,
+        "Moving a bundle's Content folder changed a model identity/cache path or lost its authored owner.");
+}
 }
 
 int main() {
     try {
-        metadataAndIdentity(); atomicMoves(); invalidMetadataAndWriteFailure(); selectionPolicy();folderDeletion();searchAndTypeQueries();filteredSelectionAndDeletion();physicalRootsAndPackageImages();
+        metadataAndIdentity(); atomicMoves(); invalidMetadataAndWriteFailure(); selectionPolicy();folderDeletion();searchAndTypeQueries();filteredSelectionAndDeletion();physicalRootsAndPackageImages();bundledModelOwnership();
         std::cout<<"Asset browser metadata and selection checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

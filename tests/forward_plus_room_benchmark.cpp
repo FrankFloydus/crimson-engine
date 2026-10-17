@@ -89,7 +89,12 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     std::cout<<"reading native source"<<std::endl;
     const auto source=readQuaderScene(nativeProject,nativeScene);
     QuaderPrepareOptions options;options.projectRoot=project;const auto imported=savedWorld?QuaderImportResult{}:prepareQuaderImport(*source,options);
-    if(!savedWorld)commitAssetTransaction(project,imported.files);
+    if(!savedWorld) {
+        commitAssetTransaction(project,imported.files);auto locations=imported.locations;
+        for(const auto& file:imported.files)if(file.contents&&file.id.starts_with("assets/"))
+            locations.push_back({file.id,checkedManagedAssetPath(project,file.id)});
+        registerAssetPaths(project,locations);
+    }
     std::cout<<"native source staged"<<std::endl;
     SceneDocument document(project);Json session;{std::ifstream input(project/"assets/editor-session.json");input>>session;}
     const auto sceneId=session.at("scene").get<std::string>();require(document.load(sceneId),document.status());
@@ -143,7 +148,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     }
     // Readback destinations outlive Renderer even if a capture throws.
     std::vector<std::shared_ptr<std::vector<std::uint8_t>>> captureDestinations;
-    ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);AssetLibrary assets(project,&resources);
+    ResourceManager resources;Renderer renderer(window,nullptr,GraphicsBackend::Direct3D11);MaterialGraphPrograms programs(resources,config);AssetLibrary assets(project,&resources);
     std::cout<<"GPU/resource owners initialized"<<std::endl;
     assets.setMaterialGraphPrograms(&programs);assets.publishManagedModels(imported.preparedModels);
     EditorResources prepared(assets,renderer,resources,project);
@@ -297,8 +302,11 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     resources.stop();renderer.drainPending(frame);return result;
 }
 }
+#include "screen_lighting_editor_diagnostic.h"
+
 int main(int argc,char** argv) {
     try {
+        if(argc>1&&(std::string(argv[1])=="--gi-project"||std::string(argv[1])=="--gi-point-project"))return screenLightingEditorDiagnostic(argc,argv);
         require(argc>=7,"Pass engine project, native project, native scene ID, shaderc, shader sources and shader include directory (optional --legacy, --saved, --cold, --capture, --ambient, --presented-player, --rig-off, --key-light, --warmup N, --samples N, --output directory).");
         Options parameters;for(int i=7;i<argc;++i){const std::string option=argv[i];if(option=="--legacy")parameters.legacy=true;else if(option=="--saved")parameters.savedWorld=true;else if(option=="--cold")parameters.cold=true;else if(option=="--capture")parameters.capture=true;
             else if(option=="--ambient")parameters.ambient=true;

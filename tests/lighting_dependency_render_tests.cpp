@@ -1,4 +1,5 @@
 #include "crimson-renderer/Renderer.h"
+#include "GpuTestBackend.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "crimson-renderer/Picking.h"
@@ -7,6 +8,7 @@
 
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
+#include <lodepng.h>
 #include <d3d11.h>
 #include <algorithm>
 #include <array>
@@ -34,7 +36,6 @@ struct Temporary {
 };
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
-struct Context {ID3D11DeviceContext* value{};~Context(){if(value)value->Release();}};
 std::shared_ptr<ModelAsset> quad() {
     auto asset=std::make_shared<ModelAsset>();asset->id="lighting-dependency-quad";
     ModelPrimitive primitive;primitive.uvMask=3;primitive.tangentUv=0;
@@ -62,16 +63,16 @@ void equivalent(const DecodedImage& a,const DecodedImage& b,const char* reason,u
 }
 void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     std::vector<std::shared_ptr<DecodedImage>> destinations;
-    ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);
+    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
     std::uint16_t width=129,height=97;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);renderer.setGridVisible(false);
     ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     bgfx::reset(320,240,BGFX_RESET_NONE);
-    Context context;static_cast<ID3D11Device*>(bgfx::getInternalData()->context)->GetImmediateContext(&context.value);
+    TestGpuContext context;
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x414d4249454e54;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.25f,.25f,.25f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());check(renderer.publishThumbnailEnvironment(environment),renderer.thumbnailStatus());
     check(renderer.publishMaterialPreviewEnvironment(environment),"Material preview environment publication failed.");
-    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.value->Flush();};
+    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle source) {
         Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Lighting readback allocation failed.");
@@ -956,9 +957,75 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     resources.stop();renderer.drainPending(frame);
     std::cout<<"Lighting dependency checks passed: scopes, reveal/casters, bright torch and moving Character shadows, reflected-light darkness, opt-in emission, directional darkness, odd dimensions, transparent receivers, generated/time masks, separated Character/World lighting, dedicated Character shadows and Scene/Game ownership.\n";
 }
+void receiverPrecisionExercise(SDL_Window* window,const fs::path& artifacts) {
+    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());TestGpuContext context;
+    constexpr std::uint16_t width=513,height=385;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);renderer.setGridVisible(false);
+    ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);bgfx::reset(320,240,BGFX_RESET_NONE);
+    PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x505245434953494f;
+    environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{})},environment.settings);check(renderer.publishEnvironment(environment),renderer.environmentStatus());
+    const auto mesh=quad();check(renderer.prepareModel(*mesh),renderer.modelStatus());auto materials=mesh->materials;std::vector<ModelMaterialTextures> textures(1);
+    RenderModelInstance receiver;receiver.entityId=1;receiver.model={mesh,math::rotation(math::axisAngle({1,0,0},-1.57079632679f))*math::scaling({12,12,1})};
+    receiver.materials=&materials;receiver.textures=&textures;receiver.forceFullDetail=true;const auto caster=receiver;
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Color;
+    settings.environment.ambientLight.color={1,1,1};settings.environment.ambientLight.energy=.3f;settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};
+    auto& ambient=settings.environment.ambientVisibility;ambient={true,1,.026f,.1f,.984f,true,false};
+    settings.camera.fov=55;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.farPlane=2048;settings.camera.target={};
+    PointLight point;point.entityId=100;point.position={0,1.5f,0};point.color={1,.7f,.3f};point.intensity=8;point.radius=8;
+    point.specularStrength=0;point.castShadows=true;point.roles.ambientReveal=true;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&receiver,1);scene.shadowInstances=std::span(&caster,1);
+    scene.pointLights=std::span(&point,1);scene.shadowWorldId=7;scene.shadowResolution=1024;
+    std::uint32_t frame{};bool editorPurpose{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
+    const auto draw=[&]{if(editorPurpose)renderer.render(scene);else renderer.renderGame(scene);};
+    const auto capture=[&](const std::string& name) {
+        for(unsigned i=0;i<3;++i){draw();tick();}draw();
+        Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
+        check(bgfx::isValid(staging.handle),"Receiver precision readback allocation failed.");DecodedImage image{width,height,std::vector<std::uint8_t>(std::size_t(width)*height*4)};
+        bgfx::blit(ReadView,staging.handle,0,0,editorPurpose?renderer.viewportTexture():renderer.gameViewportTexture(),0,0,width,height);const auto ready=bgfx::readTexture(staging.handle,image.rgba.data());
+        check(ready!=UINT32_MAX,"Receiver precision readback is unsupported.");unsigned waited{};
+        while(!picking::frameReady(frame,ready)&&waited++<120)tick();
+        if(!picking::frameReady(frame,ready)){renderer.drainPending(frame);throw std::runtime_error("Receiver precision readback timed out.");}
+        if(!artifacts.empty()){fs::create_directories(artifacts);std::vector<std::uint8_t> encoded;check(lodepng::encode(encoded,image.rgba,width,height)==0,"Receiver precision PNG encoding failed.");
+            std::ofstream file(artifacts/(name+".png"),std::ios::binary);file.write(reinterpret_cast<const char*>(encoded.data()),std::streamsize(encoded.size()));check(bool(file),"Receiver precision PNG write failed.");}return image;
+    };
+    double maximumError{};unsigned phase{};
+    for(const bool editor:{false,true})for(const auto cameraPosition:{Vec3{10,14,10},Vec3{8,3,8},Vec3{-8,2,8}})for(const auto nearPlane:{.0008660254f,.1f})for(const bool shadowAware:{false,true}) {
+        editorPurpose=editor;
+        settings.camera.position=cameraPosition;settings.camera.nearPlane=nearPlane;ambient.shadowAware=shadowAware;receiver.blend=MaterialBlend::Opaque;
+        const auto prefix=std::to_string(phase++);const auto opaque=capture(prefix+"-opaque");receiver.blend=MaterialBlend::Alpha;const auto analytic=capture(prefix+"-analytic");
+        double error{},maximum{};unsigned count{},different{};
+        for(int z=-3;z<=3;++z)for(int x=-3;x<=3;++x){const Vec3 sample{float(x),0,float(z)};
+            const auto a=brightness(opaque,settings.camera,sample),b=brightness(analytic,settings.camera,sample),difference=std::abs(a-b);
+            error+=difference;maximum=std::max(maximum,difference);different+=difference>3;++count;}
+        maximumError=std::max(maximumError,maximum);
+        std::cout<<"Receiver reconstruction view="<<(editor?"Scene":"Game")<<" camera="<<cameraPosition[0]<<','<<cameraPosition[1]<<','<<cameraPosition[2]<<" near="<<nearPlane<<" shadowAware="<<shadowAware
+            <<" mean RGB error="<<error/count<<" max="<<maximum<<" samplesOver3="<<different<<'/'<<count<<'\n';
+    }
+    // Exact evaluation must preserve a real blocker; a broad tolerance/bias
+    // increase could smooth the false bands by erasing this real occlusion.
+    auto blocker=caster;blocker.entityId=2;
+    blocker.model.transform=math::translation({0,.3f,0})*math::rotation(math::axisAngle({1,0,0},-1.57079632679f))*math::scaling({.6f,.6f,1});
+    const std::array shadowCasters{caster,blocker};scene.shadowInstances=shadowCasters;receiver.blend=MaterialBlend::Opaque;
+    point.color={};point.roles.receiverMask=0;settings.camera.position={10,14,10};
+    for(const bool editor:{false,true})for(const auto nearPlane:{.0008660254f,.1f}) {
+        editorPurpose=editor;settings.camera.nearPlane=nearPlane;ambient.shadowAware=false;
+        const std::string prefix=std::string(editor?"scene":"game")+(nearPlane<.001f?"-tiny-near":"-normal-near");
+        const auto clear=capture(prefix+"-blocker-ignored");ambient.shadowAware=true;const auto blocked=capture(prefix+"-blocker-respected");
+        const auto clearValue=brightness(clear,settings.camera,{}),blockedValue=brightness(blocked,settings.camera,{});
+        check(clearValue>blockedValue+30,"Receiver precision correction erased real point-shadow occlusion.");
+        std::cout<<"Receiver reconstruction real blocker view="<<(editor?"Scene":"Game")<<" near="<<nearPlane<<" ignored="<<clearValue<<" respected="<<blockedValue<<'\n';
+    }
+    resources.stop();renderer.drainPending(frame);check(maximumError<=3,"Opaque reconstructed ambient reveal disagrees with exact fragment receivers: maximum RGB error="+std::to_string(maximumError));
+}
 }
 int main(int argc,char** argv) {
-    try {check(argc==4,"Pass shaderc, shader source and shader include directories.");Temporary temporary;
+    try {
+        if(argc>=2&&std::string_view(argv[1])=="--receiver-precision") {
+            check(argc==2||argc==3,"Usage: lighting_dependency_render_tests --receiver-precision [ARTIFACT_DIRECTORY]");Sdl sdl;
+            std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson receiver precision checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
+            check(bool(window),SDL_GetError());receiverPrecisionExercise(window.get(),argc==3?fs::absolute(argv[2]):fs::path{});return 0;
+        }
+        check(argc==4,"Pass shaderc, shader source and shader include directories.");Temporary temporary;
         ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary.path};Sdl sdl;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson lighting dependency checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());exercise(window.get(),config);return 0;

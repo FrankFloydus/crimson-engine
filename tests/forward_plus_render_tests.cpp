@@ -1,4 +1,5 @@
 #include "crimson-renderer/Renderer.h"
+#include "GpuTestBackend.h"
 #include "crimson-renderer/RenderFrame.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/MaterialGraphShader.h"
@@ -34,7 +35,6 @@ struct Temporary {
 };
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
-struct DeviceContext {ID3D11DeviceContext* value{};~DeviceContext(){if(value)value->Release();}};
 
 std::shared_ptr<ModelAsset> quad(){
     auto asset=std::make_shared<ModelAsset>();asset->id="forward-plus-quad";
@@ -71,17 +71,17 @@ double centerBrightness(const DecodedImage& image){double result{};for(int y=-1;
 void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& benchmarkDirectory,bool movingCamera){
     // Readback storage must outlive Renderer, including exceptional shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
-    ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);
+    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
     renderer.resizeViewport(160,128);renderer.resizeGameViewport(160,128);renderer.setGridVisible(false);
     ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     bgfx::reset(960,540,BGFX_RESET_NONE);bgfx::setDebug(BGFX_DEBUG_PROFILER);
-    DeviceContext context;static_cast<ID3D11Device*>(bgfx::getInternalData()->context)->GetImmediateContext(&context.value);
+    TestGpuContext context;
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x46504c5553;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.1f,.12f,.16f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     check(renderer.publishThumbnailEnvironment(environment),renderer.thumbnailStatus());
     std::uint32_t frame{};
-    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.value->Flush();};
+    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle source,std::uint16_t width=160,std::uint16_t height=128){
         Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Forward+ readback allocation failed.");
@@ -347,7 +347,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
                     const Vec3 offset{.4f*std::sin(phaseAngle),.15f*std::cos(phaseAngle),.2f*std::sin(phaseAngle*2)};
                     settings.camera.position=settings.camera.position+offset;sceneSettings.camera.position=sceneSettings.camera.position+offset;
                 }
-                ++trajectoryFrame;renderer.advanceStreaming();renderer.renderGame(scene);if(dual)renderer.render(editorScene);lighting=renderer.clusteredLightingStats();frame=bgfx::frame();context.value->Flush();};
+                ++trajectoryFrame;renderer.advanceStreaming();renderer.renderGame(scene);if(dual)renderer.render(editorScene);lighting=renderer.clusteredLightingStats();frame=bgfx::frame();context.flush();};
             for(unsigned warm=0;warm<300;++warm)submit();const auto firstFrame=frame+1;auto start=Clock::now();std::vector<double> cpu,gpu;std::uint32_t lastGpu{};
             const auto name=mode==LocalLightMode::Clustered?"clustered":"reference";
             do{const auto before=Clock::now();submit();const auto elapsed=std::chrono::duration<double,std::milli>(Clock::now()-before).count();cpu.push_back(elapsed);

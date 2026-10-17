@@ -1,4 +1,5 @@
 #include "crimson-renderer/ClusteredLightingGpu.h"
+#include "GpuTestBackend.h"
 #include "crimson-renderer/ClusteredLighting.h"
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/AmbientVisibilityMath.h"
@@ -29,9 +30,10 @@ struct Graphics {
         auto* hwnd=SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,nullptr);
         check(hwnd!=nullptr,std::string("SDL did not provide a hidden HWND: ")+SDL_GetError());
         bgfx::renderFrame();
-        bgfx::Init init;init.type=bgfx::RendererType::Direct3D11;init.platformData.nwh=hwnd;
+        bgfx::Init init;init.type=selectedTestBgfxRenderer();init.platformData.nwh=hwnd;
         init.resolution.width=32;init.resolution.height=32;init.resolution.reset=BGFX_RESET_NONE;
-        check(bgfx::init(init),"Could not initialize hidden Direct3D11 clustered-light checks.");
+        check(bgfx::init(init),"Could not initialize the selected hidden clustered-light backend.");
+        check(bgfx::getRendererType()==init.type,"Clustered-light checks initialized a different graphics backend.");
     }
     ~Graphics(){bgfx::shutdown();}
 };
@@ -125,7 +127,7 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
             (*first)[firstRecord+3][2]==float(ambient_visibility::packLightRoles(lights[source].roles,false)),
             "Point response packing changed shadow or lighting role records.");
         check((*first)[firstRecord+4]==Vec4{0,1,4,1},"Ordinary point-light response defaults changed.");
-        check((*first)[firstRecord+5]==Vec4{2,0,0,0},"Default inverse-square attenuation was not transported.");
+        check((*first)[firstRecord+5]==Vec4{2,0,0,0},"Default attenuation was not transported.");
     }
     const auto oldRed=(*first)[lightBase+1][0];
 
@@ -154,6 +156,41 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
             "A point response edit corrupted or changed spatial light masks.");
     lights[0].specularStrength=.75f;prepare(lights,shadows);expectDispatch(0,"Specular-only edit invalidated spatial light masks.");
     check((*read())[lightBase+4]==Vec4{1.5625f,.75f,4,1},"Specular-only edit was omitted from the cached light snapshot.");
+    {
+        const auto defaultEnergy=read();const auto defaultBytes=lighting.residentBytes();
+        lights.front().indirectEnergy=0;lights.back().indirectEnergy=4;
+        prepare(lights,shadows);expectDispatch(0,"A GI-energy-only edit unnecessarily reculled spatial light masks.");
+        const auto editedEnergy=read();
+        check((*editedEnergy)[lightBase+5]==Vec4{2,-1,0,0}&&
+            (*editedEnergy)[lightBase+(lights.size()-1)*CC_POINT_LIGHT_RECORD_TEXELS+5]==Vec4{2,3,0,0},
+            "GI energy did not update the first/last records using delta-from-one encoding.");
+        for(std::size_t texel=0;texel<editedEnergy->size();++texel)for(std::size_t channel=0;channel<4;++channel) {
+            const bool energyValue=channel==1&&(texel==lightBase+5||texel==lightBase+(lights.size()-1)*CC_POINT_LIGHT_RECORD_TEXELS+5);
+            if(!energyValue)check(std::bit_cast<std::uint32_t>((*editedEnergy)[texel][channel])==
+                std::bit_cast<std::uint32_t>((*defaultEnergy)[texel][channel]),
+                "A GI energy edit changed direct response, spatial masks, BRDF data or reserved record values.");
+        }
+        check(lighting.residentBytes()==defaultBytes,"GI energy changed clustered light allocation size.");
+        lights.front().indirectEnergy=std::numeric_limits<float>::quiet_NaN();lights.back().indirectEnergy=std::numeric_limits<float>::infinity();
+        prepare(lights,shadows);expectDispatch(0,"Nonfinite GI energy changed spatial culling.");
+        const auto finiteEnergy=read();
+        check((*finiteEnergy)[lightBase+5]==Vec4{2,0,0,0}&&
+            (*finiteEnergy)[lightBase+(lights.size()-1)*CC_POINT_LIGHT_RECORD_TEXELS+5]==Vec4{2,0,0,0},
+            "Nonfinite transient GI energy failed to restore the default one multiplier.");
+        lights.front().indirectEnergy=-100;lights.back().indirectEnergy=100;
+        prepare(lights,shadows);expectDispatch(0,"GI energy bounds changed spatial culling.");
+        const auto boundedEnergy=read();
+        check((*boundedEnergy)[lightBase+5]==Vec4{2,-1,0,0}&&
+            (*boundedEnergy)[lightBase+(lights.size()-1)*CC_POINT_LIGHT_RECORD_TEXELS+5]==Vec4{2,15,0,0},
+            "Transient GI energy bounds escaped the renderer's zero-to-sixteen contract.");
+        lights.front().indirectEnergy=1;lights.back().indirectEnergy=1;
+        prepare(lights,shadows);expectDispatch(0,"Restoring default GI energy changed spatial masks.");
+        const auto restoredEnergy=read();
+        for(std::size_t texel=0;texel<restoredEnergy->size();++texel)for(std::size_t channel=0;channel<4;++channel)
+            check(std::bit_cast<std::uint32_t>((*restoredEnergy)[texel][channel])==
+                std::bit_cast<std::uint32_t>((*defaultEnergy)[texel][channel]),
+                "Default GI energy did not restore the exact legacy atlas bytes.");
+    }
     lights[0].attenuation=0;lights.back().attenuation=3;
     prepare(lights,shadows);expectDispatch(0,"Attenuation-only edit unnecessarily reculled spatial light masks.");
     const auto decay=read();
@@ -238,6 +275,36 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
         "Range/source-radius bounds were not enforced in GPU records.");
     point.position[1]=30;preparePoint();expectDispatch(1,"Moving only the finite point source reused stale masks.");
     check(lightBit(*read(),{})==0,"Moving the finite source did not clear its old illumination sphere.");
+
+    constexpr std::uint16_t screenWidth=321,screenHeight=243;
+    const auto withScreenEffects=[&](bool gi,bool ao) {
+        return lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,
+            screenWidth,screenHeight,screenWidth,screenHeight,{},
+            gi?screenWidth:0,gi?screenHeight:0,ao?screenWidth:0,ao?screenHeight:0);
+    };
+    check(withScreenEffects(true,true),lighting.status());
+    const auto packed=ambient_visibility::packedTexelCount(screenWidth,screenHeight);
+    const auto pixels=std::size_t(screenWidth)*screenHeight;
+    check(lighting.occluderBaseTexel()>=lighting.ambientBaseTexel()+packed,
+        "Nearest-layer depth overlaps ambient visibility.");
+    check(lighting.ssgiBaseTexel()>=lighting.occluderBaseTexel()+packed,
+        "SSGI overlaps packed nearest-layer depth.");
+    check(lighting.ssaoBaseTexel()==lighting.ssgiBaseTexel()+pixels&&
+        lighting.ssaoBaseTexel()+packed<=std::size_t(lighting.atlasWidth())*lighting.atlasHeight(),
+        "Odd-size SSGI and SSAO regions overlap or escape the atlas.");
+    check(lighting.ssaoWidth()==screenWidth&&lighting.ssaoHeight()==screenHeight,
+        "SSAO publication lost its odd viewport extent.");
+    for(unsigned i=0;i<4;++i)tick();
+    const auto combinedBytes=lighting.residentBytes();
+    check(withScreenEffects(false,true),lighting.status());
+    check(lighting.ssgiBaseTexel()==0&&lighting.ssaoBaseTexel()>=lighting.occluderBaseTexel()+packed,
+        "Disabling SSGI left stale metadata or invalidated independent SSAO.");
+    check(withScreenEffects(false,false),lighting.status());
+    for(unsigned i=0;i<4;++i)tick();
+    check(!lighting.ssaoWidth()&&!lighting.ssaoHeight()&&!lighting.ssaoBaseTexel()&&
+        lighting.residentBytes()<combinedBytes,"Disabled screen effects retained their atlas allocation.");
+    check(!lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,0,0,0,0,{},0,0,screenWidth,0),
+        "An incomplete SSAO target extent was accepted.");
 
 }
 }

@@ -1,6 +1,7 @@
 #include "tools/AssetBrowserPaths.h"
 #include "resources/Paths.h"
 #include "resources/AssetId.h"
+#include "quader_bundle_fixture.h"
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -64,6 +65,18 @@ void modelDocumentsAndUnavailableAssets() {
         require(!missing.available&&missing.file.empty()&&missing.directory.empty()&&missing.name=="Visible name","A virtual/missing/outside asset fabricated a filesystem location or lost its copyable name.");
     }
 }
+void bundleSourceLocations() {
+    Project project;const auto fixture=bundle_test::writeFixture(project.root);
+    const auto location=resolveBrowserAssetLocation(project.root,{fixture.modelId,"Triangle",AssetKind::Model});
+    require(location.available&&location.file==fs::weakly_canonical(fixture.file)&&location.directory==fixture.file.parent_path()&&location.name=="Triangle",
+        "A Quader submodel exposed a disposable cache package instead of its tracked bundle.");
+    const auto cache=resolveAssetPath(project.root,fixture.modelId).parent_path();
+    const auto cacheRoot=fs::weakly_canonical(project.root/".crimson/cache/quader-imports");
+    require(!cache.lexically_relative(cacheRoot).empty()&&*cache.lexically_relative(cacheRoot).begin()!="..","Bundle path fixture escaped its generated cache owner.");
+    fs::remove_all(cache);
+    const auto missing=resolveBrowserAssetLocation(project.root,{fixture.modelId,"Triangle",AssetKind::Model});
+    require(missing.available&&missing.file==location.file,"Missing generated data hid the existing tracked bundle location.");
 }
-int main(){try{pathsAndNames();modelDocumentsAndUnavailableAssets();std::cout<<"Asset browser locations, names and managed model documents passed. Explorer and clipboard were not invoked.\n";return 0;}
+}
+int main(){try{pathsAndNames();modelDocumentsAndUnavailableAssets();bundleSourceLocations();std::cout<<"Asset browser locations, names and managed model documents passed. Explorer and clipboard were not invoked.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

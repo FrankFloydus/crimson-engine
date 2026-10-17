@@ -1,94 +1,84 @@
 #include "SceneOutlinerRows.h"
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace crimson {
-std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene& scene,EntityId owner) {
-    const auto parent=scene.find(owner);if(!parent)return {};
-    const auto childIds=scene.children(owner);
-    std::vector<EntityRecord> children;children.reserve(childIds.size());
-    for(const auto id:childIds)children.push_back(*scene.find(id));
-    std::vector<const EntityRecord*> ordered;ordered.reserve(children.size());
-    for(const auto& child:children)ordered.push_back(&child);
-    return sceneOutlinerRows(*parent,ordered);
+bool isSceneGroup(const EntityRecord& record) {
+    return !record.model&&!record.particle&&!record.directional&&!record.point&&!record.environment&&
+        !record.actor&&!record.motor&&!record.controller&&!record.navigation&&!record.playerInput&&
+        !record.lightRig&&!record.darknessReveal&&!record.collider&&!record.camera&&!record.cameraFollow&&
+        !record.quader&&!record.quaderGenerated;
 }
-std::vector<SceneOutlinerRow> sceneOutlinerRows(const EntityRecord& owner,
-                                             std::span<const EntityRecord* const> orderedChildren) {
-    const auto components=sceneComponents(owner);
-    std::unordered_map<SceneComponentKind,std::vector<EntityId>> anchored;
-    std::vector<EntityId> trailing;
-    for(const auto* child:orderedChildren) {
-        if(!child||child->parent!=owner.id)continue;
-        if(child->outlinerBefore&&*child->outlinerBefore!=SceneComponentKind::Transform&&
-            std::find(components.begin(),components.end(),*child->outlinerBefore)!=components.end())
-            anchored[*child->outlinerBefore].push_back(child->id);
-        else trailing.push_back(child->id);
-    }
-    std::vector<SceneOutlinerRow> rows;rows.reserve(components.size()+orderedChildren.size());
-    for(const auto component:components) {
-        if(component==SceneComponentKind::Transform)continue;
-        if(const auto found=anchored.find(component);found!=anchored.end())
-            for(const auto id:found->second)rows.push_back(SceneOutlinerRow::childRow(id));
-        rows.push_back(SceneOutlinerRow::componentRow(component));
-    }
-    for(const auto id:trailing)rows.push_back(SceneOutlinerRow::childRow(id));
-    return rows;
-}
-bool reorderSceneOutlinerRow(SceneDocument& document,EntityId owner,SceneOutlinerRow moving,
-                             std::optional<SceneOutlinerRow> before) {
-    auto rows=sceneOutlinerRows(document.scene(),owner);const auto original=rows;
-    const auto found=std::find(rows.begin(),rows.end(),moving);
-    if(found==rows.end()||before==moving||(before&&std::find(rows.begin(),rows.end(),*before)==rows.end()))return false;
-    rows.erase(found);
-    rows.insert(before?std::find(rows.begin(),rows.end(),*before):rows.end(),moving);
-    if(rows==original)return false;
-    std::vector<SceneComponentKind> components{SceneComponentKind::Transform};
-    struct ChildOrder {uint32_t order{};std::optional<SceneComponentKind> before;};
-    std::unordered_map<EntityId,ChildOrder> children;std::optional<SceneComponentKind> next;
-    for(auto row=rows.rbegin();row!=rows.rend();++row) {
-        if(row->kind==SceneOutlinerRowKind::Component)next=row->component;
-        else children.emplace(row->child,ChildOrder{0,next});
-    }
-    uint32_t order{};
-    for(const auto& row:rows) {
-        if(row.kind==SceneOutlinerRowKind::Component) {components.push_back(row.component);continue;}
-        children.at(row.child).order=order++;
-    }
-    return document.edit("Reorder Outliner row",[&](auto& records,auto&) {
-        for(auto& record:records) {
-            if(record.id==owner)record.componentOrder=components;
-            if(const auto child=children.find(record.id);child!=children.end()) {
-                record.order=child->second.order;record.outlinerBefore=child->second.before;
-            }
-        }
+namespace {
+struct Projection {
+    std::vector<SceneOutlinerRow> rows;
+    std::vector<EntityId> order;
+    std::unordered_map<EntityId,EntityId> owners;
+    std::unordered_map<EntityId,EntityId> inspectorOwners;
+};
+Projection project(const Scene& scene) {
+    const auto records=scene.records();
+    std::unordered_map<EntityId,std::vector<const EntityRecord*>> children;
+    children.reserve(records.size());
+    for(const auto& record:records)children[record.parent].push_back(&record);
+    for(auto& [parent,siblings]:children)std::sort(siblings.begin(),siblings.end(),[](const auto* a,const auto* b) {
+        return a->order!=b->order?a->order<b->order:a->id<b->id;
     });
+    struct Work {const EntityRecord* record;EntityId parent{},actor{};};
+    std::vector<Work> pending;
+    if(const auto roots=children.find(NoEntity);roots!=children.end())
+        for(auto it=roots->second.rbegin();it!=roots->second.rend();++it)pending.push_back({*it});
+    Projection result;result.rows.reserve(records.size());result.order.reserve(records.size());result.owners.reserve(records.size());
+    result.inspectorOwners.reserve(records.size());
+    while(!pending.empty()) {
+        const auto work=pending.back();pending.pop_back();const auto& record=*work.record;
+        const bool group=isSceneGroup(record);
+        const auto actor=record.actor?record.id:group?NoEntity:work.actor;
+        // Visual models and emitters are authored entities, even when they are
+        // attached to a character. Only the recipe's following camera is an
+        // inline authoring part rather than an Outliner child.
+        const auto owner=actor&&!record.model&&!record.particle&&record.camera&&record.cameraFollow&&record.cameraFollow->target==record.parent&&
+            record.parent==actor?actor:record.id;
+        const auto inspectorOwner=!record.actor&&!group&&actor&&(record.model||record.particle||record.camera)?actor:record.id;
+        result.order.push_back(record.id);result.owners.emplace(record.id,owner);
+        result.inspectorOwners.emplace(record.id,inspectorOwner);
+        if(owner==record.id)result.rows.push_back({record.id,work.parent});
+        if(const auto descendants=children.find(record.id);descendants!=children.end())
+            for(auto it=descendants->second.rbegin();it!=descendants->second.rend();++it)
+                pending.push_back({*it,owner==record.id?record.id:work.parent,actor});
+    }
+    return result;
 }
-std::optional<Vec4> sceneOutlinerColor(const EntityRecord& record,std::optional<SceneComponentKind> component) {
-    if(!record.outlinerStyle)return std::nullopt;
-    if(!component)return record.outlinerStyle->color;
-    const auto index=static_cast<size_t>(*component);
-    return index<record.outlinerStyle->componentColors.size()?record.outlinerStyle->componentColors[index]:std::nullopt;
+}
+std::vector<SceneOutlinerRow> sceneOutlinerRows(const Scene& scene) {return project(scene).rows;}
+EntityId sceneEntityOwner(const Scene& scene,EntityId id) {
+    const auto record=scene.find(id);if(!record)return NoEntity;
+    if(!record->actor&&!record->model&&!record->particle&&record->camera&&record->cameraFollow&&record->cameraFollow->target==record->parent)
+        if(const auto parent=scene.find(record->parent);parent&&parent->actor)return parent->id;
+    return id;
+}
+std::vector<EntityId> sceneEntityParts(const Scene& scene,EntityId id) {
+    const auto projection=project(scene);
+    const auto found=projection.owners.find(id);if(found==projection.owners.end())return {};
+    const auto owner=found->second;std::vector<EntityId> result{owner};
+    for(const auto part:projection.order)if(part!=owner&&projection.inspectorOwners.at(part)==owner)result.push_back(part);
+    return result;
+}
+std::optional<Vec4> sceneOutlinerColor(const EntityRecord& record) {
+    return record.outlinerStyle?record.outlinerStyle->color:std::nullopt;
 }
 bool setSceneOutlinerColors(SceneDocument& document,std::span<const SceneOutlinerColorTarget> requested,std::optional<Vec4> color) {
     if(requested.empty()||(color&&(!math::finite(*color)||std::any_of(color->begin(),color->end(),[](float value){return value<0||value>1;}))))return false;
-    std::unordered_map<EntityId,std::vector<std::optional<SceneComponentKind>>> targets;
-    bool changed=false;
+    std::unordered_set<EntityId> targets;bool changed=false;
     for(const auto& target:requested) {
-        const auto record=document.scene().find(target.entity);
-        if(!record||(target.component&&!hasSceneComponent(*record,*target.component)))return false;
-        auto& components=targets[target.entity];
-        if(std::find(components.begin(),components.end(),target.component)==components.end())components.push_back(target.component);
-        changed=changed||sceneOutlinerColor(*record,target.component)!=color;
+        const auto record=document.scene().find(target.entity);if(!record)return false;
+        targets.insert(target.entity);changed=changed||sceneOutlinerColor(*record)!=color;
     }
     if(!changed)return false;
     return document.edit(color?"Set Outliner color":"Clear Outliner color",[&](auto& records,auto&) {
-        for(auto& record:records)if(const auto found=targets.find(record.id);found!=targets.end()) {
-            if(color&&!record.outlinerStyle)record.outlinerStyle.emplace();
-            if(record.outlinerStyle)for(const auto component:found->second) {
-                if(component)record.outlinerStyle->componentColors[static_cast<size_t>(*component)]=color;
-                else record.outlinerStyle->color=color;
-            }
-            normalizeSceneOutlinerStyle(record);
+        for(auto& record:records)if(targets.contains(record.id)) {
+            if(color)record.outlinerStyle=SceneOutlinerStyle{color};else record.outlinerStyle.reset();
         }
     });
 }

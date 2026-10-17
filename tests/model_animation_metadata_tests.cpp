@@ -24,6 +24,7 @@ void verify(const std::filesystem::path& root) {
     primitive.skinJointBounds={primitive.bounds};
     ModelMorphTarget target;target.positions.assign(3,{0,0,.2f});target.positionBounds={{0,0,.2f},{0,0,.2f},true};primitive.morphTargets.push_back(target);
     asset.primitives.push_back(primitive);asset.materials.push_back({});asset.materials[0].alphaBlend=true;asset.materialIds={"fixture-material"};
+    asset.legacyUnusedMaterialSlot=1;
     asset.meshes.push_back({"Mesh",{0},{.1f}});asset.nodes.push_back({"Mesh",{}, {},0});asset.nodes[0].skin=0;asset.nodes[0].weights={.25f};
     asset.nodes.push_back(ModelNode{});asset.nodes[1].name="Joint";asset.roots={0,1};asset.draws={{0,{},0}};
     asset.skins.push_back({"Skeleton",{1},{Mat4{}},1});
@@ -41,6 +42,8 @@ void verify(const std::filesystem::path& root) {
         "Warm model metadata lost skin/morph declarations.");
     check(warm->primitives[0].skinJointBounds.size()==1,"Warm metadata lost used-joint bounds.");
     check(warm->materials[0].alphaBlend,"Warm metadata lost imported alpha blending.");
+    check(warm->materials.size()==1&&warm->materialIds==asset.materialIds&&warm->legacyUnusedMaterialSlot==1,
+        "Warm metadata restored an unused fallback or lost its legacy override compatibility index.");
     const auto posed=evaluateModelPose(*warm,0,2,false);
     check(posed.signature==cold.signature&&posed.bounds.minimum==cold.bounds.minimum&&posed.bounds.maximum==cold.bounds.maximum,
         "Cold and warm model animation metadata produced different posed content or bounds.");
@@ -48,9 +51,19 @@ void verify(const std::filesystem::path& root) {
     check(original->geometry.skinWeights.size()==primitive.skinWeights.size()&&original->geometry.skinWeights[0].weights==primitive.skinWeights[0].weights&&
         original->geometry.morphTargets[0].positions==target.positions,"Original streamed geometry lost skin/morph data.");
     const auto index=std::filesystem::directory_iterator(resolveAssetPath(root,"assets/cache/mesh-lods/index"))->path();
-    std::ifstream input(index);auto invalid=nlohmann::json::parse(input);input.close();
-    invalid["skins"][0]["joints"][0]=1000;writeFileAtomically(index,invalid.dump());
+    std::ifstream input(index);const auto valid=nlohmann::json::parse(input);input.close();
+    auto invalid=valid;invalid["skins"][0]["joints"][0]=1000;writeFileAtomically(index,invalid.dump());
     check(!streaming::loadModelMetadataCache(package/"manifest.json",root),"Malformed cached skeleton was admitted as valid metadata.");
+    for(const auto& badSlot:nlohmann::json::array({0,-1,1.0,"1"})) {
+        invalid=valid;invalid["legacyUnusedMaterialSlot"]=badSlot;writeFileAtomically(index,invalid.dump());
+        check(!streaming::loadModelMetadataCache(package/"manifest.json",root),"Malformed legacy unused material slot was admitted by the warm cache.");
+    }
+    invalid=valid;invalid["version"]=streaming::ModelCacheVersion-1;writeFileAtomically(index,invalid.dump());
+    check(!streaming::loadModelMetadataCache(package/"manifest.json",root),"An old cache with inflated material slots was reused.");
+    asset.legacyUnusedMaterialSlot.reset();streaming::writeModelMetadataCache(asset,stream,root);
+    const auto withoutLegacy=streaming::loadModelMetadataCache(package/"manifest.json",root);
+    check(withoutLegacy&&!withoutLegacy->legacyUnusedMaterialSlot&&withoutLegacy->materials.size()==1,
+        "Warm metadata invented legacy fallback compatibility for a current explicit model.");
     std::ifstream source(package/"buffer.bin");const std::string bytes{std::istreambuf_iterator<char>(source),std::istreambuf_iterator<char>()};
     check(bytes=="animated fixture","Cache rejection modified a managed source buffer.");
 }

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <iostream>
 #include <stdexcept>
@@ -195,6 +197,29 @@ void runtimeUniformChecks() {
 void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
+    for(const auto& variant:original.variants) {
+        check(variant.source.find("crimson-material-graph-generator-v23")!=std::string::npos,
+            "Generated material identity does not invalidate pre-sky-fog shader bundles.");
+        const auto has=[&](const char* name) {
+            return std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
+                return binding.name==name && binding.kind==ShaderUniformKind::Vec4 && binding.count==1;
+            });
+        };
+        const bool surface=variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle;
+        const bool readableDepth=variant.pass==MaterialGraphPass::PointShadow || variant.pass==MaterialGraphPass::DirectionalShadow;
+        check(has("u_ssgiAtlas")==surface && has("u_ssgiSettings")==surface && has("u_ssgiDraw")==bool(surface||readableDepth),
+            "SSGI source, receiver or reactive-depth uniforms are absent from their engine pass contract.");
+        check(has("u_fogSky")==surface,"Fog sky controls leaked into depth passes or are missing from surface passes.");
+        for(const auto name:{"u_fogSunDirection","u_fogSunColor"}) {
+            const bool hasSun=std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
+                return binding.name==name&&binding.kind==ShaderUniformKind::Vec4&&binding.count==4;
+            });
+            check(hasSun==surface,"Fog directional-light arrays have an incompatible engine pass contract.");
+        }
+        check(std::all_of(variant.manifest.begin(),variant.manifest.end(),[](const auto& binding) {
+            return binding.kind!=ShaderUniformKind::Sampler || binding.samplerSlot<16;
+        }),"SSGI expanded the generated material texture-stage budget.");
+    }
     check(original.textures[0].mappingRow==original.textures[1].mappingRow && original.textures[1].mappingRow==original.textures[2].mappingRow,"Shared UV node allocated different transforms.");
     check(original.uniforms.size()<=MaterialGraphMaxParameterRows,"Parameter budget exceeded.");
     for(const auto& variant:original.variants)
@@ -433,6 +458,20 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 wrong=variant.manifest;
                 std::erase_if(wrong,[](const auto& b){return b.name==MaterialGraphParameterUniform;});
                 check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),"Generated manifest accepted undeclared parameters.");
+                wrong=variant.manifest;
+                std::erase_if(wrong,[](const auto& b){return b.name=="u_ssgiDraw";});
+                check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),
+                    "Generated manifest accepted an obsolete source-capture/reactive-depth contract.");
+                wrong=variant.manifest;
+                std::erase_if(wrong,[](const auto& b){return b.name=="u_fogSky"||b.name=="u_fogSunDirection"||b.name=="u_fogSunColor";});
+                check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),
+                    "Generated manifest accepted an obsolete fog sky/scattering contract.");
+                if(!unlit) {
+                    wrong=variant.manifest;
+                    std::erase_if(wrong,[](const auto& b){return b.name=="u_ssgiAtlas";});
+                    check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),
+                        "Generated manifest accepted an obsolete GI atlas receiver contract.");
+                }
             }
         }
     }
@@ -467,7 +506,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Separated Character lighting uniform manifest changed shape.");
             };
             for(const char* name:{"u_characterDirection","u_characterColor","u_characterResponse"})binding(name,ShaderUniformKind::Vec4,2);
-            for(const char* name:{"u_surfaceCategory","u_clusterRecordLayoutV5","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
+            for(const char* name:{"u_surfaceCategory","u_clusterRecordLayoutV6","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
             binding("u_characterShadowMatrix",ShaderUniformKind::Mat4,8);
             binding("u_revealAtlas",ShaderUniformKind::Vec4,1);
             for(const char* name:{"u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters"})binding(name,ShaderUniformKind::Vec4,8);
@@ -480,8 +519,8 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
             check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_characterColor")!=std::string::npos,
                 "A material map edit accepted the previous engine's missing Character color uniform.");
             oldManifest=variant.manifest;
-            std::erase_if(oldManifest,[](const auto& item){return item.name=="u_clusterRecordLayoutV5";});
-            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_clusterRecordLayoutV5")!=std::string::npos,
+            std::find_if(oldManifest.begin(),oldManifest.end(),[](const auto& item){return item.name=="u_clusterRecordLayoutV6";})->name="u_clusterRecordLayoutV5";
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_clusterRecordLayoutV6")!=std::string::npos,
                 "A material map edit accepted a light record ABI that the previous engine cannot bind.");
             auto wrongArray=variant.manifest;
             std::find_if(wrongArray.begin(),wrongArray.end(),[](const auto& item){return item.name=="u_characterColor";})->count=1;
@@ -571,6 +610,40 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
         const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
         if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
             throw std::runtime_error("Constant material: "+diagnostic);
+    }
+    // Uniform/sampler manifests alone cannot distinguish a single-target
+    // fragment from one that publishes coherent diffuse source attachments.
+    const auto mrtGraph=generateMaterialGraphShader(defaultMaterialAsset());
+    const auto& mrtVariant=mrtGraph.variants.front();
+    const auto mrtVertex=compileShader(config,mrtVariant.vertexName);
+    const auto mrtFragment=compileShader(config,materialGraphShaderRecipe(config,mrtGraph,mrtVariant));
+    std::ifstream mrtTemplateInput(source/"material_graph_model.sh");
+    check(bool(mrtTemplateInput),"SSGI render target test template is unavailable.");
+    const std::string mrtTemplate{std::istreambuf_iterator<char>(mrtTemplateInput),std::istreambuf_iterator<char>()};
+    for(bool missingTargets:{false,true}) {
+        auto changed=mrtTemplate;
+        if(missingTargets) {
+            const auto body=changed.find('{',changed.find("void main()"));
+            check(body!=std::string::npos,"SSGI render target test lost its entry point.");
+            changed.insert(body+1,"\n    vec4 discardedWorld, discardedCharacter, discardedGeometry;\n");
+        }
+        for(unsigned target=missingTargets?1u:3u;target<=3;++target) {
+            const auto before="gl_FragData["+std::to_string(target)+"]";
+            const std::string after=missingTargets?(target==1?"discardedWorld":target==2?"discardedCharacter":"discardedGeometry"):"gl_FragData[4]";
+            std::size_t at{};
+            while((at=changed.find(before,at))!=std::string::npos){changed.replace(at,before.size(),after);at+=after.size();}
+        }
+        auto recipe=materialGraphShaderRecipe(config,mrtGraph,mrtVariant);
+        const std::string includeTemplate="#include \"material_graph_model.sh\"";
+        const auto at=recipe.source.find(includeTemplate);
+        check(at!=std::string::npos,"SSGI render target test lost its model template include.");
+        recipe.source.replace(at,includeTemplate.size(),changed);
+        const auto fragment=compileShader(config,recipe);std::string diagnostic;
+        check(!preflightGeneratedShaderPair(mrtVertex.bytes,fragment.bytes,mrtVertex.bytes,mrtVariant.manifest,diagnostic)&&
+            diagnostic.find("render target")!=std::string::npos,
+            "Generated material admitted missing or reassigned SSGI source render targets.");
+        check(!preflightShaderPair(mrtVertex.bytes,fragment.bytes,mrtVertex.bytes,mrtFragment.bytes,diagnostic),
+            "Shader reload admitted a changed fragment render target signature.");
     }
     std::stop_source canceled;canceled.request_stop();bool rejected=false;
     const auto graph=generateMaterialGraphShader(material);

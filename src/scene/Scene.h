@@ -54,6 +54,7 @@ struct SceneDirectionalLight {
     float shadowDepthBias{.005f};
     float shadowNormalBias{1.f};
     LightRoles roles{};
+    float indirectEnergy{1.f};
     bool operator==(const SceneDirectionalLight&) const = default;
 };
 struct ScenePointLight {
@@ -69,6 +70,7 @@ struct ScenePointLight {
     float rangeFalloffExponent{4},edgeSoftness{1};
     float sourceRadius{0};
     float attenuation{2};
+    float indirectEnergy{1.f};
     bool operator==(const ScenePointLight&) const = default;
 };
 // Global lighting settings are authored on ordinary entities. Spatial transforms
@@ -139,7 +141,6 @@ struct SceneCameraFollow {
 };
 struct SceneOutlinerStyle {
     std::optional<Vec4> color;
-    std::array<std::optional<Vec4>,AllSceneComponentKinds.size()> componentColors{};
     bool operator==(const SceneOutlinerStyle&) const = default;
 };
 struct EntityRecord {
@@ -176,17 +177,10 @@ struct EntityRecord {
     SceneModelAnimation modelAnimation{};
     bool fadeWhenOccluding{false}; // Per-model participation in Game player occlusion fading.
     bool visible{true}; // Authored rendering visibility, inherited by descendants.
-    // Optional authored Outliner order; empty uses the canonical component order.
-    // This is presentation data and does not affect runtime system execution.
-    std::vector<SceneComponentKind> componentOrder;
-    // Display this actual child before one of its parent's component rows.
-    // Missing/removed anchors display at the end; hierarchy remains ordinary.
-    std::optional<SceneComponentKind> outlinerBefore;
     std::optional<SceneOutlinerStyle> outlinerStyle;
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);
-void normalizeSceneComponentOrder(EntityRecord&);
 void normalizeSceneOutlinerStyle(EntityRecord&);
 struct SceneProperties {
     EntityId activeEnvironment{NoEntity};

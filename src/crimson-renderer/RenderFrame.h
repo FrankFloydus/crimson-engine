@@ -36,6 +36,7 @@ struct PreparedRenderView {
     std::shared_ptr<const void> pinned;
     std::uint32_t width{},height{};
     std::vector<RenderCollisionOverlay> collisionOverlays;
+    std::uint64_t giWorldId{},giCameraId{},giEnvironmentId{};
 };
 
 struct PreparedRenderFrame {

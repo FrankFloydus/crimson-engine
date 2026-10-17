@@ -7,6 +7,13 @@
 #define CC_FOG_INLINE
 #endif
 
+CC_FOG_INLINE float fogBackgroundOpacity(float transmittance, float skyAffect)
+{
+    const float one = 1.0;
+    const float zero = 0.0;
+    return (one - min(max(transmittance, zero), one)) * min(max(skyAffect, zero), one);
+}
+
 CC_FOG_INLINE float fogTransmittance(float density, float distanceToEye)
 {
     if (density <= 0.0 || distanceToEye <= 0.0) return 1.0;
@@ -66,6 +73,41 @@ uniform vec4 u_fogColorDensity;
 uniform vec4 u_fogDepth;
 // World height, signed height density, mode, enabled.
 uniform vec4 u_fogHeight;
+// Sky Affect, Aerial Perspective, Sun Scatter, visible-source intensity.
+uniform vec4 u_fogSky;
+// World-space directions toward the scene's directional lights, enabled in W.
+uniform vec4 u_fogSunDirection[4];
+// Linear directional-light color times its authored intensity.
+uniform vec4 u_fogSunColor[4];
+
+vec3 fogLightColor(vec3 skyRadiance, vec3 worldViewDirection)
+{
+    vec3 color = mix(u_fogColorDensity.rgb, skyRadiance, clamp(u_fogSky.y, 0.0, 1.0));
+    if (u_fogSky.z > 0.0)
+    {
+        // Same broad forward lobe as Godot's nonvolumetric sun scattering.
+        // Directions are camera-to-surface rays and normalized on publication.
+        for (int i = 0; i < 4; ++i)
+        {
+            if (u_fogSunDirection[i].w <= 0.0) continue;
+            float amount = pow(max(dot(worldViewDirection, u_fogSunDirection[i].xyz), 0.0), 8.0);
+            color += u_fogSunColor[i].rgb * (amount * 3.141592653589793 * u_fogSky.z);
+        }
+    }
+    return clamp(color, vec3_splat(0.0), vec3_splat(60000.0));
+}
+
+vec3 applyDistanceFog(vec3 radiance, float distanceToEye, float worldHeight, float additive,
+    vec3 skyRadiance, vec3 worldViewDirection)
+{
+    float transmittance = fogCombinedTransmittance(u_fogColorDensity.w, distanceToEye,
+        u_fogDepth.x, u_fogDepth.y, u_fogDepth.z, u_fogDepth.w, worldHeight,
+        u_fogHeight.x, u_fogHeight.y, u_fogHeight.z, u_fogHeight.w);
+    vec3 color = fogLightColor(skyRadiance, worldViewDirection);
+    return vec3(fogChannel(radiance.x, color.x, transmittance, additive),
+                fogChannel(radiance.y, color.y, transmittance, additive),
+                fogChannel(radiance.z, color.z, transmittance, additive));
+}
 
 vec3 applyDistanceFog(vec3 radiance, float distanceToEye, float worldHeight, float additive)
 {

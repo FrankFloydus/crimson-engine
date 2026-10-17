@@ -23,7 +23,8 @@ bool same(const EditorPreferenceValues& a,const EditorPreferenceValues& b) {
         a.appearance.gridMinorSrgb==b.appearance.gridMinorSrgb && a.appearance.gridMajorSrgb==b.appearance.gridMajorSrgb &&
         a.appearance.gridMinorWidth==b.appearance.gridMinorWidth && a.appearance.gridMajorWidth==b.appearance.gridMajorWidth &&
         a.browserPreviewSize==b.browserPreviewSize && a.pointShadowResolution==b.pointShadowResolution &&
-        a.playerOcclusionFade==b.playerOcclusionFade && a.playerOcclusionSettings==b.playerOcclusionSettings;
+        a.playerOcclusionFade==b.playerOcclusionFade && a.playerOcclusionSettings==b.playerOcclusionSettings &&
+        a.graphicsBackend==b.graphicsBackend;
 }
 bool valid(const EditorPreferenceValues& value) {
     const auto color=[](const auto& channels) {
@@ -34,7 +35,7 @@ bool valid(const EditorPreferenceValues& value) {
         std::isfinite(value.appearance.gridMajorWidth) && value.appearance.gridMajorWidth>=.25f && value.appearance.gridMajorWidth<=8 &&
         std::find(BrowserPreviewSizes.begin(),BrowserPreviewSizes.end(),value.browserPreviewSize)!=BrowserPreviewSizes.end() &&
         std::find(PointShadowResolutions.begin(),PointShadowResolutions.end(),value.pointShadowResolution)!=PointShadowResolutions.end() &&
-        validPlayerOcclusionSettings(value.playerOcclusionSettings);
+        validPlayerOcclusionSettings(value.playerOcclusionSettings) && validGraphicsBackend(value.graphicsBackend);
 }
 }
 EditorPreferences::EditorPreferences(std::filesystem::path file) {
@@ -53,6 +54,11 @@ EditorPreferences::EditorPreferences(std::filesystem::path file) {
         candidate.browserPreviewSize=json.value("browserPreviewSize",128);
         candidate.pointShadowResolution=json.value("pointShadowResolution",1024);
         candidate.playerOcclusionFade=json.value("playerOcclusionFade",false);
+        if(const auto found=json.find("graphicsBackend");found!=json.end()) {
+            const auto parsed=parseGraphicsBackend(found->get<std::string>());
+            if(!parsed)throw std::runtime_error("Preferences contain an unsupported graphics backend.");
+            candidate.graphicsBackend=*parsed;
+        }
         if(const auto found=json.find("playerOcclusionSettings");found!=json.end()) {
             auto& fade=candidate.playerOcclusionSettings;
             fade.minimumOpacity=found->value("minimumOpacity",fade.minimumOpacity);
@@ -84,6 +90,7 @@ bool EditorPreferences::save() {
         const auto& appearance=values_.appearance;
         const auto& fade=values_.playerOcclusionSettings;
         const nlohmann::json json{{"version",1},{"browserPreviewSize",values_.browserPreviewSize},{"pointShadowResolution",values_.pointShadowResolution},
+            {"graphicsBackend",graphicsBackendKey(values_.graphicsBackend)},
             {"playerOcclusionFade",values_.playerOcclusionFade},
             {"playerOcclusionSettings",{{"minimumOpacity",fade.minimumOpacity},{"fadeStartDistance",fade.fadeStartDistance},
                 {"fullFadeDistance",fade.fullFadeDistance},{"fadeOutSeconds",fade.fadeOutSeconds},
@@ -93,7 +100,7 @@ bool EditorPreferences::save() {
         writeFileAtomically(file_,json.dump(2)+"\n"); status_.clear(); return true;
     } catch (const std::exception& error) { status_=error.what(); return false; }
 }
-void EditorPreferences::draw() {
+void EditorPreferences::draw(std::optional<GraphicsBackend> activeBackend) {
     if (!open_) return;
     ImGui::SetNextWindowSize(ImVec2(480,480),ImGuiCond_FirstUseEver);
     if (focusRequested_) { ImGui::SetNextWindowFocus(); focusRequested_=false; }
@@ -107,6 +114,18 @@ void EditorPreferences::draw() {
         changed|=ImGui::ColorEdit4("Minor line color",appearance.gridMinorSrgb.data());
         changed|=ImGui::DragFloat("Minor line width",&appearance.gridMinorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
         ImGui::SeparatorText("Rendering");
+        if(ImGui::BeginCombo("Renderer (restart required)",graphicsBackendName(candidate.graphicsBackend))) {
+            for(const auto backend:{GraphicsBackend::Direct3D12,GraphicsBackend::Direct3D11}) {
+                const bool selected=backend==candidate.graphicsBackend;
+                if(ImGui::Selectable(graphicsBackendName(backend),selected)) {candidate.graphicsBackend=backend;changed=true;}
+                if(selected)ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+            if(activeBackend)ImGui::SetTooltip("Active: %s. The selected renderer applies on the next launch.",graphicsBackendName(*activeBackend));
+            else ImGui::SetTooltip("The selected renderer applies on the next launch.");
+        }
         changed|=ImGui::Checkbox("Fade player occluders",&candidate.playerOcclusionFade);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
             ImGui::SetTooltip("In Game, participating models fade as the player approaches a blocking surface.");

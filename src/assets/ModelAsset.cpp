@@ -2,6 +2,7 @@
 #include "ModelAnimation.h"
 #include "MaterialAsset.h"
 #include "ContentStorage.h"
+#include "QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "resources/StreamingModel.h"
 
@@ -347,7 +348,11 @@ ModelTexture texture(const cgltf_texture_view& view,const cgltf_data& data,const
     return result;
 }
 void materials(const cgltf_data& data,const std::vector<std::string>& images,ModelAsset& asset) {
-    asset.materials.reserve(data.materials_count+1);
+    bool needsFallback=false;
+    for(size_t mesh=0;mesh<data.meshes_count;++mesh)
+        for(size_t primitive=0;primitive<data.meshes[mesh].primitives_count;++primitive)
+            needsFallback|=data.meshes[mesh].primitives[primitive].material==nullptr;
+    asset.materials.reserve(data.materials_count+(needsFallback?1:0));
     for (size_t i=0;i<data.materials_count;++i) {
         const auto& source=data.materials[i]; ModelMaterial m; m.name=source.name&&source.name[0]?source.name:"Material "+std::to_string(i+1);
         if (source.has_pbr_metallic_roughness) {
@@ -367,7 +372,9 @@ void materials(const cgltf_data& data,const std::vector<std::string>& images,Mod
               std::all_of(m.emissive.begin(),m.emissive.end(),unit),"invalid normal, alpha, or emissive factor: "+m.name);
         asset.materials.push_back(std::move(m));
     }
-    ModelMaterial fallback; fallback.name="Default material"; asset.materials.push_back(std::move(fallback));
+    if(needsFallback) {
+        ModelMaterial fallback; fallback.name="Default material"; asset.materials.push_back(std::move(fallback));
+    }
 }
 
 struct TangentContext { std::vector<ModelVertex>* corners; uint32_t uv; };
@@ -745,6 +752,15 @@ bool modelIdentityAvailable(const fs::path& root,const fs::path& directory) {
 bool modelManifestLocation(const fs::path& root,const fs::path& file) {
     if(file.filename()!="manifest.json")return false;
     if(inside(file,fs::weakly_canonical(contentStorageReady(root)?root/"Content":root/"assets/models")))return true;
+    if(contentStorageReady(root)&&inside(file,fs::weakly_canonical(root/".crimson/cache/quader-imports"))) {
+        // Generated packages are addressable only through a registered member
+        // of a tracked bundle. An arbitrary cache manifest is not an asset.
+        const auto id=assetIdAtPath(root,file);const auto source=quaderBundleSource(root,id);
+        if(!isAssetUuid(id)||!source||!fs::is_regular_file(*source)||source->extension()!=".crimson-quader")return false;
+        const auto owner=assetIdAtPath(root,*source);
+        return isAssetUuid(owner)&&file==fs::weakly_canonical(quaderBundleCacheDirectory(root,owner,id)/"manifest.json")&&
+            inside(fs::weakly_canonical(*source),fs::weakly_canonical(root/"Content"));
+    }
     const auto privateRoot=fs::weakly_canonical(contentStorageReady(root)?root/".crimson":root/"assets");
     const auto relative=file.lexically_relative(privateRoot);
     if(relative.empty()||relative.is_absolute()||*relative.begin()=="..")return false;
@@ -800,7 +816,23 @@ std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& ro
     }
     materials(*data,images,*asset);
     const auto explicitMaterials=manifest.find("materialAssets");
-    if(explicitMaterials!=manifest.end())check(explicitMaterials->is_array() && explicitMaterials->size()==asset->materials.size(),"materialAssets must match the material slots");
+    const bool needsFallback=asset->materials.size()>data->materials_count;
+    if(explicitMaterials!=manifest.end()) {
+        check(explicitMaterials->is_array() && std::all_of(explicitMaterials->begin(),explicitMaterials->end(),[](const Json& value){return value.is_string();}),
+            "materialAssets must be an array of material identities");
+        if(!needsFallback && explicitMaterials->size()==asset->materials.size()+1) {
+            // Old immutable packages included the loader's unconditional fallback.
+            // Discard only that known unused entry, preserving all authored indices.
+            const auto trailing=canonicalAssetId(explicitMaterials->back().get<std::string>());
+            check(trailing==DefaultMaterialId || trailing==importedMaterialId(asset->id,asset->materials.size()),
+                "materialAssets has an unexpected extra material slot");
+            asset->legacyUnusedMaterialSlot=asset->materials.size();
+        } else check(explicitMaterials->size()==asset->materials.size(),"materialAssets must match the material slots");
+    } else if(!needsFallback) {
+        // Generic glTF packages have implicit imported material identities. Their
+        // old unused fallback can still occur in saved scene override vectors.
+        asset->legacyUnusedMaterialSlot=asset->materials.size();
+    }
     for(size_t i=0;i<asset->materials.size();++i) {
         const auto id=explicitMaterials!=manifest.end()?canonicalAssetId(explicitMaterials->at(i).get<std::string>()):importedMaterialId(asset->id,i);
         if(explicitMaterials!=manifest.end() && id!=DefaultMaterialId)(void)materialAssetPath(root,id);

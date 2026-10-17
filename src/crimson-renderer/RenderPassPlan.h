@@ -33,6 +33,8 @@ RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept;
 enum class RenderPassKind : std::uint8_t {
     EnvironmentPreparation, ModelDeformation, LightAssignment, PointShadowUpdates, DirectionalShadowUpdates, CharacterShadowUpdates,
     DepthPrepass, AmbientVisibility, AmbientPublish,
+    SsgiTrace, SsgiTemporal, SsgiFilterHorizontal, SsgiFilterVertical, SsgiPublish,
+    SsaoEvaluate, SsaoPublish,
     OccluderLayer, OccluderDepthPublish, SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
     Picking, PickReadback, ThumbnailReadback, Count
 };
@@ -40,7 +42,9 @@ enum class RenderResource : std::uint8_t {
     PreparedScene, EnvironmentLighting, ShadowAtlas, ClusteredLighting, SceneHdr,
     SceneDepth, GlowA, GlowB, Composite, Display, PickColor, PickDepth,
     PickReadback, ThumbnailReadback, ReadableSceneDepth, ReceiverScopes,
-    AmbientScratch, AmbientVisibility, DeformedGeometry, OccluderHdr, OccluderDepth, OccluderDepthAtlas, Count
+    AmbientScratch, AmbientVisibility, DeformedGeometry, OccluderHdr, OccluderDepth, OccluderDepthAtlas,
+    SsgiSources, SsgiHistory, SsgiTraceScratch, SsgiTemporalScratch, SsgiFilterA, SsgiFilterB, SsgiIrradiance,
+    SsaoScratch, SsaoVisibility, Count
 };
 enum class RenderResourceOwner : std::uint8_t {
     PreparedFrame, Environment, ModelGeometry, ActiveWorldShadows, ThumbnailWorldShadows, ViewTargets, Readback
@@ -68,9 +72,11 @@ struct RenderPassPlanConfig {
     bool ambientVisibility{};
     bool collisionOverlays{};
     bool occluderLayer{};
+    bool ssgi{};
+    bool ssao{};
 };
 struct RenderPass {
-    static constexpr std::size_t MaximumResourceUses = 11;
+    static constexpr std::size_t MaximumResourceUses = 14;
     RenderPassKind kind{};
     std::uint16_t physicalView{};
     std::uint16_t viewCount{1}; // Shadow updates reserve their existing face/cascade range.
@@ -80,7 +86,7 @@ struct RenderPass {
     std::uint16_t lastPhysicalView() const noexcept { return static_cast<std::uint16_t>(physicalView+viewCount-1); }
 };
 struct RenderPassPlan {
-    static constexpr std::size_t MaximumPasses = 21;
+    static constexpr std::size_t MaximumPasses = 28;
     static constexpr std::size_t ResourceCount = static_cast<std::size_t>(RenderResource::Count);
     RenderPassPlanConfig config{};
     std::array<RenderResourceBinding,ResourceCount> bindings{};

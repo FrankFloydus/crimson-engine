@@ -38,7 +38,37 @@ bool sameSettings(const PlayerOcclusionSettings& a,const PlayerOcclusionSettings
 }
 bool samePreferences(const EditorPreferenceValues& a,const EditorPreferenceValues& b) {
     return a.appearance==b.appearance&&a.browserPreviewSize==b.browserPreviewSize&&a.pointShadowResolution==b.pointShadowResolution&&
-        a.playerOcclusionFade==b.playerOcclusionFade&&sameSettings(a.playerOcclusionSettings,b.playerOcclusionSettings);
+        a.playerOcclusionFade==b.playerOcclusionFade&&sameSettings(a.playerOcclusionSettings,b.playerOcclusionSettings)&&
+        a.graphicsBackend==b.graphicsBackend;
+}
+void graphicsBackendPreferences() {
+    Temp temp;const auto file=temp.root/"graphics-preferences.json";EditorPreferences preferences(file);
+    require(preferences.values().graphicsBackend==GraphicsBackend::Direct3D12,"New preferences must select Direct3D 12.");
+    require(!std::filesystem::exists(file),"Reading default graphics preferences wrote a preference file.");
+    auto values=preferences.values();values.graphicsBackend=GraphicsBackend::Direct3D11;
+    values.appearance.backgroundSrgb={.11f,.22f,.33f};values.browserPreviewSize=256;values.pointShadowResolution=512;
+    values.playerOcclusionFade=true;values.playerOcclusionSettings.minimumOpacity=.37f;
+    require(preferences.setValues(values),"Cannot persist Direct3D 11 preference.");
+    require(samePreferences(EditorPreferences(file).values(),values),"Graphics preference lost existing preference data on reopen.");
+    const auto dx11Text=readText(file);const auto json=nlohmann::json::parse(dx11Text);
+    require(json.at("version")==1&&json.at("graphicsBackend")=="dx11","Graphics backend persistence used the wrong representation.");
+    require(!preferences.setValues(values)&&readText(file)==dx11Text,"Unchanged graphics preferences wrote a new preference value.");
+    auto invalid=values;invalid.graphicsBackend=static_cast<GraphicsBackend>(99);
+    require(!preferences.setValues(invalid)&&samePreferences(preferences.values(),values)&&readText(file)==dx11Text,
+        "Invalid live graphics backend changed live or saved preferences.");
+    values.graphicsBackend=GraphicsBackend::Direct3D12;
+    require(preferences.setValues(values)&&samePreferences(EditorPreferences(file).values(),values),"Direct3D 12 preference did not round-trip.");
+    auto legacy=json;legacy.erase("graphicsBackend");const auto old=temp.root/"legacy-graphics.json";writeJson(old,legacy);
+    const auto oldText=readText(old);const EditorPreferences reopenedOld(old);
+    require(reopenedOld.status().empty()&&samePreferences(reopenedOld.values(),values)&&readText(old)==oldText,
+        "Older preferences did not retain existing fields and default to Direct3D 12 without rewriting.");
+    const auto bad=temp.root/"invalid-graphics.json";
+    for(const auto& backend:std::array<nlohmann::json,5>{"vulkan",17,nullptr,true,nlohmann::json::object()}) {
+        auto malformed=json;malformed["graphicsBackend"]=backend;writeJson(bad,malformed);const auto original=readText(bad);
+        const EditorPreferences rejected(bad);
+        require(!rejected.status().empty()&&samePreferences(rejected.values(),EditorPreferenceValues{})&&readText(bad)==original,
+            "Invalid saved graphics backend partially loaded or rewrote preferences.");
+    }
 }
 void playerOcclusionSettings() {
     Temp temp;const auto file=temp.root/"fade-preferences.json";EditorPreferences preferences(file);
@@ -176,6 +206,6 @@ void run() {
 }
 }
 int main() {
-    try { run();playerOcclusionSettings(); std::cout<<"Editor preferences checks passed.\n"; return 0; }
+    try { run();playerOcclusionSettings();graphicsBackendPreferences(); std::cout<<"Editor preferences checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

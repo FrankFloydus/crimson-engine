@@ -8,6 +8,7 @@
 #include "platform/WindowPlacement.h"
 #include "tools/Tools.h"
 #include "editor/EditorSession.h"
+#include "editor/EditorPreferences.h"
 #include "editor/ResourceRuntime.h"
 #include "resources/ResourceManager.h"
 #include "app/DiagnosticSession.h"
@@ -94,8 +95,11 @@ int run(const AppOptions& options) {
         std::filesystem::equivalent(root, std::filesystem::path(CC_PROJECT_ROOT)))
         throw std::runtime_error("Asset smoke checks cannot use the authored project root. Choose a disposable directory.");
     Diagnostics diagnostics;
-    diagnostics.log("crimson-renderer starting (Crimson Engine, Direct3D 11).");
     SdlLifetime sdl;
+    const EditorPreferences startupPreferences;
+    const auto graphicsBackend=options.rendererBackend.value_or(startupPreferences.values().graphicsBackend);
+    diagnostics.log(std::string("crimson-renderer starting (Crimson Engine, ")+graphicsBackendName(graphicsBackend)+").");
+    if(!startupPreferences.status().empty())diagnostics.log(startupPreferences.status());
     const bool diagnosticMode = options.scenario != "default" || options.editorSmoke || options.iblSmoke || options.modelSmoke;
     const bool persistWindow=!diagnosticMode && !options.hidden && !options.frameLimit && !options.windowCycle && !options.resizeWidth;
     const auto windowPlacement=root/"crimson_window.json";
@@ -116,7 +120,7 @@ int run(const AppOptions& options) {
 
     {
         ResourceManager resources;
-        Renderer renderer(window.get(), &diagnostics);
+        Renderer renderer(window.get(), &diagnostics, graphicsBackend);
         ImGuiLifetime imgui(window.get(), root);
         ImGuiBgfx toolsRenderer([&diagnostics](const std::string& message){diagnostics.log(message);});
         AssetLibrary assets(root,diagnosticMode?nullptr:&resources);

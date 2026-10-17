@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "crimson-renderer/GraphicsBackend.h"
 #include <string>
 
 namespace crimson {
@@ -21,6 +22,7 @@ struct AppOptions {
     std::string scenario{"default"};
     std::string projectRoot; // Optional isolated project for focused verification.
     std::string frameProfile; // Optional user-driven frame report; no automatic input.
+    std::optional<GraphicsBackend> rendererBackend; // Launch override; never persists to editor preferences.
 };
 
 AppOptions parseOptions(int argc, char** argv);

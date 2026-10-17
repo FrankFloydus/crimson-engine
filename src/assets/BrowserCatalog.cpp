@@ -1,5 +1,6 @@
 #include "BrowserCatalog.h"
 #include "AtomicFile.h"
+#include "QuaderSceneBundle.h"
 #include "resources/AssetId.h"
 #include "resources/Paths.h"
 
@@ -126,7 +127,11 @@ void BrowserCatalog::synchronize(std::span<const AssetEntry> assets) {
         auto& metadata=metadata_[id];metadata.filename=folded(utf8(physical.filename()));
         metadata.writable=!isEngineAssetId(id)&&!physical.empty()&&below(physical,root_/"Content");
         auto directory=physical.parent_path();
-        if(asset.kind==AssetKind::Model&&physical.filename()=="manifest.json")directory=directory.parent_path();
+        if(asset.kind==AssetKind::Model&&physical.filename()=="manifest.json") {
+            if(const auto bundle=quaderBundleSource(root_,id)) {
+                directory=bundle->parent_path();metadata.filename=folded(utf8(bundle->filename()));metadata.writable=false;
+            }else directory=directory.parent_path();
+        }
         else if(packageImage(physical)) {
             for(auto parent=directory;below(parent,root_/"Content")||below(parent,root_/"Engine");parent=parent.parent_path())
                 if(fs::is_regular_file(parent/"manifest.json")){directory=parent.parent_path();break;}

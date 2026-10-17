@@ -11,6 +11,8 @@
 #include "particles/ParticleAppearance.h"
 #include "math/Json.h"
 #include "model_fixtures.h"
+#include "quader_bundle_fixture.h"
+#include "resources/StreamingModel.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -425,6 +427,32 @@ void deletionValidationRetainsIncompatibleUsage() {
         "Deletion validation rewrote shared assignments or material files.");
     require(deletionValidationCurrent(*prepared),"Stable shared-material dependencies immediately invalidated preparation.");
 }
+void bundleModelResources() {
+    Project project;const auto fixture=bundle_test::writeFixture(project.root);
+    const auto manifest=resolveAssetPath(project.root,fixture.modelId);
+    auto model=loadModelPackage(manifest,project.root);
+    require(model->id==fixture.modelId&&model->primitives.size()==1&&model->materials.size()==1&&model->materialIds==std::vector<std::string>{DefaultMaterialId},
+        "A cached Quader bundle member changed identity, material slots or geometry.");
+    model->stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*model,project.root));
+    const auto warm=streaming::loadModelMetadataCache(manifest,project.root);
+    require(warm&&warm->materialIds==model->materialIds&&warm->id==model->id&&warm->primitives.front().vertices.empty(),
+        "A bundled model failed to reopen from normalized streamed metadata.");
+    AssetReferenceManager policy(project.root);const std::array models{AssetEntry{model->id,model->name,AssetKind::Model}};
+    const auto validation=validateAssetDeletion(project.root,models,policy);
+    require(std::find(validation->dependencies.begin(),validation->dependencies.end(),fixture.file)!=validation->dependencies.end(),
+        "Deletion validation did not track the authoritative Quader bundle.");
+    const auto source=read(fixture.file);writeFileAtomically(fixture.file,source+'\n');
+    require(!streaming::loadModelMetadataCache(manifest,project.root)&&!deletionValidationCurrent(*validation),
+        "Changing a tracked bundle left stale model metadata or deletion validation current.");
+    writeFileAtomically(fixture.file,source);
+    const auto cache=project.root/".crimson/cache/quader-imports";
+    fs::remove_all(cache);initializeQuaderSceneBundles(project.root);
+    const auto rebuilt=loadModelPackage(resolveAssetPath(project.root,fixture.modelId),project.root);
+    require(rebuilt->id==model->id&&rebuilt->materialIds==model->materialIds&&rebuilt->primitives.front().indices==model->primitives.front().indices,
+        "Deleting generated Quader data lost persistent model identity, material references or triangle coverage.");
+    const auto rogue=cache/"unregistered/manifest.json";writeFileAtomically(rogue,fixture.bundle.models.front().manifest);
+    rejects([&]{(void)loadModelPackage(rogue,project.root);},"An unregistered arbitrary cache manifest was accepted as a managed model.");
 }
-int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();triplanarWithoutMeshUvs();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();spriteMaterialStorageAndMigration();particleMaterialStorageAndDependencies();materialMappingAndSharedSamplerStorage();deletionValidationRetainsIncompatibleUsage();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
+}
+int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();triplanarWithoutMeshUvs();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();spriteMaterialStorageAndMigration();particleMaterialStorageAndDependencies();materialMappingAndSharedSamplerStorage();deletionValidationRetainsIncompatibleUsage();bundleModelResources();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
     catch(const std::exception& e){std::cerr<<"Asset resource test failed: "<<e.what()<<'\n';return 1;}}

@@ -1,0 +1,256 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 1,
+        "id": 2,
+        "toNode": 5,
+        "toPin": 8
+      },
+      {
+        "fromNode": 4,
+        "fromPin": 1,
+        "id": 3,
+        "toNode": 5,
+        "toPin": 9
+      },
+      {
+        "fromNode": 5,
+        "fromPin": 0,
+        "id": 4,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 5,
+        "toNode": 6,
+        "toPin": 7
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 2,
+        "id": 6,
+        "toNode": 8,
+        "toPin": 8
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 0,
+        "id": 7,
+        "toNode": 8,
+        "toPin": 9
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 0,
+        "id": 8,
+        "toNode": 1,
+        "toPin": 11
+      }
+    ],
+    "nextLinkId": 9,
+    "nextNodeId": 9,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "roughness": 0.6600000262260437,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          259.0,
+          -120.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -1179.0,
+          58.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -733.0,
+          -442.0
+        ],
+        "texture": {
+          "image": "d074c9a6-1cea-5164-8731-08322a5a719e",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "id": 4,
+        "kind": 4,
+        "name": "Base Color factor",
+        "position": [
+          -495.0,
+          -118.0
+        ]
+      },
+      {
+        "id": 5,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          -125.0,
+          -200.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "id": 6,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -525.0,
+          134.0
+        ],
+        "texture": {
+          "image": "8c6bdc9b-43cc-5eea-ba74-da594df8be0e",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 7,
+        "kind": 3,
+        "name": "Roughness factor",
+        "position": [
+          -479.0,
+          497.0
+        ],
+        "range": [
+          0.0,
+          1.0
+        ],
+        "scalar": 0.6600000262260437
+      },
+      {
+        "id": 8,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          -93.0,
+          241.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 7
+  },
+  "id": "fedf63b9-ae0b-52e9-ac03-abd5e9c9c38d",
+  "name": "Default Material",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

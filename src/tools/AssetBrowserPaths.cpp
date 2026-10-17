@@ -1,5 +1,6 @@
 #include "AssetBrowserPaths.h"
 #include "assets/ContentStorage.h"
+#include "assets/QuaderSceneBundle.h"
 #include "resources/Paths.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -37,7 +38,8 @@ BrowserAssetLocation resolveBrowserAssetLocation(const std::filesystem::path& pr
         if(asset.id.empty()||asset.id.starts_with("folder:"))return result;
         std::error_code error;const auto root=std::filesystem::weakly_canonical(projectRoot,error);
         if(error)return result;
-        auto file=checkedFile(root,resolveAssetPath(root,asset.id));
+        const auto bundle=asset.kind==AssetKind::Model?quaderBundleSource(root,asset.id):std::nullopt;
+        auto file=checkedFile(root,bundle?*bundle:resolveAssetPath(root,asset.id));
         if(file.empty())return result;
         if(asset.kind==AssetKind::Model&&file.filename()=="manifest.json") {
             // The installed managed format retains source.glb/source.gltf and

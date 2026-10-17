@@ -1,6 +1,7 @@
 /build/
 /captures/
 /assets/cache/
+# Regenerated import expansions, LODs, texture mips and shader binaries.
 /.crimson/cache/
 /.crimson/.staging-*/
 /.crimson/.resource-transactions/

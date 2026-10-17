@@ -29,6 +29,6 @@ void main()
     gl_FragColor = u_pickId;
 #else
     gl_FragColor = u_surfaceLighting.z > 0.5 ?
-        vec4(u_surfaceLighting.y / 255.0, prepassReceiverNormal(v_worldPosition, receiverPlane)) : vec4_splat(0.0);
+        vec4(prepassReceiverFlags(u_surfaceLighting.y, u_surfaceLighting.x), prepassReceiverNormal(v_worldPosition, receiverPlane)) : vec4_splat(0.0);
 #endif
 }

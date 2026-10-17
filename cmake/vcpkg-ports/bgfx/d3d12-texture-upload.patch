@@ -1,0 +1,22 @@
+diff --git a/bgfx/src/renderer_d3d12.cpp b/bgfx/src/renderer_d3d12.cpp
+--- a/bgfx/src/renderer_d3d12.cpp
++++ b/bgfx/src/renderer_d3d12.cpp
+@@ -5522,6 +5522,8 @@
+ 
+ 		desc.Width  = _rect.m_width;
+ 		desc.Height = _rect.m_height;
++		// This footprint describes one upload region, not the destination mip chain.
++		desc.MipLevels = 1;
+ 
+ 		uint32_t numRows;
+ 		uint64_t totalBytes;
+@@ -5554,7 +5556,8 @@
+ 			bx::free(g_allocator, temp);
+ 		}
+ 
+-		D3D12_RANGE writeRange = { 0, numRows*rowPitch };
++		// The final row has no trailing pitch padding in the staging allocation.
++		D3D12_RANGE writeRange = { 0, SIZE_T(totalBytes) };
+ 		staging->Unmap(0, &writeRange);
+ 
+ 		D3D12_TEXTURE_COPY_LOCATION dst = { m_ptr,   D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, {        } };

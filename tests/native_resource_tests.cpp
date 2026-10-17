@@ -10,6 +10,9 @@
 #include "assets/MaterialAsset.h"
 #include "assets/MaterialPreviewGeometry.h"
 #include <Windows.h>
+#include <d3d12.h>
+#include <d3d12sdklayers.h>
+#include <wrl/client.h>
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
 #include <imgui_impl_sdl3.h>
@@ -38,6 +41,61 @@ void cleanup(const std::filesystem::path& root) {
     if(resolved.parent_path()!=temporary || !resolved.filename().string().starts_with("crimson-native-resources-"))throw std::runtime_error("Native test cleanup target escaped its disposable directory.");
     std::filesystem::remove_all(resolved);
 }
+bool enableD3D12Validation(GraphicsBackend backend,bool requested) {
+    if(!requested)return false;
+    if(backend!=GraphicsBackend::Direct3D12) {std::cerr<<"D3D12 validation skipped: selected backend is DX11.\n";return false;}
+    Microsoft::WRL::ComPtr<ID3D12Debug> debug;
+    const auto result=D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
+    if(FAILED(result)) {std::cerr<<"D3D12 validation skipped: Windows Graphics Tools debug layer is unavailable (HRESULT 0x"<<std::hex<<static_cast<unsigned long>(result)<<std::dec<<").\n";return false;}
+    debug->EnableDebugLayer();
+    Microsoft::WRL::ComPtr<ID3D12Debug1> extended;
+    if(SUCCEEDED(debug.As(&extended)))extended->SetEnableGPUBasedValidation(TRUE);
+    std::cerr<<"D3D12 debug layer enabled"<<(extended?" with GPU-based validation":"")<<".\n";return true;
+}
+struct D3D12Validation {
+    Microsoft::WRL::ComPtr<ID3D12InfoQueue> messages;
+    Microsoft::WRL::ComPtr<ID3D12InfoQueue1> callbacks;
+    DWORD callbackCookie{};
+    bool registered{};
+    static void CALLBACK report(D3D12_MESSAGE_CATEGORY,D3D12_MESSAGE_SEVERITY severity,D3D12_MESSAGE_ID id,LPCSTR text,void*) {
+        if(severity>D3D12_MESSAGE_SEVERITY_WARNING)return;
+        std::fprintf(stderr,"D3D12 live validation severity=%u id=%u: %s\n",static_cast<unsigned>(severity),static_cast<unsigned>(id),text?text:"<no description>");
+        std::fflush(stderr);
+    }
+    ~D3D12Validation(){if(registered)callbacks->UnregisterMessageCallback(callbackCookie);}
+    explicit D3D12Validation(bool enabled) {
+        if(!enabled)return;
+        const auto* internal=bgfx::getInternalData();
+        check(internal && internal->context,"D3D12 validation has no native device.");
+        check(SUCCEEDED(static_cast<ID3D12Device*>(internal->context)->QueryInterface(IID_PPV_ARGS(&messages))),"Enabled D3D12 debug layer did not expose its message queue.");
+        // bgfx enables debugger breaks on these severities. This unattended
+        // regression gathers the messages and fails with readable diagnostics.
+        messages->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR,FALSE);
+        messages->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION,FALSE);
+        messages->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING,FALSE);
+        if(SUCCEEDED(messages.As(&callbacks))) {
+            registered=SUCCEEDED(callbacks->RegisterMessageCallback(report,D3D12_MESSAGE_CALLBACK_FLAG_NONE,nullptr,&callbackCookie));
+            check(registered,"D3D12 live validation callback registration failed.");
+            std::cerr<<"D3D12 live validation callback registered.\n";
+        } else std::cerr<<"D3D12 live message callbacks unavailable; final info queue inspection remains active.\n";
+    }
+    void checkMessages() const {
+        if(!messages)return;
+        std::string failures;
+        const auto count=messages->GetNumStoredMessagesAllowedByRetrievalFilter();
+        for(UINT64 index=0;index<count;++index) {
+            SIZE_T bytes{};messages->GetMessage(index,nullptr,&bytes);
+            std::vector<std::uint8_t> storage(bytes);auto* message=reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            if(SUCCEEDED(messages->GetMessage(index,message,&bytes)) &&
+                (message->Severity==D3D12_MESSAGE_SEVERITY_ERROR || message->Severity==D3D12_MESSAGE_SEVERITY_CORRUPTION)) {
+                if(!failures.empty())failures+='\n';
+                failures+=message->pDescription;
+            }
+        }
+        check(failures.empty(),"D3D12 API validation errors:\n"+failures);
+        std::cerr<<"D3D12 API validation: no error or corruption messages across "<<count<<" stored diagnostics.\n";
+    }
+};
 struct SdlOwner {SdlOwner(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~SdlOwner(){SDL_Quit();}};
 struct ImGuiOwner {
     explicit ImGuiOwner(SDL_Window* window) {
@@ -840,6 +898,7 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
     collapseDraw(128,false);collapseDraw(128,false);
     check(bgfx::isValid(tools.platformViewportFramebuffer(collapseViewportId)),"Expanded native window did not regain its framebuffer.");
     check(collapseChainIdentity!=0,"Collapse/expand regression never created its persistent DXGI swap chain.");
+    check(tools.platformResidentBytes()>=std::uint64_t(192)*128*4*3,"Native surface accounting omitted offscreen or swap-chain allocations.");
     // Exercise close/reopen in one owner frame. The renderer's retirement
     // fence must outlive its deleted viewport resource even if Windows reuses
     // the native handle. No readback or screenshot separates these callbacks.
@@ -919,13 +978,14 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
     renderer.releaseParticlePreview();
     for(unsigned i=0;i<8 && tools.hasPendingRetirements();++i)tick();
     check(!tools.hasPendingRetirements(),"Native imported textures survived the bounded shutdown drain.");
+    check(tools.platformResidentBytes()==0,"Native surface accounting retained closed targets after the shutdown drain.");
     check(callback.error.empty(),callback.error);
 }
 
-void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shaderConfig,SDL_Window* window,bool shaderReloadOnly) {
+void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shaderConfig,SDL_Window* window,bool shaderReloadOnly,bool platformOnly,GraphicsBackend backend,bool gpuValidation) {
     std::vector<std::shared_ptr<DecodedImage>> readbackDestinations;
     ScreenshotCallback screenshots;
-    ResourceManager resources;Renderer renderer(window,&screenshots);ImGuiOwner context(window);
+    ResourceManager resources;Renderer renderer(window,&screenshots,backend);D3D12Validation validation(gpuValidation);ImGuiOwner context(window);
     ImGuiBgfx tools([&screenshots](const std::string& message){screenshots.error=message;});
     phase("resources initialized");
     renderer.resize(320,240);renderer.resizeViewport(128,128);
@@ -936,6 +996,10 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     const auto copy=[&](bgfx::TextureHandle texture,std::uint16_t width,std::uint16_t height,bgfx::ViewId view) {
         return readTarget(texture,width,height,view,frame,tick,readbackDestinations);
     };
+    if(platformOnly) {
+        exercisePlatformWindows(renderer,tools,screenshots,frame,tick,window);
+        resources.stop();frame=renderer.drainPending(frame);validation.checkMessages();return;
+    }
     PreparedTexture color,normal;const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{20};
     do {
         textures.beginFrame();color=textures.request("native-image",source,streaming::TextureRole::Color,false,256,ResourcePriority::Selected);
@@ -953,10 +1017,10 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
         const auto composite=shaderConfig.sourceDirectory/"fs_occluder_composite.sc";
         std::ifstream input(composite);check(bool(input),"Focused shader reload could not read its composite source.");
         const std::string original(std::istreambuf_iterator<char>{input},{});input.close();
-        auto candidate=original;const std::string assignment="gl_FragColor = color;";
+        auto candidate=original;const std::string assignment="gl_FragData[0] = color;";
         const auto position=candidate.find(assignment);
         check(position!=std::string::npos,"Focused shader reload could not locate the composite output.");
-        candidate.replace(position,assignment.size(),"gl_FragColor = vec4(color.rgb * 0.75, color.a);");
+        candidate.replace(position,assignment.size(),"gl_FragData[0] = vec4(color.rgb * 0.75, color.a);");
         const auto embedded=renderer.shaderSignature();
         try {
             writeFileAtomically(composite,candidate);
@@ -990,7 +1054,7 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
             throw;
         }
         phase("focused shader reload retained last-good programs");
-        return;
+        validation.checkMessages();return;
     }
     ParticleGraphFixtures particleGraphs(resources,shaderConfig,tick);
     auto asset=quad();auto descriptor=streaming::buildModelCache(*asset,root);renderer.configureModelStream(asset->id,1,descriptor);
@@ -1075,7 +1139,10 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     };
     const auto beforeReloadParticles=particleCapture();
     phase("shader reload");ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);
-    const auto shaderDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{30};
+    // This path compiles a complete cold engine group on two workers, just as
+    // the focused reload fixture does. Backend validation should not fail when
+    // valid compilation takes slightly longer than thirty seconds.
+    const auto shaderDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{90};
     do {tick();shaders.pump();}while(shaders.pending() && std::chrono::steady_clock::now()<shaderDeadline);
     check(shaders.revision()==1,"Valid native shader candidates did not publish: "+shaders.status());
     const auto healthy=renderer.shaderSignature();const auto healthyPixels=capture("valid-reload");
@@ -1091,6 +1158,7 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     check(renderer.setThumbnail("cached",1,retained) && bgfx::isValid(renderer.thumbnailTexture("cached",1)),"Native thumbnail GPU cache publication failed.");
     renderer.evictThumbnail("cached");renderer.evictModel(asset->id);renderer.evictModel(sphere->id);resources.stop();frame=renderer.drainPending(frame);
     phase("persistent native surfaces");exercisePlatformWindows(renderer,tools,screenshots,frame,tick,window);
+    validation.checkMessages();
 }
 void exerciseShutdown() {
     SdlOwner sdl;
@@ -1108,7 +1176,7 @@ void exerciseShutdown() {
     for(unsigned iteration=0;iteration<2;++iteration) {
         phase(iteration?"repeat D3D11 initialization/shutdown":"D3D11 initialization/shutdown");
         {
-            Renderer renderer(window.get(),&callback);
+            Renderer renderer(window.get(),&callback,GraphicsBackend::Direct3D11);
             const auto current=loadedRuntime();
             if(runtime)check(current==runtime,"Repeated renderer initialization changed the pinned D3D11 mapping.");
             runtime=current;
@@ -1144,17 +1212,30 @@ int main(int argc,char** argv) {
         try {exerciseShutdown();std::cout<<"Hidden D3D11 shutdown, resource release and process-lifetime runtime mapping checks passed.\n";return 0;}
         catch(const std::exception& exception){std::cerr<<exception.what()<<'\n';return 1;}
     }
-    const bool shaderReloadOnly=argc==5&&std::strcmp(argv[4],"--shader-reload-only")==0;
-    if(argc!=4&&!shaderReloadOnly){std::cerr<<"Pass --shutdown-only, or shaderc, source and include directories, optionally followed by --shader-reload-only.\n";return 1;}
+    bool shaderReloadOnly{},platformOnly{},gpuValidation{};auto backend=GraphicsBackend::Direct3D12;
+    char* requested{};std::size_t requestedBytes{};
+    if(_dupenv_s(&requested,&requestedBytes,"CRIMSON_TEST_GPU_VALIDATION")==0 && requested)gpuValidation=std::strcmp(requested,"1")==0;
+    std::free(requested);
+    if(argc<4){std::cerr<<"Pass --shutdown-only, or shaderc, source and include directories, optionally followed by --shader-reload-only, --platform-only, --gpu-validation and --backend dx11|dx12.\n";return 1;}
+    for(int argument=4;argument<argc;++argument) {
+        if(std::strcmp(argv[argument],"--shader-reload-only")==0)shaderReloadOnly=true;
+        else if(std::strcmp(argv[argument],"--platform-only")==0)platformOnly=true;
+        else if(std::strcmp(argv[argument],"--gpu-validation")==0)gpuValidation=true;
+        else if(std::strcmp(argv[argument],"--backend")==0 && argument+1<argc) {
+            const auto parsed=parseGraphicsBackend(argv[++argument]);
+            if(!parsed){std::cerr<<"Unknown graphics backend.\n";return 1;}backend=*parsed;
+        } else {std::cerr<<"Unknown native resource test option.\n";return 1;}
+    }
     const auto root=std::filesystem::temp_directory_path()/("crimson-native-resources-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     try {
         std::filesystem::create_directories(root);
         ShaderCompileConfig config{std::filesystem::path(argv[1]),root/"shaders",root/"includes",root/"cache"};
         std::filesystem::copy(std::filesystem::path(argv[2]),config.sourceDirectory,std::filesystem::copy_options::recursive);
         std::filesystem::copy(std::filesystem::path(argv[3]),config.includeDirectory,std::filesystem::copy_options::recursive);
+        const bool validationEnabled=enableD3D12Validation(backend,gpuValidation);
         SdlOwner sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson native resource checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-        check(!!window,SDL_GetError());exercise(root,config,window.get(),shaderReloadOnly);window.reset();cleanup(root);
-        std::cout<<(shaderReloadOnly?"Hidden native DX11 built-in texture/atomic shader reload checks passed.\n":
-            "Hidden native DX11 streaming/shader/normal/cutout/material-thumbnail/live-material-preview/particle/platform-window checks passed.\n");return 0;
+        check(!!window,SDL_GetError());exercise(root,config,window.get(),shaderReloadOnly,platformOnly,backend,validationEnabled);window.reset();cleanup(root);
+        std::cout<<"Hidden native "<<graphicsBackendName(backend)<<(platformOnly?" platform-window pixel/lifetime checks passed.\n":shaderReloadOnly?" built-in texture/atomic shader reload checks passed.\n":
+            " streaming/shader/normal/cutout/material-thumbnail/live-material-preview/particle/platform-window checks passed.\n");return 0;
     }catch(const std::exception& exception){std::error_code ignored;if(std::filesystem::exists(root,ignored))try{cleanup(root);}catch(...){}std::cerr<<exception.what()<<'\n';return 1;}
 }

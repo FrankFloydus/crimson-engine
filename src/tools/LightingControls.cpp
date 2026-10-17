@@ -69,11 +69,16 @@ void drawAmbientVisibilityControls(AmbientVisibilitySettings& value,
     ImGui::EndDisabled();
 }
 
+bool drawIndirectEnergyControl(float& energy) {
+    const bool changed=ImGui::DragFloat("GI Energy",&energy,.05f,0,16,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+    tooltip("Diffuse light contributed to SSGI. 0 disables bounce from this light; 1 preserves its normal energy.");
+    return changed;
+}
 void drawActorLightRigControls(ActorLightRigSettings& rig,
-    const std::function<void(ActorLightRigControl,const char*,bool)>& edit) {
+    const std::function<void(ActorLightRigControl,const char*,bool)>& edit,bool showHeader) {
     using Control=ActorLightRigControl;
     ImGui::PushID("Character light rig");
-    if(ImGui::CollapsingHeader("Light Rig",ImGuiTreeNodeFlags_DefaultOpen)) {
+    if(!showHeader || ImGui::CollapsingHeader("Light Rig",ImGuiTreeNodeFlags_DefaultOpen)) {
         edit(Control::Enabled,"Toggle character light rig",ImGui::Checkbox("Enabled",&rig.enabled));
         edit(Control::ShowRig,"Toggle character light rig display",ImGui::Checkbox("Show Rig",&rig.showGizmos));
         tooltip("Show character light directions, Local World range and Darkness Reveal in Scene and Game.");
@@ -127,6 +132,7 @@ void drawActorLightRigControls(ActorLightRigSettings& rig,
             edit(Control::WorldHeight,"Change Local World Light height",ImGui::DragFloat("Height (m)",&light.height,.05f,.01f,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
             edit(Control::WorldColor,"Change Local World Light color",ImGui::ColorEdit3("Color",light.color.data(),ImGuiColorEditFlags_Float));
             edit(Control::WorldIntensity,"Change Local World Light intensity",ImGui::DragFloat("Intensity",&light.intensity,.05f,0,1000000,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            edit(Control::WorldIndirectEnergy,"Change Local World Light GI energy",drawIndirectEnergyControl(light.indirectEnergy));
             edit(Control::WorldRadius,"Change Local World Light radius",ImGui::DragFloat("Radius (m)",&light.radius,.1f,.01f,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
             tooltip("Maximum distance from the source. Illumination reaches zero at this radius.");
             edit(Control::WorldAttenuation,"Change Local World Light attenuation",ImGui::SliderFloat("Attenuation",&light.attenuation,-10,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));

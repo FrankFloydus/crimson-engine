@@ -7,10 +7,13 @@
 #include "assets/BuiltinGeometry.h"
 #include "assets/GrungeGenerator.h"
 #include "resources/TextureStreamer.h"
+#include "resources/StreamingModel.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "editor/PreparedMaterialSignature.h"
 #include "scene/SceneDocument.h"
+#include "scene/SceneExtraction.h"
 #include "model_fixtures.h"
+#include "quader_bundle_fixture.h"
 #include <bgfx/platform.h>
 
 #include <algorithm>
@@ -94,6 +97,47 @@ void warningQueries(){
     const auto together=library.planDeletion({canonicalAssetId(model->id),canonicalAssetId(active.assetId())},&active);
     require(together.error.empty()&&!together.needsReferenceWarning(),"A scene removed with its model was counted as a surviving owner.");
 }
+void bundledModelPublicationAndReferences() {
+    Project project;auto fixture=bundle_test::writeFixture(project.root);
+    auto assigned=createMaterialAsset(project.root,"Assigned bundle surface");
+    SceneDocument scene(project.root);const auto entity=scene.createModel(fixture.modelId,"Placed mesh");
+    auto changed=*scene.scene().find(entity);changed.modelMaterials={AssetRef<MaterialAsset>{assigned.id}};
+    require(scene.updateEntity(entity,changed)&&scene.save("Bundled scene"),scene.status());
+    const auto sceneFile=resolveAssetPath(project.root,scene.assetId()),cache=resolveAssetPath(project.root,fixture.modelId);
+    const auto sceneBytes=read(sceneFile);
+    {
+        ResourceManager resources;AssetLibrary library(project.root,&resources);
+        const auto waitModel=[&](const std::string& name) {
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+            std::shared_ptr<const ModelAsset> model;
+            do {resources.pump();library.updateResources(0);model=library.findModel(fixture.modelId);
+                if(model&&model->name==name)return model;
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }while(std::chrono::steady_clock::now()<deadline);
+            throw std::runtime_error("Bundled model publication did not finish: "+library.status());
+        };
+        const auto loaded=waitModel("Triangle");
+        require(hasAsset(library,fixture.modelId)&&loaded->materialIds==std::vector<std::string>{DefaultMaterialId}&&
+            library.resolvedModelMaterials(*loaded,changed.modelMaterials).front().baseColor==assigned.surface.baseColor,
+            "Startup discovery lost a bundled model or its per-instance material assignment.");
+        const auto plan=library.planDeletion({fixture.modelId},&scene);
+        require(!plan.error.empty()&&!library.deletionPending()&&read(fixture.file)==encodeQuaderSceneBundle(fixture.bundle)&&read(sceneFile)==sceneBytes,
+            "Independent submodel deletion was allowed or changed authored bundle/scene data.");
+        auto manifest=nlohmann::json::parse(fixture.bundle.models.front().manifest);manifest["name"]="Updated triangle";
+        fixture.bundle.models.front().manifest=manifest.dump();
+        writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));library.onFileChanged(fixture.file);
+        const auto refreshed=waitModel("Updated triangle");
+        require(refreshed->id==fixture.modelId&&refreshed->materialIds==loaded->materialIds&&resolveAssetPath(project.root,fixture.modelId)==cache&&
+            scene.scene().find(entity)->modelMaterials==changed.modelMaterials&&!scene.dirty()&&read(sceneFile)==sceneBytes,
+            "Bundle source replacement changed stable IDs, instance assignments, or the saved scene.");
+    }
+    AssetReferenceManager policy(project.root);const std::array removed{AssetEntry{fixture.modelId,"Updated triangle",AssetKind::Model}};
+    policy.replace(removed,{});policy.save();
+    fs::remove_all(project.root/".crimson/cache/quader-imports");initializeQuaderSceneBundles(project.root);
+    ResourceManager resources;AssetLibrary reopened(project.root,&resources);
+    require(!hasAsset(reopened,fixture.modelId)&&!reopened.findModel(fixture.modelId)&&reopened.references().deleted(fixture.modelId)&&read(sceneFile)==sceneBytes,
+        "Regenerating a bundle resurrected a tombstoned model or rewrote saved references.");
+}
 
 void legacyEnvironmentGlowPersistence(){
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -103,12 +147,14 @@ void legacyEnvironmentGlowPersistence(){
     environment.background={true,true,{1,0,0}};environment.fog={true,{1,0,0},.5f};
     environment.fog.mode=FogMode::Depth;environment.fog.height=5;environment.fog.heightDensity=.3f;environment.fog.lightEnergy=4;
     environment.debanding=true;
+    environment.ssgi={true,2.f,6.f,.2f,.9f,SsgiQuality::High,2};environment.ssao={true,1.2f,.6f,SsaoQuality::High};
     library.loadEnvironment(environment);
     require(!environment.glow.enabled && environment.glow==GlowSettings{} && environment.toneMapping==ToneMapping::AgX && environment.intensity==2.5f,
         "Legacy environment without Glow did not retain its old appearance and default Glow off.");
     require(environment.source==EnvironmentSource::Hdri && environment.procedural==ProceduralSkySettings{} &&
         environment.background==EnvironmentBackground{} && environment.fog==FogSettings{} && !environment.debanding,
         "Legacy environment gained procedural lighting, a visible/custom background or fog.");
+    require(environment.ssgi==SsgiSettings{}&&environment.ssao==SsaoSettings{},"Legacy environment without GI must load disabled defaults.");
     environment.glow={true,2.25f,3.5f,4.75f};environment.source=EnvironmentSource::ProceduralSky;
     environment.procedural={{.1f,.2f,.3f},{.3f,.4f,.5f},{.6f,.7f,.8f},{.8f,.6f,.4f},.7f,.4f,1.5f,45.f,.6f};
     environment.background={false,true,{.12f,.23f,.34f}};environment.fog={true,{.4f,.5f,.6f},.025f};
@@ -116,6 +162,9 @@ void legacyEnvironmentGlowPersistence(){
     environment.fog.depthCurve=.7f;environment.fog.depthOpacity=.8f;
     environment.fog.height=-4;environment.fog.heightDensity=-.025f;environment.fog.lightEnergy=2.5f;
     environment.debanding=true;
+    environment.ssgi={true,2.25f,7.5f,.12f,.65f,SsgiQuality::Low,3};environment.ssao={true,1.6f,1.3f,SsaoQuality::Low};
+    environment.ssgi.quality=SsgiQuality::Custom;environment.ssgi.rays=5;environment.ssgi.steps=27;environment.ssgi.rayBias=.04f;
+    environment.ssgi.denoiseRadius=2;environment.ssgi.denoiseStrength=.6f;environment.ssgi.radianceClamp=16;
     library.saveEnvironment(environment);const auto saved=read(file);
     EnvironmentSettings reopened;library.loadEnvironment(reopened);
     require(reopened==environment,"Legacy environment expanded settings failed exact save/reopen.");
@@ -147,6 +196,27 @@ void legacyEnvironmentGlowPersistence(){
     require(read(file)==saved,"Invalid depth opacity replaced the saved legacy environment file.");
     invalid=environment;invalid.fog.lightEnergy=-1;library.saveEnvironment(invalid);
     require(read(file)==saved,"Invalid fog light energy replaced the saved legacy environment file.");
+    invalid=environment;invalid.ssao.radius=0;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid SSAO tuning replaced the saved legacy environment file.");
+    auto noGi=nlohmann::json::parse(saved);noGi.erase("ssgi");noGi.erase("ssao");const auto noGiText=noGi.dump();writeFileAtomically(file,noGiText);
+    library.loadEnvironment(reopened);auto noGiExpected=environment;noGiExpected.ssgi={};noGiExpected.ssao={};
+    require(reopened==noGiExpected&&read(file)==noGiText,"Legacy file without screen-space lighting changed appearance or rewrote its source.");
+    auto oneBounce=nlohmann::json::parse(saved);oneBounce["ssgi"].erase("bounces");const auto oneBounceText=oneBounce.dump();writeFileAtomically(file,oneBounceText);
+    library.loadEnvironment(reopened);auto oneBounceExpected=environment;oneBounceExpected.ssgi.bounces=1;
+    require(reopened==oneBounceExpected&&read(file)==oneBounceText,"Legacy GI without Bounces changed other tuning or rewrote its source.");
+    auto previousGi=nlohmann::json::parse(saved);previousGi.erase("ssgi");
+    previousGi["gi"]={{"enabled",true},{"strength",environment.ssgi.strength},{"bounces",environment.ssgi.bounces},{"method",1},
+        {"screenSpace",{{"maxDistance",environment.ssgi.maxDistance},{"thickness",environment.ssgi.thickness},
+            {"quality",static_cast<int>(environment.ssgi.quality)},{"temporalStability",environment.ssgi.temporalStability}}},
+        {"dynamicWorld",{{"coverage",36},{"quality",2},{"temporalStability",.8}}}};
+    previousGi["gi"]["screenSpace"]=nlohmann::json::parse(saved)["ssgi"];
+    const auto previousGiText=previousGi.dump();writeFileAtomically(file,previousGiText);library.loadEnvironment(reopened);
+    require(reopened==environment&&read(file)==previousGiText,"Removed GI wrapper conversion lost screen-space tuning or rewrote authored data.");
+    library.saveEnvironment(reopened);const auto convertedGi=nlohmann::json::parse(read(file));
+    require(convertedGi.contains("ssgi")&&convertedGi.contains("ssao")&&!convertedGi.contains("gi"),"Environment save retained the removed method representation.");
+    auto badGi=nlohmann::json::parse(saved);badGi["ssao"]["quality"]=1.5;const auto badGiText=badGi.dump();writeFileAtomically(file,badGiText);
+    auto retained=environment;library.loadEnvironment(retained);
+    require(retained==environment&&read(file)==badGiText,"Invalid legacy SSAO replaced working values or rewrote its source.");
     auto corrupt=nlohmann::json::parse(saved);corrupt["glow"]["strength"]=-1;writeFileAtomically(file,corrupt.dump());
     auto working=environment;library.loadEnvironment(working);
     require(working==environment,"Invalid legacy Glow load replaced working environment values.");
@@ -471,9 +541,9 @@ void importedMaterialSlotsAndDeletion(){
     source["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_1");
     model_test::writeJson(fixtures.gltf,source);
     const auto model=importModelPackage(fixtures.gltf,p.root);promoteModelMaterials(p.root,*model);
-    // glTF imports also retain an unused default-material slot. These two
-    // primitives must keep their authored slot identities and UV availability.
-    require(model->materials.size()>=2 && model->materialIds.size()==model->materials.size() && model->primitives.size()==2 &&
+    // No unused fallback is stored; both primitives retain their authored slot
+    // identities and independent UV availability.
+    require(model->materials.size()==2 && model->materialIds.size()==model->materials.size() && model->primitives.size()==2 &&
         model->primitives[0].material==0 && model->primitives[1].material==1 &&
         model->primitives[0].uvMask==1 && model->primitives[1].uvMask==3,"Imported material-slot fixture lost its distinct UV availability.");
     std::vector<std::pair<fs::path,std::string>> unchanged;
@@ -524,7 +594,9 @@ void importedMaterialSlotsAndDeletion(){
     require(rejected,"An imported slot accepted a material requiring its unavailable UV1 set.");
     require(library.resolvedModelMaterials(*model,overrides(red.id,uvMaterial.id))[1].graph==library.findMaterial(uvMaterial.id)->surface.graph,
         "UV validation incorrectly applied another slot's primitive UV requirements.");
-    auto invalid=overrides(red.id,blue.id);setModelMaterialOverride(invalid,model->materials.size(),AssetRef<MaterialAsset>{gold.id});
+    auto invalid=overrides(red.id,blue.id);
+    const auto nonexistent=model->legacyUnusedMaterialSlot?*model->legacyUnusedMaterialSlot+1:model->materials.size();
+    setModelMaterialOverride(invalid,nonexistent,AssetRef<MaterialAsset>{gold.id});
     rejected=false;try{(void)library.resolvedModelMaterials(*model,invalid);}catch(const std::exception&){rejected=true;}
     require(rejected && !library.modelMaterialsReady(*model,invalid) && !library.modelMaterialsDiagnostic(*model,invalid).empty(),
         "A nonexistent imported slot silently dropped its explicit material assignment.");
@@ -547,6 +619,100 @@ void importedMaterialSlotsAndDeletion(){
     for(const auto& [file,bytes]:unchanged)require(fs::exists(file) && read(file)==bytes,"Instance material edits or deletion rewrote imported geometry/source material files: "+file.string());
     require(model->materialIds[0]!=gold.id && model->materials[0].baseColor==inherited[0].baseColor && model->materials[1].baseColor==inherited[1].baseColor,
         "Instance material assignment mutated the shared imported model metadata.");
+}
+void legacyUnusedModelMaterialAssignments(){
+    Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"sources");
+    auto source=nlohmann::json::parse(read(fixtures.gltf));source["materials"].erase(1);
+    for(auto& primitive:source["meshes"][0]["primitives"])primitive["material"]=0;
+    model_test::writeJson(fixtures.gltf,source);
+    const auto imported=importModelPackage(fixtures.gltf,p.root);promoteModelMaterials(p.root,*imported);
+    require(imported->materials.size()==1&&imported->materialIds.size()==1,"Single-material fixture created an unused fallback slot.");
+    const auto manifestFile=fixturePath(p.root,imported->id);auto manifest=nlohmann::json::parse(read(manifestFile));
+    manifest["format"]="Quader";
+    manifest["materialAssets"]={imported->materialIds.front(),DefaultMaterialId};
+    // Reproduce the former Quader package representation in disposable data.
+    // The extra manifest entry was never referenced by either primitive.
+    writeFileAtomically(manifestFile,manifest.dump(2));
+    std::vector<std::pair<fs::path,std::string>> packageBytes;
+    for(const auto& file:fs::recursive_directory_iterator(manifestFile.parent_path()))
+        if(file.is_regular_file())packageBytes.emplace_back(file.path(),read(file.path()));
+    const auto model=loadModelPackage(imported->id,p.root),metadata=loadModelMaterialMetadata(imported->id,p.root);
+    for(const auto& loaded:{model,metadata})require(loaded->id==imported->id&&loaded->materials.size()==1&&
+        loaded->materialIds==imported->materialIds&&loaded->legacyUnusedMaterialSlot==std::optional<std::size_t>{1},
+        "Legacy Quader loading retained a phantom slot or changed the used material identity.");
+    require(std::all_of(model->primitives.begin(),model->primitives.end(),[](const auto& primitive){return primitive.material==0;}),
+        "Discarding a legacy unused fallback changed a real primitive's material index.");
+    auto overrideMaterial=createMaterialAsset(p.root,"Preserved real slot");material_test::legacyFixture(overrideMaterial);
+    overrideMaterial.surface.baseColor={.15f,.8f,.25f,1};saveMaterialAsset(p.root,overrideMaterial);
+    overrideMaterial=loadMaterialAsset(p.root,overrideMaterial.id);
+    const ModelMaterialOverrides authored{AssetRef<MaterialAsset>{overrideMaterial.id},
+        AssetRef<MaterialAsset>{canonicalAssetId("assets/materials/unused-legacy-override.crimson-material")}};
+    ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto usable=[&](const ModelAsset& asset,const ModelMaterialOverrides& assignments){
+        const auto resolved=library.resolvedModelMaterials(asset,assignments);
+        require(resolved.size()==1&&resolved.front().baseColor==overrideMaterial.surface.baseColor&&
+            library.modelMaterialsReady(asset,assignments)&&library.modelMaterialsDiagnostic(asset,assignments).empty(),
+            "A known legacy unused assignment hid the mesh, altered its real override or reported a missing phantom material.");
+    };
+    usable(*model,authored);usable(*metadata,authored);
+    model->stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*model,p.root,false));
+    const std::array<std::shared_ptr<const ModelAsset>,1> prepared{model};library.publishManagedModels(prepared);
+    std::shared_ptr<const ModelAsset> published;
+    const auto publicationDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+    do {
+        resources.pump();library.updateResources(0);published=library.findModel(model->id);
+        if(published)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }while(std::chrono::steady_clock::now()<publicationDeadline);
+    require(published&&published->legacyUnusedMaterialSlot==model->legacyUnusedMaterialSlot&&
+        published->stream==model->stream&&published->primitives.front().vertices.empty(),
+        "Prepared-model publication lost legacy slot compatibility while stripping streamed geometry.");
+    usable(*published,authored);
+    while(!resources.idle()&&std::chrono::steady_clock::now()<publicationDeadline) {
+        resources.pump();library.updateResources(0);std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    resources.pump();require(resources.idle(),"Legacy model metadata publication did not finish.");
+    const auto warm=streaming::loadModelMetadataCache(manifestFile,p.root);
+    require(warm&&warm->materialIds==model->materialIds&&warm->legacyUnusedMaterialSlot==model->legacyUnusedMaterialSlot,
+        "Published legacy model metadata restored a phantom slot or lost its compatibility index.");
+    usable(*warm,authored);
+    const auto reopenedModel=loadModelPackage(imported->id,p.root);usable(*reopenedModel,authored);
+    auto invalid=authored;setModelMaterialOverride(invalid,2,AssetRef<MaterialAsset>{overrideMaterial.id});
+    bool rejected=false;try{(void)library.resolvedModelMaterials(*model,invalid);}catch(const std::exception&){rejected=true;}
+    require(rejected&&!library.modelMaterialsReady(*model,invalid)&&!library.modelMaterialsDiagnostic(*model,invalid).empty(),
+        "Legacy fallback compatibility accepted an unrelated out-of-range material assignment.");
+    SceneDocument active(p.root);const auto first=active.createModel(model->id,"Legacy instance");
+    auto entity=*active.scene().find(first);entity.modelMaterials=authored;
+    require(active.updateEntity(first,entity)&&active.save("Legacy material slots"),active.status());
+    const auto saved=read(fixturePath(p.root,active.assetId()));SceneDocument loaded(p.root);
+    require(loaded.load(active.assetId())&&!loaded.dirty()&&loaded.scene().find(first)->modelMaterials==authored&&
+        read(fixturePath(p.root,active.assetId()))==saved,
+        "Loading a scene normalized away its authored legacy override vector or rewrote the scene.");
+    loaded.select({first},first);require(loaded.duplicateSelection(),loaded.status());const auto copy=loaded.selection().primary;
+    require(copy!=first&&loaded.scene().find(copy)->modelMaterials==authored,"Duplicating a legacy instance lost real or retained unused assignments.");
+    require(loaded.undo()&&!loaded.scene().contains(copy)&&loaded.scene().find(first)->modelMaterials==authored,
+        "Legacy instance duplication undo changed original material assignments.");
+    require(loaded.redo()&&loaded.scene().find(copy)->modelMaterials==authored,"Legacy instance duplication redo lost material assignments.");
+    require(loaded.save(),loaded.status());SceneDocument savedAgain(p.root);
+    require(savedAgain.load(loaded.assetId())&&savedAgain.scene().find(first)->modelMaterials==authored&&
+        savedAgain.scene().find(copy)->modelMaterials==authored,"Saving duplicated legacy assignments changed their slot indices.");
+    SceneDocument runtime(p.root);require(runtime.resetTransientFrom(savedAgain),runtime.status());
+    require(runtime.scene().find(first)->modelMaterials==authored,"Edit/Play copy lost a legacy material assignment.");
+    auto runtimeEntity=*runtime.scene().find(first);setModelMaterialOverride(runtimeEntity.modelMaterials,0,AssetRef<MaterialAsset>{model->materialIds.front()});
+    require(runtime.updateEntity(first,runtimeEntity)&&savedAgain.scene().find(first)->modelMaterials==authored&&
+        runtime.scene().find(first)->modelMaterials[1]==authored[1],"Play material edits changed the authored vector or dropped its retained compatibility entry.");
+    const auto extracted=extractScene(savedAgain.scene());
+    require(extracted.models.size()==2,"Legacy slot compatibility removed a model during render extraction.");
+    for(const auto& packet:extracted.models)usable(*model,packet.materialOverrides);
+    for(const auto& [file,bytes]:packageBytes)require(read(file)==bytes,"Legacy fallback normalization rewrote an immutable model package.");
+    // Current explicit packages contain only real material identities. They must
+    // not inherit the legacy exception for a newly authored invalid assignment.
+    manifest["materialAssets"]={imported->materialIds.front()};writeFileAtomically(manifestFile,manifest.dump(2));
+    const auto current=loadModelPackage(imported->id,p.root);
+    require(current->materials.size()==1&&!current->legacyUnusedMaterialSlot,"A current one-material Quader package retained a legacy phantom slot.");
+    rejected=false;try{(void)library.resolvedModelMaterials(*current,authored);}catch(const std::exception&){rejected=true;}
+    require(rejected&&!library.modelMaterialsReady(*current,authored)&&!library.modelMaterialsDiagnostic(*current,authored).empty(),
+        "A current package silently accepted a material assignment outside its real slots.");
 }
 void immutableMaterialMetadata(){
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -821,6 +987,6 @@ int main(int argc,char** argv){try{
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
+    warningQueries();bundledModelPublicationAndReferences();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

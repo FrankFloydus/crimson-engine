@@ -1,0 +1,76 @@
+{
+  "graph": {
+    "links": [],
+    "nextLinkId": 1,
+    "nextNodeId": 3,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "blend": 0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          650.0,
+          50.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -650.0,
+          80.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      }
+    ],
+    "version": 7
+  },
+  "id": "151fc091-47a1-5d8e-9bb8-498e3c16f50a",
+  "name": "Pitch Black",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

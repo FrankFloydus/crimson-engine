@@ -25,6 +25,12 @@
 #include "cs_procedural_filter.h"
 #include "cs_model_deform.h"
 #include "cs_occluder_depth.h"
+#include "cs_ssgi_trace.h"
+#include "cs_ssgi_temporal.h"
+#include "cs_ssgi_filter.h"
+#include "cs_ssgi_publish.h"
+#include "cs_ssao_evaluate.h"
+#include "cs_ssao_publish.h"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -51,6 +57,14 @@ int main() {
         check(crimson::preflightComputeShader(cc_cs_procedural_filter,cc_cs_procedural_filter,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_model_deform,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_occluder_depth,cc_cs_occluder_depth,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssgi_trace,cc_cs_ssgi_trace,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssgi_temporal,cc_cs_ssgi_temporal,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssgi_filter,cc_cs_ssgi_filter,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssgi_publish,cc_cs_ssgi_publish,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssao_evaluate,cc_cs_ssao_evaluate,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssao_publish,cc_cs_ssao_publish,diagnostic),diagnostic);
+        check(!crimson::preflightComputeShader(cc_cs_ssao_publish,cc_cs_ssao_evaluate,diagnostic),"SSAO publication must retain its independent receiver/atlas contract.");
+        check(!crimson::preflightComputeShader(cc_cs_ssgi_publish,cc_cs_ssgi_trace,diagnostic),"GI publication must retain its separate atlas-write contract.");
         check(!crimson::preflightComputeShader(cc_cs_occluder_depth,cc_cs_model_deform,diagnostic),"Occluder depth publication must retain its independent image/uniform contract.");
         check(!crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_procedural_filter,diagnostic),"Deformation compute must retain its independent buffer/uniform contract.");
         std::vector<std::uint8_t> compute(std::begin(cc_cs_procedural_filter),std::end(cc_cs_procedural_filter));

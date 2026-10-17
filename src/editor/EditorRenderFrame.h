@@ -66,6 +66,7 @@ struct EditorRenderFrameInput {
     std::vector<std::shared_ptr<const PreparedParticleMaterial>> particlePins;
     std::vector<EntityId> shadowFocusEntities;
     std::uint64_t worldId{};
+    std::uint64_t giWorldId{},gameCameraId{},environmentId{};
     std::uint16_t shadowResolution{1024};
     MaterialEvaluationContext materialContext;
     ViewportAppearance appearance;

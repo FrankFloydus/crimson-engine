@@ -1,5 +1,9 @@
 #include "runtime/PlaySession.h"
 #include "runtime/GameInput.h"
+#include "scene/CameraAuthoring.h"
+#include "scene/BuiltinModels.h"
+#include "scene/SceneExtraction.h"
+#include "scene/SceneOutlinerRows.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -44,6 +48,63 @@ void lifecycleAndEditing() {
     play.stop();require(!play.playing(),"Stop retained its runtime.");require(play.start(authored),"Restart failed.");require(std::abs(x(play.document().scene()))<1e-5,"Restart retained movement.");
     const auto final=authored.scene().records();require(final.size()==original.size(),"Stop changed authored entities.");
     for(std::size_t i=0;i<final.size();++i)require(sameEntity(final[i],original[i]),"Play modified authored records.");
+}
+void flatPlayerPresentationPreservesRuntime() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
+    SceneDocument authored(root);fixture(authored);
+    const auto visualLocal=math::translation({.7f,.4f,-.2f})*math::eulerRotationXYZ({.2f,.4f,-.1f})*math::scaling({.7f,1.3f,.9f});
+    const auto cameraSettings=defaultPlayerCameraTemplate();
+    require(authored.edit("Owned player presentation",[&](auto& records,auto& properties){
+        for(auto& record:records)if(record.id==3){record.model=AssetRef<ModelAsset>{BuiltinBoxModelId};record.local=visualLocal;}
+        EntityRecord follow;follow.id=4;follow.parent=2;follow.name="Camera";follow.camera=cameraSettings.lens;
+        follow.cameraFollow=SceneCameraFollow{2,cameraSettings.offset,cameraSettings.worldBasis};records.push_back(follow);
+        EntityRecord attached;attached.id=5;attached.parent=1;attached.name="Attached light";attached.point.emplace();
+        attached.local=math::translation({1,2,3});records.push_back(attached);
+        properties.activeCamera=4;
+    }),"Cannot prepare the flat Player runtime fixture.");
+    const auto original=authored.scene().records();const auto roles=authored.scene().properties();
+    const auto history=authored.history().size(),revision=authored.scene().revision();
+    const auto rows=sceneOutlinerRows(authored.scene());
+    require(rows.size()==4&&std::count_if(rows.begin(),rows.end(),[](const auto& row){return row.entity==2;})==1&&
+        std::find(rows.begin(),rows.end(),SceneOutlinerRow{3,2})!=rows.end()&&
+        std::find(rows.begin(),rows.end(),SceneOutlinerRow{5,1})!=rows.end(),
+        "The Player projection hid a real visual or flattened a real attached-light parent.");
+    require(sceneEntityOwner(authored.scene(),3)==3&&sceneEntityOwner(authored.scene(),4)==2&&
+        sceneEntityParts(authored.scene(),2)==std::vector<EntityId>{2,3,4},
+        "The flat Player lost its owned visual or Camera identity.");
+    require(authored.scene().revision()==revision&&authored.history().size()==history&&sameProperties(authored.scene().properties(),roles),
+        "Inspecting the flat Player changed runtime revisions, history or role IDs.");
+    PlaySession play(root);require(play.start(authored),"The flat Player could not enter Play.");
+    for(int tick=0;tick<30;++tick)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
+    const auto& simulated=play.document().scene();const auto actorWorld=*simulated.worldTransform(2);
+    const auto expectedVisual=actorWorld*visualLocal,actualVisual=*simulated.worldTransform(3);
+    for(unsigned field=0;field<16;++field)require(std::abs(expectedVisual[field]-actualVisual[field])<1e-5f,
+        "Flat Player presentation changed its visual's local affine alignment during motion.");
+    const auto actorPosition=math::transformPoint(actorWorld,{});
+    const auto resolved=resolveGameCamera(simulated);require(resolved&&
+        math::length(resolved->position-actorPosition-cameraSettings.offset)<1e-4,
+        "Flat Player presentation changed the following Camera pose during motion.");
+    const auto extracted=extractScene(simulated);
+    require(extracted.models.size()==1&&extracted.models.front().actorOwner==2&&
+        extracted.models.front().lightingCategory==lighting_scope::Character,
+        "Flat Player presentation changed Character lighting ownership.");
+    require(sceneOutlinerRows(play.presentationScene())==rows&&!play.document().dirty()&&play.document().history().size()==0,
+        "Play interpolation changed the flat entity identities or authored simulation history.");
+    play.stop();const auto after=authored.scene().records();require(after.size()==original.size(),"Play changed the authored Player records.");
+    for(std::size_t index=0;index<after.size();++index)require(sameEntity(after[index],original[index]),"Play changed an authored Player part.");
+    require(authored.history().size()==history&&sameProperties(authored.scene().properties(),roles),"Play changed authored Player history or roles.");
+    authored.select({2},2);require(authored.duplicateSelection(),"The consolidated Player could not be duplicated.");
+    const auto copied=authored.selection().primary,copiedCamera=resolveOwnedActorCamera(authored.scene(),copied);
+    const auto copiedParts=sceneEntityParts(authored.scene(),copied);
+    require(copied!=2&&copiedParts.size()==3&&copiedCamera&&copiedCamera!=4&&
+        authored.scene().find(copiedCamera)->cameraFollow->target==copied,
+        "Duplicating the flat Player lost or shared an owned part.");
+    require(sceneOutlinerRows(authored.scene()).size()==rows.size()+2&&sameProperties(authored.scene().properties(),roles),
+        "Duplicating Player hid its real visual row, exposed a duplicate Camera row or stole scene roles.");
+    authored.select({copied},copied);require(authored.eraseSelection()&&sceneOutlinerRows(authored.scene())==rows,
+        "Deleting a flat Player left its owned parts in the Outliner.");
+    require(authored.scene().contains(2)&&authored.scene().contains(3)&&authored.scene().contains(4),
+        "Deleting the duplicate changed the original Player's parts.");
 }
 void fixedTimingAndInterpolation() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
@@ -466,4 +527,4 @@ void heldEditsRequireFreshPress() {
     require(!play.destination() && !input.heldMoveRay(view),"Cancel/reacquire in one frame retained a held route.");
 }
 }
-int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();directionalInputRespectsRoleAndComponentChanges();composedActorsShareNavigationAndKeepIndependentCommands();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{lifecycleAndEditing();flatPlayerPresentationPreservesRuntime();fixedTimingAndInterpolation();particlesUseRuntimeClock();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();directionalInputRespectsRoleAndComponentChanges();composedActorsShareNavigationAndKeepIndependentCommands();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

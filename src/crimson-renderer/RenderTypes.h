@@ -4,6 +4,8 @@
 #include "ToneMapping.h"
 #include "Glow.h"
 #include "LightingSettings.h"
+#include "Ssgi.h"
+#include "Ssao.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +17,8 @@ namespace crimson {
 // Shadow residency is a separate, smaller budget (ShadowLightSelection.h).
 inline constexpr std::size_t MaximumClusteredPointLights = 4096;
 enum class LocalLightMode { Clustered, AllLightsReference };
+// Transient per-viewport inspection; never part of authored scene data.
+enum class RenderDebugView { Lit,Albedo,Roughness,Metal,Normal,DirectLighting,IndirectLighting };
 struct ClusteredLightingStats {
     std::uint32_t totalLights{},activeLights{},clusterCount{},wordCount{};
     std::size_t allocatedBytes{};
@@ -64,6 +68,7 @@ struct FogSettings {
     FogMode mode{FogMode::Exponential};
     float depthBegin{10.f},depthEnd{100.f},depthCurve{1.f},depthOpacity{1.f}; // End zero follows the camera far plane.
     float height{0.f},heightDensity{0.f},lightEnergy{1.f};
+    float skyAffect{1.f},aerialPerspective{0.f},sunScatter{0.f};
     bool operator==(const FogSettings&) const = default;
 };
 // Resolved frame value, never serialized. Direction points TOWARD the sun.
@@ -87,6 +92,9 @@ struct EnvironmentSettings {
     bool debanding{false};
     AmbientVisibilitySettings ambientVisibility{};
     AmbientLightSettings ambientLight{};
+    SsgiSettings ssgi{};
+    SsaoSettings ssao{};
+    ToneMappingParameters toneMappingParameters{};
     bool operator==(const EnvironmentSettings&) const = default;
 };
 
@@ -101,6 +109,7 @@ struct DirectionalLight {
     float shadowDepthBias{.005f}; // World-space meters.
     float shadowNormalBias{1.f}; // Shadow-map texels.
     LightRoles roles{};
+    float indirectEnergy{1.f}; // Scale diffuse source radiance supplied to SSGI.
 };
 
 struct PointLight {
@@ -120,6 +129,7 @@ struct PointLight {
     float rangeFalloffExponent{4},edgeSoftness{1};
     float sourceRadius{0}; // Emitter size in meters: shadow penumbra and specular extent.
     float attenuation{2}; // Distance decay exponent, independent of the finite range window.
+    float indirectEnergy{1.f}; // Scale diffuse source radiance supplied to SSGI.
     float inverseRadiusSquared() const;
 };
 

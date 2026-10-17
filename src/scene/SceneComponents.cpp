@@ -1,5 +1,4 @@
 #include "SceneComponents.h"
-#include "SceneOutlinerRows.h"
 #include <algorithm>
 #include <exception>
 #include <unordered_map>
@@ -83,18 +82,18 @@ bool addSceneComponent(SceneDocument& document,EntityId id,SceneComponentKind ki
     });
 }
 bool removeSceneComponent(SceneDocument& document,EntityId id,SceneComponentKind kind) {
-    const std::array targets{SceneOutlinerColorTarget{id,kind}};
+    const std::array targets{SceneComponentTarget{id,kind}};
     return removeSceneComponents(document,targets);
 }
-bool removeSceneComponents(SceneDocument& document,std::span<const SceneOutlinerColorTarget> requested) {
+bool removeSceneComponents(SceneDocument& document,std::span<const SceneComponentTarget> requested) {
     if(requested.empty())return false;
     std::unordered_map<EntityId,std::vector<SceneComponentKind>> targets;
     for(const auto& target:requested) {
         const auto record=document.scene().find(target.entity);
-        if(!record||!target.component||!editableSceneComponent(*target.component)||!hasSceneComponent(*record,*target.component))return false;
-        auto& kinds=targets[target.entity];if(std::find(kinds.begin(),kinds.end(),*target.component)==kinds.end())kinds.push_back(*target.component);
+        if(!record||!editableSceneComponent(target.component)||!hasSceneComponent(*record,target.component))return false;
+        auto& kinds=targets[target.entity];if(std::find(kinds.begin(),kinds.end(),target.component)==kinds.end())kinds.push_back(target.component);
     }
-    const auto label=requested.size()==1?std::string("Remove ")+sceneComponentName(*requested.front().component):std::string("Remove Components");
+    const auto label=requested.size()==1?std::string("Remove ")+sceneComponentName(requested.front().component):std::string("Remove Components");
     return document.edit(label,[&](auto& records,auto& properties) {
         for(auto& entity:records)if(const auto found=targets.find(entity.id);found!=targets.end()) {
             for(const auto kind:found->second)switch(kind) {

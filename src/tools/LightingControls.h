@@ -10,6 +10,7 @@ enum class AmbientLightControl { Source, Color, SkyContribution, Energy };
 void drawAmbientLightControls(AmbientLightSettings&,
     const std::function<void(AmbientLightControl,bool)>& edit);
 bool drawLightingMaskControl(const char* label,std::uint32_t& mask);
+bool drawIndirectEnergyControl(float& energy);
 enum class AmbientVisibilityControl { Enabled,Strength,DarknessFloor,Threshold,Transition,ShadowAware,Emission };
 void drawAmbientVisibilityControls(AmbientVisibilitySettings&,
     const std::function<void(AmbientVisibilityControl,bool)>& edit);
@@ -21,9 +22,9 @@ enum class ActorLightRigControl {
     KeyEnabled,KeyDirection,KeyColor,KeyIntensity,KeyDiffuse,KeySpecular,
     FillEnabled,FillDirection,FillColor,FillIntensity,FillDiffuse,FillSpecular,
     WorldEnabled,WorldHeight,WorldColor,WorldIntensity,WorldShadows,WorldDepthBias,WorldNormalBias,
-    WorldRadius,WorldNearFalloff,WorldSpecular,WorldFalloffExponent,WorldEdgeSoftness,WorldSourceRadius,WorldAttenuation,
+    WorldRadius,WorldNearFalloff,WorldSpecular,WorldFalloffExponent,WorldEdgeSoftness,WorldSourceRadius,WorldAttenuation,WorldIndirectEnergy,
     ShadowEnabled,ShadowStrength,ShadowDistance,ShadowDepthBias,ShadowNormalBias
 };
 void drawActorLightRigControls(ActorLightRigSettings&,
-    const std::function<void(ActorLightRigControl,const char*,bool)>& edit);
+    const std::function<void(ActorLightRigControl,const char*,bool)>& edit,bool showHeader=true);
 } // namespace crimson

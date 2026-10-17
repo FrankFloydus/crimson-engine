@@ -37,7 +37,13 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
         if(previous.modelMaterials.empty() || previous.model==incoming.model)return previous.modelMaterials;
         const auto before=sources(previous.model->id),after=sources(incoming.model->id);
         if(!before || !after)throw std::runtime_error("Quader sync is waiting for source material slots to preserve assignments on "+incoming.name+".");
-        if(*before==*after)return previous.modelMaterials;
+        if(*before==*after) {
+            auto assignments=previous.modelMaterials;
+            // A changed package can retain the same real slots while dropping
+            // an old unused fallback. Preserve numbered assignments to faces.
+            if(assignments.size()>after->size())assignments.resize(after->size());
+            trimModelMaterialOverrides(assignments);return assignments;
+        }
         std::unordered_map<std::string,std::size_t> beforeCounts,afterCounts,afterSlots;
         for(const auto& id:*before)++beforeCounts[id];
         for(std::size_t index=0;index<after->size();++index){++afterCounts[(*after)[index]];afterSlots[(*after)[index]]=index;}

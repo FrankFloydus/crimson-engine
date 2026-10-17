@@ -15,10 +15,7 @@ namespace crimson {
 namespace {
 std::atomic<uint64_t> nextGeneration{1};
 struct Visibility { bool authored{true},effective{true},resolved{}; };
-struct ComponentOrder {
-    std::vector<SceneComponentKind> values;std::optional<SceneComponentKind> before;
-    std::optional<SceneOutlinerStyle> style;
-};
+struct OutlinerStyle { std::optional<SceneOutlinerStyle> value; };
 void cacheVisibility(entt::registry& registry,const std::unordered_map<EntityId,entt::entity>& entities) {
     std::vector<EntityId> chain;
     for(const auto& [id,entity]:entities) {
@@ -49,6 +46,8 @@ template<class T> void validateLight(const std::optional<T>& light) {
     if (!math::finite(light->color) || !std::isfinite(light->intensity) || light->intensity < 0 ||
         std::any_of(light->color.begin(), light->color.end(), [](float value) { return value < 0; }))
         throw std::runtime_error("Light color and intensity must be finite and nonnegative.");
+    if (!validIndirectEnergy(light->indirectEnergy))
+        throw std::runtime_error("Light GI energy must be finite and between zero and sixteen.");
 }
 std::vector<EntityId> cameraFollowOrder(const std::vector<EntityRecord>& records) {
     std::unordered_map<EntityId,const EntityRecord*> indexed;
@@ -99,17 +98,11 @@ std::vector<SceneComponentKind> sceneComponents(const EntityRecord& record) {
     const auto append=[&](SceneComponentKind kind) {
         if(hasSceneComponent(record,kind) && std::find(result.begin(),result.end(),kind)==result.end())result.push_back(kind);
     };
-    for(const auto kind:record.componentOrder)append(kind);
     for(const auto kind:AllSceneComponentKinds)append(kind);
     return result;
 }
-void normalizeSceneComponentOrder(EntityRecord& record) {
-    if(!record.componentOrder.empty())record.componentOrder=sceneComponents(record);
-}
 void normalizeSceneOutlinerStyle(EntityRecord& record) {
-    if(record.outlinerStyle&&!record.outlinerStyle->color&&
-        std::none_of(record.outlinerStyle->componentColors.begin(),record.outlinerStyle->componentColors.end(),[](const auto& color){return color.has_value();}))
-        record.outlinerStyle.reset();
+    if(record.outlinerStyle&&!record.outlinerStyle->color)record.outlinerStyle.reset();
 }
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
@@ -122,7 +115,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation && a.fadeWhenOccluding==b.fadeWhenOccluding && a.visible==b.visible &&
-        (a.componentOrder==b.componentOrder || sceneComponents(a)==sceneComponents(b)) && a.outlinerBefore==b.outlinerBefore&&a.outlinerStyle==b.outlinerStyle;
+        a.outlinerStyle==b.outlinerStyle;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -146,9 +139,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
     record.visible=registry_.get<Visibility>(entity).authored;
-    record.componentOrder=registry_.get<ComponentOrder>(entity).values;
-    record.outlinerBefore=registry_.get<ComponentOrder>(entity).before;
-    record.outlinerStyle=registry_.get<ComponentOrder>(entity).style;
+    record.outlinerStyle=registry_.get<OutlinerStyle>(entity).value;
     if (const auto* model = registry_.try_get<ModelReference>(entity)) {
         record.model=model->assetId;record.modelMaterials=model->materials;
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
@@ -291,22 +282,11 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if (isEngineAssetId(record.particle->id) || (!isAssetUuid(record.particle->id) && (!safeReference(record.particle->id) || path.parent_path()!=std::filesystem::path("assets/particles") || path.extension()!=".crimson-particle")))
                 throw std::runtime_error("Particle asset reference must be a managed .crimson-particle path under assets/particles.");
         }
-        if(record.componentOrder.size()>AllSceneComponentKinds.size())throw std::runtime_error("Component display order is too long.");
-        std::array<bool,AllSceneComponentKinds.size()> orderedKinds{};
-        for(const auto kind:record.componentOrder) {
-            const auto index=static_cast<size_t>(kind);
-            if(index>=orderedKinds.size() || orderedKinds[index])throw std::runtime_error("Component display order contains an invalid or duplicate kind.");
-            orderedKinds[index]=true;
-        }
-        if(record.outlinerBefore&&(*record.outlinerBefore==SceneComponentKind::Transform||
-            std::find(AllSceneComponentKinds.begin(),AllSceneComponentKinds.end(),*record.outlinerBefore)==AllSceneComponentKinds.end()))
-            throw std::runtime_error("Outliner child anchor must identify a known optional component.");
         if(record.outlinerStyle) {
             const auto validColor=[](const auto& color) {
                 return !color||(math::finite(*color)&&std::all_of(color->begin(),color->end(),[](float channel){return channel>=0&&channel<=1;}));
             };
-            if(!validColor(record.outlinerStyle->color)||
-                !std::all_of(record.outlinerStyle->componentColors.begin(),record.outlinerStyle->componentColors.end(),validColor))
+            if(!validColor(record.outlinerStyle->color))
                 throw std::runtime_error("Outliner colors require finite RGBA values from zero to one.");
         }
         validateLight(record.directional); validateLight(record.point);
@@ -457,34 +437,22 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
 
 void Scene::apply(const std::vector<EntityRecord>& records, const SceneProperties& properties) {
     validate(records,properties);
-    // Component ordering is editor presentation data. Publish it in place so
-    // reordering cannot invalidate navigation, particle clocks or GPU resources.
+    // Sibling order and row colors are editor presentation data. Publish them
+    // in place without invalidating navigation, particle clocks or GPU resources.
     bool presentationOnly=records.size()==entities_.size() && sameProperties(properties,properties_);
     bool orderChanged=false;
     if(presentationOnly)for(const auto& record:records) {
         auto previous=find(record.id);
         if(!previous){presentationOnly=false;break;}
-        orderChanged=orderChanged || previous->componentOrder!=record.componentOrder||previous->outlinerBefore!=record.outlinerBefore||
-            previous->order!=record.order||previous->outlinerStyle!=record.outlinerStyle;
-        previous->componentOrder=record.componentOrder;
-        previous->outlinerBefore=record.outlinerBefore;previous->order=record.order;
+        orderChanged=orderChanged || previous->order!=record.order||previous->outlinerStyle!=record.outlinerStyle;
+        previous->order=record.order;
         previous->outlinerStyle=record.outlinerStyle;
         if(!sameEntity(*previous,record)){presentationOnly=false;break;}
     }
     if(presentationOnly && orderChanged) {
-        struct PreparedPresentation {
-            entt::entity entity;std::vector<SceneComponentKind> components;
-            std::optional<SceneComponentKind> before;uint32_t order;std::optional<SceneOutlinerStyle> style;
-        };
-        std::vector<PreparedPresentation> prepared;
-        prepared.reserve(records.size());
-        for(const auto& record:records)prepared.push_back({entities_.at(record.id),
-            record.componentOrder.empty()?std::vector<SceneComponentKind>{}:sceneComponents(record),record.outlinerBefore,record.order,record.outlinerStyle});
-        for(auto& update:prepared) {
-            auto& display=registry_.get<ComponentOrder>(update.entity);
-            display.values.swap(update.components);display.before=update.before;
-            display.style=update.style;
-            registry_.get<Relationship>(update.entity).order=update.order;
+        for(const auto& record:records) {
+            registry_.get<OutlinerStyle>(entities_.at(record.id)).value=record.outlinerStyle;
+            registry_.get<Relationship>(entities_.at(record.id)).order=record.order;
         }
         return;
     }
@@ -498,7 +466,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
-        candidate.emplace<ComponentOrder>(entity,record.componentOrder.empty()?std::vector<SceneComponentKind>{}:sceneComponents(record),record.outlinerBefore,record.outlinerStyle);
+        candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.fadeWhenOccluding);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);

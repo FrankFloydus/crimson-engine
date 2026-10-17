@@ -8,7 +8,7 @@ uniform vec4 u_clusterDepth;
 uniform vec4 u_clusterViewport;
 uniform vec4 u_clusterAtlas;
 uniform vec4 u_clusterOptions;
-uniform vec4 u_clusterRecordLayoutV5; // Reflected CPU record ABI: texels per light, reserved YZW.
+uniform vec4 u_clusterRecordLayoutV6; // Reflected CPU record ABI: texels per light, reserved YZW.
 
 NUM_THREADS(64,1,1)
 void main()
@@ -36,7 +36,7 @@ void main()
     int limit=min(128,int(u_clusterOptions.x)-first);
     for(int i=0;i<limit;++i)
     {
-        vec4 sphere=s_clusterInput[(first+i)*int(u_clusterRecordLayoutV5.x)+2];
+        vec4 sphere=s_clusterInput[(first+i)*int(u_clusterRecordLayoutV6.x)+2];
         float radius=sphere.w;
         bool intersects=sphere.z+radius>=nearPlane && sphere.z-radius<=farPlane;
         intersects=intersects && sphere.x-left*sphere.z>=-radius*lengths.x;

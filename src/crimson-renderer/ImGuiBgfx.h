@@ -32,6 +32,7 @@ public:
     void render(ImDrawData* drawData, uint16_t viewId = ToolsView);
     void shutdown();
     bool hasPendingRetirements() const noexcept;
+    std::uint64_t platformResidentBytes() const noexcept;
     bgfx::ProgramHandle prepareProgramReload(std::span<const std::uint8_t>,std::span<const std::uint8_t>,std::string& diagnostic);
     void publishProgramReload(bgfx::ProgramHandle candidate);
 
@@ -53,6 +54,7 @@ private:
     void resizeViewport(ViewportResource&, ImVec2 size, ImVec2 framebufferScale);
     void destroyViewport(ViewportResource*);
     void collectRetiredSurfaces(std::uint32_t);
+    std::uint32_t platformViewLimit() const noexcept;
     void setupView(const RenderState& state);
     static void resetRenderState(const ImDrawList*, const ImDrawCmd*);
     static void setSamplerLinear(const ImDrawList*, const ImDrawCmd*);
@@ -66,11 +68,14 @@ private:
     bgfx::VertexLayout layout_{};
     bgfx::ProgramHandle program_{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle sampler_{BGFX_INVALID_HANDLE};
+    bgfx::TextureHandle platformTerminalTexture_{BGFX_INVALID_HANDLE};
+    bgfx::FrameBufferHandle platformTerminalFramebuffer_{BGFX_INVALID_HANDLE};
     std::vector<TextureResource*> textures_;
     std::vector<ViewportResource*> viewports_;
     std::vector<std::unique_ptr<PlatformSurface>> retiredSurfaces_;
     std::function<void(const std::string&)> diagnostic_;
     std::uint32_t completedFrame_{};
+    std::uint64_t platformTerminalBytes_{};
     bool initialized_{false};
 };
 
