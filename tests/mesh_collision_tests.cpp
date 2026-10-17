@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "physics/PhysicsWorld.h"
 #include "navigation_mesh_fixture.h"
 #include "runtime/PlaySession.h"

@@ -10,4 +10,7 @@ struct GameViewInteraction {
 GameViewInteraction drawGameViewImage(ImTextureRef texture,const ImVec2& size);
 // Evaluated in the current Game window after ImGui has resolved focus and text.
 bool gameMetricsToggleRequested(bool playing);
+// Tab belongs to target cycling only in the focused Game window, outside text,
+// popups and other widgets. Shortcut routing also keeps it out of UI tabbing.
+int gameAttributeDebugCycleRequested(bool enabled);
 }

@@ -83,6 +83,21 @@ void modelPackageAndRecovery() {
     const auto restored=Json::parse(read(scenePath));
     require(restored.at("name")=="Recovered scene"&&restored.at("meshCollider").at("source")==canonicalAssetId("assets/models/model-abc/manifest.json")&&!fs::exists(f.root/".crimson/.resource-transactions/interrupted"),"Recovered deletion backups bypassed UUID conversion.");
 }
+void collisionNamesAreDisplayText() {
+    Fixture f;std::array<std::string,32> names{};names[0]="assets/textures/not-an-asset.png";names[1]=newAssetId();names[2]="builtin:texture/normal";
+    const auto original=Json{{"version",1},{"names",names}}.dump(2);f.write(".crimson/collision-layers.json",original);
+    f.write("assets/editor-session.json",R"({"version":1,"activeScene":"assets/scenes/missing.crimson-scene"})");
+    initializeContentStorage(f.root);
+    require(read(f.root/".crimson/collision-layers.json")==original,"UUID migration interpreted collision layer display names as asset references.");
+    require(Json::parse(read(f.root/".crimson/editor-session.json")).at("activeScene")==canonicalAssetId("assets/scenes/missing.crimson-scene"),"Collision name exclusion disabled migration of unrelated private settings.");
+    const auto verifyIndex=[&] {
+        const auto index=Json::parse(read(f.root/".crimson/asset-locations.json"));
+        require(!index.at("assets").contains(canonicalAssetId(names[0]))&&!index.at("assets").contains(names[1]),"Collision display names introduced missing asset records.");
+    };
+    verifyIndex();auto index=Json::parse(read(f.root/".crimson/asset-locations.json"));index["uuidReferences"]=false;
+    f.write(".crimson/asset-locations.json",index.dump());refreshContentStorage(f.root);initializeContentStorage(f.root);
+    require(read(f.root/".crimson/collision-layers.json")==original,"Repeated UUID conversion rewrote collision layer labels.");verifyIndex();
+}
 void uuidIdentity() {
     const auto first=newAssetId(),second=newAssetId();require(isAssetUuid(first)&&isAssetUuid(second)&&first!=second,"New assets did not receive distinct valid UUIDs.");
     require(canonicalAssetId("builtin:material/default")=="e698f0ce-a518-596e-8710-ff12e009eb5d"&&isEngineAssetId(canonicalAssetId("builtin:texture/normal")),"Protected UUID constants disagree with the UUID library.");
@@ -145,4 +160,4 @@ void registrationGroups() {
     rejects([&]{registerAssetPaths(f.root,emptyIdentity);},"A registration group accepted an empty identity.");unchanged();
 }
 }
-int main(){try{uuidIdentity();migrationAndMoves();modelPackageAndRecovery();watcherSnapshots();registrationGroups();std::cout<<"Content storage checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{uuidIdentity();migrationAndMoves();modelPackageAndRecovery();collisionNamesAreDisplayText();watcherSnapshots();registrationGroups();std::cout<<"Content storage checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

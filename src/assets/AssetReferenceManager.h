@@ -44,6 +44,7 @@ public:
     std::string resolveEnvironment(const std::string& id) const;
     std::string resolveParticle(const std::string& id) const;
     std::string resolveNavigationAgentProfile(const std::string& id) const;
+    std::string resolveGameplayEffect(const std::string& id) const;
     std::string resolveParticleMaterial(const std::string& id) const;
     std::string resolveParticleTexture(const std::string& id) const;
     bool deleted(const std::string& id) const { return deleted_.contains(id)||deleted_.contains(canonicalAssetId(id)); }

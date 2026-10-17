@@ -1,3 +1,5 @@
+#include "scene/SceneComponents.h"
+#include "assets/GameplayEffectAsset.h"
 #include "navigation_mesh_fixture.h"
 #include <algorithm>
 #include <cmath>
@@ -21,8 +23,8 @@ void flatGroundAndCache() {
     require(path && path->corners.size()==1 && path->corners.back()==destination,"Flat ground did not retain an exact final click.");
     const auto revision=navigation.revision();physics.reconcile(scene);
     require(!navigation.reconcile(physics,agent) && navigation.revision()==revision,"Unchanged world rebuilt navigation.");
-    actor.motor->moveSpeed=9;scene.apply({box(1,{0,-.5f,0},{20,1,20}),actor},{});physics.reconcile(scene);
-    require(!navigation.reconcile(physics,agent),"Motor speed invalidated geometry clearance.");
+    actor.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{PlayerStartingEffectId}}};scene.apply({box(1,{0,-.5f,0},{20,1,20}),actor},{});physics.reconcile(scene);
+    require(!navigation.reconcile(physics,agent),"Starting effect assignment invalidated geometry clearance.");
     agent.radius=.5f;require(navigation.reconcile(physics,agent),"Capsule radius did not rebuild clearance.");
     require(!navigation.findPath({0,.02f,0},{10,0,0}),"Boundary click snapped to a distant eroded polygon.");
     require(!navigation.findPath({0,.02f,0},{50,0,0}),"Off-floor destination was approximated by a distant polygon.");

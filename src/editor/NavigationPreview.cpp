@@ -21,7 +21,7 @@ void NavigationPreview::update(const SceneDocument& document,const CollisionMesh
     std::vector<PhysicsMeshCollider> meshes;collisionPending_=false;diagnostic_.clear();
     std::optional<NavigationVolumeDescriptor> volume;std::vector<NavigationAgentProfile> profiles;
     for(const auto& record:document.scene().records()) {
-        if(record.collider && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
+        if(record.collider && record.collider->mode==ColliderMode::Solid && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
             const auto source=colliderMeshResult(*record.collider,meshQuery);
             if(!source.mesh || !source.current) {
                 collisionPending_=true;if(diagnostic_.empty())diagnostic_=source.diagnostic;

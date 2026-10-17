@@ -51,15 +51,22 @@
         "toPin": 9
       },
       {
-        "fromNode": 8,
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 9,
+        "toNode": 9,
+        "toPin": 7
+      },
+      {
+        "fromNode": 9,
         "fromPin": 0,
-        "id": 8,
+        "id": 10,
         "toNode": 1,
         "toPin": 11
       }
     ],
-    "nextLinkId": 9,
-    "nextNodeId": 9,
+    "nextLinkId": 11,
+    "nextNodeId": 10,
     "nodes": [
       {
         "id": 1,
@@ -99,8 +106,8 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -1179.0,
-          58.0
+          -1163.0,
+          83.0
         ],
         "uv": {
           "mode": 0,
@@ -153,8 +160,8 @@
         "kind": 4,
         "name": "Base Color factor",
         "position": [
-          -495.0,
-          -118.0
+          -399.0,
+          -422.0
         ]
       },
       {
@@ -171,8 +178,8 @@
         },
         "name": "Multiply",
         "position": [
-          -125.0,
-          -200.0
+          -31.0,
+          -271.0
         ],
         "right": {
           "type": 0,
@@ -189,8 +196,8 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -525.0,
-          134.0
+          -925.0,
+          429.0
         ],
         "texture": {
           "image": "8c6bdc9b-43cc-5eea-ba74-da594df8be0e",
@@ -244,6 +251,30 @@
             1.0
           ]
         }
+      },
+      {
+        "grunge": {
+          "baseNoisiness": 0.10899999737739563,
+          "coverage": 0.7590000033378601,
+          "detail": 0.5,
+          "dirtSpecksOpacity": 0.8690000176429749,
+          "disorder": 0.5,
+          "invertDirt": false,
+          "largeVariationIntensity": 0.6859999895095825,
+          "leaksOpacity": 0.35199999809265137,
+          "scratchesOpacity": 0.8820000290870667,
+          "seed": 34068,
+          "sharpen": 0.6299999952316284,
+          "stainsOpacity": 0.3499999940395355,
+          "tiling": 1
+        },
+        "id": 9,
+        "kind": 19,
+        "name": "Grunge",
+        "position": [
+          -367.800048828125,
+          -104.19998168945313
+        ]
       }
     ],
     "version": 7

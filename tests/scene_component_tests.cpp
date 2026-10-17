@@ -29,13 +29,14 @@ void componentTransactions(const std::filesystem::path& root) {
     require(document.undo()&&!document.scene().find(id)->controller,"Dependency closure did not undo together.");
     require(document.redo(),"Dependency closure did not redo.");
     const auto tunedProfile=canonicalAssetId("tests/scene-components/tall-agent");
-    document.edit("Tune enemy",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==id){entity.controller->profile=AssetRef<NavigationAgentProfile>{tunedProfile};entity.motor->moveSpeed=3.25f;}});
+    const auto tunedInitializer=canonicalAssetId("tests/scene-components/initializer");
+    document.edit("Tune enemy",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==id){entity.controller->profile=AssetRef<NavigationAgentProfile>{tunedProfile};entity.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{tunedInitializer}}};}});
     require(addSceneComponent(document,id,SceneComponentKind::LightRig),"Could not attach actor rig.");
     require(addSceneComponent(document,id,SceneComponentKind::DarknessReveal),"Could not attach independent reveal.");
     record=*document.scene().find(id);
     require(record.actor&&record.lightRig&&record.darknessReveal,"Rig did not establish visual ownership.");
     require(!record.lightRig->localWorld.enabled,"Generic actor rig implicitly emitted player-style World illumination.");
-    require(record.motor->moveSpeed==3.25f&&record.controller->profile.id==tunedProfile,"Adding lighting reset locomotion values.");
+    require(record.effects&&record.effects->starting==std::vector{AssetRef<GameplayEffectAsset>{tunedInitializer}}&&record.controller->profile.id==tunedProfile,"Adding lighting reset locomotion values.");
     require(removeSceneComponent(document,id,SceneComponentKind::LightRig),"Could not remove rig.");
     require(document.scene().find(id)->actor&&document.scene().find(id)->motor&&document.scene().find(id)->darknessReveal,"Removing rig removed unrelated capabilities.");
     require(document.undo()&&document.scene().find(id)->lightRig,"Rig removal did not restore through undo.");
@@ -46,10 +47,10 @@ void componentTransactions(const std::filesystem::path& root) {
     require(!record.controller&&!record.motor&&!record.navigation&&record.lightRig&&record.darknessReveal,"Controller removal retained invalid dependents or erased lighting.");
     require(document.history().size()==removalHistory+1,"Dependent removal was not one undo command.");
     require(document.undo(),"Controller removal did not undo.");record=*document.scene().find(id);
-    require(record.controller->profile.id==tunedProfile&&record.motor->moveSpeed==3.25f&&record.navigation,"Controller undo lost tuned dependent settings.");
+    require(record.controller->profile.id==tunedProfile&&record.effects&&record.effects->starting==std::vector{AssetRef<GameplayEffectAsset>{tunedInitializer}}&&record.navigation,"Controller undo lost tuned dependent settings.");
     require(document.begin("Edit Motor"),"Could not start motor gesture.");
-    require(document.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==id)entity.motor->moveSpeed=8;}),"Could not update motor gesture.");
-    document.cancel();require(document.scene().find(id)->motor->moveSpeed==3.25f,"Gesture cancellation lost the disconnected motor settings.");
+    require(document.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==id)entity.effects->starting.emplace_back(newAssetId());}),"Could not update motor gesture.");
+    document.cancel();require(document.scene().find(id)->effects->starting==std::vector{AssetRef<GameplayEffectAsset>{tunedInitializer}},"Gesture cancellation lost the disconnected motor settings.");
     const auto standalone=document.createEmpty("Reveal volume");
     require(addSceneComponent(document,standalone,SceneComponentKind::DarknessReveal),"Standalone reveal rejected.");
     require(!document.scene().find(standalone)->actor&&!document.scene().find(standalone)->controller,"Reveal acquired unrelated actor/physics capabilities.");
@@ -71,7 +72,10 @@ void playerRemovalAndCamera(const std::filesystem::path& root) {
     require(document.scene().contains(camera)&&document.scene().contains(player),"Component removal deleted an entity.");
     require(document.undo()&&document.scene().properties().activeCamera==camera&&document.scene().find(camera)->cameraFollow,"Camera undo lost its follow configuration.");
     const auto components=sceneComponents(*document.scene().find(player));
-    require(components.size()==8&&components.front()==SceneComponentKind::Transform,"Player component rows were incomplete or acquired entity identities.");
+    require(components==std::vector{SceneComponentKind::Transform,SceneComponentKind::Actor,SceneComponentKind::Motor,
+        SceneComponentKind::Controller,SceneComponentKind::Navigation,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,
+        SceneComponentKind::DarknessReveal,SceneComponentKind::Effects},
+        "Player component rows were incomplete or acquired entity identities.");
 }
 void followDependency(const std::filesystem::path& root) {
     SceneDocument document(root);const auto owner=document.createEmpty("Camera owner");
@@ -90,7 +94,7 @@ void recipeAndVisualChildren(const std::filesystem::path& root) {
     SceneDocument document(root);
     const auto emptyEnemy=document.createEnemy();
     const auto enemy=*document.scene().find(emptyEnemy);
-    require(enemy.actor&&enemy.motor&&enemy.controller&&enemy.navigation&&enemy.lightRig&&enemy.darknessReveal,
+    require(enemy.enemy&&enemy.actor&&enemy.motor&&enemy.controller&&enemy.navigation&&enemy.lightRig&&enemy.darknessReveal,
         "Enemy recipe omitted a shared actor capability.");
     require(!enemy.playerInput&&!enemy.camera&&!enemy.cameraFollow&&document.scene().children(emptyEnemy).empty(),
         "Enemy recipe acquired player input or a camera.");
@@ -247,7 +251,8 @@ void legacyOutlinerMetadata(const std::filesystem::path& root) {
         else if(entity.at("name")=="Legacy point")entity["outlinerStyle"]={{"color",red},{"components",{{"point",blue}}}};
     }
     const std::string legacyId="assets/scenes/legacy-flat-metadata.crimson-scene";
-    const auto write=[&](const auto& value) {std::ofstream output(root/legacyId,std::ios::binary);output<<value.dump(2);};
+    const auto write=[&](const auto& value) {const auto file=contentStorageReady(root)?sceneAssetPath(root,legacyId):root/legacyId;
+        std::ofstream output(file,std::ios::binary);output<<value.dump(2);};
     write(json);const auto fingerprint=sceneFileFingerprint(root,legacyId);
     SceneDocument migrated(root);require(migrated.load(legacyId)&&!migrated.dirty(),"Legacy layout conversion dirtied its loaded document.");
     require(sceneFileFingerprint(root,legacyId)==fingerprint,"Loading legacy Outliner metadata rewrote the scene.");

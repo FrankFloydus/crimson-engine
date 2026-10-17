@@ -7,8 +7,8 @@ namespace crimson {
 // Camera Follow shares Camera's controls; Actor is ownership with no fields.
 inline std::vector<SceneComponentKind> sceneInspectorSections(const EntityRecord& record) {
     constexpr std::array order{
-        SceneComponentKind::Transform,SceneComponentKind::Model,SceneComponentKind::Particle,
-        SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation,
+        SceneComponentKind::Transform,SceneComponentKind::Tags,SceneComponentKind::Effects,SceneComponentKind::Model,SceneComponentKind::Particle,
+        SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation,SceneComponentKind::Enemy,
         SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,SceneComponentKind::DarknessReveal,
         SceneComponentKind::Camera,SceneComponentKind::NavigationVolume,SceneComponentKind::Collider,SceneComponentKind::Directional,
         SceneComponentKind::Point,SceneComponentKind::Quader,SceneComponentKind::Environment};

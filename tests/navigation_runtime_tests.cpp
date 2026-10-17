@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "navigation_fixture.h"
 #include <atomic>
 #include <algorithm>

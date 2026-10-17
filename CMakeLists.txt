@@ -76,9 +76,13 @@ target_compile_options(crimson-resources PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-resources PUBLIC crimson-math crimson-animation PRIVATE crimson-storage meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx)
 target_link_libraries(crimson-resources PRIVATE bcrypt)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/ActorLightRig.cpp src/runtime/SceneAnimations.cpp src/assets/NavigationAgentProfile.cpp)
+add_library(crimson-gameplay src/gameplay/GameplayTags.cpp src/gameplay/Attributes.cpp src/gameplay/Effects.cpp)
+target_include_directories(crimson-gameplay PUBLIC src)
+target_compile_options(crimson-gameplay PRIVATE /W4 /permissive- /utf-8)
+
+add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/ActorLightRig.cpp src/runtime/SceneAnimations.cpp src/assets/NavigationAgentProfile.cpp src/assets/GameplayEffectAsset.cpp)
 target_include_directories(crimson-scene PUBLIC src)
-target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage EnTT::EnTT nlohmann_json::nlohmann_json)
+target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage crimson-gameplay EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
@@ -106,7 +110,7 @@ target_include_directories(crimson-navigation PUBLIC src)
 target_link_libraries(crimson-navigation PUBLIC crimson-physics crimson-resources PRIVATE RecastNavigation::Recast RecastNavigation::Detour)
 target_compile_options(crimson-navigation PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-runtime src/runtime/PlaySession.cpp src/runtime/AgentSteering.cpp src/runtime/GameInput.cpp)
+add_library(crimson-runtime src/runtime/PlaySession.cpp src/runtime/AgentSteering.cpp src/runtime/GameInput.cpp src/runtime/EnemyBehaviour.cpp src/runtime/EntityAttributes.cpp src/runtime/EntityEffects.cpp)
 target_include_directories(crimson-runtime PUBLIC src)
 target_link_libraries(crimson-runtime PUBLIC crimson-navigation crimson-particles crimson-camera SDL3::SDL3)
 target_compile_options(crimson-runtime PRIVATE /W4 /permissive- /utf-8)
@@ -272,6 +276,8 @@ add_executable(crimson-renderer WIN32
     src/editor/ActorLightRigOverlay.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
+    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp
+    src/editor/CommandConsole.cpp src/editor/AttributeDebug.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/PlayerOcclusion.cpp src/editor/QuaderSceneIntegration.cpp
     src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp src/editor/PlayShortcuts.cpp
@@ -292,6 +298,7 @@ add_executable(crimson-renderer WIN32
     src/tools/QuaderInspector.cpp
     src/tools/GameView.cpp src/tools/LightingControls.cpp
     src/tools/GameViewInteraction.cpp
+    src/tools/CommandBar.cpp
     src/tools/InspectorTransform.cpp
     src/tools/CameraAuthoringControls.cpp
     src/tools/SceneOutlinerColor.cpp
@@ -303,7 +310,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp
-    src/tools/NavigationAgentProfileEditor.cpp
+    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -350,6 +357,95 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(effect_policy_tests tests/effect_policy_tests.cpp)
+    target_link_libraries(effect_policy_tests PRIVATE crimson-runtime)
+    target_compile_options(effect_policy_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME effect_policy_core COMMAND effect_policy_tests)
+    add_executable(effects_tests tests/effects_tests.cpp)
+    target_link_libraries(effects_tests PRIVATE crimson-gameplay)
+    target_compile_options(effects_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME effects_core COMMAND effects_tests)
+    add_executable(effect_runtime_tests tests/effect_runtime_tests.cpp)
+    target_link_libraries(effect_runtime_tests PRIVATE crimson-runtime)
+    target_compile_options(effect_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME effect_runtime_core COMMAND effect_runtime_tests)
+    add_executable(gameplay_effect_asset_tests tests/gameplay_effect_asset_tests.cpp src/editor/GameplayEffectDocument.cpp src/assets/AssetReferenceManager.cpp)
+    target_link_libraries(gameplay_effect_asset_tests PRIVATE crimson-scene crimson-resources)
+    target_compile_options(gameplay_effect_asset_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME gameplay_effect_asset_core COMMAND gameplay_effect_asset_tests)
+    add_executable(effects_play_tests tests/effects_play_tests.cpp)
+    target_link_libraries(effects_play_tests PRIVATE crimson-runtime)
+    target_compile_options(effects_play_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME effects_play_core COMMAND effects_play_tests)
+    add_executable(effects_scene_tests tests/effects_scene_tests.cpp)
+    target_link_libraries(effects_scene_tests PRIVATE crimson-scene)
+    target_compile_options(effects_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME effects_scene_core COMMAND effects_scene_tests)
+    add_executable(command_console_tests tests/command_console_tests.cpp src/editor/CommandConsole.cpp)
+    target_include_directories(command_console_tests PRIVATE src)
+    target_compile_options(command_console_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME command_console_core COMMAND command_console_tests)
+    add_executable(command_bar_ui_tests tests/command_bar_ui_tests.cpp src/tools/CommandBar.cpp src/editor/CommandConsole.cpp)
+    target_include_directories(command_bar_ui_tests PRIVATE src)
+    target_link_libraries(command_bar_ui_tests PRIVATE imgui::imgui)
+    target_compile_options(command_bar_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME command_bar_ui_core COMMAND command_bar_ui_tests)
+    add_executable(attribute_debug_tests tests/attribute_debug_tests.cpp src/editor/AttributeDebug.cpp)
+    target_link_libraries(attribute_debug_tests PRIVATE crimson-runtime)
+    target_compile_options(attribute_debug_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME attribute_debug_core COMMAND attribute_debug_tests)
+    add_executable(attribute_debug_overlay_tests tests/attribute_debug_overlay_tests.cpp)
+    target_link_libraries(attribute_debug_overlay_tests PRIVATE crimson-scene)
+    target_compile_options(attribute_debug_overlay_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME attribute_debug_overlay_core COMMAND attribute_debug_overlay_tests)
+    add_executable(gameplay_tag_tests tests/gameplay_tag_tests.cpp)
+    target_link_libraries(gameplay_tag_tests PRIVATE crimson-gameplay)
+    target_compile_options(gameplay_tag_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME gameplay_tag_core COMMAND gameplay_tag_tests)
+    add_executable(attribute_tests tests/attribute_tests.cpp)
+    target_link_libraries(attribute_tests PRIVATE crimson-gameplay)
+    target_compile_options(attribute_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME attribute_core COMMAND attribute_tests)
+    add_executable(attribute_scene_tests tests/attribute_scene_tests.cpp)
+    target_link_libraries(attribute_scene_tests PRIVATE crimson-scene)
+    target_compile_options(attribute_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME attribute_scene_core COMMAND attribute_scene_tests)
+    add_executable(attribute_runtime_tests tests/attribute_runtime_tests.cpp)
+    target_link_libraries(attribute_runtime_tests PRIVATE crimson-runtime)
+    target_compile_options(attribute_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME attribute_runtime_core COMMAND attribute_runtime_tests)
+    add_executable(gameplay_ui_tests tests/gameplay_ui_tests.cpp)
+    target_link_libraries(gameplay_ui_tests PRIVATE crimson-scene imgui::imgui)
+    target_compile_options(gameplay_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME gameplay_ui_core COMMAND gameplay_ui_tests)
+    add_executable(collision_scene_tests tests/collision_scene_tests.cpp)
+    target_link_libraries(collision_scene_tests PRIVATE crimson-scene)
+    target_compile_options(collision_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_scene_core COMMAND collision_scene_tests)
+    add_executable(collision_layers_document_tests tests/collision_layers_document_tests.cpp src/editor/CollisionLayersDocument.cpp)
+    target_link_libraries(collision_layers_document_tests PRIVATE crimson-scene)
+    target_compile_options(collision_layers_document_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_layers_document_core COMMAND collision_layers_document_tests)
+    add_executable(collision_physics_tests tests/collision_physics_tests.cpp)
+    target_link_libraries(collision_physics_tests PRIVATE crimson-physics)
+    target_compile_options(collision_physics_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_physics_core COMMAND collision_physics_tests)
+    add_executable(collision_runtime_tests tests/collision_runtime_tests.cpp src/editor/NavigationPreview.cpp)
+    target_link_libraries(collision_runtime_tests PRIVATE crimson-runtime)
+    target_compile_options(collision_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_runtime_core COMMAND collision_runtime_tests)
+    add_executable(collision_ui_tests tests/collision_ui_tests.cpp src/tools/CollisionLayersEditor.cpp src/editor/CollisionLayersDocument.cpp)
+    target_link_libraries(collision_ui_tests PRIVATE crimson-scene crimson-resources imgui::imgui)
+    target_compile_options(collision_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_ui_core COMMAND collision_ui_tests)
+    add_executable(enemy_scene_tests tests/enemy_scene_tests.cpp)
+    target_link_libraries(enemy_scene_tests PRIVATE crimson-scene)
+    target_compile_options(enemy_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME enemy_scene_core COMMAND enemy_scene_tests)
+    add_executable(enemy_runtime_tests tests/enemy_runtime_tests.cpp)
+    target_link_libraries(enemy_runtime_tests PRIVATE crimson-runtime)
+    target_compile_options(enemy_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME enemy_runtime_core COMMAND enemy_runtime_tests)
     add_executable(navigation_world_tests tests/navigation_world_tests.cpp)
     target_link_libraries(navigation_world_tests PRIVATE crimson-navigation)
     target_compile_options(navigation_world_tests PRIVATE /W4 /permissive- /utf-8)

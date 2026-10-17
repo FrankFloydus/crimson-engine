@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "scene/SceneExtraction.h"
 #include "editor/CollisionWire.h"
 

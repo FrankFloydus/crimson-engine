@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "physics/PhysicsWorld.h"
 #include "physics/CharacterMotor.h"
 #include "agent_profile_fixture.h"
@@ -151,7 +152,7 @@ void controllerAndMotorComposition() {
     scene.apply({floorRecord(),body},{});PhysicsWorld world;tick(scene,world,{4,0,0},60);
     require(world.characterCount()==1&&world.grounded(2)&&std::abs((*world.characterPosition(2))[0])<1e-5,
         "A controller without a Motor lost gravity/grounding or accepted horizontal movement.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor.emplace();scene.apply(records,{});
+    auto records=scene.records();for(auto& record:records)if(record.id==2){record.motor.emplace();}scene.apply(records,{});
     tick(scene,world,{2,0,0},30);require((*world.characterPosition(2))[0]>.95f,"Attaching Motor did not enable the existing controller.");
     records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;scene.apply(records,{});
     const auto stopped=*world.characterPosition(2);tick(scene,world,{4,0,0},30);
@@ -166,7 +167,7 @@ void geometryPublication() {
     const auto revision=world.geometryRevision();const auto boxes=world.staticBoxes();
     require(boxes.size()==1 && boxes[0].entity==1 && boxes[0].size==Vec3{20,1,20},"Published navigation geometry did not match the accepted static world.");
     tick(scene,world,{1,0,0},60);require(world.geometryRevision()==revision,"Character poses invalidated static geometry.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor->moveSpeed=8;
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision,"Unrelated scene edit invalidated static geometry.");
     records=scene.records();for(auto& record:records)if(record.id==1)record.local=math::translation({0,-2,0});
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision+1,"Live geometry edit did not publish a new revision.");

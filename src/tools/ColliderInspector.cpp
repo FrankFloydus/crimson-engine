@@ -59,7 +59,7 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
     ImGui::PushID("ColliderProperties");
     ImGui::BeginDisabled(canceled);
     int shape=static_cast<int>(value.shape);
-    const bool shapeChanged=ImGui::Combo("Shape",&shape,"Cube\0Sphere\0Cylinder\0Capsule\0Trimesh\0");
+    const bool shapeChanged=ImGui::Combo("Shape",&shape,value.mode==ColliderMode::Trigger?"Cube\0Sphere\0Cylinder\0Capsule\0":"Cube\0Sphere\0Cylinder\0Capsule\0Trimesh\0");
     if(shapeChanged)value=colliderForShape(document.scene(),record.id,value,static_cast<ColliderShape>(shape));
     edit(ColliderControl::Shape,"Change collision shape",shapeChanged);
     if(value.shape==ColliderShape::Box) {

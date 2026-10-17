@@ -13,6 +13,7 @@
 #include "resources/ResourceManager.h"
 #include "app/DiagnosticSession.h"
 #include "app/FrameProfile.h"
+#include "gameplay/Attributes.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <implot.h>
@@ -88,6 +89,8 @@ bool secondaryWindowDrawable() {
 
 }
 int run(const AppOptions& options) {
+    // Validate the immutable native vocabulary before any scene is loaded.
+    (void)nativeAttributeCatalog();
     const auto root = options.projectRoot.empty() ? std::filesystem::path(CC_PROJECT_ROOT) :
         std::filesystem::absolute(std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(options.projectRoot.data()), options.projectRoot.size())));
     std::filesystem::create_directories(root);

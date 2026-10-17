@@ -2,9 +2,11 @@
 #include "GameInput.h"
 #include "AgentSteering.h"
 #include "physics/CharacterMotor.h"
+#include "assets/GameplayEffectAsset.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -16,7 +18,23 @@ std::vector<ScenePoseUpdate> characterPoses(const Scene& scene) {
     return result;
 }
 }
-PlaySession::PlaySession(std::filesystem::path projectRoot):projectRoot_(std::move(projectRoot)){}
+PlaySession::PlaySession(std::filesystem::path projectRoot):projectRoot_(std::move(projectRoot)){
+    effects_.setDefinitions([this](const std::string& id) {
+        if(effectDefinitions_) {
+            auto result=effectDefinitions_(id);
+            if(result.definition||!result.diagnostic.empty()||result.readiness==EffectReadiness::Preparing)return result;
+        }
+        if(document_)if(auto staged=document_->gameplayEffect(id))return EffectDefinitionSnapshot{std::move(staged),1,{}};
+        if(auto engine=engineGameplayEffect(id))return EffectDefinitionSnapshot{std::move(engine),1,{}};
+        if(!effectDefinitions_)try {
+            auto definition=std::make_shared<const GameplayEffectAsset>(loadGameplayEffectAsset(projectRoot_,id));
+            std::uint64_t generation=14695981039346656037ull;
+            for(const auto byte:serializeGameplayEffectAsset(*definition)){generation^=static_cast<unsigned char>(byte);generation*=1099511628211ull;}
+            return EffectDefinitionSnapshot{std::move(definition),generation?generation:1,{}};
+        }catch(const std::exception& error){return EffectDefinitionSnapshot{{},0,error.what(),EffectReadiness::Failed};}
+        return EffectDefinitionSnapshot{{},0,"Effect unavailable: "+id};
+    });
+}
 void PlaySession::setResourceManager(ResourceManager& resources) {
     if(playing())throw std::logic_error("Cannot replace resource workers during Play.");
     navigation_.reset();ownedResources_.reset();resources_=&resources;
@@ -44,22 +62,59 @@ bool PlaySession::start(const SceneDocument& authored) {
         remainder_=0;ticks_=droppedTicks_=0;suspended_=failed_=false;
         lastClickedGround_.reset();lastHeldTarget_.reset();heldRetargetRemaining_=0;
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
-        editRevision_=document_->scene().revision();reconcileAgents();resetInterpolation();reconcileParticles(0);
+        editRevision_=document_->scene().revision();reconcileAttributes();reconcileAgents();resetInterpolation();reconcileParticles(0);
         status_=physics_->status()+particles_.status();return true;
     } catch(const std::exception& error){stop();status_="Cannot enter Play: "+std::string(error.what());return false;}
 }
 void PlaySession::stop() {
+    effects_.clear();
+    attributes_.clear();
+    triggerEvents_.clear();
     meshColliders_.clear();
-    particles_=SceneParticles{};navigation_.reset();agents_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();frameProfiles_.clear();acceptedProfiles_.clear();supportedProfiles_.clear();
+    particles_=SceneParticles{};navigation_.reset();agents_.clear();enemies_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();frameProfiles_.clear();acceptedProfiles_.clear();supportedProfiles_.clear();
     presentation_.apply({},{});remainder_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=false;status_.clear();
     navigationUpdate_={};navigationDomain_=navigationSceneRevision_=navigationGeometryRevision_=0;navigationVolume_.reset();navigationTransaction_=navigationCoalescing_=false;
     lastClickedGround_.reset();lastHeldTarget_.reset();heldRetargetRemaining_=0;
     controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
 }
+void PlaySession::reconcileAttributes() {
+    if(document_)effects_.reconcile(document_->documentGeneration(),document_->scene());
+}
+bool PlaySession::setAttributeBase(EntityId id,const GameplayTag& tag,double value) {
+    const AttributeBaseChange change{tag,value};return applyAttributeBaseChanges(id,std::span{&change,1});
+}
+bool PlaySession::addAttributeBase(EntityId id,const GameplayTag& tag,double value) {
+    const AttributeBaseChange change{tag,value,AttributeBaseOperation::Add};return applyAttributeBaseChanges(id,std::span{&change,1});
+}
+bool PlaySession::applyAttributeBaseChanges(EntityId id,std::span<const AttributeBaseChange> changes) {
+    if(!document_||failed_){status_="Attribute changes require an active Play session.";return false;}
+    reconcileAttributes();
+    const bool accepted=effects_.applyBaseChanges(id,changes);
+    if(!accepted)status_=effects_.status();return accepted;
+}
+EffectApplyResult PlaySession::applyEffect(EntityId source,EntityId target,const std::string& asset) {
+    if(!document_||failed_)return {EffectApplyStatus::Unavailable,{},"Effects require an active Play session."};
+    reconcileAttributes();return effects_.apply(source,target,asset);
+}
+bool PlaySession::removeEffect(EffectHandle handle,std::uint32_t stacks) {
+    return document_&&!failed_&&effects_.remove(handle,stacks);
+}
+std::size_t PlaySession::removeEffects(EntityId target,const std::string& asset) {
+    if(!document_||failed_)return 0;
+    std::size_t removed{};
+    for(const auto& effect:effects_.active(target))if(effect.definitionId==asset&&effects_.remove(effect.handle))++removed;
+    return removed;
+}
+std::vector<EntityId> PlaySession::triggerOverlaps(EntityId trigger) const {
+    return physics_?physics_->triggerOverlaps(trigger):std::vector<EntityId>{};
+}
+std::optional<PhysicsRayHit> PlaySession::raycast(const Ray& ray,float maxDistance,const PhysicsQueryFilter& filter) const {
+    return physics_?physics_->raycast(ray,maxDistance,filter):std::nullopt;
+}
 bool PlaySession::prepareMeshColliders(const Scene& scene,bool requireReady) {
     std::vector<PhysicsMeshCollider> prepared;
     collisionSourcesCurrent_=true;collisionSourceDiagnostic_.clear();
-    for(const auto& record:scene.records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
+    for(const auto& record:scene.records())if(record.collider && record.collider->mode==ColliderMode::Solid && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
         const auto source=colliderMeshResult(*record.collider,collisionMeshes_);
         if(!source.mesh||!source.current) {
             collisionSourcesCurrent_=false;
@@ -228,6 +283,7 @@ PlaySession::Agent* PlaySession::commandActor(EntityId id) {
         status_="Game input currently owns this actor.";return nullptr;
     }
     if(agentsRevision_!=document_->scene().revision()) {
+        reconcileAttributes();
         prepareMeshColliders(document_->scene(),false);
         reconcileProfiles();physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);reconcileNavigation();reconcileAgents();
     }
@@ -280,6 +336,7 @@ void PlaySession::advance(double seconds,Vec2 movement,const Camera& camera,bool
     advanceInternal(seconds,movement,camera,active);
 }
 void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& camera,bool active,GameInput* input) {
+    triggerEvents_.clear();
     if(!document_ || failed_)return;
     try {
         if(ownedResources_)resources_->pump();
@@ -287,6 +344,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             presentation_.apply(document_->scene().records(),document_->scene().properties());
             editRevision_=document_->scene().revision();resetInterpolation();
         }
+        reconcileAttributes();
         prepareMeshColliders(document_->scene(),false);
         reconcileProfiles();
         physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);
@@ -310,6 +368,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(input)inputCancellation_=input->cancellationRevision();
         const auto newInputOwner=input&&input->ownsKeyboard()&&acceptsInput?controlled:NoEntity;
         reconcileAgents();
+        advanceEnemies(0);
         if(newInputOwner!=inputOwner_) {
             if(inputOwner_)clearPlayerRoute();
             if(newInputOwner)if(const auto found=agents_.find(newInputOwner);found!=agents_.end())clearRoute(found->second);
@@ -325,7 +384,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             heldRetargetRemaining_=std::max(0.0,heldRetargetRemaining_-inputSeconds);
             const auto ray=input->consumeMoveRay(camera);
             if(ray) {
-                const auto hit=physics_->raycast(*ray,camera.farPlane);
+                const auto hit=physics_->raycast(*ray,camera.farPlane,PhysicsQueryFilter{WorldCollisionLayer,{},true,false,false});
                 // Any actual collider hit expresses movement intent. Navigation
                 // resolves walls and disconnected roofs to reachable ground;
                 // a ray miss still cannot invent a floor.
@@ -345,7 +404,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 // stationary cursor too, since its displayed camera may follow.
                 if(const auto heldRay=input->heldMoveRay(camera)) {
                     heldRetargetRemaining_=HeldRetargetInterval;
-                    const auto hit=physics_->raycast(*heldRay,camera.farPlane);
+                    const auto hit=physics_->raycast(*heldRay,camera.farPlane,PhysicsQueryFilter{WorldCollisionLayer,{},true,false,false});
                     if(hit && controlledPose && !agent.profile.empty())
                         retargetHeld(agent,math::transformPoint(*controlledPose,{}),hit->position);
                 }
@@ -359,10 +418,16 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         const auto executed=std::min(available,MaximumCatchUpTicks);
         for(std::uint64_t tick=0;tick<executed;++tick) {
             previous_=characterPoses(document_->scene());
+            if(!effects_.step(FixedStep))throw std::runtime_error(effects_.status());
+            advanceEnemies(FixedStep);
             for(auto& [id,agent]:agents_) {
                 const auto entity=document_->scene().find(id);const auto world=document_->scene().worldTransform(id);
                 if(!entity||!entity->motor||!entity->motor->enabled||!world)continue;
-                const float speed=entity->motor->moveSpeed;
+                if(effects_.readiness(id)!=EffectReadiness::Ready) {CharacterMotor(*physics_,id).move({});continue;}
+                const auto movementSpeed=attributes_.value(id,stats::MovementSpeed);
+                if(!movementSpeed)throw std::runtime_error("Motor is missing Stats.MovementSpeed.");
+                if(movementSpeed->current>std::numeric_limits<float>::max())throw std::runtime_error("Movement Speed exceeds the physics numeric range.");
+                const float speed=static_cast<float>(movementSpeed->current);
                 if(!input&&id==controlled&&acceptsInput && (movement!=Vec2{}||agent.source==CommandSource::DirectionalInput)) {
                     clearRoute(agent);agent.source=CommandSource::DirectionalInput;
                     agent.velocity=cameraRelativeMovement(movement,camera,speed);
@@ -387,8 +452,11 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             }
             const auto poses=physics_->step(document_->scene(),NoEntity,{},static_cast<float>(FixedStep),document_->transformEditRoots(),meshColliders_);
             if(!document_->applyRuntimePoses(poses))throw std::runtime_error(document_->status());
+            const auto events=physics_->triggerEvents();
+            triggerEvents_.insert(triggerEvents_.end(),events.begin(),events.end());
             current_=characterPoses(document_->scene());lastControlledPose_=document_->scene().worldTransform(controlled);
             for(auto& [id,agent]:agents_)agent.lastPose=document_->scene().worldTransform(id);
+            for(auto& [id,enemy]:enemies_)enemy.pose=document_->scene().worldTransform(id);
             ++ticks_;reconcileParticles(FixedStep);
         }
         droppedTicks_+=available-executed;
@@ -397,6 +465,8 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(remainder_>=FixedStep)remainder_=std::fmod(remainder_,FixedStep);
         refreshPresentation();reconcileParticles(0);
         status_=physics_->status();
+        if(!attributes_.status().empty())status_+=attributes_.status();
+        if(!effects_.status().empty())status_+=effects_.status();
         for(const auto& profile:supportedProfiles_) {
             const auto debug=navigation_->summary(profile.id);
             if(!debug.diagnostic.empty())status_+=debug.diagnostic+"\n";
@@ -404,7 +474,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         for(const auto& [id,agent]:agents_)if(!agent.status.empty())status_+="Actor "+std::to_string(id)+": "+agent.status;
         if(!particles_.status().empty())status_+=particles_.status();
         if(droppedTicks_)status_+="Play discarded "+std::to_string(droppedTicks_)+" catch-up ticks.\n";
-    } catch(const std::exception& error){remainder_=0;failed_=true;status_="Play simulation stopped: "+std::string(error.what());}
+    } catch(const std::exception& error){triggerEvents_.clear();remainder_=0;failed_=true;status_="Play simulation stopped: "+std::string(error.what());}
 }
 void PlaySession::refreshPresentation() {
     std::vector<ScenePoseUpdate> poses;poses.reserve(current_.size());const double alpha=std::clamp(interpolation(),0.0,1.0);

@@ -1,4 +1,5 @@
 #include "tools/SceneInspectorSections.h"
+#include "tools/EnemyInspectorControls.h"
 #include "tools/InspectorTransform.h"
 #include "tools/CameraAuthoringControls.h"
 #include "tools/SceneOutlinerColor.h"
@@ -145,13 +146,13 @@ void directEntitySelectionAndSections(const fs::path& root){
         std::vector<std::pair<EntityId,SceneComponentKind>>{{ui.point,SceneComponentKind::Transform},{ui.point,SceneComponentKind::Point}},
         "Selecting a Point Light did not expose its Transform and light properties directly.");
     ui.click(ui.player);
-    for(const auto kind:{SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation,
+    for(const auto kind:{SceneComponentKind::Effects,SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation,
                         SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,SceneComponentKind::DarknessReveal})
         require(ui.has(ui.player,kind),"Selecting Player hid one of its capability subsections.");
     require(ui.has(ui.model,SceneComponentKind::Transform)&&ui.has(ui.model,SceneComponentKind::Model)&&
         ui.has(ui.camera,SceneComponentKind::Camera)&&!ui.has(ui.camera,SceneComponentKind::CameraFollow)&&
         !ui.has(ui.player,SceneComponentKind::Actor),"Player did not expose its owned visual/Camera in consolidated subsections.");
-    const auto expected=std::vector{SceneComponentKind::Transform,SceneComponentKind::Controller,SceneComponentKind::Motor,
+    const auto expected=std::vector{SceneComponentKind::Transform,SceneComponentKind::Effects,SceneComponentKind::Controller,SceneComponentKind::Motor,
         SceneComponentKind::Navigation,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,SceneComponentKind::DarknessReveal};
     require(sceneInspectorSections(*ui.document.scene().find(ui.player))==expected,
         "Player Inspector subsection ordering changed or retained an empty ownership subsection.");
@@ -496,13 +497,92 @@ void entityColorPopup(const fs::path& root){
     require(!ui.open&&sceneOutlinerColor(*ui.document.scene().find(ui.first))==color,
         "Stale entity popup edited reused identities in a replacement document.");
 }
+class EnemyUi {
+public:
+    explicit EnemyUi(const fs::path& root):document(root) {
+        enemy=document.createEnemy("Ordinary Guard");document.select({enemy},enemy);tick();tick();
+    }
+    void tick() {
+        ImGui::NewFrame();shown.clear();
+        const bool canceled=ImGui::IsKeyPressed(ImGuiKey_Escape,false) && document.transactionActive();
+        if(canceled){document.cancel();ImGui::ClearActiveID();active.reset();}
+        ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({760,570});
+        ImGui::Begin("Inspector",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
+        auto value=capture();
+        drawEnemyInspectorControls(value,[&](EnemyInspectorControl control,const char* label,bool changed) {
+            shown.push_back(control);
+            const auto low=ImGui::GetItemRectMin(),high=ImGui::GetItemRectMax();
+            centers[static_cast<std::size_t>(control)]={low.x+ImGui::CalcItemWidth()*.5f,(low.y+high.y)*.5f};
+            if(!canceled && (ImGui::IsItemActivated() || changed)) {
+                if(active!=control) {
+                    if(document.transactionActive())document.commit();
+                    require(document.begin(label),"Enemy property could not begin its scene gesture.");active=control;
+                }
+                if(changed)require(document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==enemy)record.enemy=value;}),"Enemy property did not update atomically.");
+            }
+            if(active==control && (ImGui::IsItemDeactivated() || (changed && !ImGui::IsItemActive()))) {
+                require(document.commit(),"Enemy property gesture did not commit.");active.reset();
+            }
+        });
+        ImGui::End();ImGui::Render();
+        require(ImGui::GetCurrentContext()->ErrorCountCurrentFrame==0,"Enemy controls left invalid ImGui state.");
+    }
+    SceneEnemy capture()const{return *document.scene().find(enemy)->enemy;}
+    void behaviour(EnemyBehaviour behaviour) {
+        require(document.edit("Enemy behaviour fixture",[&](auto& records,auto&){for(auto& record:records)if(record.id==enemy)record.enemy->behaviour=behaviour;}),"Could not set the Enemy behaviour fixture.");tick();
+    }
+    void text(EnemyInspectorControl control,const char* text) {
+        const auto center=centers[static_cast<std::size_t>(control)];auto& io=ImGui::GetIO();
+        io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddMousePosEvent(center.x,center.y);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);tick();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);tick();io.AddKeyEvent(ImGuiMod_Ctrl,false);tick();
+        require(document.transactionActive(),"Enemy numeric entry did not activate its scene transaction.");
+        io.AddInputCharactersUTF8(text);tick();
+    }
+    void key(ImGuiKey key) {auto& io=ImGui::GetIO();io.AddKeyEvent(key,true);tick();io.AddKeyEvent(key,false);tick();tick();}
+    SceneDocument document;EntityId enemy{};
+    std::array<ImVec2,4> centers{};std::vector<EnemyInspectorControl> shown;
+private:
+    Context context_;std::optional<EnemyInspectorControl> active;
+};
+void enemyInspector(const fs::path& root) {
+    EnemyUi ui(root);const auto record=*ui.document.scene().find(ui.enemy);const auto sections=sceneInspectorSections(record);
+    require(record.enemy && record.navigation && !record.playerInput && !record.camera && record.enemy->behaviour==EnemyBehaviour::Idle,
+        "Add Enemy did not create the composed idle actor recipe.");
+    const auto navigation=std::find(sections.begin(),sections.end(),SceneComponentKind::Navigation),enemy=std::find(sections.begin(),sections.end(),SceneComponentKind::Enemy);
+    require(navigation!=sections.end() && enemy!=sections.end() && navigation<enemy &&
+        std::count(sections.begin(),sections.end(),SceneComponentKind::Navigation)==1 && std::count(sections.begin(),sections.end(),SceneComponentKind::Enemy)==1,
+        "Enemy Inspector section was omitted, duplicated or placed before its NavigationAgent.");
+    require(ui.shown==std::vector{EnemyInspectorControl::Behaviour},"Idle displayed Random Move properties.");
+    ui.behaviour(EnemyBehaviour::ChasePlayer);require(ui.shown==std::vector{EnemyInspectorControl::Behaviour},"Chase Player displayed Random Move properties.");
+    ui.behaviour(EnemyBehaviour::RandomMove);require(ui.shown==std::vector{EnemyInspectorControl::Behaviour,EnemyInspectorControl::Radius,EnemyInspectorControl::MinWait,EnemyInspectorControl::MaxWait},
+        "Random Move did not expose its radius and wait controls.");
+    const std::pair<EnemyInspectorControl,const char*> edits[]{
+        {EnemyInspectorControl::Radius,"8"},{EnemyInspectorControl::MinWait,"6"},{EnemyInspectorControl::MaxWait,"0.5"}};
+    for(const auto& [control,text]:edits) {
+        const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(control,text);
+        const auto live=ui.capture();require(ui.document.transactionActive() && ui.document.history().size()==history,"Enemy numeric entry committed before release.");
+        if(control==EnemyInspectorControl::Radius)require(std::abs(live.radius-8.f)<1e-5f,"Enemy Radius did not update.");
+        else if(control==EnemyInspectorControl::MinWait)require(live.minWait==6.f && live.maxWait==6.f,"Raising Min Wait failed to raise Max Wait in the same edit.");
+        else require(live.maxWait==.5f && live.minWait==.5f,"Lowering Max Wait failed to lower Min Wait in the same edit.");
+        ui.key(ImGuiKey_Enter);require(!ui.document.transactionActive() && ui.document.history().size()==history+1,"Enemy scalar gesture was not one undo command.");
+        require(ui.document.undo() && ui.capture()==before,"Enemy property Undo lost the paired wait values.");ui.tick();
+        require(ui.document.redo() && ui.capture()==live,"Enemy property Redo lost the edited values.");ui.tick();
+    }
+    const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(EnemyInspectorControl::Radius,"20");ui.key(ImGuiKey_Escape);
+    require(!ui.document.transactionActive() && ui.capture()==before && ui.document.history().size()==history,"Escape committed an Enemy radius gesture.");
+    ui.tick();require(ui.capture()==before,"A canceled Enemy numeric buffer reapplied its value.");
+    ui.behaviour(EnemyBehaviour::Idle);const auto idle=ui.capture();
+    require(idle.radius==before.radius && idle.minWait==before.minWait && idle.maxWait==before.maxWait && ui.shown==std::vector{EnemyInspectorControl::Behaviour},
+        "Switching behaviour discarded hidden Random Move values.");
+}
+
 }
 
 int main(){
     try{
         Project project;directEntitySelectionAndSections(project.root);directEnvironmentProperties(project.root);
         preserveRealHierarchy(project.root);reparentedPlayerChildrenStaySelectable(project.root);inlineVisualTransform(project.root);
-        inlineOwnedCamera(project.root);entityColorPopup(project.root);
+        inlineOwnedCamera(project.root);entityColorPopup(project.root);enemyInspector(project.root);
         std::cout<<"Direct entity selection, retained hierarchy, complete Inspector sections, owned visual/Camera gestures and entity colors passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

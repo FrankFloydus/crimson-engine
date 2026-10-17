@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <numbers>
 
 namespace crimson {
@@ -43,9 +44,11 @@ void GameView::drawMetrics(Vec2 origin,Vec2 size) const {
     if(style.WindowBorderSize>0)draw->AddRect(minimum,maximum,ImGui::GetColorU32(ImGuiCol_Border),style.WindowRounding,0,style.WindowBorderSize);
     draw->AddText({minimum.x+padding.x,minimum.y+padding.y},ImGui::GetColorU32(ImGuiCol_Text),text);draw->PopClipRect();
 }
-GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& open,bool playing,bool focus,std::uint64_t textureAndProgramBytes) {
+GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& open,bool playing,bool focus,std::uint64_t textureAndProgramBytes,
+                             bool attributeDebug) {
     GameViewFrame frame;
     imageDrawList_=nullptr;
+    imageFont_=nullptr;
     if(playing&&!wasPlaying_){metrics_.reset();metricsText_.clear();}
     wasPlaying_=playing;
     if(!open)return frame;
@@ -57,6 +60,7 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
     if(!open) { ImGui::End();frame.closed=true;return frame; }
     if(visible) {
         if(gameMetricsToggleRequested(playing))metricsVisible_=!metricsVisible_;
+        frame.attributeDebugCycle=gameAttributeDebugCycleRequested(playing&&attributeDebug);
         if(playing)updateMetrics(renderer,textureAndProgramBytes);
         drawRenderDebugControls(renderer,RenderViewPurpose::Game);
         const auto size=ImGui::GetContentRegionAvail();
@@ -71,6 +75,7 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
                 renderer.resizeGameViewport(frame.pixelWidth,frame.pixelHeight);
                 const auto interaction=drawGameViewImage(ImTextureRef(ImGuiBgfx::textureId(renderer.gameViewportTexture())),size);
                 imageDrawList_=ImGui::GetWindowDrawList();imageRegion_=frame.viewport;
+                imageFont_=ImGui::GetFont();imageFontSize_=ImGui::GetFontSize();
                 imageWidth_=frame.pixelWidth;imageHeight_=frame.pixelHeight;
                 frame.viewport.hovered=interaction.hovered;frame.clicked=interaction.clicked;
                 frame.leftHeld=interaction.held;
@@ -95,6 +100,40 @@ void GameView::drawActorLightRigs(const Camera& camera,const Scene& scene,const 
     const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
     const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
     drawSceneLightRigOverlays(*imageDrawList_,scene,matrix,rectangle,ClipDepth::ZeroToOne,profiles);
+}
+void GameView::drawAttributeDebug(const Camera& camera,const Scene& scene,EntityId target,std::span<const AttributeDebugRow> rows,
+                                const NavigationAgentProfileQuery& profiles,const ModelBoundsQuery& modelBounds) {
+    if(!imageDrawList_ || !imageFont_ || !imageWidth_ || !imageHeight_)return;
+    const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
+    imageDrawList_->PushClipRect({rectangle[0],rectangle[1]},{rectangle[0]+rectangle[2],rectangle[1]+rectangle[3]},true);
+    const auto record=scene.find(target);
+    if(record) {
+        const auto bounds=attributeDebugActorBounds(scene,target,profiles,modelBounds);
+        if(bounds.valid && math::finite(bounds.minimum) && math::finite(bounds.maximum)) {
+            const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
+            const auto center=(bounds.minimum+bounds.maximum)*.5f;
+            // Deliberately visible through scene geometry, like route diagnostics.
+            boxWireSegments(bounds.maximum-bounds.minimum,[&](const Vec3& start,const Vec3& end) {
+                if(const auto segment=projectClippedSegment(start+center,end+center,matrix,rectangle,ClipDepth::ZeroToOne))
+                    imageDrawList_->AddLine({(*segment)[0][0],(*segment)[0][1]},{(*segment)[1][0],(*segment)[1][1]},IM_COL32(255,255,0,255),2.f);
+            });
+        }
+    }
+    std::string text=record?record->name:"No eligible actor";
+    if(record)for(const auto& row:rows) {
+        char number[64];
+        if(std::isfinite(row.current))std::snprintf(number,sizeof(number),"%.6g",row.current);
+        else std::snprintf(number,sizeof(number),"N/A");
+        text+='\n';text+=row.name;text+=" | ";text+=number;
+    }
+    const auto& style=ImGui::GetStyle();const auto padding=style.WindowPadding;
+    const auto extent=imageFont_->CalcTextSizeA(imageFontSize_,std::numeric_limits<float>::max(),0,text.c_str());
+    const ImVec2 minimum{rectangle[0]+padding.x,rectangle[1]+padding.y};
+    const ImVec2 maximum{minimum.x+extent.x+padding.x*2,minimum.y+extent.y+padding.y*2};
+    imageDrawList_->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGuiCol_WindowBg),style.WindowRounding);
+    if(style.WindowBorderSize>0)imageDrawList_->AddRect(minimum,maximum,ImGui::GetColorU32(ImGuiCol_Border),style.WindowRounding,0,style.WindowBorderSize);
+    imageDrawList_->AddText(imageFont_,imageFontSize_,{minimum.x+padding.x,minimum.y+padding.y},ImGui::GetColorU32(ImGuiCol_Text),text.c_str());
+    imageDrawList_->PopClipRect();
 }
 void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                          const std::optional<Vec3>& characterPosition) {

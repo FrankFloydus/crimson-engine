@@ -26,4 +26,16 @@ bool gameMetricsToggleRequested(bool playing) {
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&!ImGui::GetDragDropPayload()&&
         ImGui::IsKeyPressed(ImGuiKey_F1,false);
 }
+int gameAttributeDebugCycleRequested(bool enabled) {
+    const auto& io=ImGui::GetIO();const auto& context=*ImGui::GetCurrentContext();
+    const auto image=ImGui::GetID("##GameViewportImage");
+    if(!enabled || io.AppFocusLost || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ||
+       io.WantTextInput || context.PlatformImeData.WantTextInput ||
+       (ImGui::IsAnyItemActive() && context.ActiveId!=image) ||
+       io.KeyCtrl || io.KeyAlt || io.KeySuper ||
+       ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) || ImGui::GetDragDropPayload())return 0;
+    const bool forward=ImGui::Shortcut(ImGuiKey_Tab,ImGuiInputFlags_RouteFocused);
+    const bool backward=ImGui::Shortcut(ImGuiMod_Shift|ImGuiKey_Tab,ImGuiInputFlags_RouteFocused);
+    return forward?1:backward?-1:0;
+}
 }

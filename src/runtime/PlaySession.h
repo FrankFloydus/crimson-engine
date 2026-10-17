@@ -3,6 +3,8 @@
 #include "physics/PhysicsWorld.h"
 #include "scene/SceneDocument.h"
 #include "AgentSteering.h"
+#include "EntityAttributes.h"
+#include "EntityEffects.h"
 #include "navigation/NavigationWorld.h"
 #include <functional>
 #include <chrono>
@@ -27,6 +29,7 @@ public:
     void setParticleDefinitions(SceneParticles::DefinitionQuery query){particleDefinitions_=std::move(query);}
     void setCollisionMeshDefinitions(CollisionMeshQuery query){collisionMeshes_=std::move(query);}
     void setAgentProfiles(NavigationAgentProfileQuery query){profileDefinitions_=std::move(query);}
+    void setGameplayEffects(GameplayEffectQuery query){effectDefinitions_=std::move(query);}
     void setResourceManager(ResourceManager&);
     const NavigationWorld* navigationWorld() const{return navigation_.get();}
     std::shared_ptr<const NavigationAgentProfile> acceptedAgentProfile(const std::string& id) const;
@@ -41,6 +44,16 @@ public:
     double interpolation() const{return remainder_/FixedStep;}
     std::uint64_t tickCount() const{return ticks_;}
     std::uint64_t droppedTicks() const{return droppedTicks_;}
+    const EntityAttributes& attributes() const{return attributes_;}
+    std::vector<AttributeSnapshot> attributeSnapshots(EntityId id) const{return attributes_.snapshot(id);}
+    std::optional<AttributeValue> attributeValue(EntityId id,const GameplayTag& tag) const{return attributes_.value(id,tag);}
+    bool setAttributeBase(EntityId,const GameplayTag&,double);
+    bool addAttributeBase(EntityId,const GameplayTag&,double);
+    bool applyAttributeBaseChanges(EntityId,std::span<const AttributeBaseChange>);
+    EffectApplyResult applyEffect(EntityId source,EntityId target,const std::string& asset);
+    bool removeEffect(EffectHandle,std::uint32_t stacks=0);
+    std::size_t removeEffects(EntityId target,const std::string& asset);
+    const EntityEffects& effects() const{return effects_;}
     std::uint64_t navigationRevision() const;
     std::uint64_t routeQueryCount() const;
     const std::optional<Vec3>& destination() const;
@@ -60,6 +73,11 @@ public:
     std::uint64_t actorNavigationRevision(EntityId) const;
     std::size_t navigationProfileCount() const{return supportedProfiles_.size();}
     std::uint64_t navigationBuildCount() const{return navigation_?navigation_->buildCount():0;}
+    // One batch contains all fixed ticks executed by the latest advance. Values
+    // remain valid until the next advance or Stop; observing them never drains it.
+    std::span<const TriggerEvent> triggerEvents() const{return triggerEvents_;}
+    std::vector<EntityId> triggerOverlaps(EntityId trigger) const;
+    std::optional<PhysicsRayHit> raycast(const Ray&,float maxDistance,const PhysicsQueryFilter& = {}) const;
 private:
     std::filesystem::path projectRoot_;
     std::unique_ptr<SceneDocument> document_;
@@ -85,7 +103,7 @@ private:
     bool navigationTransaction_{},navigationCoalescing_{};
     bool prepareMeshColliders(const Scene&,bool requireReady);
     std::vector<ScenePoseUpdate> previous_,current_;
-    enum class CommandSource { None,External,PlayerInput,DirectionalInput };
+    enum class CommandSource { None,External,PlayerInput,DirectionalInput,Enemy };
     struct Agent {
         AgentSteering steering;
         // Original intent survives an approach point so geometry changes can
@@ -101,6 +119,24 @@ private:
         std::string status;
     };
     std::unordered_map<EntityId,Agent> agents_;
+    EntityAttributes attributes_;
+    EntityEffects effects_{attributes_};
+    GameplayEffectQuery effectDefinitions_;
+    struct EnemyState {
+        SceneEnemy definition;
+        Vec3 origin{};
+        std::optional<Vec3> target;
+        std::optional<Vec3> chaseProgress;
+        std::optional<Mat4> pose;
+        std::optional<AgentTraversalSettings> traversal;
+        std::string profile;
+        std::uint64_t random{};
+        EntityId player{};
+        double wait{},retry{},retarget{};
+        double chaseStalled{},chaseRetry{};
+    };
+    std::unordered_map<EntityId,EnemyState> enemies_;
+    std::vector<TriggerEvent> triggerEvents_;
     std::optional<Vec3> lastClickedGround_;
     std::optional<Vec3> lastHeldTarget_;
     double heldRetargetRemaining_{};
@@ -116,8 +152,10 @@ private:
     void reconcileParticles(double);
     void resetInterpolation();
     void reconcileAgents();
+    void reconcileAttributes();
     void reconcileProfiles();
     void reconcileNavigation();
+    void advanceEnemies(double seconds);
     static void clearRoute(Agent&);
     void clearPlayerRoute();
     bool planRoute(Agent&,const Vec3& start);

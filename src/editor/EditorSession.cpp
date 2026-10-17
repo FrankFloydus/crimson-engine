@@ -23,7 +23,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),playerOcclusion_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),playerOcclusion_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -46,6 +46,17 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
         return play_.playing()?play_.acceptedAgentProfile(id):agentProfiles(id);
     });
     navigationProfileEditor_.setStagedProfiles([this](const std::string& id){return activeDocument().navigationAgentProfile(id);});
+    const GameplayEffectQuery gameplayEffects=[this,&assets](const std::string& id) {
+        try {
+            if(auto managed=assets.findGameplayEffect(id))return EffectDefinitionSnapshot{std::move(managed),assets.gameplayEffectRevision(id),{}};
+            if(auto staged=activeDocument().gameplayEffect(id))return EffectDefinitionSnapshot{std::move(staged),1,{}};
+            const auto diagnostic=assets.gameplayEffectDiagnostic(id);
+            if(!diagnostic.empty())return EffectDefinitionSnapshot{{},0,diagnostic};
+            return EffectDefinitionSnapshot{{},0,"Effect unavailable: "+id};
+        } catch(const std::exception& error) {return EffectDefinitionSnapshot{{},0,error.what()};}
+    };
+    gameplayEffectEditor_.setStagedEffects(gameplayEffects);
+    play_.setGameplayEffects(gameplayEffects);
     play_.setAgentProfiles(agentProfiles);play_.setResourceManager(resources_);
     editor_.setNavigationBuildStatus([this](const std::string& profile) {
         return navigationPreview_.status(play_.playing()?play_.navigationWorld():&navigationPreview_.world(),profile);
@@ -121,6 +132,8 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     particleEditor_.filesChanged(paths);
     materialEditor_.filesChanged(paths);
     navigationProfileEditor_.filesChanged(paths);
+    gameplayEffectEditor_.filesChanged(paths);
+    collisionLayersEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
         previews_->invalidateFile(path);
@@ -210,10 +223,11 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
+    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
+    attributeDebug_.reset();
     cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
     playerOcclusion_.clear();
     playAnimations_.clear();animationPlayTick_=0;
@@ -272,7 +286,43 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto previousCamera=cameraPilot_.freeCamera().value_or(settings_.camera);
     document.setPreviewCamera(settings_.camera);
     const auto interactionDocument=document.documentGeneration();
-    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_);
+    GameplayInspectorContext gameplay;
+    // Reserve the bottom viewport inset before the scene builds its dockspace.
+    // Console state is editor-only; commands operate on the transient Play world.
+    std::vector<ConsoleEffect> consoleEffects;
+    for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect)consoleEffects.push_back({asset.id,asset.name});
+    for(const auto& effect:document.stagedGameplayEffects())if(effect&&std::none_of(consoleEffects.begin(),consoleEffects.end(),[&](const auto& value){return value.id==effect->id;}))
+        consoleEffects.push_back({effect->id,effect->name});
+    commandBar_.setEffects(consoleEffects);
+    const auto command=commandBar_.draw();
+    attributeDebug_.update(play_);
+    if(command.command==ConsoleCommand::ShowDebugAttributes) {
+        if(play_.playing()) {
+            attributeDebug_.toggle(play_);commandBar_.releaseFocus();focusGame_=true;
+        } else commandBar_.setStatus("Start Play to use ShowDebug Attributes.");
+    }
+    else if(command.command) {
+        if(!play_.playing())commandBar_.setStatus("Start Play to apply or remove effects.");
+        else if(!attributeDebug_.enabled()||attributeDebug_.target()==NoEntity)commandBar_.setStatus("Run ShowDebug Attributes to select a target.");
+        else {
+            std::string diagnostic;const auto id=resolveConsoleEffect(command.argument,consoleEffects,diagnostic);
+            if(!id)commandBar_.setStatus(std::move(diagnostic));
+            else {
+                const auto target=attributeDebug_.target();
+                if(command.command==ConsoleCommand::ApplyEffect) {
+                    auto source=play_.document().scene().properties().playerCharacter;
+                    if(!source||!play_.document().scene().contains(source))source=target;
+                    const auto result=play_.applyEffect(source,target,*id);
+                    commandBar_.setStatus(result?"Effect applied.":result.diagnostic);
+                } else {
+                    const auto removed=play_.removeEffects(target,*id);
+                    commandBar_.setStatus(removed?"Active effect removed.":"No active instances; instant changes remain applied.");
+                }
+                commandBar_.releaseFocus();focusGame_=true;
+            }
+        }
+    }
+    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,gameplay);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
@@ -284,6 +334,10 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(frame.createNavigationAgentProfile)navigationProfileEditor_.requestCreate(frame.navigationAgentProfileFolder,assets);
     if(!frame.openNavigationAgentProfile.empty())navigationProfileEditor_.requestOpen(frame.openNavigationAgentProfile,assets);
     navigationProfileEditor_.draw(assets);
+    collisionLayersEditor_.draw();
+    if(frame.createGameplayEffect)gameplayEffectEditor_.requestCreate(frame.gameplayEffectFolder,assets);
+    if(!frame.openGameplayEffect.empty())gameplayEffectEditor_.requestOpen(frame.openGameplayEffect,assets);
+    gameplayEffectEditor_.draw(assets);
     status_=startupStatus_+playStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         cameraPilot_.sync(document,settings_.camera);
@@ -333,20 +387,22 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         } catch(const std::exception& error) { materialDropStatus_="Material assignment: "+std::string(error.what())+'\n'; }
     }
     bool gameOpen=editor_.panels().game;
-    const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes());
+    const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes(),attributeDebug_.enabled());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
-        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive()});
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive()});
     if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
     // ImGui focus selects the dock/tab; a detached Game also needs native
     // keyboard focus. Its platform window may only exist on the next frame.
     if(focusGame_ && gameWindow && SDL_GetKeyboardFocus()!=gameWindow)SDL_RaiseWindow(gameWindow);
-    gameInput_.setViewport(game.viewport,play_.playing() && gameWindow && game.pixelWidth>0 && gameCamera.has_value(),game.viewport.inputBlocked || simulationSuspended_);
+    gameInput_.setViewport(game.viewport,play_.playing() && gameWindow && game.pixelWidth>0 && gameCamera.has_value(),game.viewport.inputBlocked || simulationSuspended_ || command.inputActive);
     if(!game.focused)gameInput_.cancel();
     else if(game.clicked || focusGame_)gameInput_.acquire();
     if(game.pointerPosition)gameInput_.submitUiPointer(*game.pointerPosition,game.clicked,game.leftHeld);
+    if(game.attributeDebugCycle && game.focused && !command.inputActive && !simulationSuspended_)
+        attributeDebug_.cycle(play_,game.attributeDebugCycle<0);
     const bool focusComplete=game.focused && gameWindow && SDL_GetKeyboardFocus()==gameWindow &&
         (!gameCamera || gameInput_.ownsKeyboard());
     focusGame_=focusGame_ && gameOpen && play_.playing() && !focusComplete;
@@ -391,6 +447,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         const auto inputCamera=resolveGameCamera(play_.presentationScene());
         play_.advance(simulationSeconds,gameInput_,inputCamera.value_or(gameCamera.value_or(Camera{})),!simulationSuspended_);
     }
+    attributeDebug_.update(play_);
     const NavigationAgentProfileQuery agentProfiles=[&](const std::string& id) {
         if(play_.playing())return play_.acceptedAgentProfile(id);
         try {
@@ -487,6 +544,11 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
                 const auto hit=actor.id==renderScene.properties().playerCharacter?play_.lastClickedGround():std::optional<Vec3>{};
                 gameView_.drawRoute(*gameCamera,hit,play_.actorRemainingPath(actor.id),position);
             }
+            if(attributeDebug_.enabled())gameView_.drawAttributeDebug(*gameCamera,renderScene,attributeDebug_.target(),attributeDebug_.rows(play_),agentProfiles,
+                [&assets](const std::string& id)->std::optional<Aabb> {
+                    if(const auto model=assets.peekModel(id))return model->bounds;
+                    return std::nullopt;
+                });
         }
     }
     visiblePreviewIds_=frame.visiblePreviewIds;viewportRegion_=frame.viewport;

@@ -60,6 +60,11 @@ public:
             interaction.blocked=ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive() ||
                 ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) || ImGui::GetDragDropPayload()!=nullptr;
         }
+        if(popup)ImGui::OpenPopup("Debug input gate");
+        if(ImGui::BeginPopup("Debug input gate")){ImGui::TextUnformatted("Gate");ImGui::EndPopup();}
+        debugCycle=gameAttributeDebugCycleRequested(debugEnabled);
+        debugTabNavigation=ImGui::GetCurrentContext()->NavMoveSubmitted &&
+            (ImGui::GetCurrentContext()->NavMoveFlags&ImGuiNavMoveFlags_IsTabbing)!=0;
         region={origin.x,origin.y,size.x,size.y,interaction.hovered,interaction.blocked,9};
         imagePoint={origin.x+size.x*.5f,origin.y+size.y*.5f};
         input.setViewport(region,true,interaction.blocked);
@@ -80,6 +85,7 @@ public:
         SDL_Event event{};event.type=down?SDL_EVENT_KEY_DOWN:SDL_EVENT_KEY_UP;
         event.key.windowID=9;event.key.scancode=key;input.handleEvent(event);tick();
     }
+    void uiKey(ImGuiKey key,bool down) {ImGui::GetIO().AddKeyEvent(key,down);tick();}
     void motion(ImVec2 point) {
         ImGui::GetIO().AddMousePosEvent(point.x,point.y);
         SDL_Event event{};event.type=SDL_EVENT_MOUSE_MOTION;event.motion.windowID=9;event.motion.x=point.x;event.motion.y=point.y;
@@ -113,6 +119,8 @@ public:
         require(ImGui::GetIO().WantTextInput,"Text fixture did not acquire text input.");
     }
     GameInput input;
+    bool debugEnabled{},debugTabNavigation{},popup{};
+    int debugCycle{};
     ImVec2 imagePoint{},cameraPoint{};
     ViewportRegion region;
 private:
@@ -234,6 +242,32 @@ void trickledImagePressRespectsNativeRelease(bool docked) {
     require(!ui.input.consumeMoveRay(camera) && !ui.input.heldMoveRay(camera),
         "Trickled release replayed its destination or restored holding.");
 }
+void attributeDebugOwnsTabOnlyInGame(bool docked) {
+    GameUi ui(true,docked);ui.tick(true);ui.tick();
+    ui.uiKey(ImGuiKey_Tab,true);require(ui.debugCycle==0,"Disabled attribute debug consumed Tab.");
+    ui.uiKey(ImGuiKey_Tab,false);ui.debugEnabled=true;ui.tick(true);ui.tick();
+    ui.uiKey(ImGuiKey_Tab,true);
+    require(ui.debugCycle==1&&!ui.debugTabNavigation,"Focused attribute debug did not own forward Tab ahead of widget navigation.");
+    for(unsigned index=0;index<40;++index){ui.tick();require(ui.debugCycle==0,"Held Tab repeated target cycling.");}
+    ui.uiKey(ImGuiKey_Tab,false);ui.uiKey(ImGuiMod_Shift,true);ui.tick();ui.uiKey(ImGuiKey_Tab,true);
+    require(ui.debugCycle==-1&&!ui.debugTabNavigation,"Shift+Tab did not cycle backward exclusively.");
+    ui.uiKey(ImGuiKey_Tab,false);ui.uiKey(ImGuiMod_Shift,false);
+    for(const auto modifier:{ImGuiMod_Ctrl,ImGuiMod_Alt,ImGuiMod_Super}) {
+        ui.uiKey(modifier,true);ui.uiKey(ImGuiKey_Tab,true);
+        require(ui.debugCycle==0,"Extra modifiers triggered attribute target cycling.");
+        ui.uiKey(ImGuiKey_Tab,false);ui.uiKey(modifier,false);
+    }
+    ui.tick(true);ui.tick();ui.mouse(ui.imagePoint,true);ui.tick();ui.uiKey(ImGuiKey_Tab,true);
+    require(ui.debugCycle==1&&ui.input.ownsKeyboard(),"A held Game-image gesture prevented target cycling or lost movement ownership.");
+    ui.uiKey(ImGuiKey_Tab,false);ui.mouse(ui.imagePoint,false);
+    ui.key(SDL_SCANCODE_ESCAPE,true);ui.tick();ui.uiKey(ImGuiKey_Tab,true);
+    require(ui.debugCycle==1&&!ui.input.ownsKeyboard(),"Focused debug cycling incorrectly required or reacquired player movement ownership.");
+    ui.uiKey(ImGuiKey_Tab,false);
+    ui.focusText();ui.uiKey(ImGuiKey_Tab,true);
+    require(ui.debugCycle==0,"Attribute debug stole Tab from a text field.");ui.uiKey(ImGuiKey_Tab,false);
+    ui.tick(true);ui.tick();ui.popup=true;ui.tick();ui.uiKey(ImGuiKey_Tab,true);
+    require(ui.debugCycle==0,"Attribute debug cycled through an open popup.");
+}
 }
 int main() {
     try {
@@ -242,6 +276,7 @@ int main() {
             imageAcknowledgesPressCoordinates(docked);
             heldImageSteersUntilRelease(docked);heldImageCancellationNeedsNewPress(docked);
             imageAcknowledgementRespectsNativeCancellation(docked);trickledImagePressRespectsNativeRelease(docked);
+            attributeDebugOwnsTabOnlyInGame(docked);
         }
         std::cout<<"Game image/input integration checks passed.\n";return 0;
     } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

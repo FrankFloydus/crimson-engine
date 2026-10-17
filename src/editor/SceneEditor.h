@@ -1,6 +1,7 @@
 #pragma once
 #include "SceneViewport.h"
 #include "tools/AssetBrowser.h"
+#include "tools/GameplayInspectorContext.h"
 #include "EditorPreferences.h"
 #include "assets/AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
@@ -14,6 +15,8 @@ class QuaderBridge;
 class ParticleEditor;
 class MaterialEditor;
 class NavigationAgentProfileEditor;
+class CollisionLayersEditor;
+class GameplayEffectEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
 struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true},navigationMesh{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
@@ -21,7 +24,8 @@ class SceneEditor {
     friend struct EditorPerformanceProbe;
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
-                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&);
+                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,
+                     const GameplayInspectorContext& gameplay={});
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
@@ -83,7 +87,7 @@ private:
     std::uint64_t navigationPreviewGeneration_{};
     EntityId navigationPreviewVolume_{};
     std::function<std::string(const std::string&)> navigationBuildStatus_;
-    enum class CommandTarget { Scene,Particle,Material,Profile,Game };
+    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
     void cancelOpen();

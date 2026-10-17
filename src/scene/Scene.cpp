@@ -78,6 +78,10 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::Motor:return record.motor.has_value();
     case SceneComponentKind::Controller:return record.controller.has_value();
     case SceneComponentKind::Navigation:return record.navigation.has_value();
+    case SceneComponentKind::Enemy:return record.enemy.has_value();
+    case SceneComponentKind::Attributes:return false; // Retired authored capability.
+    case SceneComponentKind::Tags:return record.tags.has_value();
+    case SceneComponentKind::Effects:return record.effects.has_value();
     case SceneComponentKind::NavigationVolume:return record.navigationVolume.has_value();
     case SceneComponentKind::PlayerInput:return record.playerInput.has_value();
     case SceneComponentKind::LightRig:return record.lightRig.has_value();
@@ -110,7 +114,8 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
         a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
-        a.actor==b.actor && a.motor==b.motor && a.controller==b.controller && a.navigation==b.navigation && a.navigationVolume==b.navigationVolume &&
+        a.actor==b.actor && a.motor==b.motor && a.controller==b.controller && a.navigation==b.navigation && a.enemy==b.enemy && a.navigationVolume==b.navigationVolume &&
+        a.tags==b.tags && a.effects==b.effects &&
         a.playerInput==b.playerInput && a.lightRig==b.lightRig && a.darknessReveal==b.darknessReveal &&
         a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
@@ -156,6 +161,9 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* value = registry_.try_get<SceneMotor>(entity)) record.motor = *value;
     if (const auto* value = registry_.try_get<SceneCharacterController>(entity)) record.controller = *value;
     if (const auto* value = registry_.try_get<SceneNavigationAgent>(entity)) record.navigation = *value;
+    if (const auto* value = registry_.try_get<SceneEnemy>(entity)) record.enemy = *value;
+    if (const auto* value = registry_.try_get<GameplayTagContainer>(entity)) record.tags = *value;
+    if (const auto* value = registry_.try_get<SceneEffects>(entity)) record.effects = *value;
     if (const auto* value = registry_.try_get<SceneNavigationVolume>(entity)) record.navigationVolume = *value;
     if (const auto* value = registry_.try_get<ScenePlayerInput>(entity)) record.playerInput = *value;
     if (const auto* value = registry_.try_get<ActorLightRigSettings>(entity)) record.lightRig = *value;
@@ -310,14 +318,31 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (record.point && (!std::isfinite(record.point->shadowDepthBias) || record.point->shadowDepthBias<0 ||
             !std::isfinite(record.point->shadowNormalBias) || record.point->shadowNormalBias<0))
             throw std::runtime_error("Point shadow biases must be finite and nonnegative.");
-        if (record.motor && (!record.controller || !std::isfinite(record.motor->moveSpeed) || record.motor->moveSpeed<0))
-            throw std::runtime_error("Motor requires a Character Controller and a finite nonnegative move speed.");
+        if(record.tags)for(const auto& tag:record.tags->tags())if(!tag.valid())throw std::runtime_error("Tags require valid qualified names.");
+        if(record.effects) {
+            if(record.effects->starting.size()>4096)throw std::runtime_error("Starting Effects exceeds the 4096 application limit.");
+            for(const auto& effect:record.effects->starting)if(!isAssetUuid(effect.id))
+                throw std::runtime_error("Starting Effects must reference managed Gameplay Effect identities.");
+        }
+        if (record.motor && !record.controller)
+            throw std::runtime_error("Motor requires a Character Controller.");
         if (record.navigation && (!record.motor || !record.controller))
             throw std::runtime_error("Navigation Agent requires Motor and Character Controller components.");
+        if(record.enemy) {
+            const auto& enemy=*record.enemy;
+            if(!record.actor||!record.controller||!record.motor||!record.navigation)
+                throw std::runtime_error("Enemy requires a Visual Root, Character Controller, Motor and Navigation Agent.");
+            if(enemy.behaviour!=EnemyBehaviour::Idle&&enemy.behaviour!=EnemyBehaviour::ChasePlayer&&enemy.behaviour!=EnemyBehaviour::RandomMove)
+                throw std::runtime_error("Enemy behaviour is invalid.");
+            if(!std::isfinite(enemy.radius)||enemy.radius<0||!std::isfinite(enemy.minWait)||enemy.minWait<0||!std::isfinite(enemy.maxWait)||enemy.maxWait<enemy.minWait)
+                throw std::runtime_error("Enemy radius and wait times must be finite and nonnegative, with maximum wait at least minimum wait.");
+        }
         if (record.playerInput && (!record.motor || !record.controller))
             throw std::runtime_error("Player Input requires Motor and Character Controller components.");
         if (record.controller) {
             if(!isAssetUuid(record.controller->profile.id)||(isEngineAssetId(record.controller->profile.id)&&record.controller->profile.id!=DefaultNavigationAgentProfileId))throw std::runtime_error("Character Controller requires a Navigation Agent Profile UUID.");
+            if((record.controller->collision.layers&WorldCollisionLayer)||!(record.controller->collision.mask&WorldCollisionLayer))
+                throw std::runtime_error("Character Controller cannot belong to World and must include World in its collision mask.");
         }
         if(record.navigationVolume) {
             if(record.navigationVolume->enabled&&++navigationVolumeCount>1)throw std::runtime_error("A scene supports one enabled Navigation Volume.");
@@ -340,6 +365,11 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             pointCount+=std::size_t(record.lightRig->localWorld.enabled);
         if (record.collider) {
             const auto& c=*record.collider;
+            if(c.mode!=ColliderMode::Solid&&c.mode!=ColliderMode::Trigger)throw std::runtime_error("Collider mode is invalid.");
+            if(c.mode==ColliderMode::Solid&&(!(c.collision.layers&WorldCollisionLayer)||c.collision.mask!=AllCollisionLayers))
+                throw std::runtime_error("Solid Collider must belong to World and block all collision layers.");
+            if(c.mode==ColliderMode::Trigger&&((c.collision.layers&WorldCollisionLayer)||c.shape==ColliderShape::Trimesh))
+                throw std::runtime_error("Trigger Collider requires a primitive shape and cannot belong to World.");
             if(c.mesh && !c.mesh->validated())throw std::runtime_error("Native collider triangles must be constructed through the validated mesh factory.");
             if(c.shape>ColliderShape::Trimesh)throw std::runtime_error("Collider shape is invalid.");
             if(!math::finite(c.size)||std::any_of(c.size.begin(),c.size.end(),[](float size){return size<=0;})||
@@ -487,6 +517,9 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.motor) candidate.emplace<SceneMotor>(entity,*record.motor);
         if (record.controller) candidate.emplace<SceneCharacterController>(entity,*record.controller);
         if (record.navigation) candidate.emplace<SceneNavigationAgent>(entity,*record.navigation);
+        if (record.enemy) candidate.emplace<SceneEnemy>(entity,*record.enemy);
+        if (record.tags) candidate.emplace<GameplayTagContainer>(entity,*record.tags);
+        if (record.effects) candidate.emplace<SceneEffects>(entity,*record.effects);
         if (record.navigationVolume) candidate.emplace<SceneNavigationVolume>(entity,*record.navigationVolume);
         if (record.playerInput) candidate.emplace<ScenePlayerInput>(entity,*record.playerInput);
         if (record.lightRig) candidate.emplace<ActorLightRigSettings>(entity,*record.lightRig);

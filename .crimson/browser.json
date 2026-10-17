@@ -32,6 +32,10 @@
       "folder": "6c1c4c7b-795f-4e8e-a107-982260d0bae5",
       "name": ""
     },
+    "16abc04b-829c-5bf5-9b89-1172df6c9b76": {
+      "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
+      "name": ""
+    },
     "1cacbf5a-b83e-5db1-8676-8ae56e5e711e": {
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
       "name": ""
@@ -42,6 +46,10 @@
     },
     "26087cca-d47d-55c1-8785-10e298969496": {
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
+      "name": ""
+    },
+    "28995670-ed9c-5ed4-8f44-3971a8ea51a7": {
+      "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
       "name": ""
     },
     "2a688822-0606-5066-8f48-58684b4a2686": {
@@ -80,6 +88,10 @@
       "folder": "folder:content",
       "name": ""
     },
+    "6e935a86-7cee-56fd-b94f-ad94c52bf3ba": {
+      "folder": "1ee25282-028a-4630-bbfc-4959b5379990",
+      "name": ""
+    },
     "771bc4bc-0f03-5909-b8d5-a7bebbeeff96": {
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
       "name": ""
@@ -94,6 +106,10 @@
     },
     "7e7af03c-86e0-5f5a-b914-1cea7a1a0647": {
       "folder": "aa18ce18-bf49-4f3f-b4a8-bd68df3a0c68",
+      "name": ""
+    },
+    "7e7cd22e-6bdc-5f1e-8755-52491e16ed73": {
+      "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
       "name": ""
     },
     "811940ef-3a10-5270-9260-cdf7e96075d5": {
@@ -128,6 +144,10 @@
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
       "name": ""
     },
+    "ba7d04bd-c78e-43ee-97df-4e5dd0762c04": {
+      "folder": "folder:content",
+      "name": "Move"
+    },
     "c3ae2438-4ad0-55c5-9262-cc029709d261": {
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
       "name": ""
@@ -146,6 +166,10 @@
     },
     "d074c9a6-1cea-5164-8731-08322a5a719e": {
       "folder": "0e0aa4d8-2662-4724-b788-608557f63db1",
+      "name": ""
+    },
+    "defc302b-0015-5572-b8ac-0d646fc818e3": {
+      "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
       "name": ""
     },
     "e2883c1c-90ba-561a-86a6-a2523a18c288": {
@@ -168,8 +192,16 @@
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
       "name": ""
     },
+    "ed59476f-e0af-593a-bfc6-5c0a7dd490fe": {
+      "folder": "1ee25282-028a-4630-bbfc-4959b5379990",
+      "name": ""
+    },
     "ef018faa-b665-5c00-b217-8ff9b6d7de8f": {
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
+      "name": ""
+    },
+    "f899a299-8cad-5ece-8642-ea274bce2193": {
+      "folder": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
       "name": ""
     },
     "fb217e2a-3d72-59b1-816e-2d3b8a2259fc": {
@@ -193,6 +225,12 @@
       "path": "Content/textures"
     },
     {
+      "id": "1ee25282-028a-4630-bbfc-4959b5379990",
+      "name": "gameplay",
+      "parent": "folder:engine",
+      "path": "Engine/gameplay"
+    },
+    {
       "id": "2fe155f2-e910-4b62-87f9-44374e75c523",
       "name": "materials",
       "parent": "folder:engine",
@@ -209,6 +247,12 @@
       "name": "textures",
       "parent": "folder:engine",
       "path": "Engine/textures"
+    },
+    {
+      "id": "d538ad63-f38f-4a16-9fe3-45011e1466b5",
+      "name": "Gameplay",
+      "parent": "folder:content",
+      "path": "Content/Gameplay"
     },
     {
       "id": "df19896e-8a23-4212-a837-60846f86eafe",

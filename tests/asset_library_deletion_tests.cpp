@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "material_fixtures.h"
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
@@ -867,17 +868,77 @@ void navigationProfileDeletion() {
     require(active.save("Profile owners"),active.status());
     SceneDocument other(p.root);const auto otherActor=other.createEnemy("Other creature");value=*other.scene().find(otherActor);
     value.controller->profile=AssetRef<NavigationAgentProfile>{profile->id};require(other.updateEntity(otherActor,value)&&other.save("Other profile owner"),other.status());
-    library.refreshScenes();value=*active.scene().find(actor);value.local=math::translation({7,2,3});value.motor->moveSpeed=8;
+    library.refreshScenes();value=*active.scene().find(actor);value.local=math::translation({7,2,3});value.motor->enabled=false;
     require(active.updateEntity(actor,value),active.status());const auto unsaved=*active.scene().find(actor);
     const auto plan=library.planDeletion({profile->id},&active);
     require(plan.error.empty()&&plan.needsReferenceWarning()&&plan.scenes.size()==2&&plan.clearsActiveHistory,"Profile deletion did not index saved, live, volume and historical users.");
     finishDeletion(library,resources,plan,{},&active);
     const auto current=*active.scene().find(actor);
-    require(current.controller->profile.id==DefaultNavigationAgentProfileId&&current.local==unsaved.local&&current.motor==unsaved.motor&&active.dirty(),"Profile deletion removed its actor or discarded unrelated unsaved edits.");
+    require(current.controller->profile.id==DefaultNavigationAgentProfileId&&current.local==unsaved.local&&current.motor==unsaved.motor&&current.effects==unsaved.effects&&active.dirty(),"Profile deletion removed its actor or discarded unrelated unsaved edits.");
     require(active.scene().find(volume)->navigationVolume->profiles==std::vector<AssetRef<NavigationAgentProfile>>{AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}},"Profile replacement left duplicate supported profiles.");
     require(readSceneSnapshot(p.root,active.assetId()).records.size()==active.scene().records().size()&&record(readSceneSnapshot(p.root,other.assetId()),otherActor).controller->profile.id==DefaultNavigationAgentProfileId,"Profile deletion did not preserve/rewrite saved actor references.");
     require(!hasAsset(library,profile->id)&&library.findNavigationAgentProfile(profile->id)==defaultNavigationAgentProfile(),"Profile deletion did not publish its protected default replacement.");
     require(!library.deleteAssets(library.planDeletion({DefaultNavigationAgentProfileId}),{}),"Protected Default Agent was deleted.");
+}
+void gameplayEffectDeletion() {
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto first=library.createGameplayEffect("Deleted initializer"),replacement=library.createGameplayEffect("Replacement"),middle=library.createGameplayEffect("Retained middle");
+    const auto refs=[](std::initializer_list<std::string> ids){std::vector<AssetRef<GameplayEffectAsset>> result;for(const auto& id:ids)result.emplace_back(id);return result;};
+    SceneDocument active(p.root);const auto actor=active.createEnemy("Saved effect owner");auto value=*active.scene().find(actor);
+    value.effects->starting=refs({first->id,middle->id,first->id,replacement->id});require(active.updateEntity(actor,value)&&active.save("Effect owners"),active.status());
+    const auto currentFormat=nlohmann::json::parse(read(sceneAssetPath(p.root,active.assetId())));
+    require(currentFormat.at("version")==23&&std::none_of(currentFormat.at("entities").begin(),currentFormat.at("entities").end(),[](const auto& entity){return entity.contains("attributes");}),
+        "Current scene wrote an authored attribute membership/value table.");
+    SceneDocument other(p.root);const auto otherActor=other.createEnemy("Other owner");value=*other.scene().find(otherActor);
+    value.effects->starting=refs({first->id,first->id});require(other.updateEntity(otherActor,value)&&other.save("Other effects"),other.status());
+    library.refreshScenes();value=*active.scene().find(actor);value.name="Unrelated unsaved name";value.local=math::translation({8,2,4});
+    require(active.updateEntity(actor,value),active.status());const auto unsaved=value;
+    const auto pinned=library.findGameplayEffect(first->id);library.protectGameplayEffectDocument(first->id);
+    require(!library.deleteAssets(library.planDeletion({first->id},&active),{},&active)&&hasAsset(library,first->id),"Open effect document did not protect its managed asset.");
+    library.protectGameplayEffectDocument({});const auto plan=library.planDeletion({first->id},&active);
+    require(plan.error.empty()&&plan.needsReferenceWarning()&&plan.scenes.size()==2&&plan.clearsActiveHistory,"Effect deletion missed saved/live/history users.");
+    finishDeletion(library,resources,plan,{{first->id,replacement->id}},&active);
+    const auto expected=refs({replacement->id,middle->id,replacement->id,replacement->id});
+    const auto saved=readSceneSnapshot(p.root,active.assetId()),otherSaved=readSceneSnapshot(p.root,other.assetId());
+    require(active.scene().find(actor)->effects->starting==expected&&record(saved,actor).effects->starting==expected&&
+        record(otherSaved,otherActor).effects->starting==refs({replacement->id,replacement->id}),"Effect replacement reordered or deduplicated repeated entries.");
+    require(active.scene().find(actor)->name==unsaved.name&&active.scene().find(actor)->local==unsaved.local&&active.dirty()&&record(saved,actor).name=="Saved effect owner",
+        "Effect transaction discarded unrelated unsaved changes or wrote them into the saved scene.");
+    require(active.history().size()==0&&!active.undo()&&pinned&&pinned->id==first->id&&library.findGameplayEffect(first->id)->id==replacement->id,
+        "Effect deletion retained resurrection history or invalidated an immutable pinned definition.");
+    finishDeletion(library,resources,library.planDeletion({replacement->id},&active),{},&active);
+    require(active.scene().find(actor)->effects->starting==refs({middle->id})&&record(readSceneSnapshot(p.root,active.assetId()),actor).effects->starting==refs({middle->id})&&
+        record(readSceneSnapshot(p.root,other.assetId()),otherActor).effects->starting.empty(),"Clearing a deleted effect removed its entity, retained duplicates or selected a default.");
+    require(!library.findGameplayEffect(first->id)&&!library.findGameplayEffect(replacement->id),"Deleted effect aliases resurrected a managed definition.");
+    require(!library.deleteAssets(library.planDeletion({PlayerStartingEffectId}),{}),"Protected Player starting effect was deleted.");
+}
+void unrelatedDeletionMaterializesLegacyEffects(bool independentlySaved) {
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);const auto material=library.createMaterial("Delete unrelated material");
+    SceneDocument source(p.root);const auto first=source.createEnemy("First legacy"),second=source.createEnemy("Second legacy"),box=source.createBox();
+    auto value=*source.scene().find(box);value.modelMaterials={AssetRef<MaterialAsset>{material->id}};
+    require(source.updateEntity(box,value)&&source.save("Legacy effect owners"),source.status());
+    auto legacy=nlohmann::json::parse(read(sceneAssetPath(p.root,source.assetId())));legacy["version"]=21;unsigned index{};
+    for(auto& entity:legacy["entities"])if(entity.contains("enemy")) {
+        entity.erase("effects");const auto capacity=index++?123.:77.;
+        entity["attributes"]=nlohmann::json::array({{{"tag","Stats.Health"},{"startingBase",0}},{{"tag","Stats.MaxHealth"},{"startingBase",capacity}},{{"tag","Stats.MovementSpeed"},{"startingBase",2.5}}});
+    }
+    writeFileAtomically(sceneAssetPath(p.root,source.assetId()),legacy.dump());library.refreshScenes();SceneDocument active(p.root);require(active.load(source.assetId()),active.status());
+    const auto firstId=active.scene().find(first)->effects->starting.front().id,secondId=active.scene().find(second)->effects->starting.front().id;
+    auto expectedFirst=*active.gameplayEffect(firstId);const auto expectedSecond=*active.gameplayEffect(secondId);std::string independentlySavedBytes;
+    if(independentlySaved) {
+        expectedFirst.name="Independently edited initializer";expectedFirst.modifiers.front().magnitude.literal=900;
+        saveGameplayEffectAsset(p.root,expectedFirst);library.refreshGameplayEffects();independentlySavedBytes=read(gameplayEffectAssetPath(p.root,firstId));
+    }
+    value=*active.scene().find(second);value.local=math::translation({5,3,2});require(active.updateEntity(second,value),active.status());
+    finishDeletion(library,resources,library.planDeletion({material->id},&active),{},&active);
+    const auto rewritten=readSceneSnapshot(p.root,source.assetId());
+    require(rewritten.stagedGameplayEffects.empty()&&record(rewritten,first).effects->starting.front().id==firstId&&record(rewritten,second).effects->starting.front().id==secondId,
+        "Unrelated deletion lost staged initializer identities or wrote dangling migrated references.");
+    require(loadGameplayEffectAsset(p.root,firstId)==expectedFirst&&loadGameplayEffectAsset(p.root,secondId)==expectedSecond,
+        "Unrelated scene rewrite changed independent legacy attribute values.");
+    if(independentlySaved)require(read(gameplayEffectAssetPath(p.root,firstId))==independentlySavedBytes,"Deletion overwrote an independently edited initializer with a conversion seed.");
+    require(active.scene().find(second)->local==value.local&&active.dirty()&&hasAsset(library,firstId)&&hasAsset(library,secondId),
+        "Legacy effect publication lost an unrelated live edit or failed shared browser publication.");
 }
 void unrelatedDeletionMaterializesLegacyProfiles(bool independentlySaved) {
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -1042,6 +1103,6 @@ int main(int argc,char** argv){try{
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();bundledModelPublicationAndReferences();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
+    warningQueries();bundledModelPublicationAndReferences();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}
