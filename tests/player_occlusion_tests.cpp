@@ -1,3 +1,4 @@
+#include "agent_profile_fixture.h"
 #include "editor/PlayerOcclusion.h"
 #include <array>
 #include <chrono>
@@ -17,7 +18,7 @@ ResourceConfig config(){ResourceConfig value;value.workers=1;value.idleGrace=std
 struct World {
     Scene scene;std::vector<EntityRecord> records;SceneProperties properties;
     World() {
-        EntityRecord player;player.id=1;player.name="Player";player.actor.emplace();player.motor.emplace();player.controller.emplace();player.playerInput.emplace();player.navigation.emplace();player.controller->height=2;
+        EntityRecord player;player.id=1;player.name="Player";player.actor.emplace();player.motor.emplace();player.controller.emplace();player.playerInput.emplace();player.navigation.emplace();player.controller->profile=testing::agentProfile({2,.3f,45,.3f});
         player.lightRig.emplace();player.lightRig->enabled=false;player.darknessReveal=DarknessRevealSettings{false,8};
         EntityRecord child;child.id=2;child.name="Player visual";child.parent=1;
         EntityRecord camera;camera.id=10;camera.name="Game camera";camera.camera.emplace();
@@ -57,7 +58,7 @@ void warm(ResourceManager& resources,PlayerOcclusion& fade,const World& world,co
 void explicitParticipation() {
     require(!EntityRecord{}.fadeWhenOccluding&&!ModelReference{}.fadeWhenOccluding&&!ExtractedModel{}.fadeWhenOccluding,
         "Model occlusion fading must default to disabled at every authored/extracted boundary.");
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f})),model(21,math::translation({0,0,.6f}))};
     for(auto& pillar:models)pillar.fadeWhenOccluding=false;
     std::size_t boundsCalls{};
@@ -73,7 +74,7 @@ void explicitParticipation() {
         fade.stats().triangleTests==0,"Unchecking participation retained opacity through hysteresis or requested geometry.");
 }
 void hiddenVisualsDoNotFade() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f}))};models.front().visible=false;
     require(fade.update(world.scene,models,camera(),1,.5f,query.bounds(),query.triangles()).empty()&&query.calls==0&&
         fade.stats().boundsCandidates==0,"A hidden wall requested occlusion geometry or faded.");
@@ -91,7 +92,7 @@ void hiddenVisualsDoNotFade() {
         "An inherited-hidden player continued fading walls.");
 }
 void originalsDoorwayAndBroadphase() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f}))};
     const auto& cold=fade.update(world.scene,models,camera(),1,.15f,query.bounds(),query.triangles());
     require(cold.empty()&&resources.stats().loads==0,"Original geometry BVH was synchronously built/published on the frame thread.");
@@ -115,7 +116,7 @@ void originalsDoorwayAndBroadphase() {
     require(fade.update(world.scene,models,camera(),1,.15f,query.bounds(),query.triangles()).empty()&&query.calls==floorCalls,"An unobstructing floor faded or queued triangle work.");
 }
 void allOccludersAndDistance() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f})),model(21,math::translation({0,0,2})),model(22,math::translation({0,0,3.5f})),model(23,math::translation({0,0,5}))};
     warm(resources,fade,world,models,query);const auto calls=query.calls;
     const auto& result=fade.update(world.scene,models,camera(),1,.5f,query.bounds(),query.triangles());
@@ -126,7 +127,7 @@ void allOccludersAndDistance() {
     require(!removed.contains(20),"A removed visual retained transient opacity state.");
 }
 void affinePresentationAndPlayerExclusion() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     auto transform=math::translation({0,0,.3f})*math::eulerRotationXYZ({0,.4f,0})*math::scaling({-2,1.5f,.6f});transform.at(0,1)+=.2f;
     std::vector models{model(20,transform),model(1,math::translation({0,0,.2f})),model(2,math::translation({0,0,.1f}))};
     warm(resources,fade,world,models,query);const auto& result=fade.update(world.scene,models,camera(),1,.15f,query.bounds(),query.triangles());
@@ -138,7 +139,7 @@ void affinePresentationAndPlayerExclusion() {
         "Visibility used an unpresented/rest player position instead of the supplied scene transform.");
 }
 void resetsAndSmoothRestore() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f}))};warm(resources,fade,world,models,query);
     const auto approaching=opacity(fade.update(world.scene,models,camera(),1,.05f,query.bounds(),query.triangles()),20);
     require(approaching>.12f&&approaching<1,"Fade-in did not ease toward its target.");
@@ -158,7 +159,7 @@ void resetsAndSmoothRestore() {
     fade.clear();require(fade.stats().triangleTests==0,"Clearing disabled/hidden Game state retained query work.");
 }
 void smoothSpatialResponse() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.6f})),model(21,math::translation({0,0,2.25f})),model(22,math::translation({0,0,3.9f}))};
     warm(resources,fade,world,models,query);
     const auto& values=fade.update(world.scene,models,camera(),1,.5f,query.bounds(),query.triangles());
@@ -167,7 +168,7 @@ void smoothSpatialResponse() {
     require(opacity(values,20)<opacity(values,21)&&opacity(values,21)<opacity(values,22),"Smooth spatial response stopped being monotonic.");
 }
 void doorwayEdgeHysteresis() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({1.98f,0,.3f})),model(21,math::translation({8,0,.3f}))};
     warm(resources,fade,world,models,query);fade.update(world.scene,models,camera(),1,.5f,query.bounds(),query.triangles());
     for(unsigned frame=0;frame<24;++frame) {
@@ -190,7 +191,7 @@ void framePartitionIndependent() {
     auto custom=PlayerOcclusionSettings{};custom.minimumOpacity=.3f;custom.fadeStartDistance=6;custom.fullFadeDistance=.7f;
     custom.fadeOutSeconds=.09f;custom.fadeInSeconds=.2f;custom.restoreDelaySeconds=.11f;
     for(const auto& settings:std::array{PlayerOcclusionSettings{},custom}) {
-    ResourceManager resources(config());PlayerOcclusion whole(resources),partitioned(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion whole(resources,testing::agentProfileQuery()),partitioned(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f}))};
     warm(resources,whole,world,models,query,camera(),1,settings);warm(resources,partitioned,world,models,query,camera(),1,settings);
     const auto advance=[&](PlayerOcclusion& fade,const Camera& view,float duration,unsigned frames) {
@@ -226,7 +227,7 @@ void settingsValidationAndLiveTweaks() {
         value=defaults;value.*field=10.01f;require(!validPlayerOcclusionSettings(value),"Fade timing above ten seconds was accepted.");
     }
     value={1,1000,0,10,10,10};require(validPlayerOcclusionSettings(value)&&value!=defaults,"Supported settings endpoints were rejected.");
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.75f})),model(21,math::translation({0,0,2})),model(22,math::translation({0,0,3}))};
     PlayerOcclusionSettings settings{.35f,2.5f,1,0,0,0};warm(resources,fade,world,models,query,camera(),1,settings);
     const auto& initial=fade.update(world.scene,models,camera(),1,0,query.bounds(),query.triangles(),settings);
@@ -256,7 +257,7 @@ void settingsValidationAndLiveTweaks() {
     require(resources.stats().loads==loads&&fade.stats().pendingMeshes==0,"Live/invalid settings edits rebuilt immutable source BVHs.");
 }
 void configuredTimingAndInstantRestore() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall());
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall());
     std::vector models{model(20,math::translation({0,0,.3f}))};PlayerOcclusionSettings settings{.3f,4,.5f,.2f,.4f,.25f};
     warm(resources,fade,world,models,query,camera(),1,settings);
     const auto approaching=opacity(fade.update(world.scene,models,camera(),1,.1f,query.bounds(),query.triangles(),settings),20);
@@ -272,7 +273,7 @@ void configuredTimingAndInstantRestore() {
     require(fade.update(world.scene,models,clear,1,0,query.bounds(),query.triangles(),settings).empty(),"Zero delay/fade-in did not restore immediately.");
 }
 void repeatedQueries() {
-    ResourceManager resources(config());PlayerOcclusion fade(resources);World world;Query query(wall(false,50));
+    ResourceManager resources(config());PlayerOcclusion fade(resources,testing::agentProfileQuery());World world;Query query(wall(false,50));
     std::vector<ExtractedModel> models;models.reserve(1000);
     for(unsigned i=0;i<1000;++i)models.push_back(model(100+i,math::translation({i<5?0.f:100.f+4*i,0,.3f+.6f*(i%5)})));
     warm(resources,fade,world,models,query);const auto loads=resources.stats().loads;const auto calls=query.calls;

@@ -4,6 +4,7 @@
 #include "scene/SceneExtraction.h"
 #include "ViewportMaterialDrop.h"
 #include "ColliderGizmo.h"
+#include "NavigationVolumeGizmo.h"
 #include "ViewportTransformGesture.h"
 #include <span>
 #include <vector>
@@ -17,11 +18,12 @@ public:
                      bool showCollisions=true, bool showTransformGizmo=true, bool allowCameraNavigation=true,
                      bool cameraGestureActive=false, bool preserveCameraLens=false);
     void cancel(SceneDocument&, Renderer&);
-    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || materialDrop_.active(); }
+    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active(); }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
     void drawActorLightRigs(const Camera&,const Scene&);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
+    void setAgentProfileQuery(NavigationAgentProfileQuery query) { agentProfiles_=std::move(query); }
 private:
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
     bool pickCtrl_{false}, pickShift_{false}, waitForRelease_{false};
@@ -35,10 +37,12 @@ private:
     bool pickIntent_{};
     ViewportMaterialDrop materialDrop_;
     ColliderGizmoDrag colliderDrag_;
+    NavigationVolumeGizmoDrag volumeDrag_;
     ViewportTransformGesture transformDrag_;
     bool materialDropCanceled_{};
     ParticleBoundsQuery particleBounds_;
     CollisionMeshQuery collisionMeshes_;
+    NavigationAgentProfileQuery agentProfiles_;
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;
     void select(SceneDocument&, EntityId, bool toggle, bool append);

@@ -52,7 +52,7 @@ add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-rend
 target_link_libraries(crimson-camera PUBLIC crimson-math)
 target_compile_options(crimson-camera PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-storage src/assets/AtomicFile.cpp src/assets/ContentStorage.cpp src/assets/QuaderSceneBundle.cpp src/resources/AssetId.cpp)
+add_library(crimson-storage src/assets/AtomicFile.cpp src/assets/AssetTransaction.cpp src/assets/ContentStorage.cpp src/assets/QuaderSceneBundle.cpp src/resources/AssetId.cpp)
 target_link_libraries(crimson-storage PUBLIC nlohmann_json::nlohmann_json PRIVATE stduuid Ole32)
 target_include_directories(crimson-storage PUBLIC src)
 target_compile_definitions(crimson-storage PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -76,7 +76,7 @@ target_compile_options(crimson-resources PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-resources PUBLIC crimson-math crimson-animation PRIVATE crimson-storage meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx)
 target_link_libraries(crimson-resources PRIVATE bcrypt)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/ActorLightRig.cpp src/runtime/SceneAnimations.cpp)
+add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/ActorLightRig.cpp src/runtime/SceneAnimations.cpp src/assets/NavigationAgentProfile.cpp)
 target_include_directories(crimson-scene PUBLIC src)
 target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -101,9 +101,9 @@ target_link_libraries(crimson-physics PUBLIC crimson-scene PRIVATE Jolt::Jolt)
 target_compile_definitions(crimson-physics PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-physics PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-navigation src/navigation/NavigationMesh.cpp)
+add_library(crimson-navigation src/navigation/NavigationMesh.cpp src/navigation/NavigationTile.cpp src/navigation/NavigationWorld.cpp)
 target_include_directories(crimson-navigation PUBLIC src)
-target_link_libraries(crimson-navigation PUBLIC crimson-physics PRIVATE RecastNavigation::Recast RecastNavigation::Detour)
+target_link_libraries(crimson-navigation PUBLIC crimson-physics crimson-resources PRIVATE RecastNavigation::Recast RecastNavigation::Detour)
 target_compile_options(crimson-navigation PRIVATE /W4 /permissive- /utf-8)
 
 add_library(crimson-runtime src/runtime/PlaySession.cpp src/runtime/AgentSteering.cpp src/runtime/GameInput.cpp)
@@ -271,6 +271,7 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
     src/editor/ActorLightRigOverlay.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
+    src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/PlayerOcclusion.cpp src/editor/QuaderSceneIntegration.cpp
     src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp src/editor/PlayShortcuts.cpp
@@ -302,6 +303,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp
+    src/tools/NavigationAgentProfileEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -348,6 +350,30 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(navigation_world_tests tests/navigation_world_tests.cpp)
+    target_link_libraries(navigation_world_tests PRIVATE crimson-navigation)
+    target_compile_options(navigation_world_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME navigation_world_core COMMAND navigation_world_tests)
+    add_executable(navigation_profile_tests tests/navigation_profile_tests.cpp)
+    target_link_libraries(navigation_profile_tests PRIVATE crimson-scene)
+    target_compile_options(navigation_profile_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME navigation_profile_core COMMAND navigation_profile_tests)
+    add_executable(navigation_runtime_tests tests/navigation_runtime_tests.cpp)
+    target_link_libraries(navigation_runtime_tests PRIVATE crimson-runtime)
+    target_compile_options(navigation_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME navigation_runtime_core COMMAND navigation_runtime_tests)
+    add_executable(navigation_volume_ui_tests tests/navigation_volume_ui_tests.cpp src/editor/ColliderGizmo.cpp src/editor/NavigationVolumeGizmo.cpp)
+    target_link_libraries(navigation_volume_ui_tests PRIVATE crimson-scene crimson-camera imgui::imgui)
+    target_compile_options(navigation_volume_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME navigation_volume_ui_core COMMAND navigation_volume_ui_tests)
+    add_executable(navigation_agent_profile_document_tests tests/navigation_agent_profile_document_tests.cpp src/editor/NavigationAgentProfileDocument.cpp)
+    target_link_libraries(navigation_agent_profile_document_tests PRIVATE crimson-scene)
+    target_compile_options(navigation_agent_profile_document_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME navigation_agent_profile_document_core COMMAND navigation_agent_profile_document_tests)
+    add_executable(navigation_preview_tests tests/navigation_preview_tests.cpp src/editor/NavigationPreview.cpp)
+    target_link_libraries(navigation_preview_tests PRIVATE crimson-navigation)
+    target_compile_options(navigation_preview_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME navigation_preview_core COMMAND navigation_preview_tests)
     add_executable(atomic_file_tests tests/atomic_file_tests.cpp)
     target_link_libraries(atomic_file_tests PRIVATE crimson-storage)
     target_compile_options(atomic_file_tests PRIVATE /W4 /permissive- /utf-8)

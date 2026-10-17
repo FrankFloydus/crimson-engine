@@ -38,6 +38,9 @@ std::vector<StoredAssetPath> storedAssetPaths(const std::filesystem::path& root)
 // Validate a complete registration group before publishing one index update.
 // An unchanged group does not write the index or advance its revision.
 void registerAssetPaths(const std::filesystem::path& root, std::span<const StoredAssetPath> paths);
+// Prepare index publication alongside a larger recoverable asset transaction.
+// Does not write files or replace the current lookup snapshot.
+std::string prepareAssetPathRegistration(const std::filesystem::path& root,std::span<const StoredAssetPath> paths);
 void registerAssetPath(const std::filesystem::path& root, const std::string& id,
                        const std::filesystem::path& file);
 std::uint64_t contentStorageRevision(const std::filesystem::path& root);

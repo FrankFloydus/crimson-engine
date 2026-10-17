@@ -31,7 +31,7 @@ namespace crimson {
 namespace {
 using Json = nlohmann::json;
 // Legacy component-row metadata is validated during conversion, never written.
-constexpr std::array<std::string_view,AllSceneComponentKinds.size()> LegacyComponentTokens{
+constexpr std::array<std::string_view,17> LegacyComponentTokens{
     "transform","actor","motor","controller","navigation","playerInput","lightRig",
     "darknessReveal","camera","cameraFollow","model","collider","directional","point",
     "environment","particle","quader"};
@@ -344,9 +344,18 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>17) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>18) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
+    const auto legacyController=[&](EntityRecord& record,float height,float radius) {
+        AgentTraversalSettings traversal;traversal.height=height;traversal.radius=radius;
+        if(!validAgentTraversal(traversal))throw std::runtime_error("Legacy Character capsule dimensions are invalid.");
+        record.controller.emplace();
+        if(traversal==AgentTraversalSettings{})return;
+        const auto name=record.name.size()<=1018?record.name+" Agent":record.name;
+        auto profile=std::make_shared<const NavigationAgentProfile>(NavigationAgentProfile{newAssetId(),name,traversal});
+        record.controller->profile=AssetRef<NavigationAgentProfile>{profile->id};result.stagedNavigationControllers.emplace_back(record.id,profile->id);result.stagedNavigationProfiles.push_back(std::move(profile));
+    };
     result.name = json.at("name").get<std::string>();
     if (result.name.empty() || result.name.size() > 1024) throw std::runtime_error("Scene name is invalid.");
     const auto& settings = json.at("settings");
@@ -409,7 +418,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         if (version>=4 && version<=15 && entity.contains("character")) {
             const auto& c=entity.at("character");
             record.actor.emplace();record.motor=SceneMotor{c.at("moveSpeed").get<float>()};
-            record.controller=SceneCharacterController{c.at("height").get<float>(),c.at("radius").get<float>()};
+            legacyController(record,c.at("height").get<float>(),c.at("radius").get<float>());
             record.navigation=SceneNavigationAgent{c.value("showRoute",true)};record.playerInput.emplace();
             record.lightRig.emplace();record.darknessReveal.emplace();
             record.controller->showCollisionInGame=c.value("showCollisionInGame",false);
@@ -431,13 +440,16 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
                         (*record.darknessReveal).spread=old.at("key").value("radius",8.f);
                 }
             }
-            if(c.contains("lightRig"))(*record.lightRig)=readLightRig(c.at("lightRig"),(*record.darknessReveal),record.controller->height);
+            if(c.contains("lightRig"))(*record.lightRig)=readLightRig(c.at("lightRig"),(*record.darknessReveal),c.at("height").get<float>());
         }
         if(version>=16) {
             if(entity.contains("actor")) {if(!entity.at("actor").is_object())throw std::runtime_error("Actor must be an object.");record.actor.emplace();}
             if(entity.contains("motor")) {const auto& c=entity.at("motor");record.motor=SceneMotor{c.value("moveSpeed",5.f),c.value("enabled",true)};}
             if(entity.contains("controller")) {
-                const auto& c=entity.at("controller");record.controller=SceneCharacterController{c.value("height",1.8f),c.value("radius",.3f),c.value("showCollisionInGame",false)};
+                const auto& c=entity.at("controller");
+                if(version<=17)legacyController(record,c.value("height",1.8f),c.value("radius",.3f));
+                else {record.controller.emplace();record.controller->profile=c.at("profile").get<AssetRef<NavigationAgentProfile>>();}
+                record.controller->showCollisionInGame=c.value("showCollisionInGame",false);
                 record.controller->collisionColor=readCollisionColor(c,record.controller->collisionColor);
             }
             if(entity.contains("navigation")) {const auto& c=entity.at("navigation");record.navigation=SceneNavigationAgent{c.value("showRoute",true),c.value("enabled",true)};}
@@ -447,7 +459,15 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
                 if(!c.is_object() || (c.contains("version")&&c.at("version")!=2))throw std::runtime_error("Unsupported Darkness Reveal component.");
                 record.darknessReveal=DarknessRevealSettings{c.value("enabled",true),c.value("spread",8.f)};
             }
-            if(entity.contains("lightRig"))record.lightRig=readLightRig(entity.at("lightRig"),record.darknessReveal.value_or(DarknessRevealSettings{}),record.controller?record.controller->height:1.8f);
+            if(entity.contains("lightRig"))record.lightRig=readLightRig(entity.at("lightRig"),record.darknessReveal.value_or(DarknessRevealSettings{}),
+                entity.contains("controller")?entity.at("controller").value("height",1.8f):1.8f);
+        }
+        if(version>=18&&entity.contains("navigationVolume")) {
+            const auto& source=entity.at("navigationVolume");record.navigationVolume.emplace();auto& volume=*record.navigationVolume;
+            volume.size=source.at("size").get<Vec3>();volume.enabled=source.value("enabled",true);
+            volume.profiles=source.at("profiles").get<std::vector<AssetRef<NavigationAgentProfile>>>();
+            const auto& bake=source.at("bake");volume.bake={bake.at("cellSize").get<float>(),bake.at("cellHeight").get<float>(),
+                bake.at("tileSize").get<std::uint32_t>(),bake.at("maxSimplificationError").get<float>()};
         }
         if (version>=4 && entity.contains("collider")) {
             const auto& c=entity.at("collider");
@@ -618,6 +638,8 @@ void canonicalizeSceneAssetRefs(SceneSnapshot& snapshot) {
         for(auto& material:record.modelMaterials)material.id=canonicalAssetId(material.id);
         if(record.particle)record.particle->id=canonicalAssetId(record.particle->id);
         if(record.collider)record.collider->source.id=canonicalAssetId(record.collider->source.id);
+        if(record.controller)record.controller->profile.id=canonicalAssetId(record.controller->profile.id);
+        if(record.navigationVolume)for(auto& profile:record.navigationVolume->profiles)profile.id=canonicalAssetId(profile.id);
         if(record.environment)record.environment->environment.map=canonicalAssetId(record.environment->environment.map);
     }
 }
@@ -648,8 +670,11 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
         if(record.actor)entity["actor"]=Json::object();
         if(record.motor)entity["motor"]={{"moveSpeed",record.motor->moveSpeed},{"enabled",record.motor->enabled}};
-        if(record.controller) {const auto& c=*record.controller;entity["controller"]={{"height",c.height},{"radius",c.radius},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};}
+        if(record.controller) {const auto& c=*record.controller;entity["controller"]={{"profile",c.profile},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};}
         if(record.navigation)entity["navigation"]={{"showRoute",record.navigation->showRoute},{"enabled",record.navigation->enabled}};
+        if(record.navigationVolume) {const auto& volume=*record.navigationVolume;const auto& bake=volume.bake;
+            entity["navigationVolume"]={{"size",volume.size},{"enabled",volume.enabled},{"profiles",volume.profiles},
+                {"bake",{{"cellSize",bake.cellSize},{"cellHeight",bake.cellHeight},{"tileSize",bake.tileSize},{"maxSimplificationError",bake.maxSimplificationError}}}};}
         if(record.playerInput)entity["playerInput"]={{"enabled",record.playerInput->enabled}};
         if(record.lightRig)entity["lightRig"]=lightRigJson(*record.lightRig);
         if(record.darknessReveal)entity["darknessReveal"]={{"version",2},{"enabled",record.darknessReveal->enabled},{"spread",record.darknessReveal->spread}};
@@ -666,7 +691,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",17},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",18},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
@@ -685,7 +710,7 @@ enum EntityField : uint32_t {
     QuaderField=1u<<15,QuaderGeneratedField=1u<<16,LightingScopesField=1u<<17,
     ModelAnimationField=1u<<18,FadeWhenOccludingField=1u<<19,VisibleField=1u<<20,MotorField=1u<<21,ControllerField=1u<<22,NavigationField=1u<<23,
     PlayerInputField=1u<<24,LightRigField=1u<<25,DarknessRevealField=1u<<26,CameraFollowField=1u<<27,
-    OutlinerStyleField=1u<<28,AllEntityFields=(1u<<29)-1
+    OutlinerStyleField=1u<<28,NavigationVolumeField=1u<<29,AllEntityFields=(1u<<30)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -709,6 +734,7 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.motor!=b.motor)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
     if(a.navigation!=b.navigation)fields|=NavigationField;
+    if(a.navigationVolume!=b.navigationVolume)fields|=NavigationVolumeField;
     if(a.playerInput!=b.playerInput)fields|=PlayerInputField;
     if(a.lightRig!=b.lightRig)fields|=LightRigField;
     if(a.darknessReveal!=b.darknessReveal)fields|=DarknessRevealField;
@@ -733,6 +759,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&MotorField)target.motor=source.motor;
     if(fields&ControllerField)target.controller=source.controller;
     if(fields&NavigationField)target.navigation=source.navigation;
+    if(fields&NavigationVolumeField)target.navigationVolume=source.navigationVolume;
     if(fields&PlayerInputField)target.playerInput=source.playerInput;
     if(fields&LightRigField)target.lightRig=source.lightRig;
     if(fields&DarknessRevealField)target.darknessReveal=source.darknessReveal;
@@ -847,11 +874,40 @@ std::string serializeSceneSnapshot(const SceneSnapshot& snapshot) {
     return contents;
 }
 void saveSceneSnapshot(const std::filesystem::path& root,const std::string& id,const SceneSnapshot& snapshot) {
-    const auto file=scenePath(root,id);
-    auto current=snapshot;current.id=id;
+    if(!snapshot.stagedNavigationProfiles.empty()&&!contentStorageReady(root))initializeContentStorage(root);
+    auto plan=prepareScenePersistence(root,id,snapshot);
+    if(!plan.registrations.empty())plan.files.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(root,plan.registrations)});
+    commitAssetTransaction(root,plan.files);if(!plan.registrations.empty())refreshContentStorage(root);
+}
+ScenePersistencePlan prepareScenePersistence(const std::filesystem::path& root,const std::string& id,const SceneSnapshot& snapshot,const std::filesystem::path& sceneFile) {
+    auto current=snapshot;current.id=contentStorageReady(root)?canonicalAssetId(id):id;
     if(contentStorageReady(root))canonicalizeSceneAssetRefs(current);
-    writeFileAtomically(file,serializeSceneSnapshot(current));
-    if(contentStorageReady(root))registerAssetPath(root,canonicalAssetId(id),file);
+    std::unordered_set<std::string> referenced;
+    for(const auto& record:current.records) {
+        if(record.controller)referenced.insert(record.controller->profile.id);
+        if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)referenced.insert(profile.id);
+    }
+    ScenePersistencePlan plan;
+    const auto indexed=contentStorageReady(root)?storedAssetPaths(root):std::vector<StoredAssetPath>{};
+    std::unordered_set<std::string> staged;
+    for(const auto& profile:current.stagedNavigationProfiles)if(profile&&referenced.contains(profile->id)&&staged.insert(profile->id).second) {
+        validateNavigationAgentProfile(*profile);
+        const auto existing=std::find_if(indexed.begin(),indexed.end(),[&](const auto& entry){return entry.id==profile->id;});
+        if(existing!=indexed.end()) {
+            // An independently saved/edited profile is now authoritative. Do
+            // not resurrect a deleted file or overwrite it with conversion data.
+            (void)loadNavigationAgentProfile(root,profile->id);continue;
+        }
+        if(!contentStorageReady(root))throw std::runtime_error("Initialize Content storage before saving converted Navigation Agent Profiles.");
+        const auto file=checkedContentPath(root,root/"Content"/"Navigation"/fromUtf8(profile->id+".crimson-agent-profile"));
+        if(std::filesystem::exists(file))throw std::runtime_error("A converted Navigation Agent Profile destination already exists without registration.");
+        plan.files.push_back({utf8(file.lexically_relative(root)),serializeNavigationAgentProfile(*profile)});
+        plan.registrations.push_back({profile->id,file});
+    }
+    const auto file=sceneFile.empty()?scenePath(root,id):sceneFile;
+    plan.files.push_back({utf8(file.lexically_relative(root)),serializeSceneSnapshot(current)});
+    if(contentStorageReady(root))plan.registrations.push_back({current.id,file});
+    return plan;
 }
 uint64_t sceneFileFingerprint(const std::filesystem::path& root,const std::string& id) { return fingerprint(readText(scenePath(root,id))); }
 uint64_t sceneTextFingerprint(std::string_view contents) noexcept { return fingerprint(contents); }
@@ -939,9 +995,36 @@ bool SceneDocument::resetTransientFrom(const SceneDocument& source) {
         auto candidate=std::make_unique<Scene>();candidate->apply(source.scene().records(),source.scene().properties());
         auto selection=source.selection_;auto id=source.assetId_;auto name=source.name_;
         scene_.adoptPrepared(*candidate);selection_=std::move(selection);assetId_=std::move(id);name_=std::move(name);
-        previewCamera_=source.previewCamera_;loadedFingerprint_=source.loadedFingerprint_;transaction_.reset();history_.reset(true);
+        previewCamera_=source.previewCamera_;loadedFingerprint_=source.loadedFingerprint_;stagedNavigationProfiles_=source.stagedNavigationProfiles_;stagedNavigationControllers_=source.stagedNavigationControllers_;transaction_.reset();history_.reset(true);
         transient_=true;++documentGeneration_;status_.clear();return true;
     }catch(const std::exception& error){status_=error.what();return false;}
+}
+std::shared_ptr<const NavigationAgentProfile> SceneDocument::navigationAgentProfile(const std::string& id) const {
+    if(id==DefaultNavigationAgentProfileId)return defaultNavigationAgentProfile();
+    const auto found=stagedNavigationProfiles_.find(id);if(found==stagedNavigationProfiles_.end())return nullptr;
+    // Index membership means this identity became authored independently. Even
+    // a subsequently missing/corrupt file must not resurrect its migration seed.
+    if(contentStorageReady(projectRoot_))for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.id==id)return nullptr;
+    return found->second;
+}
+std::vector<std::shared_ptr<const NavigationAgentProfile>> SceneDocument::stagedNavigationAgentProfiles() const {
+    std::vector<std::shared_ptr<const NavigationAgentProfile>> result;result.reserve(stagedNavigationProfiles_.size());
+    for(const auto& [id,profile]:stagedNavigationProfiles_){(void)id;result.push_back(profile);}
+    return result;
+}
+std::shared_ptr<const NavigationAgentProfile> SceneDocument::legacyNavigationAgentProfileSeedForController(EntityId id) const {
+    const auto owner=stagedNavigationControllers_.find(id);if(owner==stagedNavigationControllers_.end())return nullptr;
+    const auto seed=stagedNavigationProfiles_.find(owner->second);return seed==stagedNavigationProfiles_.end()?nullptr:seed->second;
+}
+std::vector<std::string> SceneDocument::historicalNavigationAgentProfileReferences() const {
+    std::unordered_set<std::string> references;
+    const auto append=[&](const EntityRecord& record) {
+        if(record.controller)references.insert(record.controller->profile.id);
+        if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)references.insert(profile.id);
+    };
+    for(const auto& command:history_.commands_)for(const auto& change:command.entities){if(change.before)append(*change.before);if(change.after)append(*change.after);}
+    if(transaction_)for(const auto& change:transaction_->command.entities){if(change.before)append(*change.before);if(change.after)append(*change.after);}
+    std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
 }
 bool SceneDocument::applyRuntimePoses(std::span<const ScenePoseUpdate> poses) {
     if(!transient_){status_="Simulation poses require a transient Play document.";return false;}
@@ -963,6 +1046,8 @@ void SceneDocument::newScene() {
     history_.reset(false); transaction_.reset(); selection_ = {};
     assetId_.clear(); name_ = "Untitled"; status_ = "New unsaved scene.";
     previewCamera_.reset(); loadedFingerprint_=0;
+    stagedNavigationProfiles_.clear();
+    stagedNavigationControllers_.clear();
     ++documentGeneration_;
 }
 bool SceneDocument::load(const std::string& id) {
@@ -977,6 +1062,11 @@ bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExt
     if(transient_){status_="Stop Play before saving a scene.";return false;}
     if (transaction_ && !commit()) return false;
     try {
+        if(!stagedNavigationProfiles_.empty()&&!contentStorageReady(projectRoot_)) {
+            if(!assetId_.empty()&&!overwriteExternal&&externalFileChanged())throw std::runtime_error("The scene changed outside the editor before profile conversion could be saved.");
+            initializeContentStorage(projectRoot_);
+            if(!assetId_.empty())loadedFingerprint_=sceneFileFingerprint(projectRoot_,assetId_);
+        }
         std::string savedName = name.empty() ? name_ : name;
         if (savedName.empty() || savedName.size() > 1024 || savedName.find_first_not_of(" \t\r\n") == std::string::npos)
             throw std::runtime_error("Enter a scene name containing 1 to 1024 UTF-8 bytes.");
@@ -1005,11 +1095,13 @@ bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExt
         }
         if (!saveAs && !assetId_.empty() && !overwriteExternal && externalFileChanged())
             throw std::runtime_error("The scene file changed outside the editor. Reload, Save As, or explicitly overwrite it.");
-        const SceneSnapshot snapshot{savedId,savedName,scene_.records(),scene_.properties(),previewCamera_};
+        SceneSnapshot snapshot{savedId,savedName,scene_.records(),scene_.properties(),previewCamera_};snapshot.stagedNavigationProfiles=stagedNavigationAgentProfiles();
         const auto contents=serializeSceneSnapshot(snapshot);
         if(file.empty())file=scenePath(projectRoot_,savedId);
-        writeFileAtomically(file,contents);
-        if(contentStorageReady(projectRoot_))registerAssetPath(projectRoot_,savedId,file);
+        auto plan=prepareScenePersistence(projectRoot_,savedId,snapshot,file);
+        if(!plan.registrations.empty())plan.files.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(projectRoot_,plan.registrations)});
+        commitAssetTransaction(projectRoot_,plan.files);if(!plan.registrations.empty())refreshContentStorage(projectRoot_);
+        if(contentStorageReady(projectRoot_))for(const auto& entry:storedAssetPaths(projectRoot_))stagedNavigationProfiles_.erase(entry.id);
         assetId_ = std::move(savedId); name_ = std::move(savedName);
         history_.savedState_ = history_.state_;
         loadedFingerprint_=fingerprint(contents);
@@ -1076,9 +1168,14 @@ bool SceneDocument::applyPreparedSnapshot(const SceneSnapshot& snapshot,bool pre
         std::string preparedId=current.id, preparedName=current.name;
         if (preparedName.empty() || preparedName.size()>1024) throw std::runtime_error("Scene name is invalid.");
         if (current.previewCamera && !validCamera(*current.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
+        std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> stagedProfiles;
+        for(const auto& profile:current.stagedNavigationProfiles)if(profile){validateNavigationAgentProfile(*profile);stagedProfiles.emplace(profile->id,profile);}
+        std::unordered_map<EntityId,std::string> stagedControllers(current.stagedNavigationControllers.begin(),current.stagedNavigationControllers.end());
         scene_.apply(current.records,current.properties);
         assetId_=std::move(preparedId); name_=std::move(preparedName); previewCamera_=current.previewCamera;
         loadedFingerprint_=current.fingerprint; transaction_.reset(); history_.reset(true);
+        stagedNavigationProfiles_=std::move(stagedProfiles);
+        stagedNavigationControllers_=std::move(stagedControllers);
         ++documentGeneration_;
         if (!preserveSelection) selection_={};
         sanitizeSelection(); status_=std::string(opening ? "Opened scene: " : "Reloaded scene: ")+name_; return true;
@@ -1115,7 +1212,7 @@ bool SceneDocument::commitExternalAssetChanges(PreparedExternalChange&& p)noexce
     if(!canCommitExternalAssetChanges(p))return false;
     scene_.adoptPrepared(*p.scene);selection_.ids.swap(p.selection.ids);selection_.primary=p.selection.primary;
     history_.reset(!p.wasDirty);transaction_.reset();loadedFingerprint_=p.savedFingerprint;status_.swap(p.status);
-    if(p.newDocument){assetId_.clear();name_.swap(p.name);previewCamera_.reset();++documentGeneration_;}
+    if(p.newDocument){assetId_.clear();name_.swap(p.name);previewCamera_.reset();stagedNavigationProfiles_.clear();stagedNavigationControllers_.clear();++documentGeneration_;}
     p.owner=nullptr;return true;
 }
 bool SceneDocument::begin(const std::string& label) {
@@ -1361,6 +1458,15 @@ EntityId SceneDocument::createEnemy(const std::string& name) {
 EntityId SceneDocument::createCollider(const std::string& name,EntityId parent) {
     EntityRecord record;record.name=name;record.parent=parent;record.collider.emplace();
     return create(std::move(record),"Create collider");
+}
+EntityId SceneDocument::createNavigationVolume(const std::string& name,EntityId parent) {
+    const auto records=scene_.records();
+    for(const auto& record:records)if(record.navigationVolume&&record.navigationVolume->enabled){select({record.id},record.id);return record.id;}
+    EntityRecord record;record.name=name;record.parent=parent;record.navigationVolume.emplace();record.navigationVolume->profiles.clear();
+    std::unordered_set<std::string> profiles;
+    for(const auto& actor:records)if(actor.controller&&profiles.insert(actor.controller->profile.id).second)record.navigationVolume->profiles.push_back(actor.controller->profile);
+    if(record.navigationVolume->profiles.empty())record.navigationVolume->profiles.emplace_back(DefaultNavigationAgentProfileId);
+    return create(std::move(record),"Create Navigation Volume");
 }
 EntityId SceneDocument::createCamera(const std::string& name) {
     if(!begin("Create camera"))return NoEntity;

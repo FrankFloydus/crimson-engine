@@ -1,5 +1,5 @@
 #include "physics/PhysicsWorld.h"
-#include "navigation/NavigationMesh.h"
+#include "navigation_mesh_fixture.h"
 #include "runtime/PlaySession.h"
 #include "physics/ColliderGeometry.h"
 #include "scene/SceneExtraction.h"
@@ -40,7 +40,7 @@ void floorNavigationAndAcceptedReplacement() {
     require(below&&below->entity==1&&near(below->position[1],0),"Thin mesh collision did not accept a backface click ray.");
     tick(scene,physics,sources,180);
     require(physics.grounded(2)&&near((*physics.characterPosition(2))[1],0),"Character did not ground on original mesh triangles.");
-    NavigationMesh navigation;require(navigation.reconcile(physics,{}),"Mesh floor did not build navigation.");
+    crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());require(navigation.reconcile(physics,{}),"Mesh floor did not build navigation.");
     require(navigation.findPath({-3,.02f,0},{3,0,0}).has_value(),"Navigation omitted accepted triangle floor geometry: "+navigation.status());
     const auto revision=physics.geometryRevision(),navRevision=navigation.revision();
     floor.collider->collisionColor={1,0,1,.5f};floor.collider->showCollisionInGame=true;
@@ -66,12 +66,12 @@ void affineMeshTransformsAndRamps() {
         require(physics.colliderCount()==1&&physics.status().empty(),"Finite reflection/shear/ramp disabled a triangle collider: "+physics.status());
         const auto center=math::transformPoint(world,{});const auto hit=physics.raycast({center+Vec3{0,5,0},{0,-1,0}},10);
         require(hit&&near(hit->position[1],center[1])&&hit->normal[1]>.7f,"Affine collision surface did not match transformed authored triangles.");
-        NavigationMesh navigation;navigation.reconcile(physics,{});
+        crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());navigation.reconcile(physics,{});
         const auto start=math::transformPoint(world,{-3,.02f,0}),destination=math::transformPoint(world,{3,0,0});
         require(navigation.findPath(start,destination).has_value(),"Reflected/sheared/ramp triangles lost their walkable winding: "+navigation.status());
     }
     auto steep=collider(math::eulerRotationXYZ({0,0,1.1f}));Scene scene;scene.apply({steep},{});PhysicsWorld physics;physics.reconcile(scene,{},sources);
-    NavigationMesh navigation;navigation.reconcile(physics,{});
+    crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());navigation.reconcile(physics,{});
     require(!navigation.findPath(math::transformPoint(steep.local,{-3,0,0}),math::transformPoint(steep.local,{3,0,0})),"Steep triangle surface bypassed navigation slope limits.");
     auto floor=collider(math::eulerRotationXYZ({0,0,.25f}));scene.apply({floor,character({-3,2,0})},{});PhysicsWorld motor;tick(scene,motor,sources,120);
     double highest=-100;
@@ -102,7 +102,7 @@ void nativeTrianglesWithoutAssets() {
     require(pickCollisionShape(scene,{{0,3,0},{0,-1,0}},10)==1,"Native triangles required an asset query for editor picking.");
     const std::array<EntityId,1> selected{1};const auto bounds=selectionBounds(scene,selected,{});
     require(bounds.valid&&bounds.minimum==geometry->bounds.minimum&&bounds.maximum==geometry->bounds.maximum,"Native collision bounds were omitted.");
-    NavigationMesh navigation;navigation.reconcile(physics,{});
+    crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());navigation.reconcile(physics,{});
     require(navigation.findPath({-3,0,0},{3,0,0}).has_value(),"Native triangles did not generate navigation.");
     const auto revision=physics.geometryRevision();auto raised=geometry->positions;for(auto& point:raised)point[1]=.5f;
     floor.collider->mesh=makeCollisionMesh(std::move(raised),geometry->indices);scene.apply({floor},{});physics.reconcile(scene);
@@ -136,13 +136,13 @@ void primitiveShapesAndNavigation() {
         obstacle.collider->source=AssetRef<ModelAsset>{"assets/models/inactive/manifest.json"};obstacle.collider->size={9,9,9};
         scene.apply({obstacle,ground},{});physics.reconcile(scene);
         require(physics.geometryRevision()==revision&&physics.staticMeshes().front().mesh==geometry,"Inactive/debug fields regenerated primitive geometry.");
-        NavigationMesh navigation;require(navigation.reconcile(physics,{}),"Primitive navigation failed to build.");
+        crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());require(navigation.reconcile(physics,{}),"Primitive navigation failed to build.");
         const auto route=navigation.findPath({-4,.02f,0},{4,0,0});
         require(route.has_value(),"Primitive obstacle disconnected a navigable surrounding floor: "+navigation.status());
         require(std::any_of(route->corners.begin(),route->corners.end(),[](const auto& corner){return std::abs(corner[2])>.9f;}),"Navigation allowed a route through a solid primitive interior.");
         if(shape==ColliderShape::Cylinder) {
             Scene platform;obstacle.local=math::translation({0,-.5f,0});obstacle.collider->radius=4;obstacle.collider->height=1;
-            platform.apply({obstacle},{});PhysicsWorld platformPhysics;platformPhysics.reconcile(platform);NavigationMesh platformNav;platformNav.reconcile(platformPhysics,{});
+            platform.apply({obstacle},{});PhysicsWorld platformPhysics;platformPhysics.reconcile(platform);crimson::test::NavigationMeshFixture platformNav(crimson::test::navigationTestVolume());platformNav.reconcile(platformPhysics,{});
             require(platformNav.findPath({-2,.02f,0},{2,0,0}).has_value(),"Cylinder top was not usable as a walking surface.");
         }
     }

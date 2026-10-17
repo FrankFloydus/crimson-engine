@@ -11,60 +11,21 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <map>
+#include <cstring>
 
 namespace crimson {
 namespace {
 template<class T,void (*Free)(T*)> using Owner=std::unique_ptr<T,decltype(Free)>;
-constexpr std::uint64_t MaximumCells=4'000'000;
-constexpr std::uint64_t MaximumRasterCells=16'000'000;
 constexpr int MaximumCorners=512;
 constexpr unsigned MaximumReachableCandidates=8192,MaximumReachableQueries=24;
-constexpr float Skin=.02f; // Jolt CharacterVirtual's default contact padding.
 
-void appendBox(const PhysicsBox& box,std::vector<float>& vertices,std::vector<int>& triangles) {
-    const int first=static_cast<int>(vertices.size()/3);
-    for(int corner=0;corner<8;++corner) {
-        const auto point=math::transformPoint(box.world,{box.size[0]*(corner&1?.5f:-.5f),
-            box.size[1]*(corner&2?.5f:-.5f),box.size[2]*(corner&4?.5f:-.5f)});
-        if(!math::finite(point))throw std::runtime_error("Navigation geometry contains nonfinite box corners.\n");
-        vertices.insert(vertices.end(),point.begin(),point.end());
-    }
-    // Outward facing triangles; reflected transforms reverse their winding.
-    constexpr int faces[]={0,4,6,0,6,2, 1,3,7,1,7,5, 0,1,5,0,5,4,
-                           2,6,7,2,7,3, 0,2,3,0,3,1, 4,5,7,4,7,6};
-    const bool reflected=math::handedness(box.world)<0;
-    for(int index=0;index<36;index+=3) {
-        triangles.push_back(first+faces[index]);
-        triangles.push_back(first+faces[index+(reflected?2:1)]);
-        triangles.push_back(first+faces[index+(reflected?1:2)]);
-    }
-}
-void appendMesh(const PhysicsStaticMesh& source,std::vector<float>& vertices,std::vector<int>& triangles) {
-    if(!source.mesh)return;
-    const auto& mesh=*source.mesh;
-    if(vertices.size()/3+mesh.positions.size()>4'000'000 || triangles.size()+mesh.indices.size()>12'000'000)
-        throw std::runtime_error("Navigation triangle geometry exceeds its preparation budget.\n");
-    const int first=static_cast<int>(vertices.size()/3);
-    for(const auto& position:mesh.positions) {
-        const auto world=math::transformPoint(source.world,position);
-        if(!math::finite(world))throw std::runtime_error("Navigation mesh contains nonfinite positions.\n");
-        vertices.insert(vertices.end(),world.begin(),world.end());
-    }
-    const bool reflected=math::handedness(source.world)<0;
-    for(std::size_t index=0;index<mesh.indices.size();index+=3)for(unsigned corner=0;corner<3;++corner) {
-        const auto vertex=mesh.indices.at(index+(reflected && corner?3-corner:corner));
-        if(vertex>=mesh.positions.size())throw std::runtime_error("Navigation mesh index is out of bounds.\n");
-        triangles.push_back(first+static_cast<int>(vertex));
-    }
-}
-void require(bool success,const char* stage) {
-    if(!success)throw std::runtime_error(std::string("Navigation build failed: ")+stage+".\n");
-}
 double squaredDistance(const Vec3& a,const Vec3& b) {
     double result=0;for(unsigned axis=0;axis<3;++axis){const double delta=double(a[axis])-b[axis];result+=delta*delta;}return result;
 }
 std::optional<NavigationPath> completePath(dtNavMeshQuery& query,dtPolyRef startPolygon,dtPolyRef endPolygon,
-    const Vec3& start,const Vec3& nearStart,const Vec3& nearEnd,const Vec3& destination,const dtQueryFilter& filter) {
+    const Vec3& start,const Vec3& nearStart,const Vec3& nearEnd,const Vec3& destination,const dtQueryFilter& filter,
+    const dtNavMesh& mesh,const std::map<NavigationTileKey,NavigationTileVersion>& versions) {
     std::array<dtPolyRef,MaximumCorners> corridor{};int polygonCount=0;
     const auto result=query.findPath(startPolygon,endPolygon,nearStart.data(),nearEnd.data(),&filter,
         corridor.data(),&polygonCount,static_cast<int>(corridor.size()));
@@ -76,45 +37,27 @@ std::optional<NavigationPath> completePath(dtNavMeshQuery& query,dtPolyRef start
     if(dtStatusFailed(straightResult) || dtStatusDetail(straightResult,DT_BUFFER_TOO_SMALL) || cornerCount==0 ||
        !(flags[cornerCount-1]&DT_STRAIGHTPATH_END))return std::nullopt;
     NavigationPath path;path.corners.reserve(cornerCount);
+    for(int index=0;index<polygonCount;++index) {
+        const dtMeshTile* tile{};const dtPoly* polygon{};
+        if(dtStatusFailed(mesh.getTileAndPolyByRef(corridor[index],&tile,&polygon)))return {};
+        const auto found=versions.find({tile->header->x,tile->header->y});if(found==versions.end())return {};
+        if(std::find(path.tiles.begin(),path.tiles.end(),found->second)==path.tiles.end())path.tiles.push_back(found->second);
+    }
     if(std::hypot(nearStart[0]-start[0],nearStart[2]-start[2])>.01f)path.corners.push_back(nearStart);
     for(int corner=1;corner<cornerCount;++corner)path.corners.push_back({straight[corner*3],straight[corner*3+1],straight[corner*3+2]});
     if(path.corners.empty())path.corners.push_back(destination);else path.corners.back()=destination;
     return path;
 }
-void rasterizeSolidShape(rcContext& context,const rcConfig& config,const std::vector<float>& vertices,const std::vector<int>& triangles,
-    rcHeightfield& target,std::uint64_t& remainingCells) {
-    const auto vertexCount=static_cast<int>(vertices.size()/3),triangleCount=static_cast<int>(triangles.size()/3);
-    float minimum[3],maximum[3];rcCalcBounds(vertices.data(),vertexCount,minimum,maximum);
-    const int beginX=std::clamp(static_cast<int>(std::floor((minimum[0]-config.bmin[0])/config.cs)),0,config.width-1);
-    const int beginZ=std::clamp(static_cast<int>(std::floor((minimum[2]-config.bmin[2])/config.cs)),0,config.height-1);
-    const int endX=std::clamp(static_cast<int>(std::ceil((maximum[0]-config.bmin[0])/config.cs)),beginX+1,config.width);
-    const int endZ=std::clamp(static_cast<int>(std::ceil((maximum[2]-config.bmin[2])/config.cs)),beginZ+1,config.height);
-    const auto cells=static_cast<std::uint64_t>(endX-beginX)*(endZ-beginZ);
-    require(cells<=remainingCells,"overlapping colliders exceed the 16-million-cell rasterization limit");remainingCells-=cells;
-    minimum[0]=config.bmin[0]+beginX*config.cs;minimum[1]=config.bmin[1];minimum[2]=config.bmin[2]+beginZ*config.cs;
-    maximum[0]=config.bmin[0]+endX*config.cs;maximum[1]=config.bmax[1];maximum[2]=config.bmin[2]+endZ*config.cs;
-    Owner<rcHeightfield,rcFreeHeightField> shape(rcAllocHeightfield(),rcFreeHeightField);
-    require(shape!=nullptr,"convex heightfield allocation");
-    require(rcCreateHeightfield(&context,*shape,endX-beginX,endZ-beginZ,minimum,maximum,config.cs,config.ch),"convex heightfield");
-    std::vector<unsigned char> areas(static_cast<std::size_t>(triangleCount));
-    rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,vertices.data(),vertexCount,triangles.data(),triangleCount,areas.data());
-    require(rcRasterizeTriangles(&context,vertices.data(),vertexCount,triangles.data(),areas.data(),triangleCount,*shape,config.walkableClimb),"convex rasterization");
-    // Recast rasterizes surfaces. A Collider is a solid convex volume, so fill
-    // from each column's lowest to highest surface before merging shapes.
-    // This prevents a coincident floor from becoming walkable inside a collider.
-    for(int z=0;z<shape->height;++z)for(int x=0;x<shape->width;++x) {
-        const auto* bottom=shape->spans[x+z*shape->width];if(!bottom)continue;
-        auto* top=bottom;while(top->next)top=top->next;
-        require(rcAddSpan(&context,target,x+beginX,z+beginZ,static_cast<unsigned short>(bottom->smin),
-            static_cast<unsigned short>(top->smax),static_cast<unsigned char>(top->area),config.walkableClimb),"solid convex span");
-    }
-}
+
 }
 struct NavigationMesh::Impl {
     Owner<dtNavMesh,dtFreeNavMesh> mesh{nullptr,dtFreeNavMesh};
     Owner<dtNavMeshQuery,dtFreeNavMeshQuery> query{nullptr,dtFreeNavMeshQuery};
-    std::uint64_t sourceRevision{std::numeric_limits<std::uint64_t>::max()},revision{};
-    float radius{},height{};
+    std::uint64_t revision{};
+    float radius{},height{},CellSize{.1f},CellHeight{.05f},MaximumStep{.3f};
+    NavigationBakeSettings settings; AgentTraversalSettings agent; bool configured{},changed{};
+    std::map<NavigationTileKey,NavigationTileVersion> versions;
+    std::map<NavigationTileKey,std::shared_ptr<const NavigationTileData>> payloads;
     std::string diagnostic;
     std::unordered_map<dtPolyRef,std::size_t> componentByPolygon;
     std::vector<Aabb> componentBounds;
@@ -220,138 +163,87 @@ struct NavigationMesh::Impl {
         }
         return {};
     }
-    void build(const std::vector<PhysicsBox>& boxes,const std::vector<PhysicsStaticMesh>& meshes) {
-        query.reset();mesh.reset();componentByPolygon.clear();componentBounds.clear();bounds={};diagnostic.clear();
-        if(boxes.empty() && meshes.empty()){diagnostic="Navigation needs walkable static collision geometry.\n";return;}
-        std::vector<float> vertices;std::vector<int> triangles;
-        vertices.reserve(boxes.size()*24);triangles.reserve(boxes.size()*36);
-        for(const auto& box:boxes)appendBox(box,vertices,triangles);
-        for(const auto& source:meshes)appendMesh(source,vertices,triangles);
-        if(vertices.empty()){diagnostic="Navigation needs walkable static collision geometry.\n";return;}
-        const auto vertexCount=static_cast<int>(vertices.size()/3);
-        rcConfig config{};config.cs=CellSize;config.ch=CellHeight;
-        config.walkableSlopeAngle=MaximumSlope;
-        config.walkableHeight=std::max(3,static_cast<int>(std::ceil((static_cast<double>(height)+Skin)/config.ch)));
-        config.walkableClimb=static_cast<int>(std::floor(MaximumStep/config.ch));
-        config.walkableRadius=static_cast<int>(std::ceil((static_cast<double>(radius)+Skin)/config.cs));
-        config.maxEdgeLen=static_cast<int>(12/config.cs);config.maxSimplificationError=.5f;
-        config.minRegionArea=0;config.mergeRegionArea=16;config.maxVertsPerPoly=6;
-        config.detailSampleDist=config.cs*6;config.detailSampleMaxError=config.ch;
-        rcCalcBounds(vertices.data(),vertexCount,config.bmin,config.bmax);
-        config.bmin[1]-=config.ch;config.bmax[1]+=height+config.ch;
-        const double width=std::ceil((static_cast<double>(config.bmax[0])-config.bmin[0])/config.cs);
-        const double depth=std::ceil((static_cast<double>(config.bmax[2])-config.bmin[2])/config.cs);
-        require(width>0 && depth>0 && width<=65535 && depth<=65535 && width*depth<=MaximumCells,
-                "static geometry exceeds the 4-million-cell navigation limit");
-        require((static_cast<double>(config.bmax[1])-config.bmin[1])/config.ch<RC_SPAN_MAX_HEIGHT,
-                "static geometry exceeds the navigation height range");
-        rcCalcGridSize(config.bmin,config.bmax,config.cs,&config.width,&config.height);
-        require(config.width>0 && config.height>0,"collider bounds are smaller than one navigation cell");
-        rcContext context(false);
-        Owner<rcHeightfield,rcFreeHeightField> solid(rcAllocHeightfield(),rcFreeHeightField);
-        require(solid!=nullptr,"heightfield allocation");
-        require(rcCreateHeightfield(&context,*solid,config.width,config.height,config.bmin,config.bmax,config.cs,config.ch),"heightfield");
-        auto remainingCells=MaximumRasterCells;
-        for(const auto& box:boxes) {
-            std::vector<float> shapeVertices;std::vector<int> shapeTriangles;appendBox(box,shapeVertices,shapeTriangles);
-            rasterizeSolidShape(context,config,shapeVertices,shapeTriangles,*solid,remainingCells);
-        }
-        for(const auto& source:meshes)if(source.solid && source.mesh) {
-            std::vector<float> shapeVertices;std::vector<int> shapeTriangles;appendMesh(source,shapeVertices,shapeTriangles);
-            rasterizeSolidShape(context,config,shapeVertices,shapeTriangles,*solid,remainingCells);
-        }
-        if(!meshes.empty()) {
-            std::vector<float> meshVertices;std::vector<int> meshTriangles;
-            for(const auto& source:meshes)if(!source.solid)appendMesh(source,meshVertices,meshTriangles);
-            const auto count=static_cast<int>(meshTriangles.size()/3),meshVertexCount=static_cast<int>(meshVertices.size()/3);
-            if(count) {
-                std::vector<unsigned char> areas(static_cast<std::size_t>(count));
-                rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,meshVertices.data(),meshVertexCount,meshTriangles.data(),count,areas.data());
-                require(rcRasterizeTriangles(&context,meshVertices.data(),meshVertexCount,meshTriangles.data(),areas.data(),count,*solid,config.walkableClimb),"mesh collision rasterization");
-            }
-        }
-        rcFilterLowHangingWalkableObstacles(&context,config.walkableClimb,*solid);
-        rcFilterLedgeSpans(&context,config.walkableHeight,config.walkableClimb,*solid);
-        rcFilterWalkableLowHeightSpans(&context,config.walkableHeight,*solid);
-        Owner<rcCompactHeightfield,rcFreeCompactHeightfield> compact(rcAllocCompactHeightfield(),rcFreeCompactHeightfield);
-        require(compact!=nullptr,"compact heightfield allocation");
-        require(rcBuildCompactHeightfield(&context,config.walkableHeight,config.walkableClimb,*solid,*compact),"compact heightfield");
-        solid.reset();
-        require(rcErodeWalkableArea(&context,config.walkableRadius,*compact),"capsule clearance");
-        require(rcBuildDistanceField(&context,*compact),"distance field");
-        require(rcBuildRegions(&context,*compact,0,config.minRegionArea,config.mergeRegionArea),"regions");
-        Owner<rcContourSet,rcFreeContourSet> contours(rcAllocContourSet(),rcFreeContourSet);
-        require(contours!=nullptr,"contour allocation");
-        require(rcBuildContours(&context,*compact,config.maxSimplificationError,config.maxEdgeLen,*contours),"contours");
-        Owner<rcPolyMesh,rcFreePolyMesh> polygons(rcAllocPolyMesh(),rcFreePolyMesh);
-        require(polygons!=nullptr,"polygon allocation");
-        require(rcBuildPolyMesh(&context,*contours,config.maxVertsPerPoly,*polygons),"polygons");
-        if(polygons->npolys==0){diagnostic="No static surface has clearance for this Character.\n";return;}
-        Owner<rcPolyMeshDetail,rcFreePolyMeshDetail> detail(rcAllocPolyMeshDetail(),rcFreePolyMeshDetail);
-        require(detail!=nullptr,"detail allocation");
-        require(rcBuildPolyMeshDetail(&context,*polygons,*compact,config.detailSampleDist,config.detailSampleMaxError,*detail),"surface detail");
-        for(int polygon=0;polygon<polygons->npolys;++polygon){polygons->areas[polygon]=0;polygons->flags[polygon]=1;}
-        dtNavMeshCreateParams parameters{};
-        parameters.verts=polygons->verts;parameters.vertCount=polygons->nverts;
-        parameters.polys=polygons->polys;parameters.polyAreas=polygons->areas;parameters.polyFlags=polygons->flags;
-        parameters.polyCount=polygons->npolys;parameters.nvp=polygons->nvp;
-        parameters.detailMeshes=detail->meshes;parameters.detailVerts=detail->verts;parameters.detailVertsCount=detail->nverts;
-        parameters.detailTris=detail->tris;parameters.detailTriCount=detail->ntris;
-        parameters.walkableHeight=height;parameters.walkableRadius=radius;parameters.walkableClimb=MaximumStep;
-        std::copy_n(polygons->bmin,3,parameters.bmin);std::copy_n(polygons->bmax,3,parameters.bmax);
-        parameters.cs=config.cs;parameters.ch=config.ch;parameters.buildBvTree=true;
-        unsigned char* data=nullptr;int bytes=0;
-        require(dtCreateNavMeshData(&parameters,&data,&bytes),"Detour mesh data");
-        std::unique_ptr<unsigned char,decltype(&dtFree)> ownedData(data,dtFree);
-        mesh.reset(dtAllocNavMesh());require(mesh!=nullptr,"Detour mesh allocation");
-        require(dtStatusSucceed(mesh->init(data,bytes,DT_TILE_FREE_DATA)),"Detour mesh initialization");
-        ownedData.release();query.reset(dtAllocNavMeshQuery());require(query!=nullptr,"Detour query allocation");
-        require(dtStatusSucceed(query->init(mesh.get(),8192)),"Detour query initialization");
-        cacheConnectivity();
-    }
+
 };
 NavigationMesh::NavigationMesh():impl_(std::make_unique<Impl>()){}
 NavigationMesh::~NavigationMesh()=default;
-bool NavigationMesh::reconcile(const PhysicsWorld& world,const SceneCharacterController& character) {
-    auto& state=*impl_;
-    if(state.sourceRevision==world.geometryRevision() && state.radius==character.radius && state.height==character.height)return false;
-    state.sourceRevision=world.geometryRevision();state.radius=character.radius;state.height=character.height;++state.revision;
-    try {
-        require(math::finite(state.height) && math::finite(state.radius) && state.radius>0 && state.height>=state.radius*2,
-                "invalid Character dimensions");
-        require((static_cast<double>(state.height)+Skin)/CellHeight<RC_SPAN_MAX_HEIGHT &&
-                (static_cast<double>(state.radius)+Skin)/CellSize<65535,
-                "Character dimensions exceed the navigation voxel range");
-        state.build(world.staticBoxes(),world.staticMeshes());
-    } catch(const std::exception& error){state.query.reset();state.mesh.reset();state.componentByPolygon.clear();state.componentBounds.clear();state.bounds={};state.diagnostic=error.what();}
-    return true;
+
+bool NavigationMesh::configure(const NavigationBakeSettings& settings,const AgentTraversalSettings& agent) {
+    auto& state=*impl_;if(state.configured && state.settings==settings && state.agent==agent)return false;
+    state.query.reset();state.mesh.reset();state.payloads.clear();state.versions.clear();state.componentByPolygon.clear();state.componentBounds.clear();state.bounds={};
+    state.settings=settings;state.agent=agent;state.radius=agent.radius;state.height=agent.height;
+    state.CellSize=settings.cellSize;state.CellHeight=settings.cellHeight;state.MaximumStep=agent.maxStep;state.configured=true;state.changed=true;++state.revision;
+    if(!validNavigationBakeSettings(settings)||!validAgentTraversal(agent)){state.diagnostic="Invalid navigation settings.";return true;}
+    state.mesh.reset(dtAllocNavMesh());state.query.reset(dtAllocNavMeshQuery());
+    dtNavMeshParams parameters{};parameters.tileWidth=settings.tileSize*settings.cellSize;parameters.tileHeight=parameters.tileWidth;
+    parameters.maxTiles=2048;parameters.maxPolys=2048;
+    if(!state.mesh||!state.query||dtStatusFailed(state.mesh->init(&parameters))||dtStatusFailed(state.query->init(state.mesh.get(),8192))) {
+        state.query.reset();state.mesh.reset();state.diagnostic="Cannot allocate tiled navigation world.";
+    } else state.diagnostic.clear();return true;
 }
+bool NavigationMesh::publish(std::shared_ptr<const NavigationTileData> tile,std::uint64_t version) {
+    auto& state=*impl_;if(!state.mesh || !tile)return false;
+    remove(tile->tile);
+    if(!tile->data.empty()) {
+        auto* bytes=static_cast<unsigned char*>(dtAlloc(tile->data.size(),DT_ALLOC_PERM));
+        if(!bytes){state.diagnostic="Cannot allocate navigation tile.";return false;}
+        std::memcpy(bytes,tile->data.data(),tile->data.size());
+        if(dtStatusFailed(state.mesh->addTile(bytes,static_cast<int>(tile->data.size()),DT_TILE_FREE_DATA,0,nullptr))) {
+            dtFree(bytes);state.diagnostic="Navigation tile exceeds Detour capacity (2048 tiles / 2048 polygons per tile).";return false;
+        }
+    }
+    state.versions[tile->tile]={tile->tile,version};state.payloads[tile->tile]=std::move(tile);state.changed=true;++state.revision;return true;
+}
+bool NavigationMesh::remove(NavigationTileKey key) {
+    auto& state=*impl_;if(!state.mesh || !state.versions.erase(key))return false;
+    if(const auto ref=state.mesh->getTileRefAt(key.x,key.z,0))state.mesh->removeTile(ref,nullptr,nullptr);
+    state.payloads.erase(key);state.changed=true;++state.revision;return true;
+}
+void NavigationMesh::finishPublication(){auto& state=*impl_;if(state.mesh&&state.changed)state.cacheConnectivity();state.changed=false;}
+bool NavigationMesh::valid(const NavigationPath& path) const {
+    for(const auto& dependency:path.tiles){const auto found=impl_->versions.find(dependency.tile);if(found==impl_->versions.end()||found->second!=dependency)return false;}return !path.tiles.empty();
+}
+std::optional<Vec3> NavigationMesh::project(const Vec3& point,const Vec3& extents) const {
+    const auto& state=*impl_;if(!state.query||!math::finite(point)||!math::finite(extents)||!state.overlapsMesh(point,extents))return {};
+    for(float extent:extents)if(extent<0)return {};
+    dtQueryFilter filter;filter.setIncludeFlags(1);dtPolyRef polygon{};Vec3 nearest{};
+    if(dtStatusFailed(state.query->findNearestPoly(point.data(),extents.data(),&filter,&polygon,nearest.data()))||!polygon)return {};return nearest;
+}
+NavigationDebugSnapshot NavigationMesh::debugSnapshot() const {
+    NavigationDebugSnapshot result;result.status=NavigationStatus::Ready;result.revision=impl_->revision;result.diagnostic=impl_->diagnostic;
+    for(const auto& [key,tile]:impl_->payloads) {
+        ++result.readyTiles;const auto base=static_cast<std::uint32_t>(result.vertices.size());
+        result.vertices.insert(result.vertices.end(),tile->vertices.begin(),tile->vertices.end());
+        for(auto index:tile->triangles)result.triangles.push_back(base+index);
+    }return result;
+}
+
 std::optional<NavigationPath> NavigationMesh::findPath(const Vec3& start,const Vec3& destination) const {
     const auto& state=*impl_;
     if(!state.query || !math::finite(start) || !math::finite(destination))return std::nullopt;
     dtQueryFilter filter;filter.setIncludeFlags(1);
-    const Vec3 startExtents{state.radius+CellSize,MaximumStep+.2f,state.radius+CellSize};
-    const Vec3 endExtents{CellSize,CellHeight*4,CellSize};
+    const Vec3 startExtents{state.radius+state.CellSize,state.MaximumStep+.2f,state.radius+state.CellSize};
+    const Vec3 endExtents{state.CellSize,state.CellHeight*4,state.CellSize};
     if(!state.overlapsMesh(start,startExtents) || !state.overlapsMesh(destination,endExtents))return {};
     dtPolyRef startPolygon{},endPolygon{};Vec3 nearStart{},nearEnd{};
     if(dtStatusFailed(state.query->findNearestPoly(start.data(),startExtents.data(),&filter,&startPolygon,nearStart.data())) || !startPolygon ||
        dtStatusFailed(state.query->findNearestPoly(destination.data(),endExtents.data(),&filter,&endPolygon,nearEnd.data())) || !endPolygon)return std::nullopt;
     // Never turn a click on an unreachable ledge/gap into a faraway destination.
-    if(std::hypot(nearEnd[0]-destination[0],nearEnd[2]-destination[2])>CellSize*.5f ||
-       std::abs(nearEnd[1]-destination[1])>CellHeight*4)return std::nullopt;
+    if(std::hypot(nearEnd[0]-destination[0],nearEnd[2]-destination[2])>state.CellSize*.5f ||
+       std::abs(nearEnd[1]-destination[1])>state.CellHeight*4)return std::nullopt;
     if(state.componentByPolygon.at(startPolygon)!=state.componentByPolygon.at(endPolygon))return {};
-    return completePath(*state.query,startPolygon,endPolygon,start,nearStart,nearEnd,destination,filter);
+    return completePath(*state.query,startPolygon,endPolygon,start,nearStart,nearEnd,destination,filter,*state.mesh,state.versions);
 }
 std::optional<NavigationPath> NavigationMesh::findReachablePath(const Vec3& start,const Vec3& destination) const {
     if(const auto exact=findPath(start,destination))return exact;
     const auto& state=*impl_;
     if(!state.query || !math::finite(start) || !math::finite(destination))return {};
     dtQueryFilter filter;filter.setIncludeFlags(1);
-    const Vec3 extents{state.radius+CellSize,MaximumStep+.2f,state.radius+CellSize};dtPolyRef startPolygon{};Vec3 nearStart{};
+    const Vec3 extents{state.radius+state.CellSize,state.MaximumStep+.2f,state.radius+state.CellSize};dtPolyRef startPolygon{};Vec3 nearStart{};
     if(!state.overlapsMesh(start,extents))return {};
     if(dtStatusFailed(state.query->findNearestPoly(start.data(),extents.data(),&filter,&startPolygon,nearStart.data())) || !startPolygon)return {};
     const auto destinationOnMesh=state.closestReachable(startPolygon,nearStart,destination,filter);if(!destinationOnMesh)return {};
-    return completePath(*state.query,startPolygon,destinationOnMesh->first,start,nearStart,destinationOnMesh->second,destinationOnMesh->second,filter);
+    return completePath(*state.query,startPolygon,destinationOnMesh->first,start,nearStart,destinationOnMesh->second,destinationOnMesh->second,filter,*state.mesh,state.versions);
 }
 std::uint64_t NavigationMesh::revision() const{return impl_->revision;}
 const std::string& NavigationMesh::status() const{return impl_->diagnostic;}

@@ -3,7 +3,6 @@
 #include "AgentSteering.h"
 #include "physics/CharacterMotor.h"
 #include <algorithm>
-#include <bit>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
@@ -18,16 +17,30 @@ std::vector<ScenePoseUpdate> characterPoses(const Scene& scene) {
 }
 }
 PlaySession::PlaySession(std::filesystem::path projectRoot):projectRoot_(std::move(projectRoot)){}
+void PlaySession::setResourceManager(ResourceManager& resources) {
+    if(playing())throw std::logic_error("Cannot replace resource workers during Play.");
+    navigation_.reset();ownedResources_.reset();resources_=&resources;
+}
+void PlaySession::prepareNavigationProfile(const std::string& profile){if(navigation_)navigation_->prepare(profile);}
+NavigationStatus PlaySession::navigationReadiness(const std::string& profile) const{return navigation_?navigation_->readiness(profile):NavigationStatus::Unavailable;}
+std::shared_ptr<const NavigationAgentProfile> PlaySession::acceptedAgentProfile(const std::string& id) const {
+    const auto found=acceptedProfiles_.find(id);return found==acceptedProfiles_.end()?nullptr:found->second;
+}
+NavigationProjection PlaySession::projectToNavigation(const std::string& profile,const Vec3& point) const {
+    return navigation_?navigation_->project(profile,point):NavigationProjection{NavigationStatus::Unavailable,{},"Play is not active."};
+}
 bool PlaySession::start(const SceneDocument& authored) {
     if(playing())return true;
     try {
         auto document=std::make_unique<SceneDocument>(projectRoot_);
         if(!document->resetTransientFrom(authored)){status_=document->status();return false;}
         if(!prepareMeshColliders(document->scene(),true))return false;
-        auto physics=std::make_unique<PhysicsWorld>();physics->reconcile(document->scene(),{},meshColliders_);
         presentation_.apply(document->scene().records(),document->scene().properties());
-        document_=std::move(document);physics_=std::move(physics);particles_=SceneParticles{};
-        navigation_.clear();agents_.clear();navigationBuilds_=0;
+        document_=std::move(document);physics_=std::make_unique<PhysicsWorld>();particles_=SceneParticles{};
+        if(!resources_){ownedResources_=std::make_unique<ResourceManager>();resources_=ownedResources_.get();}
+        navigation_=std::make_unique<NavigationWorld>(*resources_,projectRoot_/".crimson"/"cache"/"navigation");
+        physics_->setAgentProfiles([this](const std::string& id){const auto found=frameProfiles_.find(id);return found==frameProfiles_.end()?nullptr:found->second;});
+        reconcileProfiles();physics_->reconcile(document_->scene(),{},meshColliders_);reconcileNavigation();agents_.clear();
         remainder_=0;ticks_=droppedTicks_=0;suspended_=failed_=false;
         lastClickedGround_.reset();lastHeldTarget_.reset();heldRetargetRemaining_=0;
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
@@ -37,15 +50,21 @@ bool PlaySession::start(const SceneDocument& authored) {
 }
 void PlaySession::stop() {
     meshColliders_.clear();
-    particles_=SceneParticles{};navigation_.clear();agents_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();
+    particles_=SceneParticles{};navigation_.reset();agents_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();frameProfiles_.clear();acceptedProfiles_.clear();supportedProfiles_.clear();
     presentation_.apply({},{});remainder_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=false;status_.clear();
-    navigationBuilds_=0;lastClickedGround_.reset();lastHeldTarget_.reset();heldRetargetRemaining_=0;
+    navigationUpdate_={};navigationDomain_=navigationSceneRevision_=navigationGeometryRevision_=0;navigationVolume_.reset();navigationTransaction_=navigationCoalescing_=false;
+    lastClickedGround_.reset();lastHeldTarget_.reset();heldRetargetRemaining_=0;
     controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
 }
 bool PlaySession::prepareMeshColliders(const Scene& scene,bool requireReady) {
     std::vector<PhysicsMeshCollider> prepared;
+    collisionSourcesCurrent_=true;collisionSourceDiagnostic_.clear();
     for(const auto& record:scene.records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && (record.collider->mesh || !record.collider->source.empty())) {
         const auto source=colliderMeshResult(*record.collider,collisionMeshes_);
+        if(!source.mesh||!source.current) {
+            collisionSourcesCurrent_=false;
+            collisionSourceDiagnostic_=source.diagnostic.empty()?"Waiting for current mesh collision geometry.":source.diagnostic;
+        }
         if(!source.mesh || (requireReady && !source.current)) {
             if(requireReady){status_=source.diagnostic.empty()?"Mesh collision is unavailable.":source.diagnostic;return false;}
             continue;
@@ -68,7 +87,7 @@ std::span<const Vec3> PlaySession::actorRemainingPath(EntityId id) const {
 std::uint64_t PlaySession::actorRouteQueryCount(EntityId id) const {const auto agent=findAgent(id);return agent?agent->routeQueries:0;}
 std::uint64_t PlaySession::actorNavigationRevision(EntityId id) const {
     const auto agent=findAgent(id);if(!agent)return 0;
-    const auto found=navigation_.find(agent->profile);return found==navigation_.end()?0:found->second->revision();
+    return navigation_?navigation_->revision(agent->profile):0;
 }
 std::uint64_t PlaySession::navigationRevision() const{return actorNavigationRevision(player());}
 std::uint64_t PlaySession::routeQueryCount() const{return actorRouteQueryCount(player());}
@@ -77,6 +96,7 @@ std::span<const Vec3> PlaySession::path() const{return actorPath(player());}
 std::span<const Vec3> PlaySession::remainingPath() const{return actorRemainingPath(player());}
 void PlaySession::clearRoute(Agent& agent) {
     agent.steering.reset();agent.requestedDestination.reset();agent.destination.reset();agent.velocity.reset();
+    agent.navigationPath={};agent.queryStatus=NavigationStatus::Unavailable;
     agent.routeActive=false;agent.source=CommandSource::None;agent.status.clear();
 }
 void PlaySession::clearPlayerRoute() {
@@ -85,39 +105,120 @@ void PlaySession::clearPlayerRoute() {
     lastHeldTarget_.reset();heldRetargetRemaining_=0;
 }
 bool PlaySession::planRoute(Agent& agent,const Vec3& start) {
-    agent.steering.reset();agent.destination.reset();agent.routeActive=false;agent.status.clear();
     if(!agent.requestedDestination)return false;
-    const auto found=navigation_.find(agent.profile);
-    if(found==navigation_.end()){agent.status="Actor needs an enabled Navigation Agent to follow destinations.\n";return false;}
+    if(!agent.profileAccepted){agent.queryStatus=NavigationStatus::Unavailable;agent.status="Character profile is unavailable or has not been accepted by physics.\n";return false;}
+    if(!navigation_||agent.profile.empty()){agent.status="Actor needs an enabled Navigation Agent to follow destinations.\n";return false;}
     ++agent.routeQueries;
-    if(auto route=found->second->findReachablePath(start,*agent.requestedDestination)) {
-        agent.destination=route->corners.back();agent.steering.setPath(std::move(route->corners));agent.routeActive=true;return true;
+    auto result=navigation_->query(agent.profile,start,*agent.requestedDestination);agent.queryStatus=result.status;
+    if(result.status==NavigationStatus::Ready&&result.path&&!result.path->corners.empty()) {
+        agent.navigationPath=std::move(*result.path);agent.destination=agent.navigationPath.corners.back();
+        agent.steering.setPath(agent.navigationPath.corners);agent.routeActive=true;agent.status.clear();return true;
     }
-    agent.status="No reachable walking surface is available for this actor.\n";return false;
+    // Pending replacement is not an obstacle. Preserve the original command,
+    // and keep an earlier route only while every tile it uses remains current.
+    if(!agent.routeActive||!navigation_->valid(agent.profile,agent.navigationPath)) {
+        agent.steering.reset();agent.destination.reset();agent.routeActive=false;agent.navigationPath={};
+    }
+    agent.status=result.diagnostic.empty()?"Navigation is not ready for this destination.\n":result.diagnostic+"\n";return false;
+}
+void PlaySession::reconcileProfiles() {
+    std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> profiles;
+    const auto add=[&](const std::string& id){
+        if(profiles.contains(id))return;
+        auto profile=resolveNavigationAgentProfile(id,profileDefinitions_);
+        if(!profile)profile=document_->navigationAgentProfile(id);
+        if(profile)profiles.emplace(id,std::move(profile));
+    };
+    for(const auto& record:document_->scene().records()) {
+        if(record.controller)add(record.controller->profile.id);
+        if(record.navigationVolume)for(const auto& reference:record.navigationVolume->profiles)add(reference.id);
+    }
+    frameProfiles_=std::move(profiles);
+}
+void PlaySession::reconcileNavigation() {
+    navigationCoalescing_=false;
+    std::optional<NavigationVolumeDescriptor> volume;supportedProfiles_.clear();
+    std::unordered_set<std::string> used;
+    const auto records=document_->scene().records();
+    for(const auto& record:records)if(record.controller)used.insert(record.controller->profile.id);
+    for(const auto& [id,profile]:frameProfiles_) {
+        bool hasActor=false,accepted=false;
+        for(const auto& record:records)if(record.controller&&record.controller->profile.id==id) {
+            hasActor=true;
+            const auto definition=physics_->acceptedCharacterTraversal(record.id);
+            accepted|=definition&&*definition==profile->traversal;
+        }
+        if(!hasActor||accepted)acceptedProfiles_[id]=profile;
+    }
+    for(const auto& record:records)if(record.navigationVolume&&record.navigationVolume->enabled) {
+        if(const auto world=document_->scene().worldTransform(record.id)) {
+            const auto& source=*record.navigationVolume;
+            volume=NavigationVolumeDescriptor{record.id,*world,source.size,source.bake,source.enabled};
+            for(const auto& reference:source.profiles) {
+                used.insert(reference.id);
+                if(const auto found=frameProfiles_.find(reference.id);found!=frameProfiles_.end())supportedProfiles_.push_back(*found->second);
+            }
+        }
+        break;
+    }
+    std::erase_if(acceptedProfiles_,[&](const auto& entry){return !used.contains(entry.first);});
+    const auto now=std::chrono::steady_clock::now();
+    const auto generation=document_->documentGeneration(),revision=document_->scene().revision();
+    const bool domainChanged=navigationDomain_!=generation;
+    const bool released=navigationTransaction_&&!document_->transactionActive();
+    navigationTransaction_=document_->transactionActive();
+    const bool changed=navigationSceneRevision_!=revision;
+    const bool geometryChanged=navigationGeometryRevision_!=physics_->geometryRevision()||navigationVolume_!=volume;
+    if(!domainChanged&&!released&&navigationTransaction_&&changed&&geometryChanged&&now-navigationUpdate_<std::chrono::milliseconds(100)) {
+        navigationCoalescing_=true;
+        navigation_->setSourceReadiness(false,"Navigation is preparing the current edit.");
+        navigation_->pumpPublication();return;
+    }
+    if(domainChanged||released||changed)navigationUpdate_=now;
+    navigationDomain_=generation;navigationSceneRevision_=revision;
+    navigationGeometryRevision_=physics_->geometryRevision();navigationVolume_=volume;
+    const auto boxes=physics_->staticBoxes();const auto meshes=physics_->staticMeshes();
+    navigation_->setSourceReadiness(collisionSourcesCurrent_,collisionSourceDiagnostic_);
+    navigation_->reconcile(document_->documentGeneration(),volume,supportedProfiles_,boxes,meshes);
+    navigation_->pumpPublication();
 }
 void PlaySession::reconcileAgents() {
-    const auto& scene=document_->scene();std::unordered_set<EntityId> kept;std::unordered_set<std::uint64_t> profiles;
+    const auto& scene=document_->scene();std::unordered_set<EntityId> kept;
     for(const auto& record:scene.records()) {
         if(!record.controller||!record.motor||!record.motor->enabled||!physics_->characterPosition(record.id))continue;
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         kept.insert(record.id);auto& agent=agents_[record.id];
+        agent.profileAccepted=false;
         if(agent.lastPose && *agent.lastPose!=*world)clearRoute(agent);
         agent.lastPose=*world;
         if(!record.navigation||!record.navigation->enabled) {
             if(agent.requestedDestination)clearRoute(agent);
-            agent.profile=0;agent.navigationRevision=0;continue;
+            agent.profile.clear();agent.navigationRevision=0;continue;
         }
-        const auto& controller=*record.controller;
-        const auto key=(std::uint64_t(std::bit_cast<std::uint32_t>(controller.height))<<32)|std::bit_cast<std::uint32_t>(controller.radius);
-        profiles.insert(key);auto& navigation=navigation_[key];if(!navigation)navigation=std::make_unique<NavigationMesh>();
-        if(navigation->reconcile(*physics_,controller))++navigationBuilds_;
-        if(agent.profile!=key||agent.navigationRevision!=navigation->revision()) {
-            agent.profile=key;agent.navigationRevision=navigation->revision();
+        const auto key=record.controller->profile.id;
+        const auto resolved=frameProfiles_.find(key);const auto accepted=physics_->acceptedCharacterTraversal(record.id);
+        if(resolved==frameProfiles_.end()||!accepted||*accepted!=resolved->second->traversal) {
+            agent.steering.reset();agent.destination.reset();agent.navigationPath={};agent.routeActive=false;
+            agent.profile=key;agent.queryStatus=NavigationStatus::Unavailable;agent.status="Character profile is unavailable or has not been accepted by physics.\n";continue;
+        }
+        const auto revision=navigation_->revision(key);
+        agent.profileAccepted=true;
+        if(navigationCoalescing_&&agent.requestedDestination) {
+            agent.profile=key;agent.navigationRevision=revision;agent.queryStatus=NavigationStatus::Preparing;
+            agent.steering.reset();agent.destination.reset();agent.navigationPath={};agent.routeActive=false;
+            agent.status="Navigation is preparing the current edit.\n";continue;
+        }
+        const bool changed=agent.profile!=key||agent.navigationRevision!=revision||
+            (agent.routeActive&&!navigation_->valid(key,agent.navigationPath))||
+            (agent.requestedDestination&&agent.queryStatus==NavigationStatus::Preparing&&navigation_->readiness(key)!=NavigationStatus::Preparing);
+        if(agent.profile!=key){agent.steering.reset();agent.destination.reset();agent.navigationPath={};agent.routeActive=false;}
+        agent.profile=key;
+        if(changed) {
+            agent.navigationRevision=revision;
             if(agent.requestedDestination)planRoute(agent,math::transformPoint(*world,{}));
         }
     }
     std::erase_if(agents_,[&](const auto& entry){return !kept.contains(entry.first);});
-    std::erase_if(navigation_,[&](const auto& entry){return !profiles.contains(entry.first);});
     agentsRevision_=scene.revision();
 }
 PlaySession::Agent* PlaySession::commandActor(EntityId id) {
@@ -128,7 +229,7 @@ PlaySession::Agent* PlaySession::commandActor(EntityId id) {
     }
     if(agentsRevision_!=document_->scene().revision()) {
         prepareMeshColliders(document_->scene(),false);
-        physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);reconcileAgents();
+        reconcileProfiles();physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);reconcileNavigation();reconcileAgents();
     }
     const auto found=agents_.find(id);
     if(found==agents_.end()){status_="Actor commands require an enabled Motor and a usable Character Controller.";return nullptr;}
@@ -137,11 +238,11 @@ PlaySession::Agent* PlaySession::commandActor(EntityId id) {
 bool PlaySession::setActorDestination(EntityId id,const Vec3& destination) {
     if(!math::finite(destination)){status_="Actor destination must be finite.";return false;}
     auto agent=commandActor(id);if(!agent)return false;
-    if(!agent->profile){status_="Actor destinations require an enabled Navigation Agent.";return false;}
-    if(agent->source==CommandSource::External&&agent->requestedDestination==destination)return agent->destination.has_value();
+    if(agent->profile.empty()){status_="Actor destinations require an enabled Navigation Agent.";return false;}
+    if(agent->source==CommandSource::External&&agent->requestedDestination==destination)return agent->destination.has_value()||agent->queryStatus==NavigationStatus::Preparing;
     const auto world=document_->scene().worldTransform(id);
     clearRoute(*agent);agent->source=CommandSource::External;agent->requestedDestination=destination;
-    const auto accepted=planRoute(*agent,math::transformPoint(*world,{}));if(!accepted)status_=agent->status;return accepted;
+    const auto accepted=planRoute(*agent,math::transformPoint(*world,{}));if(!accepted)status_=agent->status;return accepted||agent->queryStatus==NavigationStatus::Preparing;
 }
 bool PlaySession::setActorMovement(EntityId id,const Vec3& velocity) {
     if(!math::finite(velocity)){status_="Actor velocity must be finite.";return false;}
@@ -153,13 +254,20 @@ bool PlaySession::clearActorMovement(EntityId id) {
 }
 void PlaySession::retargetHeld(Agent& agent,const Vec3& start,const Vec3& target) {
     lastClickedGround_=target;
+    if(!agent.profileAccepted){agent.queryStatus=NavigationStatus::Unavailable;agent.status="Character profile is unavailable or has not been accepted by physics.\n";return;}
     if(lastHeldTarget_ && math::length(target-*lastHeldTarget_)<HeldRetargetDistance)return;
-    lastHeldTarget_=target;const auto found=navigation_.find(agent.profile);if(found==navigation_.end())return;++agent.routeQueries;
-    if(auto route=found->second->findReachablePath(start,target)) {
-        agent.requestedDestination=target;agent.destination=route->corners.back();agent.velocity.reset();
-        agent.steering.setPath(std::move(route->corners));agent.source=CommandSource::PlayerInput;
+    lastHeldTarget_=target;if(!navigation_)return;++agent.routeQueries;
+    auto result=navigation_->query(agent.profile,start,target);agent.queryStatus=result.status;
+    if(result.status==NavigationStatus::Ready&&result.path&&!result.path->corners.empty()) {
+        agent.requestedDestination=target;agent.navigationPath=std::move(*result.path);
+        agent.destination=agent.navigationPath.corners.back();agent.velocity.reset();
+        agent.steering.setPath(agent.navigationPath.corners);agent.source=CommandSource::PlayerInput;
         agent.routeActive=true;agent.status.clear();
-    } else agent.status="Held destination is unreachable; retaining the previous destination.\n";
+    } else if(result.status==NavigationStatus::Preparing) {
+        agent.requestedDestination=target;agent.velocity.reset();agent.source=CommandSource::PlayerInput;
+        if(agent.routeActive&&!navigation_->valid(agent.profile,agent.navigationPath)){agent.steering.reset();agent.destination.reset();agent.routeActive=false;}
+        agent.status="Navigation is preparing the held destination.\n";
+    } else agent.status=result.diagnostic.empty()?"Held destination is unreachable; retaining the previous destination.\n":result.diagnostic+"\n";
 }
 SceneDocument& PlaySession::document(){if(!document_)throw std::logic_error("Play is not active.");return *document_;}
 const SceneDocument& PlaySession::document() const{if(!document_)throw std::logic_error("Play is not active.");return *document_;}
@@ -174,12 +282,15 @@ void PlaySession::advance(double seconds,Vec2 movement,const Camera& camera,bool
 void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& camera,bool active,GameInput* input) {
     if(!document_ || failed_)return;
     try {
+        if(ownedResources_)resources_->pump();
         if(document_->scene().revision()!=editRevision_) {
             presentation_.apply(document_->scene().records(),document_->scene().properties());
             editRevision_=document_->scene().revision();resetInterpolation();
         }
         prepareMeshColliders(document_->scene(),false);
+        reconcileProfiles();
         physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);
+        reconcileNavigation();
         const auto controlled=document_->scene().properties().playerCharacter;
         const auto controlledPose=document_->scene().worldTransform(controlled);
         const bool replacedPlayer=controlled_!=NoEntity && controlled_!=controlled;
@@ -222,7 +333,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 lastClickedGround_.reset();
                 if(hit) {
                     lastClickedGround_=hit->position;lastHeldTarget_=hit->position;
-                    if(controlledPose && agent.profile) {
+                    if(controlledPose && !agent.profile.empty()) {
                         agent.source=CommandSource::PlayerInput;agent.requestedDestination=hit->position;
                         planRoute(agent,math::transformPoint(*controlledPose,{}));
                     }
@@ -235,7 +346,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 if(const auto heldRay=input->heldMoveRay(camera)) {
                     heldRetargetRemaining_=HeldRetargetInterval;
                     const auto hit=physics_->raycast(*heldRay,camera.farPlane);
-                    if(hit && controlledPose && agent.profile)
+                    if(hit && controlledPose && !agent.profile.empty())
                         retargetHeld(agent,math::transformPoint(*controlledPose,{}),hit->position);
                 }
             }
@@ -286,7 +397,10 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(remainder_>=FixedStep)remainder_=std::fmod(remainder_,FixedStep);
         refreshPresentation();reconcileParticles(0);
         status_=physics_->status();
-        for(const auto& [profile,navigation]:navigation_)status_+=navigation->status();
+        for(const auto& profile:supportedProfiles_) {
+            const auto debug=navigation_->summary(profile.id);
+            if(!debug.diagnostic.empty())status_+=debug.diagnostic+"\n";
+        }
         for(const auto& [id,agent]:agents_)if(!agent.status.empty())status_+="Actor "+std::to_string(id)+": "+agent.status;
         if(!particles_.status().empty())status_+=particles_.status();
         if(droppedTicks_)status_+="Play discarded "+std::to_string(droppedTicks_)+" catch-up ticks.\n";

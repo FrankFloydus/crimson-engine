@@ -56,6 +56,7 @@ bool matchesFilter(AssetKind kind,BrowserAssetFilter filter) {
     case BrowserAssetFilter::Textures:return kind==AssetKind::Texture||kind==AssetKind::Environment;
     case BrowserAssetFilter::Scenes:return kind==AssetKind::Scene;
     case BrowserAssetFilter::Particles:return kind==AssetKind::Particle;
+    case BrowserAssetFilter::NavigationProfiles:return kind==AssetKind::NavigationAgentProfile;
     }
     return false;
 }

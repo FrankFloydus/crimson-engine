@@ -14,10 +14,10 @@ struct PlayerOcclusionStats {
 // worker-built BVH are shared by all instances of an asset; no scene is edited.
 class PlayerOcclusion {
 public:
-    explicit PlayerOcclusion(ResourceManager&);
+    explicit PlayerOcclusion(ResourceManager&,NavigationAgentProfileQuery profiles={});
     const PlayerOcclusionOpacities& update(const Scene&,std::span<const ExtractedModel>,const Camera&,
         std::uint64_t documentGeneration,float seconds,const ModelBoundsQuery&,const CollisionMeshQuery&,
-        const PlayerOcclusionSettings& settings={});
+        const PlayerOcclusionSettings& settings={},const NavigationAgentProfileQuery& profiles={});
     void clear();
     const PlayerOcclusionStats& stats()const{return stats_;}
 private:
@@ -29,6 +29,7 @@ private:
     };
     struct Fade {double opacity{1},target{1},clearSeconds{};bool obstructed{};};
     ResourceManager& resources_;
+    NavigationAgentProfileQuery profiles_;
     std::uint64_t owner_{},job_{},frame_{},generation_{};
     EntityId player_{},camera_{};
     std::unordered_map<std::string,MeshEntry> meshes_;

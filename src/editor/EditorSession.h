@@ -5,6 +5,8 @@
 #include "assets/AssetLibrary.h"
 #include "tools/ParticleEditor.h"
 #include "tools/MaterialEditor.h"
+#include "tools/NavigationAgentProfileEditor.h"
+#include "NavigationPreview.h"
 #include "SceneParticles.h"
 #include "PlayShortcuts.h"
 #include "runtime/PlaySession.h"
@@ -62,6 +64,7 @@ private:
     CameraPilot cameraPilot_;
     ParticleEditor particleEditor_;
     MaterialEditor materialEditor_;
+    NavigationAgentProfileEditor navigationProfileEditor_;
     SceneParticles particles_;
     SceneAnimations editAnimations_,playAnimations_;
     std::uint64_t animationPlayTick_{};
@@ -69,6 +72,7 @@ private:
     ResourceManager& resources_;
     EditorResources prepared_;
     CollisionResources collisions_;
+    NavigationPreview navigationPreview_;
     CollisionOverlays collisionOverlays_;
     PlayerOcclusion playerOcclusion_;
     QuaderBridge quader_;

@@ -28,13 +28,14 @@ void componentTransactions(const std::filesystem::path& root) {
     require(!addSceneComponent(document,id,SceneComponentKind::Navigation),"Duplicate components were accepted.");
     require(document.undo()&&!document.scene().find(id)->controller,"Dependency closure did not undo together.");
     require(document.redo(),"Dependency closure did not redo.");
-    document.edit("Tune enemy",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==id){entity.controller->height=2.4f;entity.motor->moveSpeed=3.25f;}});
+    const auto tunedProfile=canonicalAssetId("tests/scene-components/tall-agent");
+    document.edit("Tune enemy",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==id){entity.controller->profile=AssetRef<NavigationAgentProfile>{tunedProfile};entity.motor->moveSpeed=3.25f;}});
     require(addSceneComponent(document,id,SceneComponentKind::LightRig),"Could not attach actor rig.");
     require(addSceneComponent(document,id,SceneComponentKind::DarknessReveal),"Could not attach independent reveal.");
     record=*document.scene().find(id);
     require(record.actor&&record.lightRig&&record.darknessReveal,"Rig did not establish visual ownership.");
     require(!record.lightRig->localWorld.enabled,"Generic actor rig implicitly emitted player-style World illumination.");
-    require(record.motor->moveSpeed==3.25f&&record.controller->height==2.4f,"Adding lighting reset locomotion values.");
+    require(record.motor->moveSpeed==3.25f&&record.controller->profile.id==tunedProfile,"Adding lighting reset locomotion values.");
     require(removeSceneComponent(document,id,SceneComponentKind::LightRig),"Could not remove rig.");
     require(document.scene().find(id)->actor&&document.scene().find(id)->motor&&document.scene().find(id)->darknessReveal,"Removing rig removed unrelated capabilities.");
     require(document.undo()&&document.scene().find(id)->lightRig,"Rig removal did not restore through undo.");
@@ -45,7 +46,7 @@ void componentTransactions(const std::filesystem::path& root) {
     require(!record.controller&&!record.motor&&!record.navigation&&record.lightRig&&record.darknessReveal,"Controller removal retained invalid dependents or erased lighting.");
     require(document.history().size()==removalHistory+1,"Dependent removal was not one undo command.");
     require(document.undo(),"Controller removal did not undo.");record=*document.scene().find(id);
-    require(record.controller->height==2.4f&&record.motor->moveSpeed==3.25f&&record.navigation,"Controller undo lost tuned dependent settings.");
+    require(record.controller->profile.id==tunedProfile&&record.motor->moveSpeed==3.25f&&record.navigation,"Controller undo lost tuned dependent settings.");
     require(document.begin("Edit Motor"),"Could not start motor gesture.");
     require(document.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==id)entity.motor->moveSpeed=8;}),"Could not update motor gesture.");
     document.cancel();require(document.scene().find(id)->motor->moveSpeed==3.25f,"Gesture cancellation lost the disconnected motor settings.");

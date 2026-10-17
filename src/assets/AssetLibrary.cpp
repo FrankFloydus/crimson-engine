@@ -249,7 +249,7 @@ void discoverContentFiles(const std::filesystem::path& root) {
         }
         if(!entry.is_regular_file()||indexed.contains(utf8(std::filesystem::weakly_canonical(entry.path()))))continue;
         const auto extension=entry.path().extension();
-        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-scene") {
+        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-agent-profile"||extension==".crimson-scene") {
             std::ifstream input(entry.path());const auto data=nlohmann::json::parse(input);
             auto id=data.value("id",std::string{});
             if(id.empty())id="assets/scenes/"+utf8(entry.path().filename());
@@ -274,6 +274,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     if(!references_.status().empty()) status_=references_.status();
     try{discoverContentFiles(projectRoot_);}catch(const std::exception& error){status_+=std::string(error.what())+'\n';}
     ensureEngineMaterialAssets(projectRoot_);
+    ensureEngineNavigationAgentProfile(projectRoot_);
     std::vector<std::filesystem::path> files;
     for(const auto& entry:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(entry.file)) {
         if(textureFile(entry.file)&&!references_.deleted(entry.id)) {
@@ -316,6 +317,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     refreshMaterials();
     refreshScenes();
     refreshParticles();
+    refreshNavigationAgentProfiles();
     storageRevision_=contentStorageRevision(projectRoot_);
     for(const auto& entry:storedAssetPaths(projectRoot_))storageLocations_.emplace(entry.id,entry.file);
 }
@@ -366,6 +368,54 @@ void AssetLibrary::refreshParticles() {
     }
     std::erase_if(particles_,[&](const auto& entry){return !present.contains(entry.first) && entry.first!=particleDocumentId_;});
     ++catalogRevision_;
+}
+void AssetLibrary::refreshNavigationAgentProfiles() {
+    std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::NavigationAgentProfile;});
+    navigationProfiles_[DefaultNavigationAgentProfileId]={defaultNavigationAgentProfile(),1,{}};
+    std::unordered_set<std::string> present{DefaultNavigationAgentProfileId};
+    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-agent-profile"&&!references_.deleted(file.id)) {
+        present.insert(file.id);auto& entry=navigationProfiles_[file.id];
+        if(file.id!=navigationProfileDocumentId_)try {
+            auto profile=std::make_shared<const NavigationAgentProfile>(loadNavigationAgentProfile(projectRoot_,file.id));
+            if(!entry.definition||*entry.definition!=*profile){entry.definition=std::move(profile);entry.revision=nextNavigationProfileRevision_++;}
+            entry.diagnostic.clear();
+        } catch(const std::exception& error){entry.diagnostic=error.what();}
+        const auto name=entry.definition?entry.definition->name:utf8(file.file.stem());
+        catalog_.push_back({file.id,name,AssetKind::NavigationAgentProfile});
+    }
+    if(std::none_of(catalog_.begin(),catalog_.end(),[](const auto& entry){return entry.id==DefaultNavigationAgentProfileId;}))
+        catalog_.push_back({DefaultNavigationAgentProfileId,"Default Agent",AssetKind::NavigationAgentProfile});
+    std::erase_if(navigationProfiles_,[&](const auto& entry){return !present.contains(entry.first)&&entry.first!=navigationProfileDocumentId_;});
+    ++catalogRevision_;
+}
+std::shared_ptr<const NavigationAgentProfile> AssetLibrary::findNavigationAgentProfile(const std::string& id) const {
+    try {const auto resolved=references_.resolveNavigationAgentProfile(id);const auto found=navigationProfiles_.find(resolved);
+        return found==navigationProfiles_.end()?nullptr:found->second.definition;
+    }catch(const std::exception&){return nullptr;}
+}
+std::uint64_t AssetLibrary::navigationAgentProfileRevision(const std::string& id) const {
+    try {const auto found=navigationProfiles_.find(references_.resolveNavigationAgentProfile(id));return found==navigationProfiles_.end()?0:found->second.revision;}
+    catch(const std::exception&){return 0;}
+}
+std::string AssetLibrary::navigationAgentProfileDiagnostic(const std::string& id) const {
+    try {const auto found=navigationProfiles_.find(references_.resolveNavigationAgentProfile(id));
+        return found==navigationProfiles_.end()?"Navigation Agent Profile is unavailable: "+id:found->second.diagnostic;
+    }catch(const std::exception& error){return error.what();}
+}
+void AssetLibrary::publishNavigationAgentProfile(std::shared_ptr<const NavigationAgentProfile> profile) {
+    if(!profile)return;validateNavigationAgentProfile(*profile);
+    if(isEngineAssetId(profile->id)||references_.deleted(profile->id))throw std::runtime_error("Protected or deleted Navigation Agent Profile cannot be published.");
+    auto& entry=navigationProfiles_[profile->id];if(!entry.definition||*entry.definition!=*profile){entry.definition=std::move(profile);entry.revision=nextNavigationProfileRevision_++;}
+    entry.diagnostic.clear();++catalogRevision_;
+}
+std::shared_ptr<const NavigationAgentProfile> AssetLibrary::createNavigationAgentProfile(const std::string& name) {
+    auto profile=std::make_shared<const NavigationAgentProfile>(crimson::createNavigationAgentProfile(projectRoot_,name));
+    publishNavigationAgentProfile(profile);noteAssetWrite(profile->id);refreshNavigationAgentProfiles();select(profile->id);return profile;
+}
+std::shared_ptr<const NavigationAgentProfile> AssetLibrary::copyNavigationAgentProfile(const std::string& id,const std::string& name) {
+    const auto original=findNavigationAgentProfile(id);if(!original)throw std::runtime_error("Navigation Agent Profile is unavailable.");
+    auto profile=std::make_shared<const NavigationAgentProfile>(crimson::copyNavigationAgentProfile(projectRoot_,*original,name));
+    publishNavigationAgentProfile(profile);noteAssetWrite(profile->id);refreshNavigationAgentProfiles();select(profile->id);return profile;
 }
 std::shared_ptr<const ParticleEffectAsset> AssetLibrary::findParticle(const std::string& id) const {
     const auto resolved=references_.resolveParticle(id);
@@ -726,6 +776,7 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     if(changed.extension()==".crimson-scene") refreshScenes();
     if(changed.extension()==".crimson-material") refreshMaterials();
     if(changed.extension()==".crimson-particle") refreshParticles();
+    if(changed.extension()==".crimson-agent-profile")refreshNavigationAgentProfiles();
 }
 std::uint64_t AssetLibrary::materialShaderRevision()const {return graphPrograms_?graphPrograms_->revision():0;}
 std::vector<std::filesystem::path> AssetLibrary::materialShaderDependencies() const {return graphPrograms_?graphPrograms_->sourceDependencies():std::vector<std::filesystem::path>{};}
@@ -1514,6 +1565,23 @@ size_t replaceDeletedModelMaterials(SceneSnapshot& snapshot,const AssetReference
     }
     Scene::validate(snapshot.records,snapshot.properties);return changed;
 }
+size_t replaceDeletedNavigationProfiles(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,
+    const std::unordered_set<std::string>& deletedProfiles) {
+    size_t changed{};
+    const auto replace=[&](AssetRef<NavigationAgentProfile>& profile) {
+        if(!deletedProfiles.contains(previous.resolveNavigationAgentProfile(profile.id)))return;
+        const auto replacement=next.resolveNavigationAgentProfile(profile.id);if(profile.id!=replacement){profile.id=replacement;++changed;}
+    };
+    for(auto& record:snapshot.records) {
+        if(record.controller)replace(record.controller->profile);
+        if(record.navigationVolume) {
+            std::unordered_set<std::string> kept;auto& profiles=record.navigationVolume->profiles;
+            for(auto& profile:profiles)replace(profile);
+            std::erase_if(profiles,[&](const auto& profile){return !kept.insert(profile.id).second;});
+        }
+    }
+    Scene::validate(snapshot.records,snapshot.properties);return changed;
+}
 }
 void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::vector<AssetUsage> usages;
@@ -1549,6 +1617,8 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
+            if(record.controller)usages.push_back({record.controller->profile.id,id,name,record.name+" / Navigation Agent Profile",isActive,false});
+            if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)usages.push_back({profile.id,id,name,record.name+" / Supported Agent Profile",isActive,false});
             if(record.collider && !record.collider->source.empty())usages.push_back({record.collider->source.id,id,name,record.name+" / Collider source",isActive,false});
             for(size_t slot=0;slot<record.modelMaterials.size();++slot)if(!record.modelMaterials[slot].empty())
                 usages.push_back({record.modelMaterials[slot].id,id,name,record.name+" / Material slot "+std::to_string(slot+1),isActive,false});
@@ -1560,6 +1630,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
         for(const auto& id:active->historicalModelReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history",true,true});
         for(const auto& id:active->historicalMaterialReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history / Material slot",true,true});
         for(const auto& id:active->historicalParticleReferences())usages.push_back({id,active->assetId(),active->displayName(),"Particle undo / redo history",true,true});}
+    if(active)for(const auto& id:active->historicalNavigationAgentProfileReferences())usages.push_back({id,active->assetId(),active->displayName(),"Navigation profile undo / redo history",true,true});
     for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
         const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
         try{std::ifstream input(source);const auto j=nlohmann::json::parse(input);
@@ -1577,12 +1648,12 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
     try{auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
         for(const auto& id:ids){if(!browser.contains(id))throw std::runtime_error("A selected asset no longer exists.");expanded.insert(id);
             if(browser.isFolder(id))for(const auto& child:browser.descendants(id))expanded.insert(child);}
-        std::unordered_set<std::string> models,particles,materials;
+        std::unordered_set<std::string> models,particles,materials,profiles;
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
             if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
                 throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
-            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);}
+            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);}
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
         for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableOwners.insert(entry.id);
@@ -1593,6 +1664,8 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
         for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
             if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
+                (entity.controller&&profiles.contains(references_.resolveNavigationAgentProfile(entity.controller->profile.id)))||
+                (entity.navigationVolume&&std::any_of(entity.navigationVolume->profiles.begin(),entity.navigationVolume->profiles.end(),[&](const auto& profile){return profiles.contains(references_.resolveNavigationAgentProfile(profile.id));}))||
                 std::any_of(entity.modelMaterials.begin(),entity.modelMaterials.end(),[&](const auto& assigned){return !assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id));}))++count;
             if(count)plan.scenes.push_back({scene.id,scene.name,count});}
         if(active){for(const auto& entity:active->scene().records())if((entity.model&&models.contains(references_.resolve(entity.model->id))) || (entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id))))plan.clearsActiveHistory=true;
@@ -1602,6 +1675,7 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
             for(const auto& id:active->historicalMaterialReferences())if(materials.contains(references_.resolveMaterial(id)))plan.clearsActiveHistory=true;
             for(const auto& entity:active->scene().records())if(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(particles.contains(references_.resolveParticle(id)))plan.clearsActiveHistory=true;}
+        if(active)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(profiles.contains(references_.resolveNavigationAgentProfile(id)))plan.clearsActiveHistory=true;
         std::sort(plan.assetIds.begin(),plan.assetIds.end());std::sort(plan.folderIds.begin(),plan.folderIds.end());
         plan.revision=deletionRevision(projectRoot_,references_,catalogRevision_,active);
     }catch(const std::exception& e){plan.error=e.what();}return plan;
@@ -1645,16 +1719,18 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(pendingDeletion_&&(pendingDeletion_->active!=active||(active&&pendingDeletion_->documentGeneration!=active->documentGeneration())||
             pendingDeletion_->plan.revision!=plan.revision||pendingDeletion_->plan.assetIds!=plan.assetIds||pendingDeletion_->replacements!=replacements))
             throw std::runtime_error("The document or deletion choices changed while validation was pending.");
-        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedMaterials,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
+        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedMaterials,deletedProfiles,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
         if(!particleDocumentId_.empty()&&deletedIds.contains(particleDocumentId_))throw std::runtime_error("Close the particle document before deleting its asset.");
         if(!materialDocumentId_.empty()&&deletedIds.contains(materialDocumentId_))throw std::runtime_error("Close the material document before deleting its asset.");
+        if(!navigationProfileDocumentId_.empty()&&deletedIds.contains(navigationProfileDocumentId_))throw std::runtime_error("Close the Navigation Agent Profile document before deleting its asset.");
         for(const auto& id:plan.assetIds){const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Deletion target disappeared.");
             if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
                 throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
-            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);
+            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)deletedProfiles.insert(id);
             if(const auto chosen=replacements.find(id);chosen!=replacements.end()&&!chosen->second.empty()){
                 const auto options=fallbackCandidates(id);if(std::none_of(options.begin(),options.end(),[&](const auto& option){return option.id==chosen->second;}))throw std::runtime_error("Fallback has an incompatible asset type.");}}
         auto nextReferences=references_;nextReferences.replace(deleted,replacements);
+        for(const auto& id:deletedProfiles)(void)loadNavigationAgentProfile(projectRoot_,nextReferences.resolveNavigationAgentProfile(id));
         std::vector<std::shared_ptr<const ModelAsset>> nextModels;
         std::vector<AssetEntry> surviving;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model&&!deletedModels.contains(entry.id))surviving.push_back(entry);
         std::vector<AssetEntry> survivingParticles;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle&&!deletedParticles.contains(entry.id))survivingParticles.push_back(entry);
@@ -1677,6 +1753,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             nextModels=validation->models;
         }else nextModels=validateAssetDeletion(projectRoot_,surviving,nextReferences,{}, {},survivingParticles)->models;
         std::vector<AssetFileChange> changes;
+        std::vector<StoredAssetPath> profileRegistrations;
         auto preparedMaterials=materials_;auto preparedAuthoredMaterials=authoredMaterials_;auto preparedParticles=particles_;
         auto preparedMaterialRevision=nextMaterialRevision_,preparedParticleRevision=nextParticleRevision_;
         for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&!deletedIds.contains(entry.id)){
@@ -1698,19 +1775,31 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
                     if(entry.id!=particleDocumentId_)preparedParticles[entry.id]={std::make_shared<ParticleEffectAsset>(std::move(effect)),preparedParticleRevision++,{}};}}
         }
         for(auto scene:savedScenes(projectRoot_))if(!deletedIds.contains(scene.id)){
+            if(active&&scene.id==active->assetId()&&scene.fingerprint==active->loadedFingerprint())for(auto& record:scene.records)if(record.controller) {
+                const auto original=active->legacyNavigationAgentProfileSeedForController(record.id);if(!original)continue;
+                const auto seed=std::find_if(scene.stagedNavigationProfiles.begin(),scene.stagedNavigationProfiles.end(),[&](const auto& profile){return profile&&profile->id==record.controller->profile.id;});
+                if(seed!=scene.stagedNavigationProfiles.end()&&(*seed)->traversal==original->traversal){record.controller->profile.id=original->id;*seed=original;}
+            }
             const auto removed=removeDeletedModels(scene,references_,nextReferences,deletedModels);
             const auto replaced=replaceDeletedParticles(scene,references_,nextReferences,deletedParticles);
             const auto materials=replaceDeletedModelMaterials(scene,references_,nextReferences,deletedMaterials,projectRoot_);
-            if(removed||replaced||materials)changes.push_back({scene.id,serializeSceneSnapshot(scene)});
+            const auto profiles=replaceDeletedNavigationProfiles(scene,references_,nextReferences,deletedProfiles);
+            if(removed||replaced||materials||profiles) {
+                auto persistence=prepareScenePersistence(projectRoot_,scene.id,scene);
+                changes.insert(changes.end(),std::make_move_iterator(persistence.files.begin()),std::make_move_iterator(persistence.files.end()));
+                profileRegistrations.insert(profileRegistrations.end(),persistence.registrations.begin(),persistence.registrations.end());
+            }
         }
         SceneSnapshot activeCandidate;bool activeChanged=false,clearHistory=false,activeDeleted=active&&deletedIds.contains(active->assetId());const bool wasDirty=active&&active->dirty();
         if(active&&!activeDeleted){activeCandidate.records=active->scene().records();activeCandidate.properties=active->scene().properties();
             activeChanged=removeDeletedModels(activeCandidate,references_,nextReferences,deletedModels)!=0;
             activeChanged=replaceDeletedParticles(activeCandidate,references_,nextReferences,deletedParticles)!=0||activeChanged;
             activeChanged=replaceDeletedModelMaterials(activeCandidate,references_,nextReferences,deletedMaterials,projectRoot_)!=0||activeChanged;
+            activeChanged=replaceDeletedNavigationProfiles(activeCandidate,references_,nextReferences,deletedProfiles)!=0||activeChanged;
             for(const auto& id:active->historicalMaterialReferences())if(deletedMaterials.contains(references_.resolveMaterial(id)))clearHistory=true;
             for(const auto& id:active->historicalModelReferences())if(deletedModels.contains(references_.resolve(id))&&nextReferences.resolve(id).empty())clearHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(deletedParticles.contains(references_.resolveParticle(id)))clearHistory=true;}
+        if(active&&!activeDeleted)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(deletedProfiles.contains(references_.resolveNavigationAgentProfile(id)))clearHistory=true;
         std::vector<std::filesystem::path> removedDirectories,selectedDirectories;
         for(const auto& id:plan.folderIds)if(browserCatalog().writableFolder(id)) {
             const auto directory=browserCatalog().folderPath(id);selectedDirectories.push_back(directory);removedDirectories.push_back(directory);
@@ -1726,6 +1815,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         std::vector<AssetFileChange> unique;std::set<std::filesystem::path> files;for(auto& change:changes)if(files.insert(checkedManagedAssetPath(projectRoot_,change.id)).second)unique.push_back(std::move(change));
         unique.push_back({"assets/references.json",nextReferences.serialize()});auto browserIds=plan.assetIds;browserIds.insert(browserIds.end(),plan.folderIds.begin(),plan.folderIds.end());
         unique.push_back({"assets/browser.json",browserCatalog().serializeWithout(browserIds)});
+        if(!profileRegistrations.empty())unique.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(projectRoot_,profileRegistrations)});
         auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;
         std::erase_if(preparedCatalog,[&](const auto& entry){return deletedIds.contains(entry.id);});
         std::erase_if(preparedMaterials,[&](const auto& entry){return deletedIds.contains(entry->id);});
@@ -1737,19 +1827,22 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(activeDeleted) preparedScene.emplace(active->prepareNewSceneAfterAssetDeletion());
         else if(active && (activeChanged||clearHistory)) {
             auto savedFingerprint=active->loadedFingerprint();
-            for(const auto& change:unique) if(change.id==active->assetId() && change.contents) savedFingerprint=sceneTextFingerprint(*change.contents);
+            for(const auto& change:unique) if(change.contents&&checkedManagedAssetPath(projectRoot_,change.id)==sceneAssetPath(projectRoot_,active->assetId()))savedFingerprint=sceneTextFingerprint(*change.contents);
             preparedScene.emplace(active->prepareExternalAssetChanges(activeCandidate.records,activeCandidate.properties,"Delete project assets",wasDirty,savedFingerprint));
         }
         if(preparedScene && !active->canCommitExternalAssetChanges(*preparedScene)) throw std::runtime_error("The active scene changed while deletion was preparing.");
         commitAssetTransaction(projectRoot_,unique);
         durable=true;
+        if(!profileRegistrations.empty())refreshContentStorage(projectRoot_);
         // All data/registry/catalog allocations were prepared above. Install the
         // authored document immediately; cache maintenance cannot roll it back.
         if(preparedScene) { const auto committed=active->commitExternalAssetChanges(std::move(*preparedScene));if(!committed)std::terminate(); }
         references_=std::move(nextReferences);models_=std::move(nextModels);
         browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);particles_=std::move(preparedParticles);
         authoredMaterials_=std::move(preparedAuthoredMaterials);nextMaterialRevision_=preparedMaterialRevision;nextParticleRevision_=preparedParticleRevision;
-        std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return deletedIds.contains(entry.first);});++catalogRevision_;browserRevision_=catalogRevision_;
+        std::erase_if(navigationProfiles_,[&](const auto& entry){return deletedIds.contains(entry.first);});
+        if(!profileRegistrations.empty())refreshNavigationAgentProfiles();
+        std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return deletedIds.contains(entry.first);});++catalogRevision_;browserRevision_=profileRegistrations.empty()?catalogRevision_:0;
         for(auto it=assets_.begin();it!=assets_.end();)if(deletedIds.contains(it->id)){retiredTextures_.push_back(std::move(*it));it=assets_.erase(it);}else ++it;
         browserSelection_.clear();
         if(resources_) {

@@ -5,6 +5,7 @@
 #include "assets/AssetLibrary.h"
 #include "tools/ParticleEditor.h"
 #include "tools/MaterialEditor.h"
+#include "tools/NavigationAgentProfileEditor.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -135,7 +136,7 @@ void SceneEditor::save(SceneDocument& document, AssetLibrary& assets, bool saveA
         name=availableSceneName(document.projectRoot(),name);
         std::snprintf(sceneName_.data(),sceneName_.size(),"%s",name.c_str());
     } else if (document.externalFileChanged()) saveConflictPopup_=true;
-    else if (document.save()) { assets.noteAssetWrite(document.assetId()); assets.refreshScenes(); }
+    else if (document.save()) { assets.noteAssetWrite(document.assetId()); assets.refreshNavigationAgentProfiles(); assets.refreshScenes(); }
 }
 void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& assets, Renderer& renderer) {
     if (openingPopup_) { ImGui::OpenPopup("Open scene"); openingPopup_=false; }
@@ -169,7 +170,7 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         const bool enter = ImGui::InputText("Name",sceneName_.data(),sceneName_.size(),ImGuiInputTextFlags_EnterReturnsTrue);
         if ((ImGui::Button("Save") || enter) && sceneName_[0] && document.save(sceneName_.data(),saveAs_)) {
-            assets.noteAssetWrite(document.assetId()); assets.refreshScenes(); ImGui::CloseCurrentPopup();
+            assets.noteAssetWrite(document.assetId()); assets.refreshNavigationAgentProfiles(); assets.refreshScenes(); ImGui::CloseCurrentPopup();
             if (continueAfterSave_) perform(document,camera,renderer);
             continueAfterSave_=false;
         }
@@ -183,7 +184,7 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
         ImGui::TextUnformatted("The saved scene changed or was removed outside the editor.");
         if (ImGui::Button("Overwrite")) {
             if (document.save({},false,true)) {
-                assets.noteAssetWrite(document.assetId()); assets.refreshScenes(); ImGui::CloseCurrentPopup();
+                assets.noteAssetWrite(document.assetId()); assets.refreshNavigationAgentProfiles(); assets.refreshScenes(); ImGui::CloseCurrentPopup();
                 if (continueAfterSave_) perform(document,camera,renderer);
                 continueAfterSave_=false;
             }
@@ -311,7 +312,7 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
 }
 EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, AssetLibrary& assets,
                               Renderer& renderer, SDL_Window* window, bool navigationActive,
-                              uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials) {
+                              uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials,NavigationAgentProfileEditor& profiles) {
     documentReplaced_=false;
     editingAssets_=&assets;
     if(!document.transient() && deferred_!=Pending::None) {
@@ -330,11 +331,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     EntityId cameraEntity=NoEntity;
     document.setPreviewCamera(settings.camera);
     // Resolve one document at a time so modal ownership and Cancel remain clear.
-    if (quitRequested) materials.requestExit();
+    if (quitRequested) profiles.requestExit();
+    if(profiles.takeExitRequest())materials.requestExit();
     if (materials.takeExitRequest()) particles.requestExit();
     if (particles.takeExitRequest()) request(Pending::Exit,{},document,settings.camera,renderer);
     const auto updateCommandTarget=[&] {
-        if(materials.focused())commandTarget_=CommandTarget::Material;
+        if(profiles.focused())commandTarget_=CommandTarget::Profile;
+        else if(materials.focused())commandTarget_=CommandTarget::Material;
         else if(particles.focused())commandTarget_=CommandTarget::Particle;
         else if(const auto* focused=ImGui::GetCurrentContext()->NavWindow) {
             const std::string_view name=focused->RootWindow->Name;
@@ -343,47 +346,53 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             else if(commandTarget_==CommandTarget::Game)commandTarget_=CommandTarget::Scene;
         } else if(commandTarget_==CommandTarget::Game)commandTarget_=CommandTarget::Scene;
         if((commandTarget_==CommandTarget::Particle && !particles.isOpen()) ||
-           (commandTarget_==CommandTarget::Material && !materials.isOpen()))commandTarget_=CommandTarget::Scene;
+           (commandTarget_==CommandTarget::Material && !materials.isOpen()) ||
+           (commandTarget_==CommandTarget::Profile && !profiles.isOpen()))commandTarget_=CommandTarget::Scene;
     };
     updateCommandTarget();
     const bool particleFocus=commandTarget_==CommandTarget::Particle;
+    const bool profileFocus=commandTarget_==CommandTarget::Profile;
     const bool materialFocus=commandTarget_==CommandTarget::Material;
     const auto saveTarget=[&](bool saveAs) {
-        if(commandTarget_==CommandTarget::Material) {
+        if(commandTarget_==CommandTarget::Profile) {if(saveAs?profiles.canSaveAs():profiles.canSave())profiles.save(assets,saveAs);}
+        else if(commandTarget_==CommandTarget::Material) {
             if(saveAs?materials.canSaveAs():materials.canSave())materials.save(assets,saveAs);
         }
         else if(commandTarget_==CommandTarget::Particle)particles.save(assets,saveAs);
         else save(document,assets,saveAs);
     };
     const auto undoTarget=[&] {
-        if(commandTarget_==CommandTarget::Material)materials.undo();
+        if(commandTarget_==CommandTarget::Profile)profiles.undo();
+        else if(commandTarget_==CommandTarget::Material)materials.undo();
         else if(commandTarget_==CommandTarget::Particle)particles.undo();
         else document.undo();
     };
     const auto redoTarget=[&] {
-        if(commandTarget_==CommandTarget::Material)materials.redo();
+        if(commandTarget_==CommandTarget::Profile)profiles.redo();
+        else if(commandTarget_==CommandTarget::Material)materials.redo();
         else if(commandTarget_==CommandTarget::Particle)particles.redo();
         else document.redo();
     };
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New scene")) request(Pending::New,{},document,settings.camera,renderer);
-            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewportBusy() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()))) { saveTarget(false); }
-            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewportBusy() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()))) { saveTarget(true); }
+            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewportBusy() && (profileFocus || materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()) && (!profileFocus || profiles.canSave()))) { saveTarget(false); }
+            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewportBusy() && (profileFocus || materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()) && (!profileFocus || profiles.canSaveAs()))) { saveTarget(true); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
             // Opening the menu ends a property gesture before its Undo label
             // and enabled state are queried. Viewport gestures keep ownership.
-            if (materialFocus) materials.finishInteraction();
+            if(profileFocus)profiles.finishInteraction();
+            else if (materialFocus) materials.finishInteraction();
             else if(particleFocus) particles.finishInteraction();
             else finishScenePanelEdit(document);
-            const auto undo=materialFocus ? std::string("Undo material edit") : particleFocus ? std::string("Undo particle edit") : "Undo " + document.history().undoLabel();
-            const auto redo=materialFocus ? std::string("Redo material edit") : particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
-            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,!viewportBusy() && (materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive()))) { undoTarget(); }
-            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,!viewportBusy() && (materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive()))) { redoTarget(); }
-            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
-            if (ImGui::MenuItem("Delete selection","Delete",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
+            const auto undo=profileFocus ? std::string("Undo profile edit") : materialFocus ? std::string("Undo material edit") : particleFocus ? std::string("Undo particle edit") : "Undo " + document.history().undoLabel();
+            const auto redo=profileFocus ? std::string("Redo profile edit") : materialFocus ? std::string("Redo material edit") : particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
+            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,!viewportBusy() && (profileFocus ? profiles.canUndo() : materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive()))) { undoTarget(); }
+            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,!viewportBusy() && (profileFocus ? profiles.canRedo() : materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive()))) { redoTarget(); }
+            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!profileFocus && !particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
+            if (ImGui::MenuItem("Delete selection","Delete",false,!profileFocus && !particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences...")) preferences_.open();
             ImGui::EndMenu();
@@ -394,12 +403,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::MenuItem("Asset Browser","Ctrl+Space",&panels_.assetBrowser);
             ImGui::MenuItem("Game",nullptr,&panels_.game);
             if(ImGui::BeginMenu("Camera")) {
-                if(materialFocus)materials.finishInteraction();
+                if(profileFocus)profiles.finishInteraction();
+                else if(materialFocus)materials.finishInteraction();
                 else if(particleFocus)particles.finishInteraction();
                 finishScenePanelEdit(document);
                 const bool cameraActionsAllowed=!document.transient() && !playTransitionBlocked() && !navigationActive &&
                     !viewportBusy() && !document.transactionActive() && !materials.transactionActive() &&
-                    !particles.transactionActive() && !ImGui::GetTopMostPopupModal();
+                    !particles.transactionActive() && !profiles.transactionActive() && !ImGui::GetTopMostPopupModal();
                 ImGui::BeginDisabled(!cameraActionsAllowed);
                 const auto records=document.scene().records();
                 const bool hasCameras=std::any_of(records.begin(),records.end(),[](const auto& entity){return entity.camera.has_value();});
@@ -426,6 +436,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             }
             ImGui::Separator();
             ImGui::MenuItem("Collisions",nullptr,&overlays_.collisions);
+            ImGui::MenuItem("Navigation Mesh",nullptr,&overlays_.navigationMesh);
             ImGui::MenuItem("Grid",nullptr,&overlays_.grid);
             ImGui::MenuItem("Transform Gizmo",nullptr,&overlays_.transformGizmo);
             ImGui::Separator();
@@ -460,9 +471,22 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool gameKeyboard=context->NavWindow && std::string_view(context->NavWindow->RootWindow->Name)=="Game";
     const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard;
     const bool actionPending=opening_ || openingPopup_ || deletePopup_;
-    std::uint64_t playParticle{};std::string openParticle,openMaterial;
+    const auto navigationRecords=document.scene().records();
+    const auto navigationVolume=std::find_if(navigationRecords.begin(),navigationRecords.end(),[](const auto& record){return record.navigationVolume && record.navigationVolume->enabled;});
+    if(navigationVolume==navigationRecords.end()){navigationPreviewProfile_.clear();navigationPreviewVolume_=NoEntity;}
+    else {
+        const auto& supported=navigationVolume->navigationVolume->profiles;
+        const auto contains=[&](const std::string& id){return std::any_of(supported.begin(),supported.end(),[&](const auto& ref){return ref.id==id;});};
+        if(navigationPreviewGeneration_!=document.documentGeneration() || navigationPreviewVolume_!=navigationVolume->id || !contains(navigationPreviewProfile_)) {
+            navigationPreviewProfile_=supported.empty()?std::string{}:supported.front().id;
+            if(const auto player=document.scene().find(document.scene().properties().playerCharacter);player && player->controller && contains(player->controller->profile.id))navigationPreviewProfile_=player->controller->profile.id;
+        }
+        navigationPreviewVolume_=navigationVolume->id;
+    }
+    navigationPreviewGeneration_=document.documentGeneration();
+    std::uint64_t playParticle{};std::string openParticle,openMaterial,openProfile;
     if (panels_.outliner) drawSceneOutliner(document,assets,!viewportBusy() && !actionPending);
-    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial);
+    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_});
     const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,
         overlays_.collisions,overlays_.transformGizmo,cameraNavigationAllowed,cameraGestureActive_,viewedCamera_!=NoEntity);
@@ -473,6 +497,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         browser=browser_.draw(assets,window,preferences_.values().browserPreviewSize,&renderer);
         preferences_.setBrowserPreviewSize(browser.previewSize);
     }
+    frame.createNavigationAgentProfile=browser.createNavigationAgentProfile;frame.navigationAgentProfileFolder=std::move(browser.navigationAgentProfileFolder);
+    frame.openNavigationAgentProfile=browser.openNavigationAgentProfile.empty()?std::move(openProfile):std::move(browser.openNavigationAgentProfile);
     frame.visiblePreviewIds=std::move(browser.visiblePreviewIds);
     frame.createParticle=browser.createParticle;frame.particleFolder=std::move(browser.particleFolder);
     frame.openParticle=browser.openParticle.empty()?std::move(openParticle):std::move(browser.openParticle);
@@ -493,10 +519,11 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     updateCommandTarget();
     const bool particleKeyboardTarget=commandTarget_==CommandTarget::Particle;
     const bool materialKeyboardTarget=commandTarget_==CommandTarget::Material;
-    const bool targetTransaction=materialKeyboardTarget?materials.transactionActive():particleKeyboardTarget?particles.transactionActive():document.transactionActive();
+    const bool profileKeyboardTarget=commandTarget_==CommandTarget::Profile;
+    const bool targetTransaction=profileKeyboardTarget?profiles.transactionActive():materialKeyboardTarget?materials.transactionActive():particleKeyboardTarget?particles.transactionActive():document.transactionActive();
     const auto shortcuts=readSceneShortcuts({actionPending,preferencesKeyboard || commandTarget_==CommandTarget::Game,navigationActive,
         targetTransaction,!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty() ||
-            viewportBusy() || frame.materialAssignment.has_value(),particleKeyboardTarget,materialKeyboardTarget});
+            viewportBusy() || frame.materialAssignment.has_value(),particleKeyboardTarget || profileKeyboardTarget,materialKeyboardTarget});
     if (shortcuts.toggleAssetBrowser) panels_.assetBrowser=!panels_.assetBrowser;
     if (shortcuts.save && !viewportBusy() && !frame.materialAssignment)saveTarget(shortcuts.saveAs);
     if (shortcuts.undo)undoTarget();

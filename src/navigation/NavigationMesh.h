@@ -1,24 +1,24 @@
 #pragma once
-#include "physics/PhysicsWorld.h"
+#include "NavigationTypes.h"
 #include <memory>
 
 namespace crimson {
-struct NavigationPath { std::vector<Vec3> corners; };
 
 // Recast/Detour data is derived from accepted static collision geometry. Agents
 // with compatible capsule clearance share it; it never supplies collision itself.
 class NavigationMesh {
 public:
-    static constexpr float CellSize=.1f;
-    static constexpr float CellHeight=.05f;
-    static constexpr float MaximumSlope=45.f;
-    static constexpr float MaximumStep=.3f;
     NavigationMesh();
     ~NavigationMesh();
     NavigationMesh(const NavigationMesh&)=delete;
     NavigationMesh& operator=(const NavigationMesh&)=delete;
-    // Returns true only when geometry or capsule clearance changed.
-    bool reconcile(const PhysicsWorld&,const SceneCharacterController&);
+    bool configure(const NavigationBakeSettings&,const AgentTraversalSettings&);
+    bool publish(std::shared_ptr<const NavigationTileData>,std::uint64_t version);
+    bool remove(NavigationTileKey);
+    void finishPublication();
+    bool valid(const NavigationPath&) const;
+    std::optional<Vec3> project(const Vec3&,const Vec3& extents) const;
+    NavigationDebugSnapshot debugSnapshot() const;
     std::optional<NavigationPath> findPath(const Vec3& start,const Vec3& destination) const;
     // Preserve an exact reachable destination; otherwise resolve to the closest
     // surface in the start polygon's connected component. The final corner is

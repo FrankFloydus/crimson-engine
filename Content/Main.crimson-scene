@@ -187,8 +187,7 @@
           0.8666666746139526,
           1.0
         ],
-        "height": 1.7999999523162842,
-        "radius": 0.30000001192092896,
+        "profile": "5feb3b03-22ab-5617-ba07-311d23b6d749",
         "showCollisionInGame": true
       },
       "darknessReveal": {
@@ -247,7 +246,7 @@
             0.8999999761581421
           ],
           "edgeSoftness": 1.0,
-          "enabled": false,
+          "enabled": true,
           "height": 2.0,
           "indirectEnergy": 1.0,
           "intensity": 7.111111164093018,
@@ -2349,6 +2348,49 @@
       "visible": true
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "box",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "66e628e88b10eecc",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Collider",
+      "order": 0,
+      "parent": "f7327e08d4b05185",
+      "visible": true
+    },
+    {
       "castShadows": true,
       "fadeWhenOccluding": false,
       "id": "6702bf8420f9a190",
@@ -4216,6 +4258,48 @@
       "visible": true
     },
     {
+      "id": "da0c822c72e4aa74",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        3.1326122283935547,
+        -0.7643251419067383,
+        2.6637659072875977,
+        1.0
+      ],
+      "name": "NavigationVolume",
+      "navigationVolume": {
+        "bake": {
+          "cellHeight": 0.05000000074505806,
+          "cellSize": 0.10000000149011612,
+          "maxSimplificationError": 0.5,
+          "tileSize": 128
+        },
+        "enabled": true,
+        "profiles": [
+          "5feb3b03-22ab-5617-ba07-311d23b6d749"
+        ],
+        "size": [
+          22.941242218017578,
+          8.471349716186523,
+          13.838384628295898
+        ]
+      },
+      "order": 8,
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
       "collider": {
         "collisionColor": [
           0.2235294133424759,
@@ -5244,6 +5328,47 @@
       "visible": true
     },
     {
+      "castShadows": true,
+      "fadeWhenOccluding": false,
+      "id": "f7327e08d4b05185",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        2.6889140605926514,
+        -2.0910987854003906,
+        0.0,
+        0.0,
+        0.6138898134231567,
+        0.7893921732902527,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.7200000286102295,
+        0.0,
+        3.062107563018799,
+        0.7612659931182861,
+        0.9714877605438232,
+        1.0
+      ],
+      "model": "ec337913-e4bd-5069-af3a-f18227b0209f",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "Box",
+      "order": 9,
+      "parent": "0000000000000000",
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
       "id": "fe9c66b15b071b15",
       "local": [
         1.0,
@@ -5325,19 +5450,19 @@
     "fov": 45.0,
     "near": 0.009999999776482582,
     "position": [
-      8.453076362609863,
-      8.995922088623047,
-      7.24618673324585
+      9.369935989379883,
+      8.09719467163086,
+      7.94398832321167
     ],
     "target": [
-      6.147088527679443,
-      6.440763473510742,
-      4.83927059173584
+      7.673298358917236,
+      5.078432083129883,
+      5.567376136779785
     ],
     "up": [
-      -0.420885294675827,
-      0.7936481833457947,
-      -0.43929269909858704
+      -0.41762471199035645,
+      0.6952611207962036,
+      -0.5849799513816833
     ]
   },
   "settings": {
@@ -5346,5 +5471,5 @@
     "playerCharacter": "0ef73fe233641b37"
   },
   "type": "crimson-scene",
-  "version": 17
+  "version": 18
 }

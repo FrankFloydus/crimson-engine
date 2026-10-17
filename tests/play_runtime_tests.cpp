@@ -1,3 +1,4 @@
+#include "navigation_fixture.h"
 #include "runtime/PlaySession.h"
 #include "runtime/GameInput.h"
 #include "scene/CameraAuthoring.h"
@@ -13,6 +14,7 @@
 
 namespace {
 using namespace crimson;
+using crimson::testing::startWithNavigation;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 void fixture(SceneDocument& document) {
     require(document.edit("Fixture",[](auto& records,auto& properties){
@@ -27,7 +29,7 @@ float x(const Scene& scene){return scene.worldTransform(2)->at(0,3);}
 void lifecycleAndEditing() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";
     SceneDocument authored(root);fixture(authored);const auto original=authored.scene().records();const auto historySize=authored.history().size();
-    PlaySession play(root);require(play.start(authored),"Play did not clone authored data.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Play did not clone authored data.");
     require(play.document().transient() && !play.document().dirty(),"Runtime did not start with independent clean history.");
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
     require(x(play.document().scene())>4.8f,"Runtime character did not move.");
@@ -45,7 +47,7 @@ void lifecycleAndEditing() {
     require(std::abs(x(play.document().scene())-12)<1e-5 && std::abs((*play.document().scene().worldTransform(2))[13]-4)<1e-5,"Physics fought an active transform gesture.");
     require(play.document().commit(),"Transform commit failed.");play.advance(PlaySession::FixedStep,Vec2{},camera());
     require((*play.document().scene().worldTransform(2))[13]>3.99f,"Teleport resumed stale gravity.");
-    play.stop();require(!play.playing(),"Stop retained its runtime.");require(play.start(authored),"Restart failed.");require(std::abs(x(play.document().scene()))<1e-5,"Restart retained movement.");
+    play.stop();require(!play.playing(),"Stop retained its runtime.");require(startWithNavigation(play,authored),"Restart failed.");require(std::abs(x(play.document().scene()))<1e-5,"Restart retained movement.");
     const auto final=authored.scene().records();require(final.size()==original.size(),"Stop changed authored entities.");
     for(std::size_t i=0;i<final.size();++i)require(sameEntity(final[i],original[i]),"Play modified authored records.");
 }
@@ -108,7 +110,7 @@ void flatPlayerPresentationPreservesRuntime() {
 }
 void fixedTimingAndInterpolation() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
-    PlaySession a(root),b(root);require(a.start(authored) && b.start(authored),"Cannot start timing runtimes.");
+    PlaySession a(root),b(root);require(startWithNavigation(a,authored) && startWithNavigation(b,authored),"Cannot start timing runtimes.");
     for(int i=0;i<60;++i)a.advance(1.0/60.0,Vec2{1,0},camera());
     for(int i=0;i<240;++i)b.advance(1.0/240.0,Vec2{1,0},camera());
     require(a.tickCount()==60 && b.tickCount()==60 && std::abs(x(a.document().scene())-x(b.document().scene()))<1e-4,"Render frame size changed fixed simulation results.");
@@ -120,7 +122,7 @@ void fixedTimingAndInterpolation() {
     SceneDocument turning(root);fixture(turning);
     constexpr double radians=std::numbers::pi/180;
     turning.edit("Facing",[](auto& records,auto&){for(auto& record:records)if(record.id==2)record.local=math::translation({0,.05f,0})*math::rotation(math::axisAngle({0,1,0},179*radians));});
-    PlaySession turn(root);require(turn.start(turning),"Cannot start turning runtime.");
+    PlaySession turn(root);require(startWithNavigation(turn,turning),"Cannot start turning runtime.");
     Camera look;look.position={0,2,0};look.target={-std::sin(-179*radians),2,-std::cos(-179*radians)};
     turn.advance(PlaySession::FixedStep*1.5,Vec2{0,1},look);
     require((*turn.presentationScene().worldTransform(2))[10]<-.99f,"Yaw interpolation took the long path across the angle wrap.");
@@ -129,7 +131,7 @@ void particlesUseRuntimeClock() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     const auto effect=std::make_shared<ParticleEffectAsset>(defaultParticleEffect());effect->id="assets/particles/test.crimson-particle";effect->emitter.rate=60;
     authored.edit("Emitter",[&](auto& records,auto&){EntityRecord emitter;emitter.id=4;emitter.parent=2;emitter.name="Emitter";emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);});
-    PlaySession play(root);play.setParticleDefinitions([effect](const std::string&){return ParticleDefinitionVersion{effect,1,{}};});require(play.start(authored),"Cannot start particle runtime.");
+    PlaySession play(root);play.setParticleDefinitions([effect](const std::string&){return ParticleDefinitionVersion{effect,1,{}};});require(startWithNavigation(play,authored),"Cannot start particle runtime.");
     for(int i=0;i<10;++i)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
     const auto* particle=play.particles().instance(4);require(particle && std::abs(particle->elapsed()-10*PlaySession::FixedStep)<1e-8,"Runtime effects did not share the fixed clock.");
     require(particle->particles().back().position[0]>.5f,"Child emitter births did not follow the moving parent.");
@@ -144,7 +146,7 @@ void particlePreprocessIsReadyBeforePlayReturns() {
         emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);
     }),"Cannot prepare preprocessed Play fixture.");
     PlaySession play(root);play.setParticleDefinitions([effect](const std::string&){return ParticleDefinitionVersion{effect,1,{}};});
-    require(play.start(authored),"Cannot start preprocessed particle runtime.");
+    require(startWithNavigation(play,authored),"Cannot start preprocessed particle runtime.");
     const auto* warmed=play.particles().instance(4);
     require(warmed && warmed->stats().ticks==120 && !play.particles().presentation().empty() && play.tickCount()==0,
         "Play returned before two seconds of fire pre-process were ready for the first Game image.");
@@ -157,7 +159,7 @@ void particlePreprocessIsReadyBeforePlayReturns() {
     play.advance(0,Vec2{},camera());require(warmed->stats().ticks==120 && play.particles().presentation().size()==firstImage.size(),"First zero-delta Play frame restarted or hid warmed particles.");
     play.advance(PlaySession::FixedStep,Vec2{1,0},camera());require(warmed->stats().ticks==121 && !play.document().dirty() && !play.document().history().size(),
         "Ready preprocessed particles did not join the ordinary Play clock cleanly.");
-    play.stop();require(play.start(authored),"Cannot restart preprocessed Play session.");
+    play.stop();require(startWithNavigation(play,authored),"Cannot restart preprocessed Play session.");
     require(play.particles().instance(4)->stats().ticks==120 && play.particles().presentation().size()==firstImage.size(),"Stop/Play did not immediately reproduce the warm initial presentation.");
     for(std::size_t i=0;i<firstImage.size();++i)require(firstImage[i].position==play.particles().presentation()[i].position &&
         firstImage[i].spawnOrdinal==play.particles().presentation()[i].spawnOrdinal,"Stop/Play changed the seeded initial fire state.");play.stop();
@@ -166,7 +168,7 @@ void particlePreprocessIsReadyBeforePlayReturns() {
     require(many.edit("Many preprocessed emitters",[&](auto& records,auto&){for(EntityId id=100;id<116;++id){
         EntityRecord emitter;emitter.id=id;emitter.name="Fire";emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);
     }}),"Cannot prepare many-emitter Play fixture.");
-    require(play.start(many),"Cannot start many-emitter pre-process runtime.");
+    require(startWithNavigation(play,many),"Cannot start many-emitter pre-process runtime.");
     const auto replayTicks=[&]{std::uint64_t ticks{};for(EntityId id=100;id<116;++id){const auto* instance=play.particles().instance(id);require(instance!=nullptr,"Play omitted a bounded emitter.");ticks+=instance->stats().ticks;}return ticks;};
     require(replayTicks()==16u*120u && play.particles().groups().size()==16,"Play left later emitters blank on their first presentation.");
     for(const auto& group:play.particles().groups())require(group.count>0,"An admitted emitter had no ready particles on first Play entry.");
@@ -184,7 +186,7 @@ void followCameraTransformLocks() {
         EntityRecord other;other.id=6;other.name="Unrelated falling actor";other.actor.emplace();other.controller.emplace();other.motor.emplace();other.local=math::translation({8,100,0});records.push_back(other);
         EntityRecord chained;chained.id=7;chained.name="Chained follow camera";chained.camera.emplace();chained.cameraFollow.emplace();chained.cameraFollow->target=5;chained.cameraFollow->offset={3,3,3};records.push_back(chained);
     }),"Cannot prepare following-camera lock fixture.");
-    PlaySession play(root);require(play.start(authored),"Cannot start camera-lock runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start camera-lock runtime.");
     for(const auto edited:std::array<EntityId,3>{4,5,7}) {
         play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
         const auto playerBefore=*play.document().scene().worldTransform(2);
@@ -212,7 +214,7 @@ Vec2 screenPoint(const Camera& view,const ViewportRegion& viewport,const Vec3& p
 }
 void pointerMovementAndFacing() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
-    PlaySession play(root);require(play.start(authored),"Cannot start pointer runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start pointer runtime.");
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
     const ViewportRegion viewport{100,200,800,600,true,false,9};GameInput input;input.setViewport(viewport,true,false);input.acquire();
     input.submitPointer(screenPoint(view,viewport,{3,0,0}),true);
@@ -235,7 +237,7 @@ void pointerMovementAndFacing() {
     require(!input.handleEvent(oldKey),"WASD remained an active gameplay binding.");
     play.advance(.1,input,view);require(std::abs(x(play.document().scene())-released)<1e-4,"WASD moved the click-controlled player.");
 
-    PlaySession a(root),b(root);require(a.start(authored)&&b.start(authored),"Cannot start pointer timing runtimes.");
+    PlaySession a(root),b(root);require(startWithNavigation(a,authored)&&startWithNavigation(b,authored),"Cannot start pointer timing runtimes.");
     GameInput first,second;first.setViewport(viewport,true,false);second.setViewport(viewport,true,false);first.acquire();second.acquire();
     const auto far=screenPoint(view,viewport,{8,0,0});first.submitPointer(far,true);second.submitPointer(far,true);
     for(int i=0;i<60;++i)a.advance(1.0/60,first,view);
@@ -245,7 +247,7 @@ void pointerMovementAndFacing() {
 void pointerCollisionAndNoFloor() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     authored.edit("Wall",[](auto& records,auto&){EntityRecord wall;wall.id=9;wall.name="Wall";wall.collider=SceneCollider{{.2f,2,4}};wall.local=math::translation({1,1,0});records.push_back(wall);});
-    PlaySession play(root);require(play.start(authored),"Cannot start click collision runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start click collision runtime.");
     auto view=camera();view.position={0,10,8};const ViewportRegion viewport{0,0,800,600,true,false,9};
     GameInput input;input.setViewport(viewport,true,false);input.acquire();input.submitPointer(screenPoint(view,viewport,{4,0,0}),true);
     double detour=0;
@@ -255,8 +257,9 @@ void pointerCollisionAndNoFloor() {
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
     require(play.navigationRevision()==navigationRevision,"Simulation poses rebuilt the cached navigation mesh.");
     play.document().edit("Remove wall",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.id==9;});});
+    require(testing::waitForNavigation(play,input,view),"Wall deletion tiles did not finish preparing.");
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
-    require(play.navigationRevision()==navigationRevision+1,"Live wall deletion did not rebuild navigation once.");
+    require(play.navigationRevision()>navigationRevision,"Live wall deletion did not publish replacement navigation.");
     input.submitPointer(screenPoint(view,viewport,{-4,0,0}),true);play.advance(PlaySession::FixedStep,input,view);
     const auto beforeFloorDeletion=x(play.document().scene());
     play.document().edit("Remove support",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.collider.has_value();});});
@@ -265,7 +268,7 @@ void pointerCollisionAndNoFloor() {
         !play.destination() && (*play.document().scene().worldTransform(2))[13]<-3,
         "Deleting support geometry retained a stale route or invented a floor.");
     authored.edit("No floor",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.collider.has_value();});});
-    play.stop();require(play.start(authored),"Cannot restart without colliders.");input.cancel();input.acquire();input.submitPointer(screenPoint(view,viewport,{4,0,0}),true);
+    play.stop();require(startWithNavigation(play,authored),"Cannot restart without colliders.");input.cancel();input.acquire();input.submitPointer(screenPoint(view,viewport,{4,0,0}),true);
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
     require(std::abs(x(play.document().scene()))<1e-5 && (*play.document().scene().worldTransform(2))[13]<-3,"Clicking empty space supplied movement or an implicit floor.");
 }
@@ -276,7 +279,7 @@ void unreachableAndReplanning() {
         EntityRecord wall;wall.id=9;wall.name="Wall";wall.collider=SceneCollider{{.2f,2,24}};
         wall.local=math::translation({1,1,0});records.push_back(wall);
     });
-    PlaySession play(root);require(play.start(authored),"Cannot start unreachable runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start unreachable runtime.");
     auto view=camera();view.position={0,10,8};const ViewportRegion viewport{0,0,800,600,true,false,9};
     GameInput input;input.setViewport(viewport,true,false);input.acquire();input.submitPointer(screenPoint(view,viewport,{4,0,0}),true);
     for(int i=0;i<30;++i)play.advance(PlaySession::FixedStep,input,view);
@@ -284,12 +287,14 @@ void unreachableAndReplanning() {
         "Blocked ground click did not approach and stop safely on this side of the wall.");
     require(play.lastClickedGround() && math::length(*play.lastClickedGround()-Vec3{4,0,0})<.001,"Unreachable ground click lost its debug hit point.");
     play.document().edit("Open route",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.id==9;});});
+    require(testing::waitForNavigation(play,input,view),"Opened route tiles did not finish preparing.");
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
     require(std::abs(x(play.document().scene())-4)<.02f,"Live collider deletion did not replan the retained destination.");
     input.submitPointer(screenPoint(view,viewport,{-4,0,0}),true);play.advance(PlaySession::FixedStep,input,view);
     play.document().edit("Block active route",[](auto& records,auto&){EntityRecord wall;wall.id=9;wall.name="Wall";
         wall.collider=SceneCollider{{.2f,2,24}};wall.local=math::translation({1,1,0});records.push_back(wall);});
     const float before=x(play.document().scene());
+    require(testing::waitForNavigation(play,input,view),"Blocked route tiles did not finish preparing.");
     for(int i=0;i<30;++i)play.advance(PlaySession::FixedStep,input,view);
     require(x(play.document().scene())<before-.5f && x(play.document().scene())>1.4f && x(play.document().scene())<2 && play.path().empty(),
         "Inserted collider did not replace the active route with a safe approach point.");
@@ -299,7 +304,7 @@ void unreachableAndReplanning() {
 void heldTargetsAndQueryBudget() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     authored.edit("Small floor",[](auto& records,auto&){for(auto& record:records)if(record.id==1)record.collider->size={20,1,20};});
-    PlaySession play(root);require(play.start(authored),"Cannot start held-target runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start held-target runtime.");
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
     const ViewportRegion viewport{0,0,800,600,true,false,9};GameInput input;input.setViewport(viewport,true,false);input.acquire();input.setProjection(view,800,600);
     input.submitUiPointer(screenPoint(view,viewport,{3,0,0}),true,true);
@@ -330,7 +335,7 @@ void heldTargetsAndQueryBudget() {
 void heldStationaryCursorFollowsDisplayedProjection() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     authored.edit("Small floor",[](auto& records,auto&){for(auto& record:records)if(record.id==1)record.collider->size={20,1,20};});
-    PlaySession play(root);require(play.start(authored),"Cannot start held-projection runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start held-projection runtime.");
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
     const ViewportRegion viewport{100,200,800,600,true,false,9};GameInput input;input.setViewport(viewport,true,false);input.acquire();input.setProjection(view,1600,1200);
     const auto cursor=screenPoint(view,viewport,{2,0,0});input.submitUiPointer(cursor,true,true);
@@ -355,7 +360,7 @@ void heldProjectedTargetsAndMisses() {
         }
         EntityRecord wall;wall.id=9;wall.name="Wall";wall.collider=SceneCollider{{.2f,2,24}};wall.local=math::translation({1,1,0});records.push_back(wall);
     });
-    PlaySession play(root);require(play.start(authored),"Cannot start held-unreachable runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start held-unreachable runtime.");
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
     ViewportRegion viewport{0,0,800,600,true,false,9};GameInput input;input.setViewport(viewport,true,false);input.acquire();input.setProjection(view,800,600);
     input.submitUiPointer(screenPoint(view,viewport,{-5,0,0}),true,true);play.advance(PlaySession::FixedStep,input,view);
@@ -385,7 +390,7 @@ void obstacleSurfaceClicks() {
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
     const ViewportRegion viewport{100,200,800,600,true,false,9};
     for(const auto target:{Vec3{4,1,1},Vec3{4,2,0}}) for(const bool held:{false,true}) {
-        PlaySession play(root);require(play.start(authored),"Cannot start obstacle click runtime.");
+        PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start obstacle click runtime.");
         GameInput input;input.setViewport(viewport,true,false);input.acquire();input.setProjection(view,1600,1200);
         input.submitUiPointer(screenPoint(view,viewport,target),true,held);play.advance(PlaySession::FixedStep,input,view);
         require(play.destination() && !play.path().empty(),"Clicking a box wall or roof did not create an approach route.");
@@ -411,7 +416,7 @@ void directionalInputRespectsRoleAndComponentChanges() {
         EntityRecord actor;actor.id=4;actor.name="Other actor";actor.actor.emplace();actor.controller.emplace();actor.motor.emplace();
         actor.playerInput.emplace();actor.local=math::translation({0,.05f,4});records.push_back(actor);
     }),"Cannot create directional ownership fixture.");
-    PlaySession play(root);require(play.start(authored),"Cannot start directional ownership fixture.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start directional ownership fixture.");
     const auto position=[&](EntityId id){return math::transformPoint(*play.document().scene().worldTransform(id),{});};
     for(int i=0;i<10;++i)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
     require(position(2)[0]>.7f,"Directional player input did not start.");
@@ -435,21 +440,22 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
             EntityRecord actor;actor.id=id;actor.name="Actor "+std::to_string(id);actor.actor.emplace();actor.controller.emplace();
             actor.motor.emplace();actor.navigation.emplace();actor.local=math::translation({-4,.05f,id==2?-5.f:id==4?2.f:id==5?-2.f:5.f});
             if(id==2)actor.playerInput.emplace();
-            if(id==6){actor.controller->height=2;actor.controller->radius=.6f;}
+            if(id==6)actor.controller->profile=testing::agentProfile({2,.6f,45,.3f});
             records.push_back(actor);
         }
         EntityRecord falling;falling.id=7;falling.name="Controller without Motor";falling.controller.emplace();
         falling.local=math::translation({7,3,0});records.push_back(falling);properties.playerCharacter=2;
     }),"Cannot prepare composed actor fixture.");
-    PlaySession play(root);require(play.start(authored),"Cannot start composed actors.");
-    require(play.navigationProfileCount()==2&&play.navigationBuildCount()==2,"Compatible actors did not share navigation clearance data.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start composed actors.");
+    const auto initialBuilds=play.navigationBuildCount();
+    require(play.navigationProfileCount()==2&&initialBuilds>0,"Compatible actors did not share navigation clearance data.");
     require(play.setActorDestination(4,{4,0,2})&&play.setActorDestination(5,{4,0,-2})&&play.setActorDestination(6,{3,0,5}),
         "Non-player actors could not request independent destinations.");
     require(play.actorDestination(4)!=play.actorDestination(5)&&play.actorPath(4).data()!=play.actorPath(5).data(),
         "Agents shared a destination or transient path allocation.");
     require(play.actorRouteQueryCount(4)==1&&play.actorRouteQueryCount(5)==1&&play.routeQueryCount()==0,
         "A non-player command mutated the player's route state.");
-    require(play.setActorDestination(4,{4,0,2})&&play.actorRouteQueryCount(4)==1&&play.navigationBuildCount()==2,
+    require(play.setActorDestination(4,{4,0,2})&&play.actorRouteQueryCount(4)==1&&play.navigationBuildCount()==initialBuilds,
         "An unchanged external destination repeated path queries or rebuilt navigation.");
     require(!play.setActorDestination(7,{4,0,0})&&!play.setActorMovement(99,{1,0,0}),"Missing movement capabilities accepted actor commands.");
     const auto position=[&](EntityId id){return math::transformPoint(*play.document().scene().worldTransform(id),{});};
@@ -458,11 +464,15 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
         std::hypot(position(6)[0]-3,position(6)[2]-5)<.06,"Independent agents did not arrive at their own destinations.");
     require(!play.actorDestination(4)&&!play.actorDestination(5)&&play.actorRemainingPath(6).empty(),"Arrived agents retained active steering paths.");
     require(position(2)[0]==-4&&position(7)[1]<.2f,"Non-player navigation moved the player or a controller-only body failed to fall.");
-    require(play.navigationBuildCount()==2,"Destinations or ordinary actor poses rebuilt shared navigation.");
-    require(play.document().edit("Reuse an existing clearance profile",[](auto& records,auto&){for(auto& r:records)if(r.id==5){r.controller->height=2;r.controller->radius=.6f;}}),
+    require(play.navigationBuildCount()==initialBuilds,"Destinations or ordinary actor poses rebuilt shared navigation.");
+    require(play.document().edit("Reuse an existing clearance profile",[](auto& records,auto&){
+        AssetRef<NavigationAgentProfile> existing;
+        for(const auto& record:records)if(record.id==6)existing=record.controller->profile;
+        for(auto& record:records)if(record.id==5)record.controller->profile=existing;
+    }),
         "Cannot edit actor clearance.");
     play.advance(0,Vec2{},camera());
-    require(play.navigationProfileCount()==2&&play.navigationBuildCount()==2,"Changing to an existing compatible profile rebuilt its navigation mesh.");
+    require(play.navigationProfileCount()==2&&play.navigationBuildCount()==initialBuilds,"Changing to an existing compatible profile rebuilt its navigation mesh.");
     require(play.setActorMovement(4,{100,0,0}),"Non-player direct movement was rejected.");const auto before=position(4);
     for(int i=0;i<30;++i)play.advance(PlaySession::FixedStep,Vec2{},camera());
     require(position(4)[0]>before[0]+2.3f&&position(4)[0]<before[0]+2.7f,"Direct movement ignored the Motor's speed limit.");
@@ -490,7 +500,7 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
     require(play.document().edit("Change static navigation geometry",[](auto& records,auto&){for(auto& r:records)if(r.id==1)r.collider->size={42,1,40};}),
         "Cannot edit shared navigation geometry.");
     play.advance(0,Vec2{},camera());
-    require(play.navigationBuildCount()==4,"A world change did not rebuild each retained clearance profile exactly once.");
+    require(testing::waitForNavigation(play)&&play.navigationBuildCount()>initialBuilds,"A world change did not rebuild the affected retained clearance tiles.");
     require(play.document().transient()&&authored.scene().find(1)->collider->size==Vec3{40,1,40}&&
         authored.scene().find(4)->motor->enabled&&authored.scene().find(5)->navigation->enabled,
         "Runtime component edits changed the authored actors or geometry.");
@@ -501,7 +511,7 @@ void heldEditsRequireFreshPress() {
         for(auto& record:records)if(record.id==1)record.collider->size={20,1,20};
         EntityRecord other;other.id=4;other.name="Other Character";other.actor.emplace();other.controller.emplace();other.motor.emplace();other.navigation.emplace();other.playerInput.emplace();other.local=math::translation({-4,.05f,0});records.push_back(other);
     });
-    PlaySession play(root);require(play.start(authored),"Cannot start held-edit runtime.");
+    PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start held-edit runtime.");
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
     const ViewportRegion viewport{0,0,800,600,true,false,9};GameInput input;input.setViewport(viewport,true,false);input.acquire();input.setProjection(view,800,600);
     const auto cursor=screenPoint(view,viewport,{5,0,0});

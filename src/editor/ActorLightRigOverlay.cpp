@@ -10,12 +10,13 @@
 #include <numbers>
 
 namespace crimson {
-void drawSceneLightRigOverlays(ImDrawList& draw,const Scene& scene,const Mat4& viewProjection,const Vec4& viewport,ClipDepth depth) {
+void drawSceneLightRigOverlays(ImDrawList& draw,const Scene& scene,const Mat4& viewProjection,const Vec4& viewport,ClipDepth depth,const NavigationAgentProfileQuery& profiles) {
     for(const auto& record:scene.records()) {
         if(!record.lightRig || !record.lightRig->showGizmos || !scene.isVisible(record.id))continue;
         const auto world=scene.worldTransform(record.id);if(!world)continue;
+        const auto traversal=record.controller?resolveAgentTraversal(*record.controller,profiles):std::optional<AgentTraversalSettings>{};
         drawActorLightRigOverlay(draw,*record.lightRig,record.darknessReveal.value_or(DarknessRevealSettings{false,8}),
-            math::transformPoint(*world,{}),record.controller?record.controller->height:0,viewProjection,viewport,depth);
+            math::transformPoint(*world,{}),traversal?traversal->height:0,viewProjection,viewport,depth);
     }
 }
 

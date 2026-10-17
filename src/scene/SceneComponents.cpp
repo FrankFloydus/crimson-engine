@@ -11,6 +11,7 @@ const char* sceneComponentName(SceneComponentKind kind) {
     case SceneComponentKind::Motor:return "Motor";
     case SceneComponentKind::Controller:return "Character Controller";
     case SceneComponentKind::Navigation:return "Navigation Agent";
+    case SceneComponentKind::NavigationVolume:return "Navigation Volume";
     case SceneComponentKind::PlayerInput:return "Player Input";
     case SceneComponentKind::LightRig:return "Light Rig";
     case SceneComponentKind::DarknessReveal:return "Darkness Reveal";

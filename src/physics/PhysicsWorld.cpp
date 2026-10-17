@@ -90,13 +90,12 @@ bool locked(const Scene& scene,EntityId id,std::span<const EntityId> locks) {
     }
     return false;
 }
-bool sameCharacter(const SceneCharacterController& a,const SceneCharacterController& b){return a.height==b.height && a.radius==b.radius;}
 bool sameCollider(const SceneCollider& a,const SceneCollider& b) {
     if(a.shape!=b.shape)return false;
     if(a.shape==ColliderShape::Box)return a.size==b.size;
     return a.radius==b.radius && (a.shape==ColliderShape::Sphere || a.height==b.height);
 }
-bool validCharacter(const Mat4& world,const SceneCharacterController& character,std::string& error) {
+bool validCharacter(const Mat4& world,const AgentTraversalSettings& character,std::string& error) {
     const auto fields=math::affineTransformFields(world);
     if(!fields || fields->singular || fields->sheared){error="Character requires a nonsingular transform without shear.";return false;}
     for(int i=0;i<3;++i)if(std::abs(fields->scale[i]-1.f)>2e-5f){error="Character requires unit world scale; resize its capsule or scale a visual child.";return false;}
@@ -105,14 +104,14 @@ bool validCharacter(const Mat4& world,const SceneCharacterController& character,
     return true;
 }
 }
-struct PhysicsWorld::Impl {
+struct PhysicsWorld::Impl final: JPH::CharacterContactListener {
     // Lifetime is declared first so every Jolt resource is released before it.
     std::shared_ptr<JoltLifetime> lifetime{acquireJolt()};
     Layers layers;Pairs pairs;BroadPairs broadPairs;
     JPH::PhysicsSystem world;
     JPH::TempAllocatorImpl allocator{4*1024*1024};
     struct Collider {JPH::BodyID body;Mat4 world;SceneCollider definition;std::shared_ptr<const StaticTriangleMesh> mesh;};
-    struct Character {JPH::Ref<JPH::CharacterVirtual> motor;SceneCharacterController definition;Mat4 world;bool locked{},movementEnabled{};};
+    struct Character {JPH::Ref<JPH::CharacterVirtual> motor;AgentTraversalSettings definition;std::string profile;Mat4 world;bool locked{},movementEnabled{},profileCurrent{true},allowSliding{true};};
     std::map<EntityId,Collider> colliders;
     struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};};
     std::map<EntityId,MeshCollider> meshColliders;
@@ -121,10 +120,21 @@ struct PhysicsWorld::Impl {
     std::map<EntityId,Vec3> desiredFacing;
     std::string diagnostic;
     std::uint64_t geometryRevision{};
+    NavigationAgentProfileQuery profiles;
     Impl(){world.Init(4096,0,1024,1024,layers,broadPairs,pairs);world.SetGravity({0,-9.81f,0});}
     ~Impl(){characters.clear();for(const auto& [id,collider]:colliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}
         for(const auto& [id,collider]:meshColliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}}
     void report(EntityId id,const std::string& text){diagnostic+="Entity "+std::to_string(id)+": "+text+"\n";}
+    void OnContactSolve(const JPH::CharacterVirtual* character,const JPH::BodyID&,const JPH::SubShapeID&,
+        JPH::RVec3Arg,JPH::Vec3Arg normal,JPH::Vec3Arg contactVelocity,const JPH::PhysicsMaterial*,
+        JPH::Vec3Arg,JPH::Vec3& resolvedVelocity) override {
+        const auto found=characters.find(character->GetUserData());
+        // Gravity must still establish support and handle falling. Cancel its
+        // downhill projection only at an idle, stationary, walkable contact.
+        if(found!=characters.end() && found->second.motor.GetPtr()==character && !found->second.allowSliding &&
+            contactVelocity.IsNearZero() && normal.Dot(character->GetUp())>=character->GetCosMaxSlopeAngle())
+            resolvedVelocity=JPH::Vec3::sZero();
+    }
     void refresh(JPH::CharacterVirtual& motor) {
         motor.RefreshContacts(world.GetDefaultBroadPhaseLayerFilter(CharacterLayer),world.GetDefaultLayerFilter(CharacterLayer),{},{},allocator);
     }
@@ -134,7 +144,14 @@ struct PhysicsWorld::Impl {
 };
 PhysicsWorld::PhysicsWorld():impl_(std::make_unique<Impl>()){}
 PhysicsWorld::~PhysicsWorld()=default;
+void PhysicsWorld::setAgentProfiles(NavigationAgentProfileQuery query){impl_->profiles=std::move(query);}
 void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes) {
+    reconcileInternal(scene,locks,meshes,true);
+}
+void PhysicsWorld::reconcileStatics(const Scene& scene,std::span<const PhysicsMeshCollider> meshes) {
+    reconcileInternal(scene,{},meshes,false);
+}
+void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes,bool includeCharacters) {
     auto& state=*impl_;state.diagnostic.clear();
     bool collidersChanged=false;
     std::unordered_set<EntityId> keptColliders,keptCharacters;
@@ -243,36 +260,50 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
         iterator=state.meshColliders.erase(iterator);collidersChanged=true;
     }
     if(collidersChanged)++state.geometryRevision;
+    if(!includeCharacters){state.characters.clear();return;}
     for(const auto& record:records) {
         if(!record.controller)continue;const auto world=scene.worldTransform(record.id);if(!world)continue;
         std::string error;
         if(underCharacter(scene,record.id)){state.report(record.id,"A Character cannot be nested beneath another Character.");continue;}
-        if(!validCharacter(*world,*record.controller,error)){state.report(record.id,error);continue;}
         auto found=state.characters.find(record.id);
-        if(found!=state.characters.end() && !sameCharacter(found->second.definition,*record.controller)){state.characters.erase(found);found=state.characters.end();}
-        if(found==state.characters.end()) {
-            const auto& definition=*record.controller;
+        const auto resolved=resolveAgentTraversal(*record.controller,state.profiles);
+        if(!resolved) {
+            state.report(record.id,"Navigation Agent Profile is unavailable; retaining the last accepted capsule.");
+            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;}
+            continue;
+        }
+        if(!validCharacter(*world,*resolved,error)){state.report(record.id,error);continue;}
+        const auto& definition=*resolved;
+        const auto retainPrevious=[&]{
+            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;}
+        };
+        const bool newCapsule=found==state.characters.end()||found->second.definition.height!=definition.height||found->second.definition.radius!=definition.radius;
+        if(newCapsule) {
             JPH::ShapeSettings::ShapeResult capsule;
             const float cylinderHalfHeight=(definition.height-2*definition.radius)*.5f;
             if(cylinderHalfHeight<=1e-6f)capsule=JPH::SphereShapeSettings(definition.radius).Create();
             else capsule=JPH::CapsuleShapeSettings(cylinderHalfHeight,definition.radius).Create();
-            if(capsule.HasError()){state.report(record.id,capsule.GetError().c_str());continue;}
+            if(capsule.HasError()){state.report(record.id,capsule.GetError().c_str());retainPrevious();continue;}
             const auto shifted=JPH::RotatedTranslatedShapeSettings(JPH::Vec3(0,definition.height*.5f,0),JPH::Quat::sIdentity(),capsule.Get()).Create();
-            if(shifted.HasError()){state.report(record.id,shifted.GetError().c_str());continue;}
-            JPH::CharacterVirtualSettings settings;settings.mShape=shifted.Get();settings.mMaxSlopeAngle=std::numbers::pi_v<float>*.25f;
+            if(shifted.HasError()){state.report(record.id,shifted.GetError().c_str());retainPrevious();continue;}
+            JPH::CharacterVirtualSettings settings;settings.mShape=shifted.Get();settings.mMaxSlopeAngle=definition.maxSlope*std::numbers::pi_v<float>/180.f;
             settings.mSupportingVolume=JPH::Plane(JPH::Vec3::sAxisY(),-definition.radius);
             settings.mMaxStrength=0;settings.mInnerBodyShape=nullptr;
-            Impl::Character character;character.definition=definition;character.world=*world;
+            Impl::Character character;character.definition=definition;character.profile=record.controller->profile.id;character.world=*world;
             character.motor=new JPH::CharacterVirtual(&settings,position(*world),rotation(*world),record.id,&state.world);
+            character.motor->SetListener(&state);
             state.refresh(*character.motor);
-            found=state.characters.emplace(record.id,std::move(character)).first;
+            if(found==state.characters.end())found=state.characters.emplace(record.id,std::move(character)).first;
+            else found->second=std::move(character);
         }
         auto& character=found->second;const bool editing=locked(scene,record.id,locks);
+        character.motor->SetMaxSlopeAngle(definition.maxSlope*std::numbers::pi_v<float>/180.f);
+        character.profileCurrent=true;character.profile=record.controller->profile.id;
         if(!close(character.world,*world) || character.locked!=editing) {
             character.motor->SetPosition(position(*world));character.motor->SetRotation(rotation(*world));
             character.motor->SetLinearVelocity(JPH::Vec3::sZero());state.refresh(*character.motor);character.world=*world;
         } else if(collidersChanged)state.refresh(*character.motor);
-        character.locked=editing;character.definition=*record.controller;
+        character.locked=editing;character.definition=definition;
         character.movementEnabled=record.motor && record.motor->enabled;keptCharacters.insert(record.id);
     }
     std::erase_if(state.characters,[&](const auto& entry){return !keptCharacters.contains(entry.first);});
@@ -283,9 +314,10 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
     auto movement=std::move(state.desiredVelocities);state.desiredVelocities.clear();
     auto facing=std::move(state.desiredFacing);state.desiredFacing.clear();
     if(controlled!=NoEntity)movement[controlled]=math::finite(desired)?desired:Vec3{};
-    JPH::CharacterVirtual::ExtendedUpdateSettings update;update.mWalkStairsStepUp={0,.3f,0};update.mStickToFloorStepDown={0,-.5f,0};
     for(auto& [id,character]:state.characters) {
         if(character.locked)continue;
+        JPH::CharacterVirtual::ExtendedUpdateSettings update;
+        update.mWalkStairsStepUp={0,character.definition.maxStep,0};update.mStickToFloorStepDown={0,-.5f,0};
         auto& motor=*character.motor;motor.UpdateGroundVelocity();
         const auto current=motor.GetLinearVelocity();
         float vertical=current.GetY();
@@ -293,6 +325,7 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
         vertical-=9.81f*seconds;
         const auto requested=movement.find(id);
         const Vec3 horizontal=character.movementEnabled && requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
+        character.allowSliding=!native(horizontal).IsNearZero();
         const auto requestedFacing=facing.find(id);
         const auto heading=character.movementEnabled && requestedFacing!=facing.end()?Vec3{requestedFacing->second[0],0,requestedFacing->second[2]}:horizontal;
         if(math::length(heading)>1e-6) {
@@ -335,6 +368,11 @@ std::vector<PhysicsStaticMesh> PhysicsWorld::staticMeshes() const {
 }
 std::size_t PhysicsWorld::characterCount() const{return impl_->characters.size();}
 std::optional<Vec3> PhysicsWorld::characterPosition(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?std::nullopt:std::optional{own(found->second.motor->GetPosition())};}
+std::optional<AgentTraversalSettings> PhysicsWorld::acceptedCharacterTraversal(EntityId id) const {
+    const auto found=impl_->characters.find(id);
+    if(found==impl_->characters.end()||!found->second.profileCurrent)return {};
+    return found->second.definition;
+}
 bool PhysicsWorld::grounded(EntityId id) const{const auto found=impl_->characters.find(id);return found!=impl_->characters.end() && found->second.motor->GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;}
 std::optional<PhysicsRayHit> PhysicsWorld::raycast(const Ray& ray,float maxDistance) const {
     if(!math::finite(ray.origin) || !math::finite(ray.direction) || !std::isfinite(maxDistance) || maxDistance<=0)return {};

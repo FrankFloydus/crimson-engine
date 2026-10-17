@@ -1,6 +1,7 @@
 #pragma once
 #include "scene/Scene.h"
 #include "StaticCollision.h"
+#include "assets/NavigationAgentProfile.h"
 #include <memory>
 #include <span>
 #include <string>
@@ -18,7 +19,10 @@ public:
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld&)=delete;
     PhysicsWorld& operator=(const PhysicsWorld&)=delete;
+    void setAgentProfiles(NavigationAgentProfileQuery query);
     void reconcile(const Scene&,std::span<const EntityId> transformLocks = {},std::span<const PhysicsMeshCollider> meshes = {});
+    // Navigation preview accepts the same static shapes without creating motors.
+    void reconcileStatics(const Scene&,std::span<const PhysicsMeshCollider> meshes = {});
     std::vector<ScenePoseUpdate> step(const Scene&,EntityId controlled,const Vec3& desiredVelocity,
                                     float seconds,std::span<const EntityId> transformLocks = {},std::span<const PhysicsMeshCollider> meshes = {});
     const std::string& status() const;
@@ -30,6 +34,7 @@ public:
     std::vector<PhysicsStaticMesh> staticMeshes() const;
     std::uint64_t geometryRevision() const;
     std::optional<Vec3> characterPosition(EntityId) const;
+    std::optional<AgentTraversalSettings> acceptedCharacterTraversal(EntityId) const;
     bool grounded(EntityId) const;
     // Queries the current reconciled static collision world. Direction is
     // normalized internally; maxDistance and the returned position use meters.
@@ -40,5 +45,6 @@ private:
     void requestFacing(EntityId,const Vec3& direction);
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    void reconcileInternal(const Scene&,std::span<const EntityId>,std::span<const PhysicsMeshCollider>,bool characters);
 };
 }

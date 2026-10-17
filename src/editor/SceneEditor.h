@@ -13,14 +13,15 @@ namespace crimson {
 class QuaderBridge;
 class ParticleEditor;
 class MaterialEditor;
+class NavigationAgentProfileEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
-struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true}; };
+struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true},navigationMesh{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
     friend struct EditorPerformanceProbe;
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
-                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&);
+                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&);
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
@@ -49,6 +50,9 @@ public:
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { viewport_.setCollisionMeshQuery(std::move(query)); }
     void setQuaderBridge(QuaderBridge* bridge){quader_=bridge;}
+    void setAgentProfileQuery(NavigationAgentProfileQuery query) { viewport_.setAgentProfileQuery(std::move(query)); }
+    void setNavigationBuildStatus(std::function<std::string(const std::string&)> query) { navigationBuildStatus_=std::move(query); }
+    const std::string& navigationPreviewProfile() const { return navigationPreviewProfile_; }
 private:
     enum class Pending { None, New, Open, Exit };
     SceneViewport viewport_;
@@ -75,7 +79,11 @@ private:
     uint64_t openingGeneration_{},openingRevision_{};
     std::array<char,256> sceneName_{};
     bool dirtyPopup_{}, savePopup_{}, deletePopup_{}, saveConflictPopup_{}, externalPopup_{}, openingPopup_{}, saveAs_{}, continueAfterSave_{}, exitAccepted_{}, documentReplaced_{};
-    enum class CommandTarget { Scene,Particle,Material,Game };
+    std::string navigationPreviewProfile_;
+    std::uint64_t navigationPreviewGeneration_{};
+    EntityId navigationPreviewVolume_{};
+    std::function<std::string(const std::string&)> navigationBuildStatus_;
+    enum class CommandTarget { Scene,Particle,Material,Profile,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
     void cancelOpen();

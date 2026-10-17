@@ -48,6 +48,8 @@ struct EditorFrame {
     std::uint64_t playParticleEntity{};
     bool createMaterial{false};
     std::string openMaterial, materialFolder;
+    bool createNavigationAgentProfile{false};
+    std::string openNavigationAgentProfile,navigationAgentProfileFolder;
 };
 
 struct BrowserActions {
@@ -60,6 +62,8 @@ struct BrowserActions {
     std::string openParticle, particleFolder;
     bool createMaterial{false};
     std::string openMaterial, materialFolder;
+    bool createNavigationAgentProfile{false};
+    std::string openNavigationAgentProfile,navigationAgentProfileFolder;
 };
 
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);

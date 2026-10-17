@@ -72,6 +72,10 @@
       "folder": "f50452dc-9e4c-43d2-a633-18ef82298145",
       "name": ""
     },
+    "5feb3b03-22ab-5617-ba07-311d23b6d749": {
+      "folder": "df19896e-8a23-4212-a837-60846f86eafe",
+      "name": ""
+    },
     "60e71f25-8a23-4ad6-857d-9593589b6844": {
       "folder": "folder:content",
       "name": ""
@@ -205,6 +209,12 @@
       "name": "textures",
       "parent": "folder:engine",
       "path": "Engine/textures"
+    },
+    {
+      "id": "df19896e-8a23-4212-a837-60846f86eafe",
+      "name": "navigation",
+      "parent": "folder:engine",
+      "path": "Engine/navigation"
     },
     {
       "id": "f50452dc-9e4c-43d2-a633-18ef82298145",

@@ -8,6 +8,7 @@
 #include "resources/AssetId.h"
 #include "MaterialAsset.h"
 #include "ParticleAsset.h"
+#include "NavigationAgentProfile.h"
 #include "AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
@@ -89,6 +90,14 @@ public:
     void publishParticle(std::shared_ptr<const ParticleEffectAsset>);
     void refreshParticles();
     void protectParticleDocument(std::string id) { particleDocumentId_=std::move(id); }
+    std::shared_ptr<const NavigationAgentProfile> findNavigationAgentProfile(const std::string& id) const;
+    std::uint64_t navigationAgentProfileRevision(const std::string& id) const;
+    std::string navigationAgentProfileDiagnostic(const std::string& id) const;
+    void publishNavigationAgentProfile(std::shared_ptr<const NavigationAgentProfile>);
+    void refreshNavigationAgentProfiles();
+    std::shared_ptr<const NavigationAgentProfile> createNavigationAgentProfile(const std::string& name="New Navigation Agent Profile");
+    std::shared_ptr<const NavigationAgentProfile> copyNavigationAgentProfile(const std::string& id,const std::string& name={});
+    void protectNavigationAgentProfileDocument(std::string id){navigationProfileDocumentId_=std::move(id);}
     ResourceManager* resources() const { return resources_; }
     void setMaterialGraphPrograms(MaterialGraphPrograms* programs) { graphPrograms_=programs; }
     std::vector<std::filesystem::path> materialShaderDependencies() const;
@@ -161,6 +170,10 @@ private:
     std::unordered_map<std::string,ParticleVersion> particles_;
     std::uint64_t nextParticleRevision_{1};
     std::string particleDocumentId_;
+    struct NavigationProfileVersion {std::shared_ptr<const NavigationAgentProfile> definition;std::uint64_t revision{};std::string diagnostic;};
+    std::unordered_map<std::string,NavigationProfileVersion> navigationProfiles_;
+    std::uint64_t nextNavigationProfileRevision_{1};
+    std::string navigationProfileDocumentId_;
     struct MaterialVersion { std::shared_ptr<const MaterialAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,MaterialVersion> authoredMaterials_;
     struct MaterialCompatibility {std::weak_ptr<const MaterialAsset> source;bool compatible{};};

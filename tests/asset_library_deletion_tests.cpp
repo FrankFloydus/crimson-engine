@@ -857,6 +857,61 @@ void boxMaterialHistoryOnlyDeletion(){
     require(scene.history().size()==0 && scene.dirty() && scene.scene().find(box)->modelMaterials.empty() && read(fixturePath(p.root,scene.assetId()))==saved,
         "History-only material deletion changed saved content or retained resurrectable references.");
 }
+void navigationProfileDeletion() {
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto profile=library.createNavigationAgentProfile("Shared creature");
+    SceneDocument active(p.root);const auto actor=active.createEnemy("Creature");auto value=*active.scene().find(actor);
+    value.controller->profile=AssetRef<NavigationAgentProfile>{profile->id};require(active.updateEntity(actor,value),active.status());
+    const auto volume=active.createNavigationVolume();value=*active.scene().find(volume);
+    value.navigationVolume->profiles.emplace_back(DefaultNavigationAgentProfileId);require(active.updateEntity(volume,value),active.status());
+    require(active.save("Profile owners"),active.status());
+    SceneDocument other(p.root);const auto otherActor=other.createEnemy("Other creature");value=*other.scene().find(otherActor);
+    value.controller->profile=AssetRef<NavigationAgentProfile>{profile->id};require(other.updateEntity(otherActor,value)&&other.save("Other profile owner"),other.status());
+    library.refreshScenes();value=*active.scene().find(actor);value.local=math::translation({7,2,3});value.motor->moveSpeed=8;
+    require(active.updateEntity(actor,value),active.status());const auto unsaved=*active.scene().find(actor);
+    const auto plan=library.planDeletion({profile->id},&active);
+    require(plan.error.empty()&&plan.needsReferenceWarning()&&plan.scenes.size()==2&&plan.clearsActiveHistory,"Profile deletion did not index saved, live, volume and historical users.");
+    finishDeletion(library,resources,plan,{},&active);
+    const auto current=*active.scene().find(actor);
+    require(current.controller->profile.id==DefaultNavigationAgentProfileId&&current.local==unsaved.local&&current.motor==unsaved.motor&&active.dirty(),"Profile deletion removed its actor or discarded unrelated unsaved edits.");
+    require(active.scene().find(volume)->navigationVolume->profiles==std::vector<AssetRef<NavigationAgentProfile>>{AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}},"Profile replacement left duplicate supported profiles.");
+    require(readSceneSnapshot(p.root,active.assetId()).records.size()==active.scene().records().size()&&record(readSceneSnapshot(p.root,other.assetId()),otherActor).controller->profile.id==DefaultNavigationAgentProfileId,"Profile deletion did not preserve/rewrite saved actor references.");
+    require(!hasAsset(library,profile->id)&&library.findNavigationAgentProfile(profile->id)==defaultNavigationAgentProfile(),"Profile deletion did not publish its protected default replacement.");
+    require(!library.deleteAssets(library.planDeletion({DefaultNavigationAgentProfileId}),{}),"Protected Default Agent was deleted.");
+}
+void unrelatedDeletionMaterializesLegacyProfiles(bool independentlySaved) {
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto material=library.createMaterial("Delete this material");SceneDocument source(p.root);
+    const auto actor=source.createEnemy("Legacy custom creature"),box=source.createBox();auto value=*source.scene().find(box);
+    value.modelMaterials={AssetRef<MaterialAsset>{material->id}};require(source.updateEntity(box,value)&&source.save("Legacy pending profiles"),source.status());
+    auto legacy=nlohmann::json::parse(read(sceneAssetPath(p.root,source.assetId())));legacy["version"]=17;
+    for(auto& entity:legacy["entities"])if(entity.contains("controller")){entity["controller"].erase("profile");entity["controller"]["height"]=2.6f;entity["controller"]["radius"]=.45f;}
+    writeFileAtomically(sceneAssetPath(p.root,source.assetId()),legacy.dump());library.refreshScenes();
+    SceneDocument active(p.root);require(active.load(source.assetId()),active.status());
+    const auto activeProfile=active.scene().find(actor)->controller->profile.id;
+    auto expectedTraversal=AgentTraversalSettings{2.6f,.45f,45,.3f};std::string independentlySavedContents;
+    if(independentlySaved) {
+        const auto originalScene=read(sceneAssetPath(p.root,source.assetId()));
+        auto profile=*active.navigationAgentProfile(activeProfile);profile.traversal={3.1f,.55f,30,.1f};
+        saveNavigationAgentProfile(p.root,profile);library.refreshNavigationAgentProfiles();expectedTraversal=profile.traversal;
+        independentlySavedContents=read(navigationAgentProfilePath(p.root,activeProfile));
+        require(!active.navigationAgentProfile(activeProfile)&&!active.dirty(),"Materialized migration profile resurrected its seed or dirtied the scene.");
+        require(read(sceneAssetPath(p.root,source.assetId()))==originalScene,"Saving a converted profile rewrote its legacy scene.");
+    } else {
+        value=*active.scene().find(actor);value.local=math::translation({6,2,1});require(active.updateEntity(actor,value),active.status());
+    }
+    finishDeletion(library,resources,library.planDeletion({material->id},&active),{},&active);
+    const auto rewritten=readSceneSnapshot(p.root,source.assetId());const auto& creature=record(rewritten,actor);
+    require(rewritten.stagedNavigationProfiles.empty()&&creature.controller->profile.id!=DefaultNavigationAgentProfileId,"Unrelated deletion wrote an incomplete legacy-profile conversion.");
+    require(loadNavigationAgentProfile(p.root,creature.controller->profile.id).traversal==expectedTraversal,"Unrelated scene rewrite lost the authored custom capsule.");
+    require(creature.controller->profile.id==activeProfile&&active.scene().find(actor)->controller->profile.id==activeProfile,"Legacy deletion conversion changed the saved or live profile identity.");
+    if(independentlySaved) {
+        require(!active.dirty()&&active.loadedFingerprint()==sceneFileFingerprint(p.root,source.assetId()),"Legacy rewrite left the clean active scene inconsistent with its saved state.");
+        require(read(navigationAgentProfilePath(p.root,activeProfile))==independentlySavedContents,"Legacy rewrite overwrote an independently edited profile with its migration seed.");
+    } else require(active.scene().find(actor)->local==value.local&&active.dirty(),"Legacy deletion conversion discarded unrelated live edits.");
+    require(hasAsset(library,creature.controller->profile.id)&&library.browserCatalog().contains(creature.controller->profile.id),"Materialized legacy profile was absent from the shared browser catalog.");
+    require(std::none_of(rewritten.records.begin(),rewritten.records.end(),[](const auto& entity){return entity.navigationVolume.has_value();}),"Unrelated deletion auto-created a Navigation Volume.");
+}
 void materialPreviewResources(const fs::path& compiler,const fs::path& sources,const fs::path& includes){
     Project p;const std::string image="assets/textures/preview-pattern.png";
     model_test::Bytes pixels(512*512*4,255);
@@ -987,6 +1042,6 @@ int main(int argc,char** argv){try{
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();bundledModelPublicationAndReferences();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
+    warningQueries();bundledModelPublicationAndReferences();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

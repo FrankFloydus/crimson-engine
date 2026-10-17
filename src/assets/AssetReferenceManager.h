@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BrowserCatalog.h"
+#include "AssetTransaction.h"
 #include "resources/AssetId.h"
 #include <filesystem>
 #include <optional>
@@ -42,6 +43,7 @@ public:
     std::string resolveTexture(const std::string& id, bool normal=false) const;
     std::string resolveEnvironment(const std::string& id) const;
     std::string resolveParticle(const std::string& id) const;
+    std::string resolveNavigationAgentProfile(const std::string& id) const;
     std::string resolveParticleMaterial(const std::string& id) const;
     std::string resolveParticleTexture(const std::string& id) const;
     bool deleted(const std::string& id) const { return deleted_.contains(id)||deleted_.contains(canonicalAssetId(id)); }
@@ -65,15 +67,5 @@ private:
     uint64_t revision_{1};
     bool writable_{true};
 };
-
-struct AssetFileChange {
-    std::string id; // Checked managed project-relative file; no directory mutation.
-    std::optional<std::string> contents; // nullopt deletes, otherwise atomically replaces.
-};
-std::filesystem::path checkedManagedAssetPath(const std::filesystem::path& root,const std::string& id);
-// All-or-nothing publication across saved scenes, reference state and resource
-// files. An interrupted transaction is rolled back before catalog enumeration.
-void commitAssetTransaction(const std::filesystem::path& root,std::span<const AssetFileChange> changes);
-void recoverAssetTransactions(const std::filesystem::path& root);
 
 } // namespace crimson

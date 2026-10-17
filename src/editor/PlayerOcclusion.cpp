@@ -96,7 +96,7 @@ double hit(const PlayerOcclusionGeometry& geometry,const Vec3& origin,const Vec3
     return closest;
 }
 }
-PlayerOcclusion::PlayerOcclusion(ResourceManager& resources):resources_(resources),owner_(nextOwner.fetch_add(1)){}
+PlayerOcclusion::PlayerOcclusion(ResourceManager& resources,NavigationAgentProfileQuery profiles):resources_(resources),profiles_(std::move(profiles)),owner_(nextOwner.fetch_add(1)){}
 void PlayerOcclusion::clear(){meshes_.clear();fades_.clear();opacities_.clear();stats_={};generation_=0;player_=camera_=0;}
 const PlayerOcclusionGeometry* PlayerOcclusion::geometry(const std::string& id,const CollisionMeshQuery& query) {
     auto& entry=meshes_[id];entry.used=frame_;
@@ -117,11 +117,13 @@ const PlayerOcclusionGeometry* PlayerOcclusion::geometry(const std::string& id,c
     return entry.accepted.get();
 }
 const PlayerOcclusionOpacities& PlayerOcclusion::update(const Scene& scene,std::span<const ExtractedModel> models,const Camera& camera,
-    std::uint64_t generation,float seconds,const ModelBoundsQuery& boundsQuery,const CollisionMeshQuery& query,const PlayerOcclusionSettings& settings) {
+    std::uint64_t generation,float seconds,const ModelBoundsQuery& boundsQuery,const CollisionMeshQuery& query,const PlayerOcclusionSettings& settings,const NavigationAgentProfileQuery& profiles) {
     if(!validPlayerOcclusionSettings(settings)){fades_.clear();opacities_.clear();stats_={};return opacities_;}
     const auto player=scene.find(scene.properties().playerCharacter);
     const auto world=player?scene.worldTransform(player->id):std::nullopt;
     if(!player||!scene.isVisible(player->id)||!player->controller||!world||!math::finite(camera.position)||!query||!boundsQuery){clear();return opacities_;}
+    const auto traversal=resolveAgentTraversal(*player->controller,profiles?profiles:profiles_);
+    if(!traversal){clear();return opacities_;}
     if(generation_!=generation||player_!=player->id||camera_!=scene.properties().activeCamera) {
         clear();generation_=generation;player_=player->id;camera_=scene.properties().activeCamera;
     }
@@ -132,7 +134,7 @@ const PlayerOcclusionOpacities& PlayerOcclusion::update(const Scene& scene,std::
     std::array<Vec3,3> targets,starts;
     std::array<double,3> lengths{};
     for(unsigned i=0;i<3;++i) {
-        targets[i]=math::transformPoint(*world,{0,player->controller->height*(.25f+.3f*i),0});
+        targets[i]=math::transformPoint(*world,{0,traversal->height*(.25f+.3f*i),0});
         const auto towardCamera=camera.position-targets[i];const auto distance=math::length(towardCamera);
         lengths[i]=std::min(double(settings.fadeStartDistance),distance);
         starts[i]=targets[i]+math::normalized(towardCamera,{0,0,0},0)*lengths[i];

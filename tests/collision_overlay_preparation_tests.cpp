@@ -1,3 +1,4 @@
+#include "agent_profile_fixture.h"
 #include "editor/CollisionOverlays.h"
 #include "resources/AssetId.h"
 #include <algorithm>
@@ -143,19 +144,19 @@ void nativeMeshWithoutAssetQuery(){
 }
 void characterFeetAndSharedCapsule(){
     ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;EntityRecord actor;actor.id=1;actor.name="Character";actor.controller.emplace();
-    actor.controller->height=2.4f;actor.controller->radius=.4f;actor.controller->showCollisionInGame=true;actor.controller->collisionColor={.2f,.5f,.8f,.6f};
+    actor.controller->profile=testing::agentProfile({2.4f,.4f,45,.3f});actor.controller->showCollisionInGame=true;actor.controller->collisionColor={.2f,.5f,.8f,.6f};
     actor.local=math::translation({4,3,2})*math::eulerRotationXYZ({.1f,.4f,.2f})*math::scaling({2,1.5f,1});
     auto centered=collider(2,ColliderShape::Capsule);centered.collider->height=2.4f;centered.collider->radius=.4f;centered.local=math::translation({-4,0,0});
-    scene.apply({actor,centered},{});const std::array selected{actor.id};const auto packets=overlays.prepare(scene,selected,true,{});
+    scene.apply({actor,centered},{});const std::array selected{actor.id};const auto packets=overlays.prepare(scene,selected,true,{},testing::agentProfileQuery());
     require(packets.scene.size()==2&&packets.game.size()==1,"Character or centered Capsule packet was omitted.");
-    const auto expectedWorld=actor.local*math::translation({0,actor.controller->height*.5f,0});
+    const auto expectedWorld=actor.local*math::translation({0,2.4f*.5f,0});
     const auto found=std::find_if(packets.scene.begin(),packets.scene.end(),[&](const auto& packet){return packet.world==expectedWorld;});
     require(found!=packets.scene.end()&&packets.game.front().world==expectedWorld,"Character's centered debug capsule was not translated from its feet origin.");
     const auto geometry=found->geometry;require(packets.scene[0].geometry==packets.scene[1].geometry&&packets.game.front().geometry==geometry,"Matching Character and Collider capsules did not share immutable geometry.");
     Aabb bounds;for(const auto& point:geometry->vertices)math::include(bounds,point);
     near(bounds.minimum[1],-1.2f,"Cached Capsule geometry is not centered.");near(bounds.maximum[1],1.2f,"Cached Capsule total height changed.");
     near(math::transformPoint(found->world,{0,bounds.minimum[1],0}),math::transformPoint(actor.local,{}),"Character overlay bottom moved away from the authored feet.");
-    near(math::transformPoint(found->world,{0,bounds.maximum[1],0}),math::transformPoint(actor.local,{0,actor.controller->height,0}),"Character overlay top disagrees with authored total height.");
+    near(math::transformPoint(found->world,{0,bounds.maximum[1],0}),math::transformPoint(actor.local,{0,2.4f,0}),"Character overlay top disagrees with authored total height.");
     near(found->color[3],.48f,"Selected Character did not use Scene selection opacity.");near(packets.game.front().color[3],.6f,"Character Game opacity lost its authored alpha.");
 }
 void asynchronousMeshReuseAndReplacement(){

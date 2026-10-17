@@ -42,7 +42,7 @@ struct ExtractedScene {
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,
 // with no EnTT handles, registry pointers, component pointers, or GPU ownership.
-ExtractedScene extractScene(const Scene& scene);
+ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery& profiles={});
 // Resolve any authored camera, including positional follow and full affine
 // parenting. Visibility controls its marker, not its view/control behavior.
 std::optional<Camera> resolveSceneCamera(const Scene& scene,EntityId id);
@@ -66,7 +66,7 @@ using ParticleBoundsQuery = std::function<std::optional<Aabb>(EntityId)>;
 // Parent selections include descendants once. Missing models, empty entities
 // and lights get a small, fixed world-space box around their world position.
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {},const CollisionMeshQuery& meshCollision = {});
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {},const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={});
 
 struct SelectionBox { EntityId id{};Aabb local;Mat4 world{}; };
 // Outlines keep the selected root's local axes, including affine parenting.
@@ -74,10 +74,10 @@ struct SelectionBox { EntityId id{};Aabb local;Mat4 world{}; };
 // empty hierarchy markers. Nonvisual selections fall back to their own shapes.
 // Particle markers are authored/stable; live effect bounds belong to framing.
 std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const EntityId> selection,
-    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision = {});
+    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={});
 
 // Collision interiors are editor-selectable even without a rendered model.
 // Used only when the material-aware GPU model pick reports background.
-std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision = {});
+std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={},bool includeCollisions=true);
 
 } // namespace crimson

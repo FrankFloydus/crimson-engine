@@ -43,8 +43,8 @@ std::string canonicalAssetId(std::string_view value) {
     return named(assetNamespace(),value);
 }
 bool isEngineAssetId(std::string_view value) {
-    static const std::array<std::string,11> protectedIds{
-        canonicalAssetId("builtin:material/default"),canonicalAssetId("builtin:material/particle"),
+    static const std::array<std::string,12> protectedIds{
+        canonicalAssetId("builtin:material/default"),canonicalAssetId("builtin:material/particle"),canonicalAssetId("builtin:navigation-agent/default"),
         canonicalAssetId("builtin:texture/gray"),canonicalAssetId("builtin:texture/normal"),
         canonicalAssetId("builtin:environment/studio"),canonicalAssetId("builtin:mesh-box-v1"),
         canonicalAssetId("builtin:material-preview-cube-v1"),canonicalAssetId("builtin:material-preview-rounded-cube-v1"),

@@ -63,7 +63,7 @@ std::shared_ptr<const CollisionOverlayGeometry> CollisionOverlays::mesh(const st
     if(entry.pending)if(const auto ready=entry.pending.snapshot())entry.accepted=ready.shared();
     return entry.accepted;
 }
-PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::span<const EntityId> selection,bool enabled,const CollisionMeshQuery& query) {
+PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::span<const EntityId> selection,bool enabled,const CollisionMeshQuery& query,const NavigationAgentProfileQuery& profiles) {
     ++frame_;
     std::erase_if(primitives_,[&](const auto& item){return frame_-item.second.used>4;});
     std::erase_if(meshes_,[&](const auto& item){return frame_-item.second.used>4;});
@@ -94,8 +94,9 @@ PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::spa
         }
         if(record.controller) {
             const auto& character=*record.controller;SceneCollider capsule;
-            capsule.shape=ColliderShape::Capsule;capsule.radius=character.radius;capsule.height=character.height;
-            append(primitive(capsule),*world*math::translation({0,character.height*.5f,0}),character.collisionColor,character.showCollisionInGame);
+            const auto traversal=resolveAgentTraversal(character,profiles);if(!traversal)continue;
+            capsule.shape=ColliderShape::Capsule;capsule.radius=traversal->radius;capsule.height=traversal->height;
+            append(primitive(capsule),*world*math::translation({0,traversal->height*.5f,0}),character.collisionColor,character.showCollisionInGame);
         }
     }
     return result;

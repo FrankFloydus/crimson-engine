@@ -620,7 +620,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==17,"Explicit save did not write scene version 17.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==18,"Explicit save did not write scene version 18.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -734,7 +734,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==17,"Environment writer did not use scene v17.");
+    require(Json::parse(saved).at("version")==18,"Environment writer did not use scene v18.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -988,7 +988,7 @@ void lightIndirectEnergyStorageAndHistory() {
         if(record.lightRig)record.lightRig->localWorld.indirectEnergy=0;}}),document.status());
     document.cancel();sameRecords(edited,document.scene().records());
     require(document.save("Light GI energy"),document.status());const auto savedText=readText(project.root/document.assetId());const auto saved=Json::parse(savedText);
-    require(saved.at("version")==17,"Per-light GI energy unnecessarily changed the scene format version.");
+    require(saved.at("version")==18,"Per-light GI energy unnecessarily changed the scene format version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty(),reopened.status());sameRecords(edited,reopened.scene().records());
     for(const auto& record:saved["entities"]) {
         if(record.contains("point"))require(record["point"].at("indirectEnergy")==2.5f,"Point GI energy was not persisted.");
@@ -1072,7 +1072,7 @@ void environmentToneMappingParametersStorageAndHistory() {
     require(document.scene().properties().activeEnvironment==id&&document.scene().find(document.selection().primary)->environment->environment==settings,
         "Environment duplication lost curve parameters or changed active Environment selection.");
     require(document.save("Tone mapping controls"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
-    require(saved.at("version")==17,"Tone mapping controls unnecessarily changed the scene format version.");
+    require(saved.at("version")==18,"Tone mapping controls unnecessarily changed the scene format version.");
     auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("toneMappingParameters");
     const auto missingId="assets/scenes/tone-parameters-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
     SceneDocument reopened(project.root);require(reopened.load(missingId),reopened.status());
@@ -1240,7 +1240,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==17,"Particle scene writer did not use version 17.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==18,"Particle scene writer did not use version 18.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -1252,7 +1252,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==17,"Explicit version-two save did not migrate to version seventeen.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==18,"Explicit version-two save did not migrate to version eighteen.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);

@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 #include <string>
+#include <utility>
 
 namespace crimson {
 
@@ -19,7 +20,7 @@ struct DocumentEditorMenuState {
 // Read state after finishing an active edit so it is immediately undoable.
 template<class FinishInteraction,class ReadState,class EnvironmentMenu>
 DocumentEditorAction drawDocumentEditorMenuBar(FinishInteraction&& finishInteraction,ReadState&& readState,
-                                              EnvironmentMenu&& environmentMenu) {
+                                              EnvironmentMenu&& environmentMenu,bool showEnvironment=true) {
     auto action=DocumentEditorAction::None;
     if(!ImGui::BeginMenuBar())return action;
     if(ImGui::BeginMenu("File")) {
@@ -39,12 +40,18 @@ DocumentEditorAction drawDocumentEditorMenuBar(FinishInteraction&& finishInterac
         if(ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,state.canRedo))action=DocumentEditorAction::Redo;
         ImGui::EndMenu();
     }
-    if(ImGui::BeginMenu("Environment")) {
+    if(showEnvironment && ImGui::BeginMenu("Environment")) {
         environmentMenu();
         ImGui::EndMenu();
     }
     ImGui::EndMenuBar();
     return action;
+}
+
+template<class FinishInteraction,class ReadState>
+DocumentEditorAction drawDocumentEditorMenuBar(FinishInteraction&& finishInteraction,ReadState&& readState) {
+    return drawDocumentEditorMenuBar(std::forward<FinishInteraction>(finishInteraction),
+        std::forward<ReadState>(readState),[]{},false);
 }
 
 } // namespace crimson

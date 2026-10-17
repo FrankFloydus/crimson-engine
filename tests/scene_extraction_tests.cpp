@@ -125,8 +125,9 @@ void orientedSelectionBoxes() {
     require(nonvisual.size()==1&&close(nonvisual[0].local.minimum,{-.5f,-.5f,-.5f})&&close(nonvisual[0].local.maximum,{.5f,.5f,.5f})&&
         close(nonvisual[0].world,marker.local),"An empty selection lost its stable marker fallback.");
     const auto actor=selectionBoxes(scene,std::array<EntityId,1>{6},query);
-    require(actor.size()==1&&close(actor[0].local.minimum,{-character.controller->radius,0,-character.controller->radius})&&
-        close(actor[0].local.maximum,{character.controller->radius,character.controller->height,character.controller->radius}),"Character outline invented bounds beyond its authored capsule.");
+    const auto traversal=resolveAgentTraversal(*character.controller).value();
+    require(actor.size()==1&&close(actor[0].local.minimum,{-traversal.radius,0,-traversal.radius})&&
+        close(actor[0].local.maximum,{traversal.radius,traversal.height,traversal.radius}),"Character outline invented bounds beyond its authored capsule.");
     const auto authored=selectionBoxes(scene,std::array<EntityId,1>{7},query);
     const auto focused=selectionBounds(scene,std::array<EntityId,1>{7},query,[](EntityId)->std::optional<Aabb>{return Aabb{{-100,-100,-100},{100,100,100},true};});
     const auto stable=selectionBoxes(scene,std::array<EntityId,1>{7},query);
@@ -265,7 +266,7 @@ void scopedPlayerLightingExtraction() {
         "Extraction lost separate character illumination or shadow.");
     const auto frozen=extracted.points;
     require(reveal(extracted).enabled&&reveal(extracted).spread==11&&
-        close(reveal(extracted).position,playerPosition+Vec3{0,player.controller->height*.5f,0}),
+        close(reveal(extracted).position,playerPosition+Vec3{0,resolveAgentTraversal(*player.controller)->height*.5f,0}),
         "Player darkness range inherited parent scale or lost the presented center.");
     const std::array poses{ScenePoseUpdate{player.id,math::translation({1,0,2})*math::rotation(math::axisAngle({0,1,0},1.7))}};
     scene.applyRuntimePoses(poses);const auto turned=extractScene(scene);
@@ -514,11 +515,13 @@ void collisionPicking() {
     require(pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100)==3,"A collapsed collider blocked the valid hit behind it.");
 
     auto character=entity(4,"Capsule",0,math::translation({0,0,-4}));character.controller=SceneCharacterController{};
-    character.controller->height=2;character.controller->radius=.5f;scene.apply({character},{});
-    require(pickCollisionShape(scene,{{0,1,0},{0,0,-1}},100)==4,"Capsule cylinder interior was not selectable.");
-    require(pickCollisionShape(scene,{{0,1.9f,0},{0,0,-1}},100)==4,"Capsule hemisphere was not selectable.");
-    require(!pickCollisionShape(scene,{{.49f,1.99f,0},{0,0,-1}},100),"Capsule picking incorrectly used a box at the rounded corner.");
-    require(!pickCollisionShape(scene,{{0,1,0},{0,0,1}},100),"Collision shapes behind the camera remained selectable.");
+    auto profile=std::make_shared<const NavigationAgentProfile>(NavigationAgentProfile{newAssetId(),"Picking capsule",{2,.5f,45,.3f}});
+    character.controller->profile=AssetRef<NavigationAgentProfile>{profile->id};scene.apply({character},{});
+    const NavigationAgentProfileQuery profiles=[&](const auto& id){return id==profile->id?profile:nullptr;};
+    require(pickCollisionShape(scene,{{0,1,0},{0,0,-1}},100,{},profiles)==4,"Capsule cylinder interior was not selectable.");
+    require(pickCollisionShape(scene,{{0,1.9f,0},{0,0,-1}},100,{},profiles)==4,"Capsule hemisphere was not selectable.");
+    require(!pickCollisionShape(scene,{{.49f,1.99f,0},{0,0,-1}},100,{},profiles),"Capsule picking incorrectly used a box at the rounded corner.");
+    require(!pickCollisionShape(scene,{{0,1,0},{0,0,1}},100,{},profiles),"Collision shapes behind the camera remained selectable.");
 }
 void clippedSelectionWires() {
     const Vec4 viewport{20,30,800,600};

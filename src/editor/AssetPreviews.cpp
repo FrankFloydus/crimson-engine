@@ -335,7 +335,20 @@ struct AssetPreviews::Impl {
             const auto snapshot=scene(id,entry); if (!snapshot) return;
             validationFiles.push_back(sourceFile(id));
             sceneSnapshot=snapshot.shared(); hash(sourceKey,snapshot->fingerprint);
-            Scene candidate; candidate.apply(snapshot->records,snapshot->properties); auto extracted=extractScene(candidate);
+            const auto profileLocations=storedAssetPaths(root);
+            const NavigationAgentProfileQuery profileQuery=[&](const std::string& profileId) {
+                if(auto managed=assets.findNavigationAgentProfile(profileId))return managed;
+                if(std::any_of(profileLocations.begin(),profileLocations.end(),[&](const auto& entry){return entry.id==profileId;}))return std::shared_ptr<const NavigationAgentProfile>{};
+                const auto pending=std::find_if(snapshot->stagedNavigationProfiles.begin(),snapshot->stagedNavigationProfiles.end(),
+                    [&](const auto& profile){return profile&&profile->id==profileId;});
+                return pending==snapshot->stagedNavigationProfiles.end()?std::shared_ptr<const NavigationAgentProfile>{}:*pending;
+            };
+            for(const auto& record:snapshot->records)if(record.controller)if(const auto profile=resolveNavigationAgentProfile(record.controller->profile.id,profileQuery)) {
+                hash(sourceKey,profile->traversal.height);hash(sourceKey,profile->traversal.radius);
+                hash(sourceKey,profile->traversal.maxSlope);hash(sourceKey,profile->traversal.maxStep);
+                if(!isEngineAssetId(profile->id)&&std::any_of(profileLocations.begin(),profileLocations.end(),[&](const auto& entry){return entry.id==profile->id;}))validationFiles.push_back(sourceFile(profile->id));
+            }
+            Scene candidate; candidate.apply(snapshot->records,snapshot->properties); auto extracted=extractScene(candidate,profileQuery);
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
             std::erase_if(models,[](const auto& model){return !model.visible;});
             for(auto& model:models)model.animationSeconds=model.animation.startTime;

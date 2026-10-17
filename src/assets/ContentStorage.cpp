@@ -220,6 +220,7 @@ void defaultTextures(const fs::path& root,Json& locations) {
     }
     locations["assets"][canonicalAssetId("builtin:material/default")]="Engine/materials/Default.crimson-material";
     locations["assets"][canonicalAssetId("builtin:material/particle")]="Engine/materials/DefaultParticle.crimson-material";
+    locations["assets"][canonicalAssetId("builtin:navigation-agent/default")]="Engine/navigation/Default.crimson-agent-profile";
     locations["aliases"]["builtin:material/default"]=canonicalAssetId("builtin:material/default");
     locations["aliases"]["builtin:material/particle"]=canonicalAssetId("builtin:material/particle");
     fs::create_directories(checkedRelative(root,"Engine/materials"));
@@ -237,7 +238,7 @@ bool oldReference(std::string_view value) {
     const auto p=pathFromUtf8(value);if(p.has_root_path())return false;
     for(const auto& part:p)if(part==".."||part==".")return false;
     const auto suffix=lower(utf8(p.extension()));
-    return image(p)||suffix==".crimson-material"||suffix==".crimson-particle"||suffix==".crimson-scene"||p.filename()=="manifest.json";
+    return image(p)||suffix==".crimson-material"||suffix==".crimson-particle"||suffix==".crimson-agent-profile"||suffix==".crimson-scene"||p.filename()=="manifest.json";
 }
 void convertReferences(Json& value) {
     if(value.is_string()){const auto text=value.get<std::string>();if(oldReference(text))value=canonicalAssetId(text);}
@@ -283,7 +284,7 @@ void migrateUuidReferences(const fs::path& root) {
     for(const auto& tree:{root/"Content",root/".crimson"})if(fs::exists(tree))for(auto it=fs::recursive_directory_iterator(tree);it!=fs::recursive_directory_iterator();++it) {
         if(tree==root/".crimson"&&it->is_directory()&&(it->path().filename()=="cache"||utf8(it->path().filename()).starts_with('.'))){it.disable_recursion_pending();continue;}
         if(!it->is_regular_file())continue;const auto path=it->path();const auto ext=utf8(path.extension()),name=utf8(path.filename());
-        const bool native=ext==".crimson-material"||ext==".crimson-particle"||ext==".crimson-scene";
+        const bool native=ext==".crimson-material"||ext==".crimson-particle"||ext==".crimson-agent-profile"||ext==".crimson-scene";
         const bool package=tree==root/"Content"&&name=="manifest.json";
         const bool settings=path.parent_path()==root/".crimson"&&ext==".json"&&name!="asset-locations.json"&&name!="legacy-browser.backup.json"&&name!="content-move.json"&&name!="uuid-migration.json";
         if(!native&&!settings&&!package)continue;
@@ -516,6 +517,24 @@ void registerAssetPaths(const fs::path& root,std::span<const StoredAssetPath> pa
 }
 void registerAssetPath(const fs::path& root,const std::string& id,const fs::path& file) {
     const StoredAssetPath entry{id,file};registerAssetPaths(root,std::span(&entry,1));
+}
+std::string prepareAssetPathRegistration(const fs::path& root,std::span<const StoredAssetPath> paths) {
+    std::lock_guard lock(storageMutex);auto j=index(root);const auto base=normalized(root);bool changed=false;
+    std::unordered_map<std::string,std::string> assignments;
+    for(const auto& entry:paths) {
+        if(!isAssetUuid(entry.id))throw std::runtime_error("Asset registration requires a UUID.");
+        const auto relative=normalized(entry.file).lexically_relative(base);(void)checkedRelative(root,relative);
+        if(*relative.begin()=="Engine"&&!isEngineAssetId(entry.id))throw std::runtime_error("Only protected identities can own Engine files.");
+        const auto value=utf8(relative);const auto [where,added]=assignments.emplace(entry.id,value);
+        if(!added&&where->second!=value)throw std::runtime_error("One asset identity cannot register multiple files.");
+        if(j["assets"].contains(entry.id)&&j["assets"][entry.id]==value)continue;
+        j["assets"][entry.id]=value;changed=true;
+    }
+    std::unordered_map<std::string,std::string> owners;
+    for(auto it=j["assets"].begin();it!=j["assets"].end();++it)
+        if(!owners.emplace(lower(it.value().get<std::string>()),it.key()).second)throw std::runtime_error("Two asset identities cannot own the same file.");
+    if(changed)j["revision"]=j.value("revision",std::uint64_t{})+1;
+    return j.dump(2)+'\n';
 }
 std::uint64_t contentStorageRevision(const fs::path& root){std::lock_guard lock(storageMutex);return snapshot(root).revision;}
 fs::path checkedContentPath(const fs::path& root,const fs::path& file) {

@@ -3,8 +3,9 @@
 #include "physics/PhysicsWorld.h"
 #include "scene/SceneDocument.h"
 #include "AgentSteering.h"
-#include "navigation/NavigationMesh.h"
+#include "navigation/NavigationWorld.h"
 #include <functional>
+#include <chrono>
 #include <memory>
 #include <unordered_map>
 
@@ -25,6 +26,13 @@ public:
     const Scene& presentationScene() const {return presentation_;}
     void setParticleDefinitions(SceneParticles::DefinitionQuery query){particleDefinitions_=std::move(query);}
     void setCollisionMeshDefinitions(CollisionMeshQuery query){collisionMeshes_=std::move(query);}
+    void setAgentProfiles(NavigationAgentProfileQuery query){profileDefinitions_=std::move(query);}
+    void setResourceManager(ResourceManager&);
+    const NavigationWorld* navigationWorld() const{return navigation_.get();}
+    std::shared_ptr<const NavigationAgentProfile> acceptedAgentProfile(const std::string& id) const;
+    void prepareNavigationProfile(const std::string& profile);
+    NavigationStatus navigationReadiness(const std::string& profile) const;
+    NavigationProjection projectToNavigation(const std::string& profile,const Vec3&) const;
     void advance(double seconds,GameInput&,const Camera&,bool active=true);
     void advance(double seconds,Vec2 movement,const Camera&,bool active=true);
     SceneParticles& particles(){return particles_;}
@@ -50,20 +58,31 @@ public:
     std::span<const Vec3> actorRemainingPath(EntityId) const;
     std::uint64_t actorRouteQueryCount(EntityId) const;
     std::uint64_t actorNavigationRevision(EntityId) const;
-    std::size_t navigationProfileCount() const{return navigation_.size();}
-    std::uint64_t navigationBuildCount() const{return navigationBuilds_;}
+    std::size_t navigationProfileCount() const{return supportedProfiles_.size();}
+    std::uint64_t navigationBuildCount() const{return navigation_?navigation_->buildCount():0;}
 private:
     std::filesystem::path projectRoot_;
     std::unique_ptr<SceneDocument> document_;
     std::unique_ptr<PhysicsWorld> physics_;
-    // One navigation mesh per compatible capsule profile, shared by all agents
-    // using it. Paths, destinations and steering are never shared.
-    std::unordered_map<std::uint64_t,std::unique_ptr<NavigationMesh>> navigation_;
+    std::unique_ptr<ResourceManager> ownedResources_;
+    ResourceManager* resources_{};
+    std::unique_ptr<NavigationWorld> navigation_;
+    NavigationAgentProfileQuery profileDefinitions_;
+    std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> frameProfiles_;
+    std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> acceptedProfiles_;
+    std::vector<NavigationAgentProfile> supportedProfiles_;
     Scene presentation_;
     SceneParticles particles_;
     SceneParticles::DefinitionQuery particleDefinitions_;
     CollisionMeshQuery collisionMeshes_;
     std::vector<PhysicsMeshCollider> meshColliders_;
+    bool collisionSourcesCurrent_{true};
+    std::string collisionSourceDiagnostic_;
+    std::chrono::steady_clock::time_point navigationUpdate_{};
+    std::uint64_t navigationDomain_{},navigationSceneRevision_{};
+    std::uint64_t navigationGeometryRevision_{};
+    std::optional<NavigationVolumeDescriptor> navigationVolume_;
+    bool navigationTransaction_{},navigationCoalescing_{};
     bool prepareMeshColliders(const Scene&,bool requireReady);
     std::vector<ScenePoseUpdate> previous_,current_;
     enum class CommandSource { None,External,PlayerInput,DirectionalInput };
@@ -73,8 +92,11 @@ private:
         // replan toward it; destination is the currently accepted endpoint.
         std::optional<Vec3> requestedDestination,destination,velocity;
         std::optional<Mat4> lastPose;
-        std::uint64_t profile{},navigationRevision{},routeQueries{};
-        bool routeActive{};
+        std::string profile;
+        std::uint64_t navigationRevision{},routeQueries{};
+        NavigationPath navigationPath;
+        NavigationStatus queryStatus{NavigationStatus::Unavailable};
+        bool routeActive{},profileAccepted{};
         CommandSource source{CommandSource::None};
         std::string status;
     };
@@ -82,7 +104,6 @@ private:
     std::optional<Vec3> lastClickedGround_;
     std::optional<Vec3> lastHeldTarget_;
     double heldRetargetRemaining_{};
-    std::uint64_t navigationBuilds_{};
     EntityId controlled_{},inputOwner_{};
     std::uint64_t inputCancellation_{};
     std::optional<Mat4> lastControlledPose_;
@@ -95,6 +116,8 @@ private:
     void reconcileParticles(double);
     void resetInterpolation();
     void reconcileAgents();
+    void reconcileProfiles();
+    void reconcileNavigation();
     static void clearRoute(Agent&);
     void clearPlayerRoute();
     bool planRoute(Agent&,const Vec3& start);

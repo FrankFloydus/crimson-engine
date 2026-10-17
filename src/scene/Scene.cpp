@@ -78,6 +78,7 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::Motor:return record.motor.has_value();
     case SceneComponentKind::Controller:return record.controller.has_value();
     case SceneComponentKind::Navigation:return record.navigation.has_value();
+    case SceneComponentKind::NavigationVolume:return record.navigationVolume.has_value();
     case SceneComponentKind::PlayerInput:return record.playerInput.has_value();
     case SceneComponentKind::LightRig:return record.lightRig.has_value();
     case SceneComponentKind::DarknessReveal:return record.darknessReveal.has_value();
@@ -109,7 +110,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
         a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
-        a.actor==b.actor && a.motor==b.motor && a.controller==b.controller && a.navigation==b.navigation &&
+        a.actor==b.actor && a.motor==b.motor && a.controller==b.controller && a.navigation==b.navigation && a.navigationVolume==b.navigationVolume &&
         a.playerInput==b.playerInput && a.lightRig==b.lightRig && a.darknessReveal==b.darknessReveal &&
         a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
@@ -155,6 +156,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* value = registry_.try_get<SceneMotor>(entity)) record.motor = *value;
     if (const auto* value = registry_.try_get<SceneCharacterController>(entity)) record.controller = *value;
     if (const auto* value = registry_.try_get<SceneNavigationAgent>(entity)) record.navigation = *value;
+    if (const auto* value = registry_.try_get<SceneNavigationVolume>(entity)) record.navigationVolume = *value;
     if (const auto* value = registry_.try_get<ScenePlayerInput>(entity)) record.playerInput = *value;
     if (const auto* value = registry_.try_get<ActorLightRigSettings>(entity)) record.lightRig = *value;
     if (const auto* value = registry_.try_get<DarknessRevealSettings>(entity)) record.darknessReveal = *value;
@@ -245,7 +247,7 @@ std::vector<EntityId> Scene::topmost(const std::vector<EntityId>& selection) con
 void Scene::validate(const std::vector<EntityRecord>& records, const SceneProperties& properties) {
     if (records.size() > 100000) throw std::runtime_error("Scene exceeds the 100000 entity limit.");
     std::unordered_map<EntityId,EntityId> parents;
-    size_t directionalCount{}, pointCount{};
+    size_t directionalCount{}, pointCount{},navigationVolumeCount{};
     for (const auto& record : records) {
         if (!record.id || !parents.emplace(record.id,record.parent).second)
             throw std::runtime_error("Scene has a zero or duplicate entity ID.");
@@ -315,9 +317,18 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (record.playerInput && (!record.motor || !record.controller))
             throw std::runtime_error("Player Input requires Motor and Character Controller components.");
         if (record.controller) {
-            const auto& c=*record.controller;
-            if (!std::isfinite(c.height) || !std::isfinite(c.radius) || c.radius<=0 || c.height<2*c.radius)
-                throw std::runtime_error("Character Controller capsule height must be at least its diameter and radius must be positive.");
+            if(!isAssetUuid(record.controller->profile.id)||(isEngineAssetId(record.controller->profile.id)&&record.controller->profile.id!=DefaultNavigationAgentProfileId))throw std::runtime_error("Character Controller requires a Navigation Agent Profile UUID.");
+        }
+        if(record.navigationVolume) {
+            if(record.navigationVolume->enabled&&++navigationVolumeCount>1)throw std::runtime_error("A scene supports one enabled Navigation Volume.");
+            const auto& volume=*record.navigationVolume;
+            if(!math::finite(volume.size)||std::any_of(volume.size.begin(),volume.size.end(),[](float value){return value<=0||value>100000;}))
+                throw std::runtime_error("Navigation Volume size must be finite and positive, at most 100000 meters per axis.");
+            if(!validNavigationBakeSettings(volume.bake))throw std::runtime_error("Navigation Volume bake settings are invalid.");
+            if(volume.profiles.size()>256)throw std::runtime_error("Navigation Volume supports at most 256 profiles.");
+            std::unordered_set<std::string> profiles;
+            for(const auto& profile:volume.profiles)if(!isAssetUuid(profile.id)||(isEngineAssetId(profile.id)&&profile.id!=DefaultNavigationAgentProfileId)||!profiles.insert(profile.id).second)
+                throw std::runtime_error("Navigation Volume profiles require unique profile UUIDs.");
         }
         if (record.lightRig && (!record.actor || !validActorLightRigSettings(*record.lightRig)))
             throw std::runtime_error("Player Light Rig requires an Actor and valid settings.");
@@ -476,6 +487,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.motor) candidate.emplace<SceneMotor>(entity,*record.motor);
         if (record.controller) candidate.emplace<SceneCharacterController>(entity,*record.controller);
         if (record.navigation) candidate.emplace<SceneNavigationAgent>(entity,*record.navigation);
+        if (record.navigationVolume) candidate.emplace<SceneNavigationVolume>(entity,*record.navigationVolume);
         if (record.playerInput) candidate.emplace<ScenePlayerInput>(entity,*record.playerInput);
         if (record.lightRig) candidate.emplace<ActorLightRigSettings>(entity,*record.lightRig);
         if (record.darknessReveal) candidate.emplace<DarknessRevealSettings>(entity,*record.darknessReveal);

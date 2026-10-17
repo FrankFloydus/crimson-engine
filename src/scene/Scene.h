@@ -6,6 +6,7 @@
 #include "crimson-renderer/RenderTypes.h"
 #include "resources/AssetRef.h"
 #include "assets/ModelMaterialOverrides.h"
+#include "assets/NavigationAgentProfile.h"
 #include <entt/entt.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -88,14 +89,25 @@ struct SceneMotor {
     bool operator==(const SceneMotor&) const = default;
 };
 struct SceneCharacterController {
-    float height{1.8f},radius{.3f};
+    AssetRef<NavigationAgentProfile> profile{DefaultNavigationAgentProfileId};
     bool showCollisionInGame{false};
     Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
     bool operator==(const SceneCharacterController&) const = default;
 };
+inline std::optional<AgentTraversalSettings> resolveAgentTraversal(const SceneCharacterController& controller,const NavigationAgentProfileQuery& query={}) {
+    const auto profile=resolveNavigationAgentProfile(controller.profile.id,query);
+    return profile?std::optional<AgentTraversalSettings>{profile->traversal}:std::nullopt;
+}
 struct SceneNavigationAgent {
     bool showRoute{true},enabled{true};
     bool operator==(const SceneNavigationAgent&) const = default;
+};
+struct SceneNavigationVolume {
+    Vec3 size{20,10,20};
+    bool enabled{true};
+    NavigationBakeSettings bake;
+    std::vector<AssetRef<NavigationAgentProfile>> profiles{AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}};
+    bool operator==(const SceneNavigationVolume&) const = default;
 };
 struct ScenePlayerInput {
     bool enabled{true};
@@ -160,6 +172,7 @@ struct EntityRecord {
     std::optional<SceneMotor> motor;
     std::optional<SceneCharacterController> controller;
     std::optional<SceneNavigationAgent> navigation;
+    std::optional<SceneNavigationVolume> navigationVolume;
     std::optional<ScenePlayerInput> playerInput;
     std::optional<ActorLightRigSettings> lightRig;
     std::optional<DarknessRevealSettings> darknessReveal;

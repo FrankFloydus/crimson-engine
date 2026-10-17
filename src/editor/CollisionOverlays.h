@@ -17,7 +17,7 @@ class CollisionOverlays {
 public:
     explicit CollisionOverlays(ResourceManager& resources);
     PreparedCollisionOverlays prepare(const Scene&,std::span<const EntityId> selection,
-        bool enabled,const CollisionMeshQuery&);
+        bool enabled,const CollisionMeshQuery&,const NavigationAgentProfileQuery& profiles={});
 private:
     struct PrimitiveEntry {std::shared_ptr<const CollisionOverlayGeometry> geometry;std::uint64_t used{};};
     struct MeshEntry {

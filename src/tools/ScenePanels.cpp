@@ -61,8 +61,9 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
     EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
-    CharacterHeight, CharacterRadius, CharacterSpeed, CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
+    CharacterSpeed, CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
     MotorEnabled,NavigationEnabled,PlayerInputEnabled,
+    VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
     CharacterRigEnabled,
     CharacterRigLast=CharacterRigEnabled+static_cast<unsigned>(ActorLightRigControl::ShadowNormalBias),
     CharacterRevealEnabled,CharacterRevealSpread,
@@ -143,6 +144,7 @@ bool selected(const SceneDocument& document, EntityId id) {
 }
 const char* kind(const EntityRecord& record) {
     if(record.quader)return "Quader";
+    if(record.navigationVolume)return "NavigationVolume";
     if (record.playerInput) return "Player";
     if (record.actor) return "Actor";
     if (record.controller) return "Character Controller";
@@ -178,6 +180,9 @@ void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool to
 void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
     if (ImGui::MenuItem("Box")) document.createBox();
     if (ImGui::MenuItem("Collider")) document.createCollider("Collider",parent);
+    const auto records=document.scene().records();
+    const bool hasVolume=std::any_of(records.begin(),records.end(),[](const auto& record){return record.navigationVolume && record.navigationVolume->enabled;});
+    if(ImGui::MenuItem("NavigationVolume",nullptr,false,!hasVolume))document.createNavigationVolume("NavigationVolume",parent);
     if (ImGui::MenuItem("Player")) document.createPlayer();
     if (ImGui::MenuItem("Enemy")) document.createEnemy();
     if (ImGui::MenuItem("Camera")) document.createCamera();
@@ -885,7 +890,121 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
     if(cameraEdit(state.active) && !ImGui::IsAnyItemActive())finishEdit(document,state,state.active);
     ImGui::PopID();ImGui::PopID();
 }
-void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,SceneComponentKind section) {
+std::shared_ptr<const NavigationAgentProfile> inspectorProfile(SceneDocument& document,AssetLibrary& assets,const std::string& id) {
+    try {
+        if(auto managed=assets.findNavigationAgentProfile(id))return managed;
+        return document.navigationAgentProfile(id);
+    } catch(...) {return {}; }
+}
+bool profileAssetField(SceneDocument& document,AssetLibrary& assets,const char* label,const std::string& current,
+    std::string* openProfile,const std::function<void(const std::string&)>& assign,bool allowDefault=true) {
+    ImGui::PushID(label);ImGui::TextUnformatted(label);
+    const auto profile=inspectorProfile(document,assets,current);
+    const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+    const auto openWidth=ImGui::CalcTextSize("Open").x+2*ImGui::GetStyle().FramePadding.x;
+    const auto width=std::max(height,ImGui::GetContentRegionAvail().x-openWidth-height-2*gap);
+    const auto name=profile?profile->name:current.empty()?std::string("Default Agent"):std::string("Missing Profile");
+    bool changed=false;
+    if(ImGui::Button((name+"##profile").c_str(),{width,height}))ImGui::OpenPopup("Choose Profile");
+    if(ImGui::BeginDragDropTarget()) {
+        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_NAVIGATION_AGENT_PROFILE")) {
+            if(payload->DataSize>1 && static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
+                const std::string candidate(static_cast<const char*>(payload->Data),payload->DataSize-1);
+                if(inspectorProfile(document,assets,candidate)){assign(candidate);changed=true;}
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("%s",current.c_str());
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(!openProfile || !profile);
+    if(ImGui::Button("Open",{openWidth,height}) && openProfile)*openProfile=current;
+    ImGui::EndDisabled();ImGui::SameLine(0,gap);
+    ImGui::BeginDisabled(!allowDefault || current==DefaultNavigationAgentProfileId);
+    if(ImGui::Button("X",{height,height})){assign(DefaultNavigationAgentProfileId);changed=true;}
+    ImGui::EndDisabled();
+    if(ImGui::BeginPopup("Choose Profile")) {
+        static ImGuiTextFilter filter;filter.Draw("Search");
+        for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::NavigationAgentProfile && filter.PassFilter(asset.name.c_str())) {
+            if(ImGui::Selectable(asset.name.c_str(),asset.id==current)){assign(asset.id);changed=true;ImGui::CloseCurrentPopup();}
+        }
+        ImGui::EndPopup();
+    }
+    if(!document.navigationAgentProfile(current)) {
+        const auto diagnostic=assets.navigationAgentProfileDiagnostic(current);
+        if(!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
+    }
+    ImGui::PopID();return changed;
+}
+void controllerProfileControls(SceneDocument& document,const EntityRecord& record,AssetLibrary& assets,const NavigationInspectorContext& context) {
+    profileAssetField(document,assets,"Agent Profile",record.controller->profile.id,context.openProfile,[&](const std::string& id) {
+        finishScenePanelEdit(document);document.edit("Assign agent profile",changeEntity(record.id,[&](auto& entity){entity.controller->profile=AssetRef<NavigationAgentProfile>{id};}));
+    });
+    if(const auto profile=inspectorProfile(document,assets,record.controller->profile.id)) {
+        const auto& value=profile->traversal;
+        ImGui::Text("Capsule Height: %.3f m",value.height);ImGui::Text("Capsule Radius: %.3f m",value.radius);
+        ImGui::Text("Maximum Slope: %.1f degrees",value.maxSlope);ImGui::Text("Maximum Step: %.3f m",value.maxStep);
+    } else ImGui::TextWrapped("Profile unavailable: %s",record.controller->profile.id.c_str());
+    if(record.navigation && record.navigation->enabled) {
+        const auto records=document.scene().records();const auto volume=std::find_if(records.begin(),records.end(),[](const auto& candidate){return candidate.navigationVolume && candidate.navigationVolume->enabled;});
+        if(volume==records.end())ImGui::TextUnformatted("Add a NavigationVolume to prepare navigation.");
+        else if(std::none_of(volume->navigationVolume->profiles.begin(),volume->navigationVolume->profiles.end(),[&](const auto& ref){return ref==record.controller->profile;}))
+            ImGui::TextUnformatted("Add this Agent Profile to NavigationVolume's Supported Agent Profiles.");
+    }
+}
+void navigationVolumeControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,const NavigationInspectorContext& context) {
+    if(!componentHeader(state,record,SceneComponentKind::NavigationVolume)) {
+        if(state.active>=Edit::VolumeEnabled && state.active<=Edit::VolumeProfiles)finishEdit(document,state,state.active);return;
+    }
+    auto volume=*record.navigationVolume;
+    const bool enabled=ImGui::Checkbox("Enabled##navigation-volume",&volume.enabled);
+    propertyEdit(document,state,Edit::VolumeEnabled,"Toggle navigation volume",enabled,changeEntity(record.id,[volume](auto& entity){entity.navigationVolume->enabled=volume.enabled;}));
+    const bool dimensions=ImGui::DragFloat3("Dimensions (m)",volume.size.data(),.1f,.001f,100000.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    propertyEdit(document,state,Edit::VolumeSize,"Resize navigation volume",dimensions,changeEntity(record.id,[volume](auto& entity){entity.navigationVolume->size=volume.size;}));
+    if(ImGui::TreeNodeEx("Baking",ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto bakeField=[&](const char* label,float NavigationBakeSettings::* member,Edit edit,float speed,float minimum,float maximum) {
+            const bool changed=ImGui::DragFloat(label,&(volume.bake.*member),speed,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            propertyEdit(document,state,edit,"Change navigation baking",changed,changeEntity(record.id,[volume](auto& entity){entity.navigationVolume->bake=volume.bake;}));
+        };
+        bakeField("Cell Size (m)",&NavigationBakeSettings::cellSize,Edit::VolumeCellSize,.01f,.01f,10.f);
+        bakeField("Cell Height (m)",&NavigationBakeSettings::cellHeight,Edit::VolumeCellHeight,.005f,.005f,10.f);
+        bakeField("Contour Simplification",&NavigationBakeSettings::maxSimplificationError,Edit::VolumeSimplification,.05f,0.f,10.f);
+        ImGui::TreePop();
+    } else if(state.active>=Edit::VolumeCellSize && state.active<=Edit::VolumeSimplification)finishEdit(document,state,state.active);
+    if(ImGui::TreeNodeEx("Supported Agent Profiles",ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto assignProfiles=[&](std::vector<AssetRef<NavigationAgentProfile>> values) {
+            finishScenePanelEdit(document);document.edit("Change supported agent profiles",changeEntity(record.id,[values=std::move(values)](auto& entity){entity.navigationVolume->profiles=values;}));
+        };
+        for(std::size_t i=0;i<volume.profiles.size();++i) {
+            ImGui::PushID(static_cast<int>(i));
+            profileAssetField(document,assets,"Profile",volume.profiles[i].id,context.openProfile,[&](const auto& id) {
+                auto values=volume.profiles;
+                if(std::none_of(values.begin(),values.end(),[&](const auto& value){return value.id==id;})){values[i]=AssetRef<NavigationAgentProfile>{id};assignProfiles(std::move(values));}
+            });
+            if(ImGui::SmallButton("Remove")){auto values=volume.profiles;values.erase(values.begin()+static_cast<std::ptrdiff_t>(i));assignProfiles(std::move(values));}
+            ImGui::PopID();
+        }
+        if(ImGui::Button("Add Profile"))ImGui::OpenPopup("Add supported profile");
+        if(ImGui::BeginPopup("Add supported profile")) {
+            for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::NavigationAgentProfile &&
+                std::none_of(volume.profiles.begin(),volume.profiles.end(),[&](const auto& value){return value.id==asset.id;}))
+                if(ImGui::Selectable(asset.name.c_str())){auto values=volume.profiles;values.emplace_back(asset.id);assignProfiles(std::move(values));ImGui::CloseCurrentPopup();}
+            ImGui::EndPopup();
+        }
+        ImGui::TreePop();
+    }
+    if(context.previewProfile) {
+        const auto current=inspectorProfile(document,assets,*context.previewProfile);
+        if(ImGui::BeginCombo("Preview Agent Type",current?current->name.c_str():"None")) {
+            for(const auto& reference:volume.profiles) {
+                const auto profile=inspectorProfile(document,assets,reference.id);
+                if(ImGui::Selectable(profile?profile->name.c_str():reference.id.c_str(),reference.id==*context.previewProfile))*context.previewProfile=reference.id;
+            }
+            ImGui::EndCombo();
+        }
+        if(context.buildStatus)ImGui::TextWrapped("%s",context.buildStatus(*context.previewProfile).c_str());
+    }
+}
+void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,SceneComponentKind section,AssetLibrary& assets,const NavigationInspectorContext& navigation) {
     if(record.playerInput && section==SceneComponentKind::PlayerInput) {
         if(componentHeader(state,record,SceneComponentKind::PlayerInput)) {
             auto value=*record.playerInput;
@@ -915,6 +1034,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             const bool enabled=ImGui::Checkbox("Enabled##navigation",&value.enabled);
             propertyEdit(document,state,Edit::NavigationEnabled,"Toggle navigation agent",enabled,
                 changeEntity(record.id,[value](auto& entity){entity.navigation=value;}));
+            if(record.controller)controllerProfileControls(document,record,assets,navigation);
             const bool route=ImGui::Checkbox("Show Route",&value.showRoute);
             propertyEdit(document,state,Edit::CharacterRoute,"Toggle character route",route,
                 changeEntity(record.id,[v=value.showRoute](auto& entity){entity.navigation->showRoute=v;}));
@@ -925,20 +1045,14 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
     if(record.controller && section==SceneComponentKind::Controller) {
         auto value=*record.controller;
         if(componentHeader(state,record,SceneComponentKind::Controller)) {
-            const bool height=ImGui::DragFloat("Capsule Height (m)",&value.height,.02f,2*value.radius,100.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
-            propertyEdit(document,state,Edit::CharacterHeight,"Change character height",height,
-                changeEntity(record.id,[v=value.height](auto& entity){entity.controller->height=v;}));
-            const bool radius=ImGui::DragFloat("Capsule Radius (m)",&value.radius,.01f,.01f,value.height*.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
-            propertyEdit(document,state,Edit::CharacterRadius,"Change character radius",radius,
-                changeEntity(record.id,[v=value.radius](auto& entity){entity.controller->radius=v;}));
+            if(!record.navigation)controllerProfileControls(document,record,assets,navigation);
             const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
             propertyEdit(document,state,Edit::CharacterCollisionVisible,"Toggle character collision display",visible,
                 changeEntity(record.id,[v=value.showCollisionInGame](auto& entity){entity.controller->showCollisionInGame=v;}));
             const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
             propertyEdit(document,state,Edit::CharacterCollisionColor,"Change character collision color",color,
                 changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.controller->collisionColor=v;}));
-        } else if(state.active==Edit::CharacterHeight || state.active==Edit::CharacterRadius ||
-            state.active==Edit::CharacterCollisionVisible || state.active==Edit::CharacterCollisionColor) {
+        } else if(state.active==Edit::CharacterCollisionVisible || state.active==Edit::CharacterCollisionColor) {
             finishEdit(document,state,state.active);
         }
     }
@@ -1162,7 +1276,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation) {
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if(!ImGui::Begin("Inspector")) {
@@ -1183,7 +1297,8 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     [&](unsigned field){finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));}};
                 drawInspectorTransform(document,state.transforms[record.id],record,transactions);
             }
-            gameplayControls(document,state,record,section);
+            gameplayControls(document,state,record,section,assets,navigation);
+            if(section==SceneComponentKind::NavigationVolume && record.navigationVolume)navigationVolumeControls(document,state,record,assets,navigation);
             if(section==SceneComponentKind::Camera)drawCameraSection(document,state,record.id,ownedCamera);
             if(section==SceneComponentKind::Quader && record.quader && quader && componentHeader(state,record,SceneComponentKind::Quader))drawQuaderInspector(document,record,*quader);
             if(section==SceneComponentKind::Collider && record.collider) {

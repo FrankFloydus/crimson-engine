@@ -1,6 +1,7 @@
 #pragma once
 #include "crimson-renderer/RenderTypes.h"
 #include "editor/FrameMetrics.h"
+#include "assets/NavigationAgentProfile.h"
 #include <optional>
 #include <span>
 #include <string>
@@ -22,7 +23,7 @@ public:
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
     void drawRoute(const Camera&,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
-    void drawActorLightRigs(const Camera&,const Scene&);
+    void drawActorLightRigs(const Camera&,const Scene&,const NavigationAgentProfileQuery& profiles={});
 private:
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;

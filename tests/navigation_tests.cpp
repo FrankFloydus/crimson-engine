@@ -1,4 +1,4 @@
-#include "navigation/NavigationMesh.h"
+#include "navigation_mesh_fixture.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -14,7 +14,7 @@ EntityRecord box(EntityId id,Vec3 center,Vec3 size) {
 void flatGroundAndCache() {
     EntityRecord actor;actor.id=2;actor.name="Actor";actor.controller.emplace();actor.motor.emplace();
     Scene scene;scene.apply({box(1,{0,-.5f,0},{20,1,20}),actor},{});PhysicsWorld physics;physics.reconcile(scene);
-    NavigationMesh navigation;SceneCharacterController agent;
+    crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;
     require(navigation.reconcile(physics,agent),"Initial navigation build was skipped.");
     const Vec3 destination{5,0,2};const auto path=navigation.findPath({0,.02f,0},destination);
     if(!path)std::cerr<<navigation.status();
@@ -31,7 +31,7 @@ void flatGroundAndCache() {
 }
 void obstacleAndLiveChanges() {
     auto floor=box(1,{0,-.5f,0},{20,1,20});auto wall=box(2,{0,1,0},{1,2,4});
-    Scene scene;scene.apply({floor,wall},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacterController agent;
+    Scene scene;scene.apply({floor,wall},{});PhysicsWorld physics;physics.reconcile(scene);crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;
     navigation.reconcile(physics,agent);const Vec3 start{-4,.02f,0},end{4,0,0};const auto route=navigation.findPath(start,end);
     require(route && route->corners.size()>=3 && route->corners.back()==end,"Detour did not route around an intervening obstacle.");
     require(std::any_of(route->corners.begin(),route->corners.end(),[](const auto& point){return std::abs(point[2])>2.3f;}),"Route omitted capsule clearance around wall corners.");
@@ -45,7 +45,7 @@ void obstacleAndLiveChanges() {
 }
 void islandsAndClearance() {
     Scene scene;auto left=box(1,{-3,-.5f,0},{4,1,6}),right=box(2,{3,-.5f,0},{4,1,6});
-    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacterController agent;
+    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;
     navigation.reconcile(physics,agent);
     require(!navigation.findPath({-3,.02f,0},{3,0,0}),"Disconnected floor islands returned a partial path.");
     auto floor=box(1,{0,-.5f,0},{12,1,6}),ceiling=box(2,{0,2,0},{1,1,8});
@@ -62,14 +62,14 @@ void islandsAndClearance() {
 void acceptedGeometryOnly() {
     EntityRecord parent;parent.id=1;parent.name="Reflected parent";parent.local=math::scaling({-2,1,2});
     auto floor=box(2,{0,-.5f,0},{10,1,10});floor.parent=1;
-    Scene scene;scene.apply({parent,floor},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;
+    Scene scene;scene.apply({parent,floor},{});PhysicsWorld physics;physics.reconcile(scene);crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());
     navigation.reconcile(physics,{});require(navigation.findPath({0,.02f,0},{3,0,0}).has_value(),"Reflected collider winding removed valid ground.");
     parent.local=math::scaling({2,1,3});floor.local=math::eulerRotationXYZ({0,.5f,0});scene.apply({parent,floor},{});physics.reconcile(scene);navigation.reconcile(physics,{});
     require(!navigation.findPath({},{3,0,0}),"Navigation used a sheared collider disabled by physics.");
 }
 void slopeAndStep() {
     auto ramp=box(1,{0,0,0},{8,1,4});ramp.local=math::eulerRotationXYZ({0,0,.35f});
-    Scene scene;scene.apply({ramp},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;
+    Scene scene;scene.apply({ramp},{});PhysicsWorld physics;physics.reconcile(scene);crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());
     navigation.reconcile(physics,{});
     require(navigation.findPath(math::transformPoint(ramp.local,{-2,.52f,0}),math::transformPoint(ramp.local,{2,.5f,0})).has_value(),"Walkable ramp was excluded from navigation.");
     ramp.local=math::eulerRotationXYZ({0,0,1.f});scene.apply({ramp},{});physics.reconcile(scene);navigation.reconcile(physics,{});
@@ -82,18 +82,18 @@ void slopeAndStep() {
 }
 void buildBounds() {
     Scene scene;scene.apply({box(1,{0,-.5f,0},{20,1,20})},{});PhysicsWorld physics;physics.reconcile(scene);
-    NavigationMesh navigation;SceneCharacterController agent;agent.height=std::numeric_limits<float>::max();
+    crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;agent.height=std::numeric_limits<float>::max();
     navigation.reconcile(physics,agent);require(!navigation.findPath({},{1,0,0}) && !navigation.status().empty(),"Extreme Character dimensions escaped safe voxel validation.");
     agent={};navigation.reconcile(physics,agent);require(navigation.findPath({},{1,0,0}).has_value(),"Valid dimensions failed to recover after a rejected build.");
     scene.apply({box(1,{0,-.5f,0},{1000,1,1000})},{});physics.reconcile(scene);navigation.reconcile(physics,agent);
-    require(!navigation.findPath({},{1,0,0}) && navigation.status().find("4-million-cell")!=std::string::npos,"Oversized navigation grid was not rejected before allocation.");
+    require(navigation.findPath({},{1,0,0}).has_value(),"A large source collider escaped explicit volume/tile clipping.");
     scene.apply({box(1,{0,-.5f,0},{.01f,1,.01f})},{});physics.reconcile(scene);navigation.reconcile(physics,agent);
-    require(!navigation.findPath({},{.001f,0,0}) && !navigation.status().empty(),"Sub-cell geometry created an invalid zero-size grid.");
+    require(!navigation.findPath({},{.001f,0,0}),"Sub-cell geometry created an invalid walking surface.");
 }
 void closestReachableDestinations() {
     auto floor=box(1,{0,-.5f,0},{20,1,20}),wall=box(2,{0,1,0},{1,2,4});
     Scene scene;scene.apply({floor,wall},{});PhysicsWorld physics;physics.reconcile(scene);
-    NavigationMesh navigation;SceneCharacterController agent;navigation.reconcile(physics,agent);
+    crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;navigation.reconcile(physics,agent);
     const Vec3 start{-4,.02f,0},exact{4,0,0};
     const auto strict=navigation.findPath(start,exact),preserved=navigation.findReachablePath(start,exact);
     require(strict && preserved && strict->corners==preserved->corners && preserved->corners.back()==exact,
@@ -144,7 +144,7 @@ void closestReachableDestinations() {
 }
 void reachableIslandsAndClearance() {
     Scene scene;auto left=box(1,{-3,-.5f,0},{4,1,6}),right=box(2,{3,-.5f,0},{4,1,6});
-    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacterController agent;
+    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;
     navigation.reconcile(physics,agent);const Vec3 start{-3,.02f,0};
     const auto island=navigation.findReachablePath(start,{3,0,0});
     require(island && island->corners.back()[0]<-1.3f && island->corners.back()[0]>-1.8f && std::abs(island->corners.back()[2])<.1f,

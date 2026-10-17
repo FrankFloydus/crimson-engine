@@ -23,7 +23,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),collisionOverlays_(resources_),playerOcclusion_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),playerOcclusion_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -36,6 +36,20 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     play_.setCollisionMeshDefinitions([this](const std::string& id){return collisions_.query(id);});
     editor_.setCollisionMeshQuery([this](const std::string& id){return collisions_.query(id);});
     editor_.setQuaderBridge(&quader_);
+    const NavigationAgentProfileQuery agentProfiles=[this,&assets](const std::string& id) {
+        try {
+            if(auto managed=assets.findNavigationAgentProfile(id))return managed;
+            return activeDocument().navigationAgentProfile(id);
+        } catch(...) {return std::shared_ptr<const NavigationAgentProfile>{};}
+    };
+    editor_.setAgentProfileQuery([this,agentProfiles](const std::string& id) {
+        return play_.playing()?play_.acceptedAgentProfile(id):agentProfiles(id);
+    });
+    navigationProfileEditor_.setStagedProfiles([this](const std::string& id){return activeDocument().navigationAgentProfile(id);});
+    play_.setAgentProfiles(agentProfiles);play_.setResourceManager(resources_);
+    editor_.setNavigationBuildStatus([this](const std::string& profile) {
+        return navigationPreview_.status(play_.playing()?play_.navigationWorld():&navigationPreview_.world(),profile);
+    });
 }
 EditorSession::~EditorSession() { saveSession(); }
 void EditorSession::restoreSession(AssetLibrary& assets) {
@@ -46,7 +60,7 @@ void EditorSession::restoreSession(AssetLibrary& assets) {
             if (saved.at("version") != 1) throw std::runtime_error("Unsupported editor session version.");
             recoveredLegacy_=saved.value("recoveredLegacyPreview",false);
             if(saved.contains("panels")) { const auto& panels=saved.at("panels");editor_.setPanels({panels.value("outliner",true),panels.value("inspector",true),panels.value("assetBrowser",true),panels.value("game",false)}); }
-            if(saved.contains("overlays")) { const auto& overlays=saved.at("overlays");editor_.setOverlays({overlays.value("collisions",true),overlays.value("grid",true),overlays.value("transformGizmo",true)}); }
+            if(saved.contains("overlays")) { const auto& overlays=saved.at("overlays");editor_.setOverlays({overlays.value("collisions",true),overlays.value("grid",true),overlays.value("transformGizmo",true),overlays.value("navigationMesh",true)}); }
             const auto active=saved.value("scene",std::string{});
             if (!active.empty() && !document_.load(active)) { status_=document_.status(); unresolvedScene_=active; }
             if (saved.contains("cameras")) for (auto it=saved["cameras"].begin();it!=saved["cameras"].end();++it) {
@@ -100,12 +114,13 @@ void EditorSession::saveSession() noexcept {
         writeFileAtomically(resolveAssetPath(root_,"assets/editor-session.json"),Json{{"version",1},{"scene",unresolvedScene_.empty() ? document_.assetId() : unresolvedScene_},
             {"recoveredLegacyPreview",recoveredLegacy_},{"cameras",std::move(cameras)},
             {"panels",{{"outliner",editor_.panels().outliner},{"inspector",editor_.panels().inspector},{"assetBrowser",editor_.panels().assetBrowser},{"game",editor_.panels().game}}},
-            {"overlays",{{"collisions",editor_.overlays().collisions},{"grid",editor_.overlays().grid},{"transformGizmo",editor_.overlays().transformGizmo}}}}.dump(2));
+            {"overlays",{{"collisions",editor_.overlays().collisions},{"grid",editor_.overlays().grid},{"transformGizmo",editor_.overlays().transformGizmo},{"navigationMesh",editor_.overlays().navigationMesh}}}}.dump(2));
     } catch (...) { /* Session state is expendable; authored scenes were saved explicitly. */ }
 }
 void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     particleEditor_.filesChanged(paths);
     materialEditor_.filesChanged(paths);
+    navigationProfileEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
         previews_->invalidateFile(path);
@@ -195,7 +210,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
+    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
@@ -257,7 +272,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto previousCamera=cameraPilot_.freeCamera().value_or(settings_.camera);
     document.setPreviewCamera(settings_.camera);
     const auto interactionDocument=document.documentGeneration();
-    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_);
+    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
@@ -266,6 +281,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!frame.openMaterial.empty())materialEditor_.requestOpen(frame.openMaterial,assets);
     particleEditor_.draw(assets,renderer,simulationSeconds,materialEditor_);
     materialEditor_.draw(assets,renderer,resources_,simulationSeconds);
+    if(frame.createNavigationAgentProfile)navigationProfileEditor_.requestCreate(frame.navigationAgentProfileFolder,assets);
+    if(!frame.openNavigationAgentProfile.empty())navigationProfileEditor_.requestOpen(frame.openNavigationAgentProfile,assets);
+    navigationProfileEditor_.draw(assets);
     status_=startupStatus_+playStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         cameraPilot_.sync(document,settings_.camera);
@@ -318,7 +336,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
-        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive()});
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive()});
     if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
@@ -373,10 +391,18 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         const auto inputCamera=resolveGameCamera(play_.presentationScene());
         play_.advance(simulationSeconds,gameInput_,inputCamera.value_or(gameCamera.value_or(Camera{})),!simulationSuspended_);
     }
+    const NavigationAgentProfileQuery agentProfiles=[&](const std::string& id) {
+        if(play_.playing())return play_.acceptedAgentProfile(id);
+        try {
+            if(auto managed=assets.findNavigationAgentProfile(id))return managed;
+            return document.navigationAgentProfile(id);
+        } catch(...) {return std::shared_ptr<const NavigationAgentProfile>{};}
+    };
+    if(!play_.playing())navigationPreview_.update(document,[this](const std::string& id){return collisions_.query(id);},agentProfiles);
     const auto& renderScene=play_.playing()?play_.presentationScene():document.scene();
     const MaterialEvaluationContext materialContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};
     prepared_.setMaterialContext(materialContext);
-    auto extracted=extractScene(renderScene);
+    auto extracted=extractScene(renderScene,agentProfiles);
     if(play_.playing()) {
         const auto ticks=play_.tickCount();
         const auto elapsed=ticks>=animationPlayTick_?(ticks-animationPlayTick_)*PlaySession::FixedStep:0.;
@@ -427,7 +453,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         renderInput.gameModelOpacities=playerOcclusion_.update(renderScene,renderInput.extracted.models,*gameCamera,
             (document.documentGeneration()<<1)|static_cast<std::uint64_t>(play_.playing()),ImGui::GetIO().DeltaTime,[&assets](const std::string& id)->std::optional<Aabb> {
                 if(const auto model=assets.peekModel(id))return model->bounds;return std::nullopt;
-            },[this](const std::string& id){return collisions_.query(id);},editor_.playerOcclusionSettings());
+            },[this](const std::string& id){return collisions_.query(id);},editor_.playerOcclusionSettings(),agentProfiles);
     else playerOcclusion_.clear();
     renderInput.sceneAspect=std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height);
     renderInput.sceneVisible=frame.viewport.width>0 && frame.viewport.height>0;renderInput.gameVisible=gameOpen;
@@ -442,14 +468,18 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.shadowResolution=editor_.pointShadowResolution();renderInput.materialContext=materialContext;
     renderInput.appearance=editor_.appearance();renderInput.gridVisible=editor_.overlays().grid;
     auto collisionOverlays=collisionOverlays_.prepare(renderScene,document.selection().ids,editor_.overlays().collisions,
-        [this](const std::string& id){return collisions_.query(id);});
+        [this](const std::string& id){return collisions_.query(id);},agentProfiles);
+    if(editor_.overlays().navigationMesh) {
+        auto navigationOverlays=navigationPreview_.overlays(play_.playing()?play_.navigationWorld():&navigationPreview_.world(),editor_.navigationPreviewProfile());
+        collisionOverlays.scene.insert(collisionOverlays.scene.end(),navigationOverlays.begin(),navigationOverlays.end());
+    }
     renderInput.sceneCollisionOverlays=std::move(collisionOverlays.scene);
     renderInput.gameCollisionOverlays=std::move(collisionOverlays.game);
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
     editor_.drawActorLightRigs(sceneCamera,renderScene);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
-        gameView_.drawActorLightRigs(*gameCamera,renderScene);
+        gameView_.drawActorLightRigs(*gameCamera,renderScene,agentProfiles);
         if(play_.playing()) {
             for(const auto& actor:renderScene.records())if(actor.navigation && actor.navigation->enabled && actor.navigation->showRoute && renderScene.isVisible(actor.id)) {
                 std::optional<Vec3> position;

@@ -1,6 +1,8 @@
 #include "physics/PhysicsWorld.h"
 #include "physics/CharacterMotor.h"
+#include "agent_profile_fixture.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <numbers>
@@ -172,5 +174,102 @@ void geometryPublication() {
     scene.apply(records,{});world.reconcile(scene);
     require(world.staticBoxes().empty() && world.geometryRevision()==revision+2,"Rejected shear remained in derived geometry.");
 }
+void sharedProfilePublicationAndStaticPreview() {
+    using namespace crimson::testing;
+    const auto selected=agentProfile({1.2f,.25f,20,0});auto player=characterRecord();player.controller->profile=selected;
+    Scene scene;scene.apply({floorRecord(),player},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());tick(scene,world,{},120);
+    require(world.acceptedCharacterTraversal(2)==AgentTraversalSettings{1.2f,.25f,20,0},"Controller did not resolve its shared traversal definition.");
+    const auto geometry=world.geometryRevision();const auto initial=*world.characterPosition(2);
+    auto replacement=std::make_shared<NavigationAgentProfile>(*agentProfiles().at(selected.id));replacement->traversal={2.4f,.6f,35,.15f};agentProfiles()[selected.id]=replacement;world.reconcile(scene);
+    require(world.acceptedCharacterTraversal(2)==replacement->traversal&&world.geometryRevision()==geometry,"Live profile dimensions/slope/step were not coherent or dirtied static geometry.");
+    require(math::length(*world.characterPosition(2)-initial)<1e-4,"Live capsule replacement teleported the actor's foot origin.");
+    agentProfiles().erase(selected.id);world.reconcile(scene);
+    require(world.characterCount()==1&&world.characterPosition(2)&&!world.acceptedCharacterTraversal(2),"Missing custom profile discarded the last accepted capsule or reported it current.");
+    tick(scene,world,{4,0,0},60);require(std::abs((*world.characterPosition(2))[0]-initial[0])<.01&&world.grounded(2),"Unresolved profile allowed horizontal motion or lost retained collision.");
+    agentProfiles()[selected.id]=replacement;world.reconcile(scene);require(world.acceptedCharacterTraversal(2)==replacement->traversal,"Restoring the profile did not recover its controller.");
+    PhysicsWorld preview;preview.setAgentProfiles(agentProfileQuery());preview.reconcileStatics(scene);
+    require(preview.colliderCount()==1&&preview.characterCount()==0&&!preview.characterPosition(2),"Static navigation preview created a character motor.");
 }
-int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+void profileStepAndSlopeLimits() {
+    using namespace crimson::testing;
+    const auto traverseStep=[](float maximumStep) {
+        auto player=characterRecord();player.local=math::translation({0,.05f,0});player.controller->profile=agentProfile({1.8f,.3f,45,maximumStep});
+        EntityRecord step;step.id=4;step.name="Step";step.collider=SceneCollider{{1,.2f,4}};step.local=math::translation({1.5f,.1f,0});
+        Scene scene;scene.apply({floorRecord(),player,step},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());tick(scene,world,{},60);tick(scene,world,{1,0,0},150);return *world.characterPosition(2);
+    };
+    require(traverseStep(.3f)[0]>2,"Shared profile step did not enable authored stairs.");
+    require(traverseStep(0)[0]<.9f,"Zero step profile retained the old hardcoded stair height.");
+    const auto traverseRamp=[](float maximumSlope) {
+        auto player=characterRecord();player.local=math::translation({-1,.1f,0});player.controller->profile=agentProfile({1.8f,.3f,maximumSlope,.3f});
+        EntityRecord ramp;ramp.id=6;ramp.name="Ramp";ramp.collider=SceneCollider{{4,.2f,4}};constexpr float angle=25*std::numbers::pi_v<float>/180;
+        ramp.local=math::translation({1,2*std::sin(angle),0})*math::eulerRotationXYZ({0,0,angle});
+        Scene scene;scene.apply({floorRecord(),player,ramp},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());tick(scene,world,{},60);float highest=0;
+        for(unsigned tickIndex=0;tickIndex<360;++tickIndex){tick(scene,world,{1,0,0});if(world.grounded(2))highest=std::max(highest,(*world.characterPosition(2))[1]);}
+        return highest;
+    };
+    require(traverseRamp(35)>1.5f&&traverseRamp(15)<.8f,"Shared profile slope was not applied to Jolt's walkability limit.");
+}
+EntityRecord idleRamp(float degrees,float yaw,bool triangles) {
+    EntityRecord ramp;ramp.id=1;ramp.name=triangles?"Triangle idle ramp":"Box idle ramp";
+    ramp.local=math::eulerRotationXYZ({0,yaw,0})*math::eulerRotationXYZ({0,0,degrees*std::numbers::pi_v<float>/180});
+    ramp.collider=SceneCollider{{20,.2f,12}};
+    if(triangles) {
+        ramp.collider->shape=ColliderShape::Trimesh;
+        ramp.collider->mesh=makeCollisionMesh({{-10,.1f,-6},{10,.1f,-6},{10,.1f,6},{-10,.1f,6}},{0,2,1,0,3,2});
+    }
+    return ramp;
+}
+Vec3 rampSpawn(const EntityRecord& ramp,float x=0,float z=0) {
+    return math::transformPoint(ramp.local,{x,.1f,z})+Vec3{0,2,0};
+}
+Vec3 horizontalRampDirection(const EntityRecord& ramp,Vec3 direction) {
+    auto world=math::transformDirection(ramp.local,direction);world[1]=0;return math::normalized(world);
+}
+void idleWalkableSlopeSupport() {
+    struct Case {float slope,yaw;bool triangles;int motor;};
+    const std::array cases{Case{14,0,false,1},Case{-14,.7f,false,0},Case{35,-.9f,false,-1},Case{-35,.8f,true,1}};
+    for(const auto& test:cases) {
+        const auto ramp=idleRamp(test.slope,test.yaw,test.triangles);auto actor=characterRecord();actor.local=math::translation(rampSpawn(ramp));
+        if(test.motor==0)actor.motor.reset();else if(test.motor<0)actor.motor->enabled=false;
+        const auto attempted=test.motor==1?Vec3{}:horizontalRampDirection(ramp,{1,0,0})*3;
+        Scene scene;scene.apply({ramp,actor},{});PhysicsWorld world;tick(scene,world,attempted,120);
+        const auto landed=*world.characterPosition(2);const auto label=std::to_string(test.slope)+" degree "+(test.triangles?"Trimesh":"Box");
+        require(world.grounded(2)&&landed[1]<actor.local[13]-1,"Idle gravity did not land the controller on the "+label+" ramp.");
+        tick(scene,world,attempted,240);
+        const auto drift=math::length(*world.characterPosition(2)-landed);
+        require(world.grounded(2)&&drift<.01,"Idle controller drifted on the walkable "+label+" ramp: "+std::to_string(drift)+" m.");
+        if(test.motor<0) {
+            auto records=scene.records();std::erase_if(records,[](const auto& record){return record.id==1;});scene.apply(records,{});
+            tick(scene,world,attempted,30);
+            require((*world.characterPosition(2))[1]<landed[1]-.8f,"Idle slope support suspended a disabled Motor after its ramp was removed.");
+        }
+    }
+    for(const auto degrees:{14.f,35.f}) {
+        const auto ramp=idleRamp(degrees,.6f,degrees>20);auto actor=characterRecord();actor.local=math::translation(rampSpawn(ramp,-2));
+        Scene scene;scene.apply({ramp,actor},{});PhysicsWorld world;tick(scene,world,{},120);
+        const auto start=*world.characterPosition(2);tick(scene,world,horizontalRampDirection(ramp,{1,0,0})*1.5,90);
+        const auto stopped=*world.characterPosition(2);
+        require(world.grounded(2)&&stopped[1]>start[1]+.2,"Commanded ascent was blocked by idle slope support.");
+        tick(scene,world,{},240);
+        require(world.grounded(2)&&math::length(*world.characterPosition(2)-stopped)<.01,"Stopping after ascent allowed the controller to drift down a walkable ramp.");
+    }
+}
+void slopeIntentIsPerActorAndSteepSlopesStillSlide() {
+    const auto ramp=idleRamp(14,-.7f,false);auto idle=characterRecord();idle.local=math::translation(rampSpawn(ramp,0,3));
+    auto moving=characterRecord();moving.id=4;moving.name="Moving ramp actor";moving.local=math::translation(rampSpawn(ramp,3,-3));
+    Scene scene;scene.apply({ramp,idle,moving},{});PhysicsWorld world;tick(scene,world,{},120);
+    const auto idleStart=*world.characterPosition(2),movingStart=*world.characterPosition(4);const auto across=horizontalRampDirection(ramp,{0,0,1});
+    CharacterMotor motor(world,4);
+    for(int index=0;index<180;++index){motor.move(across);tick(scene,world);}
+    require(world.grounded(2)&&math::length(*world.characterPosition(2)-idleStart)<.01,"Moving another actor enabled downhill drift for an idle controller.");
+    require(world.grounded(4)&&math::dot(*world.characterPosition(4)-movingStart,across)>2.8,"Per-actor idle support blocked a different actor's commanded movement.");
+
+    using namespace crimson::testing;
+    const auto steep=idleRamp(35,.4f,true);auto actor=characterRecord();actor.local=math::translation(rampSpawn(steep));actor.controller->profile=agentProfile({1.8f,.3f,20,.3f});
+    Scene steepScene;steepScene.apply({steep,actor},{});PhysicsWorld steepWorld;steepWorld.setAgentProfiles(agentProfileQuery());tick(steepScene,steepWorld,{},60);
+    const auto start=*steepWorld.characterPosition(2);tick(steepScene,steepWorld,{},90);
+    const auto downhill=horizontalRampDirection(steep,{-1,0,0}),finish=*steepWorld.characterPosition(2);
+    require(math::dot(finish-start,downhill)>.25&&finish[1]<start[1]-.15,"Idle support made a slope above the profile limit walkable or suspended gravity.");
+}
+}
+int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

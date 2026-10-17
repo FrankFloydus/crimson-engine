@@ -60,7 +60,7 @@ Vec3 directionalLightDirection(const Mat4& world) {
     return math::normalized(math::transformDirection(world,{0,0,-1}),{0,0,-1});
 }
 
-ExtractedScene extractScene(const Scene& scene) {
+ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery& profiles) {
     ExtractedScene result;
     result.environment=resolveEnvironment(scene);
     // Actor ownership is independent of input, physics and rig activation.
@@ -142,7 +142,8 @@ ExtractedScene extractScene(const Scene& scene) {
         }
         if(const auto* reveal=registry.try_get<DarknessRevealSettings>(entity);reveal&&reveal->enabled) {
             const auto* controller=registry.try_get<SceneCharacterController>(entity);
-            const auto height=controller?controller->height:0.f;
+            const auto traversal=controller?resolveAgentTraversal(*controller,profiles):std::optional<AgentTraversalSettings>{};
+            const auto height=traversal?traversal->height:0.f;
             result.reveals.push_back({math::transformPoint(*world,{})+Vec3{0,characterLightingCenterHeight(height),0},reveal->spread,true});
         }
     }
@@ -150,7 +151,7 @@ ExtractedScene extractScene(const Scene& scene) {
 }
 
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds,const CollisionMeshQuery& meshCollision) {
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles) {
     Aabb result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
     for (auto root : scene.topmost(selected)) {
@@ -160,6 +161,10 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
             const auto world = scene.worldTransform(id);
             if (!record || !world) continue;
             bool hasBounds = false;
+            if(record->navigationVolume) {
+                const auto half=record->navigationVolume->size*.5f;
+                math::include(result,math::transformBounds(Aabb{half*-1.f,half,true},*world));hasBounds=true;
+            }
             if(record->collider) {
                 auto bounds=primitiveColliderBounds(*record->collider);
                 if(record->collider->shape==ColliderShape::Trimesh)
@@ -184,16 +189,15 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                 math::include(result,position-Vec3{.5f,.5f,.5f});
                 math::include(result,position+Vec3{.5f,.5f,.5f});
             }
-            if(record->controller)math::include(result,math::transformBounds(Aabb{
-                {-record->controller->radius,0,-record->controller->radius},
-                {record->controller->radius,record->controller->height,record->controller->radius},true},*world));
+            if(record->controller)if(const auto character=resolveAgentTraversal(*record->controller,profiles))math::include(result,math::transformBounds(Aabb{
+                {-character->radius,0,-character->radius},{character->radius,character->height,character->radius},true},*world));
         }
     }
     return result;
 }
 
 std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const EntityId> selection,
-    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision) {
+    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles) {
     std::vector<SelectionBox> result;
     if(selection.empty())return result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
@@ -225,14 +229,18 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
         if(!usable(visuals))for(const auto id:descendants) {
             if(!scene.isVisible(id))continue;
             const auto record=scene.find(id);if(!record)continue;const auto& local=relative.at(id);
+            if(record->navigationVolume) {
+                const auto half=record->navigationVolume->size*.5f;
+                math::include(shapes,math::transformBounds(Aabb{half*-1.f,half,true},local));
+            }
             if(record->collider) {
                 auto bounds=primitiveColliderBounds(*record->collider);
                 if(record->collider->shape==ColliderShape::Trimesh)
                     if(const auto source=colliderMeshResult(*record->collider,meshCollision);source.mesh)bounds=source.mesh->bounds;
                 if(usable(bounds))math::include(shapes,math::transformBounds(bounds,local));
             }
-            if(record->controller) {
-                const auto& character=*record->controller;
+            if(record->controller)if(const auto value=resolveAgentTraversal(*record->controller,profiles)) {
+                const auto& character=*value;
                 math::include(shapes,math::transformBounds(Aabb{{-character.radius,0,-character.radius},{character.radius,character.height,character.radius},true},local));
             }
         }
@@ -242,13 +250,14 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
     return result;
 }
 
-std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision) {
+std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles,bool includeCollisions) {
     if(!math::finite(ray.origin) || !math::finite(ray.direction) || !math::finite(maximumDistance) || maximumDistance<=0)return {};
     double closest=maximumDistance;
     std::optional<EntityId> result;
     for(const auto& record:scene.records()) {
         if(!scene.isVisible(record.id))continue;
-        if(!record.collider && !record.controller)continue;
+        if(!record.collider && !record.controller && !record.navigationVolume)continue;
+        if(!includeCollisions&&!record.navigationVolume)continue;
         const auto world=scene.worldTransform(record.id);
         const auto inverse=world?math::inverse(*world):std::nullopt;
         if(!inverse)continue;
@@ -257,7 +266,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
         // Keep the transformed direction unnormalized, so all hit parameters
         // remain comparable world-ray distances under affine/nonuniform parents.
         double hit=std::numeric_limits<double>::infinity();
-        if(record.collider && record.collider->shape==ColliderShape::Trimesh)if(const auto source=colliderMeshResult(*record.collider,meshCollision);source.mesh) {
+        if(includeCollisions&&record.collider && record.collider->shape==ColliderShape::Trimesh)if(const auto source=colliderMeshResult(*record.collider,meshCollision);source.mesh) {
             const auto& mesh=*source.mesh;
             for(std::size_t index=0;index+2<mesh.indices.size();index+=3) {
                 const auto a=mesh.positions[mesh.indices[index]],b=mesh.positions[mesh.indices[index+1]],c=mesh.positions[mesh.indices[index+2]];
@@ -268,9 +277,9 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                 const auto distance=math::dot(other,q)/determinant;if(distance>=0)hit=std::min(hit,distance);
             }
         }
-        if(record.collider && record.collider->shape==ColliderShape::Box) {
+        if(record.navigationVolume || (includeCollisions&&record.collider && record.collider->shape==ColliderShape::Box)) {
             double first=0,last=closest;
-            const auto half=record.collider->size*.5f;
+            const auto half=(record.navigationVolume?record.navigationVolume->size:record.collider->size)*.5f;
             for(unsigned axis=0;axis<3 && first<=last;++axis) {
                 const double direction=local.direction[axis],origin=local.origin[axis];
                 if(std::abs(direction)<1e-12) {
@@ -303,7 +312,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                       math::dot(sphereOffset,sphereOffset)-radius*radius,[](double){return true;});
             }
         };
-        if(record.collider) {
+        if(includeCollisions&&record.collider) {
             const auto& collider=*record.collider;
             if(collider.shape==ColliderShape::Sphere)capsule(collider.radius,0,0);
             else if(collider.shape==ColliderShape::Capsule) {
@@ -322,7 +331,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                 }
             }
         }
-        if(record.controller)capsule(record.controller->radius,record.controller->radius,record.controller->height-record.controller->radius);
+        if(includeCollisions&&record.controller)if(const auto character=resolveAgentTraversal(*record.controller,profiles))capsule(character->radius,character->radius,character->height-character->radius);
         if(hit<closest) {closest=hit;result=record.id;}
     }
     return result;

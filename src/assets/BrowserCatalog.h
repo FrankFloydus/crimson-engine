@@ -11,8 +11,8 @@
 
 namespace crimson {
 
-enum class AssetKind { Texture, Environment, Model, Scene, Material, Particle };
-enum class BrowserAssetFilter { All, Materials, Models, Textures, Scenes, Particles };
+enum class AssetKind { Texture, Environment, Model, Scene, Material, Particle, NavigationAgentProfile };
+enum class BrowserAssetFilter { All, Materials, Models, Textures, Scenes, Particles, NavigationProfiles };
 struct AssetEntry { std::string id, name; AssetKind kind{AssetKind::Texture}; };
 struct BrowserFolder { std::string id, parent, name, path; };
 struct BrowserItem {

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Scene.h"
+#include "assets/AssetTransaction.h"
+#include "assets/ContentStorage.h"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -23,7 +25,16 @@ struct SceneSnapshot {
     SceneProperties properties;
     std::optional<Camera> previewCamera;
     uint64_t fingerprint{};
+    // Unsaved, immutable legacy conversion payloads; never an inline scene format.
+    std::vector<std::shared_ptr<const NavigationAgentProfile>> stagedNavigationProfiles;
+    std::vector<std::pair<EntityId,std::string>> stagedNavigationControllers;
 };
+struct ScenePersistencePlan {
+    std::vector<AssetFileChange> files;
+    std::vector<StoredAssetPath> registrations;
+};
+ScenePersistencePlan prepareScenePersistence(const std::filesystem::path& projectRoot,const std::string& id,
+    const SceneSnapshot& snapshot,const std::filesystem::path& sceneFile={});
 std::filesystem::path sceneAssetPath(const std::filesystem::path& projectRoot, const std::string& id);
 SceneSnapshot readSceneSnapshot(const std::filesystem::path& projectRoot, const std::string& id);
 std::string serializeSceneSnapshot(const SceneSnapshot& snapshot);
@@ -122,6 +133,11 @@ public:
     std::vector<std::string> historicalModelReferences() const;
     std::vector<std::string> historicalParticleReferences() const;
     std::vector<std::string> historicalMaterialReferences() const;
+    std::vector<std::string> historicalNavigationAgentProfileReferences() const;
+    std::shared_ptr<const NavigationAgentProfile> navigationAgentProfile(const std::string& id) const;
+    std::vector<std::shared_ptr<const NavigationAgentProfile>> stagedNavigationAgentProfiles() const;
+    // Conversion provenance only; runtime resolution must use navigationAgentProfile.
+    std::shared_ptr<const NavigationAgentProfile> legacyNavigationAgentProfileSeedForController(EntityId) const;
     // Global resource deletion is outside scene undo. Install its complete
     // validated candidate and remove history that could resurrect deleted IDs.
     bool applyExternalAssetChanges(const std::vector<EntityRecord>& records, const SceneProperties& properties,
@@ -154,6 +170,7 @@ public:
     EntityId createPlayer(const std::string& name = "Player");
     EntityId createEnemy(const std::string& name = "Enemy");
     EntityId createCollider(const std::string& name = "Collider", EntityId parent = NoEntity);
+    EntityId createNavigationVolume(const std::string& name="Navigation Volume",EntityId parent=NoEntity);
     EntityId createCamera(const std::string& name = "Camera");
     EntityId createCamera(const Camera& view,float aspect,const std::string& name = "Camera");
     EntityId createBox(const std::string& name = "Box");
@@ -187,6 +204,8 @@ private:
     uint64_t transactionSerial_{};
     std::optional<Transaction> transaction_;
     bool transient_{};
+    std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> stagedNavigationProfiles_;
+    std::unordered_map<EntityId,std::string> stagedNavigationControllers_;
     EntityId create(EntityRecord record, const std::string& label);
     bool applyHistory(const SceneCommand& command, bool forward);
     bool duplicateInTransaction(const std::vector<EntityId>& roots,std::vector<EntityId>* copiedRoots=nullptr);

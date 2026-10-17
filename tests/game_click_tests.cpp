@@ -1,3 +1,4 @@
+#include "navigation_fixture.h"
 #include "runtime/PlaySession.h"
 #include "runtime/GameInput.h"
 #include "scene/SceneExtraction.h"
@@ -9,6 +10,7 @@
 
 namespace {
 using namespace crimson;
+using crimson::testing::startWithNavigation;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 constexpr EntityId Player=2,Follow=3;
 constexpr float Ground=-.1180819273f;
@@ -49,7 +51,7 @@ void displayedImageDestination() {
     for(const auto& layout:layouts) {
         const auto root=std::filesystem::temp_directory_path()/"crimson-game-click-unused";
         SceneDocument authored(root);fixture(authored);PlaySession play(root);
-        require(play.start(authored),"Could not start click fixture.");
+        require(startWithNavigation(play,authored),"Could not start click fixture.");
         GameInput input;input.setViewport(layout.image,true,false);input.acquire();
         auto displayed=*resolveGameCamera(play.presentationScene());
         input.setProjection(displayed,layout.width,layout.height);
