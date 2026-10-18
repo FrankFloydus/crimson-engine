@@ -37,7 +37,7 @@ GameplayEffectQuery fixtureEffects() {
     };
 }
 EntityRecord actor(EntityId id,Vec3 position) {
-    EntityRecord result;result.id=id;result.name="Actor "+std::to_string(id);result.actor.emplace();result.controller.emplace();result.motor.emplace();result.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{SpeedThree}}};result.navigation.emplace();result.local=math::translation(position);return result;
+    EntityRecord result;result.id=id;result.name="Actor "+std::to_string(id);result.actor.emplace();result.controller.emplace();result.movement.emplace();result.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{SpeedThree}}};result.navigation.emplace();result.local=math::translation(position);return result;
 }
 EntityRecord enemy(EntityId id,Vec3 position,EnemyBehaviour behaviour=EnemyBehaviour::Idle) {
     auto result=actor(id,position);result.enemy.emplace();result.enemy->behaviour=behaviour;return result;
@@ -158,7 +158,7 @@ void rearPeersDoNotFreezeRampRouteLeader() {
     std::vector<EntityRecord> records{floor(),volume(),ramp,enemy(2,{-2.806616f,.05f,2.762059f},EnemyBehaviour::ChasePlayer),
         enemy(4,{-2.806616f,.05f,3.699481f},EnemyBehaviour::ChasePlayer),enemy(5,{-2.806616f,.05f,4.558270f},EnemyBehaviour::ChasePlayer),
         enemy(6,{-2.806616f,.05f,5.420506f},EnemyBehaviour::ChasePlayer),playerActor(10,{6,.05f,-1})};
-    for(auto& record:records)if(record.motor)record.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{SpeedTwo}}};
+    for(auto& record:records)if(record.movement)record.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{SpeedTwo}}};
     author(document,std::move(records),10);PlaySession play(scratch.root);start(play,document);bool passedCorner=false;
     require(play.attributeValue(4,stats::MovementSpeed)->current==2,"Saved ramp fixture did not apply its authored starting speed effect.");
     for(unsigned index=0;index<1200;++index){tick(play);const auto leader=position(play,4);passedCorner|=leader[0]>4.6f&&leader[2]<2.25f;}
@@ -186,10 +186,10 @@ void randomMoveKeepsOriginAndWaitsAfterArrival() {
     require(newDestination,"RandomMove did not resume around an authored teleport.");
     editEnemy(play,2,[](auto& record){record.enemy->radius=0;});const auto zeroRadius=position(play,2);tick(play,120);
     require(distanceXZ(position(play,2),zeroRadius)<.02f&&!play.actorDestination(2),"Zero-radius RandomMove acquired a route or moved.");
-    editEnemy(play,2,[](auto& record){record.motor->enabled=false;record.enemy->radius=2;});tick(play);
+    editEnemy(play,2,[](auto& record){record.movement->enabled=false;record.enemy->radius=2;});tick(play);
     teleport(play,2,{-7,.05f,0});tick(play,10);
     require(distanceXZ(position(play,2),{-7,0,0})<.01f,"Disabled Motor did not retain the authored teleport.");
-    editEnemy(play,2,[](auto& record){record.motor->enabled=true;});bool resumed=false;
+    editEnemy(play,2,[](auto& record){record.movement->enabled=true;});bool resumed=false;
     for(unsigned index=0;index<120;++index){tick(play);if(const auto target=play.actorDestination(2)){require(distanceXZ(*target,{-7,0,0})<=2.15f,"Teleport while Motor was disabled retained RandomMove's old anchor.");resumed=true;break;}}
     require(resumed,"RandomMove failed to resume after a teleport while Motor was disabled.");
 }
@@ -237,9 +237,9 @@ void liveBehaviourCapabilitiesAndPlayerOwnership() {
     require(distanceXZ(position(play,10),{4,0,0})<.01f&&play.actorRouteQueryCount(10)==0,"The designated Player ran its Enemy behaviour.");
     editEnemy(play,2,[](auto& record){record.enemy->behaviour=EnemyBehaviour::ChasePlayer;});tick(play,30);require(position(play,2)[0]>-3,"Live Idle-to-Chase change did not activate enemy behaviour.");
     editEnemy(play,2,[](auto& record){record.enemy->behaviour=EnemyBehaviour::Idle;});const auto idle=position(play,2);tick(play,30);require(distanceXZ(position(play,2),idle)<.02f&&!play.actorDestination(2),"Live Chase-to-Idle retained autonomous movement.");
-    editEnemy(play,2,[](auto& record){record.enemy->behaviour=EnemyBehaviour::ChasePlayer;record.motor->enabled=false;});const auto disabled=position(play,2);tick(play,30);
+    editEnemy(play,2,[](auto& record){record.enemy->behaviour=EnemyBehaviour::ChasePlayer;record.movement->enabled=false;});const auto disabled=position(play,2);tick(play,30);
     require(distanceXZ(position(play,2),disabled)<.01f&&!play.actorDestination(2),"Enemy moved without an enabled Motor.");
-    editEnemy(play,2,[](auto& record){record.motor->enabled=true;record.navigation->enabled=false;});tick(play,30);require(distanceXZ(position(play,2),disabled)<.01f&&!play.actorDestination(2),"Enemy bypassed a disabled Navigation Agent.");
+    editEnemy(play,2,[](auto& record){record.movement->enabled=true;record.navigation->enabled=false;});tick(play,30);require(distanceXZ(position(play,2),disabled)<.01f&&!play.actorDestination(2),"Enemy bypassed a disabled Navigation Agent.");
     editEnemy(play,2,[](auto& record){record.navigation->enabled=true;});tick(play,30);require(position(play,2)[0]>disabled[0]+.8f,"Re-enabled enemy capabilities did not restore behaviour.");
     const auto builds=play.navigationBuildCount();require(play.document().edit("Spawn another enemy",[](auto& records,auto&){records.push_back(enemy(11,{-4,.05f,4},EnemyBehaviour::ChasePlayer));}),play.document().status());tick(play,30);
     require(position(play,11)[0]>-3.4f&&play.navigationBuildCount()==builds,"Spawned enemy did not reuse the existing supported navigation world.");

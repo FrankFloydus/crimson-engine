@@ -250,7 +250,7 @@ void PlaySession::reconcileNavigation() {
 void PlaySession::reconcileAgents() {
     const auto& scene=document_->scene();std::unordered_set<EntityId> kept;
     for(const auto& record:scene.records()) {
-        if(!record.controller||!record.motor||!record.motor->enabled||!physics_->characterPosition(record.id))continue;
+        if(!record.controller||!record.movement||!record.movement->enabled||!physics_->characterPosition(record.id))continue;
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         kept.insert(record.id);auto& agent=agents_[record.id];
         agent.profileAccepted=false;
@@ -345,7 +345,7 @@ void PlaySession::reconcileFirstPerson(EntityId actor,bool reset) {
     if(const auto inverse=math::inverse(rotation);inverse && basis)view.residualBasis=*inverse * *basis;
     firstPerson_=view;
 }
-void PlaySession::updateFirstPerson(GameInput& input,const ScenePlayerInput& settings,double seconds) {
+void PlaySession::updateFirstPerson(GameInput& input,const ScenePlayerInput& settings,const MovementComponent& movement,double seconds) {
     const auto delta=input.consumeLookDelta();
     if(!firstPerson_)return;
     constexpr double radians=std::numbers::pi/180;
@@ -357,9 +357,9 @@ void PlaySession::updateFirstPerson(GameInput& input,const ScenePlayerInput& set
     const auto velocity=physics_->characterVelocity(view.actor).value_or(Vec3{});
     const auto speed=attributes_.value(view.actor,stats::MovementSpeed);
     const double fraction=speed && speed->current>0?std::clamp(math::dot(velocity,right)/speed->current,-1.0,1.0):0;
-    const double target=-settings.strafeTilt*radians*fraction;
+    const double target=-movement.strafeTilt*radians*fraction;
     const double dt=std::isfinite(seconds)?std::clamp(seconds,0.0,.25):0;
-    view.tilt+=(target-view.tilt)*(settings.tiltResponse>0?-std::expm1(-settings.tiltResponse*dt):1);
+    view.tilt+=(target-view.tilt)*(movement.tiltResponse>0?-std::expm1(-movement.tiltResponse*dt):1);
     if(std::abs(view.tilt-target)<1e-6)view.tilt=target;
 }
 void PlaySession::advanceFirstPersonStep(double seconds,float height,float smoothingTime) {
@@ -427,7 +427,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         const bool editedPose=lastControlledPose_ && controlledPose && *lastControlledPose_!=*controlledPose;
         const auto controlledRecord=document_->scene().find(controlled);
         const bool acceptsInput=controlledRecord&&controlledRecord->playerInput&&controlledRecord->playerInput->enabled&&
-            controlledRecord->controller&&controlledRecord->motor&&controlledRecord->motor->enabled;
+            controlledRecord->controller&&controlledRecord->movement&&controlledRecord->movement->enabled;
         if(controlled_!=controlled || editedPose)clearPlayerRoute();
         // Authoring transforms releases native input before physics reconciles
         // the edit, so held keys cannot fight an Inspector or gizmo gesture.
@@ -447,7 +447,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         }
         if(acceptsInput)reconcileFirstPerson(controlled,replacedPlayer || editedPose);
         else firstPerson_.reset();
-        if(firstPerson_ && (physics_->characterLocked(controlled) || controlledRecord->playerInput->stairSmoothingTime<=0))
+        if(firstPerson_ && (physics_->characterLocked(controlled) || controlledRecord->movement->stairSmoothingTime<=0))
             clearFirstPersonStep();
         if(!active) {
             clearFirstPersonStep();
@@ -456,7 +456,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(input && newInputOwner) {
             movement=input->movement();
             pendingJump_=input->consumeJump() || pendingJump_;
-            updateFirstPerson(*input,*controlledRecord->playerInput,0);
+            updateFirstPerson(*input,*controlledRecord->playerInput,*controlledRecord->movement,0);
         }
         if(suspended_){seconds=0;suspended_=false;remainder_=0;resetInterpolation();}
         if(!std::isfinite(seconds) || seconds<0)seconds=0;
@@ -470,7 +470,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             advanceEnemies(FixedStep);
             for(auto& [id,agent]:agents_) {
                 const auto entity=document_->scene().find(id);const auto world=document_->scene().worldTransform(id);
-                if(!entity||!entity->motor||!entity->motor->enabled||!world)continue;
+                if(!entity||!entity->movement||!entity->movement->enabled||!world)continue;
                 if(effects_.readiness(id)!=EffectReadiness::Ready) {
                     CharacterMotor(*physics_,id).move({});
                     if(id==controlled)pendingJump_=false;
@@ -487,7 +487,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 Vec3 velocity{};CharacterMotor motor(*physics_,id);
                 if(input && id==controlled && acceptsInput &&
                    (newInputOwner || agent.source==CommandSource::DirectionalInput)) {
-                    const auto& settings=*entity->playerInput;
+                    const auto& settings=*entity->movement;
                     clearRoute(agent);agent.source=CommandSource::DirectionalInput;
                     const Vec2 axes=newInputOwner?movement:Vec2{};
                     if(firstPerson_) {
@@ -521,7 +521,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 motor.move(velocity);
             }
             const auto poses=physics_->step(document_->scene(),NoEntity,{},static_cast<float>(FixedStep),document_->transformEditRoots(),meshColliders_);
-            if(acceptsInput)advanceFirstPersonStep(FixedStep,physics_->characterStepHeight(controlled),controlledRecord->playerInput->stairSmoothingTime);
+            if(acceptsInput)advanceFirstPersonStep(FixedStep,physics_->characterStepHeight(controlled),controlledRecord->movement->stairSmoothingTime);
             if(!document_->applyRuntimePoses(poses))throw std::runtime_error(document_->status());
             const auto events=physics_->triggerEvents();
             triggerEvents_.insert(triggerEvents_.end(),events.begin(),events.end());
@@ -534,7 +534,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(seconds>bounded)droppedTicks_+=static_cast<std::uint64_t>(std::min((seconds-bounded)/FixedStep,1e12));
         remainder_=std::max(0.0,remainder_-static_cast<double>(available)*FixedStep);
         if(remainder_>=FixedStep)remainder_=std::fmod(remainder_,FixedStep);
-        if(input && acceptsInput)updateFirstPerson(*input,*controlledRecord->playerInput,seconds);
+        if(input && acceptsInput)updateFirstPerson(*input,*controlledRecord->playerInput,*controlledRecord->movement,seconds);
         refreshPresentation();reconcileParticles(0);
         status_=physics_->status();
         if(!attributes_.status().empty())status_+=attributes_.status();

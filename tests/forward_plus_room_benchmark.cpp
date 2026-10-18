@@ -53,16 +53,11 @@ struct Sample {
     std::uint32_t submittedFrame{},gpuFrame{};
 };
 struct Options {
-    bool legacy{},savedWorld{},cold{},capture{},ambient{},presentedPlayer{},rigOff{},keyLight{};
+    bool legacy{},savedWorld{},cold{},capture{},presentedPlayer{},keyLight{};
     unsigned warmup{30},samples{30};fs::path output;
 };
-template<class Record> void disablePlayerLighting(Record& record) {
-    if(record.lightRig)record.lightRig->enabled=false;
-    if(record.darknessReveal)record.darknessReveal->enabled=false;
-}
 Json playerLightingMetadata(const ExtractedScene& world) {
-    return {{"point_lights",world.points.size()},{"actor_rigs",world.actorLighting.size()},
-        {"reveal_sources",world.reveals.size()}};
+    return {{"point_lights",world.points.size()}};
 }
 Json summarize(const std::vector<Sample>& values) {
     const auto mean=[&](auto member){double sum{};for(const auto& value:values)sum+=static_cast<double>(value.*member);return sum/values.size();};
@@ -83,7 +78,7 @@ Json summarize(const std::vector<Sample>& values) {
         {"prepared_casters",mean(&Sample::preparedCasters)},{"scene_models",mean(&Sample::sceneModels)},{"game_models",mean(&Sample::gameModels)}};
 }
 Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeProject,const std::string& nativeScene,const ShaderCompileConfig& config,const Options& parameters) {
-    const auto [legacy,savedWorld,cold,captureImages,ambientEnabled,presentedPlayer,rigOff,keyLight,warmupCount,sampleCount,output]=parameters;
+    const auto [legacy,savedWorld,cold,captureImages,presentedPlayer,keyLight,warmupCount,sampleCount,output]=parameters;
     std::ofstream raw;if(!output.empty()){fs::create_directories(output);raw.open(output/"room-frames.csv");require(bool(raw),"Cannot open room benchmark raw output.");
         raw<<"phase,index,submitted_frame,gpu_frame,update_ms,shadow_preparation_ms,receiver_preparation_ms,render_submission_ms,wall_frame_ms,gpu_ms,backend_ms,draws,shadow_draws,faces,cascades,point_hits,directional_hits,scene_models,game_models,point_deferred,point_critical_deferred,directional_world_projections,character_projections,focus_casters,gpu_depth_views_ms,gpu_ambient_views_ms,environment_bytes\n";}
     std::cout<<"reading native source"<<std::endl;
@@ -98,15 +93,14 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     std::cout<<"native source staged"<<std::endl;
     SceneDocument document(project);Json session;{std::ifstream input(project/"assets/editor-session.json");input>>session;}
     const auto sceneId=session.at("scene").get<std::string>();require(document.load(sceneId),document.status());
-    if(rigOff||keyLight)require(document.edit("Diagnostic lighting contribution",[&](auto& records,auto&) {
-        if(rigOff)for(auto& record:records)disablePlayerLighting(record);
+    if(keyLight)require(document.edit("Diagnostic lighting contribution",[&](auto& records,auto&) {
         if(keyLight) {
             EntityRecord key;key.id=UINT64_MAX;
             while(std::any_of(records.begin(),records.end(),[&](const auto& record){return record.id==key.id;}))--key.id;
             key.name="Diagnostic World Key";key.order=static_cast<std::uint32_t>(records.size());
             key.local=math::inverse(math::lookAt({},{-.4f,-1,.25f},{0,1,0})).value();
             key.directional=SceneDirectionalLight{};key.directional->intensity=2;
-            key.directional->castShadows=true;key.directional->roles.ambientReveal=false;
+            key.directional->castShadows=true;
             records.push_back(std::move(key));
         }
     }),document.status());
@@ -172,8 +166,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
             scene.applyRuntimePoses(std::span(&pose,1));extracted=extractScene(scene);
             sample.update=milliseconds(begin);
         } else if(moving)for(auto& model:extracted.models)if(std::find(movingEntities.begin(),movingEntities.end(),model.id)!=movingEntities.end())model.world=math::translation(movement)*model.world;
-        if(ambientEnabled)extracted.environment.environment.ambientVisibility.enabled=true;
-        if(!shadows){for(auto& light:extracted.points)light.castShadows=false;for(auto& light:extracted.directional)light.castShadows=false;for(auto& shadow:extracted.actorShadows)shadow.enabled=false;}
+        if(!shadows){for(auto& light:extracted.points)light.castShadows=false;for(auto& light:extracted.directional)light.castShadows=false;}
         prepared.beginFrame();prepared.setMaterialContext({double(number)/60,double(number)/60});
         auto followCamera=gameCamera;if(moving){followCamera.position=followCamera.position+movement;followCamera.target=followCamera.target+movement;}
         EditorRenderFrameInput input;
@@ -223,7 +216,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
             if(view.view>=PointShadowView&&view.view<DirectionalShadowView)sample.gpuPoints+=elapsed;
             else if(view.view>=DirectionalShadowView&&view.view<SceneDepthPrepassView)sample.gpuDirectionals+=elapsed;
             else if(view.view==SceneDepthPrepassView||view.view==GameDepthPrepassView)sample.gpuDepth+=elapsed;
-            else if(view.view==SceneAmbientView||view.view==GameAmbientView)sample.gpuAmbient+=elapsed;
+            else if(view.view==SceneLightingEffectsView||view.view==GameLightingEffectsView)sample.gpuAmbient+=elapsed;
             else if(view.view==SceneView)sample.gpuScene+=elapsed;
             else if(view.view==GameSceneView)sample.gpuGame+=elapsed;
             else sample.gpuPost+=elapsed;
@@ -235,9 +228,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     result["native_meshes"]=source->meshes.size();result["native_points"]=std::count_if(source->lights.begin(),source->lights.end(),[](const auto& light){return light.type==1;});
     result["combined_models"]=combined.models.size();result["combined_points"]=combined.points.size();result["combined_directionals"]=combined.directional.size();
     result["shadow_focus_entities"]=movingEntities;result["point_shadow_face_budget"]=24;
-    result["ambient_visibility_requested"]=ambientEnabled;
-    result["presented_player_workload"]=presentedPlayer;result["rig_disabled_override"]=rigOff;result["diagnostic_world_key"]=keyLight;
-    result["ambient_visibility_saved"]=combined.environment.environment.ambientVisibility.enabled;
+    result["presented_player_workload"]=presentedPlayer;result["diagnostic_world_key"]=keyLight;
     result["player_lighting"]=playerLightingMetadata(combined);
     for(unsigned phase=0;phase<4;++phase) {
         const auto& world=phase?combined:baseline;const bool shadows=phase!=1,moving=phase==3;
@@ -307,11 +298,9 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
 int main(int argc,char** argv) {
     try {
         if(argc>1&&(std::string(argv[1])=="--gi-project"||std::string(argv[1])=="--gi-point-project"))return screenLightingEditorDiagnostic(argc,argv);
-        require(argc>=7,"Pass engine project, native project, native scene ID, shaderc, shader sources and shader include directory (optional --legacy, --saved, --cold, --capture, --ambient, --presented-player, --rig-off, --key-light, --warmup N, --samples N, --output directory).");
+        require(argc>=7,"Pass engine project, native project, native scene ID, shaderc, shader sources and shader include directory (optional --legacy, --saved, --cold, --capture, --presented-player, --key-light, --warmup N, --samples N, --output directory).");
         Options parameters;for(int i=7;i<argc;++i){const std::string option=argv[i];if(option=="--legacy")parameters.legacy=true;else if(option=="--saved")parameters.savedWorld=true;else if(option=="--cold")parameters.cold=true;else if(option=="--capture")parameters.capture=true;
-            else if(option=="--ambient")parameters.ambient=true;
             else if(option=="--presented-player")parameters.presentedPlayer=true;
-            else if(option=="--rig-off")parameters.rigOff=true;
             else if(option=="--key-light")parameters.keyLight=true;
             else if(option=="--output"){require(i+1<argc,"Missing output directory.");parameters.output=argv[++i];}
             else if(option=="--samples"||option=="--warmup"){require(i+1<argc,"Missing frame count.");const auto count=std::stoul(argv[++i]);require(count>0&&count<=1000000,"Frame count is out of range.");if(option=="--samples")parameters.samples=static_cast<unsigned>(count);else parameters.warmup=static_cast<unsigned>(count);}

@@ -102,7 +102,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
     auto& selection=assets.browserSelection();
     if (!folder_.empty() && !catalog.isFolder(folder_)) folder_=BrowserCatalog::ContentFolder;
     const bool writableFolder=catalog.writableFolder(folder_);
-    const auto mutableSelection=[&] { return !selection.ids().empty()&&std::all_of(selection.ids().begin(),selection.ids().end(),[&](const auto& id){return catalog.mutableItem(id);}); };
+    const auto deletableSelection=[&] { return !selection.ids().empty()&&std::all_of(selection.ids().begin(),selection.ids().end(),[&](const auto& id){return catalog.deletableItem(id);}); };
     std::optional<std::string> navigate;
     struct Move { std::vector<std::string> ids; std::string destination; };
     std::optional<Move> move;
@@ -212,7 +212,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         if (keys && renameId_.empty()) {
             if (ImGui::IsKeyPressed(ImGuiKey_Backspace,false) && !folder_.empty()) navigate=catalog.parent(folder_);
             if (ImGui::IsKeyPressed(ImGuiKey_F2,false) && selection.ids().size()==1 && catalog.mutableItem(selection.primary())) beginRename(selection.primary(),catalog.name(selection.primary()));
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete,false) && mutableSelection()) actions.deleteAssetIds=selection.ids();
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete,false) && deletableSelection()) actions.deleteAssetIds=selection.ids();
             if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A,false)) {
                 selection.clear();
                 for (const auto& item:items)if(item.id!=ParentCard && (!queryActive || !item.folder))selection.click(item.id,visible,true,false);
@@ -344,7 +344,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                         if(ImGui::MenuItem("Copy Name",nullptr,false,!location.name.empty()))ImGui::SetClipboardText(location.name.c_str());
                     }
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Delete selected...","Delete",false,mutableSelection())) actions.deleteAssetIds=selection.ids();
+                    if (ImGui::MenuItem("Delete selected...","Delete",false,deletableSelection())) actions.deleteAssetIds=selection.ids();
                     if (ImGui::MenuItem("Rename","F2",false,selection.ids().size()==1&&catalog.mutableItem(item.id))) beginRename(item.id,item.name);
                     if (ImGui::MenuItem("New Folder",nullptr,false,writableFolder)) createFolder();
                     ImGui::EndPopup();

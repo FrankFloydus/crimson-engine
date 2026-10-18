@@ -97,8 +97,6 @@ void exercise(SDL_Window* window) {
         SceneDocument document(std::filesystem::temp_directory_path()/"crimson-parenting-gpu-in-memory");
         const auto player=document.createPlayer(),box=document.createBox(),light=document.createPointLight();
         check(player&&box&&light,document.status());
-        check(document.scene().find(player)->lightRig&&!document.scene().find(player)->lightRig->enabled,
-            "The regression must use the newly-created Player's default disabled light rig.");
         auto playerRecord=*document.scene().find(player);playerRecord.local=playerLocal;
         check(document.updateEntity(player,playerRecord),document.status());
         auto boxRecord=*document.scene().find(box);boxRecord.local=boxLocal;
@@ -125,7 +123,6 @@ void exercise(SDL_Window* window) {
             instance.castShadows=source.castShadows;instance.receiveShadows=source.receiveShadows;
             RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances={&instance,1};
             scene.pointLights=extracted.points;scene.directionalLights=extracted.directional;
-            scene.actorLighting=extracted.actorLighting;scene.actorShadows=extracted.actorShadows;
             const auto draw=[&]{renderer.render(scene);renderer.renderGame(scene);};
             for(unsigned i=0;i<4;++i){draw();tick();}
             draw();return std::array{read(renderer.viewportTexture()),read(renderer.gameViewportTexture())};

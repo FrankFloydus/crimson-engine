@@ -61,7 +61,7 @@ void PlaySession::advanceEnemies(double seconds) {
         // Explicit commands own the actor until released. AI shares the motor
         // and route pipeline, but must not overwrite a script's live command.
         if(agent.source!=CommandSource::None&&agent.source!=CommandSource::Enemy){resetProgress();continue;}
-        if(!record.motor||!record.motor->enabled||!record.navigation||!record.navigation->enabled||
+        if(!record.movement||!record.movement->enabled||!record.navigation||!record.navigation->enabled||
             !agent.profileAccepted||physics_->characterLocked(record.id)) {stop();continue;}
         if(seconds<=0)continue;
         const auto request=[&](const Vec3& target) {

@@ -198,7 +198,7 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v23")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v24")!=std::string::npos,
             "Generated material identity does not invalidate pre-sky-fog shader bundles.");
         const auto has=[&](const char* name) {
             return std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
@@ -503,29 +503,25 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
             if(variant.pass!=MaterialGraphPass::Model&&variant.pass!=MaterialGraphPass::Particle)continue;
             const auto binding=[&](const char* name,ShaderUniformKind kind,unsigned count) {
                 const auto found=std::find_if(variant.manifest.begin(),variant.manifest.end(),[&](const auto& item){return item.name==name;});
-                check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Separated Character lighting uniform manifest changed shape.");
+                check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Scene lighting uniform manifest changed shape.");
             };
-            for(const char* name:{"u_characterDirection","u_characterColor","u_characterResponse"})binding(name,ShaderUniformKind::Vec4,2);
             for(const char* name:{"u_surfaceCategory","u_clusterRecordLayoutV6","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
-            binding("u_characterShadowMatrix",ShaderUniformKind::Mat4,8);
-            binding("u_revealAtlas",ShaderUniformKind::Vec4,1);
-            for(const char* name:{"u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters"})binding(name,ShaderUniformKind::Vec4,8);
             const auto fragment=compileShader(config,materialGraphShaderRecipe(config,edited,variant));
             const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
             if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
                 throw std::runtime_error("Material map edit revision "+std::to_string(revision)+": "+diagnostic);
             auto oldManifest=variant.manifest;
-            std::erase_if(oldManifest,[](const auto& item){return item.name=="u_characterColor";});
-            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_characterColor")!=std::string::npos,
-                "A material map edit accepted the previous engine's missing Character color uniform.");
+            std::erase_if(oldManifest,[](const auto& item){return item.name=="u_directionColor";});
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_directionColor")!=std::string::npos,
+                "A material map edit accepted the missing directional color uniform.");
             oldManifest=variant.manifest;
             std::find_if(oldManifest.begin(),oldManifest.end(),[](const auto& item){return item.name=="u_clusterRecordLayoutV6";})->name="u_clusterRecordLayoutV5";
             check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_clusterRecordLayoutV6")!=std::string::npos,
                 "A material map edit accepted a light record ABI that the previous engine cannot bind.");
             auto wrongArray=variant.manifest;
-            std::find_if(wrongArray.begin(),wrongArray.end(),[](const auto& item){return item.name=="u_characterColor";})->count=1;
+            std::find_if(wrongArray.begin(),wrongArray.end(),[](const auto& item){return item.name=="u_directionColor";})->count=1;
             check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrongArray,diagnostic),
-                "A material map edit accepted an undersized Character uniform array.");
+                "A material map edit accepted an undersized directional uniform array.");
         }
     }
     auto rgbScalar=rgbScalarFixture();

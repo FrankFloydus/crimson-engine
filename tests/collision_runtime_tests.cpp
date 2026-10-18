@@ -19,7 +19,7 @@ struct Project {
 };
 const auto SpeedSixty=canonicalAssetId("test:collision-runtime/speed-sixty");
 EntityRecord floor(){EntityRecord result;result.id=1;result.name="Floor";result.collider=SceneCollider{{30,1,30}};result.local=math::translation({0,-.5f,0});return result;}
-EntityRecord character(EntityId id,Vec3 position){EntityRecord result;result.id=id;result.name="Character";result.actor.emplace();result.controller.emplace();result.controller->collision.layers=PlayerCollisionLayer;result.motor.emplace();result.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{SpeedSixty}}};result.local=math::translation(position);return result;}
+EntityRecord character(EntityId id,Vec3 position){EntityRecord result;result.id=id;result.name="Character";result.actor.emplace();result.controller.emplace();result.controller->collision.layers=PlayerCollisionLayer;result.movement.emplace();result.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{SpeedSixty}}};result.local=math::translation(position);return result;}
 EntityRecord trigger(){EntityRecord result;result.id=3;result.name="Detector";result.collider=SceneCollider{{2,3,2}};result.collider->mode=ColliderMode::Trigger;result.collider->collision={TriggerCollisionLayer,PlayerCollisionLayer};result.local=math::translation({0,1.5f,0});return result;}
 EntityRecord volume(){EntityRecord result;result.id=4;result.name="NavigationVolume";result.navigationVolume.emplace();result.navigationVolume->size={20,8,20};return result;}
 void install(SceneDocument& document,std::vector<EntityRecord> records){require(document.edit("Fixture",[&](auto& destination,auto& properties){destination=std::move(records);properties={};}),document.status());}

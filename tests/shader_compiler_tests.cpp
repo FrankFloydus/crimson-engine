@@ -283,9 +283,7 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
         const auto clusteredSource=read(shadowSource/"clustered_lighting.sh");
         const auto assignmentSource=read(shadowSource/"cs_cluster_lights.sc");
         const auto assignment=compileShader(shadows,"cs_cluster_lights");
-        const auto ambient=compileShader(shadows,"cs_ambient_visibility");
         require(dependency(assignment,"point_light_record.sh"),"Point record layout changes do not invalidate compute shader reload.");
-        require(dependency(ambient,"point_light_record.sh"),"Point record layout changes do not invalidate ambient shader reload.");
         require(preflightComputeShader(assignment.bytes,assignment.bytes,diagnostic),"Current clustered record layout failed its compute contract.");
         const auto priorLayout=[](std::string text) {
             const std::string declaration="uniform vec4 u_clusterRecordLayoutV6;";
@@ -303,16 +301,12 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
         write(shadowSource/"cs_cluster_lights.sc",priorLayout(assignmentSource));
         const auto priorFragment=compileShader(shadows,"fs_model");
         const auto priorAssignment=compileShader(shadows,"cs_cluster_lights");
-        const auto priorAmbient=compileShader(shadows,"cs_ambient_visibility");
         require(!preflightShaderPair(modelVertex.bytes,modelFragment.bytes,modelVertex.bytes,priorFragment.bytes,diagnostic),
             "A previous engine contract accepted a live shader with the new point record layout.");
         require(!preflightComputeShader(assignment.bytes,priorAssignment.bytes,diagnostic),
             "A previous engine compute contract accepted the new point record layout.");
-        require(!preflightComputeShader(ambient.bytes,priorAmbient.bytes,diagnostic),
-            "A previous engine ambient contract accepted the new point record layout.");
         require(!preflightShaderPair(modelVertex.bytes,priorFragment.bytes,modelVertex.bytes,modelFragment.bytes,diagnostic)&&
-            !preflightComputeShader(priorAssignment.bytes,assignment.bytes,diagnostic)&&
-            !preflightComputeShader(priorAmbient.bytes,ambient.bytes,diagnostic),
+            !preflightComputeShader(priorAssignment.bytes,assignment.bytes,diagnostic),
             "A rebuilt engine accepted shaders without its required record layout binding.");
         write(shadowSource/"clustered_lighting.sh",clusteredSource);
         write(shadowSource/"cs_cluster_lights.sc",assignmentSource);

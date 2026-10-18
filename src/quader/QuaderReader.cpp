@@ -9,11 +9,13 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <tuple>
 
 namespace crimson {
 namespace {
@@ -53,8 +55,8 @@ struct Library {
         if(!api||api->abi_version!=QUADER_BRIDGE_ABI_VERSION||api->struct_size<sizeof(QuaderBridgeApi)||
             !api->open_project||!api->release_project||!api->project_view||!api->scene_entry||!api->open_scene||!api->release_scene||
             !api->scene_view||!api->mesh_view||!api->material_identity||!api->material_view||!api->read_texture||!api->blob_view||
-            !api->release_blob||!api->scene_source_fingerprint||!api->material_source_fingerprint||!api->light_view) {
-            FreeLibrary(module);module=nullptr;throw std::runtime_error("Crimson's bundled Quader reader requires its matching ABI 6 header and DLL.");
+            !api->release_blob||!api->scene_source_fingerprint||!api->material_source_fingerprint||!api->light_view||!api->node_view) {
+            FreeLibrary(module);module=nullptr;throw std::runtime_error("Crimson's bundled Quader reader requires its matching ABI 7 header and DLL.");
         }
     }
     ~Library(){if(module)FreeLibrary(module);}
@@ -132,16 +134,16 @@ std::shared_ptr<QuaderSourceScene> readQuaderScene(const std::filesystem::path& 
     QuaderBridgeSceneView view{};result(api->scene_view(source->handle,&view,&error),error);out->id=string(view.id);out->relativePath=string(view.relative_path);
     require(out->id==sceneId,"The selected Quader scene identity changed.");const auto selected=std::find_if(out->project.scenes.begin(),out->project.scenes.end(),[&](const auto& entry){return entry.id==sceneId;});
     require(selected!=out->project.scenes.end()&&selected->path==out->relativePath,"The selected Quader scene path changed.");
-    require(view.mesh_count<=50000&&view.material_count<=50000&&view.light_count<=50000,"Quader scene exceeds bridge object limits.");
+    require(view.mesh_count<=50000&&view.material_count<=50000&&view.light_count<=50000&&view.node_count<=100000,"Quader scene exceeds bridge object limits.");
     QuaderBridgeSourceFingerprint fingerprint{};result(api->scene_source_fingerprint(source->handle,&fingerprint,&error),error);out->fingerprint={fingerprint.byte_count,fingerprint.content_hash};
     for(std::uint32_t i=0;i<view.material_count;++i){QuaderBridgeMaterialIdentity value{};result(api->material_identity(source->handle,i,&value,&error),error);
         require(value.kind==QUADER_BRIDGE_MATERIAL_PROJECT||value.kind==QUADER_BRIDGE_MATERIAL_EMBEDDED,"Unknown Quader material kind.");out->materials.push_back({string(value.id),value.kind==QUADER_BRIDGE_MATERIAL_EMBEDDED});}
-    std::uint64_t totalVertices{},totalIndices{},totalCollision{};std::set<std::uint64_t> entities;
+    std::uint64_t totalVertices{},totalIndices{},totalCollision{};std::set<std::tuple<std::uint64_t,std::uint64_t,std::uint64_t>> entities;
     for(std::uint32_t i=0;i<view.mesh_count;++i){QuaderBridgeMeshView value{};result(api->mesh_view(source->handle,i,&value,&error),error);
         require((!value.vertex_count||value.vertices)&&(!value.index_count||value.indices)&&(!value.surface_count||value.surfaces)&&(!value.collision_point_count||value.collision_points),"Invalid Quader mesh buffers.");
         totalVertices+=value.vertex_count;totalIndices+=value.index_count;totalCollision+=value.collision_point_count;
         require(totalVertices<=16000000&&totalIndices<=48000000&&totalCollision<=48000000,"Quader scene exceeds bridge geometry limits.");
-        require(entities.insert(value.display_entity).second,"Quader scene contains duplicate mesh occurrence identities.");
+        require(entities.emplace(value.display_entity,value.geometry_entity,value.definition_entity).second,"Quader scene contains duplicate mesh occurrence identities.");
         QuaderSourceMesh mesh;mesh.name=string(value.name);mesh.displayEntity=value.display_entity;mesh.geometryEntity=value.geometry_entity;mesh.definitionEntity=value.definition_entity;
         mesh.transform=matrix(value.transform);mesh.visible=value.visible!=0;require(value.collision_status<=2,"Unknown Quader collision status.");mesh.collision=static_cast<QuaderCollision>(value.collision_status);
         require(value.collision_point_count%3==0&&(mesh.collision==QuaderCollision::StaticTriangles||value.collision_point_count==0),"Invalid Quader collision triangles.");
@@ -155,6 +157,51 @@ std::shared_ptr<QuaderSourceScene> readQuaderScene(const std::filesystem::path& 
         QuaderSourceLight light;light.name=string(value.name);light.entity=value.entity;light.type=value.type;light.transform=matrix(value.transform);light.visible=value.visible!=0;light.castShadows=value.casts_shadows!=0;
         light.color=vector(value.color);light.energy=value.preview_energy;light.range=value.range;light.attenuation=value.distance_attenuation;
         require(std::isfinite(light.energy)&&light.energy>=0&&std::isfinite(light.range)&&std::isfinite(light.attenuation),"Invalid Quader lighting values.");out->lights.push_back(std::move(light));}
+    using NodeId=std::pair<std::uint64_t,std::uint64_t>;
+    struct Node {NodeId id,parent;std::string name;Mat4 transform;bool visible{};std::uint32_t order{};};
+    std::vector<Node> nodes;nodes.reserve(view.node_count);
+    std::map<NodeId,std::string> keys;
+    for(const auto& mesh:out->meshes) {
+        const NodeId id=mesh.definitionEntity?NodeId{mesh.geometryEntity,mesh.displayEntity}:NodeId{mesh.displayEntity,0};
+        require(keys.emplace(id,"mesh:"+std::to_string(mesh.displayEntity)+":"+std::to_string(mesh.geometryEntity)+":"+std::to_string(mesh.definitionEntity)).second,
+            "Quader mesh hierarchy contains duplicate occurrence identities.");
+    }
+    for(const auto& light:out->lights)require(keys.emplace(NodeId{light.entity,0},"light:"+std::to_string(light.entity)).second,
+        "Quader hierarchy contains duplicate mesh/light identities.");
+    std::set<NodeId> nodeIds;
+    for(std::uint32_t index=0;index<view.node_count;++index) {
+        QuaderBridgeNodeView value{};result(api->node_view(source->handle,index,&value,&error),error);
+        Node node{{value.entity,value.occurrence_entity},{value.parent_entity,value.parent_occurrence_entity},string(value.name),
+            matrix(value.transform),value.visible!=0,value.order};
+        require(node.id.first!=0&&nodeIds.insert(node.id).second,"Quader hierarchy contains an invalid or duplicate entity.");
+        if(!keys.contains(node.id))keys.emplace(node.id,"group:"+std::to_string(node.id.first)+":"+std::to_string(node.id.second));
+        nodes.push_back(std::move(node));
+    }
+    require(nodeIds.size()==keys.size(),"Quader hierarchy omitted an exported mesh or light.");
+    const auto parentKey=[&](const Node& node) {
+        if(node.parent==NodeId{})return std::string{};
+        const auto found=keys.find(node.parent);require(found!=keys.end()&&node.parent!=node.id,"Quader hierarchy contains an invalid parent.");return found->second;
+    };
+    std::map<NodeId,const Node*> byId;for(const auto& node:nodes)byId.emplace(node.id,&node);
+    std::set<NodeId> visited;
+    for(const auto& node:nodes) {
+        std::set<NodeId> chain;const Node* current=&node;
+        while(current&&!visited.contains(current->id)) {
+            require(chain.insert(current->id).second,"Quader hierarchy contains a parenting cycle.");
+            if(current->parent==NodeId{})break;
+            const auto parent=byId.find(current->parent);require(parent!=byId.end(),"Quader hierarchy contains a missing parent.");current=parent->second;
+        }
+        visited.insert(chain.begin(),chain.end());
+    }
+    for(auto& mesh:out->meshes) {
+        const auto& node=*byId.at(mesh.definitionEntity?NodeId{mesh.geometryEntity,mesh.displayEntity}:NodeId{mesh.displayEntity,0});
+        mesh.name=node.name;mesh.parentKey=parentKey(node);mesh.order=node.order;mesh.visible=node.visible;
+    }
+    for(auto& light:out->lights) {
+        const auto& node=*byId.at({light.entity,0});light.name=node.name;light.parentKey=parentKey(node);light.order=node.order;light.visible=node.visible;
+    }
+    for(const auto& node:nodes)if(keys.at(node.id).starts_with("group:"))
+        out->groups.push_back({keys.at(node.id),parentKey(node),node.name,node.transform,node.visible,node.order});
     const auto identities=out->materials;out->readMaterial=[source,identities](std::uint32_t index){require(index<identities.size(),"Invalid Quader material index.");return material(source,index,identities[index]);};return out;
 }
 QuaderCompletedRecord parseQuaderCompletedRecord(const std::string& text,const std::string& projectId,const std::string& documentId) {

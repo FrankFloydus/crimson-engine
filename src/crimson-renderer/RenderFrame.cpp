@@ -37,9 +37,6 @@ RenderScene preparedRenderScene(const PreparedRenderFrame& frame,const PreparedR
     scene.shadowFocusEntities=world.shadowFocusEntities;scene.shadowFocusBounds=world.shadowFocusBounds;
     scene.shadowPriorityOrigin=world.shadowPriorityOrigin;
     scene.shadowReceiverBounds=world.shadowReceiverBounds;
-    scene.reveals=world.reveals;
-    scene.actorLighting=world.actorLighting;
-    scene.actorShadows=world.actorShadows;
     scene.collisionOverlays=view.collisionOverlays;
     scene.giWorldId=view.giWorldId;scene.giCameraId=view.giCameraId;scene.giEnvironmentId=view.giEnvironmentId;
     return scene;

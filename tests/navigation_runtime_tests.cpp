@@ -18,7 +18,7 @@ struct Scratch {
 };
 EntityRecord ground(){EntityRecord result;result.id=1;result.name="Ground";result.local=math::translation({0,-.5f,0});result.collider=SceneCollider{{20,1,20}};return result;}
 EntityRecord actor(EntityId id=2,AssetRef<NavigationAgentProfile> selected=AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}) {
-    EntityRecord result;result.id=id;result.name="Enemy";result.actor.emplace();result.controller.emplace();result.controller->profile=selected;result.motor.emplace();result.navigation.emplace();result.local=math::translation({-3,.05f,0});return result;
+    EntityRecord result;result.id=id;result.name="Enemy";result.actor.emplace();result.controller.emplace();result.controller->profile=selected;result.movement.emplace();result.navigation.emplace();result.local=math::translation({-3,.05f,0});return result;
 }
 EntityRecord bounds(std::vector<AssetRef<NavigationAgentProfile>> supported={AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}}) {
     EntityRecord result;result.id=3;result.name="NavigationVolume";result.navigationVolume.emplace();result.navigationVolume->size={24,12,24};result.navigationVolume->profiles=std::move(supported);return result;

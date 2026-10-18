@@ -11,7 +11,6 @@
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
 #include "crimson-renderer/shaders/point_light.sh"
-#include "crimson-renderer/shaders/ambient_visibility_response.sh"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -38,10 +37,10 @@ constexpr std::array<std::string_view,17> LegacyComponentTokens{
     "darknessReveal","camera","cameraFollow","model","collider","directional","point",
     "environment","particle","quader"};
 void preserveAuthoredActorComponents(EntityRecord& target,const EntityRecord& previous) {
-    target.actor=previous.actor;target.motor=previous.motor;target.controller=previous.controller;
+    target.actor=previous.actor;target.movement=previous.movement;target.controller=previous.controller;
     target.navigation=previous.navigation;target.enemy=previous.enemy;target.playerInput=previous.playerInput;
     target.tags=previous.tags;target.effects=previous.effects;
-    target.lightRig=previous.lightRig;target.darknessReveal=previous.darknessReveal;target.cameraFollow=previous.cameraFollow;
+    target.cameraFollow=previous.cameraFollow;
     if(previous.camera)target.camera=previous.camera;
 }
 std::uint32_t readCollisionBits(const Json& value) {
@@ -133,28 +132,12 @@ uint32_t readLightingMask(const Json& object,const char* name,uint32_t fallback)
     return field->get<uint32_t>();
 }
 Json rolesJson(const LightRoles& roles) {
-    return {{"receiverMask",roles.receiverMask},{"shadowCasterMask",roles.shadowCasterMask},
-        {"ambientRevealMask",roles.ambientRevealMask},{"ambientReveal",roles.ambientReveal},{"ambientRevealStrength",roles.ambientRevealStrength}};
+    return {{"receiverMask",roles.receiverMask},{"shadowCasterMask",roles.shadowCasterMask}};
 }
 LightRoles readRoles(const Json& source,LightRoles value={}) {
     if(!source.is_object())throw std::runtime_error("Light roles must be an object.");
     value.receiverMask=readLightingMask(source,"receiverMask",value.receiverMask);
     value.shadowCasterMask=readLightingMask(source,"shadowCasterMask",value.shadowCasterMask);
-    value.ambientRevealMask=readLightingMask(source,"ambientRevealMask",value.ambientRevealMask);
-    value.ambientReveal=source.value("ambientReveal",value.ambientReveal);
-    value.ambientRevealStrength=source.value("ambientRevealStrength",value.ambientRevealStrength);
-    return value;
-}
-Json characterLightJson(const CharacterLight& value) {
-    return {{"enabled",value.enabled},{"direction",value.direction},{"color",value.color},
-        {"intensity",value.intensity},{"diffuse",value.diffuse},{"specular",value.specular}};
-}
-CharacterLight readCharacterLight(const Json& source,CharacterLight value) {
-    if(!source.is_object())throw std::runtime_error("Character lights must be objects.");
-    value.enabled=source.value("enabled",value.enabled);value.direction=source.value("direction",value.direction);
-    value.color=source.value("color",value.color);value.intensity=source.value("intensity",value.intensity);
-    value.diffuse=source.value("diffuse",value.diffuse);value.specular=source.value("specular",value.specular);
-    if(!validCharacterLight(value))throw std::runtime_error("Character light settings are invalid.");
     return value;
 }
 float readIndirectEnergy(const Json& source,float fallback=1.f) {
@@ -163,123 +146,6 @@ float readIndirectEnergy(const Json& source,float fallback=1.f) {
     if(!encoded.is_number())throw std::runtime_error("Light GI energy must be a number.");
     const auto value=encoded.get<float>();
     if(!validIndirectEnergy(value))throw std::runtime_error("Light GI energy must be finite and between zero and sixteen.");
-    return value;
-}
-Json lightRigJson(const ActorLightRigSettings& value) {
-    const auto& local=value.localWorld;const auto& shadow=value.characterShadow;
-    return {{"version",4},{"enabled",value.enabled},{"showGizmos",value.showGizmos},
-        {"key",characterLightJson(value.key)},{"fill",characterLightJson(value.fill)},
-        {"localWorld",{{"enabled",local.enabled},{"height",local.height},{"color",local.color},
-            {"intensity",local.intensity},{"radius",local.radius},{"nearFalloffRadius",local.nearFalloffRadius},
-            {"specularStrength",local.specularStrength},{"rangeFalloffExponent",local.rangeFalloffExponent},
-            {"edgeSoftness",local.edgeSoftness},{"sourceRadius",local.sourceRadius},{"attenuation",local.attenuation},{"castShadows",local.castShadows},
-            {"shadowDepthBias",local.shadowDepthBias},{"shadowNormalBias",local.shadowNormalBias},{"indirectEnergy",local.indirectEnergy}}},
-        {"characterShadow",{{"enabled",shadow.enabled},{"strength",shadow.strength},
-            {"distance",shadow.distance},{"shadowDepthBias",shadow.shadowDepthBias},{"shadowNormalBias",shadow.shadowNormalBias}}}};
-}
-// Read-only conversion data, never a runtime mode or writer representation.
-struct FormerPointRigLight {
-    bool enabled{true};Vec3 offset{-3,5,3},color{1,.96f,.9f};float intensity{35},radius{12};
-    bool castShadows{true};float depthBias{.005f},normalBias{1};
-};
-FormerPointRigLight readFormerPointRigLight(const Json& source,FormerPointRigLight value) {
-    if(!source.is_object())throw std::runtime_error("Former point rig lights must be objects.");
-    value.enabled=source.value("enabled",value.enabled);value.offset=source.value("worldOffset",value.offset);
-    value.color=source.value("color",value.color);value.intensity=source.value("intensity",value.intensity);
-    value.radius=source.value("radius",value.radius);value.castShadows=source.value("castShadows",value.castShadows);
-    value.depthBias=source.value("shadowDepthBias",value.depthBias);value.normalBias=source.value("shadowNormalBias",value.normalBias);
-    if(!math::finite(value.offset)||std::any_of(value.offset.begin(),value.offset.end(),[](float v){return std::abs(v)>1000000;})||
-        !validLightColor(value.color)||!validLightIntensity(value.intensity)||!validLightRange(value.radius)||
-        !validShadowBiases(value.depthBias,value.normalBias)||
-        (source.contains("roles")&&!validLightRoles(readRoles(source.at("roles")))))
-        throw std::runtime_error("Former point rig light settings are invalid.");
-    return value;
-}
-CharacterLight convertFormerPoint(const FormerPointRigLight& old) {
-    CharacterLight value;value.enabled=old.enabled;value.color=old.color;
-    value.direction=math::normalized(old.offset*-1.f,{-.5f,-.8f,-.6f});
-    value.intensity=std::min(old.intensity*point_lighting::pointLightAttenuation(
-        static_cast<float>(math::dot(old.offset,old.offset)),1.f/(old.radius*old.radius)),10000.f);
-    return value;
-}
-float migratedPointIntensity(float irradiance,const LocalWorldLightSettings& light) {
-    const float attenuation=point_lighting::pointLightAttenuation(light.height*light.height,
-        1.f/(light.radius*light.radius),light.nearFalloffRadius*light.nearFalloffRadius,
-        light.rangeFalloffExponent,light.edgeSoftness,light.attenuation);
-    return static_cast<float>(std::min(double(irradiance)/std::max(double(attenuation),1e-12),1000000.));
-}
-ActorLightRigSettings readLightRig(const Json& source,const DarknessRevealSettings& reveal,float characterHeight) {
-    if(!source.is_object())throw std::runtime_error("Character light rig settings must be an object.");
-    ActorLightRigSettings value;
-    value.enabled=source.value("enabled",value.enabled);value.showGizmos=source.value("showGizmos",value.showGizmos);
-    if(source.contains("version")) {
-        const auto& encodedVersion=source.at("version");
-        if(!encodedVersion.is_number_integer()||encodedVersion<2||encodedVersion>4)
-            throw std::runtime_error("Unsupported character light rig version.");
-        const auto version=encodedVersion.get<int>();
-        if(source.contains("key"))value.key=readCharacterLight(source.at("key"),value.key);
-        if(source.contains("fill"))value.fill=readCharacterLight(source.at("fill"),value.fill);
-        const char* worldKey=version==3?"worldFill":"localWorld";
-        if(source.contains(worldKey)||version<4) {
-            const Json empty=Json::object();const auto& old=source.contains(worldKey)?source.at(worldKey):empty;
-            if(!old.is_object())throw std::runtime_error("Local World Light must be an object.");
-            auto& local=value.localWorld;
-            local.indirectEnergy=readIndirectEnergy(old,local.indirectEnergy);
-            local.enabled=old.value("enabled",local.enabled);local.height=old.value("height",local.height);
-            local.color=old.value("color",local.color);
-            local.intensity=old.value("intensity",version==2?4.f:version==3?.64f:local.intensity);
-            local.castShadows=old.value("castShadows",local.castShadows);
-            local.shadowDepthBias=old.value("shadowDepthBias",local.shadowDepthBias);local.shadowNormalBias=old.value("shadowNormalBias",local.shadowNormalBias);
-            if(version==3) {
-                if(!validLocalWorldLightSettings(local)||!validDarknessRevealSettings(reveal)||
-                    !std::isfinite(characterHeight)||characterHeight<=0)
-                    throw std::runtime_error("Former World Fill settings are invalid.");
-                local.radius=std::clamp(std::max(2.f*reveal.spread,1.25f*local.height),.01f,100000.f);
-                const float center=characterLightingCenterHeight(characterHeight);
-                const float footIrradiance=local.intensity*ambient_visibility::radialRevealWeightSquared(center*center,reveal.spread);
-                local.intensity=migratedPointIntensity(footIrradiance,local);
-            } else {
-                local.radius=old.value("radius",local.radius);
-                local.nearFalloffRadius=old.value("nearFalloffRadius",local.nearFalloffRadius);
-                local.specularStrength=old.value("specularStrength",local.specularStrength);
-                local.rangeFalloffExponent=version==2?4.f:old.value("rangeFalloffExponent",local.rangeFalloffExponent);
-                local.edgeSoftness=version==2?1.f:old.value("edgeSoftness",local.edgeSoftness);
-                local.sourceRadius=version==2?0.f:old.contains("sourceRadius")?old.at("sourceRadius").get<float>():old.value("softSourceRadius",0.f);
-                local.attenuation=old.value("attenuation",2.f);
-                if(version==2&&!validLightIntensity(local.intensity))throw std::runtime_error("Former Local World Light intensity is invalid.");
-            }
-        }
-        if(source.contains("characterShadow")) {
-            const auto& old=source.at("characterShadow");if(!old.is_object())throw std::runtime_error("Character Shadow must be an object.");
-            auto& shadow=value.characterShadow;
-            shadow.enabled=old.value("enabled",shadow.enabled);
-            shadow.strength=old.value("strength",shadow.strength);shadow.distance=old.value("distance",shadow.distance);
-            shadow.shadowDepthBias=old.value("shadowDepthBias",shadow.shadowDepthBias);shadow.shadowNormalBias=old.value("shadowNormalBias",shadow.shadowNormalBias);
-        }
-    } else if(source.contains("actorLights")) {
-        const auto& lights=source.at("actorLights");
-        if(!lights.is_array()||lights.size()!=3)throw std::runtime_error("Former directional rigs require three lights.");
-        for(std::size_t index=0;index<lights.size();++index) {
-            const auto converted=readCharacterLight(lights[index],CharacterLight{});
-            if(index==0)value.key=converted;else if(index==1)value.fill=converted;
-        }
-        // This representation contained no world source. Do not create one on load.
-        value.localWorld.enabled=false;
-        value.characterShadow.enabled=value.key.enabled;
-    } else {
-        FormerPointRigLight key,fill;
-        fill.enabled=false;fill.offset={3,3,-2};fill.color={.55f,.65f,1};fill.intensity=12;fill.radius=8;fill.castShadows=false;
-        if(source.contains("key"))key=readFormerPointRigLight(source.at("key"),key);
-        if(source.contains("fill"))fill=readFormerPointRigLight(source.at("fill"),fill);
-        value.key=convertFormerPoint(key);value.fill=convertFormerPoint(fill);
-        auto& local=value.localWorld;local.enabled=key.enabled;local.color=key.color;local.radius=key.radius;
-        local.height=std::clamp(2.f,.01f,std::max(key.radius,.02f)*.5f);
-        local.intensity=migratedPointIntensity(value.key.intensity,local);local.castShadows=key.castShadows;
-        local.shadowDepthBias=key.depthBias;local.shadowNormalBias=key.normalBias;
-        auto& shadow=value.characterShadow;shadow.enabled=key.enabled&&key.castShadows;
-        shadow.shadowDepthBias=key.depthBias;shadow.shadowNormalBias=key.normalBias;
-    }
-    if(!validActorLightRigSettings(value))throw std::runtime_error("Character light rig settings are invalid.");
     return value;
 }
 template<class Light> Json lightJson(const Light& light) {
@@ -430,7 +296,6 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
             if(!scopes.is_object())throw std::runtime_error("Surface lighting scopes must be an object.");
             record.lightingScopes.directReceiverMask=readLightingMask(scopes,"directReceiverMask",lighting_scope::All);
             record.lightingScopes.shadowCasterMask=readLightingMask(scopes,"shadowCasterMask",lighting_scope::All);
-            record.lightingScopes.ambientReceiverMask=readLightingMask(scopes,"ambientReceiverMask",lighting_scope::All);
         }
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
@@ -438,36 +303,27 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
         if (version>=4 && version<=15 && entity.contains("character")) {
             const auto& c=entity.at("character");
-            record.actor.emplace();record.motor.emplace();
+            record.actor.emplace();record.movement.emplace();
             legacyAttributes[record.id]={{stats::MovementSpeed,c.at("moveSpeed").get<double>()}};
             legacyController(record,c.at("height").get<float>(),c.at("radius").get<float>());
             record.navigation=SceneNavigationAgent{c.value("showRoute",true)};record.playerInput.emplace();legacyPlayerInputs.insert(record.id);
-            record.lightRig.emplace();record.darknessReveal.emplace();
             record.controller->showCollisionInGame=c.value("showCollisionInGame",false);
             record.controller->collisionColor=readCollisionColor(c,record.controller->collisionColor);
-            if(c.contains("darknessReveal")) {
-                const auto& reveal=c.at("darknessReveal");
-                if(!reveal.is_object())throw std::runtime_error("Character darkness reveal settings must be an object.");
-                if(reveal.contains("version")&&reveal.at("version")!=1&&reveal.at("version")!=2)
-                    throw std::runtime_error("Unsupported Character darkness reveal version.");
-                (*record.darknessReveal).enabled=reveal.value("enabled",true);
-                (*record.darknessReveal).spread=reveal.contains("version")&&reveal.at("version")==2?
-                    reveal.value("spread",8.f):reveal.value("radius",8.f);
-            } else if(c.contains("lightRig")) {
-                const auto& old=c.at("lightRig");
-                if(!old.contains("actorLights")&&old.value("enabled",false)) {
-                    if(old.contains("reveal")&&old.at("reveal").is_object()&&old.at("reveal").value("enabled",false))
-                        (*record.darknessReveal).spread=old.at("reveal").value("radius",8.f);
-                    else if(old.contains("key")&&old.at("key").is_object())
-                        (*record.darknessReveal).spread=old.at("key").value("radius",8.f);
-                }
-            }
-            if(c.contains("lightRig"))(*record.lightRig)=readLightRig(c.at("lightRig"),(*record.darknessReveal),c.at("height").get<float>());
         }
         if(version>=16) {
             if(entity.contains("actor")) {if(!entity.at("actor").is_object())throw std::runtime_error("Actor must be an object.");record.actor.emplace();}
-            if(entity.contains("motor")) {
-                const auto& c=entity.at("motor");record.motor=SceneMotor{c.value("enabled",true)};
+            if(entity.contains("movement") || entity.contains("motor")) {
+                const auto& c=entity.at(entity.contains("movement")?"movement":"motor");record.movement=MovementComponent{c.value("enabled",true)};
+                auto& movement=*record.movement;
+                movement.jumpHeight=c.value("jumpHeight",movement.jumpHeight);
+                movement.groundAcceleration=c.value("groundAcceleration",movement.groundAcceleration);
+                movement.groundFriction=c.value("groundFriction",movement.groundFriction);
+                movement.airAcceleration=c.value("airAcceleration",movement.airAcceleration);
+                movement.airControl=c.value("airControl",movement.airControl);
+                movement.strafeTilt=c.value("strafeTilt",movement.strafeTilt);
+                movement.tiltResponse=c.value("tiltResponse",movement.tiltResponse);
+                movement.stairSmoothingTime=c.value("stairSmoothingTime",movement.stairSmoothingTime);
+
                 if(version<=20)legacyAttributes[record.id]={{stats::MovementSpeed,c.value("moveSpeed",5.0)}};
             }
             if(entity.contains("controller")) {
@@ -484,23 +340,22 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                 if(!c.is_object())throw std::runtime_error("Player Input must be an object.");
                 auto& input=record.playerInput.emplace();input.enabled=c.value("enabled",input.enabled);
                 input.mouseSensitivity=c.value("mouseSensitivity",input.mouseSensitivity);input.invertY=c.value("invertY",input.invertY);
-                input.jumpHeight=c.value("jumpHeight",input.jumpHeight);input.groundAcceleration=c.value("groundAcceleration",input.groundAcceleration);
-                input.groundFriction=c.value("groundFriction",input.groundFriction);input.airAcceleration=c.value("airAcceleration",input.airAcceleration);
-                input.airControl=c.value("airControl",input.airControl);input.strafeTilt=c.value("strafeTilt",input.strafeTilt);
-                input.tiltResponse=c.value("tiltResponse",input.tiltResponse);
-                input.stairSmoothingTime=c.value("stairSmoothingTime",input.stairSmoothingTime);
+                if(!entity.contains("movement") && record.movement) {
+                    auto& movement=*record.movement;
+                    movement.jumpHeight=c.value("jumpHeight",movement.jumpHeight);
+                    movement.groundAcceleration=c.value("groundAcceleration",movement.groundAcceleration);
+                    movement.groundFriction=c.value("groundFriction",movement.groundFriction);
+                    movement.airAcceleration=c.value("airAcceleration",movement.airAcceleration);
+                    movement.airControl=c.value("airControl",movement.airControl);
+                    movement.strafeTilt=c.value("strafeTilt",movement.strafeTilt);
+                    movement.tiltResponse=c.value("tiltResponse",movement.tiltResponse);
+                    movement.stairSmoothingTime=c.value("stairSmoothingTime",movement.stairSmoothingTime);
+                }
                 constexpr std::array firstPersonFields{"mouseSensitivity","invertY","jumpHeight","groundAcceleration","groundFriction",
                     "airAcceleration","airControl","strafeTilt","tiltResponse","stairSmoothingTime"};
-                if(std::none_of(firstPersonFields.begin(),firstPersonFields.end(),[&](const char* field){return c.contains(field);}))
+                if(!entity.contains("movement") && std::none_of(firstPersonFields.begin(),firstPersonFields.end(),[&](const char* field){return c.contains(field);}))
                     legacyPlayerInputs.insert(record.id);
             }
-            if(entity.contains("darknessReveal")) {
-                const auto& c=entity.at("darknessReveal");
-                if(!c.is_object() || (c.contains("version")&&c.at("version")!=2))throw std::runtime_error("Unsupported Darkness Reveal component.");
-                record.darknessReveal=DarknessRevealSettings{c.value("enabled",true),c.value("spread",8.f)};
-            }
-            if(entity.contains("lightRig"))record.lightRig=readLightRig(entity.at("lightRig"),record.darknessReveal.value_or(DarknessRevealSettings{}),
-                entity.contains("controller")?entity.at("controller").value("height",1.8f):1.8f);
         }
         if(version>=21) {
             const auto readTag=[](const Json& source) {
@@ -799,7 +654,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
             entity["fadeWhenOccluding"]=record.fadeWhenOccluding;
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
-                {"shadowCasterMask",record.lightingScopes.shadowCasterMask},{"ambientReceiverMask",record.lightingScopes.ambientReceiverMask}};
+                {"shadowCasterMask",record.lightingScopes.shadowCasterMask}};
             const auto& animation=record.modelAnimation;
             entity["modelAnimation"]={{"clip",animation.clip},{"playing",animation.playing},{"loop",animation.loop},
                 {"speed",animation.speed},{"startTime",animation.startTime}};
@@ -811,7 +666,10 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
         if(record.actor)entity["actor"]=Json::object();
-        if(record.motor)entity["motor"]={{"enabled",record.motor->enabled}};
+        if(record.movement) {const auto& c=*record.movement;entity["movement"]={{"enabled",c.enabled},
+            {"jumpHeight",c.jumpHeight},{"groundAcceleration",c.groundAcceleration},{"groundFriction",c.groundFriction},
+            {"airAcceleration",c.airAcceleration},{"airControl",c.airControl},{"strafeTilt",c.strafeTilt},
+            {"tiltResponse",c.tiltResponse},{"stairSmoothingTime",c.stairSmoothingTime}};}
         if(record.tags) {
             auto tags=Json::array();for(const auto& tag:record.tags->tags())tags.push_back(tag.name());entity["tags"]=std::move(tags);
         }
@@ -826,11 +684,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
             entity["navigationVolume"]={{"size",volume.size},{"enabled",volume.enabled},{"profiles",volume.profiles},
                 {"bake",{{"cellSize",bake.cellSize},{"cellHeight",bake.cellHeight},{"tileSize",bake.tileSize},{"maxSimplificationError",bake.maxSimplificationError}}}};}
         if(record.playerInput) {const auto& c=*record.playerInput;entity["playerInput"]={{"enabled",c.enabled},
-            {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY},{"jumpHeight",c.jumpHeight},
-            {"groundAcceleration",c.groundAcceleration},{"groundFriction",c.groundFriction},{"airAcceleration",c.airAcceleration},
-            {"airControl",c.airControl},{"strafeTilt",c.strafeTilt},{"tiltResponse",c.tiltResponse},{"stairSmoothingTime",c.stairSmoothingTime}};}
-        if(record.lightRig)entity["lightRig"]=lightRigJson(*record.lightRig);
-        if(record.darknessReveal)entity["darknessReveal"]={{"version",2},{"enabled",record.darknessReveal->enabled},{"spread",record.darknessReveal->spread}};
+            {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY}};}
         if (record.collider) { const auto& c=*record.collider;
             const auto shape=c.shape==ColliderShape::Box?"box":c.shape==ColliderShape::Sphere?"sphere":c.shape==ColliderShape::Cylinder?"cylinder":c.shape==ColliderShape::Capsule?"capsule":"trimesh";
             entity["collider"]={{"shape",shape},{"mode",c.mode==ColliderMode::Solid?"solid":"trigger"},{"collision",collisionFilterJson(c.collision)},{"size",c.size},{"radius",c.radius},{"height",c.height},{"source",c.source},
@@ -862,7 +716,7 @@ enum EntityField : uint64_t {
     ModelMaterialField=1ull<<12, CastShadows=1ull<<13, ReceiveShadows=1ull<<14,
     QuaderField=1ull<<15,QuaderGeneratedField=1ull<<16,LightingScopesField=1ull<<17,
     ModelAnimationField=1ull<<18,FadeWhenOccludingField=1ull<<19,VisibleField=1ull<<20,MotorField=1ull<<21,ControllerField=1ull<<22,NavigationField=1ull<<23,
-    PlayerInputField=1ull<<24,LightRigField=1ull<<25,DarknessRevealField=1ull<<26,CameraFollowField=1ull<<27,
+    PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
     TagsField=1ull<<32,EffectsField=1ull<<33,AllEntityFields=((1ull<<34)-1)&~(1ull<<31)
@@ -886,14 +740,12 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     if(a.fadeWhenOccluding!=b.fadeWhenOccluding)fields|=FadeWhenOccludingField;
     if(a.visible!=b.visible)fields|=VisibleField;
-    if(a.motor!=b.motor)fields|=MotorField;
+    if(a.movement!=b.movement)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
     if(a.navigation!=b.navigation)fields|=NavigationField;
     if(a.enemy!=b.enemy)fields|=EnemyField;
     if(a.navigationVolume!=b.navigationVolume)fields|=NavigationVolumeField;
     if(a.playerInput!=b.playerInput)fields|=PlayerInputField;
-    if(a.lightRig!=b.lightRig)fields|=LightRigField;
-    if(a.darknessReveal!=b.darknessReveal)fields|=DarknessRevealField;
     if(a.cameraFollow!=b.cameraFollow)fields|=CameraFollowField;
     if(a.outlinerStyle!=b.outlinerStyle)fields|=OutlinerStyleField;
     if(a.tags!=b.tags)fields|=TagsField;
@@ -914,14 +766,12 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
     if(fields&FadeWhenOccludingField)target.fadeWhenOccluding=source.fadeWhenOccluding;
     if(fields&VisibleField)target.visible=source.visible;
-    if(fields&MotorField)target.motor=source.motor;
+    if(fields&MotorField)target.movement=source.movement;
     if(fields&ControllerField)target.controller=source.controller;
     if(fields&NavigationField)target.navigation=source.navigation;
     if(fields&EnemyField)target.enemy=source.enemy;
     if(fields&NavigationVolumeField)target.navigationVolume=source.navigationVolume;
     if(fields&PlayerInputField)target.playerInput=source.playerInput;
-    if(fields&LightRigField)target.lightRig=source.lightRig;
-    if(fields&DarknessRevealField)target.darknessReveal=source.darknessReveal;
     if(fields&CameraFollowField)target.cameraFollow=source.cameraFollow;
     if(fields&OutlinerStyleField)target.outlinerStyle=source.outlinerStyle;
     if(fields&TagsField)target.tags=source.tags;
@@ -1642,10 +1492,10 @@ EntityId SceneDocument::createEnvironment(const std::string& name) {
 }
 EntityId SceneDocument::createPlayer(const std::string& name) {
     if(!begin("Create player"))return NoEntity;
-    EntityRecord player;player.name=name;player.actor.emplace();player.motor.emplace();player.controller.emplace();
+    EntityRecord player;player.name=name;player.actor.emplace();player.movement.emplace();player.controller.emplace();
     initializePlayerEffects(player);
     player.controller->collision.layers=PlayerCollisionLayer;
-    player.playerInput.emplace();player.lightRig.emplace();player.darknessReveal.emplace();
+    player.playerInput.emplace();
     const auto initialCamera=defaultPlayerCameraTemplate();
     EntityRecord camera;camera.name="Camera";camera.camera=initialCamera.lens;
     camera.local=*math::withAffinePosition(initialCamera.worldBasis,initialCamera.offset);
@@ -1659,11 +1509,10 @@ EntityId SceneDocument::createPlayer(const std::string& name) {
     selection_={{player.id},player.id};if(!commit())return NoEntity;return player.id;
 }
 EntityId SceneDocument::createEnemy(const std::string& name) {
-    EntityRecord enemy;enemy.name=name;enemy.actor.emplace();enemy.motor.emplace();enemy.controller.emplace();
+    EntityRecord enemy;enemy.name=name;enemy.actor.emplace();enemy.movement.emplace();enemy.controller.emplace();
     initializeEnemyEffects(enemy);
     enemy.controller->collision.layers=EnemyCollisionLayer;
-    enemy.navigation.emplace();enemy.enemy.emplace();enemy.lightRig.emplace();enemy.darknessReveal.emplace();
-    enemy.lightRig->localWorld.enabled=false;
+    enemy.navigation.emplace();enemy.enemy.emplace();
     return create(std::move(enemy),"Create enemy");
 }
 EntityId SceneDocument::createCollider(const std::string& name,EntityId parent) {
@@ -1886,7 +1735,7 @@ bool SceneDocument::ungroupSelection() {
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
         if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment &&
-            !record->actor && !record->motor && !record->controller && !record->navigation && !record->tags && !record->effects && !record->playerInput && !record->lightRig && !record->darknessReveal && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
+            !record->actor && !record->movement && !record->controller && !record->navigation && !record->tags && !record->effects && !record->playerInput && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };

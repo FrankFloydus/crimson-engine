@@ -35,9 +35,6 @@ struct ExtractedScene {
     SceneEnvironment environment;
     ProceduralSun proceduralSun;
     std::vector<ExtractedParticle> particles;
-    std::vector<DarknessRevealSource> reveals;
-    std::vector<ActorLighting> actorLighting;
-    std::vector<CharacterShadowSource> actorShadows;
 };
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,

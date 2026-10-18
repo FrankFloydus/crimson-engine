@@ -20,7 +20,7 @@ inline constexpr std::uint16_t InvalidRenderView = UINT16_MAX;
 struct RenderViewPassSlots {
     std::uint16_t scene{},present{},grid{},encode{},glowExtract{},glowHorizontal{},glowVertical{};
     std::uint16_t pointShadow{},directionalShadow{};
-    std::uint16_t depthPrepass{InvalidRenderView},ambient{InvalidRenderView},characterShadow{InvalidRenderView};
+    std::uint16_t depthPrepass{InvalidRenderView},lightingEffects{InvalidRenderView};
     std::uint16_t collisions{InvalidRenderView};
     std::uint16_t occluderLayer{InvalidRenderView};
 };
@@ -28,11 +28,10 @@ struct RenderViewPassSlots {
 // existing slots; the plan does not introduce remapping or allocate view IDs.
 RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept;
 
-// Only implemented work appears here. Ambient work is optional; the disabled
-// profile retains the existing single-pass color/depth behavior.
+// Only implemented work appears here. GI/AO use the existing pre-color slot.
 enum class RenderPassKind : std::uint8_t {
-    EnvironmentPreparation, ModelDeformation, LightAssignment, PointShadowUpdates, DirectionalShadowUpdates, CharacterShadowUpdates,
-    DepthPrepass, AmbientVisibility, AmbientPublish,
+    EnvironmentPreparation, ModelDeformation, LightAssignment, PointShadowUpdates, DirectionalShadowUpdates,
+    DepthPrepass,
     SsgiTrace, SsgiTemporal, SsgiFilterHorizontal, SsgiFilterVertical, SsgiPublish,
     SsaoEvaluate, SsaoPublish,
     OccluderLayer, OccluderDepthPublish, SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
@@ -42,7 +41,7 @@ enum class RenderResource : std::uint8_t {
     PreparedScene, EnvironmentLighting, ShadowAtlas, ClusteredLighting, SceneHdr,
     SceneDepth, GlowA, GlowB, Composite, Display, PickColor, PickDepth,
     PickReadback, ThumbnailReadback, ReadableSceneDepth, ReceiverScopes,
-    AmbientScratch, AmbientVisibility, DeformedGeometry, OccluderHdr, OccluderDepth, OccluderDepthAtlas,
+    DeformedGeometry, OccluderHdr, OccluderDepth, OccluderDepthAtlas,
     SsgiSources, SsgiHistory, SsgiTraceScratch, SsgiTemporalScratch, SsgiFilterA, SsgiFilterB, SsgiIrradiance,
     SsaoScratch, SsaoVisibility, Count
 };
@@ -50,9 +49,8 @@ enum class RenderResourceOwner : std::uint8_t {
     PreparedFrame, Environment, ModelGeometry, ActiveWorldShadows, ThumbnailWorldShadows, ViewTargets, Readback
 };
 // SceneDepth names attachment use. ReadableSceneDepth explicitly identifies
-// shader reads after the depth attachment has been detached. AmbientVisibility
-// is a logical published region of ClusteredLighting's packed atlas, not an
-// extra sampled texture. Eval writes scratch before Publish reads/writes atlas.
+// shader reads after the depth attachment has been detached. GI/AO publish
+// their camera-local results into the existing clustered atlas.
 enum class RenderResourceAccess : std::uint8_t { Read, Write, ReadWrite, DepthRead, DepthWrite };
 struct RenderResourceUse {
     RenderResource resource{};
@@ -69,7 +67,6 @@ struct RenderResourceBinding {
 struct RenderPassPlanConfig {
     RenderViewIdentity view{};
     bool glow{},grid{},picking{},thumbnailReadback{},worldShadows{},prepareEnvironment{};
-    bool ambientVisibility{};
     bool collisionOverlays{};
     bool occluderLayer{};
     bool ssgi{};

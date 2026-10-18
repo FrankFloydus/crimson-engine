@@ -11,12 +11,10 @@ struct AtlasLayout {
     point_shadow::AtlasLayout points;
     std::uint16_t resolution{},pitch{},width{},height{},directionalCapacity{},cameraCount{},directionalY{},blockColumns{};
     bool gameplayContext{};
-    std::uint16_t actorCapacity{};
-    std::array<point_shadow::TileRect,MaximumActorShadows> actorTiles{};
     std::array<std::array<point_shadow::TileRect,MaxLights>,WorldCameraCount> directionalBlocks{};
     std::size_t bytes() const {return std::size_t(width)*height*sizeof(float);}
 };
-AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameraCount,bool gameplayContext=false,unsigned actorCapacity=0);
+AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameraCount,bool gameplayContext=false);
 point_shadow::TileRect blockRect(const AtlasLayout&,unsigned lightSlot,unsigned cameraContext);
 point_shadow::TileRect tileRect(const AtlasLayout&,unsigned lightSlot,unsigned cameraContext,unsigned cascade);
 // Maps a full projection clip square to a tile of the light's contiguous view
@@ -52,9 +50,6 @@ Cascades build(const DirectionalLight&,const ShadowCamera&,unsigned resolution,s
 // input returns an invalid fit. Resolution must provide at least three texels.
 Cascades buildGame(const DirectionalLight&,const ShadowCamera&,unsigned resolution,
     std::span<const Aabb> casterBounds={},std::optional<Aabb> focusBounds={},std::span<const Aabb> receiverBounds={});
-// One camera-independent, stabilized player-caster map. The XY footprint is
-// bounded by the player; light-space depth extends downstream by distance.
-std::optional<Cascade> buildCharacter(const CharacterShadowSource&,const Aabb& casterBounds,unsigned resolution);
 bool intersects(const Aabb&,const Cascade&);
 // LOD error is projected with a linear orthographic footprint, not distance to a light.
 std::uint32_t chooseLod(std::span<const streaming::ModelLod>,const Mat4&,float texelWorld,float allowedPixels=1.f);

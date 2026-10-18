@@ -9,9 +9,9 @@ struct SceneComponentTarget {
     SceneComponentKind component{SceneComponentKind::Transform};
 };
 inline constexpr std::array EditableActorComponents{
-    SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Motor,
-    SceneComponentKind::Navigation,SceneComponentKind::Enemy,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,
-    SceneComponentKind::DarknessReveal,SceneComponentKind::Camera,SceneComponentKind::CameraFollow,
+    SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Movement,
+    SceneComponentKind::Navigation,SceneComponentKind::Enemy,SceneComponentKind::PlayerInput,
+    SceneComponentKind::Camera,SceneComponentKind::CameraFollow,
     SceneComponentKind::Tags,SceneComponentKind::Effects};
 // Role recipes prepend their protected starting effect once. Later authored
 // starting effects retain their application order.

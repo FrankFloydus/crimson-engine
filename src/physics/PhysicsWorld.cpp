@@ -530,7 +530,7 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
             character.firstPerson={};character.resolvedVelocity={};character.stepHeight=0;state.jumpRequests.erase(record.id);
         }
         character.locked=editing;character.definition=definition;
-        character.movementEnabled=record.motor && record.motor->enabled;keptCharacters.insert(record.id);
+        character.movementEnabled=record.movement && record.movement->enabled;keptCharacters.insert(record.id);
         if(editing || !character.movementEnabled){character.firstPerson={};character.stepHeight=0;state.jumpRequests.erase(record.id);}
     }
     std::erase_if(state.characters,[&](const auto& entry){

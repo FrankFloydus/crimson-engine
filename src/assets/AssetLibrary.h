@@ -14,6 +14,7 @@
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
 #include <filesystem>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,6 +73,9 @@ public:
     ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget,std::uint32_t textureEdge=512) const;
     void publishMaterial(std::shared_ptr<const MaterialAsset>);
     void publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models);
+    // Retire removed source meshes from pickers immediately; reclaim their
+    // payload only when saved scenes, this document and its history release it.
+    void collectUnusedQuaderModels(const SceneDocument& active);
     void protectMaterialDocument(std::string id) { materialDocumentId_=std::move(id); }
     void refreshMaterials();
     std::shared_ptr<const MaterialAsset> createMaterial(const std::string& name="New Material");
@@ -219,6 +223,11 @@ private:
     std::vector<std::shared_ptr<const ModelAsset>> models_;
     std::vector<std::shared_ptr<const MaterialAsset>> materials_;
     std::vector<AssetEntry> catalog_;
+    std::unordered_set<std::string> inactiveQuaderModels_;
+    std::unordered_set<std::string> retainedQuaderModels_;
+    std::vector<std::string> quaderDocumentModelReferences_;
+    std::array<std::uint64_t,8> quaderCollectionState_{};
+    bool quaderCollectionInitialized_{};
     std::string status_;
     std::vector<std::filesystem::path> ownWrites_;
     TextureAsset* findMutable(const std::string& id) const;
@@ -247,6 +256,7 @@ private:
     std::string placeImportedAssets(std::span<const std::string> ids,const std::string& destinationFolder);
     void addTexture(TextureAsset asset);
     void refreshReferenceIndex(const SceneDocument* active);
+    void refreshQuaderModelCatalog();
 };
 
 } // namespace crimson

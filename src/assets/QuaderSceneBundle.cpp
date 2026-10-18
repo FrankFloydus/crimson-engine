@@ -1,4 +1,5 @@
 #include "QuaderSceneBundle.h"
+#include "AssetTransaction.h"
 #include "resources/AssetId.h"
 #include "resources/Paths.h"
 #include <nlohmann/json.hpp>
@@ -6,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -67,7 +69,7 @@ std::string quaderSceneBundleId(std::string_view project,std::string_view scene)
 std::string encodeQuaderSceneBundle(const QuaderSceneBundle& bundle){
     validate(bundle);Json models=Json::array();std::size_t offset{};
     for(const auto& model:bundle.models){require(model.buffer.size()<=MaximumBytes-offset,"Quader scene bundle exceeds its supported size.");
-        models.push_back({{"id",model.id},{"legacyManifest",model.legacyManifest},{"memberIds",model.memberIds},{"manifest",model.manifest},{"gltf",model.gltf},{"bufferOffset",offset},{"bufferLength",model.buffer.size()},{"bufferFingerprint",fingerprint(model.buffer)}});offset+=model.buffer.size();}
+        models.push_back({{"id",model.id},{"legacyManifest",model.legacyManifest},{"memberIds",model.memberIds},{"manifest",model.manifest},{"gltf",model.gltf},{"current",model.current},{"bufferOffset",offset},{"bufferLength",model.buffer.size()},{"bufferFingerprint",fingerprint(model.buffer)}});offset+=model.buffer.size();}
     const auto metadata=Json{{"version",1},{"id",bundle.id},{"project",bundle.projectId},{"scene",bundle.sceneId},{"name",bundle.name},{"models",std::move(models)}}.dump();
     require(metadata.size()<=MaximumMetadata&&metadata.size()+20<=MaximumBytes-offset,"Quader scene bundle metadata exceeds its supported bounds.");
     std::string result;result.reserve(20+metadata.size()+offset);result.append(Magic);integer(result,1,4);integer(result,metadata.size(),8);result+=metadata;for(const auto& model:bundle.models)result+=model.buffer;return result;
@@ -82,7 +84,7 @@ QuaderSceneBundle decodeQuaderSceneBundle(std::string_view bytes){
         require(item.at("bufferOffset").is_number_unsigned()&&item.at("bufferLength").is_number_unsigned()&&item.at("bufferFingerprint").is_number_unsigned(),"Invalid Quader scene binary metadata types.");
         require(item.at("memberIds").is_array()&&item.at("memberIds").size()==4,"Invalid Quader scene member identity count.");
         const auto offset=item.at("bufferOffset").get<std::uint64_t>(),size=item.at("bufferLength").get<std::uint64_t>();require(offset==cursor&&size<=payload.size()-cursor,"Invalid Quader scene binary member range.");
-        QuaderBundleModel model;model.id=item.at("id").get<std::string>();model.legacyManifest=item.at("legacyManifest").get<std::string>();model.memberIds=item.at("memberIds").get<std::array<std::string,4>>();model.manifest=item.at("manifest").get<std::string>();model.gltf=item.at("gltf").get<std::string>();model.buffer=std::string(payload.substr(cursor,static_cast<std::size_t>(size)));require(fingerprint(model.buffer)==item.at("bufferFingerprint").get<std::uint64_t>(),"Quader scene binary member checksum mismatch.");cursor+=static_cast<std::size_t>(size);bundle.models.push_back(std::move(model));
+        QuaderBundleModel model;model.id=item.at("id").get<std::string>();model.legacyManifest=item.at("legacyManifest").get<std::string>();model.memberIds=item.at("memberIds").get<std::array<std::string,4>>();model.manifest=item.at("manifest").get<std::string>();model.gltf=item.at("gltf").get<std::string>();model.current=item.value("current",true);model.buffer=std::string(payload.substr(cursor,static_cast<std::size_t>(size)));require(fingerprint(model.buffer)==item.at("bufferFingerprint").get<std::uint64_t>(),"Quader scene binary member checksum mismatch.");cursor+=static_cast<std::size_t>(size);bundle.models.push_back(std::move(model));
     }
     require(cursor==payload.size(),"Quader scene bundle contains unowned binary data.");validate(bundle);return bundle;
 }
@@ -105,9 +107,95 @@ std::optional<std::pair<fs::path,QuaderSceneBundle>> findQuaderSceneBundle(const
         const auto file=checkedContentPath(root,entry.path());auto bundle=decodeQuaderSceneBundle(read(file));if(bundle.id==id)return std::pair{file,std::move(bundle)};
     }return {};
 }
+fs::path quaderSceneContentDirectory(const fs::path& root,const QuaderSceneBundle& bundle){
+    std::string name;const auto& source=bundle.name;
+    for(std::size_t i=0;i<source.size();++i){const auto c=static_cast<unsigned char>(source[i]);
+        const bool upper=c>='A'&&c<='Z',lower=c>='a'&&c<='z',digit=c>='0'&&c<='9';
+        if(upper&&i&&((source[i-1]>='a'&&source[i-1]<='z')||(source[i-1]>='0'&&source[i-1]<='9'))&&!name.empty()&&name.back()!='_')name+='_';
+        if(upper||lower||digit||c>=128)name+=static_cast<char>(upper?c+('a'-'A'):c);
+        else if(!name.empty()&&name.back()!='_')name+='_';
+    }
+    while(!name.empty()&&name.back()=='_')name.pop_back();
+    if(name.size()>80){std::size_t end=80;while(end>0&&(static_cast<unsigned char>(name[end])&0xc0)==0x80)--end;name.resize(end);}
+    while(!name.empty()&&name.back()=='_')name.pop_back();
+    if(name.empty())name="quader_scene";
+    try{name=contentFilename(name);}catch(...){name="_"+name;}
+    return checkedContentPath(root,fs::path("Content")/pathFromUtf8(name));
+}
 fs::path defaultQuaderSceneBundlePath(const fs::path& root,const QuaderSceneBundle& bundle){
-    std::string name=bundle.name.empty()?"Quader Scene":bundle.name;for(auto& c:name)if(static_cast<unsigned char>(c)<32||std::string_view("<>:\"/\\|?*").find(c)!=std::string_view::npos)c='_';
-    if(name.size()>100){std::size_t end=100;while(end>0&&(static_cast<unsigned char>(name[end])&0xc0)==0x80)--end;name.resize(end);}while(!name.empty()&&(name.back()=='.'||name.back()==' '))name.pop_back();if(name.empty())name="Quader Scene";
-    try{name=contentFilename(name);}catch(...){name="_"+name;}return checkedContentPath(root,fs::path("Content/models")/pathFromUtf8(name+"-"+bundle.id.substr(0,8)+".crimson-quader"));
+    const auto directory=quaderSceneContentDirectory(root,bundle);
+    return checkedContentPath(root,directory/"models"/pathFromUtf8(utf8(directory.filename())+"_"+bundle.id.substr(0,8)+".crimson-quader"));
+}
+PreparedQuaderBundleModelRemoval prepareQuaderBundleModelRemoval(const fs::path& root,std::span<const std::string> modelIds){
+    const auto base=fs::weakly_canonical(fs::absolute(root));PreparedQuaderBundleModelRemoval prepared;
+    prepared.storageRevision=contentStorageRevision(root);
+    std::map<fs::path,std::set<std::string>> selected;
+    for(const auto& id:modelIds)if(const auto source=quaderBundleSource(root,id))selected[checkedContentPath(root,*source)].insert(id);
+    for(const auto& [source,ids]:selected){
+        const auto prior=read(source);auto bundle=decodeQuaderSceneBundle(prior);
+        require(resolveAssetPath(root,bundle.id)==source,"Quader bundle location changed before deletion.");
+        std::size_t count{};
+        std::erase_if(bundle.models,[&](const auto& model){
+            if(!ids.contains(model.id))return false;
+            const auto directory=quaderBundleCacheDirectory(root,bundle.id,model.id);
+            for(std::size_t index=0;index<Members.size();++index){
+                const auto path=directory/Members[index];
+                require(resolveAssetPath(root,model.memberIds[index])==path,"Quader member location changed before deletion.");
+                prepared.files.push_back({utf8(path.lexically_relative(base)),std::nullopt});
+                prepared.memberIds.push_back(model.memberIds[index]);prepared.memberLocations.push_back({model.memberIds[index],path});
+            }
+            prepared.modelIds.push_back(model.id);prepared.emptyDirectories.push_back(directory/"buffers");prepared.emptyDirectories.push_back(directory);++count;return true;
+        });
+        require(count==ids.size(),"A selected Quader mesh is missing from its scene bundle.");
+        if(bundle.models.empty()){
+            prepared.files.push_back({utf8(source.lexically_relative(base)),std::nullopt});
+            prepared.removedBundleIds.push_back(bundle.id);prepared.emptyDirectories.push_back(source.parent_path());
+        }else prepared.files.push_back({utf8(source.lexically_relative(base)),encodeQuaderSceneBundle(bundle)});
+        prepared.baselines.emplace_back(source,prior);
+    }
+    return prepared;
+}
+void validateQuaderBundleModelRemoval(const fs::path& root,const PreparedQuaderBundleModelRemoval& prepared){
+    require(contentStorageRevision(root)==prepared.storageRevision,"Asset locations changed while Quader mesh deletion was prepared.");
+    for(const auto& [source,prior]:prepared.baselines)require(read(source)==prior,"Quader bundle changed while deletion was prepared.");
+    for(const auto& member:prepared.memberLocations)require(resolveAssetPath(root,member.id)==member.file,"Quader member location changed while deletion was prepared.");
+}
+std::vector<std::string> pruneUnusedQuaderBundleModels(const fs::path& root,std::span<const std::string> referencedIds){
+    const auto base=fs::weakly_canonical(fs::absolute(root));std::set<std::string> referenced;
+    for(const auto& id:referencedIds)if(!id.empty())referenced.insert(canonicalAssetId(id));
+    std::vector<AssetFileChange> files;std::vector<std::string> removed,removedMembers;
+    std::vector<std::pair<fs::path,std::string>> baselines;std::vector<fs::path> directories;
+    for(const auto& stored:storedAssetPaths(root)){
+        if(stored.file.extension()!=".crimson-quader"||!fs::is_regular_file(stored.file))continue;
+        const auto source=checkedContentPath(root,stored.file);const auto prior=read(source);auto bundle=decodeQuaderSceneBundle(prior);
+        require(bundle.id==stored.id,"Quader bundle location identity mismatch during cleanup.");
+        bool changed=false;
+        std::erase_if(bundle.models,[&](const auto& model){
+            if(model.current||std::any_of(model.memberIds.begin(),model.memberIds.end(),[&](const auto& id){return referenced.contains(id);}))return false;
+            const auto directory=quaderBundleCacheDirectory(root,bundle.id,model.id);
+            for(std::size_t index=0;index<Members.size();++index){
+                const auto path=directory/Members[index];
+                // Delete only the cache file owned by this exact member. A
+                // location reassigned outside its bundle is never cleanup data.
+                require(resolveAssetPath(root,model.memberIds[index])==path,"Quader member location changed before cleanup.");
+                files.push_back({utf8(path.lexically_relative(base)),std::nullopt});removedMembers.push_back(model.memberIds[index]);
+            }
+            removed.push_back(model.id);directories.push_back(directory/"buffers");directories.push_back(directory);changed=true;return true;
+        });
+        if(changed){
+            if(bundle.models.empty()){files.push_back({utf8(source.lexically_relative(base)),std::nullopt});removedMembers.push_back(bundle.id);directories.push_back(source.parent_path());}
+            else files.push_back({utf8(source.lexically_relative(base)),encodeQuaderSceneBundle(bundle)});
+            baselines.emplace_back(source,prior);
+        }
+    }
+    if(removed.empty())return removed;
+    files.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(root,{},removedMembers)});
+    for(const auto& [source,prior]:baselines)require(read(source)==prior,"Quader bundle changed while cleanup was prepared.");
+    commitAssetTransaction(root,files);refreshContentStorage(root);
+    // These exact directories were ownership-checked above. Remove empty
+    // containers only; an unrelated file never becomes recursive cleanup data.
+    std::sort(directories.begin(),directories.end(),[](const auto& a,const auto& b){return std::distance(a.begin(),a.end())>std::distance(b.begin(),b.end());});
+    for(const auto& directory:directories){std::error_code ignored;if(fs::is_directory(directory,ignored)&&fs::is_empty(directory,ignored))fs::remove(directory,ignored);}
+    return removed;
 }
 } // namespace crimson

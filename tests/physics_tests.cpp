@@ -14,7 +14,7 @@ namespace {
 using namespace crimson;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 EntityRecord floorRecord(){EntityRecord floor;floor.id=1;floor.name="Floor collider";floor.local=math::translation({0,-.5f,0});floor.collider=SceneCollider{{20,1,20}};return floor;}
-EntityRecord characterRecord(){EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.motor.emplace();player.local=math::translation({0,2,0});return player;}
+EntityRecord characterRecord(){EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.movement.emplace();player.local=math::translation({0,2,0});return player;}
 void tick(Scene& scene,PhysicsWorld& world,const Vec3& movement={},int count=1) {
     for(int i=0;i<count;++i)scene.applyRuntimePoses(world.step(scene,2,movement,1.f/60.f));
 }
@@ -557,13 +557,13 @@ void independentFacing() {
     tick(scene,world,{},1);require(forward(2)[0]>.999f,"Facing queued during a transform lock replayed after unlocking.");
 }
 void controllerAndMotorComposition() {
-    Scene scene;auto body=characterRecord();body.motor.reset();body.local=math::translation({0,2,0});
+    Scene scene;auto body=characterRecord();body.movement.reset();body.local=math::translation({0,2,0});
     scene.apply({floorRecord(),body},{});PhysicsWorld world;tick(scene,world,{4,0,0},60);
     require(world.characterCount()==1&&world.grounded(2)&&std::abs((*world.characterPosition(2))[0])<1e-5,
         "A controller without a Motor lost gravity/grounding or accepted horizontal movement.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2){record.motor.emplace();}scene.apply(records,{});
+    auto records=scene.records();for(auto& record:records)if(record.id==2){record.movement.emplace();}scene.apply(records,{});
     tick(scene,world,{2,0,0},30);require((*world.characterPosition(2))[0]>.95f,"Attaching Motor did not enable the existing controller.");
-    records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;scene.apply(records,{});
+    records=scene.records();for(auto& record:records)if(record.id==2)record.movement->enabled=false;scene.apply(records,{});
     const auto stopped=*world.characterPosition(2);tick(scene,world,{4,0,0},30);
     require(math::length(*world.characterPosition(2)-stopped)<.001,"A disabled Motor continued moving its controller.");
     records=scene.records();for(auto& record:records)if(record.id==1)record.local=math::translation({0,-5,0});scene.apply(records,{});
@@ -576,7 +576,7 @@ void geometryPublication() {
     const auto revision=world.geometryRevision();const auto boxes=world.staticBoxes();
     require(boxes.size()==1 && boxes[0].entity==1 && boxes[0].size==Vec3{20,1,20},"Published navigation geometry did not match the accepted static world.");
     tick(scene,world,{1,0,0},60);require(world.geometryRevision()==revision,"Character poses invalidated static geometry.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.movement->enabled=false;
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision,"Unrelated scene edit invalidated static geometry.");
     records=scene.records();for(auto& record:records)if(record.id==1)record.local=math::translation({0,-2,0});
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision+1,"Live geometry edit did not publish a new revision.");
@@ -636,19 +636,19 @@ Vec3 horizontalRampDirection(const EntityRecord& ramp,Vec3 direction) {
     auto world=math::transformDirection(ramp.local,direction);world[1]=0;return math::normalized(world);
 }
 void idleWalkableSlopeSupport() {
-    struct Case {float slope,yaw;bool triangles;int motor;};
+    struct Case {float slope,yaw;bool triangles;int movement;};
     const std::array cases{Case{14,0,false,1},Case{-14,.7f,false,0},Case{35,-.9f,false,-1},Case{-35,.8f,true,1}};
     for(const auto& test:cases) {
         const auto ramp=idleRamp(test.slope,test.yaw,test.triangles);auto actor=characterRecord();actor.local=math::translation(rampSpawn(ramp));
-        if(test.motor==0)actor.motor.reset();else if(test.motor<0)actor.motor->enabled=false;
-        const auto attempted=test.motor==1?Vec3{}:horizontalRampDirection(ramp,{1,0,0})*3;
+        if(test.movement==0)actor.movement.reset();else if(test.movement<0)actor.movement->enabled=false;
+        const auto attempted=test.movement==1?Vec3{}:horizontalRampDirection(ramp,{1,0,0})*3;
         Scene scene;scene.apply({ramp,actor},{});PhysicsWorld world;tick(scene,world,attempted,120);
         const auto landed=*world.characterPosition(2);const auto label=std::to_string(test.slope)+" degree "+(test.triangles?"Trimesh":"Box");
         require(world.grounded(2)&&landed[1]<actor.local[13]-1,"Idle gravity did not land the controller on the "+label+" ramp.");
         tick(scene,world,attempted,240);
         const auto drift=math::length(*world.characterPosition(2)-landed);
         require(world.grounded(2)&&drift<.01,"Idle controller drifted on the walkable "+label+" ramp: "+std::to_string(drift)+" m.");
-        if(test.motor<0) {
+        if(test.movement<0) {
             auto records=scene.records();std::erase_if(records,[](const auto& record){return record.id==1;});scene.apply(records,{});
             tick(scene,world,attempted,30);
             require((*world.characterPosition(2))[1]<landed[1]-.8f,"Idle slope support suspended a disabled Motor after its ramp was removed.");

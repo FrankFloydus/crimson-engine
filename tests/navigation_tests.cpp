@@ -14,7 +14,7 @@ EntityRecord box(EntityId id,Vec3 center,Vec3 size) {
     EntityRecord record;record.id=id;record.name="Box";record.local=math::translation(center);record.collider=SceneCollider{size};return record;
 }
 void flatGroundAndCache() {
-    EntityRecord actor;actor.id=2;actor.name="Actor";actor.controller.emplace();actor.motor.emplace();
+    EntityRecord actor;actor.id=2;actor.name="Actor";actor.controller.emplace();actor.movement.emplace();
     Scene scene;scene.apply({box(1,{0,-.5f,0},{20,1,20}),actor},{});PhysicsWorld physics;physics.reconcile(scene);
     crimson::test::NavigationMeshFixture navigation(crimson::test::navigationTestVolume());AgentTraversalSettings agent;
     require(navigation.reconcile(physics,agent),"Initial navigation build was skipped.");

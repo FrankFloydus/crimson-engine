@@ -15,7 +15,7 @@ namespace crimson {
 inline void validateEnvironmentSettings(const EnvironmentSettings& value) {
     if (!std::isfinite(value.intensity) || value.intensity<0 || !std::isfinite(value.rotation) ||
         !validToneMapping(value.toneMapping) || !validToneMappingParameters(value.toneMappingParameters) ||
-        !validGlowSettings(value.glow) || !validAmbientVisibilitySettings(value.ambientVisibility))
+        !validGlowSettings(value.glow))
         throw std::runtime_error("Environment intensity, rotation, tone mapping or Glow is invalid.");
     if (value.source!=EnvironmentSource::Hdri && value.source!=EnvironmentSource::ProceduralSky)
         throw std::runtime_error("Environment source is invalid.");
@@ -148,14 +148,6 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
         ambient.skyContribution=source.value("skyContribution",ambient.skyContribution);
         ambient.energy=source.value("energy",ambient.energy);
     }
-    if (json.contains("ambientVisibility")) {
-        const auto& source=json.at("ambientVisibility");auto& ambient=value.ambientVisibility;
-        if (!source.is_object())throw std::runtime_error("Ambient visibility settings must be an object.");
-        ambient.enabled=source.value("enabled",ambient.enabled);ambient.strength=source.value("strength",ambient.strength);
-        ambient.darknessFloor=source.value("darknessFloor",ambient.darknessFloor);ambient.threshold=source.value("threshold",ambient.threshold);
-        ambient.transition=source.value("transition",ambient.transition);ambient.shadowAware=source.value("shadowAware",ambient.shadowAware);
-        ambient.attenuateEmission=source.value("attenuateEmission",ambient.attenuateEmission);
-    }
     if (json.contains("glow")) {
         const auto& glow=json.at("glow");
         value.glow={glow.at("enabled").get<bool>(),glow.at("strength").get<float>(),
@@ -227,10 +219,6 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
             {"quality",static_cast<int>(value.ssao.quality)}}},
         {"ambientLight",{{"source",static_cast<int>(value.ambientLight.source)},{"color",value.ambientLight.color},
             {"skyContribution",value.ambientLight.skyContribution},{"energy",value.ambientLight.energy}}},
-        {"ambientVisibility",{{"enabled",value.ambientVisibility.enabled},{"strength",value.ambientVisibility.strength},
-            {"darknessFloor",value.ambientVisibility.darknessFloor},{"threshold",value.ambientVisibility.threshold},
-            {"transition",value.ambientVisibility.transition},{"shadowAware",value.ambientVisibility.shadowAware},
-            {"attenuateEmission",value.ambientVisibility.attenuateEmission}}},
         {"glow",{{"enabled",value.glow.enabled},{"strength",value.glow.strength},{"radius",value.glow.radius},{"threshold",value.glow.threshold}}},
         {"source",static_cast<int>(value.source)},
         {"procedural",{{"skyTop",sky.skyTop},{"skyHorizon",sky.skyHorizon},{"groundBottom",sky.groundBottom},{"groundHorizon",sky.groundHorizon},

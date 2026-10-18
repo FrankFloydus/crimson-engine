@@ -51,22 +51,15 @@
         "toPin": 9
       },
       {
-        "fromNode": 2,
-        "fromPin": 7,
-        "id": 9,
-        "toNode": 9,
-        "toPin": 7
-      },
-      {
-        "fromNode": 9,
+        "fromNode": 8,
         "fromPin": 0,
-        "id": 10,
+        "id": 8,
         "toNode": 1,
         "toPin": 11
       }
     ],
-    "nextLinkId": 11,
-    "nextNodeId": 10,
+    "nextLinkId": 9,
+    "nextNodeId": 9,
     "nodes": [
       {
         "id": 1,
@@ -80,7 +73,7 @@
             1.0
           ],
           "blend": 0,
-          "doubleSided": true,
+          "doubleSided": false,
           "emission": [
             0.0,
             0.0,
@@ -97,8 +90,8 @@
           "specular": 0.5
         },
         "position": [
-          259.0,
-          -120.0
+          650.0,
+          50.0
         ]
       },
       {
@@ -106,8 +99,8 @@
         "kind": 1,
         "name": "UV",
         "position": [
-          -1163.0,
-          83.0
+          -650.0,
+          80.0
         ],
         "uv": {
           "mode": 0,
@@ -134,11 +127,11 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -733.0,
-          -442.0
+          -400.0,
+          0.0
         ],
         "texture": {
-          "image": "d074c9a6-1cea-5164-8731-08322a5a719e",
+          "image": "85dfbfbf-7720-5f7f-bd86-230b61b17035",
           "normalStrength": 1.0,
           "role": 0,
           "sampler": {
@@ -160,8 +153,8 @@
         "kind": 4,
         "name": "Base Color factor",
         "position": [
-          -399.0,
-          -422.0
+          -380.0,
+          105.0
         ]
       },
       {
@@ -178,8 +171,8 @@
         },
         "name": "Multiply",
         "position": [
-          -31.0,
-          -271.0
+          0.0,
+          0.0
         ],
         "right": {
           "type": 0,
@@ -196,11 +189,11 @@
         "kind": 2,
         "name": "Texture 2D",
         "position": [
-          -925.0,
-          429.0
+          -400.0,
+          240.0
         ],
         "texture": {
-          "image": "8c6bdc9b-43cc-5eea-ba74-da594df8be0e",
+          "image": "ce5567e1-9463-54f7-aa04-fdcfa20c9d21",
           "normalStrength": 1.0,
           "role": 1,
           "sampler": {
@@ -216,8 +209,8 @@
         "kind": 3,
         "name": "Roughness factor",
         "position": [
-          -479.0,
-          497.0
+          -380.0,
+          345.0
         ],
         "range": [
           0.0,
@@ -239,8 +232,8 @@
         },
         "name": "Multiply",
         "position": [
-          -93.0,
-          241.0
+          0.0,
+          240.0
         ],
         "right": {
           "type": 0,
@@ -251,35 +244,11 @@
             1.0
           ]
         }
-      },
-      {
-        "grunge": {
-          "baseNoisiness": 0.10899999737739563,
-          "coverage": 0.7590000033378601,
-          "detail": 0.5,
-          "dirtSpecksOpacity": 0.8690000176429749,
-          "disorder": 0.5,
-          "invertDirt": false,
-          "largeVariationIntensity": 0.6859999895095825,
-          "leaksOpacity": 0.35199999809265137,
-          "scratchesOpacity": 0.8820000290870667,
-          "seed": 34068,
-          "sharpen": 0.6299999952316284,
-          "stainsOpacity": 0.3499999940395355,
-          "tiling": 1
-        },
-        "id": 9,
-        "kind": 19,
-        "name": "Grunge",
-        "position": [
-          -367.800048828125,
-          -104.19998168945313
-        ]
       }
     ],
     "version": 7
   },
-  "id": "fedf63b9-ae0b-52e9-ac03-abd5e9c9c38d",
+  "id": "27f1509b-1479-56ab-9a33-463c614fee03",
   "name": "Default Material",
   "originModel": "",
   "type": "crimson-material",

@@ -112,14 +112,24 @@ void ResourceManager::invalidatePath(const std::filesystem::path& path) {
         record->cancellation.request_stop(); record->epoch=nextRevision_.fetch_add(1); record->scheduled=false; record->state=ResourceState::Queued;
     }
 }
-void ResourceManager::forget(const std::string& id) {
+void ResourceManager::discard(const std::string& id) {retire(id,false);}
+void ResourceManager::forget(const std::string& id) {retire(id,true);}
+void ResourceManager::retire(const std::string& id,bool preventReload) {
     std::lock_guard lock(storesMutex_);
-    if(!id.starts_with("import:"))forgottenIds_.insert(id);
+    if(preventReload&&!id.starts_with("import:"))forgottenIds_.insert(id);
     for(const auto& record:headers_) if(!record->derived&&record->id==id) {
         std::lock_guard stateLock(record->mutex);
         record->cancellation.request_stop(); record->epoch=nextRevision_.fetch_add(1); record->deleted=true; record->scheduled=false;
         if(record->evict) record->evict();
         if(record->clearLoader)record->clearLoader();
+    }
+    if(!preventReload) {
+        // Old handles/completions retain their deleted record and cannot
+        // publish into a replacement. New requests receive fresh records;
+        // retained immutable readers remain accounted until they let go.
+        std::apply([&](auto&... stores){
+            (std::erase_if(stores.records,[&](const auto& entry){return !entry.second->derived&&entry.second->id==id;}),...);
+        },stores_);
     }
 }
 void ResourceManager::trim() {

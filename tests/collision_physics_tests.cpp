@@ -12,7 +12,7 @@ using namespace crimson;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 EntityRecord floor() {EntityRecord result;result.id=1;result.name="Floor";result.local=math::translation({0,-.5f,0});result.collider=SceneCollider{{30,1,30}};return result;}
 EntityRecord actor(EntityId id,Vec3 point,CollisionFilter filter={}) {
-    EntityRecord result;result.id=id;result.name="Actor";result.local=math::translation(point);result.actor.emplace();result.controller.emplace();filter.mask|=WorldCollisionLayer;result.controller->collision=filter;result.motor.emplace();return result;
+    EntityRecord result;result.id=id;result.name="Actor";result.local=math::translation(point);result.actor.emplace();result.controller.emplace();filter.mask|=WorldCollisionLayer;result.controller->collision=filter;result.movement.emplace();return result;
 }
 EntityRecord trigger(EntityId id,Vec3 point,Vec3 size={2,3,2},std::uint32_t mask=CharacterCollisionLayers) {
     EntityRecord result;result.id=id;result.name="Trigger";result.local=math::translation(point);result.collider=SceneCollider{size};result.collider->mode=ColliderMode::Trigger;result.collider->collision={TriggerCollisionLayer,mask};return result;

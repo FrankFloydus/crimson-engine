@@ -1,7 +1,10 @@
 #include "editor/AssetPreviews.h"
 #include "editor/AssetPreviewCache.h"
+#include "editor/AssetSourceSnapshot.h"
+#include "quader_bundle_fixture.h"
 #include "resources/ThumbnailDemand.h"
 #include "resources/ResourceManager.h"
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -10,6 +13,69 @@ namespace {
 void require(bool value,const char* message) { if (!value) throw std::runtime_error(message); }
 template<class Function> void rejects(Function&& action,const char* message) {
     bool failed=false;try{action();}catch(const std::exception&){failed=true;}require(failed,message);
+}
+void deletedSourceObservers() {
+    using namespace crimson;
+    namespace fs=std::filesystem;
+    const auto root=fs::temp_directory_path()/("crimson-observer-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto cleanup=[&] {
+        std::error_code error;
+        const auto absolute=fs::weakly_canonical(root,error),temporary=fs::weakly_canonical(fs::temp_directory_path(),error);
+        if(!error && absolute.parent_path()==temporary && absolute.filename().string().starts_with("crimson-observer-"))fs::remove_all(absolute,error);
+    };
+    try {
+        const auto fixture=bundle_test::writeFixture(root);
+        const auto textureId=newAssetId(),materialId=newAssetId(),survivorId=newAssetId();
+        const auto texture=root/"Content/Quader.png",material=root/"Content/Quader.crimson-material",survivor=root/"Content/Keep.crimson-material";
+        writeFileAtomically(texture,"image bytes");writeFileAtomically(material,"{}");writeFileAtomically(survivor,"{}");
+        const std::array<StoredAssetPath,3> added{{{textureId,texture},{materialId,material},{survivorId,survivor}}};
+        registerAssetPaths(root,added);
+        const std::vector<AssetEntry> initial{{fixture.modelId,"Quader mesh",AssetKind::Model},{textureId,"Texture",AssetKind::Texture},
+            {materialId,"Material",AssetKind::Material},{survivorId,"Keep",AssetKind::Material}};
+        AssetCatalogSnapshot catalog;
+        require(catalog.update(root,initial).added.size()==4,"The source observer failed to capture the initial catalog.");
+        const AssetSourceSnapshot oldSources(root);
+        std::vector<StoredAssetPath> dependencies{{fixture.bundle.id,fixture.file},{materialId,material},{textureId,texture}};
+        std::vector<std::string> removedIds{materialId,textureId};
+        for(const auto& id:fixture.bundle.models.front().memberIds) {
+            dependencies.push_back({id,resolveAssetPath(root,id)});removedIds.push_back(id);
+        }
+        for(const auto& dependency:dependencies)require(oldSources.matches(dependency.id,dependency.file),"A current bundle dependency was rejected.");
+        const auto modelFile=resolveAssetPath(root,fixture.modelId);
+        auto emptyBundle=fixture.bundle;emptyBundle.models.clear();
+        writeFileAtomically(fixture.file,encodeQuaderSceneBundle(emptyBundle));
+        const auto index=prepareAssetPathRegistration(root,{},removedIds);
+        for(const auto& dependency:dependencies)if(dependency.id!=fixture.bundle.id)fs::remove(dependency.file);
+        writeFileAtomically(root/".crimson/asset-locations.json",index);refreshContentStorage(root);
+        rejects([&]{(void)resolveAssetPath(root,fixture.modelId);},"The regression fixture did not unregister the deleted model identity.");
+        const std::vector<AssetEntry> surviving{{survivorId,"Keep",AssetKind::Material}};
+        const auto changes=catalog.update(root,surviving);
+        require(changes.added.empty() && changes.removed.size()==3,"Final deletion did not evict exactly the removed catalog assets.");
+        const auto removedModel=std::find_if(changes.removed.begin(),changes.removed.end(),[&](const auto& source){return source.id==fixture.modelId;});
+        require(removedModel!=changes.removed.end() && removedModel->kind==AssetKind::Model && removedModel->file==modelFile,
+            "A removed model was resolved after unregister instead of retaining its literal source path.");
+        for(const auto& source:changes.removed)require(source.file==oldSources.find(source.id),"A deletion acknowledgement lost its predelete path.");
+        const AssetSourceSnapshot afterDelete(root);
+        for(const auto& dependency:dependencies)require(afterDelete.matches(dependency.id,dependency.file)==(dependency.id==fixture.bundle.id),
+            "A retained thumbnail did not invalidate a removed model/member/material/texture dependency.");
+        require(afterDelete.matches(survivorId,survivor),"Deleting bundled sources invalidated an unrelated surviving source.");
+        require(catalog.update(root,surviving).removed.empty(),"A later frame repeated catalog removals.");
+        const auto returned=root/"Content/Returned.crimson-material",moved=root/"Content/Moved.crimson-material";
+        writeFileAtomically(returned,"{}");registerAssetPath(root,materialId,returned);
+        const std::vector<AssetEntry> restored{{materialId,"Returned",AssetKind::Material},{survivorId,"Keep",AssetKind::Material}};
+        const auto returnedChanges=catalog.update(root,restored);
+        require(returnedChanges.added.size()==1 && returnedChanges.added.front().file==returned,"Re-registration retained the deleted source path.");
+        fs::rename(returned,moved);registerAssetPath(root,materialId,moved);
+        const AssetSourceSnapshot relocated(root);
+        require(relocated.matches(materialId,moved) && !relocated.matches(materialId,returned),"Relocation did not invalidate the former preview source location.");
+        require(catalog.update(root,restored).added.empty(),"Relocation changed the stable catalog identity.");
+        auto invalid=restored;invalid.push_back({newAssetId(),"Invalid live asset",AssetKind::Texture});
+        rejects([&]{(void)catalog.update(root,invalid);},"A malformed live catalog identity was silently treated as a deleted source.");
+        const auto removedAgain=catalog.update(root,surviving);
+        require(removedAgain.removed.size()==1 && removedAgain.removed.front().file==moved,
+            "A failed live catalog update or relocation corrupted the source observer's accepted snapshot.");
+        cleanup();
+    }catch(...){cleanup();throw;}
 }
 void persistentCache() {
     const auto root=std::filesystem::temp_directory_path()/("crimson-preview-cache-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -87,7 +153,7 @@ int main() {
         for(unsigned i=0;i<8;++i)retry.failed(now);
         require(!retry.ready(now+std::chrono::seconds{29}) && retry.ready(now+std::chrono::seconds{30}),"Thumbnail retry delay must remain bounded.");
         retry.reset();require(retry.ready(now),"A source edit or successful publication must reset retry backoff.");
-        persistentCache();
+        persistentCache();deletedSourceObservers();
         std::cout << "Preview source coherence passed.\n"; return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

@@ -32,7 +32,7 @@ EntityRecord actor(SceneDocument& document,EntityId id,const AttributeSeeds& ini
 void fixture(SceneDocument& document) {
     auto first=actor(document,10,{{stats::MaxMana,25}}),second=actor(document,20,{{stats::MovementSpeed,4}});
     auto player=actor(document,40,{{stats::MaxHealth,100},{stats::Vitality,10},{stats::MovementSpeed,5}});
-    player.controller.emplace();player.motor.emplace();player.playerInput.emplace();
+    player.controller.emplace();player.movement.emplace();player.playerInput.emplace();
     auto empty=actor(document,30),unresolved=actor(document,35,{{GameplayTag{"Stats.Future"},0}});
     auto arbitrary=actor(document,5,{{stats::MaxHealth,100}});arbitrary.actor.reset();
     auto visual=actor(document,6,{{stats::MovementSpeed,8}});visual.actor.reset();visual.parent=10;

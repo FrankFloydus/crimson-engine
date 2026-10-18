@@ -69,7 +69,7 @@ struct ScenePointLight {
     bool castShadows{false};
     float shadowDepthBias{.005f}; // World-space meters.
     float shadowNormalBias{1.f}; // Shadow-map texels.
-    LightRoles roles{lighting_scope::All,lighting_scope::All,lighting_scope::All,true,1.f};
+    LightRoles roles{};
     float nearFalloffRadius{0},specularStrength{1};
     float rangeFalloffExponent{4},edgeSoftness{1};
     float sourceRadius{0};
@@ -86,9 +86,14 @@ struct SceneEnvironment {
 };
 // Explicit capabilities compose ordinary entities; Actor marks a visual boundary.
 struct SceneActor { bool operator==(const SceneActor&) const = default; };
-struct SceneMotor {
+struct MovementComponent {
     bool enabled{true};
-    bool operator==(const SceneMotor&) const = default;
+    float jumpHeight{1.1f}; // Meters, converted to takeoff speed by the motor.
+    float groundAcceleration{45.f},groundFriction{8.f};
+    float airAcceleration{12.f},airControl{.35f};
+    float strafeTilt{3.f},tiltResponse{12.f}; // Degrees and exponential response per second.
+    float stairSmoothingTime{.10f}; // Camera step response time in seconds; zero disables smoothing.
+    bool operator==(const MovementComponent&) const = default;
 };
 struct SceneCharacterController {
     AssetRef<NavigationAgentProfile> profile{DefaultNavigationAgentProfileId};
@@ -122,11 +127,6 @@ struct ScenePlayerInput {
     bool enabled{true};
     float mouseSensitivity{.10f}; // Degrees per logical mouse pixel.
     bool invertY{false};
-    float jumpHeight{1.1f}; // Meters, converted to takeoff speed by the motor.
-    float groundAcceleration{45.f},groundFriction{8.f};
-    float airAcceleration{12.f},airControl{.35f};
-    float strafeTilt{3.f},tiltResponse{12.f}; // Degrees and exponential response per second.
-    float stairSmoothingTime{.10f}; // Camera step response time in seconds; zero disables smoothing.
     bool operator==(const ScenePlayerInput&) const = default;
 };
 struct SceneEffects {
@@ -193,7 +193,7 @@ struct EntityRecord {
     // explicit asset clear/deletion. A missing nonempty asset keeps its ID.
     std::optional<AssetRef<ParticleEffectAsset>> particle;
     std::optional<SceneActor> actor;
-    std::optional<SceneMotor> motor;
+    std::optional<MovementComponent> movement;
     std::optional<SceneCharacterController> controller;
     std::optional<SceneNavigationAgent> navigation;
     std::optional<SceneEnemy> enemy;
@@ -201,8 +201,6 @@ struct EntityRecord {
     std::optional<SceneEffects> effects;
     std::optional<SceneNavigationVolume> navigationVolume;
     std::optional<ScenePlayerInput> playerInput;
-    std::optional<ActorLightRigSettings> lightRig;
-    std::optional<DarknessRevealSettings> darknessReveal;
     std::optional<SceneCollider> collider;
     std::optional<SceneCamera> camera;
     std::optional<SceneCameraFollow> cameraFollow;

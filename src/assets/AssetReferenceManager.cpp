@@ -23,6 +23,26 @@ std::filesystem::path path(const std::string& id){return std::filesystem::path(s
 std::string text(const std::filesystem::path& file){std::ifstream in(file,std::ios::binary);if(!in)throw std::runtime_error("Cannot read asset transaction file.");return {std::istreambuf_iterator<char>(in),{}};}
 bool builtin(const std::string& id){return isEngineAssetId(id);}
 bool knownBuiltin(const std::string& id){return id==PlayerStartingEffectId||id==EnemyStartingEffectId||id==GrayTextureId||id==NeutralNormalTextureId||id==DefaultMaterialId||id==DefaultParticleMaterialId||id==StudioEnvironmentId||id==DefaultNavigationAgentProfileId||isBuiltinModel(id);}
+std::optional<std::filesystem::path> managedIdentityPath(const std::filesystem::path& root,const std::string& id) {
+    std::optional<std::filesystem::path> resolved;
+    try{resolved=resolveAssetPath(root,id);}catch(const std::exception&){/* Deleted bundle members no longer have a live location. */}
+    if(resolved)return checkedManagedAssetPath(root,id);
+    // Aliases retain source provenance after a deleted member's cache location
+    // is removed. An opaque UUID without provenance has no inferred asset kind.
+    const auto legacy=legacyAssetId(root,id);
+    if(legacy==id)return {};
+    return checkedManagedAssetPath(root,legacy);
+}
+void validateDeletedIdentity(const std::filesystem::path& root,const std::string& id) {
+    if(builtin(id))throw std::runtime_error("Built-in asset cannot be deleted.");
+    if(isAssetUuid(id)){
+        if(canonicalAssetId(id)!=id)throw std::runtime_error("Deleted asset identity must be a canonical UUID.");
+        // Tombstones reserve immutable identities, independently of whether a
+        // deleted asset still owns a registered physical file.
+        (void)managedIdentityPath(root,id);return;
+    }
+    checkedManagedAssetPath(root,id);
+}
 bool gameplayEffectIdentity(const std::filesystem::path& root,const std::string& id) {
     if(id==PlayerStartingEffectId||id==EnemyStartingEffectId)return true;
     if(!isAssetUuid(id)||builtin(id))return false;
@@ -40,12 +60,16 @@ void validateMaterialTarget(const std::filesystem::path& root,const std::string&
 AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(std::move(root)){
     recoverAssetTransactions(root_);const auto file=resolveAssetPath(root_,"assets/references.json");
     try{if(!std::filesystem::exists(file))return;const auto j=Json::parse(text(file));if(j.at("version")!=1)throw std::runtime_error("Unsupported asset reference state version.");
-        for(const auto& id:j.at("deleted")){const auto value=id.get<std::string>();if(builtin(value))throw std::runtime_error("Built-in asset cannot be deleted.");checkedManagedAssetPath(root_,value);deleted_.insert(value);}
+        for(const auto& id:j.at("deleted")){const auto value=id.get<std::string>();validateDeletedIdentity(root_,value);deleted_.insert(value);}
         for(auto it=j.at("replacements").begin();it!=j.at("replacements").end();++it){const auto replacement=it.value().get<std::string>();
             if(!deleted_.contains(it.key()))throw std::runtime_error("Replacement source is not a deleted managed asset.");
             if(builtin(replacement)&&!knownBuiltin(replacement))throw std::runtime_error("Replacement references an unknown built-in resource.");
-            if(!replacement.empty()&&!builtin(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
-        for(const auto& [id,target]:replacements_){(void)target;if(gameplayEffectIdentity(root_,id))resolveGameplayEffect(id);else if(particleIdentity(root_,id))resolveParticle(id);else if(materialIdentity(root_,id))validateMaterialTarget(root_,resolve(id));else resolve(id);}
+            if(!replacement.empty()&&!builtin(replacement)&&!deleted_.contains(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
+        for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
+            if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
+            else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
+            else if(source&&source->extension()==".crimson-material")validateMaterialTarget(root_,resolve(id));
+            else resolve(id);}
     }catch(const std::exception& e){deleted_.clear();replacements_.clear();writable_=false;status_="Asset reference state could not be loaded: "+std::string(e.what())+" The existing file was preserved; destructive asset operations are disabled.";}
 }
 std::string AssetReferenceManager::resolve(const std::string& id)const{
@@ -53,6 +77,11 @@ std::string AssetReferenceManager::resolve(const std::string& id)const{
     while(!current.empty()){if(!visited.insert(current).second)throw std::runtime_error("Asset fallback references contain a cycle.");
         const auto found=replacements_.find(current);if(found==replacements_.end())return deleted_.contains(current)?std::string{}:current;current=found->second;}
     return {};
+}
+std::vector<std::string> AssetReferenceManager::replacementTargets()const{
+    if(!writable_)throw std::runtime_error(status_);std::set<std::string> targets;
+    for(const auto& [source,target]:replacements_){(void)source;const auto resolved=resolve(target);if(!resolved.empty())targets.insert(resolved);}
+    return {targets.begin(),targets.end()};
 }
 std::string AssetReferenceManager::resolveTexture(const std::string& id,bool normal)const{auto result=resolve(id);if(!id.empty()&&(result.empty()||result==GrayTextureId))return normal?NeutralNormalTextureId:GrayTextureId;return result;}
 std::string AssetReferenceManager::resolveMaterial(const std::string& id)const{const auto result=resolve(id);validateMaterialTarget(root_,result);return result;}
@@ -145,7 +174,11 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
         deleted.insert(a.id);redirects[a.id]=std::move(target);
     }
     auto previousDeleted=std::move(deleted_);auto previousRedirects=std::move(replacements_);deleted_=std::move(deleted);replacements_=std::move(redirects);
-    try{for(const auto& [id,target]:replacements_){(void)target;if(gameplayEffectIdentity(root_,id))resolveGameplayEffect(id);else if(particleIdentity(root_,id))resolveParticle(id);else if(materialIdentity(root_,id))validateMaterialTarget(root_,resolve(id));else resolve(id);}}
+    try{for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
+        if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
+        else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
+        else if(source&&source->extension()==".crimson-material")validateMaterialTarget(root_,resolve(id));
+        else resolve(id);}}
     catch(...){deleted_=std::move(previousDeleted);replacements_=std::move(previousRedirects);throw;}++revision_;
 }
 std::string AssetReferenceManager::serialize()const{std::vector<std::string> deleted(deleted_.begin(),deleted_.end());std::sort(deleted.begin(),deleted.end());return Json{{"version",1},{"deleted",deleted},{"replacements",replacements_}}.dump(2)+"\n";}

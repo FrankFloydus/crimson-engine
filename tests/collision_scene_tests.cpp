@@ -22,7 +22,7 @@ struct Project {
 };
 void roundTripHistoryAndMigration() {
     Project project;SceneDocument document(project.root);const auto player=document.createPlayer(),enemy=document.createEnemy(),generic=document.createEmpty("Generic actor");
-    require(addSceneComponent(document,generic,SceneComponentKind::Motor),document.status());const auto solid=document.createCollider(),trigger=document.createCollider("Actor trigger",player);
+    require(addSceneComponent(document,generic,SceneComponentKind::Movement),document.status());const auto solid=document.createCollider(),trigger=document.createCollider("Actor trigger",player);
     require(document.scene().find(player)->controller->collision==CollisionFilter{PlayerCollisionLayer,AllCollisionLayers}&&document.scene().find(enemy)->controller->collision.layers==EnemyCollisionLayer&&document.scene().find(generic)->controller->collision.layers==CharacterCollisionLayer,"Actor recipes did not assign their collision layers.");
     auto sensor=*document.scene().find(trigger);sensor.collider->mode=ColliderMode::Trigger;sensor.collider->shape=ColliderShape::Sphere;sensor.collider->collision={TriggerCollisionLayer|(1u<<31),EnemyCollisionLayer};
     const auto history=document.history().size();require(document.updateEntity(trigger,sensor)&&document.history().size()==history+1&&document.undo()&&document.scene().find(trigger)->collider->mode==ColliderMode::Solid&&document.redo()&&document.scene().find(trigger)->collider==sensor.collider,"Collider mode and bit-31 filters did not participate in scene history.");

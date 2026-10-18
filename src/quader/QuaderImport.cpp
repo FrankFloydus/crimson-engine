@@ -19,6 +19,8 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
+#include <map>
 #include <numbers>
 #include <stdexcept>
 #include <unordered_set>
@@ -67,6 +69,42 @@ std::string identity(const QuaderSourceScene& scene,const QuaderSourceTexture& t
 float scaled(float value,float factor){const double result=double(value)*factor;require(std::isfinite(result)&&std::abs(result)<=std::numeric_limits<float>::max(),"Import Scale exceeds Crimson's numeric range.");return static_cast<float>(result);}
 Vec3 scaled(const Vec3& value,float factor){return {scaled(value[0],factor),scaled(value[1],factor),scaled(value[2],factor)};}
 Mat4 placement(const Mat4& source,float factor){auto value=source;for(std::size_t i=12;i<15;++i)value[i]=scaled(source[i],factor);require(math::finite(value)&&math::isAffine(value),"Quader placement is invalid.");return value;}
+std::string meshKey(const QuaderSourceMesh& mesh){return "mesh:"+std::to_string(mesh.displayEntity)+":"+std::to_string(mesh.geometryEntity)+":"+std::to_string(mesh.definitionEntity);}
+std::string meshOwner(const QuaderSourceMesh& mesh){
+    // Only authored Quader instances share a definition member. Ordinary
+    // objects own independent assets even when their render bytes are equal.
+    return mesh.definitionEntity?"instance:"+std::to_string(mesh.definitionEntity)+":"+std::to_string(mesh.geometryEntity):
+        "object:"+std::to_string(mesh.displayEntity);
+}
+void localizeHierarchy(const QuaderSourceScene& source,QuaderImportResult& out){
+    std::unordered_map<std::string,std::string> parents;
+    const auto add=[&](const std::string& key,const std::string& parent){require(!key.empty()&&parents.emplace(key,parent).second,"Duplicate Quader hierarchy identity.");};
+    for(const auto& group:source.groups)add(group.sourceKey,group.parentKey);
+    for(const auto& mesh:source.meshes)add(meshKey(mesh),mesh.parentKey);
+    for(const auto& light:source.lights)add("light:"+std::to_string(light.entity),light.parentKey);
+    // Validate once, without recursion, so deeply nested authored groups cannot
+    // exhaust the stack or conceal a cycle through a skipped source light.
+    std::unordered_map<std::string,unsigned char> states;
+    for(const auto& [key,parent]:parents){(void)parent;std::vector<std::string> chain;auto next=key;
+        while(!next.empty()){
+            const auto found=parents.find(next);require(found!=parents.end(),"Quader hierarchy refers to a missing parent.");
+            auto& state=states[next];if(state==2)break;require(state==0,"Quader hierarchy contains a cycle.");state=1;chain.push_back(next);next=found->second;
+        }
+        for(const auto& visited:chain)states[visited]=2;
+    }
+    std::unordered_map<std::string,Mat4> worlds;
+    const auto capture=[&](const auto& nodes){for(const auto& node:nodes)worlds.emplace(node.sourceKey,node.local);};
+    capture(out.groups);capture(out.meshes);capture(out.lights);
+    const auto localize=[&](auto& nodes){for(auto& node:nodes){
+        // Disabled/unsupported lights may still parent supported descendants.
+        // Promote those descendants to the closest imported ancestor.
+        while(!node.parentKey.empty()&&!worlds.contains(node.parentKey))node.parentKey=parents.at(node.parentKey);
+        if(node.parentKey.empty())continue;
+        const auto inverse=math::inverse(worlds.at(node.parentKey));require(inverse.has_value(),"A Quader parent has a singular transform.");
+        node.local=math::multiply(*inverse,node.local);require(math::finite(node.local)&&math::isAffine(node.local),"Quader local placement is invalid.");
+    }};
+    localize(out.groups);localize(out.meshes);localize(out.lights);
+}
 void triangle(const Vec3& a,const Vec3& b,const Vec3& c,float factor,const Mat4& transform){
     const auto x=scaled(a,factor),y=scaled(b,factor),z=scaled(c,factor);const auto before=math::cross(b-a,c-a),after=math::cross(y-x,z-x);
     require(math::finite(after)&&(math::length(before)==0||math::length(after)>0)&&math::finite(math::transformPoint(transform,x))&&
@@ -113,26 +151,74 @@ MaterialAsset materialAsset(const QuaderSourceMaterial& source,const std::string
     canonicalizeMaterialAsset(material);validateMaterialAsset(material);return material;
 }
 struct Preparation {
-    struct Package {std::string id,gltf,buffer,manifest,identity;std::array<std::string,4> inputs;};
+    struct Package {std::string id,gltf,buffer,manifest,identity,owner;std::array<std::string,4> inputs;};
     const QuaderSourceScene& scene;const QuaderPrepareOptions& options;std::stop_token stop;QuaderImportResult out;
     std::unordered_map<std::string,std::size_t> fileIndexes,inputIndexes;std::unordered_map<std::string,MaterialAsset> materials;std::filesystem::path stage;
     std::unordered_map<std::string,std::vector<Package>> packages;
     std::unordered_set<std::string> preparedPackages;bool indexedPackages{};
-    QuaderSceneBundle bundle;std::filesystem::path bundlePath,canonicalRoot;
+    QuaderSceneBundle bundle;std::filesystem::path bundlePath,canonicalRoot,previousSceneDirectory,sceneDirectory,materialDirectory,textureDirectory;
+    std::unordered_map<std::string,std::filesystem::path> registeredFiles;
     explicit Preparation(const QuaderSourceScene& source,const QuaderPrepareOptions& settings,std::stop_token token):scene(source),options(settings),stop(token){
         canonicalRoot=std::filesystem::weakly_canonical(std::filesystem::absolute(options.projectRoot));
-        static std::atomic<std::uint64_t> sequence{};const auto id=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
-        stage=resolveAssetPath(options.projectRoot,"assets/.staging-quader-"+id);
+        out.locationRevision=contentStorageRevision(options.projectRoot);
+        for(const auto& entry:storedAssetPaths(options.projectRoot))registeredFiles.emplace(entry.id,entry.file);
+        static std::atomic<std::uint64_t> sequence{};const auto stageId=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
+        stage=resolveAssetPath(options.projectRoot,"assets/.staging-quader-"+stageId);
         for(const auto& [id,material]:options.existingMaterials)materials[canonicalAssetId(id)]=material;
         auto fallback=defaultMaterialAsset();canonicalizeMaterialAsset(fallback);materials[DefaultMaterialId]=std::move(fallback);
         if(auto existing=findQuaderSceneBundle(options.projectRoot,scene.project.id,scene.id)){
             bundlePath=existing->first;bundle=std::move(existing->second);
             input(pathText(bundlePath.lexically_relative(canonicalRoot)),bytes(bundlePath));
+            const auto sourceName=pathText(pathFromUtf8(scene.relativePath).stem());
+            // The old package migration did not know the source filename and
+            // used this generic name. Adopt it only while its path is automatic.
+            if(bundle.name=="Quader Scene"&&!sourceName.empty()&&sourceName!=bundle.name&&
+                (bundlePath==defaultQuaderSceneBundlePath(options.projectRoot,bundle)||bundlePath.parent_path()==canonicalRoot/"Content/models")){
+                const auto oldDirectory=quaderSceneContentDirectory(options.projectRoot,bundle),oldPath=bundlePath;bundle.name=sourceName;
+                bundlePath=defaultQuaderSceneBundlePath(options.projectRoot,bundle);
+                if(bundlePath!=oldPath){
+                    previousSceneDirectory=oldDirectory;require(!std::filesystem::exists(bundlePath),"The source scene content destination is already occupied.");
+                    input(pathText(bundlePath.lexically_relative(canonicalRoot)),std::nullopt);out.files.push_back({pathText(oldPath.lexically_relative(canonicalRoot)),std::nullopt});
+                }
+            }
         }else{
             bundle.id=quaderSceneBundleId(scene.project.id,scene.id);bundle.projectId=scene.project.id;bundle.sceneId=scene.id;
             bundle.name=pathText(pathFromUtf8(scene.relativePath).stem());if(bundle.name.empty())bundle.name=scene.project.name;
             bundlePath=defaultQuaderSceneBundlePath(options.projectRoot,bundle);
             input(pathText(bundlePath.lexically_relative(canonicalRoot)),std::nullopt);
+        }
+        sceneDirectory=bundlePath.parent_path().parent_path();materialDirectory=sceneDirectory/"materials";textureDirectory=sceneDirectory/"textures";
+        if(previousSceneDirectory.empty()){
+            std::map<std::filesystem::path,std::size_t> materialFolders,textureFolders;
+            std::set<std::string> sourceMaterials,sourceTextures;
+            const auto anchor=[&](const std::string& id,const std::string& kind,auto& folders)->std::optional<std::filesystem::path>{
+                const auto found=registeredFiles.find(id);if(found==registeredFiles.end())return {};
+                const auto& path=found->second;const auto relative=path.lexically_relative(sceneDirectory);
+                if(relative.empty()||relative.has_root_path()||*relative.begin()=="..")return {};
+                const auto prefix="assets/"+kind+"/quader-"+(kind=="materials"?scene.project.id+"-":std::string{});
+                const auto legacy=legacyAssetId(options.projectRoot,id),original="assets/"+kind+"/"+pathText(path.filename());
+                if(!legacy.starts_with(prefix)&&!(original.starts_with(prefix)&&publishedId(original)==id))return {};
+                ++folders[path.parent_path()];return path;
+            };
+            for(const auto& model:bundle.models){const auto manifest=Json::parse(model.manifest);
+                if(const auto mapped=manifest.find("materialAssets");mapped!=manifest.end())for(const auto& value:*mapped)sourceMaterials.insert(publishedId(value.get<std::string>()));}
+            for(const auto& id:sourceMaterials)if(const auto file=anchor(id,"materials",materialFolders)){
+                // Refresh can repair a malformed destination without parsing it.
+                // Such a file still supplies its known material-folder anchor.
+                try{const auto definition=Json::parse(bytes(*file));
+                    const auto collect=[&](auto&& self,const Json& value)->void {
+                        if(value.is_object())for(auto it=value.begin();it!=value.end();++it){
+                            if(it.key()=="image"&&it.value().is_string())sourceTextures.insert(publishedId(it.value().get<std::string>()));
+                            else self(self,it.value());
+                        }else if(value.is_array())for(const auto& child:value)self(self,child);
+                    };collect(collect,definition);
+                }catch(const std::exception&){/* Existing graph validation remains the material owner's responsibility. */}
+            }
+            for(const auto& id:sourceTextures)(void)anchor(id,"textures",textureFolders);
+            const auto preferred=[](const auto& folders,const std::filesystem::path& fallback){
+                auto result=fallback;std::size_t count{};for(const auto& [folder,uses]:folders)if(uses>count){result=folder;count=uses;}return result;
+            };
+            materialDirectory=preferred(materialFolders,materialDirectory);textureDirectory=preferred(textureFolders,textureDirectory);
         }
         std::filesystem::create_directories(stage);
     }
@@ -156,14 +242,26 @@ struct Preparation {
     std::string availableFileId(const std::string& original)const{
         return availableQuaderAssetId(original,options.reservedIds);
     }
+    std::filesystem::path outputPath(const std::string& id)const{
+        if(const auto found=registeredFiles.find(publishedId(id));found!=registeredFiles.end())return found->second;
+        if(id.starts_with("assets/materials/quader-")||id.starts_with("assets/textures/quader-")){
+            const auto& directory=id.starts_with("assets/materials/")?materialDirectory:textureDirectory;
+            return checkedContentPath(options.projectRoot,directory/pathFromUtf8(id).filename());
+        }
+        return checkedManagedAssetPath(options.projectRoot,id);
+    }
     void file(const std::string& id,std::string data,bool preserve=false,bool immutable=false){
-        canceled(stop);require(!id.empty(),"Quader import produced an empty output identity.");const auto path=checkedManagedAssetPath(options.projectRoot,id);
+        canceled(stop);require(!id.empty(),"Quader import produced an empty output identity.");const auto path=outputPath(id);
         if(options.reservedIds.contains(id)||options.reservedIds.contains(canonicalAssetId(id)))throw std::runtime_error("Quader import would recreate an explicitly deleted asset: "+id);
         if(const auto found=fileIndexes.find(id);found!=fileIndexes.end()){require(out.files[found->second].contents==data,"Conflicting Quader asset identities.");return;}
         const auto prior=std::filesystem::exists(path)?std::optional{bytes(path)}:std::nullopt;
-        if(!immutable)input(id,prior);
+        const auto literal=pathText(path.lexically_relative(canonicalRoot));
+        if(!immutable)input(literal,prior);
+        if(id.starts_with("assets/materials/quader-")||id.starts_with("assets/textures/quader-")){
+            if(std::none_of(out.locations.begin(),out.locations.end(),[&](const auto& entry){return entry.id==publishedId(id);}))out.locations.push_back({publishedId(id),path});
+        }
         if(prior){if(*prior==data||preserve)return;require(!immutable,"Managed Quader geometry was modified; delete the conflicting package before importing again.");}
-        fileIndexes.emplace(id,out.files.size());out.files.push_back({id,std::move(data)});
+        fileIndexes.emplace(id,out.files.size());out.files.push_back({literal,std::move(data)});
     }
     std::vector<std::string> importMaterials(){
         std::vector<std::string> result;result.reserve(scene.materials.size());
@@ -176,7 +274,7 @@ struct Preparation {
                 const auto target=replacement->second.empty()?std::string(DefaultMaterialId):replacement->second;result.push_back(target);
                 if(!isEngineAssetId(target))reuseMaterial(target);continue;}
             const auto id=availableFileId(originalId);
-            result.push_back(publishedId(id));const bool exists=std::filesystem::is_regular_file(checkedManagedAssetPath(options.projectRoot,id));
+            result.push_back(publishedId(id));const bool exists=std::filesystem::is_regular_file(outputPath(id));
             const bool protectedMaterial=options.protectedMaterials.contains(id)||options.protectedMaterials.contains(publishedId(id));
             if(exists&&(!options.refreshMaterials||protectedMaterial)){
                 reuseMaterial(id);
@@ -200,6 +298,53 @@ struct Preparation {
         return result;
     }
     std::string identityKey(const QuaderSourceTexture& texture,std::size_t slot,bool directX)const{return identity(scene,texture,slot,directX);}
+    void adoptSourceSceneDirectory(){
+        if(previousSceneDirectory.empty())return;
+        const auto destination=quaderSceneContentDirectory(options.projectRoot,bundle);
+        const auto generatedPath=[&](const std::string& id,const std::string& kind)->std::optional<std::filesystem::path>{
+            const auto found=registeredFiles.find(id);if(found==registeredFiles.end()||options.reservedIds.contains(id))return {};
+            const auto& path=found->second;
+            if(!std::filesystem::is_regular_file(path)||(path.parent_path()!=previousSceneDirectory/kind&&path.parent_path()!=canonicalRoot/"Content"/kind)||
+                !pathText(path.filename()).starts_with("quader-"))return {};
+            const auto prefix="assets/"+kind+"/quader-"+(kind=="materials"?scene.project.id+"-":std::string{});
+            const auto legacy=legacyAssetId(options.projectRoot,id),original="assets/"+kind+"/"+pathText(path.filename());
+            if(!legacy.starts_with(prefix)&&!(original.starts_with(prefix)&&publishedId(original)==id))return {};
+            return path;
+        };
+        const auto dataAt=[&](const std::filesystem::path& path){
+            const auto literal=pathText(path.lexically_relative(canonicalRoot));
+            for(const auto& change:out.files)if(change.id==literal&&change.contents)return *change.contents;
+            return bytes(path);
+        };
+        std::set<std::string> relocated;
+        const auto relocate=[&](const std::string& id,const std::string& kind,const std::filesystem::path& from){
+            if(!relocated.insert(id).second)return;
+            const auto to=checkedContentPath(options.projectRoot,destination/kind/from.filename());
+            require(!std::filesystem::exists(to),"A native asset already occupies the source scene content destination.");
+            const auto old=pathText(from.lexically_relative(canonicalRoot)),next=pathText(to.lexically_relative(canonicalRoot));
+            const auto prior=bytes(from);input(old,prior);input(next,std::nullopt);
+            const auto staged=std::find_if(out.files.begin(),out.files.end(),[&](const auto& change){return change.id==old;});
+            if(staged!=out.files.end()){require(staged->contents.has_value(),"A source asset was already removed during scene folder adoption.");staged->id=next;}
+            else out.files.push_back({next,prior});
+            out.files.push_back({old,std::nullopt});
+            const auto location=std::find_if(out.locations.begin(),out.locations.end(),[&](const auto& entry){return entry.id==id;});
+            if(location==out.locations.end())out.locations.push_back({id,to});else location->file=to;
+        };
+        const auto imageReferences=[](auto&& self,const Json& value,std::set<std::string>& images)->void {
+            if(value.is_object())for(auto it=value.begin();it!=value.end();++it){
+                if(it.key()=="image"&&it.value().is_string())images.insert(canonicalAssetId(it.value().get<std::string>()));
+                else self(self,it.value(),images);
+            }else if(value.is_array())for(const auto& child:value)self(self,child,images);
+        };
+        std::set<std::string> materialIds;
+        for(const auto& model:bundle.models){const auto manifest=Json::parse(model.manifest);
+            if(const auto mapped=manifest.find("materialAssets");mapped!=manifest.end())for(const auto& value:*mapped)materialIds.insert(publishedId(value.get<std::string>()));}
+        for(const auto& id:materialIds)if(const auto material=generatedPath(id,"materials")){
+            const auto definition=Json::parse(dataAt(*material));std::set<std::string> images;imageReferences(imageReferences,definition,images);
+            relocate(id,"materials",*material);
+            for(const auto& image:images)if(const auto texture=generatedPath(image,"textures"))relocate(image,"textures",*texture);
+        }
+    }
     bool reservedPackage(const std::string& id)const{
         for(const auto& model:bundle.models)if(model.id==canonicalAssetId(id)||model.legacyManifest==id){
             const auto directory=pathFromUtf8(model.legacyManifest).parent_path();
@@ -220,12 +365,17 @@ struct Preparation {
         for(const auto& model:bundle.models){
             canceled(stop);if(reservedPackage(model.id))continue;
             Package package;package.id=model.id;package.manifest=model.manifest;package.gltf=model.gltf;package.buffer=model.buffer;
-            package.identity=visualIdentity(Json::parse(package.gltf),Json::parse(package.manifest).at("materialAssets"));
-            packages[digest(package.identity+"\n"+package.buffer)].push_back(std::move(package));
+            const auto manifest=Json::parse(package.manifest);package.owner=manifest.at("quader").value("meshOwner",std::string{});
+            // Former content-only generations stay intact for saved scenes
+            // and history. Reimport publishes owned replacements rather than
+            // arbitrarily assigning one previously shared asset to an object.
+            if(package.owner.empty())continue;
+            package.identity=visualIdentity(Json::parse(package.gltf),manifest.at("materialAssets"));
+            packages[digest(package.owner+"\n"+package.identity+"\n"+package.buffer)].push_back(std::move(package));
         }
         // Imports run on a worker. Inspect the immutable package catalog once,
         // not once per occurrence; physical placement and display names are not
-        // geometry identity. Old UUID-migrated packages keep their original bytes.
+        // geometry identity. Sharing still requires the same authored owner.
         for(const auto& entry:storedAssetPaths(options.projectRoot)){
             canceled(stop);if(entry.file.filename()!="manifest.json"||!std::filesystem::is_regular_file(entry.file)||reservedPackage(entry.id))continue;
             if(std::any_of(bundle.models.begin(),bundle.models.end(),[&](const auto& model){return model.id==entry.id;}))continue;
@@ -233,6 +383,7 @@ struct Preparation {
                 Package package;package.id=entry.id;package.manifest=bytes(entry.file);const auto manifest=Json::parse(package.manifest);
                 if(manifest.value("format",std::string{})!="Quader"||!manifest.contains("quader"))continue;
                 const auto& source=manifest.at("quader");if(source.value("project",std::string{})!=scene.project.id||source.value("scene",std::string{})!=scene.id||source.value("collision",false))continue;
+                package.owner=source.value("meshOwner",std::string{});if(package.owner.empty())continue;
                 if(manifest.value("document",std::string{})!="model.gltf"||manifest.value("original",std::string{})!="source.gltf")continue;
                 const auto directory=entry.file.parent_path();package.gltf=bytes(directory/"model.gltf");
                 if(bytes(directory/"source.gltf")!=package.gltf)continue;
@@ -240,12 +391,12 @@ struct Preparation {
                 package.identity=visualIdentity(Json::parse(package.gltf),manifest.at("materialAssets"));
                 const std::array<std::filesystem::path,4> files{entry.file,directory/"model.gltf",directory/"source.gltf",directory/"buffers/0.bin"};
                 for(std::size_t i=0;i<files.size();++i)package.inputs[i]=assetIdAtPath(options.projectRoot,files[i]);
-                const auto key=digest(package.identity+"\n"+package.buffer);packages[key].push_back(std::move(package));
+                const auto key=digest(package.owner+"\n"+package.identity+"\n"+package.buffer);packages[key].push_back(std::move(package));
             }catch(const std::exception&){/* Unrelated invalid packages cannot be reused. Direct identity conflicts still fail in file(). */}
         }
         for(auto& [key,candidates]:packages){(void)key;std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.id<b.id;});}
     }
-    std::string package(const std::string& name,const std::vector<QuaderSourceVertex>& vertices,const std::vector<std::uint32_t>& indices,
+    std::string package(const std::string& name,const std::string& owner,const std::vector<QuaderSourceVertex>& vertices,const std::vector<std::uint32_t>& indices,
         const std::vector<QuaderSourceSurface>& surfaces,const std::vector<std::string>& materialIds){
         if(indices.empty())return {};require(!vertices.empty()&&indices.size()%3==0,"Quader mesh does not contain valid triangles.");
         std::string buffer;Json views=Json::array(),accessors=Json::array();const auto append=[&](const void* data,std::size_t count){const auto offset=buffer.size();buffer.append(static_cast<const char*>(data),count);return offset;};
@@ -265,37 +416,31 @@ struct Preparation {
             Json attributes{{"POSITION",position},{"NORMAL",normal},{"TEXCOORD_0",uv}};
             primitives.push_back({{"attributes",std::move(attributes)},{"indices",index},{"material",slot},{"mode",4}});}
         if(primitives.empty())return {};
+        // The ABI 6 provenance token participates in the established geometry
+        // hash. ABI 7 adds hierarchy only; keep identical render data reusable.
         Json document{{"asset",{{"version","2.0"},{"generator","Crimson Quader bridge ABI 6"}}},{"scene",0},{"scenes",Json::array({{{"nodes",{0}}}})},
             {"nodes",Json::array({{{"name",name},{"mesh",0}}})},{"meshes",Json::array({{{"name",name},{"primitives",std::move(primitives)}}})},
             {"materials",std::move(gltfMaterials)},{"buffers",Json::array({{{"uri","buffers/0.bin"},{"byteLength",buffer.size()}}})},{"bufferViews",std::move(views)},{"accessors",std::move(accessors)}};
-        // Preserve the former hash recipe, including its virtual fallback, so
-        // removing the unused manifest entry does not change existing package IDs
-        // or conceal immutable-member corruption behind a replacement package.
+        // Keep the virtual fallback in generation hashes for consistent slot
+        // compatibility, while source ownership decides which objects can share.
         auto legacyMaterials=nativeMaterials;legacyMaterials.push_back(DefaultMaterialId);
-        auto gltf=document.dump();const auto exactContent=digest(scene.project.id+"|"+scene.id+"|"+gltf+"\n"+legacyMaterials.dump()+"\n"+buffer);
-        const auto normalized=visualIdentity(document,nativeMaterials),key=digest(normalized+"\n"+buffer);
-        auto content=digest("Quader visual geometry v2|"+scene.project.id+"|"+scene.id+"|"+rawVisualIdentity(document,legacyMaterials)+"\n"+buffer);
-        // Prefer the exact legacy package when present, so corruption of its
-        // immutable members is still reported rather than hidden by a new ID.
-        const auto oldBase="assets/models/quader-"+exactContent;
+        auto gltf=document.dump();const auto normalized=visualIdentity(document,nativeMaterials),key=digest(owner+"\n"+normalized+"\n"+buffer);
+        const auto content=digest("Quader owned visual geometry v3|"+scene.project.id+"|"+scene.id+"|"+owner+"|"+rawVisualIdentity(document,legacyMaterials)+"\n"+buffer);
         const auto generationBase=[&](const std::string& original){
             for(std::size_t generation=0;;++generation){const auto value=original+(generation?"-"+std::to_string(generation):std::string{});
                 if(!reservedPackage(value+"/manifest.json"))return value;}
         };
-        const auto legacyBase=generationBase(oldBase);
-        const bool exactLegacy=std::filesystem::is_regular_file(checkedManagedAssetPath(options.projectRoot,legacyBase+"/manifest.json"));
-        if(exactLegacy)content=exactContent;
         const auto originalBase="assets/models/quader-"+content;
         std::string base;
         // Deletion reserves old references, not the right to import the source
         // again. Reuse the first live generation and never revive a deleted ID.
         base=generationBase(originalBase);auto id=base+"/manifest.json";
         Json manifest{{"version",1},{"name",name},{"format","Quader"},{"document","model.gltf"},{"original","source.gltf"},
-            {"dependencies",Json::array({{{"kind","buffer"},{"index",0},{"path","buffers/0.bin"},{"source","Quader reader ABI 6"}}})},{"materialAssets",exactLegacy?legacyMaterials:nativeMaterials},
-            {"quader",{{"project",scene.project.id},{"scene",scene.id},{"collision",false},{"content",content}}}};
+            {"dependencies",Json::array({{{"kind","buffer"},{"index",0},{"path","buffers/0.bin"},{"source","Quader reader ABI 6"}}})},{"materialAssets",nativeMaterials},
+            {"quader",{{"project",scene.project.id},{"scene",scene.id},{"collision",false},{"content",content},{"meshOwner",owner}}}};
         auto manifestText=manifest.dump(2)+"\n";indexPackages();
         const auto candidates=packages.find(key);const Package* reused{};
-        if(!exactLegacy&&candidates!=packages.end())for(const auto& candidate:candidates->second)if(candidate.identity==normalized&&candidate.buffer==buffer){reused=&candidate;break;}
+        if(candidates!=packages.end())for(const auto& candidate:candidates->second)if(candidate.owner==owner&&candidate.identity==normalized&&candidate.buffer==buffer){reused=&candidate;break;}
         if(reused){
             id=reused->id;gltf=reused->gltf;buffer=reused->buffer;manifestText=reused->manifest;
             const std::array<const std::string*,4> values{&manifestText,&gltf,&gltf,&buffer};
@@ -312,7 +457,7 @@ struct Preparation {
                     bytes(checkedManagedAssetPath(options.projectRoot,base+"/buffers/0.bin"))==buffer,
                     "Managed Quader geometry was modified; repair the conflicting source package before importing again.");
             }
-            packages[key].push_back({publishedId(id),gltf,buffer,manifestText,normalized,{}});
+            packages[key].push_back({publishedId(id),gltf,buffer,manifestText,normalized,owner,{}});
         }
         const auto published=publishedId(id);out.assetIds.push_back(published);
         if(!preparedPackages.insert(published).second)return published;
@@ -333,9 +478,12 @@ struct Preparation {
         out.preparedModels.push_back(std::move(asset));return published;
     }
     void finish(){
-        if(preparedPackages.empty())return;
-        // One durable file owns every immutable generation for this source
-        // scene. Older generations remain available to scene references/Undo.
+        if(bundle.models.empty())return;
+        // Publish the source's complete current set, including an empty set.
+        // Referenced older generations remain loadable for scenes and Undo,
+        // while the catalog only offers current source geometry.
+        for(auto& model:bundle.models)model.current=preparedPackages.contains(model.id);
+        adoptSourceSceneDirectory();
         file(pathText(bundlePath.lexically_relative(canonicalRoot)),encodeQuaderSceneBundle(bundle));
         out.locations.push_back({bundle.id,bundlePath});
         const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
@@ -371,11 +519,12 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
     if(options.completed)out.sourceKey=quaderSaveKey(*options.completed,options.scale,options.refreshMaterials,options.syncLights);
     else out.sourceKey=scene.project.id+"|"+scene.id+"|manual|"+std::to_string(scene.fingerprint.bytes)+"|"+std::to_string(scene.fingerprint.hash);
     const auto materialIds=context.importMaterials();
-    for(const auto& source:scene.meshes){canceled(stop);QuaderImportedMesh mesh;mesh.sourceKey="mesh:"+std::to_string(source.displayEntity)+":"+std::to_string(source.geometryEntity)+":"+std::to_string(source.definitionEntity);mesh.name=source.name;mesh.local=placement(source.transform,options.scale);mesh.visible=source.visible;
+    for(const auto& source:scene.groups){canceled(stop);out.groups.push_back({source.sourceKey,source.parentKey,source.name,placement(source.transform,options.scale),source.visible,source.order});}
+    for(const auto& source:scene.meshes){canceled(stop);QuaderImportedMesh mesh;mesh.sourceKey=meshKey(source);mesh.name=source.name;mesh.local=placement(source.transform,options.scale);mesh.visible=source.visible;mesh.parentKey=source.parentKey;mesh.order=source.order;
         std::vector<QuaderSourceSurface> surfaces=source.surfaces;if(surfaces.empty()&&!source.indices.empty())surfaces.push_back({UINT32_MAX,0,static_cast<std::uint32_t>(source.indices.size())});
         for(const auto& surface:surfaces){require(surface.count%3==0&&std::uint64_t(surface.offset)+surface.count<=source.indices.size(),"Invalid Quader surface indices.");
             for(std::uint32_t i=0;i<surface.count;i+=3){const auto a=source.indices[surface.offset+i],b=source.indices[surface.offset+i+1],c=source.indices[surface.offset+i+2];require(a<source.vertices.size()&&b<source.vertices.size()&&c<source.vertices.size(),"Invalid Quader vertex index.");triangle(source.vertices[a].position,source.vertices[b].position,source.vertices[c].position,options.scale,mesh.local);}}
-        mesh.modelId=context.package(source.name,source.vertices,source.indices,surfaces,materialIds);
+        mesh.modelId=context.package(source.name,meshOwner(source),source.vertices,source.indices,surfaces,materialIds);
         if(source.collision==QuaderCollision::Unsupported)++out.skippedCollisions;
         if(source.collision==QuaderCollision::StaticTriangles&&!source.collisionPoints.empty()){
             require(source.collisionPoints.size()%3==0,"Invalid Quader static collision triangles.");std::vector<Vec3> positions;std::vector<std::uint32_t> indices;positions.reserve(source.collisionPoints.size());indices.reserve(source.collisionPoints.size());
@@ -387,12 +536,13 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
     if(options.syncLights)for(const auto& source:scene.lights){canceled(stop);if(source.type==2){++out.skippedSpots;continue;}require(source.type<=1,"Unsupported Quader light type.");require(lightIds.insert(source.entity).second,"Duplicate Quader light identity.");
         require(!((source.type==0&&directional>=MaximumDirectionalLights)||(source.type==1&&points>=MaximumPointLights)),"Quader scene exceeds Crimson's supported directional or point light count.");if(source.type==0)++directional;else ++points;
         QuaderImportedLight light;light.sourceKey="light:"+std::to_string(source.entity);light.name=source.name;light.point=source.type==1;light.color=source.color;light.intensity=source.energy;
+        light.parentKey=source.parentKey;light.order=source.order;
         light.radius=std::max(.01f,scaled(source.range,options.scale));require(light.radius<=100000.f,"Quader light range exceeds Crimson's supported radius.");light.castShadows=source.castShadows;light.visible=source.visible;
         const auto direction=math::normalized(math::transformDirection(source.transform,{0,-1,0}),{0,-1,0});auto up=math::normalized(math::transformDirection(source.transform,{0,0,1}),{0,0,1});
         if(std::abs(math::dot(direction,up))>.999)up=std::abs(direction[1])<.999?Vec3{0,1,0}:Vec3{0,0,1};
         const auto right=math::normalized(math::cross(direction,up),{1,0,0});up=math::normalized(math::cross(right,direction),{0,1,0});
         light.local={right[0],right[1],right[2],0,up[0],up[1],up[2],0,-direction[0],-direction[1],-direction[2],0,
             scaled(source.transform[12],options.scale),scaled(source.transform[13],options.scale),scaled(source.transform[14],options.scale),1};out.lights.push_back(std::move(light));}
-    context.finish();std::sort(out.assetIds.begin(),out.assetIds.end());out.assetIds.erase(std::unique(out.assetIds.begin(),out.assetIds.end()),out.assetIds.end());return std::move(out);
+    localizeHierarchy(scene,out);context.finish();std::sort(out.assetIds.begin(),out.assetIds.end());out.assetIds.erase(std::unique(out.assetIds.begin(),out.assetIds.end()),out.assetIds.end());return std::move(out);
 }
 } // namespace crimson

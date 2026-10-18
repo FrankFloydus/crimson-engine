@@ -45,6 +45,7 @@ public:
     std::filesystem::path folderPath(const std::string& id) const;
     bool writableFolder(const std::string& id) const;
     bool mutableItem(const std::string& id) const;
+    bool deletableItem(const std::string& id) const;
     std::string createFolder(const std::string& parent, std::string name);
     void rename(const std::string& id, std::string name);
     // Imports choose unique filenames in one transaction; ordinary editor moves
@@ -62,7 +63,7 @@ private:
     std::unordered_map<std::string,AssetEntry> assets_;
     std::unordered_map<std::string,BrowserFolder> folders_;
     std::unordered_map<std::string,Presentation> presentation_;
-    struct ItemMetadata { std::string name, catalogName, filename, identity; bool writable{}; };
+    struct ItemMetadata { std::string name, catalogName, filename, identity; bool writable{},deletable{}; };
     std::unordered_map<std::string,ItemMetadata> metadata_;
     std::vector<BrowserItem> orderedItems_;
     std::unordered_map<std::string,std::vector<BrowserItem>> directItems_;

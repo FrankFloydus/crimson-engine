@@ -44,11 +44,11 @@ void retiredCapabilityAndRoleEffects(){
         "Retired attribute membership remained an authored component or changed history.");
     const auto components=sceneComponents(record);require(std::find(components.begin(),components.end(),SceneComponentKind::Attributes)==components.end(),"Retired membership appeared in component enumeration.");
     const auto generic=document.createEmpty("Motor owner");const auto before=*document.scene().find(generic);
-    require(addSceneComponent(document,generic,SceneComponentKind::Motor),document.status());const auto composed=*document.scene().find(generic);
-    require(composed.controller&&composed.motor&&!composed.effects,"Motor authoring created attribute membership or an unrelated initializer.");
+    require(addSceneComponent(document,generic,SceneComponentKind::Movement),document.status());const auto composed=*document.scene().find(generic);
+    require(composed.controller&&composed.movement&&!composed.effects,"Motor authoring created attribute membership or an unrelated initializer.");
     require(document.undo()&&sameEntity(*document.scene().find(generic),before)&&document.redo(),"Motor dependencies did not undo and redo atomically.");
     require(addSceneComponent(document,generic,SceneComponentKind::Enemy),document.status());const auto creature=*document.scene().find(generic);
-    require(creature.effects->starting.front().id==EnemyStartingEffectId&&removeSceneComponent(document,generic,SceneComponentKind::Motor)&&
+    require(creature.effects->starting.front().id==EnemyStartingEffectId&&removeSceneComponent(document,generic,SceneComponentKind::Movement)&&
         document.scene().find(generic)->effects==creature.effects&&document.undo()&&sameEntity(*document.scene().find(generic),creature),"Motor removal discarded independently authored initialization effects.");
     EntityRecord independent;initializePlayerEffects(independent);const auto once=independent.effects;initializePlayerEffects(independent);
     require(independent.effects==once,"Role initialization helper duplicated its protected effect.");
@@ -70,7 +70,7 @@ void effectsAndTagsStorageHistory(){
     require(document.save("Effect copy",true),document.status());SceneDocument copied(project.root);require(copied.load(document.assetId())&&copied.scene().find(copy)->effects==authored.effects,"Save As changed effect references.");
 }
 void privateLegacySpeedConversion(){
-    EntityRecord actor;actor.id=17;actor.name="Player";actor.actor.emplace();actor.controller.emplace();actor.motor.emplace();
+    EntityRecord actor;actor.id=17;actor.name="Player";actor.actor.emplace();actor.controller.emplace();actor.movement.emplace();
     const auto current=Json::parse(serializeSceneSnapshot({{},"Legacy values",{actor},{}}));
     for(const auto version:{4,10,15,16,17,18,19,20,21}){
         Project project;auto json=current;json["version"]=version;auto& entity=json["entities"][0];

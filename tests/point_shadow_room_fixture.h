@@ -184,7 +184,7 @@ template<class Read> void exercise(Renderer& renderer,const ShaderCompileConfig&
     light.shadowDepthBias=0;light.shadowNormalBias=1;
     const auto height=authored.at("height").get<float>();
     SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
-    settings.environment.ambientVisibility.enabled=false;settings.environment.glow.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+settings.environment.glow.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
     settings.camera.nearPlane=.0001f;settings.camera.farPlane=100;settings.camera.fov=45;
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=room.instances;scene.shadowInstances=room.instances;
     scene.pointLights=std::span(&light,1);scene.shadowWorldId=9911;scene.shadowResolution=1024;

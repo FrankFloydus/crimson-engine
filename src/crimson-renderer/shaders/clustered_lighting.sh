@@ -11,10 +11,9 @@ uniform vec4 u_clusterAtlas; // Atlas extent, light-record and mask base texels.
 uniform vec4 u_clusterOptions; // Light count, all-lights reference, BRDF size, tile size.
 uniform vec4 u_clusterRecordLayoutV6; // Reflected CPU record ABI: texels per light, reserved YZW.
 uniform mat4 u_clusterView;
-uniform vec4 u_ambientAtlas; // Packed visibility base, screen width/height, published.
-uniform vec4 u_surfaceLighting; // Direct mask, ambient mask, depth prepass, analytical ambient.
+uniform vec4 u_surfaceLighting; // Direct mask, reserved, depth prepass, reserved.
 uniform vec4 u_surfaceCategory; // Explicit entity category: World 1 / Character 2.
-uniform vec4 u_directionLightingRoles[4]; // Direct mask, ambient mask, reveal strength, shadowed.
+uniform vec4 u_directionLightingRoles[4]; // Direct mask, reserved YZW.
 
 vec4 forwardPlusFetch(int linearIndex)
 {

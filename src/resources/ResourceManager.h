@@ -218,6 +218,10 @@ public:
     }
     void invalidate(const std::string& id);
     void invalidatePath(const std::filesystem::path&);
+    // Retire every live variant without reserving the authored identity. A
+    // later validated source publication may request a fresh generation.
+    void discard(const std::string& id);
+    // Explicit project deletion permanently rejects late ordinary requests.
     void forget(const std::string& id);
     void trim();
     void stop();
@@ -249,6 +253,7 @@ private:
     bool enqueue(Task);
     void complete(std::function<void()>);
     void worker(std::stop_token);
+    void retire(const std::string& id,bool preventReload);
     template<class T> void schedule(const std::shared_ptr<resource_detail::Record<T>>& record) {
         std::lock_guard lock(record->mutex);
         if(stopped_.load() || record->deleted || record->scheduled || !record->loader || record->interests.load()==0 ||

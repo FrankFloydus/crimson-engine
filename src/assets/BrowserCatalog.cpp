@@ -128,10 +128,12 @@ void BrowserCatalog::synchronize(std::span<const AssetEntry> assets) {
         try{physical=resolveAssetPath(root_,id);}catch(const std::exception&){}
         auto& metadata=metadata_[id];metadata.filename=folded(utf8(physical.filename()));
         metadata.writable=!isEngineAssetId(id)&&!physical.empty()&&below(physical,root_/"Content");
+        metadata.deletable=metadata.writable;
         auto directory=physical.parent_path();
         if(asset.kind==AssetKind::Model&&physical.filename()=="manifest.json") {
             if(const auto bundle=quaderBundleSource(root_,id)) {
                 directory=bundle->parent_path();metadata.filename=folded(utf8(bundle->filename()));metadata.writable=false;
+                metadata.deletable=!isEngineAssetId(id);
             }else directory=directory.parent_path();
         }
         else if(packageImage(physical)) {
@@ -180,6 +182,11 @@ bool BrowserCatalog::mutableItem(const std::string& id)const {
     if(!writable_||!contains(id)||id==ContentFolder||id==EngineFolder)return false;
     if(isFolder(id))return writableFolder(id);
     const auto found=metadata_.find(id);return found!=metadata_.end()&&found->second.writable;
+}
+bool BrowserCatalog::deletableItem(const std::string& id)const {
+    if(!writable_||!contains(id)||id==ContentFolder||id==EngineFolder)return false;
+    if(isFolder(id))return writableFolder(id);
+    const auto found=metadata_.find(id);return found!=metadata_.end()&&found->second.deletable;
 }
 fs::path BrowserCatalog::itemPath(const std::string& id)const {
     if(isFolder(id))return folderPath(id);
@@ -315,7 +322,7 @@ std::vector<std::string> BrowserCatalog::descendants(const std::string& folder)c
 std::string BrowserCatalog::serializeWithout(std::span<const std::string> ids)const {
     if(!writable_)throw std::runtime_error(status_);const std::unordered_set<std::string> erased(ids.begin(),ids.end());
     for(const auto& id:erased) {
-        if(contains(id)&&!mutableItem(id))throw std::runtime_error("Engine content and the Content root are protected.");
+        if(contains(id)&&!deletableItem(id))throw std::runtime_error("Engine content and the Content root are protected.");
         if(isFolder(id))for(const auto& descendant:descendants(id))if(!erased.contains(descendant))throw std::runtime_error("Folder deletion must include its complete contents.");
     }
     Json folders=Json::array(),assets=Json::object();std::vector<std::string> keys;

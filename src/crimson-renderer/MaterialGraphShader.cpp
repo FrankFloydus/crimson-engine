@@ -95,7 +95,7 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         addBinding(result,"u_modelNormalMatrix",ShaderUniformKind::Mat4);
         addBinding(result,"u_direction",ShaderUniformKind::Vec4,4);addBinding(result,"u_directionColor",ShaderUniformKind::Vec4,4);
         for(auto name:{"u_clusterGrid","u_clusterDepth","u_clusterViewport","u_clusterAtlas","u_clusterOptions","u_clusterRecordLayoutV6",
-            "u_surfaceLighting","u_surfaceCategory","u_ambientAtlas","u_ambientSettings","u_ambientTransition","u_revealAtlas","u_lightingResponse",
+            "u_surfaceLighting","u_surfaceCategory",
             "u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase","u_ssgiAtlas","u_ssgiSettings","u_ssgiDraw","u_ssaoAtlas","u_ssaoSettings","u_debugView"})addBinding(result,name);
         addBinding(result,"u_directionLightingRoles",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_clusterView",ShaderUniformKind::Mat4);
@@ -105,9 +105,6 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         addBinding(result,"u_directionalShadowParameters",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_directionalShadowRect",ShaderUniformKind::Vec4,16);
         addBinding(result,"u_shadowCameraForward");
-        for(auto name:{"u_characterDirection","u_characterColor","u_characterResponse"})addBinding(result,name,ShaderUniformKind::Vec4,2);
-        addBinding(result,"u_characterShadowMatrix",ShaderUniformKind::Mat4,MaximumActorShadows);
-        for(auto name:{"u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters"})addBinding(result,name,ShaderUniformKind::Vec4,MaximumActorShadows);
         addBinding(result,"s_irradiance",ShaderUniformKind::Sampler,1,12,ShaderTextureDimension::Cube);
         addBinding(result,"s_prefiltered",ShaderUniformKind::Sampler,1,13,ShaderTextureDimension::Cube);
         addBinding(result,"s_brdfLut",ShaderUniformKind::Sampler,1,14);
@@ -316,7 +313,7 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         source<<((model || particle)?
             "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal\n":
             "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal\n");
-        source<<"// crimson-material-graph-generator-v23\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
+        source<<"// crimson-material-graph-generator-v24\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
             <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<(surface&&lit)<<"\n";
         source<<"#include <bgfx_shader.sh>\nuniform vec4 u_graphParams[208];\n";
         if(model || particle)source<<"uniform mat4 u_modelNormalMatrix;\nuniform vec4 u_modelUv;\n";

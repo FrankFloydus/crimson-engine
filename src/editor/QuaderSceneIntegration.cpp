@@ -1,18 +1,30 @@
 #include "QuaderSceneIntegration.h"
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 namespace crimson {
 bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderLink& requested,const QuaderImportResult& result,
     const ModelMaterialSourceQuery& modelMaterials) {
     std::vector<EntityRecord> records;
+    std::unordered_map<std::string,EntityId> sourceIds;
+    std::vector<std::pair<std::size_t,std::string>> parents;
     const auto append=[&](std::string key,std::string name,const Mat4& local,EntityId parent=NoEntity)->EntityRecord& {
         EntityRecord record;record.id=records.size()+1;record.name=name.empty()?"Quader object":std::move(name);
         record.parent=parent;record.order=static_cast<std::uint32_t>(records.size());record.local=local;
         record.quaderGenerated=QuaderGenerated{owner,std::move(key)};records.push_back(std::move(record));return records.back();
     };
+    const auto hierarchy=[&](EntityRecord& record,const std::string& key,const std::string& parent,std::uint32_t order) {
+        sourceIds.emplace(key,record.id);record.order=order;
+        if(!parent.empty())parents.emplace_back(records.size()-1,parent);
+    };
+    for(const auto& group:result.groups) {
+        auto& record=append(group.sourceKey,group.name,group.local);record.visible=group.visible;
+        hierarchy(record,group.sourceKey,group.parentKey,group.order);
+    }
     for(const auto& mesh:result.meshes) {
         auto& visual=append(mesh.sourceKey,mesh.name,mesh.local);const auto parent=visual.id;
+        hierarchy(visual,mesh.sourceKey,mesh.parentKey,mesh.order);
         visual.visible=mesh.visible;
         if(!mesh.modelId.empty())visual.model=AssetRef<ModelAsset>{mesh.modelId};
         if(mesh.collision) {
@@ -22,11 +34,18 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
     }
     if(requested.syncLights)for(const auto& light:result.lights) {
         auto& record=append(light.sourceKey,light.name,light.local);
+        hierarchy(record,light.sourceKey,light.parentKey,light.order);
         if(light.point) {
             record.point=ScenePointLight{light.color,light.intensity,light.visible,light.radius,light.castShadows};
         } else {
             record.directional=SceneDirectionalLight{light.color,light.intensity,light.visible,light.castShadows};
         }
+    }
+    for(const auto& [index,key]:parents) {
+        const auto found=sourceIds.find(key);
+        // SceneDocument validates the complete replacement before committing;
+        // unresolved parents must fail there rather than flattening the tree.
+        records[index].parent=found==sourceIds.end()?std::numeric_limits<EntityId>::max():found->second;
     }
     auto link=requested;link.projectId=result.projectId;link.sceneId=result.sceneId;link.saveKey=result.sourceKey;
     const auto sources=[&](const std::string& id)->std::optional<std::vector<std::string>> {

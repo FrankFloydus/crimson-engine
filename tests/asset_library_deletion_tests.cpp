@@ -122,8 +122,9 @@ void bundledModelPublicationAndReferences() {
             library.resolvedModelMaterials(*loaded,changed.modelMaterials).front().baseColor==assigned.surface.baseColor,
             "Startup discovery lost a bundled model or its per-instance material assignment.");
         const auto plan=library.planDeletion({fixture.modelId},&scene);
-        require(!plan.error.empty()&&!library.deletionPending()&&read(fixture.file)==encodeQuaderSceneBundle(fixture.bundle)&&read(sceneFile)==sceneBytes,
-            "Independent submodel deletion was allowed or changed authored bundle/scene data.");
+        require(plan.error.empty()&&plan.assetIds==std::vector<std::string>{fixture.modelId}&&plan.needsReferenceWarning()&&plan.clearsActiveHistory&&
+            !library.deletionPending()&&read(fixture.file)==encodeQuaderSceneBundle(fixture.bundle)&&read(sceneFile)==sceneBytes,
+            "Bundled model deletion was blocked, lost saved/live reference warnings, or changed authored data while planning.");
         auto manifest=nlohmann::json::parse(fixture.bundle.models.front().manifest);manifest["name"]="Updated triangle";
         fixture.bundle.models.front().manifest=manifest.dump();
         writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));library.onFileChanged(fixture.file);
@@ -138,6 +139,424 @@ void bundledModelPublicationAndReferences() {
     ResourceManager resources;AssetLibrary reopened(project.root,&resources);
     require(!hasAsset(reopened,fixture.modelId)&&!reopened.findModel(fixture.modelId)&&reopened.references().deleted(fixture.modelId)&&read(sceneFile)==sceneBytes,
         "Regenerating a bundle resurrected a tombstoned model or rewrote saved references.");
+}
+void manualBundledModelDeletion(bool asynchronous){
+    Project project;auto fixture=bundle_test::writeFixture(project.root);
+    const auto material=createMaterialAsset(project.root,"Shared bundle surface");
+    auto manifest=nlohmann::json::parse(fixture.bundle.models.front().manifest);manifest["materialAssets"]=nlohmann::json::array({material.id});
+    fixture.bundle.models.front().manifest=manifest.dump();
+    auto sibling=fixture.bundle.models.front();sibling.legacyManifest="assets/models/quader-bundle-sibling/manifest.json";
+    const auto siblingBase=fs::path(sibling.legacyManifest).parent_path();
+    const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+    for(std::size_t index=0;index<members.size();++index)sibling.memberIds[index]=canonicalAssetId((siblingBase/members[index]).generic_string());
+    sibling.id=sibling.memberIds[0];manifest["name"]="Sibling mesh";sibling.manifest=manifest.dump();fixture.bundle.models.push_back(sibling);
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));initializeQuaderSceneBundles(project.root);
+    const auto removedModel=fixture.bundle.models.front();const auto locations=quaderBundleCacheLocations(project.root,fixture.bundle);
+    const auto cache=quaderBundleCacheDirectory(project.root,fixture.bundle.id,fixture.modelId);
+    writeFileAtomically(cache/"keep.txt","Unrelated file");const auto materialBytes=read(resolveAssetPath(project.root,material.id));
+    SceneDocument scene(project.root);const auto owner=scene.createQuader("Removed Quader node"),mesh=scene.createModel(fixture.modelId,"Removed mesh");
+    scene.select({mesh},mesh);require(scene.reparentSelection(owner),scene.status());scene.select({owner},owner);require(scene.eraseSelection(),scene.status());
+    require(!scene.scene().contains(owner)&&!scene.scene().contains(mesh)&&scene.history().canUndo(),"The removed-node deletion fixture did not retain undo history.");
+    {
+        ResourceManager resources;AssetLibrary library(project.root,asynchronous?&resources:nullptr);
+        // Keep the same loaded metadata and browser snapshot that a running
+        // editor retains across the deletion command and its next frame.
+        std::shared_ptr<const ModelAsset> displayed;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+        do {resources.pump();library.updateResources(0);displayed=library.findModel(fixture.modelId);
+            if(displayed)break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(std::chrono::steady_clock::now()<deadline);
+        require(bool(displayed),"The manual bundled-deletion fixture did not load its displayed model.");
+        (void)library.browserCatalog();
+        const auto plan=library.planDeletion({fixture.modelId},&scene);
+        require(plan.error.empty()&&plan.assetIds==std::vector<std::string>{fixture.modelId}&&!plan.needsReferenceWarning()&&plan.clearsActiveHistory,
+            "Deleting a Quader node still left its remaining model blocked or produced a saved-owner warning for history alone.");
+        finishDeletion(library,resources,plan,{},&scene);
+        const auto remaining=decodeQuaderSceneBundle(read(fixture.file));
+        require(remaining.models.size()==1&&remaining.models.front().id==sibling.id&&remaining.models.front().manifest==sibling.manifest&&
+            remaining.models.front().gltf==sibling.gltf&&remaining.models.front().buffer==sibling.buffer&&remaining.models.front().memberIds==sibling.memberIds,
+            "Deleting one bundled mesh removed or changed a sibling's immutable payload.");
+        require(!hasAsset(library,fixture.modelId)&&hasAsset(library,sibling.id)&&library.references().deleted(fixture.modelId)&&!library.references().deleted(sibling.id)&&
+            scene.history().size()==0&&!scene.undo()&&!scene.redo()&&scene.dirty(),
+            "Manual bundled-model deletion retained its card/history or changed a surviving model and dirty state.");
+        require(read(cache/"keep.txt")=="Unrelated file"&&read(resolveAssetPath(project.root,material.id))==materialBytes&&hasAsset(library,material.id),
+            "Manual mesh deletion removed unrelated cache files or independently authored native materials.");
+        const auto stored=storedAssetPaths(project.root);
+        for(const auto& location:locations){
+            const bool deleted=std::find(removedModel.memberIds.begin(),removedModel.memberIds.end(),location.id)!=removedModel.memberIds.end();
+            require(fs::is_regular_file(location.file)!=deleted,"Manual bundled-model deletion retained a member file or removed a sibling file.");
+            require(std::any_of(stored.begin(),stored.end(),[&](const auto& value){return value.id==location.id;})!=deleted,
+                "Manual bundled-model deletion retained a member location or removed a sibling registration.");
+        }
+        for(std::size_t index=1;index<removedModel.memberIds.size();++index)require(!library.references().deleted(removedModel.memberIds[index]),
+            "Manual model deletion created independent deletion policies for generated package members.");
+        for(const auto& path:library.takeOwnWrites())library.onFileChanged(path);
+        for(const auto& location:locations)library.onFileChanged(location.file);
+        for(unsigned frame=0;frame<8;++frame) {
+            resources.pump();library.updateResources(frame);library.processImports();(void)library.browserCatalog();
+            require(!library.findModel(fixture.modelId)&&!library.peekModel(fixture.modelId)&&!library.modelLoading(fixture.modelId)&&
+                library.modelRevision(fixture.modelId)==0&&library.modelDependencies(fixture.modelId).empty()&&
+                library.modelMaterialsReady(*displayed)&&library.modelMaterialsDiagnostic(*displayed).empty()&&
+                library.resolvedModelMaterials(*displayed).size()==1&&!hasAsset(library,fixture.modelId)&&hasAsset(library,sibling.id),
+                "Continuing editor frames or delayed file notifications resurrected a deleted bundled model or broke retained material metadata.");
+        }
+        require(library.planDeletion({sibling.id},&scene).error.empty(),
+            "A subsequent deletion plan could no longer inspect the surviving bundle member.");
+    }
+    initializeQuaderSceneBundles(project.root);AssetLibrary reopened(project.root);
+    require(!hasAsset(reopened,fixture.modelId)&&hasAsset(reopened,sibling.id)&&!fs::exists(cache/"manifest.json")&&read(cache/"keep.txt")=="Unrelated file"&&
+        reopened.references().valid()&&reopened.references().deleted(fixture.modelId),
+        "Restart reconstructed an explicitly deleted bundled model, invalidated its reference policy, or lost unrelated bundle data.");
+}
+void bundledBatchDeletionContinuesFrames(bool loadModels){
+    Project project;auto fixture=bundle_test::writeFixture(project.root);
+    auto material=createMaterialAsset(project.root,"Batch-deleted shared surface");
+    const auto sources=model_test::writeModelFixtures(project.root/"sources");
+    const std::string image="assets/textures/batch-deleted.png";
+    const auto imageFile=fixturePath(project.root,image);fs::create_directories(imageFile.parent_path());fs::copy_file(sources.image,imageFile);
+    material_test::legacyFixture(material);material.surface.baseColorTexture.image.id=image;saveMaterialAsset(project.root,material);
+    auto manifest=nlohmann::json::parse(fixture.bundle.models.front().manifest);manifest["materialAssets"]=nlohmann::json::array({material.id});
+    fixture.bundle.models.front().manifest=manifest.dump();
+    auto sibling=fixture.bundle.models.front();sibling.legacyManifest="assets/models/quader-batch-sibling/manifest.json";
+    const auto siblingBase=fs::path(sibling.legacyManifest).parent_path();
+    const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+    for(std::size_t index=0;index<members.size();++index)sibling.memberIds[index]=canonicalAssetId((siblingBase/members[index]).generic_string());
+    sibling.id=sibling.memberIds[0];fixture.bundle.models.push_back(sibling);
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));initializeQuaderSceneBundles(project.root);
+    const auto locations=quaderBundleCacheLocations(project.root,fixture.bundle);
+    SceneDocument scene(project.root);const auto owner=scene.createQuader("Deleted batch owner");
+    for(const auto& id:{fixture.modelId,sibling.id}) {
+        const auto mesh=scene.createModel(id,"Deleted batch mesh");scene.select({mesh},mesh);require(scene.reparentSelection(owner),scene.status());
+    }
+    scene.select({owner},owner);require(scene.eraseSelection(),scene.status());
+    {
+        ResourceManager resources;AssetLibrary library(project.root,&resources);
+        // The pending case retains resource handles without publishing their
+        // completions; the loaded case exercises immutable displayed metadata.
+        std::array<std::shared_ptr<const ModelAsset>,2> displayed;
+        const std::array ids{fixture.modelId,sibling.id};
+        for(std::size_t index=0;index<ids.size();++index)displayed[index]=library.findModel(ids[index]);
+        if(loadModels) {
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+            while(std::chrono::steady_clock::now()<deadline&&(!displayed[0]||!displayed[1])) {
+                resources.pump();library.updateResources(0);
+                for(std::size_t index=0;index<ids.size();++index)displayed[index]=library.findModel(ids[index]);
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            require(displayed[0]&&displayed[1],"Batch deletion did not load its displayed model metadata.");
+        }
+        const auto displayedMaterial=library.findMaterial(material.id);require(bool(displayedMaterial),"Batch deletion lost its shared material before deletion.");
+        require(library.find(image)!=nullptr,"Batch deletion did not register its pending texture request.");
+        (void)library.browserCatalog();
+        const auto plan=library.planDeletion({fixture.modelId,sibling.id,material.id,canonicalAssetId(image)},&scene);
+        finishDeletion(library,resources,plan,{},&scene);
+        for(const auto& path:library.takeOwnWrites())library.onFileChanged(path);
+        for(const auto& location:locations)library.onFileChanged(location.file);
+        for(unsigned frame=0;frame<8;++frame) {
+            resources.pump();library.updateResources(frame);library.processImports();(void)library.browserCatalog();
+            library.collectUnusedQuaderModels(scene);
+            require(!library.findModel(fixture.modelId)&&!library.findModel(sibling.id)&&!library.peekModel(fixture.modelId)&&
+                !library.find(image)&&!hasAsset(library,fixture.modelId)&&!hasAsset(library,sibling.id)&&!hasAsset(library,material.id)&&
+                library.findMaterial(material.id)->id==DefaultMaterialId&&!scene.history().canUndo(),
+                "Batch deletion left live resource requests, browser cards or undo payloads referencing removed bundle members.");
+            for(const auto& model:displayed)if(model)require(library.modelMaterialsReady(*model)&&
+                library.modelMaterialsDiagnostic(*model).empty()&&library.resolvedModelMaterials(*model).size()==1,
+                "A retained model snapshot could not resolve the shared material deleted in the same batch.");
+        }
+        require(!fs::exists(fixture.file),"Batch deletion retained a removed bundled payload.");
+    }
+    ResourceManager resources;AssetLibrary reopened(project.root,&resources);
+    for(unsigned frame=0;frame<3;++frame){resources.pump();reopened.updateResources(frame);(void)reopened.browserCatalog();}
+    require(!hasAsset(reopened,fixture.modelId)&&!hasAsset(reopened,sibling.id)&&!hasAsset(reopened,material.id)&&!reopened.find(image)&&
+        reopened.references().valid()&&reopened.findMaterial(material.id)->id==DefaultMaterialId,
+        "Restart resurrected batch-deleted bundle members, material or texture, or lost their fallback policy.");
+}
+void multiBundleBatchDeletionWithSurvivingFallbacks(){
+    Project project;auto fixture=bundle_test::writeFixture(project.root);
+    const auto sources=model_test::writeModelFixtures(project.root/"sources");
+    const std::string image=canonicalAssetId("assets/textures/shared-deleted.png"),replacementImage=canonicalAssetId("assets/textures/shared-kept.png");
+    const auto imageFile=fixturePath(project.root,"assets/textures/shared-deleted.png"),replacementImageFile=fixturePath(project.root,"assets/textures/shared-kept.png");
+    fs::create_directories(imageFile.parent_path());fs::copy_file(sources.image,imageFile);fs::copy_file(sources.image,replacementImageFile);
+    auto material=createMaterialAsset(project.root,"Deleted shared surface");material_test::legacyFixture(material);
+    material.surface.baseColorTexture.image.id=image;saveMaterialAsset(project.root,material);
+    auto replacementMaterial=createMaterialAsset(project.root,"Surviving replacement surface");material_test::legacyFixture(replacementMaterial);
+    replacementMaterial.surface.baseColor={.25f,.5f,.75f,1};replacementMaterial.surface.baseColorTexture.image.id=image;saveMaterialAsset(project.root,replacementMaterial);
+    const auto makeModel=[&](const QuaderSceneBundle& owner,const std::string& suffix){
+        auto model=fixture.bundle.models.front();model.legacyManifest="assets/models/quader-batch-"+suffix+"/manifest.json";
+        const auto base=fs::path(model.legacyManifest).parent_path();const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+        for(std::size_t index=0;index<members.size();++index)model.memberIds[index]=canonicalAssetId((base/members[index]).generic_string());
+        model.id=model.memberIds[0];auto manifest=nlohmann::json::parse(model.manifest);
+        manifest["name"]=suffix;manifest["quader"]["project"]=owner.projectId;manifest["quader"]["scene"]=owner.sceneId;
+        manifest["materialAssets"]=nlohmann::json::array({material.id});model.manifest=manifest.dump();return model;
+    };
+    auto first=fixture.bundle,second=fixture.bundle;second.sceneId="second-batch-scene";second.id=quaderSceneBundleId(second.projectId,second.sceneId);second.name="Second batch bundle";
+    first.models={makeModel(first,"first-deleted"),makeModel(first,"first-survivor")};
+    second.models={makeModel(second,"second-deleted"),makeModel(second,"second-survivor")};
+    const auto secondFile=defaultQuaderSceneBundlePath(project.root,second);
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(first));writeFileAtomically(secondFile,encodeQuaderSceneBundle(second));initializeQuaderSceneBundles(project.root);
+    const auto firstLocations=quaderBundleCacheLocations(project.root,first),secondLocations=quaderBundleCacheLocations(project.root,second);
+    SceneDocument scene(project.root);const auto firstDeleted=scene.createModel(first.models[0].id,"First removed mesh"),secondDeleted=scene.createModel(second.models[0].id,"Second removed mesh");
+    const auto firstSurvivor=scene.createModel(first.models[1].id,"First survivor"),secondSurvivor=scene.createModel(second.models[1].id,"Second survivor");
+    auto assigned=*scene.scene().find(firstSurvivor);assigned.modelMaterials={AssetRef<MaterialAsset>{material.id}};require(scene.updateEntity(firstSurvivor,assigned),scene.status());
+    require(scene.save("Multi-bundle mixed deletion"),scene.status());const auto sceneId=scene.assetId();
+    assigned=*scene.scene().find(firstSurvivor);assigned.name="Unsaved survivor name";require(scene.updateEntity(firstSurvivor,assigned),scene.status());
+    {
+        ResourceManager resources;AssetLibrary library(project.root,&resources);
+        (void)library.findModel(first.models[0].id);(void)library.findModel(second.models[0].id);
+        (void)library.findModel(first.models[1].id);(void)library.findModel(second.models[1].id);(void)library.find(image);(void)library.findMaterial(replacementMaterial.id);
+        const auto plan=library.planDeletion({first.models[0].id,second.models[0].id,material.id,image},&scene);
+        require(plan.error.empty()&&plan.needsReferenceWarning(),plan.error);
+        finishDeletion(library,resources,plan,{{material.id,replacementMaterial.id},{image,replacementImage}},&scene);
+        require(!scene.scene().contains(firstDeleted)&&!scene.scene().contains(secondDeleted)&&scene.scene().contains(secondSurvivor)&&
+            scene.scene().find(firstSurvivor)->name=="Unsaved survivor name"&&scene.scene().find(firstSurvivor)->modelMaterials.front().id==replacementMaterial.id&&scene.dirty()&&!scene.history().canUndo(),
+            "Multi-bundle batch deletion lost live survivors, unsaved edits or fallback assignments, or retained invalid history.");
+        const auto saved=readSceneSnapshot(project.root,sceneId);
+        require(record(saved,firstSurvivor).name=="First survivor"&&record(saved,firstSurvivor).modelMaterials.front().id==replacementMaterial.id&&
+            std::none_of(saved.records.begin(),saved.records.end(),[&](const auto& value){return value.id==firstDeleted||value.id==secondDeleted;}),
+            "Multi-bundle batch deletion did not atomically rewrite saved references while preserving unrelated live edits.");
+        const auto rewritten=loadMaterialAsset(project.root,replacementMaterial.id);
+        require(rewritten.surface.baseColor==replacementMaterial.surface.baseColor&&rewritten.surface.baseColorTexture.image.id==replacementImage,
+            "A surviving replacement material retained a texture deleted in the same batch or lost its authored factors.");
+        // Keep notifications delayed until surviving model requests have resumed;
+        // both pre-deletion worker completions and later watcher events must be safe.
+        auto delayed=library.takeOwnWrites();
+        for(const auto& location:firstLocations)delayed.push_back(location.file);
+        for(const auto& location:secondLocations)delayed.push_back(location.file);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};bool ready=false;
+        do {
+            resources.pump();library.updateResources(0);library.processImports();library.collectUnusedQuaderModels(scene);(void)library.browserCatalog();
+            const auto a=library.findModel(first.models[1].id),b=library.findModel(second.models[1].id);
+            ready=a&&b&&library.modelMaterialsReady(*a)&&library.modelMaterialsReady(*b);
+            if(ready){for(const auto& value:{a,b}){const auto surfaces=library.resolvedModelMaterials(*value);
+                require(surfaces.size()==1&&surfaces.front().baseColor==replacementMaterial.surface.baseColor&&
+                    library.references().resolveTexture(surfaces.front().baseColorTexture.image.id)==replacementImage,
+                    "A surviving bundled model could not resolve material and texture replacements from the same deletion batch.");}}
+            if(!delayed.empty()&&ready){for(const auto& file:delayed)library.onFileChanged(file);delayed.clear();ready=false;}
+            else if(ready)break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(std::chrono::steady_clock::now()<deadline);
+        require(ready,"Surviving models did not recover after mixed multi-bundle deletion and delayed notifications: "+library.status());
+        const auto locations=storedAssetPaths(project.root);
+        for(const auto* owner:{&first,&second}){
+            const auto file=owner==&first?fixture.file:secondFile;const auto current=decodeQuaderSceneBundle(read(file));
+            require(current.models.size()==1&&current.models.front().id==owner->models[1].id&&current.models.front().buffer==owner->models[1].buffer,
+                "Mixed multi-bundle deletion changed a surviving sibling or retained a selected mesh.");
+            for(const auto& id:owner->models[0].memberIds)require(std::none_of(locations.begin(),locations.end(),[&](const auto& value){return value.id==id;}),
+                "Mixed multi-bundle deletion retained a selected member location.");
+        }
+    }
+    ResourceManager resources;AssetLibrary reopened(project.root,&resources);
+    for(const auto* owner:{&first,&second})require(!hasAsset(reopened,owner->models[0].id)&&hasAsset(reopened,owner->models[1].id)&&
+        loadModelPackage(resolveAssetPath(project.root,owner->models[1].id),project.root,reopened.modelResolvers())->materials.front().baseColor==replacementMaterial.surface.baseColor,
+        "Restart lost a surviving bundle sibling or revived a selected mesh after mixed deletion.");
+    require(reopened.references().valid()&&!hasAsset(reopened,material.id)&&!reopened.find(image)&&hasAsset(reopened,replacementMaterial.id)&&reopened.find(replacementImage),
+        "Restart lost mixed-batch material/texture fallbacks or revived deleted native assets.");
+}
+void externallyChangedDeletionPolicy(unsigned phase){
+    Project project;const auto fixture=bundle_test::writeFixture(project.root);SceneDocument scene(project.root);
+    const auto mesh=scene.createModel(fixture.modelId,"Preserved mesh");require(scene.save("Policy edit during deletion"),scene.status());
+    ResourceManager resources;AssetLibrary library(project.root,&resources);
+    const auto sourceBytes=read(fixture.file),indexBytes=read(project.root/".crimson/asset-locations.json"),sceneBytes=read(resolveAssetPath(project.root,scene.assetId()));
+    const auto cacheFile=resolveAssetPath(project.root,fixture.modelId);const auto cacheBytes=read(cacheFile);
+    const auto policyFile=resolveAssetPath(project.root,"assets/references.json");const auto externalId=canonicalAssetId("assets/textures/externally-deleted.png");
+    const auto external=nlohmann::json{{"version",1},{"deleted",nlohmann::json::array({externalId})},{"replacements",{{externalId,GrayTextureId}}}}.dump(2)+"\n";
+    if(phase==0)writeFileAtomically(policyFile,external);
+    const auto plan=library.planDeletion({fixture.modelId},&scene);
+    if(phase==0)require(!plan.error.empty(),"Deletion planning accepted an externally changed policy missing from its in-memory manager.");
+    else {
+        require(plan.error.empty(),plan.error);
+        if(phase==2)require(!library.deleteAssets(plan,{},&scene)&&library.deletionPending(),"Policy-conflict fixture did not start background validation.");
+        writeFileAtomically(policyFile,external);library.onFileChanged(policyFile);
+        require(!(phase==2?library.pumpDeletion(&scene):library.deleteAssets(plan,{},&scene))&&!library.deletionPending(),
+            "Deletion committed over a reference-policy edit made after planning or during validation.");
+    }
+    require(read(policyFile)==external&&read(fixture.file)==sourceBytes&&read(cacheFile)==cacheBytes&&read(project.root/".crimson/asset-locations.json")==indexBytes&&
+        read(resolveAssetPath(project.root,scene.assetId()))==sceneBytes&&scene.scene().contains(mesh)&&!library.references().deleted(fixture.modelId),
+        "Rejected policy-conflict deletion changed bundle, cache, index, saved/live scene or the external policy.");
+    require(!library.planDeletion({fixture.modelId},&scene).error.empty(),"Replanning with a stale policy manager silently accepted an external policy edit.");
+    AssetLibrary reopened(project.root,&resources);require(reopened.references().deleted(externalId)&&reopened.planDeletion({fixture.modelId},&scene).error.empty(),
+        "Reopening did not retain the external tombstone and allow a fresh deletion plan.");
+}
+void lastBundledMeshFolderCleanup(bool keepUnrelated){
+    Project project;auto fixture=bundle_test::writeFixture(project.root);
+    const auto sceneDirectory=project.root/"Content/diablo_room",modelDirectory=sceneDirectory/"models";
+    const auto bundleFile=modelDirectory/"diablo_room.crimson-quader";
+    fs::create_directories(modelDirectory);fs::rename(fixture.file,bundleFile);registerAssetPath(project.root,fixture.bundle.id,bundleFile);
+    fs::remove(fixture.file.parent_path());fixture.file=bundleFile;initializeQuaderSceneBundles(project.root);
+    if(keepUnrelated){writeFileAtomically(modelDirectory/"keep.txt","Unrelated authored bytes");fs::create_directory(modelDirectory/"authored_empty_folder");}
+    SceneDocument scene(project.root);ResourceManager resources;
+    {
+        AssetLibrary library(project.root,&resources);const auto folder=library.browserCatalog().parent(fixture.modelId);
+        require(library.browserCatalog().folderPath(folder)==modelDirectory,"Imported mesh was not presented in its physical models directory.");
+        const auto plan=library.planDeletion({fixture.modelId},&scene);finishDeletion(library,resources,plan,{},&scene);
+        require(!fs::exists(bundleFile)&&!hasAsset(library,fixture.modelId)&&!library.references().deleted(fixture.bundle.id),
+            "Deleting the last mesh retained its empty bundle or tombstoned the stable source-bundle identity.");
+        const auto locations=storedAssetPaths(project.root);
+        require(std::none_of(locations.begin(),locations.end(),[&](const auto& value){return value.id==fixture.bundle.id;}),
+            "Deleting the last mesh retained the empty bundle's file registration.");
+        if(keepUnrelated)require(read(modelDirectory/"keep.txt")=="Unrelated authored bytes"&&fs::is_directory(modelDirectory/"authored_empty_folder")&&library.browserCatalog().isFolder(folder),
+            "Automatic empty-folder cleanup removed unrelated files/directories or their browser folder.");
+        else require(!fs::exists(modelDirectory)&&!fs::exists(sceneDirectory)&&!library.browserCatalog().isFolder(folder)&&fs::is_directory(project.root/"Content"),
+            "Deleting the last mesh retained empty import ancestors or their browser folders, or removed Content.");
+    }
+    AssetLibrary reopened(project.root,&resources);require(!hasAsset(reopened,fixture.modelId)&&!fs::exists(bundleFile),
+        "Restart reconstructed an explicitly deleted last mesh or its removed source bundle.");
+}
+void referencedBundledModelDeletion(bool replacement){
+    Project project;const auto fixture=bundle_test::writeFixture(project.root);const auto fallback=seedModel(project);
+    const auto fallbackId=canonicalAssetId(fallback->id);
+    SceneDocument active(project.root);const auto owner=active.createQuader("Kept Quader node"),mesh=active.createModel(fixture.modelId,"Placed mesh");
+    active.select({mesh},mesh);require(active.reparentSelection(owner),active.status());
+    const auto child=active.createPointLight("Retained manual child");active.select({child},child);require(active.reparentSelection(mesh),active.status());
+    const auto childWorld=*active.scene().worldTransform(child);require(active.save("Referenced bundle"),active.status());
+    const auto sceneId=active.assetId();SceneDocument saved(project.root);const auto other=saved.createModel(fixture.modelId,"Saved mesh");require(saved.save("Other bundle reference"),saved.status());
+    auto edited=*active.scene().find(child);edited.name="Unsaved retained light";require(active.updateEntity(child,edited),active.status());
+    ResourceManager resources;AssetLibrary library(project.root,&resources);const auto plan=library.planDeletion({fixture.modelId},&active);
+    require(plan.error.empty()&&plan.scenes.size()==2&&plan.warningUsages.size()==2&&plan.clearsActiveHistory,
+        "Bundled-model deletion failed to report saved scenes and active/history references through the ordinary reference policy.");
+    finishDeletion(library,resources,plan,replacement?std::unordered_map<std::string,std::string>{{fixture.modelId,fallback->id}}:std::unordered_map<std::string,std::string>{},&active);
+    const auto first=readSceneSnapshot(project.root,sceneId),second=readSceneSnapshot(project.root,saved.assetId());
+    require(active.scene().contains(owner)&&active.scene().find(child)->name=="Unsaved retained light"&&record(first,child).name=="Retained manual child"&&active.dirty(),
+        "Deleting a referenced bundled mesh removed its Quader node or saved unrelated live edits.");
+    if(replacement){
+        require(active.scene().find(mesh)->model->id==fixture.modelId&&record(first,mesh).model->id==fixture.modelId&&record(second,other).model->id==fixture.modelId&&
+            library.references().resolve(active.scene().find(mesh)->model->id)==fallbackId&&library.references().resolve(record(first,mesh).model->id)==fallbackId&&
+            library.references().resolve(record(second,other).model->id)==fallbackId,
+            "Bundled-model deletion changed authored model identities or failed to resolve live and saved references through the chosen fallback policy.");
+        std::shared_ptr<const ModelAsset> resolved;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+        do {resources.pump();library.updateResources(0);resolved=library.findModel(fixture.modelId);
+            if(resolved)break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(std::chrono::steady_clock::now()<deadline);
+        require(resolved&&canonicalAssetId(resolved->id)==fallbackId,"Loading a deleted bundled-model reference did not prepare its chosen replacement model.");
+    }else{
+        require(!active.scene().contains(mesh)&&active.scene().find(child)->parent==owner&&
+            std::none_of(first.records.begin(),first.records.end(),[&](const auto& value){return value.id==mesh;})&&
+            std::none_of(second.records.begin(),second.records.end(),[&](const auto& value){return value.id==other;})&&active.history().size()==0,
+            "Bundled-model deletion did not remove model references and clear invalid history while preserving children.");
+    }
+    nearMatrix(*active.scene().worldTransform(child),childWorld);
+    require(!fs::exists(fixture.file)&&!hasAsset(library,fixture.modelId)&&hasAsset(library,fallback->id),
+        "Deleting the last bundled mesh left its payload published or removed an independent replacement model.");
+    AssetReferenceManager reopened(project.root);
+    require(reopened.valid()&&reopened.deleted(fixture.modelId)&&reopened.resolve(fixture.modelId)==(replacement?fallbackId:std::string{}),
+        "Restart lost the model deletion/fallback policy after removing its generated location registration.");
+}
+void cancelAndStaleBundledDeletion(){
+    Project project;const auto fixture=bundle_test::writeFixture(project.root);SceneDocument active(project.root);
+    const auto owner=active.createQuader("Quader"),mesh=active.createModel(fixture.modelId,"Mesh");active.select({mesh},mesh);require(active.reparentSelection(owner),active.status());
+    require(active.save("Linked bundle"),active.status());ResourceManager resources;AssetLibrary library(project.root,&resources);
+    const auto sourceBytes=read(fixture.file),sceneBytes=read(resolveAssetPath(project.root,active.assetId())),indexBytes=read(project.root/".crimson/asset-locations.json");
+    const auto cache=resolveAssetPath(project.root,fixture.modelId);const auto cacheBytes=read(cache),sceneId=active.assetId();
+    auto plan=library.planDeletion({fixture.modelId},&active);require(plan.error.empty(),plan.error);
+    require(!library.deleteAssets(plan,{},&active)&&library.deletionPending(),"Bundled model deletion did not start asynchronous validation.");
+    library.cancelDeletion();require(!library.deletionPending()&&!library.pumpDeletion(&active),"Canceled bundled deletion retained a pending transaction.");
+    for(unsigned i=0;i<30;++i){resources.pump();std::this_thread::sleep_for(std::chrono::milliseconds{1});}
+    require(read(fixture.file)==sourceBytes&&read(resolveAssetPath(project.root,sceneId))==sceneBytes&&read(cache)==cacheBytes&&
+        read(project.root/".crimson/asset-locations.json")==indexBytes&&!library.references().deleted(fixture.modelId)&&active.scene().contains(mesh),
+        "Canceled bundled deletion changed source payload, cache, saved scene, location index or live entities.");
+    plan=library.planDeletion({fixture.modelId},&active);require(!library.deleteAssets(plan,{},&active)&&library.deletionPending(),"Second bundled deletion did not start.");
+    active.newScene();require(!library.pumpDeletion(&active)&&!library.deletionPending(),"A bundled deletion prepared for a replaced active scene was committed.");
+    require(read(fixture.file)==sourceBytes&&read(resolveAssetPath(project.root,sceneId))==sceneBytes&&read(cache)==cacheBytes&&
+        read(project.root/".crimson/asset-locations.json")==indexBytes&&!library.references().deleted(fixture.modelId)&&hasAsset(library,fixture.modelId),
+        "Stale bundled deletion partially changed bundle, cache, saved scene, location index or deletion policy.");
+}
+void failedBundledDeletion(){
+    Project project;const auto fixture=bundle_test::writeFixture(project.root);SceneDocument active(project.root);
+    const auto mesh=active.createModel(fixture.modelId,"Mesh");require(active.save("Preserved bundle reference"),active.status());AssetLibrary library(project.root);
+    const auto cache=resolveAssetPath(project.root,fixture.modelId);const auto cacheBytes=read(cache),sceneBytes=read(resolveAssetPath(project.root,active.assetId()));
+    const auto indexBytes=read(project.root/".crimson/asset-locations.json");const auto historySize=active.history().size();
+    const auto plan=library.planDeletion({fixture.modelId},&active);require(plan.error.empty(),plan.error);
+    writeFileAtomically(fixture.file,"Invalid bundle changed after deletion planning");const auto invalidBytes=read(fixture.file);
+    require(!library.deleteAssets(plan,{},&active)&&!library.deletionPending(),"Deleting a model from a corrupt/stale bundle unexpectedly succeeded.");
+    require(read(fixture.file)==invalidBytes&&read(cache)==cacheBytes&&read(resolveAssetPath(project.root,active.assetId()))==sceneBytes&&
+        read(project.root/".crimson/asset-locations.json")==indexBytes&&active.scene().contains(mesh)&&active.history().size()==historySize&&
+        !active.dirty()&&!library.references().deleted(fixture.modelId)&&hasAsset(library,fixture.modelId),
+        "Failed bundled deletion partially changed bundle bytes, generated members, saved/live scene, history, index or reference policy.");
+}
+void retiredQuaderModelCollection(bool asynchronous){
+    Project project;auto fixture=bundle_test::writeFixture(project.root);
+    const auto material=createMaterialAsset(project.root,"Retained wall material");
+    auto manifest=nlohmann::json::parse(fixture.bundle.models.front().manifest);manifest["materialAssets"]=nlohmann::json::array({material.id});fixture.bundle.models.front().manifest=manifest.dump();
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));initializeQuaderSceneBundles(project.root);
+    SceneDocument scene(project.root);const auto entity=scene.createModel(fixture.modelId,"Wall C");require(scene.save("Linked level"),scene.status());
+    const auto savedId=scene.assetId(),savedBytes=read(resolveAssetPath(project.root,savedId));const auto cache=resolveAssetPath(project.root,fixture.modelId);
+    ResourceManager resources;AssetLibrary library(project.root,asynchronous?&resources:nullptr);
+    const auto waitModel=[&]{
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+        do {resources.pump();library.updateResources(0);if(auto model=library.findModel(fixture.modelId))return model;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});}while(std::chrono::steady_clock::now()<deadline);
+        throw std::runtime_error("Retained Quader model could not be loaded: "+library.status());
+    };
+    const auto loaded=waitModel();require(hasAsset(library,fixture.modelId),"Current source mesh was absent from the catalog.");
+    fixture.bundle.models.front().current=false;writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));library.onFileChanged(fixture.file);
+    require(!hasAsset(library,fixture.modelId),"A removed source mesh remained in the model catalog.");
+    library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache)&&read(resolveAssetPath(project.root,savedId))==savedBytes,"Cleanup removed referenced geometry or rewrote a saved scene.");
+    const auto materialPlan=library.planDeletion({material.id},&scene);
+    require(materialPlan.error.empty()&&materialPlan.needsReferenceWarning()&&std::any_of(materialPlan.usages.begin(),materialPlan.usages.end(),[&](const auto& usage){return usage.ownerId==fixture.modelId;}),
+        "A hidden retained model lost its native material dependency or deletion warning.");
+    const auto retained=waitModel();resources.pump();library.updateResources(0);
+    require(retained->id==fixture.modelId&&!hasAsset(library,fixture.modelId),"Loading a retired model through a scene resurrected its browser card.");
+    fixture.bundle.models.front().current=true;writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));
+    const std::array publish{loaded};library.publishManagedModels(publish);
+    require(hasAsset(library,fixture.modelId),"Reactivating an already loaded model did not restore its catalog card.");
+    fixture.bundle.models.front().current=false;writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));library.publishManagedModels({});
+    require(!hasAsset(library,fixture.modelId),"An empty source-model publication did not retire removed cards.");
+    scene.newScene();library.collectUnusedQuaderModels(scene);
+    require(fs::is_regular_file(cache),"An unopened saved scene did not retain its retired model payload.");
+    require(scene.load(savedId),scene.status());scene.select({entity},entity);require(scene.eraseSelection()&&scene.save(),scene.status());
+    library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache),"Saving removed geometry discarded the Undo payload.");
+    require(scene.undo()&&scene.scene().find(entity)&&scene.redo(),"Retired model collection broke scene undo/redo.");
+    library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache),"Redo history did not retain retired model geometry.");
+    require(scene.reloadFromDisk(),scene.status());
+    const auto broken=fixturePath(project.root,"assets/scenes/broken.crimson-scene");writeFileAtomically(broken,"{broken");
+    library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache)&&library.status().find("cleanup deferred")!=std::string::npos,"An unreadable saved scene did not defer physical model cleanup.");
+    fs::remove(broken);library.refreshScenes();library.collectUnusedQuaderModels(scene);
+    require(!fs::exists(cache)&&!fs::exists(fixture.file)&&!library.references().deleted(fixture.modelId)&&!scene.dirty(),
+        "Unused retired geometry was retained, tombstoned or dirtied the active scene.");
+    const auto paths=storedAssetPaths(project.root);require(std::none_of(paths.begin(),paths.end(),[&](const auto& path){return path.id==fixture.modelId;}),"Retired mesh cleanup left a dead asset location.");
+    initializeQuaderSceneBundles(project.root);require(!fs::exists(cache),"Startup reconstruction resurrected a collected source mesh.");
+    // Returning unchanged source geometry reuses its identity without a user
+    // deletion tombstone. Restore through ordinary managed publication in the
+    // same ResourceManager, while the former immutable reader is still pinned.
+    fixture.bundle.models.front().current=true;
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));initializeQuaderSceneBundles(project.root);
+    library.publishManagedModels(publish);
+    const auto returned=waitModel();
+    require(returned&&returned->id==fixture.modelId&&loaded->id==fixture.modelId&&hasAsset(library,fixture.modelId)&&
+        !library.references().deleted(fixture.modelId)&&fs::is_regular_file(cache),
+        "Identical source geometry could not return under its collected UUID in the same resource session.");
+}
+void retiredQuaderPolicyRetention(){
+    Project project;auto fixture=bundle_test::writeFixture(project.root);fixture.bundle.models.front().current=false;
+    writeFileAtomically(fixture.file,encodeQuaderSceneBundle(fixture.bundle));
+    const auto cache=resolveAssetPath(project.root,fixture.modelId),policyFile=resolveAssetPath(project.root,"assets/references.json");
+    const auto first=canonicalAssetId("assets/models/deleted-source/manifest.json"),second=canonicalAssetId("assets/models/deleted-middle/manifest.json");
+    registerAssetPath(project.root,"assets/models/deleted-source/manifest.json",project.root/"Content/models/deleted-source/manifest.json");
+    registerAssetPath(project.root,"assets/models/deleted-middle/manifest.json",project.root/"Content/models/deleted-middle/manifest.json");
+    const std::array firstAsset{AssetEntry{first,"Deleted source",AssetKind::Model}},secondAsset{AssetEntry{second,"Deleted intermediate",AssetKind::Model}};
+    const auto emptyPolicy=R"({"version":1,"deleted":[],"replacements":{}})";
+    SceneDocument scene(project.root);
+    {
+        AssetLibrary library(project.root);AssetReferenceManager persisted(project.root);
+        persisted.replace(firstAsset,{{first,second}});persisted.replace(secondAsset,{{second,fixture.modelId}});persisted.save();
+        require(persisted.replacementTargets()==std::vector<std::string>{fixture.modelId},"Persistent replacement chains did not publish their surviving model target.");
+        library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache),"A newly saved replacement-only model owner was ignored by collection.");
+        writeFileAtomically(policyFile,"{invalid policy");scene.newScene();library.collectUnusedQuaderModels(scene);
+        require(fs::is_regular_file(cache)&&library.status().find("policy is invalid")!=std::string::npos,"Malformed persisted policy did not preserve retired mesh payloads.");
+        writeFileAtomically(policyFile,emptyPolicy);library.references().replace(firstAsset,{{first,fixture.modelId}});
+        library.collectUnusedQuaderModels(scene);require(fs::is_regular_file(cache),"An in-memory replacement-only model owner was ignored by collection.");
+    }
+    {
+        writeFileAtomically(policyFile,"{invalid policy");AssetLibrary blocked(project.root);
+        require(!blocked.references().valid(),"Malformed policy did not expose invalid reference state.");
+        writeFileAtomically(policyFile,emptyPolicy);blocked.collectUnusedQuaderModels(scene);
+        require(fs::is_regular_file(cache),"An invalid loaded policy allowed physical model cleanup.");
+    }
+    AssetLibrary reopened(project.root);reopened.collectUnusedQuaderModels(scene);
+    require(!fs::exists(cache)&&!fs::exists(fixture.file),"Released replacement-only owners still pinned unused mesh payloads.");
 }
 
 void legacyEnvironmentGlowPersistence(){
@@ -868,13 +1287,13 @@ void navigationProfileDeletion() {
     require(active.save("Profile owners"),active.status());
     SceneDocument other(p.root);const auto otherActor=other.createEnemy("Other creature");value=*other.scene().find(otherActor);
     value.controller->profile=AssetRef<NavigationAgentProfile>{profile->id};require(other.updateEntity(otherActor,value)&&other.save("Other profile owner"),other.status());
-    library.refreshScenes();value=*active.scene().find(actor);value.local=math::translation({7,2,3});value.motor->enabled=false;
+    library.refreshScenes();value=*active.scene().find(actor);value.local=math::translation({7,2,3});value.movement->enabled=false;
     require(active.updateEntity(actor,value),active.status());const auto unsaved=*active.scene().find(actor);
     const auto plan=library.planDeletion({profile->id},&active);
     require(plan.error.empty()&&plan.needsReferenceWarning()&&plan.scenes.size()==2&&plan.clearsActiveHistory,"Profile deletion did not index saved, live, volume and historical users.");
     finishDeletion(library,resources,plan,{},&active);
     const auto current=*active.scene().find(actor);
-    require(current.controller->profile.id==DefaultNavigationAgentProfileId&&current.local==unsaved.local&&current.motor==unsaved.motor&&current.effects==unsaved.effects&&active.dirty(),"Profile deletion removed its actor or discarded unrelated unsaved edits.");
+    require(current.controller->profile.id==DefaultNavigationAgentProfileId&&current.local==unsaved.local&&current.movement==unsaved.movement&&current.effects==unsaved.effects&&active.dirty(),"Profile deletion removed its actor or discarded unrelated unsaved edits.");
     require(active.scene().find(volume)->navigationVolume->profiles==std::vector<AssetRef<NavigationAgentProfile>>{AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}},"Profile replacement left duplicate supported profiles.");
     require(readSceneSnapshot(p.root,active.assetId()).records.size()==active.scene().records().size()&&record(readSceneSnapshot(p.root,other.assetId()),otherActor).controller->profile.id==DefaultNavigationAgentProfileId,"Profile deletion did not preserve/rewrite saved actor references.");
     require(!hasAsset(library,profile->id)&&library.findNavigationAgentProfile(profile->id)==defaultNavigationAgentProfile(),"Profile deletion did not publish its protected default replacement.");
@@ -1103,6 +1522,6 @@ int main(int argc,char** argv){try{
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();bundledModelPublicationAndReferences();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
+    warningQueries();bundledModelPublicationAndReferences();manualBundledModelDeletion(false);manualBundledModelDeletion(true);bundledBatchDeletionContinuesFrames(false);bundledBatchDeletionContinuesFrames(true);multiBundleBatchDeletionWithSurvivingFallbacks();externallyChangedDeletionPolicy(0);externallyChangedDeletionPolicy(1);externallyChangedDeletionPolicy(2);lastBundledMeshFolderCleanup(false);lastBundledMeshFolderCleanup(true);referencedBundledModelDeletion(false);referencedBundledModelDeletion(true);cancelAndStaleBundledDeletion();failedBundledDeletion();retiredQuaderModelCollection(false);retiredQuaderModelCollection(true);retiredQuaderPolicyRetention();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();importedMaterialSlotsAndDeletion();legacyUnusedModelMaterialAssignments();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();navigationProfileDeletion();gameplayEffectDeletion();unrelatedDeletionMaterializesLegacyEffects(false);unrelatedDeletionMaterializesLegacyEffects(true);unrelatedDeletionMaterializesLegacyProfiles(false);unrelatedDeletionMaterializesLegacyProfiles(true);
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

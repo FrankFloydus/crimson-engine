@@ -2,7 +2,6 @@
 #include "GameViewInteraction.h"
 #include "RenderDebugControls.h"
 #include "editor/CollisionWire.h"
-#include "editor/ActorLightRigOverlay.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/Renderer.h"
@@ -89,12 +88,6 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
     }
     ImGui::End();frame.closed=!open;
     return frame;
-}
-void GameView::drawActorLightRigs(const Camera& camera,const Scene& scene,const NavigationAgentProfileQuery& profiles) {
-    if(!imageDrawList_ || !imageWidth_ || !imageHeight_)return;
-    const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
-    const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
-    drawSceneLightRigOverlays(*imageDrawList_,scene,matrix,rectangle,ClipDepth::ZeroToOne,profiles);
 }
 void GameView::drawAttributeDebug(const Camera& camera,const Scene& scene,EntityId target,std::span<const AttributeDebugRow> rows,
                                 const NavigationAgentProfileQuery& profiles,const ModelBoundsQuery& modelBounds) {

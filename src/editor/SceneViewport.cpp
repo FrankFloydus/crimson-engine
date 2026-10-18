@@ -3,7 +3,6 @@
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
 #include "CollisionWire.h"
-#include "ActorLightRigOverlay.h"
 #include "ColliderGizmoUi.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -117,12 +116,6 @@ void SceneViewport::focus(Camera& camera, const SceneDocument& document, const A
         camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
         if(preserveLens){camera.nearPlane=nearPlane;camera.farPlane=farPlane;}
     }
-}
-void SceneViewport::drawActorLightRigs(const Camera& camera,const Scene& scene) {
-    if(!imageDrawList_ || imageRegion_.width<=0 || imageRegion_.height<=0)return;
-    const auto vp=camera.projectionMatrix(imageRegion_.width/imageRegion_.height,ClipDepth::NegativeOneToOne)*camera.viewMatrix();
-    drawSceneLightRigOverlays(*imageDrawList_,scene,vp,
-        {imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height},ClipDepth::NegativeOneToOne,agentProfiles_);
 }
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
                                 Renderer& renderer, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked,

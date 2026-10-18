@@ -8,6 +8,7 @@
 #include "resources/ImageDecoder.h"
 #include "resources/Paths.h"
 #include "resources/StreamingModel.h"
+#include "scene/SceneDocument.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -40,6 +41,12 @@ struct Temporary {
 };
 std::string utf8(const fs::path& path){const auto value=path.generic_u8string();return {reinterpret_cast<const char*>(value.data()),value.size()};}
 std::string fileBytes(const fs::path& path){std::ifstream input(path,std::ios::binary);require(static_cast<bool>(input),"Cannot read test asset.");return {std::istreambuf_iterator<char>(input),{}};}
+std::string fileAssetId(const QuaderImportResult& result,const AssetFileChange& file){
+    const auto relative=utf8(pathFromUtf8(file.id).lexically_normal());
+    for(const auto& location:result.locations){const auto absolute=utf8(location.file.lexically_normal());
+        if(absolute==relative||absolute.ends_with("/"+relative))return location.id;}
+    return canonicalAssetId(file.id);
+}
 void commit(const fs::path& root,std::span<const AssetFileChange> files) {
     initializeContentStorage(root);
     commitAssetTransaction(root,files);
@@ -72,7 +79,7 @@ std::set<std::pair<std::string,fs::path>> locations(const fs::path& root) {
 std::string logicalFile(const QuaderImportResult& result,const std::string& id) {
     for(const auto& file:result.files)if(file.id.ends_with(".crimson-quader")&&file.contents)
         for(const auto& model:decodeQuaderSceneBundle(*file.contents).models)if(model.id==canonicalAssetId(id))return model.legacyManifest;
-    for(const auto& file:result.files)if(canonicalAssetId(file.id)==canonicalAssetId(id))return file.id;
+    for(const auto& file:result.files)if(fileAssetId(result,file)==canonicalAssetId(id))return file.id;
     throw std::runtime_error("Prepared Quader package lost its file provenance.");
 }
 fs::path fixture(){
@@ -112,7 +119,8 @@ void geometryAndLights(){
     auto repeated=prepareQuaderImport(scene,options);require(repeated.meshes[0].modelId==result.meshes[0].modelId,"Unchanged source created a different managed model identity.");require(repeated.files.empty(),"Unchanged source rewrote published immutable packages.");
     auto collisionOnly=synthetic();collisionOnly.meshes[0].vertices.clear();collisionOnly.meshes[0].indices.clear();collisionOnly.meshes[0].surfaces.clear();collisionOnly.lights.clear();
     const auto nativeOnly=prepareQuaderImport(collisionOnly,options);
-    require(nativeOnly.meshes[0].modelId.empty()&&nativeOnly.meshes[0].collision&&nativeOnly.files.empty()&&
+    require(nativeOnly.meshes[0].modelId.empty()&&nativeOnly.meshes[0].collision&&
+        preparedBundle(nativeOnly).models.size()==1&&!preparedBundle(nativeOnly).models[0].current&&
         nativeOnly.assetIds.empty()&&nativeOnly.preparedModels.empty(),"A collision-only source published a renderable or browsable model asset.");
     options.scale=3;auto changed=prepareQuaderImport(scene,options);require(changed.meshes[0].modelId!=result.meshes[0].modelId,"Scale replacement cannot preserve prior Undo geometry.");
     require(fs::is_regular_file(resolveAssetPath(temporary.root,result.meshes[0].modelId)),"Preparing replacement removed prior Undo geometry.");
@@ -121,6 +129,48 @@ void geometryAndLights(){
     options.syncLights=false;auto noLights=prepareQuaderImport(scene,options);
     require(noLights.lights.empty()&&noLights.skippedSpots==0&&noLights.meshes.size()==1&&noLights.meshes[0].collision,"Disabled light sync imported lights or blocked geometry/collision on the source light limit.");
     (void)models(temporary.root);
+}
+void sourceHierarchyPlacement(){
+    Temporary temporary;auto source=synthetic();QuaderPrepareOptions options;options.projectRoot=temporary.root;options.scale=2;
+    Mat4 affine=math::translation({4,5,6});affine[0]=-2;affine[4]=.35f;affine[5]=3;
+    const auto nested=math::multiply(affine,math::translation({7,8,9}));
+    source.groups={{"group:root","","Room",affine,true,2},{"group:child","group:root","Walls",nested,true,1}};
+    source.meshes[0].parentKey="group:child";source.meshes[0].order=3;
+    source.meshes[0].transform=math::multiply(nested,math::translation({1,2,3}));
+    source.lights[2].parentKey="group:root";source.lights[1].parentKey="light:9";
+    const auto result=prepareQuaderImport(source,options);
+    require(result.groups.size()==2&&result.groups[1].name=="Walls"&&result.groups[1].parentKey=="group:root"&&
+        result.meshes[0].parentKey=="group:child"&&result.meshes[0].order==3,
+        "Import lost source group names, nesting or sibling order.");
+    auto world=math::multiply(result.groups[0].local,result.groups[1].local);world=math::multiply(world,result.meshes[0].local);
+    auto expected=source.meshes[0].transform;for(std::size_t i=12;i<15;++i)expected[i]*=2;
+    for(std::size_t i=0;i<16;++i)near(world[i],expected[i]);
+    near(result.meshes[0].local[12],2);near(result.meshes[0].local[13],4);near(result.meshes[0].local[14],6);
+    require(result.lights[1].parentKey=="group:root","A skipped spotlight orphaned its imported child.");
+    const auto lightWorld=math::multiply(result.groups[0].local,result.lights[1].local);
+    near(lightWorld[12],2);near(lightWorld[13],4);near(lightWorld[14],6);
+    options.syncLights=false;source.groups[1].parentKey="light:8";source.lights[1].parentKey="group:root";
+    const auto noLights=prepareQuaderImport(source,options);
+    require(noLights.lights.empty()&&noLights.groups[1].parentKey=="group:root","Disabled light sync orphaned a source group.");
+    source.groups[0].parentKey="group:child";rejects([&]{prepareQuaderImport(source,options);});
+    source.groups[0].parentKey="missing";rejects([&]{prepareQuaderImport(source,options);});
+    source.groups[0].parentKey="";source.groups[0].transform=math::scaling({0,1,1});rejects([&]{prepareQuaderImport(source,options);});
+}
+void currentSourceMeshSet(){
+    Temporary temporary;auto source=synthetic();source.lights.clear();QuaderPrepareOptions options;options.projectRoot=temporary.root;
+    for(std::uint64_t i=2;i<=3;++i){auto mesh=source.meshes.front();mesh.displayEntity=i;mesh.name="Wall "+std::to_string(i);mesh.vertices[1].position[0]=static_cast<float>(i);source.meshes.push_back(mesh);}
+    const auto first=prepareQuaderImport(source,options);commit(temporary.root,first);const auto removed=first.meshes.back().modelId;
+    source.meshes.pop_back();const auto second=prepareQuaderImport(source,options);const auto bundle=preparedBundle(second);
+    require(bundle.models.size()==3&&std::count_if(bundle.models.begin(),bundle.models.end(),[](const auto& model){return model.current;})==2&&
+        std::any_of(bundle.models.begin(),bundle.models.end(),[&](const auto& model){return model.id==removed&&!model.current;}),
+        "Reimport did not retire exactly the removed wall while retaining its immutable data for reference checks.");
+    commit(temporary.root,second);source.meshes.clear();const auto empty=prepareQuaderImport(source,options);const auto cleared=preparedBundle(empty);
+    require(std::none_of(cleared.models.begin(),cleared.models.end(),[](const auto& model){return model.current;}),
+        "Removing every source mesh failed to publish an empty current model set.");
+    commit(temporary.root,empty);const auto repeated=prepareQuaderImport(source,options);require(repeated.files.empty(),"Repeated empty source rewrote the bundle.");
+    source=synthetic();source.lights.clear();const auto restored=prepareQuaderImport(source,options);const auto reactivated=preparedBundle(restored);
+    require(restored.meshes[0].modelId==first.meshes[0].modelId&&std::count_if(reactivated.models.begin(),reactivated.models.end(),[](const auto& model){return model.current;})==1,
+        "Restoring source geometry duplicated its retained generation or revived other removed walls.");
 }
 void geometryReuseIgnoresNamesAndPlacement(){
     Temporary temporary;auto scene=synthetic();QuaderPrepareOptions options;options.projectRoot=temporary.root;
@@ -170,8 +220,95 @@ void geometryReuseIgnoresNamesAndPlacement(){
         file.id=base+member.substr(slash);if(file.id.ends_with("/manifest.json"))file.contents=metadata.dump(2)+"\n";}
     commit(legacy.root,legacyFiles);initializeContentStorage(legacy.root);const auto oldId=canonicalAssetId(base+"/manifest.json");const auto oldLocations=locations(legacy.root);
     oldSource.meshes[0].name="Renamed old package";const auto migrated=prepareQuaderImport(oldSource,options);
-    require(migrated.files.empty()&&migrated.meshes[0].modelId==oldId&&locations(legacy.root)==oldLocations,
-        "Name-independent reuse failed to retain a compatible preexisting Quader package.");
+    require(migrated.files.size()==2&&std::all_of(migrated.files.begin(),migrated.files.end(),[](const auto& file){return file.id.ends_with(".crimson-quader");})&&
+        migrated.meshes[0].modelId==oldId&&locations(legacy.root)==oldLocations,
+        "Reusing compatible preexisting geometry rewrote its members instead of only adopting the known source scene name.");
+    commit(legacy.root,migrated);const auto warm=prepareQuaderImport(oldSource,options);
+    require(warm.files.empty()&&warm.meshes[0].modelId==oldId,"A compatible preexisting package or adopted scene directory was not stable after reimport.");
+}
+void authoredMeshOwnership(){
+    Temporary temporary;auto source=synthetic();source.lights.clear();QuaderPrepareOptions options;options.projectRoot=temporary.root;
+    auto ordinary=source.meshes.front();ordinary.definitionEntity=0;ordinary.displayEntity=ordinary.geometryEntity=10;ordinary.name="Stair A";
+    auto duplicate=ordinary;duplicate.displayEntity=duplicate.geometryEntity=11;duplicate.name="Stair B";duplicate.transform=math::translation({20,30,40});
+    auto instance=ordinary;instance.displayEntity=50;instance.geometryEntity=102;instance.definitionEntity=100;instance.name="Linked stair";
+    auto occurrence=instance;occurrence.displayEntity=60;occurrence.transform=math::translation({-5,6,7});
+    auto otherDefinition=instance;otherDefinition.displayEntity=70;otherDefinition.definitionEntity=200;
+    auto otherMember=instance;otherMember.geometryEntity=103;
+    source.meshes={ordinary,duplicate,instance,occurrence,otherDefinition,otherMember};
+    const auto first=prepareQuaderImport(source,options);const auto& meshes=first.meshes;
+    require(meshes.size()==6&&first.preparedModels.size()==5&&first.assetIds.size()==5&&preparedBundle(first).models.size()==5,
+        "Ordinary Quader objects or distinct definition members were implicitly deduplicated.");
+    require(meshes[0].modelId!=meshes[1].modelId&&meshes[2].modelId==meshes[3].modelId&&
+        meshes[0].modelId!=meshes[2].modelId&&meshes[2].modelId!=meshes[4].modelId&&meshes[2].modelId!=meshes[5].modelId&&
+        meshes[4].modelId!=meshes[5].modelId&&meshes[2].sourceKey!=meshes[3].sourceKey,
+        "Only formal occurrences of the same Quader definition/member may share a mesh asset.");
+    const std::array<std::string,6> owners{"object:10","object:11","instance:100:102","instance:100:102","instance:200:102","instance:100:103"};
+    const auto bundle=preparedBundle(first);
+    for(std::size_t i=0;i<meshes.size();++i){
+        const auto model=std::find_if(bundle.models.begin(),bundle.models.end(),[&](const auto& value){return value.id==meshes[i].modelId;});
+        require(model!=bundle.models.end()&&Json::parse(model->manifest).at("quader").at("meshOwner")==owners[i]&&
+            meshes[i].name==source.meshes[i].name&&meshes[i].local==source.meshes[i].transform&&bool(meshes[i].collision),
+            "Owned geometry lost source identity, occurrence name, placement or independent collision payload.");
+    }
+    commit(temporary.root,first);const auto initialLocations=locations(temporary.root);const auto initialRevision=contentStorageRevision(temporary.root);
+    for(std::size_t i=0;i<source.meshes.size();++i){source.meshes[i].name="Renamed "+std::to_string(i);source.meshes[i].transform=math::translation({float(i),4,5});}
+    const auto repeated=prepareQuaderImport(source,options);
+    require(repeated.files.empty()&&repeated.preparedModels.size()==5&&locations(temporary.root)==initialLocations&&contentStorageRevision(temporary.root)==initialRevision,
+        "Same-source rename or placement changed owned geometry generations.");
+    for(std::size_t i=0;i<meshes.size();++i)require(repeated.meshes[i].modelId==meshes[i].modelId,"Owned geometry identity changed after a source rename.");
+    source.meshes[0].vertices[1].uv={.25f,.75f};const auto changed=prepareQuaderImport(source,options);const auto generations=preparedBundle(changed);
+    require(changed.meshes[0].modelId!=meshes[0].modelId&&changed.meshes[1].modelId==meshes[1].modelId&&
+        changed.meshes[2].modelId==meshes[2].modelId&&generations.models.size()==6&&
+        std::any_of(generations.models.begin(),generations.models.end(),[&](const auto& model){return model.id==meshes[0].modelId&&!model.current;}),
+        "An ordinary object edit changed another owner or overwrote the prior immutable generation.");
+    commit(temporary.root,changed);source.meshes[0].vertices=ordinary.vertices;
+    const auto restored=prepareQuaderImport(source,options);
+    require(restored.meshes[0].modelId==meshes[0].modelId&&restored.meshes[1].modelId==meshes[1].modelId,
+        "Restoring ordinary geometry reused another object's asset rather than its own retained generation.");
+}
+void contentOnlyOwnershipMigration(){
+    Temporary temporary;auto source=synthetic();source.lights.clear();QuaderPrepareOptions options;options.projectRoot=temporary.root;
+    const auto seed=prepareQuaderImport(source,options);auto legacy=preparedBundle(seed);auto& old=legacy.models.front();
+    auto manifest=Json::parse(old.manifest),document=Json::parse(old.gltf);manifest["quader"].erase("meshOwner");
+    const auto omit=[](auto&& self,Json& value)->void {
+        if(value.is_object()){value.erase("name");for(auto& child:value)self(self,child);}
+        else if(value.is_array())for(auto& child:value)self(self,child);
+    };
+    omit(omit,document);auto materials=manifest.at("materialAssets");materials.push_back(DefaultMaterialId);
+    const auto raw="Quader visual geometry v2|"+source.project.id+"|"+source.id+"|"+document.dump()+"\n"+materials.dump()+"\n"+old.buffer;
+    const auto content=modelImportDataDigest({reinterpret_cast<const std::uint8_t*>(raw.data()),raw.size()});
+    const auto base="assets/models/quader-"+content;old.legacyManifest=base+"/manifest.json";
+    const std::array<const char*,4> members{"manifest.json","model.gltf","source.gltf","buffers/0.bin"};
+    for(std::size_t i=0;i<members.size();++i)old.memberIds[i]=canonicalAssetId(base+"/"+members[i]);
+    old.id=old.memberIds.front();manifest["quader"]["content"]=content;old.manifest=manifest.dump(2)+"\n";
+    const auto bundleFile=defaultQuaderSceneBundlePath(temporary.root,legacy);
+    writeFileAtomically(bundleFile,encodeQuaderSceneBundle(legacy));registerAssetPath(temporary.root,legacy.id,bundleFile);
+    initializeQuaderSceneBundles(temporary.root);const auto oldLocations=quaderBundleCacheLocations(temporary.root,legacy);
+    std::vector<std::string> oldBytes;for(const auto& location:oldLocations)oldBytes.push_back(fileBytes(location.file));
+    const auto authored=createMaterialAsset(temporary.root,"Historical material override");
+    SceneDocument historical(temporary.root);const auto oldEntity=historical.createModel(old.id,"Historical shared mesh");
+    auto record=*historical.scene().find(oldEntity);record.modelMaterials={AssetRef<MaterialAsset>{authored.id}};require(historical.updateEntity(oldEntity,record),historical.status());
+    require(historical.save("Historical scene"),historical.status());const auto sceneFile=resolveAssetPath(temporary.root,historical.assetId());const auto sceneBytes=fileBytes(sceneFile);
+    historical.select({oldEntity},oldEntity);require(historical.eraseSelection(),historical.status());
+    auto ordinary=source.meshes.front();ordinary.definitionEntity=0;ordinary.displayEntity=ordinary.geometryEntity=10;
+    auto duplicate=ordinary;duplicate.displayEntity=duplicate.geometryEntity=11;
+    auto occurrence=source.meshes.front();occurrence.displayEntity=50;auto repeatedOccurrence=occurrence;repeatedOccurrence.displayEntity=60;
+    source.meshes={ordinary,duplicate,occurrence,repeatedOccurrence};const auto migrated=prepareQuaderImport(source,options);const auto owned=preparedBundle(migrated);
+    require(migrated.preparedModels.size()==3&&owned.models.size()==4&&migrated.meshes[0].modelId!=migrated.meshes[1].modelId&&
+        migrated.meshes[2].modelId==migrated.meshes[3].modelId&&std::all_of(migrated.meshes.begin(),migrated.meshes.end(),[&](const auto& mesh){return mesh.modelId!=old.id;})&&
+        std::any_of(owned.models.begin(),owned.models.end(),[&](const auto& model){return model.id==old.id&&!model.current&&model.memberIds==old.memberIds&&model.manifest==old.manifest&&model.gltf==old.gltf&&model.buffer==old.buffer;}),
+        "Migrating content-only assets did not split ordinary owners, retain formal sharing and preserve the old immutable package.");
+    commit(temporary.root,migrated);
+    for(std::size_t i=0;i<oldLocations.size();++i)require(resolveAssetPath(temporary.root,oldLocations[i].id)==oldLocations[i].file&&fileBytes(oldLocations[i].file)==oldBytes[i],
+        "Source ownership migration rewrote or unregistered a historical geometry member.");
+    require(fileBytes(sceneFile)==sceneBytes&&historical.undo()&&historical.scene().find(oldEntity)->model->id==old.id&&
+        historical.scene().find(oldEntity)->modelMaterials==record.modelMaterials,
+        "Source ownership migration changed a saved scene, authored override or undoable historical geometry reference.");
+    ModelResolvers resolvers;resolvers.material=[](const std::string&)->std::optional<ModelMaterial>{return defaultMaterialAsset().surface;};
+    const auto reopened=loadModelPackage(resolveAssetPath(temporary.root,old.id),temporary.root,resolvers);
+    require(reopened->materialIds.size()==1&&reopened->primitives.size()==1,"A historical content-only mesh stopped loading after source ownership migration.");
+    const auto repeated=prepareQuaderImport(source,options);require(repeated.files.empty(),"Owned migration repeated on a warm source import.");
+    for(std::size_t i=0;i<source.meshes.size();++i)require(repeated.meshes[i].modelId==migrated.meshes[i].modelId,"Owned migration changed a stable source asset on reimport.");
 }
 void legacyUnusedFallbackPackages(){
     for(bool nameDependent:{false,true}){
@@ -190,12 +327,13 @@ void legacyUnusedFallbackPackages(){
         const auto base="assets/models/quader-"+content;
         for(auto& file:files){const auto member=file.id.substr(file.id.find("/quader-")+1);const auto slash=member.find('/');
             file.id=base+member.substr(slash);if(file.id.ends_with("/manifest.json"))file.contents=metadata.dump(2)+"\n";}
-        commit(temporary.root,files);initializeContentStorage(temporary.root);const auto oldId=canonicalAssetId(base+"/manifest.json");const auto oldLocations=locations(temporary.root);
-        const auto revision=contentStorageRevision(temporary.root);
+        commit(temporary.root,files);initializeContentStorage(temporary.root);const auto oldId=canonicalAssetId(base+"/manifest.json");
         const auto unchanged=prepareQuaderImport(source,options);
-        require(unchanged.files.empty()&&unchanged.meshes[0].modelId==oldId&&unchanged.preparedModels.size()==1&&
+        require(unchanged.files.size()==2&&std::all_of(unchanged.files.begin(),unchanged.files.end(),[](const auto& file){return file.id.ends_with(".crimson-quader");})&&
+            unchanged.meshes[0].modelId==oldId&&unchanged.preparedModels.size()==1&&
             unchanged.preparedModels[0]->materials.size()==1&&unchanged.preparedModels[0]->materialIds==std::vector<std::string>{DefaultMaterialId},
             "Legacy fallback compatibility changed an immutable package ID, slot count or used assignment.");
+        commit(temporary.root,unchanged);const auto oldLocations=locations(temporary.root);const auto revision=contentStorageRevision(temporary.root);
         source.meshes[0].name="Renamed legacy fallback mesh";source.meshes[0].transform=math::translation({11,12,13});
         const auto renamed=prepareQuaderImport(source,options);
         require(renamed.files.empty()&&renamed.meshes[0].modelId==oldId&&locations(temporary.root)==oldLocations&&
@@ -230,10 +368,24 @@ void deletedGeometryReimport(){
     const auto erasePackages=[&](const QuaderImportResult& result){
         const auto ids=packageIds(result);AssetReferenceManager references(temporary.root);
         const std::array<AssetEntry,1> assets{{{ids[0],"Quader geometry",AssetKind::Model}}};
-        references.replace(assets,{});std::vector<AssetFileChange> changes;
-        for(const auto& id:ids){options.reservedIds.insert(id);const auto directory=pathFromUtf8(logicalFile(result,id)).parent_path();
-            for(const auto* member:{"manifest.json","model.gltf","source.gltf","buffers/0.bin"})changes.push_back({utf8(directory/member),std::nullopt});}
-        changes.push_back({"assets/references.json",references.serialize()});commit(temporary.root,changes);
+        const auto prepared=prepareQuaderBundleModelRemoval(temporary.root,ids);
+        require(prepared.modelIds==std::vector<std::string>{ids[0]}&&prepared.memberIds.size()==4,
+            "Explicit Quader mesh deletion did not prepare its bundle record and exact generated members.");
+        references.replace(assets,{});auto changes=prepared.files;
+        changes.push_back({"assets/references.json",references.serialize()});
+        auto removedLocations=prepared.memberIds;removedLocations.insert(removedLocations.end(),prepared.removedBundleIds.begin(),prepared.removedBundleIds.end());
+        changes.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(temporary.root,{},removedLocations)});
+        validateQuaderBundleModelRemoval(temporary.root,prepared);commitAssetTransaction(temporary.root,changes);refreshContentStorage(temporary.root);
+        const auto remaining=findQuaderSceneBundle(temporary.root,scene.project.id,scene.id);
+        require(!remaining&&prepared.removedBundleIds==std::vector<std::string>{preparedBundle(result).id},"Deleting the last Quader mesh retained its empty bundle or source-bundle registration.");
+        const auto stored=locations(temporary.root);
+        for(const auto& member:prepared.memberLocations)require(!fs::exists(member.file)&&!stored.contains({member.id,member.file}),
+            "Explicit Quader mesh deletion retained a generated member file or UUID location.");
+        initializeQuaderSceneBundles(temporary.root);
+        for(const auto& member:prepared.memberLocations)require(!fs::exists(member.file),"Startup reconstruction revived explicitly deleted Quader geometry.");
+        AssetReferenceManager reopened(temporary.root);require(reopened.valid()&&reopened.deleted(ids[0])&&reopened.resolve(ids[0]).empty(),
+            "Removing a bundled mesh's location invalidated or cleared its authored deletion policy.");
+        const auto reserved=reservedModelImportIds(temporary.root);options.reservedIds.clear();options.reservedIds.insert(reserved.begin(),reserved.end());
     };
     erasePackages(original);const auto referenceBytes=fileBytes(resolveAssetPath(temporary.root,"assets/references.json"));
     const auto replacement=prepareQuaderImport(scene,options);const auto originalIds=packageIds(original),replacementIds=packageIds(replacement);
@@ -253,7 +405,8 @@ void deletedGeometryReimport(){
     commit(temporary.root,replacement);
     require(fileBytes(resolveAssetPath(temporary.root,"assets/references.json"))==referenceBytes,"Quader reimport changed authored asset deletion policy.");
     AssetReferenceManager references(temporary.root);
-    for(const auto& id:originalIds)require(references.deleted(id)&&references.resolve(id).empty()&&!fs::exists(resolveAssetPath(temporary.root,id)),
+    for(const auto& id:originalIds)require(references.valid()&&references.deleted(id)&&references.resolve(id).empty()&&
+        !fs::exists(quaderBundleCacheDirectory(temporary.root,preparedBundle(original).id,id)/"manifest.json"),
         "Reimporting Quader geometry restored an old deleted reference or package.");
     auto repeated=prepareQuaderImport(scene,options);
     require(packageIds(repeated)==replacementIds&&repeated.files.empty(),"Repeated Quader reimport did not reuse its replacement package generation.");
@@ -328,6 +481,56 @@ void completionRecords(){
     require(quaderSaveKey(save,1,false)==first,"Preserved-material synchronization reacted to an unrelated material save.");require(quaderSaveKey(save,1,true)!=quaderSaveKey(QuaderCompletedSave{parsed,{},{}},1,true),"Explicit material refresh omitted material completion tokens.");
     require(quaderSaveKey(save,1,false,true)==first&&quaderSaveKey(save,1,false,false)!=first,"Light sync configuration did not retain the default consumption key or distinguish disabled imports.");
 }
+void nativeReaderHierarchy(){
+    const auto directory=fixture().parent_path()/"hierarchy",project=directory/"hierarchy.qproj",sceneFile=directory/"Scenes/hierarchy.qdr";
+    const auto manifestBytes=fileBytes(project),sceneBytes=fileBytes(sceneFile);
+    const auto source=readQuaderScene(project,"88888888-8888-4888-8888-888888888888");
+    require(source->groups.size()==7&&source->meshes.size()==6&&source->lights.size()==1,
+        "Native Quader hierarchy lost authored groups or multi-member instance geometry.");
+    const auto group=[&](const std::string& key)->const QuaderSourceGroup&{
+        const auto found=std::find_if(source->groups.begin(),source->groups.end(),[&](const auto& value){return value.sourceKey==key;});
+        require(found!=source->groups.end(),"Native hierarchy omitted an expected source group.");return *found;
+    };
+    require(group("group:10:0").name=="Level Group"&&!group("group:10:0").visible&&group("group:10:0").order==0&&
+        group("group:11:0").name=="Nested Group"&&group("group:11:0").parentKey=="group:10:0"&&group("group:11:0").visible&&
+        group("group:40:0").name=="Empty Group"&&group("group:40:0").parentKey.empty(),
+        "Native hierarchy flattened nested/empty groups, changed authored names or baked parent hiding into children.");
+    require(group("group:50:0").name=="Instance One"&&group("group:50:0").parentKey=="group:10:0"&&
+        group("group:101:50").name=="Assembly Inner"&&group("group:101:50").parentKey=="group:50:0"&&
+        group("group:60:0").name=="Instance Two"&&group("group:101:60").parentKey=="group:60:0",
+        "Native instance expansion lost occurrence names or nested member groups.");
+    const std::array<std::string,6> names{"Wall B","Wall A","Arch","Column","Arch","Column"};
+    const std::array<std::string,6> parents{"group:10:0","group:11:0","group:101:50","group:50:0","group:101:60","group:60:0"};
+    const std::array<std::uint64_t,6> displays{12,13,50,50,60,60},geometries{12,13,102,103,102,103};
+    const std::array<std::uint32_t,6> order{1,3,7,8,12,13};
+    for(std::size_t index=0;index<names.size();++index) {
+        const auto mesh=std::find_if(source->meshes.begin(),source->meshes.end(),[&](const auto& value){return value.displayEntity==displays[index]&&value.geometryEntity==geometries[index];});
+        require(mesh!=source->meshes.end()&&mesh->name==names[index]&&mesh->parentKey==parents[index]&&mesh->order==order[index]&&mesh->visible&&
+            mesh->definitionEntity==(displays[index]>=50?100u:0u),
+            "Native mesh names, authored sibling order, parent grouping or local visibility changed.");
+    }
+    require(std::count_if(source->meshes.begin(),source->meshes.end(),[](const auto& mesh){return mesh.displayEntity==50;})==2&&
+        std::count_if(source->meshes.begin(),source->meshes.end(),[](const auto& mesh){return mesh.displayEntity==60;})==2,
+        "Native hierarchy fixture did not retain distinct members sharing a concrete instance occurrence.");
+    require(source->lights[0].name=="Window Light"&&source->lights[0].parentKey=="group:11:0"&&source->lights[0].order==4,
+        "Native grouped light lost its source name, hierarchy or order.");
+    Temporary temporary;QuaderPrepareOptions options;options.projectRoot=temporary.root;options.scale=2;
+    const auto prepared=prepareQuaderImport(*source,options);
+    struct Node {std::string parent;Mat4 local;};std::unordered_map<std::string,Node> nodes;
+    const auto append=[&](const auto& values){for(const auto& value:values)nodes.emplace(value.sourceKey,Node{value.parentKey,value.local});};
+    append(prepared.groups);append(prepared.meshes);append(prepared.lights);
+    const auto world=[&](const std::string& key){const auto& node=nodes.at(key);auto value=node.local;auto parent=node.parent;
+        for(std::size_t depth=0;!parent.empty();++depth){require(depth<nodes.size(),"Prepared native hierarchy contains a cycle.");
+            const auto& ancestor=nodes.at(parent);value=math::multiply(ancestor.local,value);parent=ancestor.parent;}
+        return value;
+    };
+    for(const auto& value:source->groups){const auto actual=world(value.sourceKey);for(std::size_t axis=12;axis<15;++axis)near(actual[axis],value.transform[axis]*2);}
+    for(std::size_t index=0;index<prepared.meshes.size();++index){const auto actual=world(prepared.meshes[index].sourceKey);
+        for(std::size_t axis=0;axis<16;++axis)near(actual[axis],source->meshes[index].transform[axis]*(axis>=12&&axis<15?2.f:1.f));}
+    commit(temporary.root,prepared);const auto repeated=prepareQuaderImport(*source,options);
+    require(repeated.files.empty()&&repeated.groups.size()==prepared.groups.size(),"Repeated grouped native import rewrote unchanged geometry.");
+    require(fileBytes(project)==manifestBytes&&fileBytes(sceneFile)==sceneBytes,"Native hierarchy import changed its authored Quader source.");
+}
 void nativeReaderMaterials(){
     Temporary temporary;const auto project=fixture()/"godot-bridge-fixture-v2.qproj";const auto catalog=inspectQuaderProject(project);require(catalog.scenes.size()==2,"Bundled native reader did not inspect the native project fixture.");
     auto source=readQuaderScene(project,"11111111-1111-4111-8111-111111111111");require(source->meshes.size()==3,"Native mesh occurrence count changed.");
@@ -375,26 +578,135 @@ void nativeReaderMaterials(){
     auto local=loadMaterialAsset(temporary.root,editedId);local.name="Current Crimson graph";materialOutputNode(local.graph).output.roughness=.123f;canonicalizeMaterialAsset(local);saveMaterialAsset(temporary.root,local);
     const auto localBytes=fileBytes(resolveAssetPath(temporary.root,editedId));
     auto latest=prepareQuaderImport(preservedSource,options);require(fileBytes(resolveAssetPath(temporary.root,editedId))==localBytes&&
-        std::none_of(latest.files.begin(),latest.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==editedId;}),"Reuse mode overwrote a material edited after the captured material map.");
+        std::none_of(latest.files.begin(),latest.files.end(),[&](const auto& file){return fileAssetId(latest,file)==editedId;}),"Reuse mode overwrote a material edited after the captured material map.");
     bool latestGraph{};for(const auto& model:latest.preparedModels)for(std::size_t slot=0;slot<model->materialIds.size();++slot)if(model->materialIds[slot]==editedId){
         require(model->materials.at(slot).name==local.name,"Worker-prepared model retained a stale captured Crimson material.");latestGraph=true;}
     require(latestGraph,"Native fixture no longer references its shared material.");
     std::string imageId,originalImage;for(const auto& id:materialTextureReferences(local))if(!isEngineAssetId(id)){imageId=id;break;}
-    for(const auto& file:result.files)if(canonicalAssetId(file.id)==imageId)originalImage=*file.contents;
+    for(const auto& file:result.files)if(fileAssetId(result,file)==imageId)originalImage=*file.contents;
     require(!imageId.empty(),"Native fixture did not normalize a source texture.");
     writeFileAtomically(resolveAssetPath(temporary.root,imageId),"Crimson texture edit");
     require(fs::remove(resolveAssetPath(temporary.root,editedId)),"Cannot remove disposable missing-material fixture.");
     auto missingMaterial=prepareQuaderImport(*source,options);
-    require(std::any_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==editedId;})&&
-        std::none_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==imageId;}),"Reuse mode did not recreate a missing material or overwrote its existing shared image.");
+    require(std::any_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return fileAssetId(missingMaterial,file)==editedId;})&&
+        std::none_of(missingMaterial.files.begin(),missingMaterial.files.end(),[&](const auto& file){return fileAssetId(missingMaterial,file)==imageId;}),"Reuse mode did not recreate a missing material or overwrote its existing shared image.");
     commit(temporary.root,missingMaterial);require(fileBytes(resolveAssetPath(temporary.root,imageId))=="Crimson texture edit","Missing material publication replaced an existing stable-ID texture in reuse mode.");
     // Sync-on must repair even a malformed destination; no old parse is needed.
     writeFileAtomically(resolveAssetPath(temporary.root,editedId),"invalid Crimson material");
-    options.refreshMaterials=true;auto refreshed=prepareQuaderImport(*source,options);require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return canonicalAssetId(file.id)==editedId;}),"Explicit refresh did not stage the shared material replacement.");
+    options.refreshMaterials=true;auto refreshed=prepareQuaderImport(*source,options);require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return fileAssetId(refreshed,file)==editedId;}),"Explicit refresh did not stage the shared material replacement.");
     commit(temporary.root,refreshed);require(loadMaterialAsset(temporary.root,editedId).name=="Project surface","Explicit refresh retained an old authored material name.");
     require(fileBytes(resolveAssetPath(temporary.root,imageId))==originalImage,"Enabled material sync did not restore source pixels at the same texture identity.");
     for(const auto& file:result.files)if(file.id.ends_with(".png")){const auto image=decodeManagedImage(checkedManagedAssetPath(temporary.root,file.id));require(image.width>0&&!image.rgba.empty(),"Normalized source image is unreadable.");}
     const auto count=models(temporary.root);auto missing=readQuaderScene(project,"22222222-2222-4222-8222-222222222222");rejects([&]{prepareQuaderImport(*missing,options);});require(models(temporary.root)==count,"Failed source texture import changed managed geometry.");
+}
+void sceneScopedContentLayout(){
+    Temporary temporary;const auto project=fixture()/"godot-bridge-fixture-v2.qproj";
+    auto source=*readQuaderScene(project,"11111111-1111-4111-8111-111111111111");source.relativePath="Scenes/Diablo Room.qdr";
+    QuaderPrepareOptions options;options.projectRoot=temporary.root;const auto imported=prepareQuaderImport(source,options);
+    const auto bundle=preparedBundle(imported);const auto directory=temporary.root/"Content/diablo_room";
+    require(quaderSceneContentDirectory(temporary.root,bundle)==directory,"Quader scene directory did not use the lowercase snake_case scene filename.");
+    std::size_t nativeMaterials{},nativeTextures{},bundles{};
+    for(const auto& file:imported.files){const auto path=checkedManagedAssetPath(temporary.root,file.id);
+        if(path.extension()==".crimson-quader"){
+            require(path.parent_path()==directory/"models"&&fileAssetId(imported,file)==bundle.id,"Quader bundle did not publish under the scene's models folder with its stable identity.");++bundles;
+        }else if(path.extension()==".crimson-material"||path.extension()==".png"){
+            const auto kind=path.extension()==".crimson-material"?"materials":"textures";
+            require(path.parent_path()==directory/kind&&fileAssetId(imported,file)==canonicalAssetId("assets/"+std::string(kind)+"/"+utf8(path.filename())),
+                "Quader native assets lost their original UUIDs or were written outside their scene's material/texture folders.");
+            if(path.extension()==".crimson-material")++nativeMaterials;else ++nativeTextures;
+        }else require(file.id.starts_with(".crimson/cache/quader-imports/"),"Quader expanded geometry escaped the private import cache.");
+    }
+    require(bundles==1&&nativeMaterials>0&&nativeTextures>0,"Scene-layout fixture did not cover bundle, native material and texture publication.");
+    commit(temporary.root,imported);
+    require(!fs::exists(temporary.root/"Content/models")&&!fs::exists(temporary.root/"Content/materials")&&!fs::exists(temporary.root/"Content/textures"),
+        "Fresh Quader import created flat global models/materials/textures folders.");
+    for(const auto& identity:source.materials){const auto id=canonicalAssetId(quaderMaterialAssetId(source.project.id,source.id,identity));
+        require(resolveAssetPath(temporary.root,id).parent_path()==directory/"materials"&&loadMaterialAsset(temporary.root,id).id==id,
+            "Scene-scoped native material publication changed a canonical source identity or failed to register its new location.");}
+    const auto index=fileBytes(temporary.root/".crimson/asset-locations.json");const auto revision=contentStorageRevision(temporary.root);
+    std::vector<std::pair<fs::path,fs::file_time_type>> times;
+    for(const auto& file:imported.files)times.emplace_back(checkedManagedAssetPath(temporary.root,file.id),fs::last_write_time(checkedManagedAssetPath(temporary.root,file.id)));
+    const auto repeated=prepareQuaderImport(source,options);require(repeated.files.empty(),"Unchanged scene-scoped import rewrote authored assets or the durable bundle.");commit(temporary.root,repeated);
+    require(fileBytes(temporary.root/".crimson/asset-locations.json")==index&&contentStorageRevision(temporary.root)==revision,
+        "Repeated scene-scoped import rewrote the location index or advanced its revision.");
+    for(const auto& [path,time]:times)require(fs::last_write_time(path)==time,"Repeated scene-scoped import rewrote an equal published file.");
+}
+void genericSceneNameAdoption(){
+    Temporary temporary;const auto project=fixture()/"godot-bridge-fixture-v2.qproj";
+    auto source=*readQuaderScene(project,"11111111-1111-4111-8111-111111111111");source.relativePath="Scenes/Quader Scene.qdr";
+    QuaderPrepareOptions options;options.projectRoot=temporary.root;const auto original=prepareQuaderImport(source,options);commit(temporary.root,original);
+    const auto oldBundle=preparedBundle(original);const auto oldFile=resolveAssetPath(temporary.root,oldBundle.id);
+    const auto materialId=canonicalAssetId(quaderMaterialAssetId(source.project.id,source.id,source.materials[0]));
+    auto material=loadMaterialAsset(temporary.root,materialId);material.name="Edited before source name adoption";
+    materialOutputNode(material.graph).output.roughness=.123f;canonicalizeMaterialAsset(material);saveMaterialAsset(temporary.root,material);
+    const auto oldMaterial=resolveAssetPath(temporary.root,materialId);const auto editedBytes=fileBytes(oldMaterial);
+    std::vector<std::pair<std::string,std::string>> textures;
+    for(const auto& id:materialTextureReferences(material))if(!isEngineAssetId(id))textures.emplace_back(id,fileBytes(resolveAssetPath(temporary.root,id)));
+    source.relativePath="Scenes/Diablo Room.qdr";const auto adopted=prepareQuaderImport(source,options);const auto named=preparedBundle(adopted);
+    require(named.name=="Diablo Room"&&named.id==oldBundle.id&&named.models.size()==oldBundle.models.size()&&
+        adopted.meshes.size()==original.meshes.size()&&
+        std::any_of(adopted.files.begin(),adopted.files.end(),[&](const auto& change){return !change.contents&&checkedManagedAssetPath(temporary.root,change.id)==oldFile;}),
+        "A generic migrated scene did not adopt its real source name while preserving the source bundle and geometry identities.");
+    for(std::size_t i=0;i<adopted.meshes.size();++i)require(adopted.meshes[i].modelId==original.meshes[i].modelId,"Adopting a real scene name regenerated unchanged source geometry.");
+    commit(temporary.root,adopted);const auto directory=temporary.root/"Content/diablo_room";
+    require(resolveAssetPath(temporary.root,named.id).parent_path()==directory/"models"&&!fs::exists(oldFile)&&!fs::exists(oldMaterial)&&
+        resolveAssetPath(temporary.root,materialId).parent_path()==directory/"materials"&&fileBytes(resolveAssetPath(temporary.root,materialId))==editedBytes,
+        "Adopting the real source name lost Crimson material edits or left the native material/bundle at the generic path.");
+    for(const auto& [id,pixels]:textures)require(resolveAssetPath(temporary.root,id).parent_path()==directory/"textures"&&fileBytes(resolveAssetPath(temporary.root,id))==pixels,
+        "Adopting a real scene name lost shared texture UUIDs or changed their authored pixels.");
+    const auto index=fileBytes(temporary.root/".crimson/asset-locations.json");const auto revision=contentStorageRevision(temporary.root);
+    const auto repeated=prepareQuaderImport(source,options);require(repeated.files.empty(),"A generic scene-name conversion repeated after its first import.");commit(temporary.root,repeated);
+    require(fileBytes(temporary.root/".crimson/asset-locations.json")==index&&contentStorageRevision(temporary.root)==revision,
+        "Warm import of an adopted scene changed storage registrations.");
+    // Refresh writes and relocation must describe the same final file version.
+    Temporary refresh;options.projectRoot=refresh.root;source.relativePath="Scenes/Quader Scene.qdr";
+    const auto seed=prepareQuaderImport(source,options);commit(refresh.root,seed);source.relativePath="Scenes/Diablo Room.qdr";options.refreshMaterials=true;
+    const auto refreshed=prepareQuaderImport(source,options);commit(refresh.root,refreshed);
+    require(resolveAssetPath(refresh.root,materialId).parent_path()==refresh.root/"Content/diablo_room/materials"&&
+        loadMaterialAsset(refresh.root,materialId).name==source.readMaterial(0).name,
+        "Source-name adoption dropped or published a refresh to the former material path.");
+    // An explicit authored location is never a generic automatic-folder claim.
+    Temporary custom;options.projectRoot=custom.root;options.refreshMaterials=false;source.relativePath="Scenes/Quader Scene.qdr";
+    const auto initial=prepareQuaderImport(source,options);commit(custom.root,initial);
+    const auto customBundle=custom.root/"Content/Custom/Bundle.crimson-quader",customMaterial=custom.root/"Content/Custom/Material.crimson-material";
+    const std::array<ContentPathMove,2> moves{{{resolveAssetPath(custom.root,oldBundle.id),customBundle,false},{resolveAssetPath(custom.root,materialId),customMaterial,false}}};
+    relocateContentPaths(custom.root,moves);source.relativePath="Scenes/Diablo Room.qdr";const auto unchanged=prepareQuaderImport(source,options);
+    require(unchanged.files.empty()&&resolveAssetPath(custom.root,oldBundle.id)==customBundle&&resolveAssetPath(custom.root,materialId)==customMaterial,
+        "A real source name reversed manually authored bundle or native-material locations.");
+}
+void renamedSceneContentFolders(){
+    Temporary temporary;auto source=*readQuaderScene(fixture()/"godot-bridge-fixture-v2.qproj","11111111-1111-4111-8111-111111111111");
+    source.relativePath="Scenes/Diablo Room.qdr";QuaderPrepareOptions options;options.projectRoot=temporary.root;
+    const auto original=prepareQuaderImport(source,options);commit(temporary.root,original);const auto owner=preparedBundle(original);
+    const auto originalDirectory=temporary.root/"Content/diablo_room",directory=temporary.root/"Content/My Renamed Level";
+    const ContentPathMove rootMove{originalDirectory,directory,false};relocateContentPaths(temporary.root,std::span(&rootMove,1));
+    const std::array<ContentPathMove,3> roles{{{directory/"models",directory/"geometry",false},{directory/"materials",directory/"surfaces",false},{directory/"textures",directory/"images",false}}};
+    relocateContentPaths(temporary.root,roles);
+    const auto bundlePath=resolveAssetPath(temporary.root,owner.id);
+    std::vector<std::pair<std::string,std::string>> existing;
+    for(const auto& identity:source.materials){const auto id=canonicalAssetId(quaderMaterialAssetId(source.project.id,source.id,identity));existing.emplace_back(id,fileBytes(resolveAssetPath(temporary.root,id)));}
+    const auto reader=source.readMaterial;auto added=reader(0);
+    for(std::uint32_t index=0;index<source.materials.size();++index){auto candidate=reader(index);
+        if(std::any_of(candidate.textures.begin(),candidate.textures.end(),[](const auto& texture){return texture.present;})){added=std::move(candidate);break;}}
+    require(std::any_of(added.textures.begin(),added.textures.end(),[](const auto& texture){return texture.present;}),"Renamed-folder fixture has no textured source material.");
+    added.identity.id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";added.identity.embedded=false;added.name="New room surface";
+    for(auto& texture:added.textures)if(texture.present)texture.id+="-added-after-folder-rename";
+    const auto addedIndex=static_cast<std::uint32_t>(source.materials.size());source.materials.push_back(added.identity);
+    source.readMaterial=[reader,added,addedIndex](std::uint32_t index){return index==addedIndex?added:reader(index);};
+    require(!source.meshes.empty()&&!source.meshes[0].surfaces.empty(),"Renamed-folder fixture has no material-bearing geometry.");source.meshes[0].surfaces[0].material=addedIndex;
+    const auto imported=prepareQuaderImport(source,options);
+    std::size_t addedMaterials{},addedTextures{};
+    for(const auto& file:imported.files)if(file.contents){const auto path=checkedManagedAssetPath(temporary.root,file.id);
+        if(path.extension()==".crimson-material"){require(path.parent_path()==directory/"surfaces","New source material ignored the renamed role folder.");++addedMaterials;}
+        else if(path.extension()==".png"){require(path.parent_path()==directory/"images","New source texture ignored the renamed role folder.");++addedTextures;}
+        else if(path.extension()==".crimson-quader")require(path==bundlePath,"Geometry changes recreated an old scene/model folder after a rename.");
+    }
+    require(addedMaterials==1&&addedTextures>0,"Renamed-folder fixture did not publish new source material/texture assets.");commit(temporary.root,imported);
+    require(resolveAssetPath(temporary.root,owner.id)==bundlePath&&!fs::exists(originalDirectory)&&!fs::exists(directory/"models")&&
+        !fs::exists(directory/"materials")&&!fs::exists(directory/"textures"),"Reimport recreated scene or role folders that the user renamed.");
+    for(const auto& [id,data]:existing)require(resolveAssetPath(temporary.root,id).parent_path()==directory/"surfaces"&&fileBytes(resolveAssetPath(temporary.root,id))==data,
+        "Reimport after folder renames changed existing source asset UUIDs, authored material bytes or assigned locations.");
+    const auto repeated=prepareQuaderImport(source,options);require(repeated.files.empty(),"A repeated import into renamed scene/role folders rewrote equal data.");
 }
 void deletedMaterialsAndTexturesReimport(){
     Temporary temporary;const auto project=fixture()/"godot-bridge-fixture-v2.qproj";
@@ -404,25 +716,25 @@ void deletedMaterialsAndTexturesReimport(){
     AssetReferenceManager references(temporary.root);std::vector<AssetEntry> deleted;std::vector<AssetFileChange> changes;
     std::vector<std::string> originalMaterialIds,originalImageIds;
     for(const auto& file:original.files){
-        if(file.id.ends_with(".crimson-material")){deleted.push_back({canonicalAssetId(file.id),"Deleted Quader material",AssetKind::Material});originalMaterialIds.push_back(file.id);}
-        else if(file.id.ends_with(".png")){deleted.push_back({canonicalAssetId(file.id),"Deleted Quader image",AssetKind::Texture});originalImageIds.push_back(file.id);}
+        if(file.id.ends_with(".crimson-material")){deleted.push_back({fileAssetId(original,file),"Deleted Quader material",AssetKind::Material});originalMaterialIds.push_back(fileAssetId(original,file));}
+        else if(file.id.ends_with(".png")){deleted.push_back({fileAssetId(original,file),"Deleted Quader image",AssetKind::Texture});originalImageIds.push_back(fileAssetId(original,file));}
         else continue;
-        options.reservedIds.insert(canonicalAssetId(file.id));changes.push_back({file.id,std::nullopt});
+        options.reservedIds.insert(fileAssetId(original,file));changes.push_back({file.id,std::nullopt});
     }
     require(!originalMaterialIds.empty()&&!originalImageIds.empty(),"Native Quader fixture must contain shared materials and normalized textures.");
     references.replace(deleted,{});changes.push_back({"assets/references.json",references.serialize()});commit(temporary.root,changes);
-    for(const auto& id:originalMaterialIds)options.materialOverrides.emplace(id,references.resolveModelMaterial(id));
+    for(const auto& identity:source->materials){const auto id=quaderMaterialAssetId(source->project.id,source->id,identity);options.materialOverrides.emplace(id,references.resolveModelMaterial(id));}
     for(const auto& id:originalImageIds)options.imageOverrides.emplace(id,std::array{references.resolveTexture(id,false),references.resolveTexture(id,true)});
     const auto referenceBytes=fileBytes(resolveAssetPath(temporary.root,"assets/references.json"));
     const auto replacement=prepareQuaderImport(*source,options);std::vector<std::string> freshMaterialIds,freshImageIds;
     for(const auto& file:replacement.files){
-        if(file.id.ends_with(".crimson-material"))freshMaterialIds.push_back(file.id);
+        if(file.id.ends_with(".crimson-material"))freshMaterialIds.push_back(fileAssetId(replacement,file));
         else if(file.id.ends_with(".png")){
-            freshImageIds.push_back(file.id);
+            freshImageIds.push_back(fileAssetId(replacement,file));
             require(std::any_of(original.files.begin(),original.files.end(),[&](const auto& before){return before.id.ends_with(".png")&&before.contents==file.contents;}),
                 "Reimporting deleted Quader textures changed normalized source pixels.");
         }else continue;
-        require(!options.reservedIds.contains(canonicalAssetId(file.id)),"Quader reimport reused a deleted material or texture identity.");
+        require(!options.reservedIds.contains(fileAssetId(replacement,file)),"Quader reimport reused a deleted material or texture identity.");
     }
     require(freshMaterialIds.size()==originalMaterialIds.size()&&freshImageIds.size()==originalImageIds.size(),
         "Reimporting deleted Quader assets kept fallback gray materials or omitted source textures.");
@@ -453,7 +765,7 @@ void deletedMaterialsAndTexturesReimport(){
     require(fileBytes(resolveAssetPath(temporary.root,refreshedImage))=="Crimson replacement texture edit",
         "Disabled material sync discarded an edit to a replacement Quader texture.");
     options.refreshMaterials=true;const auto refreshed=prepareQuaderImport(*source,options);
-    for(const auto& id:freshMaterialIds)require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return file.id==id;}),
+    for(const auto& id:freshMaterialIds)require(std::any_of(refreshed.files.begin(),refreshed.files.end(),[&](const auto& file){return fileAssetId(refreshed,file)==id;}),
         "Enabled material sync did not refresh the replacement material under its existing identity.");
     commit(temporary.root,refreshed);
     require(fileBytes(resolveAssetPath(temporary.root,refreshedImage))==sourcePixels,"Enabled material sync did not restore replacement texture source pixels.");
@@ -626,8 +938,8 @@ void coordinatorTransactions(){
     const auto rollbackIndex=fileBytes(rollbackRoot/".crimson/asset-locations.json");const auto rollbackLocations=locations(rollbackRoot);
     rollback.requestImport(7,draft,1);const auto end=std::chrono::steady_clock::now()+std::chrono::seconds{12};while(rollback.busy(7)&&std::chrono::steady_clock::now()<end){rollback.update(rollbackTargets,1,false,failing);std::this_thread::sleep_for(std::chrono::milliseconds{1});}
     require(!rollback.busy(7)&&models(rollbackRoot)==0,"Rejected scene transaction left imported model files published.");
-    const auto materialDirectory=resolveAssetPath(rollbackRoot,"assets/materials");
-    require(!fs::is_directory(materialDirectory)||fs::is_empty(materialDirectory),"Rejected scene transaction overwrote external materials.");
+    for(const auto& entry:fs::recursive_directory_iterator(rollbackRoot/"Content"))
+        require(!entry.is_regular_file(),"Rejected scene transaction retained a scene-scoped bundle, material or texture file.");
     require(fileBytes(rollbackRoot/".crimson/asset-locations.json")==rollbackIndex,"Rejected scene transaction retained newly registered asset locations.");
     require(!rejectedIds.empty()&&locations(rollbackRoot)==rollbackLocations,"Rejected scene transaction restored index bytes but retained newly registered cached locations.");
     for(const auto& id:rejectedIds)rejects([&]{resolveAssetPath(rollbackRoot,id);});
@@ -729,5 +1041,5 @@ void materialSyncTransactions(){
 int main(int argc,char** argv){try{
     if(argc==4&&std::string(argv[1])=="--verify-import"){verifyImport(pathFromUtf8(argv[2]),argv[3]);return 0;}
     require(argc==1,"Usage: quader_bridge_tests [--verify-import <project.qproj> <scene-id>]");
-    geometryAndLights();geometryReuseIgnoresNamesAndPlacement();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderMaterials();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();materialSyncTransactions();std::cout<<"Quader reader, import, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
+    geometryAndLights();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();materialSyncTransactions();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

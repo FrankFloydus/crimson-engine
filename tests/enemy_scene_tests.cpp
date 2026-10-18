@@ -24,25 +24,25 @@ struct Project {
 void recipeDependenciesAndHistory() {
     Project project;SceneDocument document(project.root);const auto enemy=document.createEnemy();
     const auto recipe=*document.scene().find(enemy);
-    require(recipe.enemy==SceneEnemy{}&&recipe.actor&&recipe.controller&&recipe.motor&&recipe.navigation,"Enemy recipe omitted its definition or required capabilities.");
+    require(recipe.enemy==SceneEnemy{}&&recipe.actor&&recipe.controller&&recipe.movement&&recipe.navigation,"Enemy recipe omitted its definition or required capabilities.");
     require(!recipe.playerInput&&!recipe.camera&&!recipe.cameraFollow&&document.scene().children(enemy).empty()&&!document.scene().properties().playerCharacter,"Enemy recipe acquired player input or a camera.");
     require(hasSceneComponent(recipe,SceneComponentKind::Enemy)&&editableSceneComponent(SceneComponentKind::Enemy)&&static_cast<unsigned>(SceneComponentKind::Enemy)==18,"Enemy component identity was missing or changed an existing persistent identity.");
     const auto kinds=sceneComponents(recipe);require(std::count(kinds.begin(),kinds.end(),SceneComponentKind::Enemy)==1,"Enemy component enumeration lost or duplicated the definition.");
     const auto bare=document.createEmpty("Composed creature");const auto before=document.history().size();
     require(addSceneComponent(document,bare,SceneComponentKind::Enemy)&&document.history().size()==before+1,"Enemy dependency closure was not one command.");
-    auto composed=*document.scene().find(bare);require(composed.enemy&&composed.actor&&composed.controller&&composed.motor&&composed.navigation&&!composed.playerInput,"Adding Enemy omitted dependencies or introduced player input.");
+    auto composed=*document.scene().find(bare);require(composed.enemy&&composed.actor&&composed.controller&&composed.movement&&composed.navigation&&!composed.playerInput,"Adding Enemy omitted dependencies or introduced player input.");
     require(document.undo()&&!document.scene().find(bare)->enemy&&!document.scene().find(bare)->actor&&!document.scene().find(bare)->controller,"Undo did not remove Enemy's implicit dependencies.");
     require(document.redo()&&!addSceneComponent(document,bare,SceneComponentKind::Enemy),"Enemy redo failed or duplicate addition was accepted.");
     composed=*document.scene().find(bare);composed.enemy=SceneEnemy{EnemyBehaviour::RandomMove,7.5f,.25f,2.5f};
-    composed.motor->enabled=false;composed.navigation->enabled=false;require(document.updateEntity(bare,composed),document.status());
+    composed.movement->enabled=false;composed.navigation->enabled=false;require(document.updateEntity(bare,composed),document.status());
     require(document.scene().find(bare)->enemy==composed.enemy,"Disabling Motor or Navigation discarded Enemy settings.");
-    for(const auto kind:{SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation}) {
+    for(const auto kind:{SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Movement,SceneComponentKind::Navigation}) {
         const auto expectedHistory=document.history().size()+(document.history().canRedo()?0:1);
         require(removeSceneComponent(document,bare,kind)&&!document.scene().find(bare)->enemy&&document.history().size()==expectedHistory,"Removing an Enemy prerequisite retained an invalid Enemy or split history.");
         require(document.undo()&&sameEntity(*document.scene().find(bare),composed),"Undo did not restore the complete tuned Enemy dependency closure.");
     }
     require(removeSceneComponent(document,bare,SceneComponentKind::Enemy),document.status());
-    const auto removed=*document.scene().find(bare);require(!removed.enemy&&removed.actor&&removed.controller&&removed.motor&&removed.navigation,"Removing Enemy removed its independently useful capabilities.");
+    const auto removed=*document.scene().find(bare);require(!removed.enemy&&removed.actor&&removed.controller&&removed.movement&&removed.navigation,"Removing Enemy removed its independently useful capabilities.");
     require(document.undo()&&document.scene().find(bare)->enemy==composed.enemy,"Enemy removal did not undo with its authored settings.");
     require(document.begin("Tune Enemy"),document.status());
     require(document.update([&](auto& records,auto&){for(auto& value:records)if(value.id==bare)value.enemy->radius=12;}),document.status());
@@ -78,8 +78,8 @@ void validationAndQuaderRefresh() {
     auto invalid=*before.enemy;invalid.radius=-1;rejects(invalid);invalid=*before.enemy;invalid.radius=std::numeric_limits<float>::quiet_NaN();rejects(invalid);
     invalid=*before.enemy;invalid.minWait=-1;rejects(invalid);invalid=*before.enemy;invalid.maxWait=.5f;rejects(invalid);
     invalid=*before.enemy;invalid.maxWait=std::numeric_limits<float>::infinity();rejects(invalid);invalid=*before.enemy;invalid.behaviour=static_cast<EnemyBehaviour>(255);rejects(invalid);
-    for(const auto kind:{SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation}) {
-        auto entity=before;switch(kind){case SceneComponentKind::Actor:entity.actor.reset();break;case SceneComponentKind::Controller:entity.controller.reset();break;case SceneComponentKind::Motor:entity.motor.reset();break;case SceneComponentKind::Navigation:entity.navigation.reset();break;default:break;}
+    for(const auto kind:{SceneComponentKind::Actor,SceneComponentKind::Controller,SceneComponentKind::Movement,SceneComponentKind::Navigation}) {
+        auto entity=before;switch(kind){case SceneComponentKind::Actor:entity.actor.reset();break;case SceneComponentKind::Controller:entity.controller.reset();break;case SceneComponentKind::Movement:entity.movement.reset();break;case SceneComponentKind::Navigation:entity.navigation.reset();break;default:break;}
         require(!document.updateEntity(id,entity)&&sameEntity(*document.scene().find(id),before),"Enemy accepted missing required capabilities.");
     }
     auto boundary=before;boundary.enemy=SceneEnemy{EnemyBehaviour::RandomMove,0,0,0};require(document.updateEntity(id,boundary),"Zero radius and zero wait Enemy boundaries were rejected.");
@@ -95,10 +95,10 @@ void validationAndQuaderRefresh() {
     for(const auto& entity:reserved.scene().records())if(entity.quaderGenerated&&entity.quaderGenerated->sourceKey=="Imported")importedRoot=entity.id;
     require(importedRoot&&addSceneComponent(reserved,importedRoot,SceneComponentKind::Enemy),reserved.status());
     auto rootEnemy=*reserved.scene().find(importedRoot);rootEnemy.enemy=SceneEnemy{EnemyBehaviour::RandomMove,9,.4f,1.7f};
-    rootEnemy.controller->profile=AssetRef<NavigationAgentProfile>{newAssetId()};rootEnemy.effects->starting.emplace_back(newAssetId());rootEnemy.motor->enabled=false;
+    rootEnemy.controller->profile=AssetRef<NavigationAgentProfile>{newAssetId()};rootEnemy.effects->starting.emplace_back(newAssetId());rootEnemy.movement->enabled=false;
     rootEnemy.navigation->enabled=false;rootEnemy.navigation->showRoute=false;require(reserved.updateEntity(importedRoot,rootEnemy),reserved.status());
     require(reserved.replaceQuaderImport(reservedOwner,QuaderLink{},{generated}),reserved.status());const auto refreshed=*reserved.scene().find(importedRoot);
-    require(refreshed.enemy==rootEnemy.enemy&&refreshed.actor==rootEnemy.actor&&refreshed.controller==rootEnemy.controller&&refreshed.motor==rootEnemy.motor&&refreshed.navigation==rootEnemy.navigation&&refreshed.effects==rootEnemy.effects,
+    require(refreshed.enemy==rootEnemy.enemy&&refreshed.actor==rootEnemy.actor&&refreshed.controller==rootEnemy.controller&&refreshed.movement==rootEnemy.movement&&refreshed.navigation==rootEnemy.navigation&&refreshed.effects==rootEnemy.effects,
         "Quader refresh discarded Enemy or its authored prerequisites on the reserved Imported container.");
 }
 }

@@ -20,7 +20,7 @@ void fixture(SceneDocument& document) {
         EntityRecord floor;floor.id=1;floor.name="Floor";floor.collider=SceneCollider{{100,1,100}};
         floor.local=math::translation({0,-.5f,0});records.push_back(floor);
         EntityRecord player;player.id=2;player.name="Player";player.actor.emplace();player.controller.emplace();
-        player.motor.emplace();player.playerInput.emplace();player.local=math::translation({0,.05f,0});records.push_back(player);
+        player.movement.emplace();player.playerInput.emplace();player.local=math::translation({0,.05f,0});records.push_back(player);
         const auto settings=defaultPlayerCameraTemplate();
         EntityRecord camera;camera.id=3;camera.name="Camera";camera.parent=2;camera.camera=settings.lens;
         camera.cameraFollow=SceneCameraFollow{2,settings.offset,settings.worldBasis};records.push_back(camera);
@@ -294,7 +294,7 @@ void staircaseAuthoredResponseAndDisable() {
     const auto authorTime=[](SceneDocument& document,float seconds) {
         staircaseFixture(document);
         require(document.edit("Set stair smoothing",[seconds](auto& records,auto&){
-            for(auto& record:records)if(record.id==2)record.playerInput->stairSmoothingTime=seconds;
+            for(auto& record:records)if(record.id==2)record.movement->stairSmoothingTime=seconds;
         }),"Could not author a stair smoothing response.");
     };
     authorTime(fastAuthored,.05f);authorTime(slowAuthored,.3f);authorTime(disabledAuthored,0);
@@ -339,7 +339,7 @@ void staircaseLiveResponseEditing() {
     require(forward[1]<-.15f,"Live stair response fixture did not establish an independent mouse look.");
     const auto editTime=[&](float seconds) {
         require(play.document().edit("Adjust stair smoothing",[seconds](auto& records,auto&){
-            for(auto& record:records)if(record.id==2)record.playerInput->stairSmoothingTime=seconds;
+            for(auto& record:records)if(record.id==2)record.movement->stairSmoothingTime=seconds;
         }),"Could not edit stair smoothing during Play.");
     };
     const auto beforeTicks=play.tickCount();const auto beforeActor=position(play.document().scene());
@@ -367,7 +367,7 @@ void staircaseLiveResponseEditing() {
     require(disabledStep,"Live stair response fixture did not cross a tread with smoothing disabled.");
     require(play.document().undo(),"Could not undo disabling stair smoothing.");
     play.advance(0,input,Camera{});
-    require(play.document().scene().find(2)->playerInput->stairSmoothingTime==.2f && input.ownsKeyboard(),
+    require(play.document().scene().find(2)->movement->stairSmoothingTime==.2f && input.ownsKeyboard(),
         "Undo did not restore the authored stair response and preserve gameplay input ownership.");
     require(std::abs(eyeResidual(play))<1e-5,"Reenabling stair smoothing restored stale camera lag.");
     bool resumed=false;
@@ -382,7 +382,7 @@ void compactStaircaseCameraContinuity() {
     for(bool triangles:{false,true})for(double speed:{5.,8.}) {
         SceneDocument authored(root);fixture(authored);
         require(authored.edit("Compact staircase",[triangles](auto& records,auto&){
-            for(auto& record:records)if(record.id==2)record.playerInput->stairSmoothingTime=.15f;
+            for(auto& record:records)if(record.id==2)record.movement->stairSmoothingTime=.15f;
             // Match ordinary close-spaced architectural stairs. The rounded
             // capsule finishes each ascent in its normal sweep after Jolt's
             // stair helper; separate triangle meshes also match Quader imports.

@@ -6,8 +6,8 @@
 namespace crimson {
 bool isSceneGroup(const EntityRecord& record) {
     return !record.model&&!record.particle&&!record.directional&&!record.point&&!record.environment&&
-        !record.actor&&!record.motor&&!record.controller&&!record.navigation&&!record.playerInput&&
-        !record.lightRig&&!record.darknessReveal&&!record.collider&&!record.camera&&!record.cameraFollow&&
+        !record.actor&&!record.movement&&!record.controller&&!record.navigation&&!record.playerInput&&
+        !record.collider&&!record.camera&&!record.cameraFollow&&
         !record.quader&&!record.quaderGenerated;
 }
 namespace {

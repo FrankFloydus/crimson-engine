@@ -1,5 +1,6 @@
 #include "ResourceRuntime.h"
 #include "ShaderRuntimePaths.h"
+#include "AssetSourceSnapshot.h"
 #include "EditorSession.h"
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
@@ -45,7 +46,7 @@ struct ResourceRuntime::Impl {
     FileWatcher watcher;
     ShaderReloadSession shaders;
     MaterialGraphPrograms materialPrograms;
-    std::unordered_map<std::string,AssetKind> catalog;
+    AssetCatalogSnapshot catalog;
     std::unordered_map<std::string,std::uint64_t> ownFingerprints;
     std::unordered_map<std::string,std::filesystem::path> locations;
     std::uint64_t storageRevision{};
@@ -57,7 +58,7 @@ struct ResourceRuntime::Impl {
         shaderCompile(shaderConfig(root)),watcher(shaderRuntimeWatchedRoots(root,{shaderCompile.sourceDirectory,shaderCompile.includeDirectory})),
         shaders(manager,graphics,tools,shaderCompile,EmbeddedShaderSourceBaseline),materialPrograms(manager,shaderCompile) {
         assets.setMaterialGraphPrograms(&materialPrograms);
-        for(const auto& entry:assets.catalog())catalog.emplace(entry.id,entry.kind);
+        (void)catalog.update(root,assets.catalog());
         catalogRevision=assets.catalogRevision();
         storageRevision=contentStorageRevision(root);
         for(const auto& entry:storedAssetPaths(root))locations.emplace(entry.id,entry.file);
@@ -97,9 +98,9 @@ struct ResourceRuntime::Impl {
         }
         catch(const std::exception& exception) {error=exception.what();}
     }
-    void acknowledgeAsset(const AssetEntry& entry) {
-        if(isEngineAssetId(entry.id))return;
-        const auto file=resolveAssetPath(root,entry.id);
+    void acknowledgeAsset(const AssetCatalogSource& entry) {
+        const auto& file=entry.file;
+        if(file.empty())return;
         if(!managedFile(file))return;
         acknowledgeFile(file);
         if(entry.kind==AssetKind::Model && std::filesystem::is_directory(file.parent_path()))
@@ -110,16 +111,12 @@ struct ResourceRuntime::Impl {
     // native notification processing. External creation enters through the watcher.
     void observeCatalog(bool ownChanges) {
         if(catalogRevision==assets.catalogRevision())return;
-        std::unordered_map<std::string,AssetKind> next;
-        for(const auto& entry:assets.catalog()) {
-            next.emplace(entry.id,entry.kind);
-            if(ownChanges && !catalog.contains(entry.id))acknowledgeAsset(entry);
+        const auto changes=catalog.update(root,assets.catalog());
+        if(ownChanges)for(const auto& added:changes.added)acknowledgeAsset(added);
+        for(const auto& removed:changes.removed) {
+            renderer.evictThumbnail(removed.id);if(removed.kind==AssetKind::Model)renderer.evictModel(removed.id);
+            if(ownChanges && !removed.file.empty())acknowledgeFile(removed.file);
         }
-        for(const auto& [id,kind]:catalog)if(!next.contains(id)) {
-            renderer.evictThumbnail(id);if(kind==AssetKind::Model)renderer.evictModel(id);
-            if(ownChanges)acknowledgeFile(resolveAssetPath(root,id));
-        }
-        catalog=std::move(next);
         catalogRevision=assets.catalogRevision();
     }
     bool ownChange(const std::filesystem::path& file) {

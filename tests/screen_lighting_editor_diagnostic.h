@@ -41,7 +41,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
             return std::none_of(records.begin(),records.end(),[&](const auto& entity){return entity.id==point.entityId&&entity.point.has_value();});
         });
         extracted.directional.clear();extracted.proceduralSun={};
-        extracted.actorLighting.clear();extracted.actorShadows.clear();extracted.reveals.clear();extracted.particles.clear();
+        extracted.particles.clear();
         Vec3 center{};unsigned coffins{};
         for(const auto& entity:records)if(entity.model&&(entity.name.find("tomb")!=std::string::npos||entity.name.find("coffin")!=std::string::npos))
             if(const auto transform=document.scene().worldTransform(entity.id)){center=center+math::transformPoint(*transform,{});++coffins;}
@@ -145,11 +145,11 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
         copy->world=std::move(world);return std::shared_ptr<const PreparedRenderFrame>{std::move(copy)};
     };
     std::uint32_t frame{};std::shared_ptr<const PreparedRenderFrame> last;
-    bool submittedGi{},submittedAo{},submittedDarkness{},pointsEnabled=true,useCenterPoint{},useHighBudget{},useObliqueCamera{},useLinearTone{};
+    bool submittedGi{},submittedAo{},pointsEnabled=true,useCenterPoint{},useHighBudget{},useObliqueCamera{},useLinearTone{};
     Camera obliqueCamera=camera;
     if(centerPoint){obliqueCamera.position=centerPoint->position+Vec3{4,1,4};obliqueCamera.target=centerPoint->position-Vec3{0,1,0};obliqueCamera.up={0,1,0};obliqueCamera.nearPlane=.01f;}
-    const auto tick=[&](bool giEnabled,bool aoEnabled=false,bool darkness=false) {
-        submittedGi=giEnabled;submittedAo=aoEnabled;submittedDarkness=darkness;
+    const auto tick=[&](bool giEnabled,bool aoEnabled=false) {
+        submittedGi=giEnabled;submittedAo=aoEnabled;
         resources.pump();assets.updateResources(frame);renderer.advanceStreaming();prepared.beginFrame();
         EditorRenderFrameInput input;input.extracted=extracted;input.settings.environment=extracted.environment.environment;
         input.settings.exposure=extracted.environment.exposure;input.settings.proceduralSun=extracted.proceduralSun;
@@ -161,7 +161,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
             input.settings.environment.ambientLight.source=AmbientLightSource::Disabled;
             input.settings.environment.ambientLight.energy=0;input.settings.environment.ambientLight.skyContribution=0;
             input.settings.environment.background.show=false;input.settings.environment.glow.enabled=false;input.settings.environment.fog.enabled=false;
-            input.settings.environment.ambientVisibility.enabled=darkness;input.settings.proceduralSun={};
+            input.settings.proceduralSun={};
             if(!pointsEnabled)for(auto& point:input.extracted.points)point.enabled=false;
             if(useCenterPoint){input.extracted.points.clear();if(centerPoint)input.extracted.points.push_back(*centerPoint);}
             if(useHighBudget){gi.quality=SsgiQuality::Custom;gi.rays=16;gi.steps=64;}
@@ -181,7 +181,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
         require(bgfx::isValid(staging),"Cannot allocate saved-project GI readback.");auto pixels=std::make_shared<std::vector<std::uint8_t>>(Width*Height*4);destinations.push_back(pixels);
         bgfx::blit(254,staging,0,0,view?renderer.gameViewportTexture():renderer.viewportTexture(),0,0,Width,Height);
         const auto ready=bgfx::readTexture(staging,pixels->data());require(ready!=UINT32_MAX,"Saved-project GI readback is unsupported.");
-        unsigned waited{};while(static_cast<std::int32_t>(frame-ready)<0&&waited++<120)tick(submittedGi,submittedAo,submittedDarkness);
+        unsigned waited{};while(static_cast<std::int32_t>(frame-ready)<0&&waited++<120)tick(submittedGi,submittedAo);
         if(static_cast<std::int32_t>(frame-ready)<0){renderer.drainPending(frame);bgfx::destroy(staging);throw std::runtime_error("Saved-project GI readback timed out.");}
         bgfx::destroy(staging);std::vector<std::uint8_t> encoded;require(lodepng::encode(encoded,*pixels,Width,Height)==0,"Cannot encode saved-project GI image.");
         std::ofstream file(output/name,std::ios::binary);file.write(reinterpret_cast<const char*>(encoded.data()),std::streamsize(encoded.size()));require(bool(file),"Cannot save GI image.");return pixels;
@@ -190,7 +190,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
         {"scene_camera",{{"position",camera.position},{"target",camera.target},{"up",camera.up}}},{"game_camera",{{"position",gameCamera.position},{"target",gameCamera.target},{"up",gameCamera.up}}}};
     report["point_lights"]=Json::array();for(const auto& point:extracted.points)report["point_lights"].push_back({{"position",point.position},{"radius",point.radius},{"intensity",point.intensity},
         {"depth_bias",point.shadowDepthBias},{"normal_bias",point.shadowNormalBias},{"source_radius",point.sourceRadius},{"shadows",point.castShadows},
-        {"receiver_mask",point.roles.receiverMask},{"ambient_reveal_mask",point.roles.ambientRevealMask},{"enabled",point.enabled}});
+        {"receiver_mask",point.roles.receiverMask},{"enabled",point.enabled}});
     constexpr std::array<const char*,4> names{"off","ssgi","ssao","combined"};
     const auto difference=[&](const auto& a,const auto& b) {
         double absolute{};std::size_t changed{},brightened{},darkened{};unsigned maximum{};
@@ -206,31 +206,29 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
         report["settings"]={{"ssgi_strength",gi.strength},{"ssgi_distance",gi.maxDistance},{"ssgi_thickness",gi.thickness},{"ssgi_bounces",gi.bounces},
             {"ssgi_quality",int(gi.quality)},{"ssgi_rays",gi.rays},{"ssgi_steps",gi.steps},{"ssgi_temporal_stability",gi.temporalStability},
             {"ssgi_ray_bias",gi.rayBias},{"ssgi_denoise_radius",gi.denoiseRadius},{"ssgi_denoise_strength",gi.denoiseStrength},{"ssgi_radiance_clamp",gi.radianceClamp},
-            {"exposure",extracted.environment.exposure},{"authored_tone_mapping",int(extracted.environment.environment.toneMapping)},{"ambient_darkness_strength",extracted.environment.environment.ambientVisibility.strength},
-            {"ambient_darkness_floor",extracted.environment.environment.ambientVisibility.darknessFloor}};
-        struct Phase {const char* name;bool gi,darkness,points,center;bool highBudget{},oblique{},linear{};};
-        std::vector<Phase> phases{{"off",false,false,true,false},{"ssgi",true,false,true,false},{"darkness-off",false,true,true,false},
-            {"darkness-ssgi",true,true,true,false},{"no-points-ssgi",true,false,false,false}};
+            {"exposure",extracted.environment.exposure},{"authored_tone_mapping",int(extracted.environment.environment.toneMapping)}};
+        struct Phase {const char* name;bool gi,points,center;bool highBudget{},oblique{},linear{};};
+        std::vector<Phase> phases{{"off",false,true,false},{"ssgi",true,true,false},{"no-points-ssgi",true,false,false}};
         if(centerPoint) {
-            phases.push_back({"center-off",false,false,true,true});phases.push_back({"center-ssgi",true,false,true,true});phases.push_back({"center-darkness-ssgi",true,true,true,true});
-            phases.push_back({"center-high-ssgi",true,false,true,true,true});
-            phases.push_back({"oblique-center-off",false,false,true,true,false,true});
-            phases.push_back({"oblique-center-ssgi",true,false,true,true,false,true});
-            phases.push_back({"oblique-center-high-ssgi",true,false,true,true,true,true});
+            phases.push_back({"center-off",false,true,true});phases.push_back({"center-ssgi",true,true,true});
+            phases.push_back({"center-high-ssgi",true,true,true,true});
+            phases.push_back({"oblique-center-off",false,true,true,false,true});
+            phases.push_back({"oblique-center-ssgi",true,true,true,false,true});
+            phases.push_back({"oblique-center-high-ssgi",true,true,true,true,true});
             report["center_test_light"]={{"position",centerPoint->position},{"intensity",centerPoint->intensity},{"range",centerPoint->radius},{"shadows",centerPoint->castShadows},
                 {"note","One extra diagnostic light above the average coffin entity origin; replaces authored points only in center phases."}};
             report["oblique_scene_camera"]={{"position",obliqueCamera.position},{"target",obliqueCamera.target},{"up",obliqueCamera.up}};
         }
         if(inspectOnly) {
-            phases={{"authored-tone-ssgi",true,false,true,false},{"authored-linear-ssgi",true,false,true,false,false,false,true}};
+            phases={{"authored-tone-ssgi",true,true,false},{"authored-linear-ssgi",true,true,false,false,false,true}};
             if(centerPoint) {
-                phases.push_back({"center-tone-ssgi",true,false,true,true});
-                phases.push_back({"center-linear-ssgi",true,false,true,true,false,false,true});
-                phases.push_back({"center-high-ssgi",true,false,true,true,true});
-                phases.push_back({"oblique-center-off",false,false,true,true,false,true});
-                phases.push_back({"oblique-center-ssgi",true,false,true,true,false,true});
-                phases.push_back({"oblique-center-high-ssgi",true,false,true,true,true,true});
-                phases.push_back({"oblique-center-linear-ssgi",true,false,true,true,false,true,true});
+                phases.push_back({"center-tone-ssgi",true,true,true});
+                phases.push_back({"center-linear-ssgi",true,true,true,false,false,true});
+                phases.push_back({"center-high-ssgi",true,true,true,true});
+                phases.push_back({"oblique-center-off",false,true,true,false,true});
+                phases.push_back({"oblique-center-ssgi",true,true,true,false,true});
+                phases.push_back({"oblique-center-high-ssgi",true,true,true,true,true});
+                phases.push_back({"oblique-center-linear-ssgi",true,true,true,false,true,true});
             }
         }
         constexpr std::array modes{RenderDebugView::Lit,RenderDebugView::DirectLighting,RenderDebugView::IndirectLighting};
@@ -246,14 +244,14 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
             return Json{{"mean_rgb",sum/(Width*Height*3)},{"peak",peak},{"nonzero_pixels",nonzero}};
         };
         for(unsigned phase=0;phase<phases.size();++phase) {
-            const auto& definition=phases[phase];const bool giEnabled=definition.gi,darkness=definition.darkness;
+            const auto& definition=phases[phase];const bool giEnabled=definition.gi;
             pointsEnabled=definition.points;useCenterPoint=definition.center;useHighBudget=definition.highBudget;useObliqueCamera=definition.oblique;useLinearTone=definition.linear;
             for(unsigned mode=0;mode<modes.size();++mode) {
                 if(inspectOnly&&mode==0)continue;
                 renderer.setDebugView(RenderViewPurpose::Scene,modes[mode]);renderer.setDebugView(RenderViewPurpose::Game,modes[mode]);
                 const auto deadline=Clock::now()+std::chrono::seconds{180};unsigned warm{},settled{};
                 do {
-                    if(tick(giEnabled,false,darkness))++settled;else settled=0;++warm;
+                    if(tick(giEnabled,false))++settled;else settled=0;++warm;
                     if(warm%120==0)std::cout<<definition.name<<" "<<modeNames[mode]<<" warm="<<warm<<" ready="<<settled<<" ssgi="<<renderer.ssgiStatus()
                         <<" models="<<prepared.status()<<" assets="<<assets.status()<<" queued="<<resources.stats().queued<<" running="<<resources.stats().running<<std::endl;
                     if(settled<120)std::this_thread::sleep_for(std::chrono::milliseconds{2});
@@ -262,7 +260,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
                 auto& phaseReport=report[definition.name];phaseReport["ssgi_status"]=renderer.ssgiStatus();phaseReport["warmup_frames"][modeNames[mode]]=warm;
                 phaseReport["ssgi_bytes"]=renderer.ssgiResidentBytes();phaseReport["model_status"]=prepared.status();
                 for(unsigned view=0;view<2;++view) {
-                    tick(giEnabled,false,darkness);
+                    tick(giEnabled,false);
                     const std::string viewName=view?"game":"scene";
                     auto values=read(view,std::string(definition.name)+"-"+modeNames[mode]+"-"+viewName+".png");
                     images[phase][mode][view]=values;phaseReport[modeNames[mode]][viewName]=energy(*values);
@@ -340,8 +338,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
     }
     std::array<std::array<std::shared_ptr<std::vector<std::uint8_t>>,2>,4> images;
     report["settings"]={{"ssgi_strength",1},{"ssgi_distance",3},{"ssgi_thickness",.1},{"ssgi_bounces",2},{"quality","Medium"},{"ssao_radius",.5},{"ssao_strength",1},
-        {"ambient_energy",extracted.environment.environment.ambientLight.energy},{"ambient_source",int(extracted.environment.environment.ambientLight.source)},
-        {"ambient_darkness",extracted.environment.environment.ambientVisibility.enabled}};
+        {"ambient_energy",extracted.environment.environment.ambientLight.energy},{"ambient_source",int(extracted.environment.environment.ambientLight.source)}};
     for(unsigned phase=0;phase<4;++phase) {
         const bool gi=phase==1||phase==3,ao=phase>=2;const auto deadline=Clock::now()+std::chrono::seconds{120};unsigned warm{},settled{};
         do {

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -156,6 +157,75 @@ void quaderMeshOwnsColliderHierarchy() {
             "Reimport did not retain the updated affine pose on the corresponding mesh.");
     require(loaded.save(),loaded.status());SceneDocument reopened(project.root);
     require(reopened.load(loaded.assetId()),reopened.status());hierarchy(reopened.scene());
+}
+void sourceGroupsNamesAndOrderSurviveRefresh() {
+    Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
+    QuaderLink link{"C:/authoring/project.quader","project-id","scene-id",1,true,false};
+    auto initial=lightSyncFixture("groups-a");
+    QuaderImportedGroup room;room.sourceKey="group:100:0";room.name="Room A";room.order=1;
+    room.local=math::translation({10,2,-4});room.local.at(0,1)=.25f;
+    QuaderImportedGroup walls;walls.sourceKey="group:101:0";walls.parentKey=room.sourceKey;walls.name="Walls";walls.order=2;
+    walls.local=math::translation({-2,3,1});walls.local.at(2,0)=-.15f;
+    QuaderImportedGroup empty;empty.sourceKey="group:102:0";empty.name="Empty authored group";empty.order=0;
+    // Source categories need not arrive in parent-first order.
+    initial.groups={walls,room,empty};
+    initial.meshes[0].parentKey=room.sourceKey;initial.meshes[0].name="Wall A";initial.meshes[0].order=0;
+    auto wall=initial.meshes[0];wall.sourceKey="mesh/wall-c";wall.name="Wall C";wall.parentKey=walls.sourceKey;wall.order=1;
+    initial.meshes.push_back(wall);
+    initial.lights[0].parentKey=room.sourceKey;initial.lights[0].order=1;initial.lights[1].order=2;
+    require(applyQuaderSceneImport(document,owner,link,initial),document.status());
+    const auto imported=generatedId(document.scene(),owner,"Imported"),roomId=generatedId(document.scene(),owner,room.sourceKey);
+    const auto wallsId=generatedId(document.scene(),owner,walls.sourceKey),emptyId=generatedId(document.scene(),owner,empty.sourceKey);
+    const auto floorId=generatedId(document.scene(),owner,"mesh/floor"),wallId=generatedId(document.scene(),owner,wall.sourceKey);
+    const auto sunId=generatedId(document.scene(),owner,"light/sun"),pointId=generatedId(document.scene(),owner,"light/point");
+    const auto colliderId=generatedId(document.scene(),owner,wall.sourceKey+"/collision");
+    require(document.scene().children(imported)==std::vector<EntityId>{emptyId,roomId,pointId}&&
+        document.scene().children(roomId)==std::vector<EntityId>{floorId,sunId,wallsId},
+        "Quader grouping lost authored sibling order between groups, meshes and lights.");
+    require(document.scene().find(roomId)->name==room.name&&document.scene().find(wallsId)->name==walls.name&&
+        document.scene().find(wallId)->name==wall.name&&document.scene().find(wallId)->parent==wallsId&&
+        document.scene().find(colliderId)->parent==wallId,
+        "Quader authored names or nested mesh/collider grouping were flattened.");
+    require(document.scene().find(roomId)->local==room.local&&document.scene().find(wallsId)->local==walls.local&&
+        document.scene().find(wallId)->local==wall.local,"Nested Quader groups changed their exact authored local matrices.");
+    const auto actualWorld=document.scene().worldTransform(wallId);const auto expectedWorld=room.local*walls.local*wall.local;
+    require(actualWorld.has_value(),"Nested Quader groups lost their world placement.");
+    // Scene walks upward as room * (walls * wall); this independent expected
+    // product associates left. Float matrix products need not be bit-identical.
+    for(std::size_t index=0;index<16;++index)
+        require(std::isfinite((*actualWorld)[index])&&std::abs((*actualWorld)[index]-expectedWorld[index])<=
+            1e-5f*std::max(1.f,std::abs(expectedWorld[index])),"Nested Quader groups lost affine placement.");
+    const auto rows=sceneOutlinerRows(document.scene());
+    require(rows.size()==document.scene().records().size()&&std::any_of(rows.begin(),rows.end(),[&](const auto& row){return row.entity==wallsId&&row.parent==roomId;}),
+        "The Outliner did not expose the real imported Quader group.");
+    auto authored=*document.scene().find(roomId);authored.visible=false;require(document.updateEntity(roomId,authored),document.status());
+    const auto before=snapshot(document);const auto history=document.history().size();
+    auto replacement=initial;replacement.sourceKey="groups-b";replacement.groups.erase(replacement.groups.begin());
+    replacement.groups[0].name="Renamed / Room";replacement.groups[0].local=math::translation({20,4,-8});
+    replacement.meshes.pop_back();replacement.meshes[0].parentKey=empty.sourceKey;replacement.meshes[0].name="Renamed Wall A";
+    replacement.meshes[0].local=math::translation({8,6,4});
+    require(applyQuaderSceneImport(document,owner,link,replacement),document.status());
+    require(document.history().size()==history+1&&generatedId(document.scene(),owner,room.sourceKey)==roomId&&
+        generatedId(document.scene(),owner,empty.sourceKey)==emptyId&&generatedId(document.scene(),owner,"mesh/floor")==floorId,
+        "Source group rename/reparenting changed matching persistent identities or split the import transaction.");
+    require(document.scene().find(roomId)->name=="Renamed / Room"&&!document.scene().find(roomId)->visible&&
+        document.scene().find(floorId)->name=="Renamed Wall A"&&document.scene().find(floorId)->parent==emptyId&&
+        document.scene().find(floorId)->local==replacement.meshes[0].local,
+        "Quader refresh did not apply exact source group names, parenting and placement while retaining authored visibility.");
+    require(!document.scene().contains(wallsId)&&!document.scene().contains(wallId)&&!document.scene().contains(colliderId),
+        "Removed Quader source groups/meshes or their collider children survived refresh.");
+    const auto after=snapshot(document);
+    require(document.undo()&&snapshot(document)==before&&document.scene().find(wallId)->parent==wallsId,
+        "Grouped Quader refresh undo lost removed hierarchy, names or entity identities.");
+    require(document.redo()&&snapshot(document)==after,"Grouped Quader refresh redo lost the replacement hierarchy.");
+    auto invalid=replacement;invalid.meshes[0].parentKey="group/missing";
+    require(!applyQuaderSceneImport(document,owner,link,invalid)&&snapshot(document)==after,
+        "A missing imported group partially applied or silently flattened Quader hierarchy.");
+    invalid=replacement;invalid.groups[0].parentKey=invalid.groups[1].sourceKey;invalid.groups[1].parentKey=invalid.groups[0].sourceKey;
+    require(!applyQuaderSceneImport(document,owner,link,invalid)&&snapshot(document)==after,
+        "A cyclic imported hierarchy partially applied a Quader refresh.");
+    require(document.save("Quader source groups"),document.status());SceneDocument loaded(project.root);
+    require(loaded.load(document.assetId())&&snapshot(loaded)==snapshot(document),"Quader source hierarchy/names did not survive scene save and reopen.");
 }
 void independentLightSyncPolicy() {
     Project project;SceneDocument document(project.root);const auto owner=document.createQuader();
@@ -355,12 +425,12 @@ void crimsonLightingRolesSurviveSourceSync() {
     QuaderLink link{"C:/authoring/project.qproj","project-id","scene-id",1,true,false};
     auto source=lightSyncFixture("lighting-a");require(applyQuaderSceneImport(document,owner,link,source),document.status());
     const auto visual=generatedId(document.scene(),owner,"mesh/floor"),point=generatedId(document.scene(),owner,"light/point"),sun=generatedId(document.scene(),owner,"light/sun");
-    auto model=*document.scene().find(visual);model.lightingScopes={lighting_scope::World,0,lighting_scope::Character};model.castShadows=false;
+    auto model=*document.scene().find(visual);model.lightingScopes={lighting_scope::World,0};model.castShadows=false;
     require(document.updateEntity(visual,model),document.status());
-    auto lamp=*document.scene().find(point);lamp.point->roles={lighting_scope::Character,lighting_scope::World,lighting_scope::Character,false,.3f};
+    auto lamp=*document.scene().find(point);lamp.point->roles={lighting_scope::Character,lighting_scope::World};
     lamp.point->intensity=99;lamp.point->radius=99;lamp.point->castShadows=true;lamp.point->indirectEnergy=2.5f;lamp.local=math::translation({99,99,99});
     require(document.updateEntity(point,lamp),document.status());
-    auto directional=*document.scene().find(sun);directional.directional->roles={lighting_scope::World,lighting_scope::Character,lighting_scope::World,true,.7f};
+    auto directional=*document.scene().find(sun);directional.directional->roles={lighting_scope::World,lighting_scope::Character};
     directional.directional->castShadows=false;directional.directional->indirectEnergy=0;require(document.updateEntity(sun,directional),document.status());
     const auto before=snapshot(document);
     auto replacement=lightSyncFixture("lighting-b");replacement.lights[1].intensity=11;replacement.lights[1].radius=17;
@@ -564,5 +634,5 @@ void bundleMigrationPreservesSceneHierarchyAndAssignments() {
         "Bundle storage migration invalidated existing material-assignment undo/redo.");
 }
 }
-int main(){try{reimportIdentityHistoryAndAtomicFailure();quaderMeshOwnsColliderHierarchy();independentLightSyncPolicy();nativeCollisionHistoryAndRefresh();authoredVisibilitySurvivesSourceSync();sourceHiddenMeshesRemainEditable();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();singleMaterialLegacyFallbackSync();bundleMigrationPreservesSceneHierarchyAndAssignments();std::cout<<"Quader scene identity, mesh/collider hierarchy, native collision, atomic reimport, visibility, independent light sync, history and compatibility checks passed.\n";return 0;}
+int main(){try{reimportIdentityHistoryAndAtomicFailure();quaderMeshOwnsColliderHierarchy();sourceGroupsNamesAndOrderSurviveRefresh();independentLightSyncPolicy();nativeCollisionHistoryAndRefresh();authoredVisibilitySurvivesSourceSync();sourceHiddenMeshesRemainEditable();directionalCompatibilityAndMeshDefaults();clusteredPointLightSceneImport();crimsonLightingRolesSurviveSourceSync();materialSlotsSurviveSourceSync();singleMaterialLegacyFallbackSync();bundleMigrationPreservesSceneHierarchyAndAssignments();std::cout<<"Quader scene identity, authored groups/names/order, mesh/collider hierarchy, native collision, atomic reimport, visibility, independent light sync, history and compatibility checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

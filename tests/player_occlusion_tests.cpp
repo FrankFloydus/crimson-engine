@@ -19,8 +19,8 @@ ResourceConfig config(){ResourceConfig value;value.workers=1;value.idleGrace=std
 struct World {
     Scene scene;std::vector<EntityRecord> records;SceneProperties properties;
     World() {
-        EntityRecord player;player.id=1;player.name="Player";player.actor.emplace();player.motor.emplace();player.controller.emplace();player.playerInput.emplace();player.navigation.emplace();player.controller->profile=testing::agentProfile({2,.3f,45,.3f});
-        player.lightRig.emplace();player.lightRig->enabled=false;player.darknessReveal=DarknessRevealSettings{false,8};
+        EntityRecord player;player.id=1;player.name="Player";player.actor.emplace();player.movement.emplace();player.controller.emplace();player.playerInput.emplace();player.navigation.emplace();player.controller->profile=testing::agentProfile({2,.3f,45,.3f});
+
         EntityRecord child;child.id=2;child.name="Player visual";child.parent=1;
         EntityRecord camera;camera.id=10;camera.name="Game camera";camera.camera.emplace();
         auto alternate=camera;alternate.id=11;alternate.name="Alternate camera";

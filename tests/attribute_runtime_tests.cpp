@@ -82,10 +82,10 @@ void playMovementAndPools() {
     near(value(stats::Health).base,70.5,"Play did not run fixed-tick regeneration.");
     require(play.document().edit("Rename",[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.name="Renamed";}),"Rename failed.");
     play.advance(0,Vec2{},Camera{});near(value(stats::Health).base,70.5,"A Play edit reset the resource pool.");
-    require(play.document().edit("Disable Motor",[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.motor->enabled=false;}),"Disable failed.");
+    require(play.document().edit("Disable Motor",[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.movement->enabled=false;}),"Disable failed.");
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,Vec2{},Camera{});
     near(value(stats::Health).base,71,"Disabling Motor stopped or reset regeneration.");
-    require(play.document().edit("Enable Motor",[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.motor->enabled=true;}),"Enable failed.");
+    require(play.document().edit("Enable Motor",[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.movement->enabled=true;}),"Enable failed.");
     play.advance(0,Vec2{},Camera{});
     require(play.setActorDestination(player,{6,0,0}),"Destination was rejected.");
     require(play.setAttributeBase(player,stats::MovementSpeed,0),"Zero speed was rejected.");

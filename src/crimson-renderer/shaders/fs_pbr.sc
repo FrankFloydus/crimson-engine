@@ -24,8 +24,6 @@ SAMPLER2D(s_brdfLut, 6);
 #include "clustered_lighting.sh"
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
-#include "character_shadow.sh"
-#include "ambient_visibility.sh"
 #include "debug_view.sh"
 #include "ssao_material.sh"
 
@@ -125,7 +123,6 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
     return evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, u_roughness.z, 1.0, 1.0);
 }
 
-#include "character_lighting.sh"
 
 void main()
 {
@@ -140,7 +137,6 @@ void main()
     if (u_textureFlags.z > 0.5) metallic *= texture2D(s_metallic, v_texcoord0).r;
     roughness = clamp(roughness, 0.045, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
-    float darkness = ambientVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
     vec3 color = vec3_splat(0.0);
     for (int i = 0; i < 4; ++i)
     {
@@ -175,13 +171,7 @@ void main()
     }
     vec3 directLighting = color;
     vec3 indirectLighting = evaluateEnvironment(N, V, base, metallic, roughness) * ssaoVisibility(v_worldPosition);
-    vec3 characterDirect = characterLighting(N, V, base, metallic, roughness, u_roughness.z);
     color += indirectLighting;
-    color += characterDirect;
-    directLighting += characterDirect;
-    float characterVisibility = characterShadowVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal, 1.0);
-    color *= characterVisibility;
-    color *= darkness;
     // Keep extreme near-light highlights finite in half-float HDR storage.
     color = debugViewColor(color, base, roughness, metallic, N, directLighting, indirectLighting);
     if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, 0.0);

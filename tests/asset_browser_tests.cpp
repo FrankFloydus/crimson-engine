@@ -393,9 +393,13 @@ void bundledModelOwnership() {
     require(catalog.name(parent)=="Levels"&&catalog.items(parent).size()==1&&catalog.items(parent).front().id==fixture.modelId,
         "A bundled mesh was not presented beside its authored scene bundle.");
     require(!catalog.mutableItem(fixture.modelId),"A disposable bundle member was independently mutable.");
+    require(catalog.deletableItem(fixture.modelId)&&!catalog.deletableItem(BrowserCatalog::ContentFolder)&&!catalog.deletableItem(BrowserCatalog::EngineFolder),
+        "Bundle mesh deletion stayed blocked or allowed deleting protected roots.");
     rejects([&]{catalog.rename(fixture.modelId,"Renamed mesh");},"A bundle member was independently renamed.");
     rejects([&]{catalog.move(std::array{fixture.modelId},BrowserCatalog::ContentFolder);},"A bundle member was independently moved.");
-    rejects([&]{catalog.serializeWithout(std::array{fixture.modelId});},"A bundle member could be independently deleted.");
+    const auto deletion=catalog.prepareErase(std::array{fixture.modelId});
+    require(!deletion.contains(fixture.modelId)&&catalog.contains(fixture.modelId)&&read(fixture.file)==bundleBytes&&fs::is_regular_file(cache),
+        "Preparing a bundle mesh deletion failed or changed source files before the asset transaction.");
     catalog.rename(parent,"Renamed levels");catalog.synchronize(assets);
     const auto source=quaderBundleSource(project.root,fixture.modelId);
     require(source&&*source==project.root/"Content/Renamed levels/Bundle fixture.crimson-quader"&&read(*source)==bundleBytes&&

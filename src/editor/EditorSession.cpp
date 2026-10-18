@@ -182,6 +182,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
         materialEditor_.filesChanged(changed);
     };
     quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks);
+    if(!play_.playing() && !document_.transactionActive())assets.collectUnusedQuaderModels(document_);
     prepared_.beginFrame(); renderer.advanceStreaming();renderer.setAppearance(editor_.appearance());
     for(const auto& file:changedFiles_) {
         const auto id=assetIdAtPath(root_,file);
@@ -532,9 +533,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.sceneCollisionOverlays=std::move(collisionOverlays.scene);
     renderInput.gameCollisionOverlays=std::move(collisionOverlays.game);
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
-    editor_.drawActorLightRigs(sceneCamera,renderScene);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
-        gameView_.drawActorLightRigs(*gameCamera,renderScene,agentProfiles);
         if(play_.playing()) {
             for(const auto& actor:renderScene.records())if(actor.navigation && actor.navigation->enabled && actor.navigation->showRoute && renderScene.isVisible(actor.id)) {
                 std::optional<Vec3> position;

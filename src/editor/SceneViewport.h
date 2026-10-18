@@ -20,7 +20,6 @@ public:
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active(); }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
-    void drawActorLightRigs(const Camera&,const Scene&);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { agentProfiles_=std::move(query); }

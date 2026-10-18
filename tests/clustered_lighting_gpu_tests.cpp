@@ -2,7 +2,6 @@
 #include "GpuTestBackend.h"
 #include "crimson-renderer/ClusteredLighting.h"
 #include "crimson-renderer/Picking.h"
-#include "crimson-renderer/AmbientVisibilityMath.h"
 #include "crimson-renderer/PointLightRecord.h"
 #include <bgfx/platform.h>
 #include <SDL3/SDL.h>
@@ -124,7 +123,7 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
     for(const auto source:{0u,1u,17u,4095u}) {
         const auto firstRecord=lightBase+source*CC_POINT_LIGHT_RECORD_TEXELS;
         check((*first)[firstRecord+3][1]==0&&(*first)[firstRecord+3][0]==-1&&
-            (*first)[firstRecord+3][2]==float(ambient_visibility::packLightRoles(lights[source].roles,false)),
+            (*first)[firstRecord+3][2]==float(lights[source].roles.receiverMask),
             "Point response packing changed shadow or lighting role records.");
         check((*first)[firstRecord+4]==Vec4{0,1,4,1},"Ordinary point-light response defaults changed.");
         check((*first)[firstRecord+5]==Vec4{2,0,0,0},"Default attenuation was not transported.");
@@ -279,14 +278,12 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
     constexpr std::uint16_t screenWidth=321,screenHeight=243;
     const auto withScreenEffects=[&](bool gi,bool ao) {
         return lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,
-            screenWidth,screenHeight,screenWidth,screenHeight,{},
+            screenWidth,screenHeight,
             gi?screenWidth:0,gi?screenHeight:0,ao?screenWidth:0,ao?screenHeight:0);
     };
     check(withScreenEffects(true,true),lighting.status());
-    const auto packed=ambient_visibility::packedTexelCount(screenWidth,screenHeight);
+    const auto packed=(std::size_t(screenWidth)*screenHeight+3)/4;
     const auto pixels=std::size_t(screenWidth)*screenHeight;
-    check(lighting.occluderBaseTexel()>=lighting.ambientBaseTexel()+packed,
-        "Nearest-layer depth overlaps ambient visibility.");
     check(lighting.ssgiBaseTexel()>=lighting.occluderBaseTexel()+packed,
         "SSGI overlaps packed nearest-layer depth.");
     check(lighting.ssaoBaseTexel()==lighting.ssgiBaseTexel()+pixels&&
@@ -303,7 +300,7 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
     for(unsigned i=0;i<4;++i)tick();
     check(!lighting.ssaoWidth()&&!lighting.ssaoHeight()&&!lighting.ssaoBaseTexel()&&
         lighting.residentBytes()<combinedBytes,"Disabled screen effects retained their atlas allocation.");
-    check(!lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,0,0,0,0,{},0,0,screenWidth,0),
+    check(!lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,0,0,0,0,screenWidth,0),
         "An incomplete SSAO target extent was accepted.");
 
 }

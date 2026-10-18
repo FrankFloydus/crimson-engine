@@ -1,5 +1,4 @@
 #include "SceneExtraction.h"
-#include "runtime/ActorLightRig.h"
 #include "physics/ColliderGeometry.h"
 
 #include <algorithm>
@@ -60,10 +59,10 @@ Vec3 directionalLightDirection(const Mat4& world) {
     return math::normalized(math::transformDirection(world,{0,0,-1}),{0,0,-1});
 }
 
-ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery& profiles) {
+ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery&) {
     ExtractedScene result;
     result.environment=resolveEnvironment(scene);
-    // Actor ownership is independent of input, physics and rig activation.
+    // Actor ownership is independent of input and physics.
     // Cache ancestor resolution once so deep visual hierarchies remain linear.
     const auto& registry=scene.registry();
     const auto view=registry.view<const Identity,const Transform>();
@@ -96,7 +95,7 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
         if (const auto* model = registry.try_get<ModelReference>(entity)) {
             auto scopes=model->lightingScopes;
             const auto category=actorOwner(id)?lighting_scope::Character:lighting_scope::World;
-            scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;scopes.ambientReceiverMask&=category;
+            scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;
             result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
             result.models.back().fadeWhenOccluding=model->fadeWhenOccluding;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
@@ -116,35 +115,6 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             result.points.push_back({position,light->color,light->intensity,light->enabled,light->radius,id,
                 light->castShadows,light->shadowDepthBias,light->shadowNormalBias,light->roles,
                 light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation,light->indirectEnergy});
-        }
-    }
-    // Ordinary scene sources were gathered first, so derived source IDs cannot
-    // accidentally collide with authored lights. Actor order is deterministic.
-    std::unordered_set<std::uint64_t> lightIds;
-    lightIds.reserve(result.points.size()+result.directional.size()+ordered.size());
-    for(const auto& source:result.points)lightIds.insert(source.entityId);
-    for(const auto& source:result.directional)lightIds.insert(source.entityId);
-    for(const auto entity:ordered) {
-        const auto id=registry.get<Identity>(entity).id;
-        if(!scene.isVisible(id))continue;
-        const auto world=scene.worldTransform(id);if(!world)continue;
-        if(registry.any_of<SceneActor>(entity))if(const auto* settings=registry.try_get<ActorLightRigSettings>(entity)) {
-            auto rig=evaluateActorLightRig(*settings,math::transformPoint(*world,{}),{},{},id);
-            if(!rig.valid())throw std::runtime_error(rig.error);
-            result.actorLighting.push_back({id,rig.characterLights});
-            if(rig.characterShadow.enabled)result.actorShadows.push_back(rig.characterShadow);
-            if(rig.localWorld) {
-                if(result.points.size()>=MaximumClusteredPointLights)throw std::runtime_error("Actor World lights exceed the 4096 point-light source limit.");
-                auto& source=*rig.localWorld;
-                while(lightIds.contains(source.entityId))source.entityId=source.entityId>1?source.entityId-1:std::numeric_limits<std::uint64_t>::max();
-                lightIds.insert(source.entityId);result.points.push_back(source);
-            }
-        }
-        if(const auto* reveal=registry.try_get<DarknessRevealSettings>(entity);reveal&&reveal->enabled) {
-            const auto* controller=registry.try_get<SceneCharacterController>(entity);
-            const auto traversal=controller?resolveAgentTraversal(*controller,profiles):std::optional<AgentTraversalSettings>{};
-            const auto height=traversal?traversal->height:0.f;
-            result.reveals.push_back({math::transformPoint(*world,{})+Vec3{0,characterLightingCenterHeight(height),0},reveal->spread,true});
         }
     }
     return result;

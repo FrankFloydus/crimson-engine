@@ -49,8 +49,8 @@ void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& m
     settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
     settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
     settings.environment.background.color={};settings.environment.background.show=false;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;
     std::vector<ModelMaterial> frontSurface(1),neighborSurface(1),rearSurface(1);
     frontSurface[0].baseColor={0,0,0,1};neighborSurface[0]=frontSurface[0];rearSurface[0].baseColor={0,1,0,1};
     std::vector<ModelMaterialTextures> frontBindings(1),neighborBindings(1),rearBindings(1);
@@ -113,116 +113,14 @@ void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& m
         }
     }
 }
-template<class Read,class Prepare>
-void exerciseActorLighting(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
-    SceneSettings settings;settings.camera.position={0,0,4};settings.camera.target={};settings.camera.fov=45;
-    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.1f;settings.camera.farPlane=20;
-    settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;
-    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.background.show=false;
-    RenderScene scene{settings,{}};scene.sceneMode=true;
-    std::vector<ModelMaterial> materials(1);materials[0].baseColor={.5f,.5f,.5f,1};materials[0].metallic=0;materials[0].roughness=1;materials[0].specular=0;
-    std::vector<ModelMaterialTextures> bindings(1);
-    std::array<RenderModelInstance,3> models;
-    for(unsigned i=0;i<models.size();++i) {
-        models[i].entityId=i+1;models[i].model.asset=mesh;models[i].materials=&materials;models[i].textures=&bindings;
-        models[i].model.transform=math::translation({(float(i)-1)*.7f,0,0})*math::scaling({.25f,.3f,1});
-    }
-    models[0].actorOwner=101;models[2].actorOwner=202;
-    models[0].lightingCategory=models[2].lightingCategory=lighting_scope::Character;
-    models[0].lightingScopes=models[2].lightingScopes={2,2,2};scene.instances=models;
-    std::array<ActorLighting,2> rigs;rigs[0].owner=101;rigs[1].owner=202;
-    for(auto& rig:rigs){auto& key=rig.lights[0];key.enabled=true;key.direction={0,0,-1};key.intensity=2;key.diffuse=1;key.specular=0;}
-    rigs[0].lights[0].color={1,0,0};rigs[1].lights[0].color={0,0,1};scene.actorLighting=rigs;
-    const auto capture=[&](bool game){if(game){renderer.renderGame(scene);return read(renderer.gameViewportTexture());}renderer.render(scene);return read(renderer.viewportTexture());};
-    const Vec3 left{-.7f,0,0},middle{},right{.7f,0,0};
-    const auto dark=[](const auto& pixel){return pixel[0]<3&&pixel[1]<3&&pixel[2]<3;};
-    MaterialAsset authored;addMaterialNode(authored.graph,MaterialNodeKind::Output);
-    auto& output=materialOutputNode(authored.graph).output;output.baseColor={.5f,.5f,.5f};output.metallic=0;output.roughness=1;output.specular=0;
-    for(bool generated:{false,true})for(bool game:{false,true}) {
-        bindings[0].graph=generated?prepare(authored):nullptr;
-        const auto image=capture(game);const auto a=sample(image,settings.camera,left),b=sample(image,settings.camera,right);
-        check(a[0]>50&&a[1]<3&&a[2]<3&&b[2]>50&&b[0]<3&&b[1]<3&&dark(sample(image,settings.camera,middle)),
-            "Independent actor rigs contaminated a shared material, another owner, or a World draw.");
-        rigs[0].lights[0].enabled=false;const auto disabled=capture(game);
-        check(dark(sample(disabled,settings.camera,left))&&difference(sample(disabled,settings.camera,right),b)<=2,
-            "Disabling one actor rig changed another actor's readability.");rigs[0].lights[0].enabled=true;
-        std::swap(rigs[0],rigs[1]);const auto reordered=capture(game);
-        check(difference(sample(reordered,settings.camera,left),a)<=2&&difference(sample(reordered,settings.camera,right),b)<=2,
-            "Actor rig selection depends on extraction order.");std::swap(rigs[0],rigs[1]);
-        models[0].actorOwner=0;check(dark(sample(capture(game),settings.camera,left)),"Unowned draw reused the previous actor's light uniforms.");models[0].actorOwner=101;
-        settings.environment.ambientVisibility.enabled=true;settings.environment.ambientVisibility.strength=1;settings.environment.ambientVisibility.darknessFloor=0;
-        check(dark(sample(capture(game),settings.camera,left)),"Actor readability escaped darkness without a reveal.");
-        std::array<DarknessRevealSource,2> reveals{{{left,.2f,true},{right,.2f,true}}};scene.reveals=std::span(reveals).first(1);
-        check(dark(sample(capture(game),settings.camera,right)),"One actor reveal incorrectly restored a separate actor island.");
-        scene.reveals=reveals;
-        const auto revealed=capture(game);
-        check(difference(sample(revealed,settings.camera,left),a)<=3&&difference(sample(revealed,settings.camera,right),b)<=3,
-            "Independent reveal sources did not restore both actor islands.");
-        scene.reveals={};check(dark(sample(capture(game),settings.camera,right)),"Removing reveal sources retained stale atlas influence.");
-        scene.reveals=reveals;const auto restored=capture(game);
-        check(difference(sample(restored,settings.camera,left),sample(revealed,settings.camera,left))<=2&&
-            difference(sample(restored,settings.camera,right),sample(revealed,settings.camera,right))<=2,
-            "Re-enabling identical reveal sources skipped publication after ambient rows overwrote their old atlas region.");
-        const DarknessRevealSource farAway{{100000,0,0},.1f,true};
-        const std::array withOffscreen{reveals[0],reveals[1],farAway};scene.reveals=withOffscreen;
-        const auto culled=capture(game);
-        check(difference(sample(culled,settings.camera,left),sample(restored,settings.camera,left))<=2,
-            "Offscreen reveal changed an unrelated visible actor island.");
-        if(!game)check(renderer.clusteredLightingStats().totalReveals==3&&renderer.clusteredLightingStats().visibleReveals==2,
-            "Finite offscreen reveal support was not culled before fragment publication.");
-        scene.reveals={};
-        settings.environment.ambientVisibility={};
-    }
-    bindings[0].graph.reset();scene.actorLighting={};
-    RenderModelInstance floor=models[1];floor.model.transform=math::scaling({2,2,1});scene.instances=std::span(&floor,1);
-    PointLight light;light.position={0,0,3};light.color={1,1,1};light.intensity=20;light.radius=8;light.entityId=900;light.castShadows=false;
-    scene.pointLights=std::span(&light,1);scene.shadowWorldId=0x4143544f52;scene.shadowResolution=256;
-    std::array<RenderModelInstance,2> casters{models[0],models[2]};
-    for(auto& caster:casters)caster.model.transform=math::translation({caster.actorOwner==101?-.7f:.7f,0,1})*math::scaling({.2f,.3f,1});
-    scene.shadowInstances=casters;
-    std::array<CharacterShadowSource,2> shadows;
-    for(unsigned i=0;i<2;++i){shadows[i].owner=casters[i].actorOwner;shadows[i].position={i==0?-.7f:.7f,0,1};shadows[i].direction={0,0,-1};shadows[i].strength=1;shadows[i].distance=10;shadows[i].enabled=true;}
-    std::array<int,3> shadowClearLeft{};
-    for(bool game:{false,true}) {
-        scene.actorShadows={};const auto clear=capture(game);scene.actorShadows=shadows;const auto both=capture(game);
-        shadowClearLeft=sample(clear,settings.camera,left);
-        check(sample(both,settings.camera,left)[0]<sample(clear,settings.camera,left)[0]*.35&&
-            sample(both,settings.camera,right)[0]<sample(clear,settings.camera,right)[0]*.35,
-            "Independent actor shadow projections failed to shade both footprints.");
-        shadows[0].enabled=false;const auto one=capture(game);
-        check(difference(sample(one,settings.camera,left),sample(clear,settings.camera,left))<=2&&
-            sample(one,settings.camera,right)[0]<sample(clear,settings.camera,right)[0]*.35,
-            "Removing one actor shadow corrupted another tile or retained stale attenuation.");shadows[0].enabled=true;
-    }
-    std::array<RenderModelInstance,MaximumActorShadows+2> crowdedCasters;
-    std::array<CharacterShadowSource,MaximumActorShadows+2> crowdedShadows;
-    for(unsigned i=0;i<crowdedCasters.size();++i){crowdedCasters[i]=casters[0];crowdedCasters[i].actorOwner=i+1;crowdedCasters[i].entityId=100+i;crowdedShadows[i]=shadows[0];crowdedShadows[i].owner=i+1;}
-    scene.shadowInstances=crowdedCasters;scene.actorShadows=crowdedShadows;scene.shadowWorldId++;
-    renderer.renderGame(scene);const auto stats=renderer.shadowStats();(void)read(renderer.gameViewportTexture());
-    check(stats.actorShadowRequested==MaximumActorShadows+2&&stats.actorShadowAdmitted==MaximumActorShadows&&stats.actorShadowUnadmitted==2,
-        "Actor shadow admission did not report its bounded shadowless fallback.");
-    std::vector<ModelMaterial> translucent=materials;translucent[0].alphaBlend=true;
-    for(unsigned i=0;i<MaximumActorShadows;++i)crowdedCasters[i].materials=&translucent;
-    scene.shadowInstances=std::span(crowdedCasters).first(MaximumActorShadows+1);
-    scene.actorShadows=std::span(crowdedShadows).first(MaximumActorShadows+1);scene.shadowWorldId++;
-    renderer.renderGame(scene);const auto admitted=renderer.shadowStats();const auto eligible=read(renderer.gameViewportTexture());
-    check(admitted.actorShadowAdmitted==1&&sample(eligible,settings.camera,left)[0]<shadowClearLeft[0]*.35,
-        "Early translucent actors consumed admission and starved a later opaque actor silhouette.");
-    auto pendingAsset=std::make_shared<ModelAsset>(*mesh);pendingAsset->id="actor-shadow-unprepared";
-    for(unsigned i=0;i<MaximumActorShadows;++i){crowdedCasters[i].materials=&materials;crowdedCasters[i].model.asset=pendingAsset;}
-    scene.shadowWorldId++;renderer.renderGame(scene);const auto pending=renderer.shadowStats();const auto readyBehindPending=read(renderer.gameViewportTexture());
-    check(pending.actorShadowAdmitted==1&&sample(readyBehindPending,settings.camera,left)[0]<shadowClearLeft[0]*.35,
-        "Early unresident actors consumed admission and starved a ready opaque actor silhouette.");
-}
-
 template<class Read,class Prepare,class Pick>
 void exerciseInstanceOpacity(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare,Pick&& pick) {
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
     settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
     settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
     settings.environment.background.color={};settings.environment.background.show=false;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;
     std::vector<ModelMaterial> frontMaterials(1),rearMaterials(1);
     rearMaterials[0].baseColor={0,1,0,1};
     std::vector<ModelMaterialTextures> frontBindings(1),rearBindings(1);
@@ -282,13 +180,6 @@ void exerciseInstanceOpacity(Renderer& renderer,const std::shared_ptr<ModelAsset
         instances[0].shading=MaterialShading::StandardPbr;instances[0].opacity=.5f;
         if(generated)frontBindings[0].graph=prepare(authored);
         expect(capture(),{},.5f,false,context+" did not fade Lit radiance.");
-        // Ambient Visibility must evaluate the faded surface analytically:
-        // it is absent from the camera's opaque depth/receiver attachments.
-        settings.environment.ambientVisibility.enabled=true;settings.environment.ambientVisibility.strength=1;
-        settings.environment.ambientVisibility.darknessFloor=.25f;settings.environment.ambientVisibility.attenuateEmission=true;
-        revealSource={{},.1f,true};
-        expect(capture(),{},.5f,false,context+" retained a stale opaque ambient receiver.");
-        settings.environment.ambientVisibility.enabled=false;settings.environment.ambientVisibility.attenuateEmission=false;revealSource={};
         material.emissive={};output.emission={};output.shading=MaterialShading::Unlit;instances[0].shading=MaterialShading::Unlit;
         if(generated)frontBindings[0].graph=prepare(authored);
         // Both draws share exactly one material packet. The value is per
@@ -327,8 +218,8 @@ void exerciseNearestOccluderLayer(Renderer& renderer,const std::shared_ptr<Model
     RenderModelInstance instance;instance.entityId=401;instance.model.asset=room;instance.materials=&materials;instance.textures=&bindings;instance.shading=MaterialShading::Unlit;
     auto rear=instance;rear.entityId=402;rear.model.asset=mesh;rear.model.transform=math::translation({0,0,-.4f});rear.materials=&rearMaterials;rear.textures=&rearBindings;
     auto player=rear;player.entityId=403;player.model.transform=math::translation({0,0,.2f})*math::scaling({.2f,.2f,1});
-    DarknessRevealSource revealSource;
-    std::array instances{instance,rear};RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;scene.instances=instances;
+
+    std::array instances{instance,rear};RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;
     const auto capture=[&](bool game=true){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
     const auto expected=[](float linear){return int(std::lround(255*(linear<=.0031308f?12.92f*linear:1.055f*std::pow(linear,1/2.4f)-.055f)));};
     const auto requireColor=[&](const DecodedImage& image,Vec3 point,std::array<int,3> rgb,const std::string& context) {
@@ -400,14 +291,13 @@ void exerciseNearestOccluderLayer(Renderer& renderer,const std::shared_ptr<Model
         instances[0].shading=MaterialShading::StandardPbr;
         if(generated)bindings[0].graph=prepare(authored);
         settings.environment.fog.enabled=true;settings.environment.fog.density=.1f;settings.environment.fog.color={.2f,.3f,.4f};
-        settings.environment.ambientVisibility.enabled=true;settings.environment.ambientVisibility.attenuateEmission=true;
-        settings.environment.ambientVisibility.darknessFloor=.4f;revealSource={{},.5f,true};
+
         settings.environment.glow.enabled=true;settings.environment.glow.strength=.2f;
         instances[0].opacity=1;const auto lit=capture();instances[0].opacity=std::nextafter(1.f,0.f);const auto litFaded=capture();
         for(Vec3 point:std::array<Vec3,3>{{{-.4f,0,0},{},{.4f,.3f,0}}})
             check(difference(sample(lit,settings.camera,point),sample(litFaded,settings.camera,point))<=6,context+" changed Lit HDR/fog/ambient/glow at the opaque endpoint.");
         instances[0].opacity=1;check(capture().rgba==lit.rgba,context+" failed to restore opaque lighting exactly.");
-        settings.environment.fog={};settings.environment.ambientVisibility={};settings.environment.glow={};revealSource={};
+        settings.environment.fog={};settings.environment.glow={};
     }
     constexpr auto LayerBytes=std::size_t(Size)*Size*20;
     renderer.resizeGameViewport(Size+8,Size);
@@ -434,8 +324,8 @@ void exerciseParticlesIntersectingOccluders(Renderer& renderer,const std::shared
     particles[2].billboardMode=ParticleBillboardMode::Disabled;
     particles[2].right=math::normalized(Vec3{1,0,1});particles[2].up={0,1,0};
     RenderParticleMaterial sprite;sprite.baseColor={0,0,1,.6f};sprite.shading=MaterialShading::Unlit;sprite.doubleSided=true;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;scene.instances=instances;scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
     const auto capture=[&](bool game){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
     const auto encoded=[](float linear){return int(std::lround(255*(linear<=.0031308f?12.92f*linear:1.055f*std::pow(linear,1/2.4f)-.055f)));};
     for(bool generated:{false,true})for(auto blend:{MaterialBlend::Alpha,MaterialBlend::Additive,MaterialBlend::Opaque,MaterialBlend::Mask}) {
@@ -518,8 +408,8 @@ void exerciseParticleFadeTransitions(Renderer& renderer,const std::shared_ptr<Mo
     std::array<RenderParticle,3> particles;
     for(auto& particle:particles){particle.size=.14f;particle.billboardMode=ParticleBillboardMode::Enabled;}
     RenderParticleMaterial sprite;sprite.blend=MaterialBlend::Alpha;sprite.baseColor={.22f,.4f,.7f,1};
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;scene.instances=std::span(&wall,1);
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&wall,1);
     scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
     const auto capture=[&]{renderer.renderGame(scene);return read(renderer.gameViewportTexture());};
     const auto encoded=[](double linear){return int(std::lround(255*(linear<=.0031308?12.92*linear:1.055*std::pow(linear,1/2.4)-.055)));};
@@ -638,8 +528,8 @@ void exerciseCoplanarCollisionOverlays(Renderer& renderer,const std::shared_ptr<
     geometry->wireVertices={{-1,0,0},{1,0,0}};geometry->edges={{0,1,{0,0,1},{0,0,1},false}};
     auto fillOnly=std::make_shared<CollisionOverlayGeometry>(*geometry);fillOnly->wireVertices.clear();fillOnly->edges.clear();
     RenderCollisionOverlay overlay;overlay.geometry=geometry;overlay.color={.35f,.65f,.8f,1};overlay.fillAlphaScale=1;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;scene.collisionOverlays=std::span(&overlay,1);
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.collisionOverlays=std::span(&overlay,1);
     const auto capture=[&](bool game){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
     const auto nearColor=[](const auto& rgb){return std::abs(rgb[0]-89)<=2&&std::abs(rgb[1]-166)<=2&&std::abs(rgb[2]-204)<=2;};
     for(bool distant:{false,true})for(bool floor:{false,true}) {
@@ -743,8 +633,8 @@ void exerciseCollisionOverlays(Renderer& renderer,const std::shared_ptr<ModelAss
     geometry->vertices={{-.85f,-.85f,0},{.85f,-.85f,0},{.85f,.85f,0},{-.85f,.85f,0}};
     geometry->triangles={0,1,2,0,2,3};geometry->wireVertices={{-.85f,0,0},{.85f,0,0}};geometry->edges={{0,1,{0,0,1},{0,0,1},false}};
     RenderCollisionOverlay overlay;overlay.geometry=geometry;overlay.world=math::translation({0,0,-.3f});overlay.color={.35f,.65f,.8f,1};overlay.fillAlphaScale=1;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;scene.instances=std::span(&wall,1);scene.collisionOverlays=std::span(&overlay,1);
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&wall,1);scene.collisionOverlays=std::span(&overlay,1);
     renderer.setGridVisible(false);
     const auto capture=[&](bool game){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
     const auto nearColor=[&](const auto& rgb){return std::abs(rgb[0]-89)<=2&&std::abs(rgb[1]-166)<=2&&std::abs(rgb[2]-204)<=2;};
@@ -799,8 +689,8 @@ void exerciseImageAdjustmentsAndGrunge(Renderer& renderer,const std::shared_ptr<
     settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
     settings.environment.fog.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;
     settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.background.show=false;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;
     std::vector<ModelMaterial> surfaces(1);std::vector<ModelMaterialTextures> bindings(1);
     RenderModelInstance instance;instance.model.asset=mesh;instance.materials=&surfaces;instance.textures=&bindings;
     instance.shading=MaterialShading::Unlit;scene.instances=std::span(&instance,1);
@@ -938,8 +828,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     std::vector<ModelMaterial> surfaces=mesh->materials;auto& material=surfaces.front();std::vector<ModelMaterialTextures> bindings(1);
     RenderModelInstance instance;instance.entityId=11;instance.model.asset=mesh;instance.materials=&surfaces;instance.textures=&bindings;instance.shading=MaterialShading::Unlit;
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
-    DarknessRevealSource revealSource;
-    RenderScene scene{settings,{}};scene.reveals=std::span(&revealSource,1);scene.sceneMode=true;scene.instances=std::span(&instance,1);
+
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);
     const auto capture=[&]{renderer.renderGame(scene);return read(renderer.gameViewportTexture());};
     const auto reset=[&]{material.uvScale={1,1,1};material.uvOffset={};material.uvRotation={};material.triplanar=false;material.triplanarWorld=false;};
     constexpr std::array<std::uint8_t,16> colors{{255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255}};
@@ -1170,7 +1060,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     };
     std::cerr<<"[material mapping] Material fog.\n"<<std::flush;
     exerciseMaterialFog(renderer,mesh,read,prepare);
-    exerciseActorLighting(renderer,mesh,read,prepare);
+
     std::cerr<<"[material mapping] Nearest faded room layer.\n"<<std::flush;
     exerciseNearestOccluderLayer(renderer,mesh,read,prepare);
     std::cerr<<"[material mapping] Particle continuity across wall fade transitions.\n"<<std::flush;

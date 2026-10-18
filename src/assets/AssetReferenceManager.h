@@ -34,6 +34,8 @@ struct AssetDeletionPlan {
 
 // Authored references and persistent replacement policy. This is deliberately
 // separate from runtime resource pins, CPU/GPU caches and memory accounting.
+// Deleted UUIDs remain reserved after their physical location is unregistered;
+// surviving aliases retain source-kind provenance for replacement validation.
 class AssetReferenceManager {
 public:
     explicit AssetReferenceManager(std::filesystem::path projectRoot);
@@ -49,6 +51,10 @@ public:
     std::string resolveParticleTexture(const std::string& id) const;
     bool deleted(const std::string& id) const { return deleted_.contains(id)||deleted_.contains(canonicalAssetId(id)); }
     uint64_t revision() const { return revision_; }
+    bool valid() const { return writable_; }
+    // Persistent fallbacks are authored owners even when no scene currently
+    // uses their deleted source. Return the surviving targets of every chain.
+    std::vector<std::string> replacementTargets() const;
     const std::string& status() const { return status_; }
     const std::vector<AssetUsage>& usages() const { return usages_; }
     void setUsages(std::vector<AssetUsage> usages);

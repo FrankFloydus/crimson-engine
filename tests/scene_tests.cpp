@@ -969,13 +969,11 @@ void lightIndirectEnergyStorageAndHistory() {
     TempProject project;SceneDocument document(project.root);
     const auto point=document.createPointLight(),directional=document.createDirectionalLight(),player=document.createPlayer();
     require(point&&directional&&player,document.status());
-    require(document.scene().find(point)->point->indirectEnergy==1&&document.scene().find(directional)->directional->indirectEnergy==1&&
-        document.scene().find(player)->lightRig->localWorld.indirectEnergy==1,"New lights changed default GI contribution.");
+    require(document.scene().find(point)->point->indirectEnergy==1&&document.scene().find(directional)->directional->indirectEnergy==1,"New lights changed default GI contribution.");
     const auto original=document.scene().records();const auto beforeHistory=document.history().size();
     const auto tune=[&](auto& records,auto&){for(auto& record:records) {
         if(record.id==point)record.point->indirectEnergy=2.5f;
         if(record.id==directional)record.directional->indirectEnergy=0;
-        if(record.id==player)record.lightRig->localWorld.indirectEnergy=4;
     }};
     require(document.begin("Tune light GI")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==point)record.point->indirectEnergy=1.5f;})&&
         document.update(tune)&&document.commit(),document.status());
@@ -984,8 +982,7 @@ void lightIndirectEnergyStorageAndHistory() {
     require(document.undo(),document.status());sameRecords(original,document.scene().records());
     require(document.redo(),document.status());sameRecords(edited,document.scene().records());
     require(document.begin("Cancel light GI")&&document.update([&](auto& records,auto&){for(auto& record:records) {
-        if(record.point)record.point->indirectEnergy=0;if(record.directional)record.directional->indirectEnergy=8;
-        if(record.lightRig)record.lightRig->localWorld.indirectEnergy=0;}}),document.status());
+        if(record.point)record.point->indirectEnergy=0;if(record.directional)record.directional->indirectEnergy=8;}}),document.status());
     document.cancel();sameRecords(edited,document.scene().records());
     require(document.save("Light GI energy"),document.status());const auto savedText=readText(project.root/document.assetId());const auto saved=Json::parse(savedText);
     require(saved.at("version")==23,"Per-light GI energy unnecessarily changed the scene format version.");
@@ -993,36 +990,29 @@ void lightIndirectEnergyStorageAndHistory() {
     for(const auto& record:saved["entities"]) {
         if(record.contains("point"))require(record["point"].at("indirectEnergy")==2.5f,"Point GI energy was not persisted.");
         if(record.contains("directional"))require(record["directional"].at("indirectEnergy")==0,"Directional GI energy was not persisted.");
-        if(record.contains("lightRig"))require(record["lightRig"]["localWorld"].at("indirectEnergy")==4&&
-            !record["lightRig"]["key"].contains("indirectEnergy")&&!record["lightRig"]["fill"].contains("indirectEnergy"),
-            "Local World GI energy was lost or added to private Character Key/Fill.");
     }
     document.select({point,directional,player});require(document.duplicateSelection(),document.status());
     for(const auto& record:document.scene().records()) {
         if(record.point)require(record.point->indirectEnergy==2.5f,"Point duplication lost GI energy.");
         if(record.directional)require(record.directional->indirectEnergy==0,"Directional duplication lost disabled GI energy.");
-        if(record.lightRig)require(record.lightRig->localWorld.indirectEnergy==4,"Player duplication lost Local World GI energy.");
     }
     auto missing=saved;for(auto& record:missing["entities"]) {
         if(record.contains("point"))record["point"].erase("indirectEnergy");
         if(record.contains("directional"))record["directional"].erase("indirectEnergy");
-        if(record.contains("lightRig"))record["lightRig"]["localWorld"].erase("indirectEnergy");
     }
     const auto missingId="assets/scenes/light-gi-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
     require(reopened.load(missingId)&&!reopened.dirty()&&readText(project.root/missingId)==missingText,
         "Reading missing optional GI energy dirtied or rewrote an existing scene.");
     auto expected=edited;for(auto& record:expected) {
         if(record.point)record.point->indirectEnergy=1;if(record.directional)record.directional->indirectEnergy=1;
-        if(record.lightRig)record.lightRig->localWorld.indirectEnergy=1;
     }
     sameRecords(expected,reopened.scene().records());
     require(reopened.load(document.assetId()),reopened.status());const auto beforeInvalid=reopened.scene().records();
-    for(const auto owner:{point,directional,player}) {
+    for(const auto owner:{point,directional}) {
         for(const auto bad:{Json(-.01f),Json(16.01f),Json(true),Json("2"),Json(nullptr),Json::array(),Json::object()}) {
             auto invalid=saved;for(auto& record:invalid["entities"]) {
                 if(owner==point&&record.contains("point"))record["point"]["indirectEnergy"]=bad;
                 if(owner==directional&&record.contains("directional"))record["directional"]["indirectEnergy"]=bad;
-                if(owner==player&&record.contains("lightRig"))record["lightRig"]["localWorld"]["indirectEnergy"]=bad;
             }
             const auto invalidId="assets/scenes/light-gi-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
             require(!reopened.load(invalidId),"Invalid persisted light GI energy was accepted.");sameRecords(beforeInvalid,reopened.scene().records());
@@ -1030,13 +1020,11 @@ void lightIndirectEnergyStorageAndHistory() {
         for(const float bad:{-.01f,16.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
             auto candidate=*document.scene().find(owner);
             if(candidate.point)candidate.point->indirectEnergy=bad;if(candidate.directional)candidate.directional->indirectEnergy=bad;
-            if(candidate.lightRig)candidate.lightRig->localWorld.indirectEnergy=bad;
             require(!document.updateEntity(owner,candidate),"Invalid finite range or nonfinite light GI energy entered a scene.");
         }
         for(const float boundary:{0.f,16.f}) {
             auto candidate=*document.scene().find(owner);
             if(candidate.point)candidate.point->indirectEnergy=boundary;if(candidate.directional)candidate.directional->indirectEnergy=boundary;
-            if(candidate.lightRig)candidate.lightRig->localWorld.indirectEnergy=boundary;
             Scene::validate({candidate},{});
         }
     }

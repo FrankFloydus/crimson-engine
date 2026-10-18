@@ -285,30 +285,9 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
     auto result=std::make_shared<PreparedEditorShadows>();
     const auto shadowSelection=selectPointShadowLights(scene.points,priorityOrigin);
     const bool directional=std::any_of(scene.directional.begin(),scene.directional.end(),[](const auto& light){return light.enabled&&light.castShadows;});
-    const bool characterShadow=std::any_of(scene.actorShadows.begin(),scene.actorShadows.end(),[](const auto& source){return source.enabled&&source.strength>0;});
-    if(!directional && !characterShadow && std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
+    if(!directional && std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
     const std::array<ShadowCamera,1> fallback{{{Camera{},1.f}}};if(cameras.empty())cameras=fallback;
     const auto focused=[&](std::uint64_t id){return std::find(focusEntities.begin(),focusEntities.end(),id)!=focusEntities.end();};
-    const auto characterCaster=[&](const ExtractedModel& model) {
-        return model.visible && model.castShadows && model.lightingCategory==lighting_scope::Character &&
-            (model.lightingScopes.shadowCasterMask&lighting_scope::Character)!=0 &&
-            model.actorOwner!=0;
-    };
-    std::unordered_map<std::uint64_t,Aabb> actorBounds;
-    if(characterShadow)for(const auto& model:scene.models)if(characterCaster(model))
-        if(const auto asset=assets_.findModel(model.assetId))
-            math::include(actorBounds[model.actorOwner],math::transformBounds(modelBounds(model,asset),model.world));
-    std::unordered_map<std::uint64_t,directional_shadow::Cascade> actorFits;
-    std::vector<const CharacterShadowSource*> actorSources;
-    for(const auto& source:scene.actorShadows)if(source.owner&&source.enabled&&source.strength>0)actorSources.push_back(&source);
-    std::sort(actorSources.begin(),actorSources.end(),[](const auto* a,const auto* b){return a->owner<b->owner;});
-    for(const auto* source:actorSources) {
-        // Renderer admission follows actual opaque/masked GPU caster readiness.
-        // Prematurely truncating here can let eight translucent/pending actors
-        // prevent a later eligible actor from ever receiving a caster packet.
-        if(const auto found=actorBounds.find(source->owner);found!=actorBounds.end())
-            if(const auto fit=directional_shadow::buildCharacter(*source,found->second,resolution))actorFits.emplace(source->owner,*fit);
-    }
     std::vector<Aabb> allBounds,worldCasterBounds;
     if(directional){allBounds.reserve(scene.models.size());worldCasterBounds.reserve(scene.models.size());result->receiverBounds.reserve(scene.models.size()+extraReceiverBounds.size());
         result->receiverBounds.insert(result->receiverBounds.end(),extraReceiverBounds.begin(),extraReceiverBounds.end());}
@@ -345,7 +324,6 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
         float texel=std::numeric_limits<float>::max();
         // Unknown bounds still request the player's original detail, so an
         // offscreen pending model can become a caster without a visible draw.
-        if(characterShadow&&characterCaster(model))if(const auto fit=actorFits.find(model.actorOwner);fit!=actorFits.end())texel=fit->second.texelWorld;
         for(const auto& fit:fits)if(fit.valid)for(unsigned projection=0;projection<fit.projectionCount;++projection) {
             if(fit.characterProjection<fit.projectionCount && focused(model.id)!=(projection==fit.characterProjection))continue;
             if(directional_shadow::intersects(bounds,fit.values[projection]))texel=std::min(texel,fit.values[projection].texelWorld);

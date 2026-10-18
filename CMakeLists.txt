@@ -80,7 +80,7 @@ add_library(crimson-gameplay src/gameplay/GameplayTags.cpp src/gameplay/Attribut
 target_include_directories(crimson-gameplay PUBLIC src)
 target_compile_options(crimson-gameplay PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/ActorLightRig.cpp src/runtime/SceneAnimations.cpp src/assets/NavigationAgentProfile.cpp src/assets/GameplayEffectAsset.cpp)
+add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/SceneAnimations.cpp src/assets/NavigationAgentProfile.cpp src/assets/GameplayEffectAsset.cpp)
 target_include_directories(crimson-scene PUBLIC src)
 target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage crimson-gameplay EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -158,13 +158,9 @@ function(cc_shader NAME TYPE VARYING)
                 "${CC_SHADER_DIR}/point_light_record.sh"
                 "${CC_SHADER_DIR}/clustered_lighting.sh"
                 "${CC_SHADER_DIR}/occluder_partition.sh"
-                "${CC_SHADER_DIR}/ambient_visibility.sh"
-                "${CC_SHADER_DIR}/ambient_visibility_response.sh"
                 "${CC_SHADER_DIR}/prepass_receiver.sh"
                 "${CC_SHADER_DIR}/point_shadow.sh"
                 "${CC_SHADER_DIR}/directional_shadow.sh"
-                "${CC_SHADER_DIR}/character_shadow.sh"
-                "${CC_SHADER_DIR}/character_lighting.sh"
                 "${CC_SHADER_DIR}/material_mapping.sh"
                 "${CC_SHADER_DIR}/material_mapping_functions.sh"
                 "${CC_SHADER_DIR}/model_lighting.sh"
@@ -209,8 +205,6 @@ cc_shader(fs_sky fragment varying.def.sc)
 cc_shader(cs_procedural_filter compute varying.def.sc)
 cc_shader(cs_cluster_lights compute varying.def.sc)
 cc_shader(cs_occluder_depth compute varying.def.sc)
-cc_shader(cs_ambient_visibility compute varying.def.sc)
-cc_shader(cs_ambient_publish compute varying.def.sc)
 cc_shader(cs_ssgi_trace compute varying.def.sc)
 cc_shader(cs_ssgi_temporal compute varying.def.sc)
 cc_shader(cs_ssgi_filter compute varying.def.sc)
@@ -273,7 +267,6 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorSession.cpp src/editor/CameraPilot.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/ViewportTransformGesture.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
-    src/editor/ActorLightRigOverlay.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
     src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp
@@ -483,18 +476,6 @@ if(BUILD_TESTING)
     target_link_libraries(model_animation_metadata_tests PRIVATE crimson-resources nlohmann_json::nlohmann_json)
     target_compile_options(model_animation_metadata_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME model_animation_metadata_core COMMAND model_animation_metadata_tests)
-    add_executable(player_light_rig_tests tests/player_light_rig_tests.cpp)
-    target_link_libraries(player_light_rig_tests PRIVATE crimson-scene)
-    target_compile_options(player_light_rig_tests PRIVATE /W4 /permissive- /utf-8)
-    add_test(NAME player_light_rig_core COMMAND player_light_rig_tests)
-    add_executable(player_light_rig_overlay_tests tests/player_light_rig_overlay_tests.cpp src/editor/ActorLightRigOverlay.cpp)
-    target_link_libraries(player_light_rig_overlay_tests PRIVATE crimson-scene imgui::imgui)
-    target_compile_options(player_light_rig_overlay_tests PRIVATE /W4 /permissive- /utf-8)
-    add_test(NAME player_light_rig_overlay_core COMMAND player_light_rig_overlay_tests)
-    add_executable(ambient_visibility_tests tests/ambient_visibility_tests.cpp)
-    target_link_libraries(ambient_visibility_tests PRIVATE crimson-camera)
-    target_compile_options(ambient_visibility_tests PRIVATE /W4 /permissive- /utf-8)
-    add_test(NAME ambient_visibility_core COMMAND ambient_visibility_tests)
     add_executable(shadow_update_scheduler_tests tests/shadow_update_scheduler_tests.cpp)
     target_link_libraries(shadow_update_scheduler_tests PRIVATE crimson-camera)
     target_compile_options(shadow_update_scheduler_tests PRIVATE /W4 /permissive- /utf-8)
@@ -880,6 +861,25 @@ if(BUILD_TESTING)
     target_compile_options(preview_dependencies_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME preview_dependencies_core COMMAND preview_dependencies_tests)
 
+    add_executable(asset_deletion_runtime_tests tests/asset_deletion_runtime_tests.cpp
+        src/editor/ResourceRuntime.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp src/editor/EditorResources.cpp
+        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
+        src/assets/AssetReferenceManager.cpp src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
+        src/assets/MaterialPreviewGeometry.cpp src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
+        src/crimson-renderer/Renderer.cpp src/crimson-renderer/ModelDeformationGpu.cpp src/crimson-renderer/Mesh.cpp
+        src/crimson-renderer/PointShadowRenderer.cpp src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
+        src/crimson-renderer/PlatformSurface.cpp src/crimson-renderer/ModelGpuCache.cpp src/crimson-renderer/ThumbnailCache.cpp
+        "${CC_SHADER_BASELINE_HEADER}" ${CC_SHADER_HEADERS})
+    target_include_directories(asset_deletion_runtime_tests PRIVATE src tests "${CC_GENERATED_DIR}" "${CC_CGLTF_INCLUDE}")
+    target_compile_definitions(asset_deletion_runtime_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+        CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE:bgfx::shaderc>"
+        CC_STAGED_SHADER_DIR="${CC_SHADER_DIR}" CC_STAGED_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}")
+    target_compile_options(asset_deletion_runtime_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_deletion_runtime_tests PRIVATE crimson-material-gpu crimson-resources crimson-scene crimson-particles
+        crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    add_test(NAME asset_deletion_runtime_core COMMAND asset_deletion_runtime_tests)
+    set_tests_properties(asset_deletion_runtime_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
+
     add_executable(asset_library_deletion_tests tests/asset_library_deletion_tests.cpp
         src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
         src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
@@ -961,21 +961,6 @@ if(BUILD_TESTING)
     target_link_libraries(forward_plus_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng d3d11)
     add_test(NAME forward_plus_render_core COMMAND forward_plus_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(forward_plus_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
-
-    add_executable(lighting_dependency_render_tests tests/lighting_dependency_render_tests.cpp
-        src/crimson-renderer/Renderer.cpp src/crimson-renderer/ModelDeformationGpu.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/PointShadowRenderer.cpp
-        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
-        src/crimson-renderer/PlatformSurface.cpp src/crimson-renderer/ModelGpuCache.cpp src/crimson-renderer/ThumbnailCache.cpp
-        src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
-        src/assets/MaterialPreviewGeometry.cpp ${CC_SHADER_HEADERS})
-    target_include_directories(lighting_dependency_render_tests PRIVATE src tests "${CC_GENERATED_DIR}")
-    target_compile_definitions(lighting_dependency_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_compile_options(lighting_dependency_render_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(lighting_dependency_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng d3d11)
-    add_test(NAME lighting_dependency_render_core COMMAND lighting_dependency_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
-    set_tests_properties(lighting_dependency_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
-    add_test(NAME ambient_receiver_precision_core COMMAND lighting_dependency_render_tests --receiver-precision)
-    set_tests_properties(ambient_receiver_precision_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
 
     add_executable(ssgi_tests tests/ssgi_tests.cpp)
     target_link_libraries(ssgi_tests PRIVATE crimson-camera)
@@ -1066,9 +1051,9 @@ if(BUILD_TESTING)
     target_link_libraries(forward_plus_room_benchmark PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer native_resource_tests point_shadow_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests lighting_dependency_render_tests ssgi_render_tests ssao_render_tests fog_background_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark)
+foreach(CC_TARGET crimson-renderer native_resource_tests asset_deletion_runtime_tests point_shadow_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests lighting_dependency_render_tests ssgi_render_tests ssao_render_tests fog_background_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark)
     if(TARGET ${CC_TARGET})
-        target_sources(${CC_TARGET} PRIVATE src/crimson-renderer/RenderFrame.cpp src/crimson-renderer/ProceduralSkyGpu.cpp src/crimson-renderer/ClusteredLightingGpu.cpp src/crimson-renderer/AmbientVisibilityGpu.cpp src/crimson-renderer/SsgiGpu.cpp src/crimson-renderer/SsaoGpu.cpp src/crimson-renderer/CollisionOverlayGpu.cpp)
+        target_sources(${CC_TARGET} PRIVATE src/crimson-renderer/RenderFrame.cpp src/crimson-renderer/ProceduralSkyGpu.cpp src/crimson-renderer/ClusteredLightingGpu.cpp src/crimson-renderer/SsgiGpu.cpp src/crimson-renderer/SsaoGpu.cpp src/crimson-renderer/CollisionOverlayGpu.cpp)
         target_link_libraries(${CC_TARGET} PRIVATE d3d12 dxgi)
     endif()
 endforeach()

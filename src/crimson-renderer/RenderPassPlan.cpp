@@ -49,44 +49,35 @@ RenderPass makePass(Kind kind,const RenderPassPlanConfig& config) noexcept {
         pass.physicalView=slots.pointShadow;pass.viewCount=96;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);use(Resource::ShadowAtlas,Access::ReadWrite);break;
     case Kind::DirectionalShadowUpdates:
         pass.physicalView=slots.directionalShadow;pass.viewCount=4;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);use(Resource::ShadowAtlas,Access::ReadWrite);break;
-    case Kind::CharacterShadowUpdates:
-        pass.physicalView=slots.characterShadow;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);use(Resource::ShadowAtlas,Access::ReadWrite);break;
     case Kind::DepthPrepass:
         pass.physicalView=slots.depthPrepass;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);
         use(Resource::ReadableSceneDepth,Access::DepthWrite);use(Resource::ReceiverScopes,Access::Write);break;
-    case Kind::AmbientVisibility:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
-        use(Resource::ClusteredLighting,Access::Read);if(config.worldShadows)use(Resource::ShadowAtlas,Access::Read);
-        use(Resource::AmbientScratch,Access::Write);break;
-    case Kind::AmbientPublish:
-        pass.physicalView=slots.ambient;use(Resource::AmbientScratch,Access::Read);
-        use(Resource::ClusteredLighting,Access::ReadWrite);use(Resource::AmbientVisibility,Access::Write);break;
     case Kind::SsgiTrace:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
         use(Resource::SsgiSources,Access::Read);use(Resource::SsgiTraceScratch,Access::Write);break;
     case Kind::SsgiTemporal:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
         use(Resource::SsgiSources,Access::Read);use(Resource::SsgiTraceScratch,Access::Read);
         use(Resource::SsgiHistory,Access::ReadWrite);use(Resource::SsgiTemporalScratch,Access::Write);break;
     case Kind::SsgiFilterHorizontal:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
         use(Resource::SsgiTemporalScratch,Access::Read);use(Resource::SsgiFilterA,Access::Write);break;
     case Kind::SsgiFilterVertical:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
         use(Resource::SsgiFilterA,Access::Read);use(Resource::SsgiFilterB,Access::Write);break;
     case Kind::SsgiPublish:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
         use(Resource::SsgiFilterB,Access::Read);use(Resource::ClusteredLighting,Access::ReadWrite);use(Resource::SsgiIrradiance,Access::Write);break;
     case Kind::SsaoEvaluate:
-        pass.physicalView=slots.ambient;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::ReadableSceneDepth,Access::Read);use(Resource::ReceiverScopes,Access::Read);
         use(Resource::SsaoScratch,Access::Write);break;
     case Kind::SsaoPublish:
-        pass.physicalView=slots.ambient;use(Resource::SsaoScratch,Access::Read);use(Resource::ReadableSceneDepth,Access::Read);
+        pass.physicalView=slots.lightingEffects;use(Resource::SsaoScratch,Access::Read);use(Resource::ReadableSceneDepth,Access::Read);
         use(Resource::ReceiverScopes,Access::Read);use(Resource::ClusteredLighting,Access::ReadWrite);use(Resource::SsaoVisibility,Access::Write);break;
     case Kind::OccluderLayer:
         pass.physicalView=slots.occluderLayer;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);
         use(Resource::EnvironmentLighting,Access::Read);if(config.worldShadows)use(Resource::ShadowAtlas,Access::Read);
-        use(Resource::ClusteredLighting,Access::Read);if(config.ambientVisibility)use(Resource::AmbientVisibility,Access::Read);
+        use(Resource::ClusteredLighting,Access::Read);
         use(Resource::OccluderHdr,Access::Write);use(Resource::OccluderDepth,Access::DepthWrite);break;
     case Kind::OccluderDepthPublish:
         pass.physicalView=slots.scene;use(Resource::OccluderDepth,Access::Read);
@@ -96,7 +87,7 @@ RenderPass makePass(Kind kind,const RenderPassPlanConfig& config) noexcept {
         // faded layer partitions that same queue behind/composite/in front.
         pass.physicalView=slots.scene;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);use(Resource::EnvironmentLighting,Access::Read);
         if(config.worldShadows)use(Resource::ShadowAtlas,Access::Read);
-        use(Resource::ClusteredLighting,Access::Read);if(config.ambientVisibility)use(Resource::AmbientVisibility,Access::Read);
+        use(Resource::ClusteredLighting,Access::Read);
         if(config.occluderLayer){use(Resource::OccluderHdr,Access::Read);use(Resource::OccluderDepth,Access::Read);use(Resource::OccluderDepthAtlas,Access::Read);}
         if(config.ssgi){use(Resource::SsgiIrradiance,Access::Read);use(Resource::SsgiSources,Access::Write);}
         if(config.ssao)use(Resource::SsaoVisibility,Access::Read);
@@ -128,9 +119,8 @@ RenderPass makePass(Kind kind,const RenderPassPlanConfig& config) noexcept {
 bool expected(Kind kind,const RenderPassPlanConfig& config) noexcept {
     switch(kind) {
     case Kind::EnvironmentPreparation: return config.prepareEnvironment;
-    case Kind::PointShadowUpdates: case Kind::DirectionalShadowUpdates: case Kind::CharacterShadowUpdates: return config.worldShadows;
-    case Kind::DepthPrepass: return config.ambientVisibility || config.ssgi || config.ssao;
-    case Kind::AmbientVisibility: case Kind::AmbientPublish: return config.ambientVisibility;
+    case Kind::PointShadowUpdates: case Kind::DirectionalShadowUpdates: return config.worldShadows;
+    case Kind::DepthPrepass: return config.ssgi || config.ssao;
     case Kind::SsgiTrace: case Kind::SsgiTemporal: case Kind::SsgiFilterHorizontal: case Kind::SsgiFilterVertical: case Kind::SsgiPublish: return config.ssgi;
     case Kind::SsaoEvaluate: case Kind::SsaoPublish: return config.ssao;
     case Kind::GlowExtract: case Kind::GlowHorizontal: case Kind::GlowVertical: return config.glow;
@@ -152,15 +142,15 @@ RenderPassPlanValidation failure(RenderPassPlanError error,std::size_t pass=0,Re
 RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept {
     switch(purpose) {
     case RenderViewPurpose::Scene:
-        return {SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3,PointShadowView,DirectionalShadowView,SceneDepthPrepassView,SceneAmbientView,CharacterShadowView,GridView,SceneAmbientView};
+        return {SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3,PointShadowView,DirectionalShadowView,SceneDepthPrepassView,SceneLightingEffectsView,GridView,SceneLightingEffectsView};
     case RenderViewPurpose::Game:
-        return {GameSceneView,GamePresentView,InvalidRenderView,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3,PointShadowView,GameDirectionalShadowView,GameDepthPrepassView,GameAmbientView,CharacterShadowView,GamePresentView,GameAmbientView};
+        return {GameSceneView,GamePresentView,InvalidRenderView,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3,PointShadowView,GameDirectionalShadowView,GameDepthPrepassView,GameLightingEffectsView,GamePresentView,GameLightingEffectsView};
     case RenderViewPurpose::MaterialPreview:
         return {MaterialPreviewView,MaterialPreviewView+4,MaterialPreviewView+5,MaterialPreviewView+6,MaterialPreviewView+1,MaterialPreviewView+2,MaterialPreviewView+3,InvalidRenderView,InvalidRenderView};
     case RenderViewPurpose::ParticlePreview:
         return {ParticlePreviewView,ParticlePreviewView+4,ParticlePreviewView+5,ParticlePreviewView+6,ParticlePreviewView+1,ParticlePreviewView+2,ParticlePreviewView+3,InvalidRenderView,InvalidRenderView};
     case RenderViewPurpose::Thumbnail:
-        return {ThumbnailSceneView,ThumbnailSceneView+1,ThumbnailSceneView+2,ThumbnailSceneView+3,InvalidRenderView,InvalidRenderView,InvalidRenderView,ThumbnailPointShadowView,ThumbnailDirectionalShadowView,ThumbnailDepthPrepassView,ThumbnailAmbientView,ThumbnailCharacterShadowView};
+        return {ThumbnailSceneView,ThumbnailSceneView+1,ThumbnailSceneView+2,ThumbnailSceneView+3,InvalidRenderView,InvalidRenderView,InvalidRenderView,ThumbnailPointShadowView,ThumbnailDirectionalShadowView,ThumbnailDepthPrepassView,ThumbnailLightingEffectsView};
     }
     return {InvalidRenderView,InvalidRenderView,InvalidRenderView,InvalidRenderView,InvalidRenderView,InvalidRenderView,InvalidRenderView,InvalidRenderView,InvalidRenderView};
 }
@@ -206,8 +196,7 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
        (config.collisionOverlays && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
        (config.occluderLayer && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
        (config.ssgi && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
-       (config.ssao && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
-       (config.ambientVisibility && !isWorld(purpose)))return failure(RenderPassPlanError::UnsupportedFeature);
+       (config.ssao && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game))return failure(RenderPassPlanError::UnsupportedFeature);
     if(plan.count>plan.entries.size())return failure(RenderPassPlanError::CapacityExceeded);
     std::array<bool,RenderPassPlan::ResourceCount> available{};
     for(std::size_t i=0;i<plan.bindings.size();++i) {
@@ -232,21 +221,18 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
                 ((pass.kind==Kind::ModelDeformation && plan.entries[i-1].kind==Kind::EnvironmentPreparation) ||
                  (pass.kind==Kind::LightAssignment && (plan.entries[i-1].kind==Kind::ModelDeformation ||
                     plan.entries[i-1].kind==Kind::EnvironmentPreparation)));
-            const bool ambientCompute=pass.kind==Kind::AmbientPublish && plan.entries[i-1].kind==Kind::AmbientVisibility &&
-                pass.physicalView==plan.entries[i-1].physicalView;
             // Pinned bgfx sorts compute before graphics within a view (the draw
             // bit sorts after compute keys). The layer can borrow this slot
             // after ambient publication without reducing native window slots.
             const bool giCompute=pass.physicalView==plan.entries[i-1].physicalView &&
-                ((pass.kind==Kind::SsgiTrace && plan.entries[i-1].kind==Kind::AmbientPublish) ||
-                 (pass.kind==Kind::SsgiTemporal && plan.entries[i-1].kind==Kind::SsgiTrace) ||
+                ((pass.kind==Kind::SsgiTemporal && plan.entries[i-1].kind==Kind::SsgiTrace) ||
                  (pass.kind==Kind::SsgiFilterHorizontal && plan.entries[i-1].kind==Kind::SsgiTemporal) ||
                  (pass.kind==Kind::SsgiFilterVertical && plan.entries[i-1].kind==Kind::SsgiFilterHorizontal) ||
                  (pass.kind==Kind::SsgiPublish && plan.entries[i-1].kind==Kind::SsgiFilterVertical) ||
-                 (pass.kind==Kind::SsaoEvaluate && (plan.entries[i-1].kind==Kind::AmbientPublish || plan.entries[i-1].kind==Kind::SsgiPublish)) ||
+                 (pass.kind==Kind::SsaoEvaluate && (plan.entries[i-1].kind==Kind::SsgiPublish)) ||
                  (pass.kind==Kind::SsaoPublish && plan.entries[i-1].kind==Kind::SsaoEvaluate));
             const bool occluderAfterAmbient=pass.kind==Kind::OccluderLayer &&
-                (plan.entries[i-1].kind==Kind::AmbientPublish || plan.entries[i-1].kind==Kind::SsgiPublish || plan.entries[i-1].kind==Kind::SsaoPublish) &&
+                (plan.entries[i-1].kind==Kind::SsgiPublish || plan.entries[i-1].kind==Kind::SsaoPublish) &&
                 pass.physicalView==plan.entries[i-1].physicalView;
             const bool colorAfterOccluderPublish=pass.kind==Kind::SceneColor && plan.entries[i-1].kind==Kind::OccluderDepthPublish &&
                 pass.physicalView==plan.entries[i-1].physicalView;
@@ -255,7 +241,7 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
             const bool postOverlay=pass.kind==Kind::CollisionOverlays &&
                 (plan.entries[i-1].kind==Kind::ToneMap || plan.entries[i-1].kind==Kind::Grid) &&
                 pass.physicalView==plan.entries[i-1].physicalView;
-            if(!sharedCompute&&!ambientCompute&&!giCompute&&!occluderAfterAmbient&&!colorAfterOccluderPublish&&!postOverlay)return failure(RenderPassPlanError::PhysicalOrder,i);
+            if(!sharedCompute&&!giCompute&&!occluderAfterAmbient&&!colorAfterOccluderPublish&&!postOverlay)return failure(RenderPassPlanError::PhysicalOrder,i);
         }
         if(pass.resourceCount>pass.resources.size())return failure(RenderPassPlanError::CapacityExceeded,i);
         std::array<bool,RenderPassPlan::ResourceCount> used{};

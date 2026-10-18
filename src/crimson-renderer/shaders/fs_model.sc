@@ -31,13 +31,10 @@ SAMPLER2D(s_brdfLut, 7);
 #include "occluder_partition.sh"
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
-#include "character_shadow.sh"
-#include "ambient_visibility.sh"
 #include "material_mapping.sh"
 uniform mat4 u_modelNormalMatrix;
 
 #include "model_lighting.sh"
-#include "character_lighting.sh"
 #include "ssgi_material.sh"
 #include "ssao_material.sh"
 #include "debug_view.sh"
@@ -128,7 +125,6 @@ void main()
         return;
     }
     vec3 V = safeNormalize(u_cameraPos.xyz - v_worldPosition, N);
-    float darkness = ambientVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
     vec3 color = vec3_splat(0.0);
     for (int i = 0; i < 4; ++i)
     {
@@ -191,21 +187,11 @@ void main()
         color += bounceLighting;
         indirectLighting += bounceLighting;
     }
-    vec3 characterDirect = characterLighting(N, V, base, metallic, roughness, u_modelSpecular.x);
-    color += characterDirect;
-    directLighting += characterDirect;
-    vec3 characterReceiverNormal = safeNormalize(v_normal, vec3(0.0, 1.0, 0.0));
-    if (u_modelOptions.z > 0.5) characterReceiverNormal *= (gl_FrontFacing ? -1.0 : 1.0) * u_modelOptions.w;
-    float characterVisibility = characterShadowVisibility(v_worldPosition, characterReceiverNormal, shadowPlaneNormal, u_modelEmissiveMap.z);
-    color *= characterVisibility;
-    color *= darkness;
     vec3 emissive = u_modelEmissive.rgb;
     if (u_modelEmissiveMap.x > 0.5) emissive *= materialSample(s_emissive, slotUv(uv, u_modelOptions.x), mappingPosition, mappingNormal).rgb;
-    emissive *= u_lightingResponse.x > 0.5 ? darkness : 1.0;
     color += emissive;
-    sourceWorld = sourceWorld * (characterVisibility * darkness) + emissive;
-    sourceCharacter = sourceCharacter * (characterVisibility * darkness) + emissive;
-    sourceResponse *= characterVisibility * darkness;
+    sourceWorld = sourceWorld + emissive;
+    sourceCharacter = sourceCharacter + emissive;
     color = debugViewColor(color, base, roughness, metallic, N, directLighting, indirectLighting);
     if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
     float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;

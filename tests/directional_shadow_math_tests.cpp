@@ -76,59 +76,6 @@ void gameAtlasChecks() {
     }
     check(casterTile(4,4,1)==Vec4{} && casterTile(0,0,1)==Vec4{},"Invalid caster tile coordinates produced a valid remap.");
 }
-void dedicatedAtlasChecks() {
-    using namespace directional_shadow;
-    for(unsigned resolution:{256u,512u,1024u})for(unsigned points:{0u,1u,2u,4u,8u,16u})
-        for(unsigned lights=0;lights<=4;++lights)for(unsigned cameras:{1u,2u})for(unsigned actors:{1u,2u,8u}) {
-        const auto layout=atlasLayout(resolution,points,lights,cameras,cameras==2,actors);
-        check(layout.width&&layout.height&&layout.width<=16384&&layout.height<=16384&&layout.actorCapacity==actors,
-            "Independent actor projections exceeded the atlas budget.");
-        for(unsigned actor=0;actor<actors;++actor) {
-            const auto tile=layout.actorTiles[actor];
-            check(tile.width==resolution+4&&tile.height==resolution+4&&tile.x+tile.width<=layout.width&&tile.y+tile.height<=layout.height,
-                "Actor tile escaped its guarded allocation.");
-            const auto overlaps=[&](const point_shadow::TileRect& other) {
-                return tile.x<other.x+other.width&&other.x<tile.x+tile.width&&tile.y<other.y+other.height&&other.y<tile.y+tile.height;
-            };
-            for(unsigned point=0;point<layout.points.capacity;++point)for(unsigned face=0;face<6;++face)
-                check(!overlaps(point_shadow::tileRect(layout.points,point,face)),"Actor tile overlaps an ordinary point map.");
-            for(unsigned camera=0;camera<cameras;++camera)for(unsigned light=0;light<layout.directionalCapacity;++light)
-                check(!overlaps(blockRect(layout,light,camera)),"Actor tile overlaps a directional block.");
-            for(unsigned previous=0;previous<actor;++previous)check(!overlaps(layout.actorTiles[previous]),"Independent actor tiles overlap.");
-        }
-        check(layout.bytes()==std::size_t(layout.width)*layout.height*4,"Actor atlas accounting omitted padding.");
-    }
-    const auto only=atlasLayout(1024,0,0,2,true,1);
-    check(only.width==1028&&only.height==1028&&only.points.capacity==0&&only.directionalCapacity==0,
-        "A single actor shadow consumed ordinary slots or redundant camera tiles.");
-    check(!atlasLayout(1024,0,0,2,true,MaximumActorShadows+1).width,"Unbounded actor shadow allocation was accepted.");
-}
-void dedicatedProjectionChecks() {
-    using namespace directional_shadow;
-    CharacterShadowSource source;source.enabled=true;source.strength=.8f;source.distance=20;source.direction={-.5f,-1,.25f};
-    Aabb caster{{-.4f,0,-.3f},{.4f,2,.3f},true};
-    const auto fit=buildCharacter(source,caster,1024);check(bool(fit),"Finite player shadow input failed fitting.");
-    for(unsigned corner=0;corner<8;++corner) {
-        const Vec3 point{corner&1?caster.maximum[0]:caster.minimum[0],corner&2?caster.maximum[1]:caster.minimum[1],corner&4?caster.maximum[2]:caster.minimum[2]};
-        const auto assertCovered=[&](const Vec3& p) {
-            const auto clip=math::transformHomogeneous(fit->receiverViewProjection,{p[0],p[1],p[2],1});
-            check(math::finite(clip) && std::abs(clip[0])<=1.0001f && std::abs(clip[1])<=1.0001f && clip[2]>=0 && clip[2]<=1,
-                "Dedicated fit clipped the player or its downstream receiver reach.");
-        };
-        assertCovered(point);assertCovered(point+fit->forward*source.distance);
-    }
-    auto translated=caster;translated.minimum=translated.minimum+Vec3{1,0,0};translated.maximum=translated.maximum+Vec3{1,0,0};
-    const auto moved=buildCharacter(source,translated,1024);
-    check(moved && moved->receiverViewProjection!=fit->receiverViewProjection && close(moved->radius,fit->radius),
-        "Character map failed to follow player geometry at stable scale.");
-    const auto longRange=source.distance;source.distance*=2;
-    const auto farther=buildCharacter(source,caster,1024);
-    check(farther && farther->radius==fit->radius && farther->farDepth>fit->farDepth+longRange*.99f,
-        "Changing downstream shadow reach degraded orthographic texel density.");
-    source.enabled=false;check(!buildCharacter(source,caster,1024),"Disabled character shadow retained a projection.");source.enabled=true;
-    check(!buildCharacter(source,{},1024)&&!buildCharacter(source,caster,2),"Invalid dedicated shadow bounds/resolution were accepted.");
-    source.direction={};check(!buildCharacter(source,caster,1024),"Zero character shadow direction was accepted.");
-}
 void projectionChecks() {
     using namespace directional_shadow;
     DirectionalLight light;light.direction={0,-1,0};light.castShadows=true;
@@ -381,4 +328,4 @@ void lodChecks() {
     check(directional_shadow::chooseLod(levels,{},1e-20f)==0,"A light within a caster must retain original geometry even when simplified levels report zero error.");
 }
 }
-int main(){try{atlasChecks();gameAtlasChecks();dedicatedAtlasChecks();dedicatedProjectionChecks();projectionChecks();gameProjectionChecks();characterProjectionChecks();receiverAwareGameChecks();gameInvalidChecks();lodChecks();std::cout<<"Directional shadow atlas, camera isolation, cascaded/gameplay/focused/receiver fitting, depth, caster and LOD checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{atlasChecks();gameAtlasChecks();projectionChecks();gameProjectionChecks();characterProjectionChecks();receiverAwareGameChecks();gameInvalidChecks();lodChecks();std::cout<<"Directional shadow atlas, camera isolation, cascaded/gameplay/focused/receiver fitting, depth, caster and LOD checks passed.\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

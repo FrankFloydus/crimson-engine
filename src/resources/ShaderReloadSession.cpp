@@ -91,7 +91,7 @@ void ShaderReloadSession::pump() {
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }
     if (!renderer_.reloadPrograms(pairs,ready.at("cs_procedural_filter")->bytes,ready.at("cs_cluster_lights")->bytes,
-        ready.at("cs_ambient_visibility")->bytes,ready.at("cs_ambient_publish")->bytes,ready.at("cs_model_deform")->bytes,
+        ready.at("cs_model_deform")->bytes,
         ready.at("cs_occluder_depth")->bytes,ready.at("cs_ssgi_trace")->bytes,ready.at("cs_ssgi_temporal")->bytes,
         ready.at("cs_ssgi_filter")->bytes,ready.at("cs_ssgi_publish")->bytes,
         ready.at("cs_ssao_evaluate")->bytes,ready.at("cs_ssao_publish")->bytes)) {

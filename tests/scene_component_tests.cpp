@@ -23,7 +23,7 @@ void componentTransactions(const std::filesystem::path& root) {
     const auto before=document.history().size();
     require(addSceneComponent(document,id,SceneComponentKind::Navigation),"Could not compose navigation.");
     auto record=*document.scene().find(id);
-    require(record.controller&&record.motor&&record.navigation&&!record.playerInput,"Navigation dependency closure was wrong.");
+    require(record.controller&&record.movement&&record.navigation&&!record.playerInput,"Navigation dependency closure was wrong.");
     require(document.history().size()==before+1,"Adding navigation created multiple history commands.");
     require(!addSceneComponent(document,id,SceneComponentKind::Navigation),"Duplicate components were accepted.");
     require(document.undo()&&!document.scene().find(id)->controller,"Dependency closure did not undo together.");
@@ -31,29 +31,16 @@ void componentTransactions(const std::filesystem::path& root) {
     const auto tunedProfile=canonicalAssetId("tests/scene-components/tall-agent");
     const auto tunedInitializer=canonicalAssetId("tests/scene-components/initializer");
     document.edit("Tune enemy",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==id){entity.controller->profile=AssetRef<NavigationAgentProfile>{tunedProfile};entity.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{tunedInitializer}}};}});
-    require(addSceneComponent(document,id,SceneComponentKind::LightRig),"Could not attach actor rig.");
-    require(addSceneComponent(document,id,SceneComponentKind::DarknessReveal),"Could not attach independent reveal.");
-    record=*document.scene().find(id);
-    require(record.actor&&record.lightRig&&record.darknessReveal,"Rig did not establish visual ownership.");
-    require(!record.lightRig->localWorld.enabled,"Generic actor rig implicitly emitted player-style World illumination.");
-    require(record.effects&&record.effects->starting==std::vector{AssetRef<GameplayEffectAsset>{tunedInitializer}}&&record.controller->profile.id==tunedProfile,"Adding lighting reset locomotion values.");
-    require(removeSceneComponent(document,id,SceneComponentKind::LightRig),"Could not remove rig.");
-    require(document.scene().find(id)->actor&&document.scene().find(id)->motor&&document.scene().find(id)->darknessReveal,"Removing rig removed unrelated capabilities.");
-    require(document.undo()&&document.scene().find(id)->lightRig,"Rig removal did not restore through undo.");
-    require(document.edit("Tune rig",[&](auto& records,auto&){for(auto& entity:records)if(entity.id==id)entity.lightRig->key.intensity=2;}),"Could not tune restored rig.");
     const auto removalHistory=document.history().size();
     require(removeSceneComponent(document,id,SceneComponentKind::Controller),"Could not remove controller.");
     record=*document.scene().find(id);
-    require(!record.controller&&!record.motor&&!record.navigation&&record.lightRig&&record.darknessReveal,"Controller removal retained invalid dependents or erased lighting.");
+    require(!record.controller&&!record.movement&&!record.navigation,"Controller removal retained invalid dependents or erased lighting.");
     require(document.history().size()==removalHistory+1,"Dependent removal was not one undo command.");
     require(document.undo(),"Controller removal did not undo.");record=*document.scene().find(id);
     require(record.controller->profile.id==tunedProfile&&record.effects&&record.effects->starting==std::vector{AssetRef<GameplayEffectAsset>{tunedInitializer}}&&record.navigation,"Controller undo lost tuned dependent settings.");
     require(document.begin("Edit Motor"),"Could not start motor gesture.");
     require(document.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==id)entity.effects->starting.emplace_back(newAssetId());}),"Could not update motor gesture.");
     document.cancel();require(document.scene().find(id)->effects->starting==std::vector{AssetRef<GameplayEffectAsset>{tunedInitializer}},"Gesture cancellation lost the disconnected motor settings.");
-    const auto standalone=document.createEmpty("Reveal volume");
-    require(addSceneComponent(document,standalone,SceneComponentKind::DarknessReveal),"Standalone reveal rejected.");
-    require(!document.scene().find(standalone)->actor&&!document.scene().find(standalone)->controller,"Reveal acquired unrelated actor/physics capabilities.");
 }
 void playerRemovalAndCamera(const std::filesystem::path& root) {
     SceneDocument document(root);const auto player=document.createPlayer();
@@ -64,7 +51,7 @@ void playerRemovalAndCamera(const std::filesystem::path& root) {
     const auto cameraWorld=*document.scene().worldTransform(camera);
     require(removeSceneComponent(document,player,SceneComponentKind::PlayerInput),"Could not remove player input.");
     const auto actor=*document.scene().find(player);
-    require(!document.scene().properties().playerCharacter&&actor.motor&&actor.controller&&!actor.navigation&&actor.lightRig,"Input removal left a stale player role or removed shared capabilities.");
+    require(!document.scene().properties().playerCharacter&&actor.movement&&actor.controller&&!actor.navigation,"Input removal left a stale player role or removed shared capabilities.");
     require(document.scene().worldTransform(camera)==cameraWorld,"Removing input moved the camera.");
     require(document.undo()&&document.scene().properties().playerCharacter==player,"Input undo lost the explicit player role.");
     require(removeSceneComponent(document,camera,SceneComponentKind::Camera),"Could not remove camera component.");
@@ -72,9 +59,9 @@ void playerRemovalAndCamera(const std::filesystem::path& root) {
     require(document.scene().contains(camera)&&document.scene().contains(player),"Component removal deleted an entity.");
     require(document.undo()&&document.scene().properties().activeCamera==camera&&document.scene().find(camera)->cameraFollow,"Camera undo lost its follow configuration.");
     const auto components=sceneComponents(*document.scene().find(player));
-    require(components==std::vector{SceneComponentKind::Transform,SceneComponentKind::Actor,SceneComponentKind::Motor,
-        SceneComponentKind::Controller,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,
-        SceneComponentKind::DarknessReveal,SceneComponentKind::Effects},
+    require(components==std::vector{SceneComponentKind::Transform,SceneComponentKind::Actor,SceneComponentKind::Movement,
+        SceneComponentKind::Controller,SceneComponentKind::PlayerInput,
+        SceneComponentKind::Effects},
         "Player component rows were incomplete or acquired entity identities.");
 }
 void followDependency(const std::filesystem::path& root) {
@@ -94,7 +81,7 @@ void recipeAndVisualChildren(const std::filesystem::path& root) {
     SceneDocument document(root);
     const auto emptyEnemy=document.createEnemy();
     const auto enemy=*document.scene().find(emptyEnemy);
-    require(enemy.enemy&&enemy.actor&&enemy.motor&&enemy.controller&&enemy.navigation&&enemy.lightRig&&enemy.darknessReveal,
+    require(enemy.enemy&&enemy.actor&&enemy.movement&&enemy.controller&&enemy.navigation,
         "Enemy recipe omitted a shared actor capability.");
     require(!enemy.playerInput&&!enemy.camera&&!enemy.cameraFollow&&document.scene().children(emptyEnemy).empty(),
         "Enemy recipe acquired player input or a camera.");
@@ -134,8 +121,8 @@ void entityHierarchyProjection(const std::filesystem::path& root) {
     add(4,"Explicit group",1,2);
     add(5,"Grouped model",4,0).model=AssetRef<ModelAsset>{BuiltinBoxModelId};
     add(6,"Attached model",5,0).model=AssetRef<ModelAsset>{BuiltinBoxModelId};
-    auto& actor=add(7,"Player",0,1);actor.actor.emplace();actor.motor.emplace();actor.controller.emplace();
-    actor.navigation.emplace();actor.playerInput.emplace();actor.lightRig.emplace();actor.darknessReveal.emplace();
+    auto& actor=add(7,"Player",0,1);actor.actor.emplace();actor.movement.emplace();actor.controller.emplace();
+    actor.navigation.emplace();actor.playerInput.emplace();
     auto& camera=add(8,"Owned camera",7,0);camera.camera.emplace();camera.cameraFollow=SceneCameraFollow{7,{5,7,5},{}};
     auto& visual=add(9,"Owned visual",7,1);visual.model=AssetRef<ModelAsset>{BuiltinBoxModelId};
     visual.local=math::translation({.25f,1,-.5f});visual.local.at(0,1)=.3f;visual.local.at(0,0)=-1.4f;
@@ -313,18 +300,18 @@ void batchComponentRemoval(const std::filesystem::path& root) {
     SceneDocument document(root);const auto player=document.createPlayer(),enemy=document.createEnemy();
     const auto camera=document.scene().properties().activeCamera;const auto count=document.history().size();
     const auto before=document.scene().records();const auto properties=document.scene().properties();
-    const std::array targets{SceneComponentTarget{player,SceneComponentKind::Controller},SceneComponentTarget{player,SceneComponentKind::Motor},
-        SceneComponentTarget{enemy,SceneComponentKind::LightRig},SceneComponentTarget{enemy,SceneComponentKind::DarknessReveal}};
+    const std::array targets{SceneComponentTarget{player,SceneComponentKind::Controller},SceneComponentTarget{player,SceneComponentKind::Movement},
+        SceneComponentTarget{enemy,SceneComponentKind::Navigation}};
     require(removeSceneComponents(document,targets)&&document.history().size()==count+1,"Batch component removal created separate commands.");
     const auto p=*document.scene().find(player),e=*document.scene().find(enemy);
-    require(!p.controller&&!p.motor&&!p.navigation&&!p.playerInput&&p.lightRig&&p.actor&&!document.scene().properties().playerCharacter&&
-        !e.lightRig&&!e.darknessReveal&&e.controller&&e.motor&&e.navigation&&document.scene().contains(camera),
+    require(!p.controller&&!p.movement&&!p.navigation&&!p.playerInput&&p.actor&&!document.scene().properties().playerCharacter&&
+        e.controller&&e.movement&&!e.navigation&&document.scene().contains(camera),
         "Batch removal retained invalid dependencies or deleted unrelated owner/camera data.");
     require(document.undo()&&sameProperties(properties,document.scene().properties()),"Batch removal did not restore scene roles.");
     const auto restored=document.scene().records();require(restored.size()==before.size(),"Batch removal undo changed entity counts.");
     for(size_t index=0;index<before.size();++index)require(sameEntity(before[index],restored[index]),"Batch removal undo lost authored component values.");
-    const std::array invalid{SceneComponentTarget{player,SceneComponentKind::Motor},SceneComponentTarget{enemy,SceneComponentKind::Transform}};
-    require(!removeSceneComponents(document,invalid)&&document.scene().find(player)->motor,"Batch removal accepted an entity-only entry or partially removed components.");
+    const std::array invalid{SceneComponentTarget{player,SceneComponentKind::Movement},SceneComponentTarget{enemy,SceneComponentKind::Transform}};
+    require(!removeSceneComponents(document,invalid)&&document.scene().find(player)->movement,"Batch removal accepted an entity-only entry or partially removed components.");
 }
 void savedSceneCompatibility(const std::filesystem::path& root) {
     std::vector<std::string> diagnostics;const auto scenes=scanSceneAssets(root,&diagnostics);

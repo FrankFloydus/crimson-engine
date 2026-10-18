@@ -26,7 +26,7 @@ EntityRecord collider(Mat4 world={}) {
     record.collider->source=AssetRef<ModelAsset>{"assets/models/collision/manifest.json"};return record;
 }
 EntityRecord character(Vec3 position={0,2,0}) {
-    EntityRecord record;record.id=2;record.name="Character";record.controller.emplace();record.motor.emplace();record.playerInput.emplace();record.navigation.emplace();record.local=math::translation(position);return record;
+    EntityRecord record;record.id=2;record.name="Character";record.controller.emplace();record.movement.emplace();record.playerInput.emplace();record.navigation.emplace();record.local=math::translation(position);return record;
 }
 void tick(Scene& scene,PhysicsWorld& physics,std::span<const PhysicsMeshCollider> meshes,int count,Vec3 velocity={}) {
     for(int index=0;index<count;++index)scene.applyRuntimePoses(physics.step(scene,2,velocity,1.f/60,{},meshes));

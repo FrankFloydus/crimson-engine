@@ -1,5 +1,4 @@
 #include "ClusteredLightingGpu.h"
-#include "AmbientVisibilityMath.h"
 #include "PointLightRecord.h"
 
 #include <algorithm>
@@ -35,8 +34,7 @@ bool sameLights(std::span<const PointLight> left,std::span<const PointLight> rig
             same(a.nearFalloffRadius,b.nearFalloffRadius) && same(a.specularStrength,b.specularStrength) &&
             same(a.rangeFalloffExponent,b.rangeFalloffExponent) && same(a.edgeSoftness,b.edgeSoftness) &&
             same(a.sourceRadius,b.sourceRadius) && same(a.attenuation,b.attenuation) && same(a.indirectEnergy,b.indirectEnergy) &&
-            a.roles.receiverMask==b.roles.receiverMask && a.roles.ambientRevealMask==b.roles.ambientRevealMask &&
-            a.roles.ambientReveal==b.roles.ambientReveal && same(a.roles.ambientRevealStrength,b.roles.ambientRevealStrength) && a.castShadows==b.castShadows;
+            a.roles.receiverMask==b.roles.receiverMask && a.castShadows==b.castShadows;
     });
 }
 }
@@ -50,10 +48,8 @@ ClusteredLightingGpu::ClusteredLightingGpu(bgfx::ProgramHandle computeProgram):c
     optionsUniform_=bgfx::createUniform("u_clusterOptions",bgfx::UniformType::Vec4);
     recordLayoutUniform_=bgfx::createUniform("u_clusterRecordLayoutV6",bgfx::UniformType::Vec4);
     viewUniform_=bgfx::createUniform("u_clusterView",bgfx::UniformType::Mat4);
-    ambientUniform_=bgfx::createUniform("u_ambientAtlas",bgfx::UniformType::Vec4);
     occluderUniform_=bgfx::createUniform("u_occluderDepthAtlas",bgfx::UniformType::Vec4);
     occluderOptionsUniform_=bgfx::createUniform("u_occluderDepthOptions",bgfx::UniformType::Vec4);
-    revealUniform_=bgfx::createUniform("u_revealAtlas",bgfx::UniformType::Vec4);
     occluderDepthSampler_=bgfx::createUniform("s_occluderPublishDepth",bgfx::UniformType::Sampler);
 }
 ClusteredLightingGpu::~ClusteredLightingGpu() {
@@ -62,7 +58,7 @@ ClusteredLightingGpu::~ClusteredLightingGpu() {
     destroyHandle(sampler_);destroyHandle(gridUniform_);destroyHandle(depthUniform_);destroyHandle(viewportUniform_);
     destroyHandle(atlasUniform_);destroyHandle(optionsUniform_);destroyHandle(viewUniform_);
     destroyHandle(recordLayoutUniform_);
-    destroyHandle(ambientUniform_);destroyHandle(revealUniform_);
+
     destroyHandle(occluderUniform_);destroyHandle(occluderOptionsUniform_);destroyHandle(occluderDepthSampler_);
 }
 void ClusteredLightingGpu::advance(std::uint64_t frame) {
@@ -76,7 +72,7 @@ std::size_t ClusteredLightingGpu::residentBytes() const {
     for(const auto& old:retired_)bytes+=old.bytes;
     return bytes;
 }
-bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels,std::uint64_t occluderTexels,std::size_t revealCount,std::uint64_t ssgiTexels,std::uint64_t ssaoTexels) {
+bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t occluderTexels,std::uint64_t ssgiTexels,std::uint64_t ssaoTexels) {
     const auto* caps=bgfx::getCaps();
     if(!caps || !(caps->supported&BGFX_CAPS_COMPUTE) || !bgfx::isValid(computeProgram_))
         throw std::runtime_error("Clustered Forward+ requires a valid compute program and compute-capable adapter.");
@@ -96,8 +92,7 @@ bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t br
     std::uint32_t width=std::bit_ceil(std::max<std::uint32_t>(brdfSize,releaseSsgi?0:atlasWidth_));
     auto requiredHeight=[&](std::uint32_t extent) {
         const auto lightRows=point_lighting::pointLightRecordRows(MaxLights,extent);
-        const auto revealRows=(revealCount+extent-1)/extent;
-        const auto afterAmbient=(std::uint64_t(brdfSize)+lightRows+revealRows)*extent+maskTexels+ambientTexels;
+        const auto afterAmbient=(std::uint64_t(brdfSize)+lightRows)*extent+maskTexels;
         const auto end=occluderTexels?occluderBase(afterAmbient)+occluderTexels:afterAmbient;
         return (end+ssgiTexels+ssaoTexels+extent-1)/extent;
     };
@@ -118,21 +113,20 @@ bool ClusteredLightingGpu::ensureAtlas(std::uint64_t maskTexels,std::uint16_t br
     }
     atlas_=next;atlasWidth_=static_cast<std::uint16_t>(width);atlasHeight_=static_cast<std::uint16_t>(height);brdfSize_=brdfSize;
     ssgiAllocation_=ssgiTexels!=0;ssaoAllocation_=ssaoTexels!=0;
-    brdfSnapshot_.clear();publishedReveals_.clear();publishedRevealBase_=UINT32_MAX;recordsUploaded_=false;masksValid_=false;
+    brdfSnapshot_.clear();recordsUploaded_=false;masksValid_=false;
     return true;
 }
 bool ClusteredLightingGpu::prepare(const Camera& camera,std::uint16_t width,std::uint16_t height,
     std::span<const PointLight> lights,std::span<const std::int32_t> shadowIndices,
-    std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights,std::uint16_t ambientWidth,std::uint16_t ambientHeight,
-    std::uint16_t occluderWidth,std::uint16_t occluderHeight,std::span<const DarknessRevealSource> reveals,
+    std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights,
+    std::uint16_t occluderWidth,std::uint16_t occluderHeight,
     std::uint16_t ssgiWidth,std::uint16_t ssgiHeight,std::uint16_t ssaoWidth,std::uint16_t ssaoHeight) {
     const auto begin=std::chrono::steady_clock::now();
-    usable_=false;status_.clear();stats_={};ambientValues_={};occluderValues_={};revealValues_={};ssgiBase_=0;ssaoBase_=0;ssaoWidth_=ssaoHeight_=0;
+    usable_=false;status_.clear();stats_={};occluderValues_={};ssgiBase_=0;ssaoBase_=0;ssaoWidth_=ssaoHeight_=0;
     occluderOptionsValues_={bgfx::getCaps()->originBottomLeft?1.f:0.f,0,0,0};
     stats_.totalLights=static_cast<std::uint32_t>(std::min<std::size_t>(lights.size(),UINT32_MAX));
     try {
         if(!width || !height)throw std::runtime_error("Clustered Forward+ requires a nonempty viewport.");
-        if(bool(ambientWidth)!=bool(ambientHeight))throw std::runtime_error("Ambient visibility requires both target dimensions.");
         if(bool(occluderWidth)!=bool(occluderHeight))throw std::runtime_error("Occluder depth requires both target dimensions.");
         if(bool(ssgiWidth)!=bool(ssgiHeight))throw std::runtime_error("SSGI requires both target dimensions.");
         if(bool(ssaoWidth)!=bool(ssaoHeight))throw std::runtime_error("SSAO requires both target dimensions.");
@@ -176,9 +170,9 @@ bool ClusteredLightingGpu::prepare(const Camera& camera,std::uint16_t width,std:
                 records_.push_back({light.position[0],light.position[1],light.position[2],std::clamp(light.intensity,0.f,1000000.f)});
                 records_.push_back({linear(light.color[0]),linear(light.color[1]),linear(light.color[2]),light.inverseRadiusSquared()});
                 records_.push_back({view[0],view[1],-view[2],radius+padding});
-                const auto roles=ambient_visibility::packLightRoles(light.roles,light.castShadows);
+                const auto roles=light.roles.receiverMask;
                 const float sourceRadius=std::isfinite(light.sourceRadius)?std::clamp(light.sourceRadius,0.f,100000.f):0.f;
-                records_.push_back({float(shadow>=0 && shadow<16?shadow:-1),sourceRadius,float(roles),light.roles.ambientRevealStrength});
+                records_.push_back({float(shadow>=0 && shadow<16?shadow:-1),sourceRadius,float(roles),0.f});
                 const float nearRadius=std::isfinite(light.nearFalloffRadius)?std::clamp(light.nearFalloffRadius,0.f,100000.f):0.f;
                 const float specular=std::isfinite(light.specularStrength)?std::clamp(light.specularStrength,0.f,1.f):1.f;
                 const float exponent=std::isfinite(light.rangeFalloffExponent)?std::clamp(light.rangeFalloffExponent,.25f,8.f):4.f;
@@ -198,41 +192,18 @@ bool ClusteredLightingGpu::prepare(const Camera& camera,std::uint16_t width,std:
         // Four 32-bit masks share a texel, with the final unused bits zeroed.
         const auto words=((count+127)/128)*4;
         const auto maskTexels=std::uint64_t(clusters)*(words/4);
-        const auto ambientTexels=ambient_visibility::packedTexelCount(ambientWidth,ambientHeight);
-        const auto occluderTexels=ambient_visibility::packedTexelCount(occluderWidth,occluderHeight);
-        revealRecords_.clear();revealRecords_.reserve(reveals.size());
-        for(const auto& reveal:reveals)if(reveal.enabled&&math::finite(reveal.position)&&std::isfinite(reveal.spread)&&reveal.spread>0) {
-            ++stats_.totalReveals;
-            const auto spread=std::min(reveal.spread,100000.f);
-            if(ambient_visibility::revealIntersectsView(math::transformPoint(nextView,reveal.position),spread,tanY*aspect,tanY,nearPlane,farPlane))
-                revealRecords_.push_back({reveal.position[0],reveal.position[1],reveal.position[2],spread});
-        }
-        stats_.visibleReveals=static_cast<std::uint32_t>(revealRecords_.size());
+        const auto occluderTexels=(std::uint64_t(occluderWidth)*occluderHeight+3)/4;
         const auto ssgiTexels=std::uint64_t(ssgiWidth)*ssgiHeight;
-        const auto ssaoTexels=ambient_visibility::packedTexelCount(ssaoWidth,ssaoHeight);
-        ensureAtlas(maskTexels,static_cast<std::uint16_t>(brdfSize),ambientTexels,occluderTexels,revealRecords_.size(),ssgiTexels,ssaoTexels);
+        const auto ssaoTexels=(std::uint64_t(ssaoWidth)*ssaoHeight+3)/4;
+        ensureAtlas(maskTexels,static_cast<std::uint16_t>(brdfSize),occluderTexels,ssgiTexels,ssaoTexels);
         const auto lightBase=std::uint32_t(brdfSize_)*atlasWidth_;
         const auto lightRows=point_lighting::pointLightRecordRows(MaxLights,atlasWidth_);
-        const auto revealBase=lightBase+lightRows*atlasWidth_;
-        const auto revealRows=static_cast<std::uint32_t>((revealRecords_.size()+atlasWidth_-1)/atlasWidth_);
-        const auto maskBase=revealBase+revealRows*atlasWidth_;
-        revealValues_={float(revealBase),float(revealRecords_.size()),0,0};
-        // With no reveal rows the masks/ambient region moves back over their
-        // old texels. Re-enabling the same profiles must republish those bytes.
-        if(revealRecords_.empty()){publishedReveals_.clear();publishedRevealBase_=UINT32_MAX;}
-        if(!revealRecords_.empty()&&(revealRecords_!=publishedReveals_||publishedRevealBase_!=revealBase)) {
-            uploadRows_.assign(std::size_t(revealRows)*atlasWidth_,Vec4{});
-            std::copy(revealRecords_.begin(),revealRecords_.end(),uploadRows_.begin());
-            bgfx::updateTexture2D(atlas_,0,0,0,static_cast<std::uint16_t>(revealBase/atlasWidth_),atlasWidth_,static_cast<std::uint16_t>(revealRows),
-                bgfx::copy(uploadRows_.data(),static_cast<std::uint32_t>(uploadRows_.size()*sizeof(Vec4))));
-            publishedReveals_=revealRecords_;publishedRevealBase_=revealBase;
-        }
-        if(ambientTexels)ambientValues_={float(maskBase+maskTexels),float(ambientWidth),float(ambientHeight),0};
-        const auto afterAmbient=std::uint64_t(maskBase)+maskTexels+ambientTexels;
+        const auto maskBase=lightBase+lightRows*atlasWidth_;
+        const auto afterAmbient=std::uint64_t(maskBase)+maskTexels;
         const auto screenBase=occluderTexels?occluderBase(afterAmbient)+occluderTexels:afterAmbient;
         if(ssgiTexels)ssgiBase_=static_cast<std::uint32_t>(screenBase);
         if(ssaoTexels){ssaoBase_=static_cast<std::uint32_t>(screenBase+ssgiTexels);ssaoWidth_=ssaoWidth;ssaoHeight_=ssaoHeight;}
-        if(occluderTexels)occluderValues_={float(occluderBase(maskBase+maskTexels+ambientTexels)),float(occluderWidth),float(occluderHeight),0};
+        if(occluderTexels)occluderValues_={float(occluderBase(maskBase+maskTexels)),float(occluderWidth),float(occluderHeight),0};
         const Vec4 nextGrid{float(tilesX),float(tilesY),float(DepthSlices),float(words)};
         const Vec4 nextDepth{scale,bias,nearPlane,farPlane};
         const Vec4 nextViewport{float(width),float(height),tanY*aspect,tanY};
@@ -284,7 +255,6 @@ void ClusteredLightingGpu::setUniforms() const {
     bgfx::setUniform(viewportUniform_,viewportValues_.data());bgfx::setUniform(atlasUniform_,atlasValues_.data());
     bgfx::setUniform(optionsUniform_,optionsValues_.data());bgfx::setUniform(viewUniform_,viewValues_.data());
     const Vec4 recordLayout{float(RecordTexels),0,0,0};bgfx::setUniform(recordLayoutUniform_,recordLayout.data());
-    bgfx::setUniform(ambientUniform_,ambientValues_.data());bgfx::setUniform(revealUniform_,revealValues_.data());
     bgfx::setUniform(occluderUniform_,occluderValues_.data());bgfx::setUniform(occluderOptionsUniform_,occluderOptionsValues_.data());
 }
 bool ClusteredLightingGpu::publishOccluderDepth(bgfx::TextureHandle depth,bgfx::ProgramHandle program,bgfx::ViewId view) {

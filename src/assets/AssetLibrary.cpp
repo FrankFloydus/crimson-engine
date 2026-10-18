@@ -276,6 +276,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     ensureEngineMaterialAssets(projectRoot_);
     ensureEngineNavigationAgentProfile(projectRoot_);
     ensureEngineGameplayEffects(projectRoot_);
+    refreshQuaderModelCatalog();
     std::vector<std::filesystem::path> files;
     for(const auto& entry:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(entry.file)) {
         if(textureFile(entry.file)&&!references_.deleted(entry.id)) {
@@ -289,6 +290,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
             const auto id=assetIdAtPath(projectRoot_,file);
             if(references_.deleted(id)) continue;
             if(resources_) {
+                if(inactiveQuaderModels_.contains(id))continue;
                 std::ifstream input(file); const auto manifest=nlohmann::json::parse(input);
                 catalog_.push_back({id,manifest.value("name",utf8(file.parent_path().filename())),AssetKind::Model}); ++catalogRevision_;
                 // Explicit shared-material assignments cannot create imported
@@ -782,6 +784,7 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
             // Rebuild derived files before any request can observe the source
             // notification. Cache writes themselves are excluded by the watcher.
             initializeQuaderSceneBundles(projectRoot_);
+            refreshQuaderModelCatalog();
             const auto source=std::filesystem::weakly_canonical(changed);
             for(const auto& entry:storedAssetPaths(projectRoot_)) {
                 if(entry.file.filename()!="manifest.json")continue;
@@ -792,7 +795,7 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
                 std::erase_if(models_,[&](const auto& model){return model->id==entry.id;});
                 if(references_.deleted(entry.id))continue;
                 if(!resources_)registerModel(loadModelPackage(entry.file,projectRoot_,modelResolvers()),false);
-                else {
+                else if(!inactiveQuaderModels_.contains(entry.id)) {
                     std::ifstream input(entry.file);const auto manifest=nlohmann::json::parse(input);
                     const auto item=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& asset){return asset.id==entry.id;});
                     if(item==catalog_.end())catalog_.push_back({entry.id,manifest.at("name").get<std::string>(),AssetKind::Model});
@@ -919,7 +922,13 @@ void AssetLibrary::ensureModelMaterials(const ModelAsset& model) {
             materialCatalogDirty_=true;
 }
 void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool refreshMaterialCatalog) {
-    if (!model || std::any_of(models_.begin(),models_.end(),[&](const auto& existing){return existing->id==model->id;})) return;
+    if(!model)return;
+    if(std::any_of(models_.begin(),models_.end(),[&](const auto& existing){return existing->id==model->id;})){
+        if(!inactiveQuaderModels_.contains(model->id)&&std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==model->id;})){
+            catalog_.push_back({model->id,model->name,AssetKind::Model});++catalogRevision_;
+        }
+        return;
+    }
     if(!isAssetUuid(model->id)) {
         const auto original=model->id;const auto file=resolveAssetPath(projectRoot_,original);
         if(std::filesystem::is_regular_file(file))registerAssetPath(projectRoot_,original,file);
@@ -961,7 +970,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
         throw;
     }
     for (auto& image : pending) addTexture(std::move(image));
-    if(std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& existing){return existing.id==model->id;})) catalog_.push_back({model->id, model->name, AssetKind::Model});
+    if(!inactiveQuaderModels_.contains(model->id)&&std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& existing){return existing.id==model->id;})) catalog_.push_back({model->id, model->name, AssetKind::Model});
     ++catalogRevision_;
     if(resources_ && !modelResources_.contains(model->id)) {
         auto compact=std::make_shared<ModelAsset>();
@@ -993,6 +1002,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model,bool re
     if(refreshMaterialCatalog&&materialCatalogDirty_)refreshMaterials();
 }
 void AssetLibrary::publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models) {
+    refreshQuaderModelCatalog();
     for(const auto& model:models)registerModel(model,false);
     if(materialCatalogDirty_)refreshMaterials();
 }
@@ -1547,14 +1557,33 @@ void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
 namespace {
 std::vector<SceneSnapshot> savedScenes(const std::filesystem::path& root) {
     std::vector<SceneSnapshot> result;
-    for(const auto& entry:scanSceneAssets(root)){
+    std::vector<std::string> diagnostics;const auto entries=scanSceneAssets(root,&diagnostics);
+    if(!diagnostics.empty())throw std::runtime_error("Cannot inspect all saved scene references: "+diagnostics.front());
+    for(const auto& entry:entries){
         const auto& id=entry.id;try{result.push_back(readSceneSnapshot(root,id));}
         catch(const std::exception& error){throw std::runtime_error("Cannot inspect scene "+id+": "+error.what());}
     }return result;
 }
 uint64_t mix(uint64_t value,uint64_t input){return (value^input)*1099511628211ull;}
+std::optional<std::string> referencePolicyBytes(const std::filesystem::path& root){
+    const auto file=resolveAssetPath(root,"assets/references.json");
+    if(!std::filesystem::exists(file))return {};
+    std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read the asset reference policy.");
+    std::string bytes{std::istreambuf_iterator<char>(input),{}};
+    if(!input.eof()&&input.fail())throw std::runtime_error("Cannot read the complete asset reference policy.");
+    return bytes;
+}
+std::optional<std::string> currentReferencePolicy(const std::filesystem::path& root,const AssetReferenceManager& references){
+    const auto baseline=referencePolicyBytes(root);const AssetReferenceManager persisted(root);
+    if(!persisted.valid())throw std::runtime_error(persisted.status());
+    if(!references.valid()||persisted.serialize()!=references.serialize()||referencePolicyBytes(root)!=baseline)
+        throw std::runtime_error("The asset reference policy changed outside this editor. Reopen the project before deleting assets.");
+    return baseline;
+}
 uint64_t deletionRevision(const std::filesystem::path& root,const AssetReferenceManager& references,uint64_t catalogRevision,const SceneDocument* active){
     auto result=mix(1469598103934665603ull,references.revision());result=mix(result,catalogRevision);
+    const auto policy=referencePolicyBytes(root);result=mix(result,policy.has_value());
+    if(policy)for(const auto c:*policy)result=mix(result,static_cast<uint8_t>(c));
     if(active){result=mix(result,active->scene().revision());result=mix(result,active->scene().generation());result=mix(result,active->history().size());}
     for(const auto& directory:{root/"Content",root/"Engine"})if(std::filesystem::exists(directory))
         for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_regular_file()){
@@ -1664,8 +1693,13 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     for(const auto& id:materialDocumentHistory_)if(!id.empty()&&!isEngineAssetId(id))usages.push_back({id,materialDocumentId_,"Open material","Material texture undo / redo history",true,true});
     // Inspect lightweight material metadata for every package, including models
     // never opened in the viewport. Authored usage cannot depend on residency.
-    for(const auto& entry:catalog_) if(entry.kind==AssetKind::Model) {
-        const auto model=loadModelMaterialMetadata(resolveAssetPath(projectRoot_,entry.id),projectRoot_,modelResolvers());
+    std::set<std::string> referencedModels;
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model)referencedModels.insert(entry.id);
+    // Hidden old geometry still owns material/image dependencies while saved
+    // scenes, live entities or history can load that generation.
+    for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id))referencedModels.insert(id);
+    for(const auto& id:referencedModels) {
+        const auto model=loadModelMaterialMetadata(resolveAssetPath(projectRoot_,id),projectRoot_,modelResolvers());
         for(size_t index=0;index<model->materials.size();++index) {
             const auto materialId=index<model->materialIds.size()?model->materialIds[index]:importedMaterialId(model->id,index);
             usages.push_back({materialId,model->id,model->name,"Material "+std::to_string(index+1)});
@@ -1709,20 +1743,82 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     references_.setUsages(std::move(usages));
 }
+void AssetLibrary::refreshQuaderModelCatalog(){
+    // Keep pruned IDs retired for this session as well: a completed background
+    // snapshot must not republish a card after its unused source was reclaimed.
+    auto inactive=inactiveQuaderModels_;std::unordered_set<std::string> retained;
+    for(const auto& entry:storedAssetPaths(projectRoot_)){
+        if(entry.file.extension()!=".crimson-quader"||!std::filesystem::is_regular_file(entry.file))continue;
+        std::ifstream input(entry.file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read Quader bundle catalog.");
+        const std::string bytes{std::istreambuf_iterator<char>(input),{}};const auto bundle=decodeQuaderSceneBundle(bytes);
+        if(bundle.id!=entry.id)throw std::runtime_error("Quader bundle catalog identity mismatch.");
+        for(const auto& model:bundle.models)if(model.current)inactive.erase(model.id);else {inactive.insert(model.id);retained.insert(model.id);}
+    }
+    const auto count=catalog_.size();std::erase_if(catalog_,[&](const auto& entry){return entry.kind==AssetKind::Model&&inactive.contains(entry.id);});
+    if(inactive!=inactiveQuaderModels_||count!=catalog_.size())++catalogRevision_;
+    inactiveQuaderModels_=std::move(inactive);
+    retainedQuaderModels_=std::move(retained);
+}
+void AssetLibrary::collectUnusedQuaderModels(const SceneDocument& active){
+    if(active.transactionActive())return;
+    const auto state=std::array<std::uint64_t,8>{catalogRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),
+        active.scene().revision(),active.scene().generation(),active.loadedFingerprint(),static_cast<std::uint64_t>(active.history().size()),references_.revision()};
+    if(quaderCollectionInitialized_&&state==quaderCollectionState_)return;
+    // Most scene revisions are poses/properties. Rescan saved dependencies only
+    // when model references/history or an external catalog boundary changed.
+    auto documentReferences=active.historicalModelReferences();
+    for(const auto& record:active.scene().records()){
+        if(record.model)documentReferences.push_back(record.model->id);
+        if(record.collider&&!record.collider->source.empty())documentReferences.push_back(record.collider->source.id);
+    }
+    std::sort(documentReferences.begin(),documentReferences.end());documentReferences.erase(std::unique(documentReferences.begin(),documentReferences.end()),documentReferences.end());
+    const bool unchanged=quaderCollectionInitialized_&&documentReferences==quaderDocumentModelReferences_&&state[0]==quaderCollectionState_[0]&&
+        state[1]==quaderCollectionState_[1]&&state[2]==quaderCollectionState_[2]&&state[5]==quaderCollectionState_[5]&&state[7]==quaderCollectionState_[7];
+    quaderCollectionInitialized_=true;quaderCollectionState_=state;
+    quaderDocumentModelReferences_=std::move(documentReferences);
+    if(unchanged||retainedQuaderModels_.empty())return;
+    try{
+        // Failure to read any scene/material/legacy reference leaves every
+        // retained generation intact. Runtime residency is not authored usage.
+        // Read the durable policy again at this destructive boundary. An
+        // external edit cannot silently discard replacement-only owners.
+        AssetReferenceManager persistedPolicy(projectRoot_);
+        if(!references_.valid()||!persistedPolicy.valid())throw std::runtime_error("Asset reference policy is invalid; retained meshes were preserved.");
+        refreshReferenceIndex(&active);auto referenced=references_.replacementTargets();
+        const auto persistedTargets=persistedPolicy.replacementTargets();referenced.insert(referenced.end(),persistedTargets.begin(),persistedTargets.end());
+        for(const auto& usage:references_.usages()){
+            referenced.push_back(usage.targetId);const auto resolved=references_.resolve(usage.targetId);if(!resolved.empty())referenced.push_back(resolved);
+        }
+        std::unordered_map<std::string,std::filesystem::path> sources;
+        for(const auto& id:retainedQuaderModels_)if(const auto source=quaderBundleSource(projectRoot_,id))sources.emplace(id,*source);
+        const auto removed=pruneUnusedQuaderBundleModels(projectRoot_,referenced);
+        if(removed.empty())return;
+        std::set<std::filesystem::path> writtenSources;
+        for(const auto& id:removed){
+            inactiveQuaderModels_.insert(id);retainedQuaderModels_.erase(id);modelResources_.erase(id);materialCatalogResources_.erase(id);registeredModelRevisions_.erase(id);modelInterest_.erase(id);
+            if(resources_)resources_->discard(id);
+            if(const auto source=sources.find(id);source!=sources.end())writtenSources.insert(source->second);
+        }
+        for(const auto& source:writtenSources)ownWrites_.push_back(source);
+        std::erase_if(models_,[&](const auto& model){return std::find(removed.begin(),removed.end(),model->id)!=removed.end();});
+        ++catalogRevision_;
+        quaderCollectionState_={catalogRevision_,contentStorageRevision(projectRoot_),active.documentGeneration(),active.scene().revision(),
+            active.scene().generation(),active.loadedFingerprint(),static_cast<std::uint64_t>(active.history().size()),references_.revision()};
+    }catch(const std::exception& error){status_="Quader mesh cleanup deferred: "+std::string(error.what());}
+}
 AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids,const SceneDocument* active){
     AssetDeletionPlan plan;plan.selectedIds=ids;
-    try{auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
+    try{(void)currentReferencePolicy(projectRoot_,references_);auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
         for(const auto& id:ids){if(!browser.contains(id))throw std::runtime_error("A selected asset no longer exists.");expanded.insert(id);
             if(browser.isFolder(id))for(const auto& child:browser.descendants(id))expanded.insert(child);}
         std::unordered_set<std::string> models,particles,materials,profiles,effects;
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
-            if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
-                throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
             plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)effects.insert(id);}
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
         for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableOwners.insert(entry.id);
+        for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id)&&std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,id)))usableOwners.insert(id);
         // A valid saved scene can arrive from disk before the browser's watcher
         // refresh. Its actual authored dependencies must still be protected.
         const auto scenes=savedScenes(projectRoot_);for(const auto& scene:scenes)usableOwners.insert(scene.id);
@@ -1754,7 +1850,7 @@ std::vector<AssetEntry> AssetLibrary::fallbackCandidates(const std::string& id)c
     bool sprite=false,model=false;
     if(source->kind==AssetKind::Material)for(const auto& usage:references_.users(id))if(usage.targetId==id||references_.resolve(usage.targetId)==id){
         const auto owner=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& e){return e.id==usage.ownerId;});
-        sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||usage.slot.find(" / Material slot")!=std::string::npos;}
+        sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||retainedQuaderModels_.contains(usage.ownerId)||usage.slot.find(" / Material slot")!=std::string::npos;}
     for(const auto& entry:catalog_)if(entry.id!=id&&(entry.kind==source->kind||(source->kind==AssetKind::Environment&&entry.kind==AssetKind::Texture))){
         if(source->kind==AssetKind::Material){const auto material=findMaterial(entry.id);if(!material||(sprite&&!particleMaterialCompatible(*material))||(model&&!modelMaterialCompatible(*material)))continue;}
         result.push_back(entry);}
@@ -1783,6 +1879,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
     try{
         if(!plan.error.empty())throw std::runtime_error(plan.error);
         if(plan.revision!=deletionRevision(projectRoot_,references_,catalogRevision_,active))throw std::runtime_error("Assets or scenes changed while deletion was pending. Review the updated deletion list.");
+        const auto policyBaseline=currentReferencePolicy(projectRoot_,references_);
         if(active&&active->transactionActive())throw std::runtime_error("Finish the active scene edit before deleting assets.");
         if(pendingDeletion_&&(pendingDeletion_->active!=active||(active&&pendingDeletion_->documentGeneration!=active->documentGeneration())||
             pendingDeletion_->plan.revision!=plan.revision||pendingDeletion_->plan.assetIds!=plan.assetIds||pendingDeletion_->replacements!=replacements))
@@ -1793,8 +1890,6 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(!navigationProfileDocumentId_.empty()&&deletedIds.contains(navigationProfileDocumentId_))throw std::runtime_error("Close the Navigation Agent Profile document before deleting its asset.");
         if(!gameplayEffectDocumentId_.empty()&&deletedIds.contains(gameplayEffectDocumentId_))throw std::runtime_error("Close the Gameplay Effect document before deleting its asset.");
         for(const auto& id:plan.assetIds){const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Deletion target disappeared.");
-            if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
-                throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
             deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)deletedProfiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)deletedEffects.insert(id);
             if(const auto chosen=replacements.find(id);chosen!=replacements.end()&&!chosen->second.empty()){
                 const auto options=fallbackCandidates(id);if(std::none_of(options.begin(),options.end(),[&](const auto& option){return option.id==chosen->second;}))throw std::runtime_error("Fallback has an incompatible asset type.");}}
@@ -1803,6 +1898,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         for(const auto& id:deletedEffects){const auto target=nextReferences.resolveGameplayEffect(id);if(!target.empty())(void)loadGameplayEffectAsset(projectRoot_,target);}
         std::vector<std::shared_ptr<const ModelAsset>> nextModels;
         std::vector<AssetEntry> surviving;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model&&!deletedModels.contains(entry.id))surviving.push_back(entry);
+        for(const auto& id:retainedQuaderModels_)if(!references_.deleted(id)&&!deletedModels.contains(id))surviving.push_back({id,id,AssetKind::Model});
         std::vector<AssetEntry> survivingParticles;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle&&!deletedParticles.contains(entry.id))survivingParticles.push_back(entry);
         if(resources_){
             if(!pendingDeletion_){
@@ -1822,7 +1918,10 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
             if(!deletionValidationCurrent(*validation))throw std::runtime_error("Resource files changed while deletion was validating. Review the deletion again.");
             nextModels=validation->models;
         }else nextModels=validateAssetDeletion(projectRoot_,surviving,nextReferences,{}, {},survivingParticles)->models;
-        std::vector<AssetFileChange> changes;
+        const std::vector<std::string> deletedModelIds(deletedModels.begin(),deletedModels.end());
+        auto bundleRemoval=prepareQuaderBundleModelRemoval(projectRoot_,deletedModelIds);
+        const std::unordered_set<std::string> deletedBundleModels(bundleRemoval.modelIds.begin(),bundleRemoval.modelIds.end());
+        std::vector<AssetFileChange> changes=std::move(bundleRemoval.files);
         std::vector<StoredAssetPath> profileRegistrations;
         auto preparedMaterials=materials_;auto preparedAuthoredMaterials=authoredMaterials_;auto preparedParticles=particles_;
         auto preparedMaterialRevision=nextMaterialRevision_,preparedParticleRevision=nextParticleRevision_;
@@ -1884,11 +1983,23 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(active&&!activeDeleted)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(deletedProfiles.contains(references_.resolveNavigationAgentProfile(id)))clearHistory=true;
         if(active&&!activeDeleted)for(const auto& id:active->historicalGameplayEffectReferences())if(deletedEffects.contains(references_.resolveGameplayEffect(id)))clearHistory=true;
         std::vector<std::filesystem::path> removedDirectories,selectedDirectories;
+        removedDirectories.insert(removedDirectories.end(),bundleRemoval.emptyDirectories.begin(),bundleRemoval.emptyDirectories.end());
+        const auto contentRoot=std::filesystem::weakly_canonical(projectRoot_/"Content");
+        const auto addEmptyAncestors=[&](std::filesystem::path directory){
+            directory=std::filesystem::weakly_canonical(directory);const auto relative=directory.lexically_relative(contentRoot);
+            if(relative.empty()||relative=="."||relative.has_root_path()||*relative.begin()=="..")return;
+            for(;directory!=contentRoot;directory=directory.parent_path())removedDirectories.push_back(directory);
+        };
+        for(const auto& entry:deleted){
+            addEmptyAncestors(resolveAssetPath(projectRoot_,entry.id).parent_path());
+            const auto folder=browserCatalog().parent(entry.id);if(!folder.empty()&&browserCatalog().writableFolder(folder))addEmptyAncestors(browserCatalog().folderPath(folder));
+        }
         for(const auto& id:plan.folderIds)if(browserCatalog().writableFolder(id)) {
             const auto directory=browserCatalog().folderPath(id);selectedDirectories.push_back(directory);removedDirectories.push_back(directory);
             if(std::filesystem::is_directory(directory))for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_directory())removedDirectories.push_back(item.path());
         }
-        for(const auto& entry:deleted){if(entry.kind==AssetKind::Model){const auto package=checkedManagedAssetPath(projectRoot_,entry.id).parent_path();removedDirectories.push_back(package);
+        for(const auto& entry:deleted){if(deletedBundleModels.contains(entry.id))continue;
+            if(entry.kind==AssetKind::Model){const auto package=checkedManagedAssetPath(projectRoot_,entry.id).parent_path();removedDirectories.push_back(package);
                 for(const auto& file:std::filesystem::recursive_directory_iterator(package))if(file.is_regular_file()){
                     const auto independent=assetIdAtPath(projectRoot_,file.path());if(!independent.empty()&&independent!=entry.id&&!deletedIds.contains(independent)&&std::any_of(catalog_.begin(),catalog_.end(),[&](const auto& card){return card.id==independent;}))continue;
                     changes.push_back({utf8(file.path().lexically_relative(projectRoot_)),std::nullopt});}
@@ -1898,8 +2009,12 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         std::vector<AssetFileChange> unique;std::set<std::filesystem::path> files;for(auto& change:changes)if(files.insert(checkedManagedAssetPath(projectRoot_,change.id)).second)unique.push_back(std::move(change));
         unique.push_back({"assets/references.json",nextReferences.serialize()});auto browserIds=plan.assetIds;browserIds.insert(browserIds.end(),plan.folderIds.begin(),plan.folderIds.end());
         unique.push_back({"assets/browser.json",browserCatalog().serializeWithout(browserIds)});
-        if(!profileRegistrations.empty())unique.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(projectRoot_,profileRegistrations)});
+        auto removedLocations=bundleRemoval.memberIds;removedLocations.insert(removedLocations.end(),bundleRemoval.removedBundleIds.begin(),bundleRemoval.removedBundleIds.end());
+        const bool locationsChanged=!profileRegistrations.empty()||!removedLocations.empty();
+        if(locationsChanged)unique.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(projectRoot_,profileRegistrations,removedLocations)});
         auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;
+        auto preparedInactiveQuaderModels=inactiveQuaderModels_,preparedRetainedQuaderModels=retainedQuaderModels_;
+        for(const auto& id:deletedBundleModels){preparedInactiveQuaderModels.insert(id);preparedRetainedQuaderModels.erase(id);}
         std::erase_if(preparedCatalog,[&](const auto& entry){return deletedIds.contains(entry.id);});
         std::erase_if(preparedMaterials,[&](const auto& entry){return deletedIds.contains(entry->id);});
         std::erase_if(preparedParticles,[&](const auto& entry){return deletedIds.contains(entry.first);});
@@ -1910,33 +2025,42 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(activeDeleted) preparedScene.emplace(active->prepareNewSceneAfterAssetDeletion());
         else if(active && (activeChanged||clearHistory)) {
             auto savedFingerprint=active->loadedFingerprint();
-            for(const auto& change:unique) if(change.contents&&checkedManagedAssetPath(projectRoot_,change.id)==sceneAssetPath(projectRoot_,active->assetId()))savedFingerprint=sceneTextFingerprint(*change.contents);
+            if(!active->assetId().empty()){
+                const auto savedScene=sceneAssetPath(projectRoot_,active->assetId());
+                for(const auto& change:unique)if(change.contents&&checkedManagedAssetPath(projectRoot_,change.id)==savedScene)savedFingerprint=sceneTextFingerprint(*change.contents);
+            }
             preparedScene.emplace(active->prepareExternalAssetChanges(activeCandidate.records,activeCandidate.properties,"Delete project assets",wasDirty,savedFingerprint));
         }
         if(preparedScene && !active->canCommitExternalAssetChanges(*preparedScene)) throw std::runtime_error("The active scene changed while deletion was preparing.");
+        std::vector<std::filesystem::path> writtenPaths;writtenPaths.reserve(unique.size());
+        for(const auto& change:unique)writtenPaths.push_back(checkedManagedAssetPath(projectRoot_,change.id));
+        ownWrites_.reserve(ownWrites_.size()+writtenPaths.size());
+        validateQuaderBundleModelRemoval(projectRoot_,bundleRemoval);
+        if(referencePolicyBytes(projectRoot_)!=policyBaseline)throw std::runtime_error("The asset reference policy changed while deletion was preparing. Review the deletion again.");
         commitAssetTransaction(projectRoot_,unique);
         durable=true;
-        if(!profileRegistrations.empty())refreshContentStorage(projectRoot_);
         // All data/registry/catalog allocations were prepared above. Install the
         // authored document immediately; cache maintenance cannot roll it back.
         if(preparedScene) { const auto committed=active->commitExternalAssetChanges(std::move(*preparedScene));if(!committed)std::terminate(); }
         references_=std::move(nextReferences);models_=std::move(nextModels);
         browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);particles_=std::move(preparedParticles);
+        inactiveQuaderModels_=std::move(preparedInactiveQuaderModels);retainedQuaderModels_=std::move(preparedRetainedQuaderModels);
         authoredMaterials_=std::move(preparedAuthoredMaterials);nextMaterialRevision_=preparedMaterialRevision;nextParticleRevision_=preparedParticleRevision;
+        ownWrites_.insert(ownWrites_.end(),std::make_move_iterator(writtenPaths.begin()),std::make_move_iterator(writtenPaths.end()));
+        if(locationsChanged)refreshContentStorage(projectRoot_);
         std::erase_if(navigationProfiles_,[&](const auto& entry){return deletedIds.contains(entry.first);});
         std::erase_if(gameplayEffects_,[&](const auto& entry){return deletedIds.contains(entry.first);});
         if(!profileRegistrations.empty()){refreshNavigationAgentProfiles();refreshGameplayEffects();}
-        std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return deletedIds.contains(entry.first);});++catalogRevision_;browserRevision_=profileRegistrations.empty()?catalogRevision_:0;
+        std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return deletedIds.contains(entry.first);});++catalogRevision_;browserRevision_=0;
         for(auto it=assets_.begin();it!=assets_.end();)if(deletedIds.contains(it->id)){retiredTextures_.push_back(std::move(*it));it=assets_.erase(it);}else ++it;
         browserSelection_.clear();
         if(resources_) {
-            for(const auto& id:deletedIds) { resources_->forget(id);textureStreamer_->invalidate(id);modelResources_.erase(id);materialResources_.erase(id); }
+            for(const auto& id:deletedIds) { resources_->forget(id);textureStreamer_->invalidate(id);modelResources_.erase(id);materialResources_.erase(id);materialCatalogResources_.erase(id);modelInterest_.erase(id); }
             // Runtime model records hold compact metadata; validation arrays above are temporary.
             models_.clear();registeredModelRevisions_.clear();
         }
-        for(const auto& change:unique) noteAssetWrite(change.id);
         std::sort(removedDirectories.begin(),removedDirectories.end(),[](const auto& a,const auto& b){return std::distance(a.begin(),a.end())>std::distance(b.begin(),b.end());});
-        for(const auto& directory:removedDirectories){std::error_code ignored;std::filesystem::remove(directory,ignored);}
+        for(const auto& directory:removedDirectories){std::error_code ignored;if(std::filesystem::is_directory(directory,ignored)&&std::filesystem::is_empty(directory,ignored))std::filesystem::remove(directory,ignored);}
         std::string retained;
         for(const auto& directory:selectedDirectories)if(std::filesystem::exists(directory))retained+="\nFolder retained because it still contains files: "+utf8(directory);
         cancelDeletion();status_="Deleted "+std::to_string(plan.assetIds.size())+" asset(s)."+retained;return true;

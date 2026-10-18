@@ -1,6 +1,7 @@
 #include "AssetPreviews.h"
 #include "scene/BuiltinModels.h"
 #include "AssetPreviewCache.h"
+#include "AssetSourceSnapshot.h"
 #include "crimson-renderer/EnvironmentPresentation.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
@@ -71,6 +72,9 @@ bool texturesMatchSources(const AssetLibrary& assets,const std::filesystem::path
             for(const auto& source:graph->sources) {
                 const auto& target=source.image.id;
                 if(target.empty() || isEngineAssetId(target))continue;
+                // A retained graph packet still pins its old image after the
+                // deletion transaction has published a replacement policy.
+                if(assets.references().resolveTexture(target,source.role==MaterialGraphTextureRole::Normal)!=target)return false;
                 const auto file=resolveAssetPath(root,target);
                 if(!expected.sourceMatches(file,graph->sourceFingerprints[source.slot])) {
                     if(const auto fingerprint=expected.sourceFingerprint(file);fingerprint && refreshedSources[resourcePathKey(file)]!=*fingerprint) {
@@ -307,9 +311,6 @@ struct AssetPreviews::Impl {
         ++statistics.validations;
         SceneSettings settings; settings.directional.enabled=false; for (auto& light:settings.points) light.enabled=false;
         std::vector<ExtractedModel> models; std::vector<DirectionalLight> directions; std::vector<PointLight> points;
-        std::vector<DarknessRevealSource> reveals;
-        std::vector<ActorLighting> actorLighting;
-        std::vector<CharacterShadowSource> actorShadows;
         std::shared_ptr<const SceneSnapshot> sceneSnapshot; Aabb bounds;
         std::shared_ptr<const MaterialAsset> materialAsset;
         std::shared_ptr<const ModelAsset> materialGeometry;
@@ -352,9 +353,6 @@ struct AssetPreviews::Impl {
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
             std::erase_if(models,[](const auto& model){return !model.visible;});
             for(auto& model:models)model.animationSeconds=model.animation.startTime;
-            reveals=std::move(extracted.reveals);
-            actorLighting=std::move(extracted.actorLighting);
-            actorShadows=std::move(extracted.actorShadows);
             settings.environment=extracted.environment.environment; settings.exposure=extracted.environment.exposure;
             settings.proceduralSun=extracted.proceduralSun;
             if (snapshot->previewCamera) settings.camera=*snapshot->previewCamera;
@@ -400,8 +398,11 @@ struct AssetPreviews::Impl {
                 continue;
             }
             const auto fingerprint=assets.modelFingerprint(model.assetId); hash(sourceKey,fingerprint); hash(sourceKey,model.world);
-            if(!isBuiltinModel(model.assetId)) {
-                validationFiles.push_back(sourceFile(model.assetId));
+            // Saved scene references retain their authored identity after a
+            // deletion fallback. Only the resolved model owns current files;
+            // the original bundled UUID may no longer have a registration.
+            if(!isBuiltinModel(asset->id)) {
+                validationFiles.push_back(sourceFile(asset->id));
                 const auto dependencies=assets.modelDependencies(model.assetId);
                 validationFiles.insert(validationFiles.end(),dependencies.begin(),dependencies.end());
             }
@@ -475,7 +476,6 @@ struct AssetPreviews::Impl {
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         if(sceneSnapshot) {
             ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;shadowScene.directional=directions;
-            shadowScene.actorShadows=actorShadows;
             std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId) && !assets.modelLoading(model.assetId);});
             const std::array<ShadowCamera,1> shadowCameras{{{settings.camera,1.f}}};
             pins->shadows=prepared.prepareShadows(shadowScene,256,ResourcePriority::Preview,shadowCameras);
@@ -559,9 +559,6 @@ struct AssetPreviews::Impl {
             thumbnailEnvironment=bake->key;
         }
         RenderScene renderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials};
-        renderScene.reveals=reveals;
-        renderScene.actorLighting=actorLighting;
-        renderScene.actorShadows=actorShadows;
         if(pins->shadows) {
             renderScene.shadowInstances=pins->shadows->instances;
             renderScene.shadowWorldId=textHash(id);renderScene.shadowResolution=256;
@@ -577,10 +574,11 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
     const auto revision=contentStorageRevision(impl_->root);
     if(impl_->storageRevision!=revision) {
         impl_->storageRevision=revision;
+        const AssetSourceSnapshot sources(impl_->root);
         for(auto& [id,entry]:impl_->entries) {
             (void)id;
             if(std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& source){
-                return resolveAssetPath(impl_->root,source.id).lexically_normal()!=source.file.lexically_normal();
+                return !sources.matches(source.id,source.file);
             })) {
                 entry.scene={};entry.dependencies={};entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
                 entry.clean=false;entry.indexChecked=true;entry.retry.reset();++impl_->statistics.invalidations;
@@ -668,7 +666,17 @@ void AssetPreviews::requestSceneSave(const std::string& id) {
     auto& entry=impl_->entries[id];entry.kind=AssetKind::Scene;entry.saveRequested=true;entry.forceScene=true;entry.clean=false;entry.indexChecked=true;entry.retry.reset();
 }
 void AssetPreviews::invalidate(const std::string& id) {
-    invalidateFile(resolveAssetPath(impl_->root,id));
+    const auto source=AssetSourceSnapshot(impl_->root).find(id);
+    if(source) {invalidateFile(*source);return;}
+    // Deleted sources have no current path. Retained descriptors still identify
+    // exactly which previews depend on them, including pending scene saves.
+    for(auto& [assetId,entry]:impl_->entries) {
+        const bool affected=assetId==id || std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& location){return location.id==id;});
+        if(!affected)continue;
+        entry.retry.reset();entry.cacheState.checked=0;entry.sourceKey=0;entry.signature=0;entry.error.clear();
+        entry.clean=false;entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
+        if(entry.kind==AssetKind::Scene)entry.forceScene=true;
+    }
 }
 void AssetPreviews::invalidateFile(const std::filesystem::path& file) {
     const auto changed=resourcePathKey(file),id=assetIdAtPath(impl_->root,file);

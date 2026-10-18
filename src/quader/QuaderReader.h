@@ -52,6 +52,8 @@ struct QuaderSourceMesh {
     std::vector<QuaderSourceSurface> surfaces;
     QuaderCollision collision{};
     std::vector<Vec3> collisionPoints;
+    std::string parentKey;
+    std::uint32_t order{};
 };
 struct QuaderSourceLight {
     std::string name;
@@ -61,6 +63,14 @@ struct QuaderSourceLight {
     bool visible{true},castShadows{};
     Vec3 color{1,1,1};
     float energy{},range{},attenuation{};
+    std::string parentKey;
+    std::uint32_t order{};
+};
+struct QuaderSourceGroup {
+    std::string sourceKey,parentKey,name;
+    Mat4 transform;
+    bool visible{true};
+    std::uint32_t order{};
 };
 struct QuaderSourceScene {
     QuaderProjectCatalog project;
@@ -69,6 +79,7 @@ struct QuaderSourceScene {
     std::vector<QuaderMaterialIdentity> materials;
     std::vector<QuaderSourceMesh> meshes;
     std::vector<QuaderSourceLight> lights;
+    std::vector<QuaderSourceGroup> groups;
     // Retains the immutable native scene/DLL. Invoke serially on a worker only;
     // reused Crimson materials never invoke this lazy source-reading operation.
     std::function<QuaderSourceMaterial(std::uint32_t)> readMaterial;

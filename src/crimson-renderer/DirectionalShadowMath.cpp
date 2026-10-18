@@ -91,16 +91,16 @@ std::optional<ReceiverFit> receiverFit(const Camera& camera,double aspect,double
     return any?std::optional<ReceiverFit>{result}:std::nullopt;
 }
 }
-AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameras,bool gameplayContext,unsigned actorCapacity) {
-    if(!resolution || resolution>65531 || pointCapacity>16 || directionalCapacity>4 || actorCapacity>MaximumActorShadows || !cameras || cameras>2 ||
-        (gameplayContext && cameras!=2) || (!pointCapacity&&!directionalCapacity&&!actorCapacity))return {};
+AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameras,bool gameplayContext) {
+    if(!resolution || resolution>65531 || pointCapacity>16 || directionalCapacity>4 || !cameras || cameras>2 ||
+        (gameplayContext && cameras!=2) || (!pointCapacity&&!directionalCapacity))return {};
     AtlasLayout result;result.points=pointCapacity?point_shadow::atlasLayout(resolution,pointCapacity):point_shadow::AtlasLayout{};
     if(pointCapacity&&!result.points.width)return {};
     unsigned directional=directionalCapacity?1:0;while(directional<directionalCapacity)directional*=2;
     const unsigned pitch=resolution+4,pointColumns=result.points.columns,pointRows=result.points.rows;
     const unsigned blocks=directional*cameras;
     const unsigned targetColumns=blocks?2*static_cast<unsigned>(std::ceil(std::sqrt(double(blocks)))):0;
-    const unsigned columns=std::max({pointColumns,targetColumns,std::min(4u,actorCapacity)}),blockColumns=std::max(1u,columns/2);
+    const unsigned columns=std::max(pointColumns,targetColumns),blockColumns=std::max(1u,columns/2);
     struct GridBlock {unsigned x{},y{},width{},height{};};
     std::array<std::array<GridBlock,MaxLights>,WorldCameraCount> packed{};
     unsigned directionalRows=blocks?2*((blocks+blockColumns-1)/blockColumns):0;
@@ -121,63 +121,18 @@ AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned dire
         }
     }
     unsigned rows=pointRows+directionalRows;
-    std::array<GridBlock,MaximumActorShadows> actors{};
-    for(unsigned actor=0;actor<actorCapacity;++actor) {
-        bool placed=false;
-        for(unsigned row=0;row<rows&&!placed;++row)for(unsigned x=0;x<columns;++x) {
-            bool occupied=row<pointRows&&x<pointColumns;
-            if(row>=pointRows)for(unsigned context=0;context<cameras&&!occupied;++context)for(unsigned light=0;light<directional&&!occupied;++light) {
-                const unsigned block=context*directional+light;
-                const auto area=gameplayContext?packed[context][light]:GridBlock{(block%blockColumns)*2,(block/blockColumns)*2,2,2};
-                const auto y=row-pointRows;
-                occupied=x>=area.x&&x<area.x+area.width&&y>=area.y&&y<area.y+area.height;
-            }
-            for(unsigned previous=0;previous<actor&&!occupied;++previous)occupied=actors[previous].x==x&&actors[previous].y==row;
-            if(!occupied){actors[actor]={x,row,1,1};placed=true;break;}
-        }
-        if(!placed){actors[actor]={0,rows,1,1};++rows;}
-    }
     if(!columns || pitch>65535/columns || !rows || pitch>65535/rows)return {};
     result.resolution=static_cast<std::uint16_t>(resolution);result.pitch=static_cast<std::uint16_t>(pitch);
     result.width=static_cast<std::uint16_t>(columns*pitch);result.height=static_cast<std::uint16_t>(rows*pitch);
     result.directionalCapacity=static_cast<std::uint16_t>(directional);result.cameraCount=static_cast<std::uint16_t>(cameras);
     result.directionalY=static_cast<std::uint16_t>(pointRows*pitch);result.blockColumns=static_cast<std::uint16_t>(blockColumns);
     result.gameplayContext=gameplayContext;
-    result.actorCapacity=static_cast<std::uint16_t>(actorCapacity);
-    for(unsigned actor=0;actor<actorCapacity;++actor)result.actorTiles[actor]={static_cast<std::uint16_t>(actors[actor].x*pitch),static_cast<std::uint16_t>(actors[actor].y*pitch),static_cast<std::uint16_t>(pitch),static_cast<std::uint16_t>(pitch)};
     if(gameplayContext)for(unsigned context=0;context<cameras;++context)for(unsigned light=0;light<directional;++light) {
         const auto& block=packed[context][light];
         result.directionalBlocks[context][light]={static_cast<std::uint16_t>(block.x*pitch),static_cast<std::uint16_t>((pointRows+block.y)*pitch),
             static_cast<std::uint16_t>(block.width*pitch),static_cast<std::uint16_t>(block.height*pitch)};
     }
     return result;
-}
-std::optional<Cascade> buildCharacter(const CharacterShadowSource& source,const Aabb& bounds,unsigned resolution) {
-    if(!source.enabled || !valid(bounds) || resolution<=2 || resolution>65531 ||
-        !math::finite(source.position) || !validLightDirection(source.direction) ||
-        !validLightRange(source.distance) || !std::isfinite(source.strength) || source.strength<=0 || source.strength>1 ||
-        !validShadowBiases(source.shadowDepthBias,source.shadowNormalBias))return {};
-    Cascade output;
-    output.forward=math::normalized(source.direction);
-    const auto nominalUp=std::abs(output.forward[1])<.99?Vec3{0,1,0}:Vec3{0,0,1};
-    output.right=math::normalized(math::cross(output.forward,nominalUp));
-    output.up=math::normalized(math::cross(output.right,output.forward));
-    const auto x=interval(bounds,output.right),y=interval(bounds,output.up),z=interval(bounds,output.forward);
-    const double extent=std::max(2.0,std::ceil(std::max(x.second-x.first,y.second-y.first)*8)/16)*double(resolution)/(resolution-2);
-    output.radius=static_cast<float>(extent);output.texelWorld=static_cast<float>(2*extent/resolution);
-    const double cx=std::round((x.first+x.second)*.5/output.texelWorld)*output.texelWorld;
-    const double cy=std::round((y.first+y.second)*.5/output.texelWorld)*output.texelWorld;
-    const double margin=std::max(.01,double(output.texelWorld)*2),near=z.first-margin,far=z.second+source.distance+margin;
-    output.center=output.right*cx+output.up*cy+output.forward*((z.first+z.second)*.5);
-    output.nearDepth=static_cast<float>(near);output.farDepth=static_cast<float>(far);
-    output.view={output.right[0],output.up[0],-output.forward[0],0,
-        output.right[1],output.up[1],-output.forward[1],0,output.right[2],output.up[2],-output.forward[2],0,-cx,-cy,near,1};
-    output.receiverViewProjection=math::orthographic(-extent,extent,-extent,extent,0,far-near,ClipDepth::ZeroToOne)*output.view;
-    const double guard=extent+2*output.texelWorld;
-    output.projection=math::orthographic(-guard,guard,-guard,guard,0,far-near,ClipDepth::ZeroToOne);
-    if(!math::finite(output.receiverViewProjection) || !math::finite(output.projection) || !math::finite(output.center) ||
-        !std::isfinite(output.texelWorld) || output.texelWorld<=0)return {};
-    return output;
 }
 point_shadow::TileRect blockRect(const AtlasLayout& a,unsigned light,unsigned camera) {
     if(!a.pitch || light>=a.directionalCapacity || camera>=a.cameraCount)return {};

@@ -167,7 +167,7 @@ private:
     void clearPlayerRoute();
     bool planRoute(Agent&,const Vec3& start);
     void reconcileFirstPerson(EntityId,bool reset);
-    void updateFirstPerson(GameInput&,const ScenePlayerInput&,double seconds);
+    void updateFirstPerson(GameInput&,const ScenePlayerInput&,const MovementComponent&,double seconds);
     void advanceFirstPersonStep(double seconds,float height,float smoothingTime);
     void clearFirstPersonStep();
     Agent* commandActor(EntityId);

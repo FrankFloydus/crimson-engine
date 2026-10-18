@@ -106,13 +106,13 @@ void exercise(SDL_Window* window,const fs::path& artifacts){
     renderer.render(sceneView);draw();const auto editor=read(renderer.viewportTexture());check(patch(editor,settings.camera,nearPoint)<patch(game,settings.camera,nearPoint)-3,"Scene/Game SSAO state was shared across views.");
     width=323;height=243;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);settings.environment.ssao.enabled=true;
     check(patch(capture(),settings.camera,nearPoint)<baseNear-2,"Odd viewport resize lost SSAO.");
-    settings.environment.ssgi.enabled=true;settings.environment.ambientVisibility.enabled=true;settings.environment.glow.enabled=true;settings.environment.fog.enabled=true;instances[1].opacity=.5f;
+    settings.environment.ssgi.enabled=true;settings.environment.glow.enabled=true;settings.environment.fog.enabled=true;instances[1].opacity=.5f;
     capture(12);check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
     settings.environment.ssgi.enabled=false;settings.environment.ssao.enabled=false;sceneSettings.environment.ssao.enabled=false;
     for(unsigned i=0;i<8;++i){renderer.render(sceneView);draw();tick();}check(renderer.ssaoResidentBytes()==0,"SSAO scratch survived disabled-view retirement.");
     // The presentation controls use the same opaque, nonfaded model fixture;
     // known HDR emission isolates each curve from lighting and AO equations.
-    instances[1].opacity=1;settings.environment.ambientVisibility.enabled=false;settings.environment.glow.enabled=false;
+    instances[1].opacity=1;settings.environment.glow.enabled=false;
     settings.environment.fog.enabled=false;settings.environment.debanding=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
     settings.exposure=1;scene.directionalLights={};scene.pointLights={};renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
     const auto toneSample=[&]{return patchRgb(capture(3),settings.camera,farPoint);};

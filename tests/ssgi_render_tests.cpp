@@ -268,12 +268,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
     instances[0].opacity=1;instances[1].opacity=.5f;
     check(floorColor(capture(32),settings.camera)[0]<2,"A partially faded model supplied GI.");
     instances[1].opacity=1;
-    settings.environment.ambientVisibility.enabled=true;settings.environment.ambientVisibility.darknessFloor=0;
-    const auto darkened=capture(32);
-    check(floorColor(darkened,settings.camera)[0]<1,"Ambient Darkness failed to suppress bounced reflected illumination.");
-    bool visibleEmission=false;for(std::size_t i=0;i<darkened.rgba.size();i+=4)visibleEmission|=darkened.rgba[i]>200;
-    check(visibleEmission,"Ambient Darkness unexpectedly suppressed emission with Affect Emission disabled.");
-    settings.environment.ambientVisibility.enabled=false;
+
     wallMaterials[0].emissive={.005f,.015f,3};const auto changedEmission=floorColor(capture(40),settings.camera);
     check(changedEmission[2]>changedEmission[0]+3,"Changing donor radiance retained stale red GI.");
     wallMaterials[0].emissive={3,.015f,.005f};warm(32);
@@ -321,7 +316,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         // Exercise artist energy without the separate donor-radiance clamp
         // hiding the brighter setting's response.
         settings.environment.ssgi.radianceClamp=0;
-        point.roles={lighting_scope::All,lighting_scope::All,lighting_scope::All,true,1};
+        point.roles={lighting_scope::All,lighting_scope::All};
         scene.pointLights=std::span(&point,1);++scene.giWorldId;
         const auto wallColor=[&](const DecodedImage& image){return surfaceColor(image,settings.camera,
             {-.4f,1.2f,-1.498f},{.1f,0,0},{0,.1f,0});};
@@ -381,7 +376,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
 
         // Receiver bits share the point record with reveal/shadow role flags.
         // Keep those higher bits populated while checking both transport lanes.
-        point.roles.receiverMask=lighting_scope::Character;point.roles.ambientRevealMask=lighting_scope::World;
+        point.roles.receiverMask=lighting_scope::Character;
         instances[1].lightingCategory=lighting_scope::Character;
         instances[1].lightingScopes.directReceiverMask=lighting_scope::Character;++scene.giWorldId;
         const auto excludedWorld=floorColor(capture(48),settings.camera);
@@ -389,7 +384,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         instances[0].lightingCategory=lighting_scope::Character;
         instances[0].lightingScopes.directReceiverMask=lighting_scope::Character;++scene.giWorldId;
         const auto characterPointBounce=pointBounce("Character-only point light").second;
-        point.roles.receiverMask=lighting_scope::World;point.roles.ambientRevealMask=lighting_scope::Character;
+        point.roles.receiverMask=lighting_scope::World;
         instances[1]=wall;++scene.giWorldId;
         const auto excludedCharacter=floorColor(capture(48),settings.camera);
         for(auto value:excludedCharacter)check(value<2,"World-only point-light bounce leaked into the Character receiver lane.");
@@ -400,7 +395,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         // not just the unshadowed material branch. The wall remains visible to
         // this light while both real fixture surfaces are eligible casters.
         point.roles.receiverMask=lighting_scope::All;point.roles.shadowCasterMask=lighting_scope::All;
-        point.roles.ambientRevealMask=lighting_scope::All;point.castShadows=true;
+point.castShadows=true;
         scene.shadowWorldId=8100;scene.shadowResolution=256;scene.shadowInstances=instances;++scene.giWorldId;
         warm(64);draw();const auto pointShadows=renderer.shadowStats();
         check(renderer.shadowStatus().empty(),renderer.shadowStatus());
@@ -449,13 +444,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
     std::vector<ModelMaterialTextures> energyTextures(1);energyTextures[0].graph=prepare(energyDonor);instances[1].textures=&energyTextures;
     directionalEnergy("Generated directional light");instances[1].textures=&textures;
     scene.directionalLights={};instances[0]=floor;instances[1]=wall;wallMaterials[0].emissive={};
-    ActorLighting actor;actor.owner=7;actor.lights[0].enabled=true;actor.lights[0].direction={0,0,-1};
-    actor.lights[0].color={1,.005f,.005f};actor.lights[0].intensity=8;actor.lights[0].specular=0;
-    instances[1].lightingCategory=lighting_scope::Character;instances[1].actorOwner=actor.owner;
-    instances[1].lightingScopes.directReceiverMask=lighting_scope::Character;
-    scene.actorLighting=std::span(&actor,1);++scene.giWorldId;
-    check(floorColor(capture(40),settings.camera)[0]<2,"Private Character Key lighting leaked into World GI.");
-    scene.actorLighting={};instances[1]=wall;wallMaterials[0].emissive={3,.015f,.005f};++scene.giWorldId;
+    instances[1]=wall;wallMaterials[0].emissive={3,.015f,.005f};++scene.giWorldId;
     warm(32);settings.camera.position={-3.4f,4.7f,6.3f};++scene.giCameraId;
     const auto moved=floorColor(capture(40),settings.camera);check(moved[0]>4,"Camera discontinuity failed to recover visible local bounce.");
     width=219;height=165;renderer.resizeGameViewport(width,height);renderer.resizeViewport(width,height);

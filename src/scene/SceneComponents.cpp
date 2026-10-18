@@ -21,7 +21,7 @@ const char* sceneComponentName(SceneComponentKind kind) {
     switch(kind) {
     case SceneComponentKind::Transform:return "Transform";
     case SceneComponentKind::Actor:return "Visual Root";
-    case SceneComponentKind::Motor:return "Motor";
+    case SceneComponentKind::Movement:return "Movement";
     case SceneComponentKind::Controller:return "Character Controller";
     case SceneComponentKind::Navigation:return "Navigation Agent";
     case SceneComponentKind::Enemy:return "Enemy";
@@ -30,8 +30,6 @@ const char* sceneComponentName(SceneComponentKind kind) {
     case SceneComponentKind::Effects:return "Effects";
     case SceneComponentKind::NavigationVolume:return "Navigation Volume";
     case SceneComponentKind::PlayerInput:return "Player Input";
-    case SceneComponentKind::LightRig:return "Light Rig";
-    case SceneComponentKind::DarknessReveal:return "Darkness Reveal";
     case SceneComponentKind::Camera:return "Camera";
     case SceneComponentKind::CameraFollow:return "Camera Follow";
     case SceneComponentKind::Model:return "Model";
@@ -82,24 +80,20 @@ bool addSceneComponent(SceneDocument& document,EntityId id,SceneComponentKind ki
     return document.edit(std::string("Add ")+sceneComponentName(kind),[=](auto& records,auto& properties) {
         for(auto& entity:records)if(entity.id==id) {
             const auto body=[&](std::uint32_t layer=CharacterCollisionLayer) {if(!entity.controller){entity.controller.emplace();entity.controller->collision.layers=layer;}};
-            const auto motor=[&](std::uint32_t layer=CharacterCollisionLayer) {body(layer);if(!entity.motor)entity.motor.emplace();};
+            const auto movement=[&](std::uint32_t layer=CharacterCollisionLayer) {body(layer);if(!entity.movement)entity.movement.emplace();};
             switch(kind) {
             case SceneComponentKind::Actor:entity.actor.emplace();break;
             case SceneComponentKind::Tags:entity.tags.emplace();break;
             case SceneComponentKind::Effects:entity.effects.emplace();break;
             case SceneComponentKind::Controller:body();break;
-            case SceneComponentKind::Motor:motor();break;
-            case SceneComponentKind::Navigation:motor();entity.navigation.emplace();break;
+            case SceneComponentKind::Movement:movement();break;
+            case SceneComponentKind::Navigation:movement();entity.navigation.emplace();break;
             case SceneComponentKind::Enemy:
-                if(!entity.actor)entity.actor.emplace();motor(EnemyCollisionLayer);
+                if(!entity.actor)entity.actor.emplace();movement(EnemyCollisionLayer);
                 if(!entity.navigation)entity.navigation.emplace();entity.enemy.emplace();
                 if(entity.playerInput||properties.playerCharacter==entity.id)initializePlayerEffects(entity);
                 else initializeEnemyEffects(entity);break;
-            case SceneComponentKind::PlayerInput:motor(PlayerCollisionLayer);entity.playerInput.emplace();initializePlayerEffects(entity);break;
-            case SceneComponentKind::LightRig:
-                if(!entity.actor)entity.actor.emplace();
-                entity.lightRig.emplace();entity.lightRig->localWorld.enabled=false;break;
-            case SceneComponentKind::DarknessReveal:entity.darknessReveal.emplace();break;
+            case SceneComponentKind::PlayerInput:movement(PlayerCollisionLayer);entity.playerInput.emplace();initializePlayerEffects(entity);break;
             case SceneComponentKind::Camera:entity.camera.emplace();if(!properties.activeCamera)properties.activeCamera=id;break;
             default:break;
             }
@@ -122,21 +116,19 @@ bool removeSceneComponents(SceneDocument& document,std::span<const SceneComponen
     return document.edit(label,[&](auto& records,auto& properties) {
         for(auto& entity:records)if(const auto found=targets.find(entity.id);found!=targets.end()) {
             for(const auto kind:found->second)switch(kind) {
-            case SceneComponentKind::Actor:entity.actor.reset();entity.lightRig.reset();entity.enemy.reset();break;
+            case SceneComponentKind::Actor:entity.actor.reset();entity.enemy.reset();break;
             case SceneComponentKind::Tags:entity.tags.reset();break;
             case SceneComponentKind::Effects:entity.effects.reset();break;
             case SceneComponentKind::Controller:entity.controller.reset();[[fallthrough]];
-            case SceneComponentKind::Motor:entity.motor.reset();entity.navigation.reset();entity.playerInput.reset();entity.enemy.reset();break;
+            case SceneComponentKind::Movement:entity.movement.reset();entity.navigation.reset();entity.playerInput.reset();entity.enemy.reset();break;
             case SceneComponentKind::Navigation:entity.navigation.reset();entity.enemy.reset();break;
             case SceneComponentKind::Enemy:entity.enemy.reset();break;
             case SceneComponentKind::PlayerInput:entity.playerInput.reset();break;
-            case SceneComponentKind::LightRig:entity.lightRig.reset();break;
-            case SceneComponentKind::DarknessReveal:entity.darknessReveal.reset();break;
             case SceneComponentKind::Camera:entity.camera.reset();entity.cameraFollow.reset();if(properties.activeCamera==entity.id)properties.activeCamera=NoEntity;break;
             case SceneComponentKind::CameraFollow:entity.cameraFollow.reset();break;
             default:break;
             }
-            if(properties.playerCharacter==entity.id && (!entity.controller || !entity.motor || !entity.playerInput))properties.playerCharacter=NoEntity;
+            if(properties.playerCharacter==entity.id && (!entity.controller || !entity.movement || !entity.playerInput))properties.playerCharacter=NoEntity;
         }
     });
 }

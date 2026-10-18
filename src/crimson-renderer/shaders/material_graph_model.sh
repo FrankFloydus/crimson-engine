@@ -16,13 +16,10 @@ SAMPLER2D(s_brdfLut, 14);
 #define CC_POINT_SHADOW_SLOT 15
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
-#include "character_shadow.sh"
 #include "point_light.sh"
-#include "ambient_visibility.sh"
 #include "prepass_receiver.sh"
 #include "fog_environment.sh"
 #include "model_lighting.sh"
-#include "character_lighting.sh"
 #include "ssgi_material.sh"
 #include "ssao_material.sh"
 #include "debug_view.sh"
@@ -60,7 +57,7 @@ void main()
 #if CC_GRAPH_PARTICLE
     if (u_surfaceLighting.z > 0.5)
     {
-        gl_FragData[0] = vec4(prepassReceiverFlags(u_surfaceLighting.y, u_surfaceLighting.x), prepassReceiverNormal(v_worldPosition, shadowPlaneNormal));
+        gl_FragData[0] = vec4(prepassReceiverFlags(u_surfaceLighting.x), prepassReceiverNormal(v_worldPosition, shadowPlaneNormal));
         ssgiWriteSources(sourceWorld, sourceCharacter, sourceResponse, v_worldPosition, shadowPlaneNormal, gl_FragCoord.z, false,
             gl_FragData[1], gl_FragData[2], gl_FragData[3]);
         return;
@@ -83,7 +80,6 @@ void main()
 #endif
     {
     vec3 V = safeNormalize(u_cameraPos.xyz - v_worldPosition, N);
-    float darkness = ambientVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
     color = vec3_splat(0.0);
     for (int i = 0; i < 4; ++i)
     {
@@ -154,20 +150,11 @@ void main()
         indirectLighting += bounceLighting;
     }
 #endif
-    vec3 characterDirect = characterLighting(N, V, base, metallic, roughness, material.specular);
-    color += characterDirect;
-    directLighting += characterDirect;
-    vec3 characterReceiverNormal = safeNormalize(v_normal, vec3(0.0, 1.0, 0.0));
-    if (u_graphParams[3].x > 0.5) characterReceiverNormal *= faceSign * u_modelOptions.w;
-    float characterVisibility = characterShadowVisibility(v_worldPosition, characterReceiverNormal, shadowPlaneNormal, u_modelEmissiveMap.z);
-    color *= characterVisibility;
-    color *= darkness;
-    vec3 emission = material.emission * (u_lightingResponse.x > 0.5 ? darkness : 1.0);
+    vec3 emission = material.emission;
     color += emission;
 #if CC_GRAPH_MODEL
-    sourceWorld = sourceWorld * (characterVisibility * darkness) + emission;
-    sourceCharacter = sourceCharacter * (characterVisibility * darkness) + emission;
-    sourceResponse *= characterVisibility * darkness;
+    sourceWorld = sourceWorld + emission;
+    sourceCharacter = sourceCharacter + emission;
 #endif
     }
 #endif

@@ -28,10 +28,10 @@ void error(const RenderPassPlan& plan,Error expected,const char* message) { chec
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool ambient:{false,true})for(bool collisions:{false,true})for(bool occluders:{false,true})for(bool gi:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool occluders:{false,true})for(bool gi:{false,true}) {
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game || purpose==RenderViewPurpose::Thumbnail;
-            config.ambientVisibility=ambient&&config.worldShadows;
+
             config.glow=glow && purpose!=RenderViewPurpose::Thumbnail;
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
@@ -46,8 +46,7 @@ void profiles() {
             check(plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Collision overlays escaped their active view profile.");
             check(plan.has(Kind::OccluderLayer)==config.occluderLayer,"Occluder layer escaped its active view profile.");
             check(plan.has(Kind::OccluderDepthPublish)==config.occluderLayer,"Packed occluder depth escaped its active view profile.");
-            check(plan.has(Kind::DepthPrepass)==(config.ambientVisibility||config.ssgi)&&plan.has(Kind::AmbientVisibility)==config.ambientVisibility&&
-                plan.has(Kind::AmbientPublish)==config.ambientVisibility,"Ambient feature did not add exactly its complete chain.");
+            check(plan.has(Kind::DepthPrepass)==config.ssgi,"GI depth prepass does not match its enabled state.");
             for(const auto kind:{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish})
                 check(plan.has(kind)==config.ssgi,"GI feature did not add exactly its complete chain.");
             const auto& display=plan.bindings[static_cast<std::size_t>(Resource::Display)];
@@ -74,56 +73,9 @@ void profiles() {
     const auto thumbPlan=buildRenderPassPlan(thumbnail);
     check(thumbPlan.find(Kind::PointShadowUpdates)->physicalView==124 && thumbPlan.find(Kind::PointShadowUpdates)->lastPhysicalView()==219,"Thumbnail point shadow range changed.");
     check(thumbPlan.find(Kind::DirectionalShadowUpdates)->physicalView==220 && thumbPlan.find(Kind::Encode)->physicalView==230 && thumbPlan.find(Kind::ThumbnailReadback)->physicalView==231,"Thumbnail composition/readback range changed.");
-    check(scenePlan.find(Kind::CharacterShadowUpdates)->physicalView==105 && gamePlan.find(Kind::CharacterShadowUpdates)->physicalView==105 &&
-        thumbPlan.find(Kind::CharacterShadowUpdates)->physicalView==224,"Dedicated character shadows lost their world-owned pre-color slots.");
     check(FirstPlatformView==248&&ToolsView==247&&256-FirstPlatformView==8,"Native platform-window headroom changed.");
 }
 
-void ambientDependencies() {
-    const auto uses=[](const RenderPass& entry,Resource resource,Access access) {
-        return std::find(entry.uses().begin(),entry.uses().end(),RenderResourceUse{resource,access})!=entry.uses().end();
-    };
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::Thumbnail})for(bool shadows:{false,true}) {
-        RenderPassPlanConfig config;config.view={purpose,14};config.ambientVisibility=true;config.prepareEnvironment=true;config.worldShadows=shadows;
-        config.glow=purpose!=RenderViewPurpose::Thumbnail;config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
-        config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
-        config.collisionOverlays=purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game;
-        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Complete ambient chain is invalid.");
-        if(purpose==RenderViewPurpose::Scene&&shadows)check(correct.count==RenderPassPlan::MaximumPasses-9,"Scene profile without an occluder layer lost fixed-capacity coverage.");
-        const auto& depth=*correct.find(Kind::DepthPrepass);const auto& evaluate=*correct.find(Kind::AmbientVisibility);
-        const auto& publish=*correct.find(Kind::AmbientPublish);const auto& color=*correct.find(Kind::SceneColor);
-        check(depth.physicalView<evaluate.physicalView&&evaluate.physicalView==publish.physicalView&&publish.physicalView<color.physicalView,
-            "Depth/evaluate/publish/color ordering is invalid.");
-        check(uses(depth,Resource::ReadableSceneDepth,Access::DepthWrite)&&uses(depth,Resource::ReceiverScopes,Access::Write),
-            "Prepass lost depth or receiver-scope output.");
-        check(uses(evaluate,Resource::ReadableSceneDepth,Access::Read)&&uses(evaluate,Resource::ReceiverScopes,Access::Read)&&
-            uses(evaluate,Resource::ClusteredLighting,Access::Read)&&uses(evaluate,Resource::AmbientScratch,Access::Write)&&
-            uses(evaluate,Resource::ShadowAtlas,Access::Read)==shadows,"Ambient evaluation has incorrect sampled inputs/output.");
-        check(uses(publish,Resource::AmbientScratch,Access::Read)&&uses(publish,Resource::ClusteredLighting,Access::ReadWrite)&&
-            uses(publish,Resource::AmbientVisibility,Access::Write)&&uses(color,Resource::AmbientVisibility,Access::Read),
-            "Ambient visibility was not published through the cluster-atlas alias.");
-        const auto& assignment=*correct.find(Kind::LightAssignment);
-        check(assignment.physicalView==0&&assignment.resourceCount==3,"Ambient feature changed conservative light assignment dependencies.");
-        auto missingDepth=correct;erase(missingDepth,Kind::DepthPrepass);error(missingDepth,Error::MissingProducer,"Ambient evaluation read unproduced depth.");
-        auto missingEvaluate=correct;erase(missingEvaluate,Kind::AmbientVisibility);error(missingEvaluate,Error::MissingProducer,"Ambient publish read unproduced scratch.");
-        auto missingPublish=correct;erase(missingPublish,Kind::AmbientPublish);error(missingPublish,Error::MissingProducer,"Scene sampled unpublished ambient visibility.");
-        auto reordered=correct;std::swap(pass(reordered,Kind::AmbientVisibility),pass(reordered,Kind::AmbientPublish));
-        error(reordered,Error::MissingProducer,"Same-view ambient dispatches may publish before evaluation.");
-        auto attachmentOnly=correct;pass(attachmentOnly,Kind::AmbientVisibility).resources[0].access=Access::DepthRead;
-        error(attachmentOnly,Error::InvalidAccess,"Ambient sampled depth was modeled as an attachment test.");
-        auto lostAtlas=correct;pass(lostAtlas,Kind::AmbientPublish).resources[1].access=Access::Write;
-        error(lostAtlas,Error::InvalidAccess,"Ambient publish may discard the existing cluster atlas.");
-        auto disabled=config;disabled.ambientVisibility=false;const auto legacy=buildRenderPassPlan(disabled);
-        check(bool(validateRenderPassPlan(legacy))&&!legacy.has(Kind::DepthPrepass)&&!legacy.has(Kind::AmbientVisibility)&&!legacy.has(Kind::AmbientPublish)&&
-            !uses(*legacy.find(Kind::SceneColor),Resource::AmbientVisibility,Access::Read),"Disabled ambient changed the legacy logical profile.");
-    }
-    for(const auto purpose:{RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview}) {
-        const auto slots=renderViewPassSlots(purpose);
-        check(slots.depthPrepass==InvalidRenderView&&slots.ambient==InvalidRenderView,"Preview acquired world ambient slots.");
-        RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.ambientVisibility=true;
-        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"World ambient work escaped into a preview.");
-    }
-}
 
 void dependencyAndAccessFailures() {
     RenderPassPlanConfig config;config.glow=true;config.grid=true;config.picking=true;config.worldShadows=true;config.prepareEnvironment=true;
@@ -162,28 +114,17 @@ void collisionComposition() {
 }
 
 void occluderDependencies() {
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ambient:{false,true})for(bool shadows:{false,true}) {
-        RenderPassPlanConfig config;config.view.purpose=purpose;config.ambientVisibility=ambient;config.worldShadows=shadows;
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool shadows:{false,true}) {
+        RenderPassPlanConfig config;config.view.purpose=purpose;config.worldShadows=shadows;
         config.occluderLayer=true;config.glow=true;config.grid=purpose==RenderViewPurpose::Scene;
         config.picking=config.grid;config.collisionOverlays=true;config.prepareEnvironment=true;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Nearest occluder layer has invalid dependencies.");
         const auto& layer=*correct.find(Kind::OccluderLayer);
         const auto& depthPublish=*correct.find(Kind::OccluderDepthPublish);
-        check(layer.physicalView==renderViewPassSlots(purpose).ambient && layer.physicalView<correct.find(Kind::SceneColor)->physicalView,
+        check(layer.physicalView==renderViewPassSlots(purpose).lightingEffects && layer.physicalView<correct.find(Kind::SceneColor)->physicalView,
             "Occluder layer must use its camera's pre-color ambient slot without consuming native window slots.");
         check(depthPublish.physicalView==correct.find(Kind::SceneColor)->physicalView && layer.physicalView<depthPublish.physicalView,
             "Packed depth must publish after detached layer depth and before graphics in the existing color slot.");
-        if(purpose==RenderViewPurpose::Scene&&ambient&&shadows)
-            check(correct.count==RenderPassPlan::MaximumPasses-7,"Maximum occluder profile no longer fits the pass capacity.");
-        if(ambient) {
-            const auto& publish=*correct.find(Kind::AmbientPublish);
-            check(publish.physicalView==layer.physicalView,"The pinned compute-before-draw slot contract changed.");
-            auto reversed=correct;
-            for(std::size_t i=0;i<reversed.count;++i)if(reversed.entries[i].kind==Kind::OccluderLayer) {
-                std::swap(reversed.entries[i],reversed.entries[i-1]);break;
-            }
-            error(reversed,Error::PhysicalOrder,"Ambient publication accepted a preceding occluder draw in its logical view.");
-        }
         auto missingLayer=correct;erase(missingLayer,Kind::OccluderLayer);
         error(missingLayer,Error::MissingProducer,"Scene composition read an unproduced occluder layer.");
         auto missingPublish=correct;erase(missingPublish,Kind::OccluderDepthPublish);
@@ -213,8 +154,8 @@ void ssgiDependencies() {
         for(std::size_t i=0;i<plan.count;++i)if(plan.entries[i].kind==kind)return i;
         throw std::runtime_error("GI test requested a missing pass position.");
     };
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ambient:{false,true})for(bool shadows:{false,true})for(bool occluders:{false,true}) {
-        RenderPassPlanConfig config;config.view={purpose,901};config.ssgi=true;config.ambientVisibility=ambient;
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool shadows:{false,true})for(bool occluders:{false,true}) {
+        RenderPassPlanConfig config;config.view={purpose,901};config.ssgi=true;
         config.worldShadows=shadows;config.occluderLayer=occluders;config.glow=true;config.prepareEnvironment=true;config.collisionOverlays=true;
         config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"A supported GI combination has an invalid plan.");
@@ -222,13 +163,10 @@ void ssgiDependencies() {
         const auto& publish=*correct.find(Kind::SsgiPublish);const auto& color=*correct.find(Kind::SceneColor);
         check(depth.physicalView<trace.physicalView&&publish.physicalView<color.physicalView,"GI escaped the detached-depth/pre-color slots.");
         for(std::size_t i=0;i<chain.size();++i) {
-            check(correct.find(chain[i])->physicalView==renderViewPassSlots(purpose).ambient,"GI consumed an extra native-window view slot.");
+            check(correct.find(chain[i])->physicalView==renderViewPassSlots(purpose).lightingEffects,"GI consumed an extra native-window view slot.");
             if(i)check(position(correct,chain[i])==position(correct,chain[i-1])+1,"Same-view GI compute dispatches are not consecutive.");
         }
-        if(ambient)check(position(correct,Kind::SsgiTrace)==position(correct,Kind::AmbientPublish)+1,"GI compute preceded ambient atlas publication.");
         if(occluders)check(position(correct,Kind::OccluderLayer)==position(correct,Kind::SsgiPublish)+1,"Occluder graphics preceded same-view GI compute.");
-        if(purpose==RenderViewPurpose::Scene&&ambient&&shadows&&occluders)
-            check(correct.count==RenderPassPlan::MaximumPasses-2,"The maximum SSGI-only profile lost fixed-capacity coverage.");
         check(uses(trace,Resource::ReadableSceneDepth,Access::Read)&&uses(trace,Resource::ReceiverScopes,Access::Read)&&
             uses(trace,Resource::SsgiSources,Access::Read)&&uses(trace,Resource::SsgiTraceScratch,Access::Write),"GI trace lost current geometry or coherent previous radiance.");
         check(uses(temporal,Resource::SsgiHistory,Access::ReadWrite)&&uses(temporal,Resource::SsgiTraceScratch,Access::Read)&&
@@ -254,10 +192,6 @@ void ssgiDependencies() {
             auto reversed=correct;std::swap(pass(reversed,chain[i-1]),pass(reversed,chain[i]));
             check(!bool(validateRenderPassPlan(reversed)),"A reversed same-view GI compute dependency was accepted.");
         }
-        if(ambient) {
-            auto reversed=correct;std::swap(pass(reversed,Kind::AmbientPublish),pass(reversed,Kind::SsgiTrace));
-            error(reversed,Error::PhysicalOrder,"GI tracing may sort ahead of Ambient Darkness publication in the shared slot.");
-        }
         if(occluders) {
             auto reversed=correct;std::swap(pass(reversed,Kind::SsgiPublish),pass(reversed,Kind::OccluderLayer));
             error(reversed,Error::PhysicalOrder,"Occluder graphics may precede GI publication in the shared slot.");
@@ -272,8 +206,8 @@ void ssgiDependencies() {
         error(currentSourceFeedback,Error::InvalidAccess,"GI tracing may overwrite its previous-frame source input.");
         auto disabledConfig=config;disabledConfig.ssgi=false;const auto disabled=buildRenderPassPlan(disabledConfig);
         check(bool(validateRenderPassPlan(disabled)),"Disabling GI left an invalid baseline plan.");
-        check(correct.count-disabled.count==(ambient?5:6),"Disabled GI retained dispatches or an unnecessary depth prepass.");
-        check(disabled.has(Kind::DepthPrepass)==ambient,"GI retained its readable prepass after disabling.");
+        check(correct.count-disabled.count==6,"Disabled GI retained dispatches or an unnecessary depth prepass.");
+        check(!disabled.has(Kind::DepthPrepass),"GI retained its readable prepass after disabling.");
         for(const auto kind:chain)check(!disabled.has(kind),"Disabled GI retained a compute dispatch.");
         for(const auto& entry:disabled.passes())for(const auto use:entry.uses())
             check(use.resource<Resource::SsgiSources,"Disabled GI retained a source/history/scratch/irradiance dependency.");
@@ -286,22 +220,20 @@ void ssgiDependencies() {
 
 void ssaoDependencies() {
     constexpr std::array chain{Kind::SsaoEvaluate,Kind::SsaoPublish};
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ambient:{false,true})for(bool ssgi:{false,true})for(bool occluders:{false,true}) {
-        RenderPassPlanConfig config;config.view={purpose,912};config.ssao=true;config.ambientVisibility=ambient;config.ssgi=ssgi;
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ssgi:{false,true})for(bool occluders:{false,true}) {
+        RenderPassPlanConfig config;config.view={purpose,912};config.ssao=true;config.ssgi=ssgi;
         config.worldShadows=true;config.occluderLayer=occluders;config.glow=true;config.prepareEnvironment=true;
         config.collisionOverlays=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"SSAO has an invalid combined pass chain.");
-        if(purpose==RenderViewPurpose::Scene&&ambient&&ssgi&&occluders)
-            check(correct.count==RenderPassPlan::MaximumPasses,"The combined SSGI/SSAO profile does not fit exactly in fixed pass capacity.");
         for(const auto kind:chain) {
-            check(correct.find(kind)->physicalView==renderViewPassSlots(purpose).ambient,"SSAO consumed extra native-window views.");
+            check(correct.find(kind)->physicalView==renderViewPassSlots(purpose).lightingEffects,"SSAO consumed extra native-window views.");
             auto missing=correct;erase(missing,kind);check(!bool(validateRenderPassPlan(missing)),"An SSAO producer is optional while its consumer remains.");
         }
         auto reversed=correct;std::swap(pass(reversed,chain[0]),pass(reversed,chain[1]));
         check(!bool(validateRenderPassPlan(reversed)),"SSAO same-view dispatch dependencies may reverse.");
         check(correct.has(Kind::DepthPrepass),"SSAO lost readable receiver depth.");
         auto disabled=config;disabled.ssao=false;const auto baseline=buildRenderPassPlan(disabled);
-        check(bool(validateRenderPassPlan(baseline))&&correct.count-baseline.count==((ambient||ssgi)?2:3),"Disabled SSAO retained compute or depth work.");
+        check(bool(validateRenderPassPlan(baseline))&&correct.count-baseline.count==(ssgi?2:3),"Disabled SSAO retained compute or depth work.");
     }
     for(const auto purpose:{RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
         RenderPassPlanConfig config;config.view.purpose=purpose;config.ssao=true;
@@ -336,7 +268,7 @@ void ownershipAndOrderFailures() {
     RenderPassPlanConfig invalid;invalid.view.purpose=static_cast<RenderViewPurpose>(255);
     error(buildRenderPassPlan(invalid),Error::InvalidViewPurpose,"Unknown camera purpose was accepted.");
     RenderPassPlanConfig overfull;overfull.prepareEnvironment=overfull.glow=overfull.grid=overfull.picking=
-        overfull.thumbnailReadback=overfull.worldShadows=overfull.ambientVisibility=true;
+        overfull.thumbnailReadback=overfull.worldShadows=overfull.ssao=true;
     error(buildRenderPassPlan(overfull),Error::UnsupportedFeature,"Unsupported over-capacity profile escaped safe construction.");
 }
 }
@@ -344,7 +276,7 @@ void ownershipAndOrderFailures() {
 int main() {
     try {
         static_assert(std::is_trivially_copyable_v<RenderPassPlan>,"Pass plans must remain fixed-size CPU values.");
-        profiles();ambientDependencies();dependencyAndAccessFailures();collisionComposition();occluderDependencies();ssgiDependencies();ssaoDependencies();ownershipAndOrderFailures();
+        profiles();dependencyAndAccessFailures();collisionComposition();occluderDependencies();ssgiDependencies();ssaoDependencies();ownershipAndOrderFailures();
         std::cout<<"Renderer pass-plan checks passed.\n";return 0;
     } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
 }

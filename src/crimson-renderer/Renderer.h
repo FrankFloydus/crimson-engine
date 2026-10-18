@@ -152,9 +152,6 @@ struct RenderScene {
     // Frozen world metadata, including non-casting receivers. Empty direct
     // submissions derive bounds from their camera-local instances instead.
     std::span<const Aabb> shadowReceiverBounds;
-    std::span<const DarknessRevealSource> reveals;
-    std::span<const ActorLighting> actorLighting;
-    std::span<const CharacterShadowSource> actorShadows;
     std::span<const RenderCollisionOverlay> collisionOverlays;
     std::uint64_t giWorldId{},giCameraId{},giEnvironmentId{};
 };
@@ -256,8 +253,7 @@ public:
     const std::string& thumbnailStatus() const;
     // Every candidate is created before any live program is replaced.
     bool reloadPrograms(std::span<const RendererShaderPair>,std::span<const std::uint8_t> proceduralCompute={},
-        std::span<const std::uint8_t> clusterCompute={},std::span<const std::uint8_t> ambientEvaluate={},
-        std::span<const std::uint8_t> ambientPublish={},std::span<const std::uint8_t> deformationCompute={},
+        std::span<const std::uint8_t> clusterCompute={},std::span<const std::uint8_t> deformationCompute={},
         std::span<const std::uint8_t> occluderDepthCompute={},std::span<const std::uint8_t> ssgiTrace={},
         std::span<const std::uint8_t> ssgiTemporal={},std::span<const std::uint8_t> ssgiFilter={},std::span<const std::uint8_t> ssgiPublish={},
         std::span<const std::uint8_t> ssaoEvaluate={},std::span<const std::uint8_t> ssaoPublish={});

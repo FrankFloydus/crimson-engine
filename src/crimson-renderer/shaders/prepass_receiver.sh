@@ -26,9 +26,9 @@ vec3 receiverNormalDecode(vec3 encoded)
 #ifndef CC_LIGHTING_COMPUTE
 uniform vec4 u_ssgiDraw; // Capture allowed, reactive geometry/material, reserved ZW.
 
-float prepassReceiverFlags(float ambientMask, float directMask)
+float prepassReceiverFlags(float directMask)
 {
-    uint flags = (uint(ambientMask) & 3u) | ((uint(directMask) & 3u) << 2u);
+    uint flags = (uint(directMask) & 3u) << 2u;
     if (u_ssgiDraw.y > 0.5) flags |= 16u;
     return float(flags) / 255.0;
 }

@@ -2,11 +2,15 @@
 
 Updated 2026-10-18. This is a source-oriented companion for agents changing Crimson's current renderer or Character lighting. [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) remains authoritative for ownership, implementation status and the next agreed milestone. The implementation described here exists in the checkout; deferred proposals at the end require their own requested slice.
 
-Crimson's current game direction is first-person action with an editable eye camera, WASD movement, mouse look, jumping, strafe tilt and smooth stair traversal. DUSK and Quake inform locomotion and camera feel only. Existing actor rigs, Darkness Reveal, model fading and shadow policies remain available; they do not require a return to an elevated player camera or establish a D2R-inspired lighting roadmap. Evaluate future appearance changes from the authored first-person view while preserving current rendering and asset contracts.
+Crimson's current game direction is first-person action with an editable eye camera, WASD movement, mouse look, jumping, strafe tilt and smooth stair traversal. DUSK and Quake inform locomotion and camera feel only. Model fading and ordinary scene-light shadow policies remain available; they do not require a return to an elevated player camera or establish a D2R-inspired lighting roadmap. Evaluate future appearance changes from the authored first-person view while preserving current rendering and asset contracts.
 
 Read the relevant sections before editing, then verify the source rather than treating a historical screenshot or test count as the current contract. [D2R lighting findings](D2R_CHARACTER_LIGHTING_FINDINGS.md) records the reference evidence and discarded iterations. It does not establish Diablo II: Resurrected's unpublished equations or require copying its complete pipeline.
 
 The Windows renderer defaults to Direct3D 12. **Edit → Preferences → Rendering → Renderer (restart required)** selects Direct3D 12 or Direct3D 11 for the next launch; the tooltip reports the active backend. `--renderer dx11|dx12` overrides that preference for one process without persisting it. The engine-owned `GraphicsBackend` value is selected before bgfx initialization and does not belong to scene or Environment data. The renderer validates the requested backend and checks native blendable RGBA32F support using the matching D3D11/D3D12 device. Both backends retain the same linear HDR lighting, final sRGB encoding, effects and SM5/DXBC shader/cache/preflight contracts. Switching APIs alone adds no rendering effects and does not require material recompilation. Vulkan is not enabled. Historical D3D11 measurements below retain their original scope; they are not DX12 measurements or cross-backend speed claims.
+
+## Actor lighting and removed features
+
+Actors, players and enemies receive ordinary scene point/directional lights and environment illumination. `SceneActor` defines the nearest visual ownership boundary and World/Character classification; it supplies no private lighting. Character Light Rigs, their Key/Fill and Local World sources, dedicated rig silhouettes, Darkness Reveal and Environment Ambient Darkness have been removed. Existing scenes load while discarding those obsolete settings in memory; saving writes only the current settings. Ordinary scene lights, character shadow casting from those lights, model fading, SSGI and SSAO remain independent.
 
 ## Feature map and entry points
 
@@ -18,80 +22,14 @@ DX12 uses the same pinned bgfx version with [project-owned patches](../cmake/vcp
 | Authored Character and light data | [Scene.h](../src/scene/Scene.h), [LightingSettings.h](../src/crimson-renderer/LightingSettings.h), [RenderTypes.h](../src/crimson-renderer/RenderTypes.h) |
 | Validation, transactions, persistence and conversion | [Scene.cpp](../src/scene/Scene.cpp), [SceneDocument.cpp](../src/scene/SceneDocument.cpp) |
 | Actor Inspector and shared lighting widgets | [ScenePanels.cpp](../src/tools/ScenePanels.cpp), [LightingControls.cpp](../src/tools/LightingControls.cpp) |
-| Pure actor rig evaluation | [ActorLightRig.cpp](../src/runtime/ActorLightRig.cpp) |
-| Presented scene categories, light arrays and reveal | [SceneExtraction.cpp](../src/scene/SceneExtraction.cpp) |
+| Presented scene categories and light arrays | [SceneExtraction.cpp](../src/scene/SceneExtraction.cpp) |
 | Prepared world/camera/resource ownership | [EditorRenderFrame.cpp](../src/editor/EditorRenderFrame.cpp), [RenderPassPlan.h](../src/crimson-renderer/RenderPassPlan.h) |
 | Submission, HDR targets and shared appearance | [Renderer.cpp](../src/crimson-renderer/Renderer.cpp) |
 | Forward+ records and camera assignment | [ClusteredLightingGpu.cpp](../src/crimson-renderer/ClusteredLightingGpu.cpp), [clustered_lighting.sh](../src/crimson-renderer/shaders/clustered_lighting.sh) |
-| Point, directional and dedicated Key shadow ownership | [PointShadowRenderer.cpp](../src/crimson-renderer/PointShadowRenderer.cpp), [DirectionalShadowMath.cpp](../src/crimson-renderer/DirectionalShadowMath.cpp) |
-| Darkness depth/evaluation/publication | [AmbientVisibilityGpu.cpp](../src/crimson-renderer/AmbientVisibilityGpu.cpp), [ambient_visibility.sh](../src/crimson-renderer/shaders/ambient_visibility.sh) |
+| Point and directional shadow ownership | [PointShadowRenderer.cpp](../src/crimson-renderer/PointShadowRenderer.cpp), [DirectionalShadowMath.cpp](../src/crimson-renderer/DirectionalShadowMath.cpp) |
 | Dynamic GI settings and Environment persistence | [Ssgi.h](../src/crimson-renderer/Ssgi.h), [Ssao.h](../src/crimson-renderer/Ssao.h), [EnvironmentSerialization.h](../src/scene/EnvironmentSerialization.h), [ScenePanels.cpp](../src/tools/ScenePanels.cpp) |
-| Scene/Game rig visualization | [ActorLightRigOverlay.cpp](../src/editor/ActorLightRigOverlay.cpp) |
 | Material publication and startup | [MaterialGraphGpu.cpp](../src/crimson-renderer/MaterialGraphGpu.cpp), [material startup contract](MATERIAL_SHADER_STARTUP.md) |
 | Diagnostics and exact counter meanings | [SceneDiagnostics.cpp](../src/tools/SceneDiagnostics.cpp), [shadow diagnostics guide](SHADOW_DIAGNOSTICS.md) |
-
-## Actor authoring workflow
-
-Create a composed actor with **Add → Player** or **Add → Enemy**. Each actor appears as one Outliner entity. Selecting it exposes all applicable Inspector sections, including Light Rig and Darkness Reveal; Player also supplies a Camera section and Visuals authoring. Owned camera/model/particle spatial records retain their IDs and local transforms internally. Nearest-actor lighting ownership stops at nested actors. Each actor’s rig is independent of Motor, Character Controller, Navigation Agent and Player Input. `SceneProperties::playerCharacter` selects the input owner and player-focused camera/fading context; it does not select the only valid rig or reveal.
-
-Select the actor entity and expand **Inspector → Light Rig** to edit its lighting. Components are Inspector subsections rather than separate Outliner selection targets. **Visuals** contains owned model/particle settings, and **Camera** edits the supplied camera without altering the controller transform. Darkness Reveal remains a separate optional capability. Edit mode affects Scene and Game; Play changes remain temporary. Component/history/storage ownership stays with SceneDocument; shared widgets own no renderer-global settings.
-
-**Light Rig → Enabled** defaults off. Key, Fill and Local World each retain their own enabled settings beneath it. **Darkness Reveal** is a sibling section and works independently of the rig master. This separation is intentional: revealing existing global light is different from emitting a local light.
-
-The lighting roles are deliberately separate:
-
-| Contribution | Receivers | Casters/occlusion | Purpose |
-| --- | --- | --- | --- |
-| Character Key | Owning actor visual subtree only | World geometry does not block it | Stable readable actor shading and highlights |
-| Character Fill | Owning actor visual subtree only | No shadow map | Additional actor shading; never lights architecture |
-| Local World Light | World only | World geometry casts into its six point faces; actor surfaces excluded | Actor-following omni illumination and pillar/doorway shadows |
-| Key silhouette | World with Receive Shadows | Only eligible player-subtree models | Strong player silhouette without Key illumination on the environment |
-| Darkness Reveal | Eligible ambient receivers | Distance only; no map | Restores existing illumination near the player |
-
-### Character Key and Fill
-
-Both are directional irradiance values, not scene entities or ordinary point slots. **Direction** is the world-space direction in which light travels. It remains fixed when the actor turns. Directions normalize during evaluation; zero/invalid directions are rejected. Character lights cannot be blocked by a nearby pillar.
-
-| Control | Key default | Fill default | Authored range |
-| --- | --- | --- | --- |
-| Enabled | On | On | Boolean |
-| Direction | `(-.5, -.8, -.6)` | `(.7, -.4, .6)` | Inspector components -1…1; finite nonzero vector |
-| Color, sRGB | `(1, .96, .9)` | `(.55, .65, 1)` | Each channel 0…1 |
-| Intensity | 1.5 | .35 | 0…10,000 |
-| Advanced → Diffuse | 1 | 1 | 0…1 |
-| Advanced → Specular | 1 | 1 | 0…1 |
-
-The Key additionally owns **Cast Shadow** (on), **Shadow Strength** (.8, range 0…1) and **Shadow Range (m)** (20, range .01…100,000). Advanced **Shadow Depth Bias (m)** defaults .005; **Shadow Normal Bias (texels)** defaults 1. Both accept finite nonnegative values. Fill has no shadow controls.
-
-The silhouette derives its direction and enable state from Key. Rig/Key/Cast Shadow off, zero Key intensity, zero Strength or no eligible drawable player caster suppresses it. It uses a bounded, camera-independent orthographic projection fitted around eligible player bounds, quantized in extent and snapped to texels. Range extends downstream receiver depth; it is not an omni radius.
-
-This is an artistic reflected-light mask: `mix(1, keyVisibility, strength)` multiplies all reflected World lighting, including torch light and IBL. That keeps the player silhouette readable near a bright torch. It adds no illumination to World and does not make pillars cast Key shadows. It leaves emission, Unlit and fog independent. This is Crimson's explicit behavior, not a claim about D2R internals.
-
-### Local World Light
-
-Each actor evaluator emits at most one ordinary `PointLight` at `presentedActorPosition + (0, Height, 0)`. Enabled sources join the common point-light/shadow budgets and retain a deterministic transient identity derived from owner EntityId. Height, radius and Key/Fill directions remain world aligned and independent of actor rotation/scale.
-
-| Control | Default | Range and effect |
-| --- | --- | --- |
-| Enabled | On | Emits the point only while the rig master is on |
-| Height (m) | 2 | .01…100,000; moves the real source and shadow origin |
-| Color | `(1, .96, .9)` | sRGB channels 0…1 |
-| Intensity | `64/9` ≈ 7.111 | 0…1,000,000; HDR radiance multiplier |
-| GI Energy | 1 | 0…16; diffuse donor energy for SSGI, independent of direct brightness |
-| Radius (m) | 8 | .01…100,000; finite influence and point-shadow far coverage |
-| Attenuation | 2 | -10…10; independent distance-decay exponent |
-| Near Falloff Radius (m) | 1.5 | 0…100,000; smooths close-range intensity peak |
-| Range Falloff | 1 | .25…8; shapes the outer window |
-| Edge Softness | 1 | .05…1; fraction of Radius used for the outer fade |
-| Source Radius (m) | 0 | 0…100,000; specular extent and point-shadow penumbra |
-| Specular Scale | 0 | 0…1; reflective highlights, independent of diffuse/shadows |
-| Cast Shadows | On | Ordinary World-only point-map participation |
-| Advanced → Depth Bias (m) | .005 | Finite nonnegative comparison offset |
-| Advanced → Normal Bias (texels) | 1 | Finite nonnegative geometric-normal offset |
-
-This is normal-dependent PBR illumination. A wall facing the source can become brighter; a circular/elliptical footprint on a bare floor follows finite influence and distance decay. No claim is made that a point light eliminates that shape. Tune Radius, Intensity, Attenuation and the range window for the scene, rather than reintroducing a hidden normal-independent fill or doorway leakage workaround.
-
-The Local World light has fixed World receiver/caster masks and `ambientReveal=false`. Thus pillars block it, the player does not receive/cast its omni shadows, and the light does not reveal its own darkness footprint. The independent player reveal restores global illumination. Open doors can physically pass point light; the distance reveal can restore IBL across a wall because it is not room visibility.
 
 ### Shared point response and source-size shadows
 
@@ -117,51 +55,7 @@ Keep one terminal PCF call in `pointShadowVisibility`: `tryPointShadowVisibility
 
 The receiver plane itself is not a blocker. Authored depth/normal offsets still apply and can independently separate shadows from zero-thickness walls; the filter does not silently cap those values. For contact-sensitive joined walls, use **Depth Bias 0 m / Normal Bias 1 texel**; zero authored Depth Bias still includes the numerical comparison tolerance. There is no global conversion of authored settings or defaults. Positive source radius uses a bounded deterministic PCSS search/filter: 12 blocker samples, radial blocker-distance reconstruction from perspective face depth, and 16 visibility taps. Penumbra radius is proportional to `sourceRadius * (receiverDistance-blockerDistance)/blockerDistance`. Contact stays sharper than distant shadow edges.
 
-Wide samples remap to their proper cube face rather than crossing an atlas tile into another light. Receiver-plane correction and a receiver-normal-based stable kernel preserve sloped surfaces and cube seams. It uses the existing comparison atlas/raw depth access, with no extra sampler, shadow map or depth-render pass. Source-size/attenuation edits can change shading immediately while all six depth faces remain cached. Positive size increases query work; zero depth draws is not zero shadow cost. Key and ordinary directional filtering remain separate and retain their sharpness.
-
-## Darkness Reveal and Environment Ambient Darkness
-
-**Darkness Reveal → Enabled** defaults on when this independent component is added; Spread defaults to 8 m and accepts .01–100,000 m. A controller contributes its half-height to the source center; otherwise the owner origin is used. Every enabled reveal is extracted and packed into the shared Forward+ atlas after light records. Source visibility combines by maximum, with no extra material sampler. Adding a Light Rig does not implicitly reveal darkness.
-
-The player weight is `exp2(-(distance/spread)²)`, with an already negligible tail smoothly tapered to zero over six to eight Spreads. It emits no light, consumes no point record and casts no shadow. It is not an occlusion query or fog of war.
-
-**Environment → Ambient Darkness** owns the global response:
-
-| Control | Default | Meaning |
-| --- | --- | --- |
-| Enabled | Off | Enables the additional readable-depth/darkness path |
-| Darkness Floor | 0 | Remaining reflected light outside reveal; range 0…1 |
-| Softness | .25 | Scene-light energy transition width; UI .001…1 |
-| Advanced → Strength | 1 | Mix original and darkened lighting; 0…1 |
-| Advanced → Threshold | .1 | Scene-light energy needed for reveal; 0…10,000 |
-| Advanced → Respect Shadows | On | Uses available scene-light shadow visibility for energy reveal |
-| Advanced → Affect Emission | Off | Also attenuates Lit emission with darkness |
-
-Ordinary scene lights independently expose **Affect Ambient Darkness**, reveal strength and reveal receiver scope. Points default to reveal enabled; directionals default off. Reveal eligibility does not depend on direct receiver acceptance. Respect Shadows uses available maps under their existing admission/update budgets; an unshadowed/nonresident source can reveal through an occluder.
-
-Scene-light energy passes through `smoothstep(threshold, threshold+softness, energy)`, then Darkness Floor/Strength. Player visibility uses the Gaussian with the same floor/strength. The two are combined by **maximum**, so a torch can reveal an independent island without double-applying the player fade. Source influence, not final shaded pixel brightness, supplies energy; there is no lighting-feedback loop.
-
-Composition is `reflected * keySilhouette * darkness`, where reflected includes directional/point lighting, Character Key/Fill, custom ambient and diffuse/specular IBL after their ordinary material/scope/shadow response. Affect Emission optionally applies darkness to Lit emission. Unlit, fog, background and post-processing remain independent. An ambient receiver mask of zero explicitly opts out (`darkness=1`); disabling every reveal source does not opt eligible surfaces out.
-
-Opaque/masked surfaces produce separate readable D24S8 depth and RGBA8 receiver data with matching coverage and clocks. Receiver R stores scope; the remaining channels pack 12-bit octahedral normal coordinates. [AmbientVisibilityGpu](../src/crimson-renderer/AmbientVisibilityGpu.cpp) reconstructs receivers, writes R32F scratch, then publishes four visibility values per RGBA32F texel in the existing cluster atlas. Evaluate/Publish are separate dispatches. The color depth attachment is not sampled while bound.
-
-Opaque materials read published visibility; transparent meshes and Lit sprites evaluate the same response at their own world position. They must not receive a screen-space mask reconstructed from background geometry. Disabled darkness avoids these extra passes/initial allocations; previously allocated reusable resources can remain resident.
-
-Ambient Darkness's computed mask bounds the uncertainty from its D24 readable depth and float inverse-projection arithmetic. If that uncertainty exceeds an eligible resident shadow's authored metre bias, the compute evaluation publishes a negative sentinel before querying that shadow. The opaque material then uses the existing exact-fragment `ambientVisibilityAt` path at its original interpolated surface position. Valid receivers rounded to the clear depth use the same fallback. Raw R32F scratch and RGBA32F atlas publication preserve the sentinel; it never becomes a negative lighting multiplier. This removes camera-angle bands caused by very small editor near planes without altering camera clipping or shadow bias, allocating another target, or performing both complete shadow evaluations. Reliable samples retain the computed mask, while fallback samples pay the existing per-surface light/shadow evaluation cost. A focused ceiling-free fixture covers Scene/Game, three angles, small/normal near planes, Respect Shadows off/on and real blocker preservation.
-
-## Multiple-actor rig resources
-
-Immutable extraction/frame records contain `actorLighting`, `actorShadows` and `reveals` lists. Render models carry their stable actor owner through visible, shadow, preview and thumbnail preparation. Each draw binds its actor's two Key/Fill values, retaining shared material assets and per-instance ownership. Local World points use the existing shared clustered/light-shadow limits. Dedicated actor silhouettes have eight atlas slots with deterministic owner-sorted admission, cache identity including the owner, and shadowless fallback for unadmitted requests. Requested/admitted/unadmitted counters expose that limit. Disabling or reordering rigs resets their draw data and cannot redirect another actor's lights or cached shadow. Independent reveal contributions use maximum visibility.
-
-## Scope masks versus transient categories
-
-`lighting_scope::World=1`, `Character=2`, `All=3`. These are two current bits, not an arbitrary general-purpose layer system.
-
-Models author independent **Advanced Lighting → Direct Lighting**, **Shadow Casting** and **Ambient Darkness** masks. Lights author **Advanced Lighting → Affect**, **Shadow Casters**, **Affect Ambient Darkness**, **Ambient Receivers** and **Ambient Strength**. Removing direct acceptance must not implicitly remove casting or darkness participation. Model **Cast Shadows** and **Receive Shadows** remain separate controls.
-
-Extraction assigns Character to models owned by their nearest Visual Root, and World to unowned models. Authored surface masks intersect that broad category. A separate actor-owner identity selects private Key/Fill data for each prepared draw, preventing one enemy's rig from lighting another. Disabled/missing rigs bind neutral light values. Dedicated silhouettes accept World/Receive Shadows surfaces and select only their owner's shadow casters.
-
-Transient categories, actor-owner indices, evaluated sources, shadow slots and GPU handles are never serialized. Visual ownership is independent of player designation and of rig enablement. A stationary actor can receive a rig; a moving controller does not automatically establish visual ownership.
+Wide samples remap to their proper cube face rather than crossing an atlas tile into another light. Receiver-plane correction and a receiver-normal-based stable kernel preserve sloped surfaces and cube seams. It uses the existing comparison atlas/raw depth access, with no extra sampler, shadow map or depth-render pass. Source-size/attenuation edits can change shading immediately while all six depth faces remain cached. Positive size increases query work; zero depth draws is not zero shadow cost. Ordinary directional filtering retains its sharpness.
 
 ## Environment Ambient Light, sky and fog
 
@@ -179,7 +73,6 @@ Sky:      diffuseAmbient = C * E * (1-S) + I * J * S
 
 Energy scales the **custom color**, not the entire blend. At S=1 it has no effect; Environment Intensity controls the sky. Environment lighting Enabled/Intensity controls sky/reflections, while custom-color ambient remains independent. Ambient Source Disabled removes diffuse ambient only; reflections keep their existing environment response. This separation follows the inspected Godot renderer semantics.
 
-[EnvironmentPresentation.h](../src/crimson-renderer/EnvironmentPresentation.h) converts/weights custom color once on the CPU. [environment_ambient.sh](../src/crimson-renderer/shaders/environment_ambient.sh) is shared by fallback/generated meshes and Lit particles. The shader applies normal material diffuse response; ambient color is not an emissive overlay. It participates in Ambient Darkness and World Key silhouette. Independent material/particle previews retain their own environment, rather than inheriting the authored scene.
 
 Fog supports Exponential and Depth response, height density and Light Energy. **Sky Affect** (default 1) scales background fog opacity; **Aerial Perspective** (default 0) blends fog color toward the sky along the viewing ray, and **Sun Scatter** (default 0) adds Godot's broad forward scattering toward enabled directional lights. All three range from 0 to 1. Sky Affect controls only the background; Aerial Perspective and Sun Scatter also affect fog on surfaces/particles, while additive materials retain attenuation only. The existing environment sampler supplies aerial perspective without consuming material texture slots, independently of environment illumination Enabled.
 
@@ -195,15 +88,15 @@ The optional `toneMappingParameters` JSON object writes `reinhardWhite`, `acesWh
 
 ## Dynamic global illumination
 
+Only ordinary point/directional lights and eligible Lit emission/environment diffuse light supply donors. Private actor light sources and darkness attenuation are absent. **GI Energy** remains a per-scene-light multiplier in [0,16], default 1. It changes diffuse donor energy independently of direct light, specular or shadows.
+
+
 The Environment entity's collapsed **Global Illumination** section enables SSGI (default off). Strength defaults 1 (0…4), Bounces 1 (integer 1…4), Max Distance 3 m per bounce (.1…20 m), Quality Medium, Advanced Thickness .1 m (.01…2 m) and Temporal Stability .85 (0….98). Low/Medium/High trace 2/4/8 rays with 12/16/24 steps per segment at half resolution. Custom supports Samples Per Pixel 1…16 and Ray Steps 8…64; editing either budget selects Custom while preserving the other resolved preset budget. Advanced exposes Ray Bias .02 m (.001….5 m), Denoise Radius 3 half-resolution pixels (0…4), Denoise Strength 1 (0…1) and Radiance Clamp 10 HDR units (0…100; zero disables it). There is no lighting bake. Open levels do not require ceilings, but offscreen and hidden donors remain unavailable.
 
-The independent collapsed **Screen Space Ambient Occlusion** section defaults off and exposes Strength 1 (0…2), Radius .5 m (.05…5 m) and Quality Medium (Low/Medium/High). SSAO adds contact shading to indirect light from nearby visible depth. It does not supply bounce lighting and is separate from artistic Ambient Darkness. Zero Strength bypasses either effect independently. Low/Medium/High use 4/8/12 directions with 3/4/6 horizon steps, followed by a depth/normal-aware filter and upsampling. There is no SSAO history or activation warmup. Direct light and emission remain independent; transparent and partially faded surfaces bypass SSAO.
 
 The shared serializer writes flat optional `ssgi` and `ssao` objects. Current `ssgi` takes precedence; otherwise, the removed `gi` wrapper converts once in memory from its common and `screenSpace` values. Writers discard removed method/world-volume settings. Missing effects stay off, and missing earlier Bounces stays one. Loading does not rewrite or dirty authored files. Whole-Environment transactions preserve disabled tuning, duplication, undo/redo and Play isolation/reset. Material/Particle previews and browser thumbnails omit both effects.
 
-`SsgiGpu` owns three full-resolution donor attachments (World/Character RGBA16F and geometry RGBA32F), half-resolution tracing, temporal histories and bilateral filter targets. Direct diffuse follows the light receiver masks; environment diffuse and eligible Lit emission supply both lanes. Private Key/Fill, specular, fog and previous GI are excluded from donors. Full-opacity opaque/masked donors and receivers participate; Alpha/Additive retain opaque source attachments, while Unlit and fully metallic receivers gain no diffuse bounce. Full-resolution publication reuses the Forward+ data atlas rather than adding a material sampler. Strength and receiver diffuse response apply once before the normal silhouette/darkness/fog composition.
 
-Ordinary directional/point lights and Local World Light expose **GI Energy**, stored as finite `indirectEnergy` in `[0,16]`, default 1. It multiplies only that source's shadowed diffuse donor contribution before World/Character lane accumulation. Zero removes the source's reflected contribution, while higher values artistically boost it; direct/specular lighting, source range, shadow tests and ambient reveal remain independent. Material emission and environment donors are not multiplied by a light's setting. The control does not bypass SSGI visibility or the Environment's Radiance Clamp. Private Character Key/Fill still supply no GI. Missing fields retain 1 without load-time writes; shared scene transactions, duplication, runtime copies and render extraction retain the authored value.
 
 Geometry A stores validity/reactivity plus seven bits per RGB diffuse-response channel as an exact 23-bit integer in RGBA32F. Additional path segments multiply the decoded, bounded response at intermediate hits, keeping material color and energy loss separate from Strength. Each segment has its own Max Distance bound. Captured radiance remains free of prior GI; changing Bounces extends the path rather than increasing a feedback multiplier.
 
@@ -211,11 +104,10 @@ Tracing samples the full cosine hemisphere over time, refines perspective-correc
 
 For a clear Screen Space visual comparison, place a colored Lit emissive wall beside a rough neutral, nonmetallic floor, keep both visible and within Max Distance, and temporarily remove other illumination. The floor should gain the wall's color with GI enabled. An ordinary light illuminating one surface can similarly supply bounce to a nearby surface facing it. Light to floor to wall is one indirect bounce; continuing from that wall back onto the floor requires Bounces 2 or higher. Strength scales the result rather than extending propagation. Every added segment remains limited to visible geometry, so higher bounce counts cannot restore offscreen transport. Glow is a separate screen-space effect and does not illuminate nearby geometry.
 
-Point lights supply GI through the diffuse light reflected by opaque/masked Lit models, including generated materials and shadowed lights. Indirect Lighting deliberately omits the point's direct pool. A point-lit flat floor cannot reflect diffuse light back onto the same coplanar floor; visible facing walls or prop sides provide that path. GI can illuminate dimmer or shadowed receivers through those reflected paths, including beyond the source's direct Radius when the GI trace can reach a lit donor. It does not flatten the point's direct distance falloff or uniformly fill its range. Horizontal prop tops mostly reflect toward the upper hemisphere, and hidden sides cannot act as screen-space donors. Ambient Darkness also attenuates captured reflected lighting; Direct Lighting inspection bypasses that final artistic mask, so a bright direct diagnostic does not by itself establish a bright GI donor.
 
 A focused point-only saved-project reproduction disabled model emission, sky/ambient, directionals and private actor lights while preserving scene geometry, ordinary point lights and authored SSGI settings. GI brightened 14,800 Scene pixels and 17,877 Game pixels in Lit at 909×684, while Direct Lighting captures were identical with GI on/off and the no-point control was exactly black. Isolating the weak reflected signal under the saved ACES curve left only 32 detected Scene pixels; presenting the same camera/light/settings with Linear revealed 89,892. The coffin materials were opaque Lit nonmetals with full per-view opacity. This establishes working point-light transport and a display-curve limitation; it does not establish room-wide fill or remove screen-space visibility limits.
 
-The isolated `ssgi_render_core` GPU fixture covers that ceiling-free comparison, changing/removing emission, moving geometry, discarded cutouts, partially faded models, generated/fallback materials, scope separation, private Key exclusion, transparent auxiliary preservation, darkness composition, independent cameras and disabled/zero-strength output. Its point-only case places a finite-range point above the floor so it directly illuminates a wall while excluding the floor: the floor is black in Direct Lighting and receives colored bounce in Indirect Lighting. It checks generated/fallback donors, light removal, World/Character isolation with packed reveal flags and an actual resident point-shadow path. A second fixture requires an emitter-to-wall-to-coplanar-floor path: one bounce leaves the floor black, while two through four transport light through the wall. It checks Unlit, metallic and scope-blocked intermediate surfaces, generated material response, emission removal and unchanged bounce-count allocations. Its executable accepts `--artifacts <directory>` to export off/on, point-only and 1/2/4-bounce PNGs, and `--benchmark --warmup 120 --samples 360` for a bounded comparison; its three required path arguments are supplied by the CTest registration.
+The isolated `ssgi_render_core` GPU fixture covers that ceiling-free comparison, changing/removing emission, moving geometry, discarded cutouts, partially faded models, generated/fallback materials, scope separation, transparent auxiliary preservation, independent cameras and disabled/zero-strength output. Its point-only case places a finite-range point above the floor so it directly illuminates a wall while excluding the floor: the floor is black in Direct Lighting and receives colored bounce in Indirect Lighting. It checks generated/fallback donors, light removal, World/Character isolation and an actual resident point-shadow path. A second fixture requires an emitter-to-wall-to-coplanar-floor path: one bounce leaves the floor black, while two through four transport light through the wall. It checks Unlit, metallic and scope-blocked intermediate surfaces, generated material response, emission removal and unchanged bounce-count allocations. Its executable accepts `--artifacts <directory>` to export off/on, point-only and 1/2/4-bounce PNGs, and `--benchmark --warmup 120 --samples 360` for a bounded comparison; its three required path arguments are supplied by the CTest registration.
 
 On 2026-10-17, the updated D3D11 RTX 4090 fixture at 1920×1080, Medium, measured these whole-frame GPU medians with 160 warmup frames and 300 measured submissions per case (232/269 distinct completed GPU samples for the off cases, 300 for each on case). The interactive editor was closed; CPU material-cache preparation was running. The benchmark scene contains two quads, so many multi-segment paths terminate early; these figures describe the synthetic local workload, not gameplay cost or a lower-end GPU budget. Richer geometry can keep additional segments active and increase cost. GI-on p95 was .973/.647/.866 ms for Game at 1/2/4 bounces, and 1.074/1.233/1.412 ms for Scene+Game.
 
@@ -234,13 +126,10 @@ Scene and Game each expose a top-right render-view dropdown with Lit, Albedo, Ro
 
 Current local lighting is GPU clustered Forward+: up to 4,096 point sources, initial 32-pixel tiles and 24 logarithmic depth slices per camera. Very large viewports grow tile size. Dense clusters retain all influencing lights within source capacity. The all-lights reference path is a correctness comparison, not a second authoring mode. Up to four ordinary directionals remain independent.
 
-The generated shader texture budget is fixed: graph textures 0…11, IBL cubes 12…13, combined BRDF/Forward+ data atlas 14 and shared shadow comparison atlas 15. Keep BRDF filtering/coordinates intact when extending the atlas. Do not add a sampled darkness texture or source-size sampler casually.
+The generated shader texture budget is fixed: graph textures 0…11, IBL cubes 12…13, combined BRDF/Forward+ data atlas 14 and shared shadow comparison atlas 15. Keep BRDF filtering/coordinates intact when extending the atlas. Keep new effects within the existing sampler budget.
 
-Each point record contains six vec4 texels with the existing attenuation/source-size/material-role response. Zero-based row five carries the attenuation exponent and GI Energy minus one, followed by two reserved zeros. `u_clusterRecordLayoutV6` still guards the six-texel stride. Independent reveal records occupy a subsequent atlas section described by `u_revealAtlas`. Generated-material identity is v23, retaining the actor light/silhouette arrays, shared GI atlas/draw interface, packed donor response and four color outputs. SSAO and viewport diagnostic uniforms belong to the same coherently replaced shader family. Preflight rejects obsolete bindings and render-target signatures; staged source/cache identity and complete last-good publication remain mandatory.
 
-Direct capacity is distinct from shadow residency: **16 admitted point maps**, six guarded D32F projections each, and a normal update budget of **4 maps/24 faces** per world frame. The player omni consumes one source and, when eligible, one map. Key/Fill, reveal and dedicated silhouette consume no ordinary point slots. Scene validation includes the enabled player point before committing edits/loads.
 
-Point admission/update selection uses spatial priority, cache state and fairness. Deferred caster-only updates can retain a coherent previous projection; a changed light projection must not sample obsolete depth. Scene/Game share point caches and a dedicated Key map. Ordinary directional shadows use four Scene/thumbnail cascades; Game uses one stabilized World projection plus an optional focused player-caster projection. That focused ordinary directional map is **different from the Key silhouette**. Do not replace Game policy with cascades by accident. This is the implemented policy, not evidence of shadow quality across every first-person camera angle; a requested shadow-policy change needs its own representative view and receiver coverage checks.
 
 Per-projection cache keys include relevant caster geometry/deformation, transforms, alpha coverage/time and projection. Receiver biases and source response need not redraw unchanged depth. Upstream World casters are collected before camera receiver culling. Depth range/receiver fitting, texel snapping and receiver-plane correction are correctness requirements; increasing bias is not a substitute.
 
@@ -252,7 +141,6 @@ Preserve linear HDR accumulation, the existing GGX/Smith/Schlick/Fresnel-Lambert
 
 ## Persistence, materials and startup
 
-Current native scene writer is **v23** (readers v1–v23); Light Rig settings remain **v4**, Darkness Reveal **v2**, native material file **v6**, graph schema **v7**. Old Character fields convert in memory into Actor, Controller, Motor, Navigation Agent, Player Input, Light Rig and Darkness Reveal. Lens-only Camera and separate Camera Follow capture the former follow target/offset and full world basis. Existing IDs, hierarchy, settings and camera roles remain intact, with only the proven former built-in player-camera recipe converted to First Person as described in the architecture. First-person input tuning is optional v23 data. Only explicit Save writes the current schema; loading does not rewrite authored assets. The optional Environment `ssgi` and `ssao` objects retain disabled defaults in older files.
 
 Imported glTF/GLB and Quader native material sidecars are editable under their shared assigned identities. Imported origin is provenance, not a read-only flag. Existing glTF sidecars are not overwritten by promotion; exact-content imports preserve their native graphs. Quader Sync Materials governs source overwrite, independently of its Sync Lights setting. Preserve model slot overrides, factors, texture roles/channels, UV/tangent compatibility and reference-aware deletion policy.
 
@@ -266,7 +154,6 @@ Current interactive misses skip costly surface-fragment FXC optimization for fir
 
 ## Visual tools and focused diagnosis
 
-**Light Rig → Show Rig** displays active Scene/Game arrows, the Local World source sphere and the separate **50% Reveal** sphere using the same presented pose/camera. Turning it off hides these overlays regardless of selection in Edit and Play. The Reveal sphere can display independently of the rig master when Reveal and Show Rig are enabled. These are passive overlays; free Scene camera navigation remains available. They do not create light entities.
 
 During Play, focus Game and press **F1** to toggle the top-right metrics overlay. It reports FPS/frame time, main-thread CPU work, backend GPU time, backend Device VRAM where available, tracked textures/programs/models/shadows and engine draw count. Missing device/timer values show N/A. These are not OS CPU utilization or a complete per-pass GPU profiler. Input guards preserve text fields, popups and drag ownership.
 
@@ -281,9 +168,6 @@ Common symptom routing:
 | Symptom | Check first |
 | --- | --- |
 | Source Radius has no effect | Cast Shadows/admission, radius above zero, actual caster-receiver separation; specular can be disabled |
-| Player invisible near a pillar | Player designation/subtree/category, rig master/Key/Fill, ambient mask; World omni intentionally excludes player |
-| Torch washes away player silhouette | Key Cast Shadow/Strength/eligible coverage/World Receive Shadows; silhouette must multiply the complete reflected sum once |
-| Room behind a wall becomes visible | Separate real point transport from distance-only player reveal/IBL; do not remove shadows to disguise it |
 | Wall flickers at grazing movement | Receiver normal/plane consistency, bias sign, cube seam/tile addressing; test reflected/sloped geometry |
 | Gray or missing textures at launch | Certified path/fallback and coherent packet state; cache/source-family/preflight diagnostics; do not erase authored textures |
 | A light is visible but shadow count is lower | Distinct 4,096 direct-source versus 16-map admission and four-update budget |
@@ -295,8 +179,6 @@ Documentation-only edits need source/link consistency checks, not an application
 | Changed contract | Focused existing CTest names |
 | --- | --- |
 | Backend selection, persistence and native lifetime | `app_options_core`, `editor_preferences_core`, `native_resource_core`, `native_resource_dx11_core` |
-| Rig values and extraction | `player_light_rig_core`, `scene_gameplay_core`, `scene_extraction_core` |
-| Darkness math/environment settings | `ambient_visibility_core`, `environment_core`, `environment_presentation_core`, `procedural_sky_core` |
 | Point response and shadow geometry | `render_core`, `point_shadow_math_core`, `point_shadow_render_core` |
 | Directional policy/precision/scheduler | `directional_shadow_math_core`, `directional_shadow_receiver_plane_core`, `directional_shadow_quality_core`, `shadow_update_scheduler_core` |
 | GPU records and cross-path lighting | `clustered_lighting_core`, `clustered_lighting_gpu_core`, `forward_plus_render_core`, `lighting_dependency_render_core` |

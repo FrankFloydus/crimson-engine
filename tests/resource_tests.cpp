@@ -60,6 +60,34 @@ void failureAndStaleness() {
     require(!handle.snapshot() && pinned->rgba[0]==42,"Deletion invalidated a pinned reader or retained new access.");
     require(!manager.request<DecodedImage>(AssetRef<DecodedImage>{"reload"},loader),"Deleted identity was silently resurrected.");
 }
+void reusableRetirement() {
+    std::atomic_bool block{},entered{};
+    ResourceManager manager;
+    const auto loader=[&](std::stop_token stop) {
+        if(block){entered=true;while(block&&!stop.stop_requested())std::this_thread::yield();}
+        return image(4);
+    };
+    auto original=manager.request<DecodedImage>(AssetRef<DecodedImage>{"collected-source"},loader);
+    ResourceRequestOptions variant;variant.variant="second-role";
+    auto second=manager.request<DecodedImage>(AssetRef<DecodedImage>{"collected-source"},[](std::stop_token){return image(6);},variant);
+    auto derived=manager.requestDerived<DecodedImage>("collected-source",[](std::stop_token){return image(8);});
+    await(manager,[&]{return original.state()==ResourceState::Ready&&second.state()==ResourceState::Ready&&derived.state()==ResourceState::Ready;});
+    const auto retained=original.snapshot();const auto derivedRevision=derived.snapshot().revision();
+    block=true;manager.invalidate("collected-source");await(manager,[&]{return entered.load();});
+    const auto previousStale=manager.stats().staleResults;
+    manager.discard("collected-source");
+    require(!original.snapshot()&&!second.snapshot()&&retained->rgba[0]==4,"Collection retained live access or invalidated an immutable reader.");
+    auto returned=manager.request<DecodedImage>(AssetRef<DecodedImage>{"collected-source"},[](std::stop_token){return image(12);});
+    auto returnedVariant=manager.request<DecodedImage>(AssetRef<DecodedImage>{"collected-source"},[](std::stop_token){return image(14);},variant);
+    require(bool(returned)&&bool(returnedVariant),"A collected identity could not request new resource generations.");
+    block=false;
+    await(manager,[&]{return returned.state()==ResourceState::Ready&&returnedVariant.state()==ResourceState::Ready&&manager.stats().staleResults>previousStale;});
+    require(returned.snapshot()->rgba[0]==12&&returnedVariant.snapshot()->rgba[0]==14&&returned.snapshot().revision()>retained.revision()&&
+        !original.snapshot()&&!second.snapshot(),"An obsolete collected completion replaced or reconnected a returning source.");
+    require(derived.snapshot().revision()==derivedRevision&&derived.snapshot()->rgba[0]==8,"Collection retired an unrelated derived resource.");
+    manager.forget("collected-source");manager.discard("collected-source");
+    require(!manager.request<DecodedImage>(AssetRef<DecodedImage>{"collected-source"},loader),"Collection revived an explicitly deleted identity.");
+}
 void retentionAndVariants() {
     ResourceConfig config; config.cpuRetentionBytes=0; config.idleGrace=std::chrono::milliseconds{0}; config.maximumQueued=1;
     ResourceManager manager(config);
@@ -219,6 +247,6 @@ void supersededDerivedWork() {
 }
 }
 int main() {
-    try { handlesAndVersions(); failureAndStaleness(); retentionAndVariants(); dependencyAndWatcher(); shutdown();boundedQueueAndPriority();seedLifetimeAndIdentityRevisions();dependencyClosureAndFailedRetention();derivedFileStateValidation();transientDerivedIdentity();supersededDerivedWork();std::cout<<"Resource lifecycle checks passed.\n"; }
+    try { handlesAndVersions(); failureAndStaleness(); reusableRetirement(); retentionAndVariants(); dependencyAndWatcher(); shutdown();boundedQueueAndPriority();seedLifetimeAndIdentityRevisions();dependencyClosureAndFailedRetention();derivedFileStateValidation();transientDerivedIdentity();supersededDerivedWork();std::cout<<"Resource lifecycle checks passed.\n"; }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

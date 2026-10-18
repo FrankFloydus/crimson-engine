@@ -32,6 +32,19 @@ std::string completedMessage(const QuaderImportResult& result){std::ostringstrea
     if(result.skippedSpots)out<<' '<<result.skippedSpots<<" spot lights skipped.";
     if(result.skippedLights)out<<' '<<result.skippedLights<<" lights exceeded scene limits.";
     if(!result.deferredMaterials.empty())out<<" Material refresh waits for the open material to be saved or closed.";return out.str();}
+void removeEmptyImportFolders(const std::filesystem::path& root,const QuaderImportResult& result){
+    const auto content=std::filesystem::weakly_canonical(std::filesystem::absolute(root)/"Content");
+    std::set<std::filesystem::path> directories;
+    for(const auto& file:result.files)if(!file.contents){
+        auto directory=checkedManagedAssetPath(root,file.id).parent_path();
+        const auto relative=directory.lexically_relative(content);
+        if(relative.empty()||relative=="."||relative.has_root_path()||*relative.begin()=="..")continue;
+        for(;directory!=content;directory=directory.parent_path())directories.insert(directory);
+    }
+    std::vector<std::filesystem::path> ordered(directories.begin(),directories.end());
+    std::sort(ordered.begin(),ordered.end(),[](const auto& a,const auto& b){return std::distance(a.begin(),a.end())>std::distance(b.begin(),b.end());});
+    for(const auto& directory:ordered){std::error_code ignored;if(std::filesystem::is_directory(directory,ignored)&&std::filesystem::is_empty(directory,ignored))std::filesystem::remove(directory,ignored);}
+}
 }
 struct QuaderBridge::Impl {
     struct Request {EntityId entity{};QuaderLink link;std::uint64_t generation{},serial{};bool manual{};std::optional<QuaderCompletedSave> completed;std::string key;
@@ -111,9 +124,14 @@ struct QuaderBridge::Impl {
                 if(current.manualBaseline)current.result->sourceKey=quaderSaveKey(*current.manualBaseline,current.request.link.importScale,current.request.link.refreshMaterials,current.request.link.syncLights);}
             if(!current.result||suspended)return;if(current.invalid){job.reset();return;}
             if(!currentCompletion(current)){states[current.request.entity].message="A newer Quader save superseded this import.";job.reset();return;}
-            if(hooks.dirtyMaterial)for(const auto& file:current.result->files)if(file.id.ends_with(".crimson-material")&&hooks.dirtyMaterial(canonicalAssetId(file.id))){
-                states[current.request.entity].message="Material refresh waits for the open material to be saved or closed.";return;}
-            if((hooks.assetPolicyRevision&&hooks.assetPolicyRevision()!=current.assetPolicyRevision)||!currentMaterialInputs(*current.result)){
+            if(hooks.dirtyMaterial)for(const auto& file:current.result->files)if(file.id.ends_with(".crimson-material")){
+                const auto destination=checkedManagedAssetPath(root,file.id);
+                const auto location=std::find_if(current.result->locations.begin(),current.result->locations.end(),[&](const auto& entry){return entry.file==destination;});
+                const auto id=location==current.result->locations.end()?canonicalAssetId(file.id):location->id;
+                if(hooks.dirtyMaterial(id)){states[current.request.entity].message="Material refresh waits for the open material to be saved or closed.";return;}
+            }
+            if((hooks.assetPolicyRevision&&hooks.assetPolicyRevision()!=current.assetPolicyRevision)||
+                (current.result->locationRevision&&*current.result->locationRevision!=contentStorageRevision(root))||!currentMaterialInputs(*current.result)){
                 current.result.reset();current.blockedMaterials.clear();states[current.request.entity].message="Crimson material assets changed; preparing the current versions...";return;}
             if(!hooks.applyImport)throw std::runtime_error("No Quader scene publication owner is available.");
             std::vector<AssetFileChange> rollback;rollback.reserve(current.result->files.size()+1);for(const auto& file:current.result->files)rollback.push_back({file.id,previousFile(root,file.id)});
@@ -136,6 +154,7 @@ struct QuaderBridge::Impl {
             auto& state=states[current.request.entity];state.message=completedMessage(*current.result);state.deferred=current.result->deferredMaterials;state.failures=0;state.failedKey.clear();
             consume(state,current.result->sourceKey);consume(state,current.request.key);
             if(hooks.publishAssets){try{hooks.publishAssets(*current.result);}catch(const std::exception& error){state.message+=" Asset refresh: "+std::string(error.what());}}
+            removeEmptyImportFolders(root,*current.result);
             job.reset();
         }catch(const std::exception& error){if(!current.invalid)fail(current.request,error.what());job.reset();}
     }

@@ -21,6 +21,7 @@ foreach(required IN ITEMS quader_bridge_reader.dll include/quader_bridge_reader.
     endif()
 endforeach()
 file(GLOB_RECURSE payload_files RELATIVE "${reader_source}" LIST_DIRECTORIES FALSE "${reader_source}/*")
+list(FILTER payload_files EXCLUDE REGEX "^source/")
 file(MAKE_DIRECTORY "${reader_destination}")
 file(GLOB_RECURSE staged_files RELATIVE "${reader_destination}" LIST_DIRECTORIES FALSE "${reader_destination}/*")
 foreach(staged IN LISTS staged_files)

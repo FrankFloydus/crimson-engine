@@ -8,10 +8,12 @@ $ErrorActionPreference = 'Stop'
 $nativeRoot = (Resolve-Path -LiteralPath $QuaderRoot).Path
 $binaryRoot = (Resolve-Path -LiteralPath $BuildRoot).Path
 $payloadRoot = [IO.Path]::GetFullPath($Destination)
-$sourceHeader = Join-Path $nativeRoot 'src/io/bridge/quader_bridge_reader.hpp'
+$overrideRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../third_party/quader_reader/source')).Path
+$sourceHeader = Join-Path $overrideRoot 'quader_bridge_reader.hpp'
+$sourceImplementation = Join-Path $overrideRoot 'quader_bridge_reader.cpp'
 $sourceReader = Join-Path $binaryRoot 'Release/quader_bridge_reader.dll'
 $cacheFile = Join-Path $binaryRoot 'CMakeCache.txt'
-foreach ($required in @($sourceHeader, $sourceReader, $cacheFile)) {
+foreach ($required in @($sourceHeader, $sourceImplementation, $sourceReader, $cacheFile)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing reader staging input: $required" }
 }
 $cache = @{}
@@ -23,6 +25,10 @@ if (-not $cache.ContainsKey('CMAKE_HOME_DIRECTORY') -or
     throw 'The reader build was configured from a different native source checkout.'
 }
 if ($cache['VCPKG_TARGET_TRIPLET'] -ne 'x64-windows') { throw 'Reader staging requires the x64-windows Release dependency closure.' }
+if (-not $cache.ContainsKey('CC_QUADER_READER_OVERRIDE_ROOT') -or
+    -not $overrideRoot.Equals((Resolve-Path -LiteralPath $cache['CC_QUADER_READER_OVERRIDE_ROOT']).Path, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The reader must be built with Crimson source overrides through Build-QuaderReader.ps1.'
+}
 $installedRoot = $cache['VCPKG_INSTALLED_DIR']
 $releaseBin = Join-Path $installedRoot 'x64-windows/bin'
 if (-not (Test-Path -LiteralPath $releaseBin -PathType Container)) { throw 'The configured reader dependency cache is missing.' }
@@ -153,6 +159,8 @@ $provenance = [ordered]@{
     native_worktree_diff_sha256 = (Get-FileHash -LiteralPath $diffPath -Algorithm SHA256).Hash.ToLowerInvariant()
     native_source_inputs_sha256 = $sourceDigest
     native_untracked_build_inputs = $usedUntracked
+    crimson_reader_source = 'third_party/quader_reader/source/quader_bridge_reader.cpp'
+    crimson_reader_source_sha256 = (Get-FileHash -LiteralPath $sourceImplementation -Algorithm SHA256).Hash.ToLowerInvariant()
     header_sha256 = (Get-FileHash -LiteralPath $sourceHeader -Algorithm SHA256).Hash.ToLowerInvariant()
     files = $records
 }

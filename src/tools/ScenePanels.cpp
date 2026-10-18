@@ -3,6 +3,7 @@
 #include "GameplayTagControls.h"
 #include "EnemyInspectorControls.h"
 #include "PlayerInputInspectorControls.h"
+#include "MovementInspectorControls.h"
 #include "CollisionFilterControls.h"
 #include "editor/CollisionLayersDocument.h"
 #include "SceneOutlinerColor.h"
@@ -45,10 +46,10 @@ enum class Edit { None, Name, InlineName, Visible,
     DirectionEnabled, DirectionColor, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,
     PointEnabled, PointColor, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
-    DirectionReceivers,DirectionCasters,DirectionRevealReceivers,DirectionReveal,DirectionRevealStrength,
-    PointReceivers,PointCasters,PointRevealReceivers,PointReveal,PointRevealStrength,
+    DirectionReceivers,DirectionCasters,
+    PointReceivers,PointCasters,
     ModelCastShadows, ModelReceiveShadows,ModelFadeWhenOccluding,
-    ModelDirectReceivers,ModelCasterScope,ModelAmbientReceivers,
+    ModelDirectReceivers,ModelCasterScope,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
     Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
     EnvironmentSkyTop, EnvironmentSkyHorizon, EnvironmentSkyCurve,
@@ -62,18 +63,15 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentToneMapping, EnvironmentReinhardWhite, EnvironmentAcesWhite, EnvironmentAgxWhite, EnvironmentAgxContrast,
     EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
-    EnvironmentAmbientEnabled,EnvironmentAmbientStrength,EnvironmentAmbientFloor,EnvironmentAmbientThreshold,EnvironmentAmbientTransition,EnvironmentAmbientShadows,EnvironmentAmbientEmission,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
     EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
     CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
-    MotorEnabled,NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,PlayerJumpHeight,
+    NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,
+    MovementEnabled,PlayerJumpHeight,
     PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,PlayerStairSmoothingTime,
     EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
     VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
-    CharacterRigEnabled,
-    CharacterRigLast=CharacterRigEnabled+static_cast<unsigned>(ActorLightRigControl::ShadowNormalBias),
-    CharacterRevealEnabled,CharacterRevealSpread,
     ColliderShape,ColliderSizeX,ColliderSizeY,ColliderSizeZ,ColliderRadius,ColliderHeight,ColliderSource,ColliderVisible,ColliderColor,
     CameraOffset,CameraRotation,CameraFov,CameraNear,CameraFar };
 enum class Panel { None, Outliner, Inspector };
@@ -84,10 +82,7 @@ Panel owner(Edit edit) {
 }
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
 bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentSsaoQuality; }
-bool rigEdit(Edit edit) { return edit>=Edit::CharacterRigEnabled && edit<=Edit::CharacterRigLast; }
-bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointRevealStrength; }
-static_assert(static_cast<unsigned>(Edit::CharacterRigLast)-static_cast<unsigned>(Edit::CharacterRigEnabled)==
-    static_cast<unsigned>(ActorLightRigControl::ShadowNormalBias));
+bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointCasters; }
 struct PanelsState {
     SceneDocument* document{};
     uint64_t documentGeneration{};
@@ -412,14 +407,7 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
         roleEdit(directional?Edit::DirectionCasters:Edit::PointCasters,"Change light shadow casters",
             drawLightingMaskControl("Shadow Casters",roles.shadowCasterMask));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Meshes allowed to block THIS light, independently of lit receivers. Enable Character for player shadows from this light.");
-        roleEdit(directional?Edit::DirectionReveal:Edit::PointReveal,"Toggle light ambient contribution",ImGui::Checkbox("Affect Ambient Darkness",&roles.ambientReveal));
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reveal direct and environment lighting near this source when Ambient Darkness is enabled.");
-        ImGui::BeginDisabled(!roles.ambientReveal);
-        roleEdit(directional?Edit::DirectionRevealReceivers:Edit::PointRevealReceivers,"Change light ambient receivers",
-            drawLightingMaskControl("Ambient Receivers",roles.ambientRevealMask));
-        roleEdit(directional?Edit::DirectionRevealStrength:Edit::PointRevealStrength,"Change light ambient strength",
-            ImGui::SliderFloat("Ambient Strength",&roles.ambientRevealStrength,0,1,"%.3f"));
-        ImGui::EndDisabled();ImGui::TreePop();
+        ImGui::TreePop();
     }
     if(lightRoleEdit(state.active) && (!activeRoleDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     ImGui::PopID();
@@ -776,15 +764,6 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         });
         if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     }
-    if(ImGui::CollapsingHeader("Ambient Darkness")) {
-        ImGui::PushID("Ambient darkness");
-        drawAmbientVisibilityControls(value.ambientVisibility,[&](AmbientVisibilityControl control,bool changed) {
-            constexpr std::array<Edit,7> properties{Edit::EnvironmentAmbientEnabled,Edit::EnvironmentAmbientStrength,
-                Edit::EnvironmentAmbientFloor,Edit::EnvironmentAmbientThreshold,Edit::EnvironmentAmbientTransition,Edit::EnvironmentAmbientShadows,Edit::EnvironmentAmbientEmission};
-            field(properties[static_cast<unsigned>(control)],"Change ambient darkness",changed);
-        });
-        ImGui::PopID();
-    }
     ImGui::PopID();
     // Collapsing a section or switching sources removes its active widget.
     if(environmentEdit(state.active) && (!activeFieldDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
@@ -1099,8 +1078,8 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
         if(!activeDrawn && state.active>=Edit::EnemyBehaviour && state.active<=Edit::EnemyMaxWait)finishEdit(document,state,state.active);
     }
     if(record.playerInput && section==SceneComponentKind::PlayerInput) {
-        static_assert(static_cast<unsigned>(Edit::PlayerStairSmoothingTime)-static_cast<unsigned>(Edit::PlayerInputEnabled)==
-            static_cast<unsigned>(PlayerInputInspectorControl::StairSmoothingTime));
+        static_assert(static_cast<unsigned>(Edit::PlayerInvertY)-static_cast<unsigned>(Edit::PlayerInputEnabled)==
+            static_cast<unsigned>(PlayerInputInspectorControl::InvertY));
         bool activeDrawn=false;
         if(componentHeader(state,record,SceneComponentKind::PlayerInput)) {
             auto value=*record.playerInput;
@@ -1112,17 +1091,21 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Controlled Player");
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
         }
-        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerStairSmoothingTime)finishEdit(document,state,state.active);
+        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerInvertY)finishEdit(document,state,state.active);
     }
-    if(record.motor && section==SceneComponentKind::Motor) {
-        auto value=*record.motor;
-        if(componentHeader(state,record,SceneComponentKind::Motor)) {
-            const bool enabled=ImGui::Checkbox("Enabled##motor",&value.enabled);
-            propertyEdit(document,state,Edit::MotorEnabled,"Toggle motor",enabled,
-                changeEntity(record.id,[value](auto& entity){entity.motor=value;}));
-        } else if(state.active==Edit::MotorEnabled) {
-            finishEdit(document,state,state.active);
+    if(record.movement && section==SceneComponentKind::Movement) {
+        static_assert(static_cast<unsigned>(Edit::PlayerStairSmoothingTime)-static_cast<unsigned>(Edit::MovementEnabled)==
+            static_cast<unsigned>(MovementInspectorControl::StairSmoothingTime));
+        bool activeDrawn=false;
+        if(componentHeader(state,record,SceneComponentKind::Movement)) {
+            auto value=*record.movement;
+            drawMovementInspectorControls(value,[&](MovementInspectorControl control,const char* label,bool changed) {
+                const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::MovementEnabled)+static_cast<unsigned>(control));
+                propertyEdit(document,state,property,label,changed,changeEntity(record.id,[value](auto& entity){entity.movement=value;}));
+                activeDrawn|=state.active==property;
+            });
         }
+        if(!activeDrawn && state.active>=Edit::MovementEnabled && state.active<=Edit::PlayerStairSmoothingTime)finishEdit(document,state,state.active);
     }
     if(record.navigation && section==SceneComponentKind::Navigation) {
         auto value=*record.navigation;
@@ -1157,32 +1140,6 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             propertyEdit(document,state,Edit::CharacterCollisionColor,"Change character collision color",color,
                 changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.controller->collisionColor=v;}));
         } else if(state.active==Edit::CharacterCollisionVisible || state.active==Edit::CharacterCollisionColor) {
-            finishEdit(document,state,state.active);
-        }
-    }
-    if(record.lightRig && section==SceneComponentKind::LightRig) {
-        auto value=*record.lightRig;bool activeRigDrawn=false;
-        if(componentHeader(state,record,SceneComponentKind::LightRig))
-            drawActorLightRigControls(value,[&](ActorLightRigControl control,const char* label,bool changed) {
-                const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::CharacterRigEnabled)+static_cast<unsigned>(control));
-                propertyEdit(document,state,property,label,changed,
-                    changeEntity(record.id,[rig=value](auto& entity){entity.lightRig=rig;}));
-                activeRigDrawn|=state.active==property;
-            },false);
-        if(rigEdit(state.active) && (!activeRigDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
-    }
-    if(record.darknessReveal && section==SceneComponentKind::DarknessReveal) {
-        auto value=*record.darknessReveal;
-        if(componentHeader(state,record,SceneComponentKind::DarknessReveal,0)) {
-            const bool enabled=ImGui::Checkbox("Enabled##character-reveal",&value.enabled);
-            propertyEdit(document,state,Edit::CharacterRevealEnabled,"Toggle character darkness reveal",enabled,
-                changeEntity(record.id,[value](auto& entity){entity.darknessReveal=value;}));
-            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Restore environmental lighting near this entity. Emits no light.");
-            const bool spread=ImGui::DragFloat("Spread (m)",&value.spread,.1f,.01f,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-            propertyEdit(document,state,Edit::CharacterRevealSpread,"Change character lighting spread",spread,
-                changeEntity(record.id,[value](auto& entity){entity.darknessReveal=value;}));
-            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Distance where Darkness Reveal falls to 50%. Independent of the Local World Light's radius.");
-        } else if(state.active==Edit::CharacterRevealEnabled||state.active==Edit::CharacterRevealSpread) {
             finishEdit(document,state,state.active);
         }
     }
@@ -1447,12 +1404,12 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             if(section==SceneComponentKind::Directional && record.directional) {
                 if(componentHeader(state,record,SceneComponentKind::Directional))lightControls(document,state,record.id,true);
                 else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionNormalBias) ||
-                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionRevealStrength))finishEdit(document,state,state.active);
+                        (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionCasters))finishEdit(document,state,state.active);
             }
             if(section==SceneComponentKind::Point && record.point) {
                 if(componentHeader(state,record,SceneComponentKind::Point))lightControls(document,state,record.id,false);
                 else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
-                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointRevealStrength))finishEdit(document,state,state.active);
+                        (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters))finishEdit(document,state,state.active);
             }
             if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
                 auto castShadows=record.castShadows,receiveShadows=record.receiveShadows;
@@ -1475,10 +1432,9 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 if(ImGui::TreeNode("Advanced Lighting")) {
                     scopeEdit(Edit::ModelDirectReceivers,"Change model direct-light scope",drawLightingMaskControl("Direct Lighting",scopes.directReceiverMask));
                     scopeEdit(Edit::ModelCasterScope,"Change model shadow-caster scope",drawLightingMaskControl("Shadow Casting",scopes.shadowCasterMask));
-                    scopeEdit(Edit::ModelAmbientReceivers,"Change model ambient scope",drawLightingMaskControl("Ambient Darkness",scopes.ambientReceiverMask));
                     ImGui::TreePop();
                 }
-                if(state.active>=Edit::ModelDirectReceivers && state.active<=Edit::ModelAmbientReceivers &&
+                if((state.active==Edit::ModelDirectReceivers || state.active==Edit::ModelCasterScope) &&
                    (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
                 modelAnimationControls(document,state,record,assets);
                 modelInformation(document,state,record,assets,renderer,openMaterial);

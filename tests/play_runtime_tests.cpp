@@ -20,7 +20,7 @@ void require(bool value,const char* message){if(!value)throw std::runtime_error(
 void fixture(SceneDocument& document) {
     require(document.edit("Fixture",[](auto& records,auto& properties){
         records.clear();EntityRecord floor;floor.id=1;floor.name="Floor";floor.collider=SceneCollider{{100,1,100}};floor.local=math::translation({0,-.5f,0});records.push_back(floor);
-        EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.motor.emplace();player.navigation.emplace();player.playerInput.emplace();player.local=math::translation({0,.05f,0});records.push_back(player);
+        EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.movement.emplace();player.navigation.emplace();player.playerInput.emplace();player.local=math::translation({0,.05f,0});records.push_back(player);
         EntityRecord visual;visual.id=3;visual.parent=2;visual.name="Visual";visual.local=math::translation({0,1,0});records.push_back(visual);
         properties.playerCharacter=2;
     }),"Cannot prepare runtime fixture.");
@@ -184,7 +184,7 @@ void followCameraTransformLocks() {
         // Following a visual child also depends on that visual's Character ancestor.
         follow.cameraFollow.emplace();follow.cameraFollow->target=3;follow.cameraFollow->offset={0,5,5};records.push_back(follow);properties.activeCamera=4;
         EntityRecord child;child.id=5;child.parent=4;child.name="Camera child";child.local=math::translation({0,2,0});records.push_back(child);
-        EntityRecord other;other.id=6;other.name="Unrelated falling actor";other.actor.emplace();other.controller.emplace();other.motor.emplace();other.local=math::translation({8,100,0});records.push_back(other);
+        EntityRecord other;other.id=6;other.name="Unrelated falling actor";other.actor.emplace();other.controller.emplace();other.movement.emplace();other.local=math::translation({8,100,0});records.push_back(other);
         EntityRecord chained;chained.id=7;chained.name="Chained follow camera";chained.camera.emplace();chained.cameraFollow.emplace();chained.cameraFollow->target=5;chained.cameraFollow->offset={3,3,3};records.push_back(chained);
     }),"Cannot prepare following-camera lock fixture.");
     PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start camera-lock runtime.");
@@ -211,7 +211,7 @@ void followCameraTransformLocks() {
 void directionalInputRespectsRoleAndComponentChanges() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     require(authored.edit("Other input-capable actor",[](auto& records,auto&){
-        EntityRecord actor;actor.id=4;actor.name="Other actor";actor.actor.emplace();actor.controller.emplace();actor.motor.emplace();
+        EntityRecord actor;actor.id=4;actor.name="Other actor";actor.actor.emplace();actor.controller.emplace();actor.movement.emplace();
         actor.playerInput.emplace();actor.local=math::translation({0,.05f,4});records.push_back(actor);
     }),"Cannot create directional ownership fixture.");
     PlaySession play(root);require(startWithNavigation(play,authored),"Cannot start directional ownership fixture.");
@@ -236,7 +236,7 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
         floor.collider=SceneCollider{{40,1,40}};floor.local=math::translation({0,-.5f,0});records.push_back(floor);
         for(EntityId id:{2,4,5,6}) {
             EntityRecord actor;actor.id=id;actor.name="Actor "+std::to_string(id);actor.actor.emplace();actor.controller.emplace();
-            actor.motor.emplace();actor.navigation.emplace();actor.local=math::translation({-4,.05f,id==2?-5.f:id==4?2.f:id==5?-2.f:5.f});
+            actor.movement.emplace();actor.navigation.emplace();actor.local=math::translation({-4,.05f,id==2?-5.f:id==4?2.f:id==5?-2.f:5.f});
             if(id==2)actor.playerInput.emplace();
             if(id==6)actor.controller->profile=testing::agentProfile({2,.6f,45,.3f});
             records.push_back(actor);
@@ -291,7 +291,7 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
     require(position(2)[0]>released[0]+.2f,"External movement required enabled native input ownership.");
     require(play.clearActorMovement(2)&&play.clearActorMovement(5),"Could not clear independent runtime commands.");
     require(play.document().edit("Disable movement components",[](auto& records,auto&){
-        for(auto& r:records){if(r.id==4)r.motor->enabled=false;if(r.id==5)r.navigation->enabled=false;}
+        for(auto& r:records){if(r.id==4)r.movement->enabled=false;if(r.id==5)r.navigation->enabled=false;}
     }),"Cannot disable actor components.");
     require(!play.setActorMovement(4,{1,0,0})&&!play.setActorDestination(5,{0,0,0})&&play.setActorMovement(5,{1,0,0}),
         "Disabled Motor/Navigation Agent capabilities were not respected independently.");
@@ -300,7 +300,7 @@ void composedActorsShareNavigationAndKeepIndependentCommands() {
     play.advance(0,Vec2{},camera());
     require(testing::waitForNavigation(play)&&play.navigationBuildCount()>initialBuilds,"A world change did not rebuild the affected retained clearance tiles.");
     require(play.document().transient()&&authored.scene().find(1)->collider->size==Vec3{40,1,40}&&
-        authored.scene().find(4)->motor->enabled&&authored.scene().find(5)->navigation->enabled,
+        authored.scene().find(4)->movement->enabled&&authored.scene().find(5)->navigation->enabled,
         "Runtime component edits changed the authored actors or geometry.");
 }
 

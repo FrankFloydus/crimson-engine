@@ -164,7 +164,7 @@ template<class Read> void touchingCorner(Renderer& renderer,const ShaderCompileC
     blocker.model.transform={0,0,-2,0, 0,1.5f,0,0, 1,0,0,0, 0,1.5f,2,1};
     const std::array casters{receiver,blocker};
     SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
-    settings.environment.ambientVisibility.enabled=false;settings.environment.glow.enabled=false;
+settings.environment.glow.enabled=false;
     settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
     settings.camera.position={.0035f,1.5f,.012f};settings.camera.target={.0035f,1.5f,0};
     settings.camera.nearPlane=.0001f;settings.camera.fov=45;
@@ -561,7 +561,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         // geometry, so a correctly remapped kernel must reproduce one source.
         for (std::size_t i=1;i<lights.size();++i) {
             lights[i].roles.receiverMask=0;lights[i].roles.shadowCasterMask=0;
-            lights[i].roles.ambientReveal=false;
+
         }
         scene.pointLights=lights;DecodedImage neighbors;
         for (unsigned attempt=0;attempt<8;++attempt) {
@@ -789,16 +789,15 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     RenderModelInstance animatedReceiver;animatedReceiver.entityId=700;animatedReceiver.model.asset=animated;animatedReceiver.pose=animatedPose;
     RenderModelInstance referenceReceiver=animatedReceiver;referenceReceiver.model.asset=reference;referenceReceiver.pose.reset();
     SceneSettings animationSettings;animationSettings.camera.position={0,0,6};animationSettings.camera.target={};animationSettings.camera.fov=45;
-    animationSettings.environment.enabled=false;animationSettings.environment.ambientVisibility.enabled=true;
-    animationSettings.environment.ambientVisibility.darknessFloor=1;
+    animationSettings.environment.enabled=false;
+
     // Illuminate the two-sided fixture from both directions. Lit parity uses
     // an orientation-preserving nonuniform blend; reflected geometry is tested
     // separately below without depending on the PBR backface convention.
     std::array<PointLight,2> animationLights;auto& animationLight=animationLights[0];
     animationLight.entityId=701;animationLight.position={0,0,4};animationLight.radius=12;animationLight.intensity=60;
     animationLights[1]=animationLight;animationLights[1].entityId=702;animationLights[1].position={0,0,-4};
-    CharacterShadowSource animationActorShadow;animationActorShadow.owner=99;
-    RenderScene animationScene{animationSettings,{}};animationScene.actorShadows=std::span(&animationActorShadow,1);animationScene.sceneMode=true;animationScene.pointLights=animationLights;
+    RenderScene animationScene{animationSettings,{}};animationScene.sceneMode=true;animationScene.pointLights=animationLights;
     const auto renderAnimated=[&](const RenderModelInstance& instance){animationScene.instances=std::span(&instance,1);renderer.render(animationScene);return read(renderer.viewportTexture());};
     const auto equivalentAnimation=[&](const DecodedImage& gpu,const DecodedImage& cpu,const char* reason){
         std::size_t changed{};unsigned maximum{};std::uint64_t total{};
@@ -875,12 +874,6 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     animatedReceiver.actorOwner=referenceReceiver.actorOwner=99;
     animatedReceiver.lightingCategory=referenceReceiver.lightingCategory=lighting_scope::Character;
     animatedReceiver.lightingScopes.shadowCasterMask=referenceReceiver.lightingScopes.shadowCasterMask=lighting_scope::Character;
-    animationLight.castShadows=false;animationActorShadow.enabled=true;animationActorShadow.strength=1;
-    animationActorShadow.direction={0,0,-1};animationActorShadow.distance=10;
-    const auto cpuCharacter=animationShadow(referenceReceiver);
-    check(brightness(cpuCharacter,animationSettings.camera,{blockerCenter[0],blockerCenter[1],0})<brightness(animatedClear,animationSettings.camera,{blockerCenter[0],blockerCenter[1],0})*.5,
-        "Animated dedicated-shadow parity fixture has no visible ground silhouette.");
-    equivalentAnimation(animationShadow(animatedReceiver),cpuCharacter,"Dedicated player shadow caster did not use GPU-deformed vertices.");
     // A reflected skin blend reverses winding. Test its geometry with Unlit
     // receivers, so the established two-sided PBR NoV rejection cannot turn a
     // correct CPU reference black. Depth, picking and both shadow types still
@@ -894,7 +887,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     reflectedPose->bounds=reflectedReference->bounds;check(renderer.prepareModel(*reflectedReference),renderer.modelStatus());
     auto reflectedGpu=animatedReceiver;reflectedGpu.pose=reflectedPose;reflectedGpu.shading=MaterialShading::Unlit;reflectedGpu.model.transform={};
     auto reflectedCpu=referenceReceiver;reflectedCpu.model.asset=reflectedReference;reflectedCpu.shading=MaterialShading::Unlit;reflectedCpu.model.transform={};
-    animationScene.shadowWorldId=0;animationScene.shadowInstances={};animationActorShadow={};animationActorShadow.owner=99;animationLight.castShadows=false;
+    animationScene.shadowWorldId=0;animationScene.shadowInstances={};animationLight.castShadows=false;
     const auto reflectedCpuColor=renderAnimated(reflectedCpu);const auto reflectedGpuColor=renderAnimated(reflectedGpu);
     const auto reflectedCenter=(reflectedReference->bounds.minimum+reflectedReference->bounds.maximum)*.5;
     check(brightness(reflectedCpuColor,animationSettings.camera,reflectedCenter)>30&&brightness(reflectedGpuColor,animationSettings.camera,reflectedCenter)>30,
@@ -914,12 +907,6 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(brightness(reflectedCpuPoint,animationSettings.camera,reflectedFloor)<brightness(reflectedClear,animationSettings.camera,reflectedFloor)*.5,
         "Reflected point-shadow parity fixture has no visible silhouette.");
     equivalentAnimation(animationShadow(reflectedGpu),reflectedCpuPoint,"Reflected GPU point shadow differs from CPU geometry.");
-    animationLight.castShadows=false;animationActorShadow.enabled=true;animationActorShadow.strength=1;
-    animationActorShadow.direction={0,0,-1};animationActorShadow.distance=10;
-    const auto reflectedCpuKey=animationShadow(reflectedCpu);
-    check(brightness(reflectedCpuKey,animationSettings.camera,{reflectedBlocker[0],reflectedBlocker[1],0})<brightness(reflectedClear,animationSettings.camera,{reflectedBlocker[0],reflectedBlocker[1],0})*.5,
-        "Reflected dedicated-shadow parity fixture has no visible silhouette.");
-    equivalentAnimation(animationShadow(reflectedGpu),reflectedCpuKey,"Reflected GPU dedicated silhouette differs from CPU geometry.");
     resources.stop();frame=renderer.drainPending(frame);
 }
 }

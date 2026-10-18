@@ -520,8 +520,12 @@ void registerAssetPaths(const fs::path& root,std::span<const StoredAssetPath> pa
 void registerAssetPath(const fs::path& root,const std::string& id,const fs::path& file) {
     const StoredAssetPath entry{id,file};registerAssetPaths(root,std::span(&entry,1));
 }
-std::string prepareAssetPathRegistration(const fs::path& root,std::span<const StoredAssetPath> paths) {
+std::string prepareAssetPathRegistration(const fs::path& root,std::span<const StoredAssetPath> paths,std::span<const std::string> removedIds) {
     std::lock_guard lock(storageMutex);auto j=index(root);const auto base=normalized(root);bool changed=false;
+    for(const auto& id:removedIds) {
+        if(!isAssetUuid(id)||isEngineAssetId(id))throw std::runtime_error("Asset location removal requires a managed UUID.");
+        changed=j["assets"].erase(id)!=0||changed;
+    }
     std::unordered_map<std::string,std::string> assignments;
     for(const auto& entry:paths) {
         if(!isAssetUuid(entry.id))throw std::runtime_error("Asset registration requires a UUID.");
@@ -693,6 +697,73 @@ void initializeQuaderSceneBundles(const fs::path& rootValue) {
         }catch(...){if(!fs::exists(root/".crimson/content-move.json")){try{removeOwned(root,stage);}catch(...){/* Retain staging evidence if cleanup fails. */}}throw;}
         std::sort(oldDirectories.begin(),oldDirectories.end(),[](const auto& a,const auto& b){return a.native().size()>b.native().size();});
         for(const auto& directory:oldDirectories){std::error_code ignored;if(fs::is_directory(directory)&&fs::is_empty(directory))fs::remove(directory,ignored);}
+    }
+    // Adopt the former flat generated layout once. Asset UUIDs and aliases
+    // remain authoritative; moving bytes never rewrites scenes or materials.
+    // Authored/manual paths outside those exact old folders stay where they are.
+    {
+        const auto before=index(root);auto relocated=before;std::vector<ContentPathMove> moves;
+        std::set<std::string> reserved,claimed;std::vector<fs::path> formerDirectories;
+        for(const auto& value:before.at("assets"))reserved.insert(lower(value.get<std::string>()));
+        const auto flatModels=checkedRelative(root,"Content/models"),flatMaterials=checkedRelative(root,"Content/materials"),flatTextures=checkedRelative(root,"Content/textures");
+        const auto samePath=[&](const fs::path& a,const fs::path& b){return lower(utf8(a))==lower(utf8(b));};
+        const auto generated=[&](const std::string& id,const fs::path& folder,const std::string& legacyPrefix)->std::optional<fs::path>{
+            if(deleted.contains(id)||isEngineAssetId(id))return {};
+            const auto found=before.at("assets").find(id);if(found==before.at("assets").end())return {};
+            const auto file=checkedContentPath(root,root/pathFromUtf8(found->get<std::string>()));
+            if(!samePath(file.parent_path(),folder)||!lower(utf8(file.filename())).starts_with("quader-")||!fs::is_regular_file(file))return {};
+            if(const auto aliases=before.find("aliases");aliases!=before.end())for(auto it=aliases->begin();it!=aliases->end();++it)
+                if(it.value()==id&&it.key().starts_with(legacyPrefix))return file;
+            const auto old="assets/"+utf8(file.lexically_relative(content));
+            if(old.starts_with(legacyPrefix)&&canonicalAssetId(old)==id)return file;
+            return {};
+        };
+        const auto relocate=[&](const std::string& id,const fs::path& from,const fs::path& requested){
+            if(!claimed.insert(id).second)return;
+            const auto relative=uniquePath(root,requested.lexically_relative(root),reserved),to=checkedRelative(root,relative);
+            moves.push_back({from,to,false});relocated["assets"][id]=utf8(relative);formerDirectories.push_back(from.parent_path());
+        };
+        const auto imageReferences=[](auto&& self,const Json& value,std::set<std::string>& images)->void {
+            if(value.is_object())for(auto it=value.begin();it!=value.end();++it){
+                if(it.key()=="image"&&it.value().is_string())images.insert(canonicalAssetId(it.value().get<std::string>()));
+                else self(self,it.value(),images);
+            }else if(value.is_array())for(const auto& child:value)self(self,child,images);
+        };
+        // Ordered bundle/asset identities give shared native resources one
+        // deterministic destination without duplicating their files or UUIDs.
+        const auto retired=checkedRelative(root,fs::path(".crimson")/pathFromUtf8(".staging-quader-layout-"+newAssetId()));
+        for(auto it=groups.begin();it!=groups.end();){
+            auto& group=it->second;
+            if(group.bundle.models.empty()){
+                moves.push_back({group.file,retired/pathFromUtf8(group.bundle.id+".crimson-quader"),false});
+                relocated["assets"].erase(group.bundle.id);formerDirectories.push_back(group.file.parent_path());it=groups.erase(it);continue;
+            }
+            const auto directory=quaderSceneContentDirectory(root,group.bundle);
+            if(samePath(group.file.parent_path(),flatModels)){
+                relocate(group.bundle.id,group.file,defaultQuaderSceneBundlePath(root,group.bundle));
+                group.file=checkedRelative(root,pathFromUtf8(relocated.at("assets").at(group.bundle.id).get<std::string>()));
+            }
+            std::set<std::string> materials;
+            for(const auto& model:group.bundle.models){const auto manifest=Json::parse(model.manifest);
+                if(const auto mapped=manifest.find("materialAssets");mapped!=manifest.end())for(const auto& value:*mapped)materials.insert(canonicalAssetId(value.get<std::string>()));}
+            for(const auto& id:materials){
+                const auto file=generated(id,flatMaterials,"assets/materials/quader-"+group.bundle.projectId+"-");
+                if(!file||file->extension()!=".crimson-material")continue;
+                Json material;try{material=Json::parse(boundedRead(*file));}catch(const std::exception&){continue;}
+                relocate(id,*file,directory/"materials"/file->filename());
+                std::set<std::string> images;imageReferences(imageReferences,material,images);
+                for(const auto& imageId:images)if(const auto texture=generated(imageId,flatTextures,"assets/textures/quader-"))
+                    if(image(*texture))relocate(imageId,*texture,directory/"textures"/texture->filename());
+            }
+            ++it;
+        }
+        if(!moves.empty()){
+            std::set<std::string> owners;for(const auto& value:relocated.at("assets"))
+                if(!owners.insert(lower(value.get<std::string>())).second)throw std::runtime_error("Two identities claim the same organized Quader content file.");
+            try{publishMoves(root,moves,std::move(relocated),{});if(fs::exists(retired))removeOwned(root,retired);}
+            catch(...){if(!fs::exists(root/".crimson/content-move.json")&&fs::exists(retired)){try{removeOwned(root,retired);}catch(...){}}throw;}
+            for(const auto& directory:formerDirectories){std::error_code ignored;if(fs::is_directory(directory,ignored)&&fs::is_empty(directory,ignored))fs::remove(directory,ignored);}
+        }
     }
     // The bundle is the sole durable geometry source. Private cache removal,
     // partial writes and missing location metadata all recover from it without

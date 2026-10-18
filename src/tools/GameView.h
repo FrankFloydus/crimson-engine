@@ -58,7 +58,6 @@ public:
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
     void drawRoute(const Camera&,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
-    void drawActorLightRigs(const Camera&,const Scene&,const NavigationAgentProfileQuery& profiles={});
     void drawAttributeDebug(const Camera&,const Scene&,EntityId target,std::span<const AttributeDebugRow> rows,
                             const NavigationAgentProfileQuery& profiles={},const ModelBoundsQuery& modelBounds={});
 private:

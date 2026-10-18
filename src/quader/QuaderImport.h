@@ -15,6 +15,8 @@ struct QuaderImportedMesh {
     std::shared_ptr<const CollisionMesh> collision;
     Mat4 local;
     bool visible{true};
+    std::string parentKey;
+    std::uint32_t order{};
 };
 struct QuaderImportedLight {
     std::string sourceKey,name;
@@ -22,6 +24,14 @@ struct QuaderImportedLight {
     Vec3 color{1,1,1};
     float intensity{},radius{};
     bool point{},castShadows{},visible{true};
+    std::string parentKey;
+    std::uint32_t order{};
+};
+struct QuaderImportedGroup {
+    std::string sourceKey,parentKey,name;
+    Mat4 local;
+    bool visible{true};
+    std::uint32_t order{};
 };
 struct QuaderMaterialInput {
     std::string id;
@@ -33,11 +43,15 @@ struct QuaderImportResult {
     std::string projectId,sceneId,sourceKey;
     std::vector<QuaderImportedMesh> meshes;
     std::vector<QuaderImportedLight> lights;
+    std::vector<QuaderImportedGroup> groups;
     std::vector<std::string> deferredMaterials;
     std::vector<AssetFileChange> files;
     // Bundle members retain their authored UUIDs while their expanded files
     // live in the disposable import cache.
     std::vector<StoredAssetPath> locations;
+    // Publication also rechecks path ownership, including files whose bytes
+    // remained at a previous location after a concurrent registration change.
+    std::optional<std::uint64_t> locationRevision;
     std::vector<QuaderMaterialInput> materialInputs;
     std::vector<std::string> assetIds;
     std::vector<std::shared_ptr<const ModelAsset>> preparedModels;
