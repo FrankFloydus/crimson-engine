@@ -140,6 +140,311 @@ void cancellationAndCameraLifetime() {
     play.advance(0,input,Camera{},false);play.advance(0,input,Camera{},true);const auto before=play.tickCount();
     ticks(play,input,1);require(play.tickCount()==before+1,"Removing a camera during suspension stopped Play.");
 }
+void staircaseFixture(SceneDocument& document) {
+    fixture(document);
+    require(document.edit("Add staircase",[](auto& records,auto&){
+        // Adjacent solid treads exercise both Jolt's walk-up correction and its
+        // grounded step-down snap. The wide final tread leaves room to brake.
+        for(int i=0;i<6;++i) {
+            const float left=1.f+1.2f*i,height=.18f*(i+1);
+            const float width=i==5?8.f:1.2f;
+            EntityRecord step;step.id=10+i;step.name="Stair tread";
+            step.local=math::translation({left+width*.5f,height*.5f,0});
+            step.collider=SceneCollider{{width,height,4}};records.push_back(step);
+        }
+    }),"Could not add the FPS staircase fixture.");
+}
+double eyeResidual(const PlaySession& play,double eye=defaultPlayerCameraTemplate().offset[1]) {
+    const auto camera=resolveGameCamera(play.presentationScene());
+    require(camera.has_value(),"Stair camera disappeared during Play.");
+    return camera->position[1]-position(play.presentationScene())[1]-eye;
+}
+void reachFirstSmoothedStep(PlaySession& play,GameInput& input) {
+    ticks(play,input,20);key(input,SDL_SCANCODE_D);
+    for(int i=0;i<60;++i) {
+        ticks(play,input,1);
+        if(eyeResidual(play)<-.015)return;
+    }
+    require(false,"Stair ascent did not produce a camera-only smoothing offset.");
+}
+void staircaseAscentDescentAndSettling() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-stairs";
+    SceneDocument authored(root);staircaseFixture(authored);
+    PlaySession play(root);require(play.start(authored),"Could not start the FPS staircase fixture.");
+    GameInput input;activate(input);ticks(play,input,20);
+    const double initialEye=resolveGameCamera(play.presentationScene())->position[1];
+    double previousActor=position(play.presentationScene())[1],previousEye=initialEye;
+    double largestAscent=0,largestEyeAscent=0;int rises=0;bool reachedStairs=false;
+    key(input,SDL_SCANCODE_D);
+    for(int i=0;i<180;++i) {
+        ticks(play,input,1);
+        const auto actor=position(play.presentationScene());
+        const double eye=resolveGameCamera(play.presentationScene())->position[1];
+        if(actor[1]>previousActor+.04)++rises;
+        largestAscent=std::max(largestAscent,actor[1]-previousActor);
+        largestEyeAscent=std::max(largestEyeAscent,eye-previousEye);
+        reachedStairs=reachedStairs || actor[1]>.1f;
+        if(!reachedStairs)require(eye>=initialEye-1e-4,"Stair smoothing dipped the eye before the first ascent.");
+        require(eyeResidual(play)<=1e-3,"Ascending stair smoothing overshot the authored eye height.");
+        previousActor=actor[1];previousEye=eye;
+        if(actor[0]>9)break;
+    }
+    require(rises>=5 && position(play.document().scene())[1]>1.f,"The staircase fixture did not traverse multiple ascending treads.");
+    require(largestAscent>.08 && largestEyeAscent<largestAscent*.7,"Stair ascent still moved the eye by the capsule's abrupt rise.");
+    key(input,SDL_SCANCODE_D,false);ticks(play,input,120);
+    require(std::abs(eyeResidual(play))<1e-4,"Stair ascent left the idle eye below its authored offset.");
+
+    previousActor=position(play.presentationScene())[1];previousEye=resolveGameCamera(play.presentationScene())->position[1];
+    double largestDescent=0,largestEyeDescent=0;int drops=0;
+    key(input,SDL_SCANCODE_A);
+    for(int i=0;i<200;++i) {
+        ticks(play,input,1);
+        const auto actor=position(play.presentationScene());
+        const double eye=resolveGameCamera(play.presentationScene())->position[1];
+        if(actor[1]<previousActor-.04)++drops;
+        largestDescent=std::max(largestDescent,previousActor-actor[1]);
+        largestEyeDescent=std::max(largestEyeDescent,previousEye-eye);
+        require(eyeResidual(play)>=-1e-3,"Descending stair smoothing overshot the authored eye height.");
+        previousActor=actor[1];previousEye=eye;
+        if(actor[0]<-.5f)break;
+    }
+    require(drops>=5 && position(play.document().scene())[1]<.1f,"The staircase fixture did not traverse multiple descending treads.");
+    require(largestDescent>.08 && largestEyeDescent<largestDescent*.7,"Stair descent still moved the eye by the capsule's abrupt drop.");
+    key(input,SDL_SCANCODE_A,false);ticks(play,input,120);
+    require(std::abs(eyeResidual(play))<1e-4,"Stair descent left the idle eye above its authored offset.");
+    require(!play.document().dirty() && play.document().history().size()==0,"Camera stair smoothing authored runtime scene data.");
+}
+void staircaseRenderTimingAndJumpIsolation() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-stairs";
+    SceneDocument authored(root);staircaseFixture(authored);
+    PlaySession slow(root),fast(root);require(slow.start(authored)&&fast.start(authored),"Could not start stair timing fixtures.");
+    GameInput slowInput,fastInput;activate(slowInput);activate(fastInput);ticks(slow,slowInput,20);ticks(fast,fastInput,20);
+    key(slowInput,SDL_SCANCODE_D);key(fastInput,SDL_SCANCODE_D);
+    // Compare the same quarter-tick presentation phase after each 60 Hz or
+    // 240 Hz render interval, including the first discontinuous stair rise.
+    slow.advance(Tick/4,slowInput,Camera{});fast.advance(Tick/4,fastInput,Camera{});
+    bool smoothed=false;
+    for(int i=0;i<105;++i) {
+        slow.advance(Tick,slowInput,Camera{});
+        for(int frame=0;frame<4;++frame)fast.advance(Tick/4,fastInput,Camera{});
+        require(std::abs(slow.interpolation()-fast.interpolation())<1e-9,"Stair timing fixtures compared different presentation phases.");
+        require(std::abs(resolveGameCamera(slow.presentationScene())->position[1]-resolveGameCamera(fast.presentationScene())->position[1])<1e-5,
+            "Stair camera smoothing depended on the render rate.");
+        require(math::length(position(slow.document().scene())-position(fast.document().scene()))<1e-5,
+            "Camera smoothing altered fixed-tick stair movement.");
+        smoothed=smoothed || eyeResidual(slow)<-.015;
+    }
+    require(smoothed,"Render timing fixtures did not reach a smoothed stair transition.");
+
+    SceneDocument flat(root);fixture(flat);PlaySession jump(root);require(jump.start(flat),"Could not start flat jump camera fixture.");
+    GameInput jumpInput;activate(jumpInput);ticks(jump,jumpInput,20);
+    key(jumpInput,SDL_SCANCODE_SPACE);ticks(jump,jumpInput,1);key(jumpInput,SDL_SCANCODE_SPACE,false);
+    for(int i=0;i<150;++i) {
+        jump.advance(Tick/2,jumpInput,Camera{});
+        require(std::abs(eyeResidual(jump))<1e-5,"Stair smoothing delayed a flat-ground jump or landing.");
+    }
+    PlaySession stairJump(root);require(stairJump.start(authored),"Could not start stair jump camera fixture.");
+    GameInput stairInput;activate(stairInput);reachFirstSmoothedStep(stairJump,stairInput);
+    // Fixed-tick calls present the previous pose at alpha=0. Publish almost
+    // all of the already accepted walking tick before measuring the residual,
+    // so its final stair correction cannot be mistaken for a jump correction.
+    const auto beforePresentation=stairJump.tickCount();
+    stairJump.advance(Tick*.9999,stairInput,Camera{});
+    require(stairJump.tickCount()==beforePresentation,"Stair jump setup unexpectedly advanced the physics clock.");
+    const double residual=eyeResidual(stairJump),startHeight=position(stairJump.document().scene())[1];
+    key(stairInput,SDL_SCANCODE_D,false);key(stairInput,SDL_SCANCODE_SPACE);
+    ticks(stairJump,stairInput,1);key(stairInput,SDL_SCANCODE_SPACE,false);
+    require(position(stairJump.document().scene())[1]>startHeight+.025,"Stair jump fixture did not leave support on its queued jump.");
+    double highest=startHeight;
+    for(int i=0;i<32;++i) {
+        ticks(stairJump,stairInput,1);highest=std::max(highest,static_cast<double>(position(stairJump.document().scene())[1]));
+        require(eyeResidual(stairJump)>=residual-.003,"Jumping from stairs fed ballistic motion into camera step smoothing.");
+    }
+    require(highest-startHeight>.8,"Jumping from a stair interrupted the normal jump arc.");
+    require(std::abs(eyeResidual(stairJump))<.01,"Residual stair smoothing did not settle naturally during the jump.");
+}
+void staircaseCameraResets() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-stairs";
+    SceneDocument authored(root);staircaseFixture(authored);
+    for(int change=0;change<5;++change) {
+        PlaySession play(root);require(play.start(authored),"Could not start a stair reset fixture.");
+        GameInput input;activate(input);reachFirstSmoothedStep(play,input);double eye=defaultPlayerCameraTemplate().offset[1];
+        if(change==0) {
+            require(play.document().edit("Teleport on stairs",[](auto& records,auto&){
+                for(auto& record:records)if(record.id==2){record.local[12]+=3;record.local[13]+=2;}
+            }),"Could not teleport the stair player.");
+        } else if(change==1) {
+            auto settings=defaultPlayerCameraTemplate();settings.offset[1]=1.42f;eye=settings.offset[1];
+            require(updateCameraAuthoring(play.document(),3,settings),"Could not edit a camera during a stair transition.");
+        } else if(change==2) {
+            require(play.document().edit("Replace stair camera",[](auto& records,auto& properties){
+                auto camera=*std::find_if(records.begin(),records.end(),[](const auto& record){return record.id==3;});
+                camera.id=4;records.push_back(camera);properties.activeCamera=4;
+            }),"Could not replace the active stair camera.");
+        } else if(change==3)play.advance(0,input,Camera{},false);
+        else require(play.document().beginTransform("Begin stair player transform",{2}),"Could not lock the stair player for an editor gesture.");
+        play.advance(0,input,Camera{});
+        require(std::abs(eyeResidual(play,eye))<1e-5,"A camera edit, teleport, replacement, suspension or transform lock retained stale stair smoothing.");
+        if(change==4)play.document().cancel();
+    }
+}
+void staircaseAuthoredResponseAndDisable() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-stairs";
+    SceneDocument fastAuthored(root),slowAuthored(root),disabledAuthored(root);
+    const auto authorTime=[](SceneDocument& document,float seconds) {
+        staircaseFixture(document);
+        require(document.edit("Set stair smoothing",[seconds](auto& records,auto&){
+            for(auto& record:records)if(record.id==2)record.playerInput->stairSmoothingTime=seconds;
+        }),"Could not author a stair smoothing response.");
+    };
+    authorTime(fastAuthored,.05f);authorTime(slowAuthored,.3f);authorTime(disabledAuthored,0);
+    PlaySession fast(root),slow(root),disabled(root);
+    require(fast.start(fastAuthored)&&slow.start(slowAuthored)&&disabled.start(disabledAuthored),
+        "Could not start authored stair response fixtures.");
+    GameInput fastInput,slowInput,disabledInput;activate(fastInput);activate(slowInput);activate(disabledInput);
+    ticks(fast,fastInput,20);ticks(slow,slowInput,20);ticks(disabled,disabledInput,20);
+    key(fastInput,SDL_SCANCODE_D);key(slowInput,SDL_SCANCODE_D);key(disabledInput,SDL_SCANCODE_D);
+    const auto advanceTogether=[&] {
+        ticks(fast,fastInput,1);ticks(slow,slowInput,1);ticks(disabled,disabledInput,1);
+        require(math::length(position(fast.document().scene())-position(slow.document().scene()))<1e-5 &&
+            math::length(position(fast.document().scene())-position(disabled.document().scene()))<1e-5,
+            "Authored camera stair smoothing changed physical player movement.");
+        require(std::abs(eyeResidual(disabled))<1e-5,"Zero stair smoothing still produced a camera offset.");
+    };
+    bool stepped=false;
+    for(int i=0;i<60;++i) {
+        advanceTogether();
+        if(position(fast.document().scene())[1]>.1f){stepped=true;break;}
+    }
+    require(stepped,"Authored stair response fixtures did not reach the first tread.");
+    key(fastInput,SDL_SCANCODE_D,false);key(slowInput,SDL_SCANCODE_D,false);key(disabledInput,SDL_SCANCODE_D,false);
+    for(int i=0;i<8;++i)advanceTogether();
+    const double fastLag=std::abs(eyeResidual(fast)),slowLag=std::abs(eyeResidual(slow));
+    require(slowLag>.03 && fastLag<slowLag*.25,
+        "A longer authored stair smoothing time did not retain more lag or settle more slowly.");
+    for(int i=0;i<90;++i)advanceTogether();
+    require(std::abs(eyeResidual(slow))<.001,"The slower authored stair response failed to settle at the eye height.");
+    key(fastInput,SDL_SCANCODE_D);key(slowInput,SDL_SCANCODE_D);key(disabledInput,SDL_SCANCODE_D);
+    for(int i=0;i<110;++i)advanceTogether();
+    require(position(disabled.document().scene())[1]>1.f,"Disabled stair smoothing fixture did not cross the remaining treads.");
+}
+void staircaseLiveResponseEditing() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-stairs";
+    SceneDocument authored(root);staircaseFixture(authored);
+    PlaySession play(root);require(play.start(authored),"Could not start the live stair response fixture.");
+    GameInput input;activate(input);reachFirstSmoothedStep(play,input);
+    look(input,0,120);play.advance(Tick*.9999,input,Camera{});
+    const auto beforeEdit=resolveGameCamera(play.presentationScene());
+    const auto forward=math::normalized(beforeEdit->target-beforeEdit->position);
+    require(forward[1]<-.15f,"Live stair response fixture did not establish an independent mouse look.");
+    const auto editTime=[&](float seconds) {
+        require(play.document().edit("Adjust stair smoothing",[seconds](auto& records,auto&){
+            for(auto& record:records)if(record.id==2)record.playerInput->stairSmoothingTime=seconds;
+        }),"Could not edit stair smoothing during Play.");
+    };
+    const auto beforeTicks=play.tickCount();const auto beforeActor=position(play.document().scene());
+    editTime(.2f);play.advance(0,input,Camera{});
+    require(play.tickCount()==beforeTicks && position(play.document().scene())==beforeActor && input.ownsKeyboard(),
+        "A live stair response edit advanced physics, moved the capsule or released gameplay input.");
+    require(eyeResidual(play)<-.01,"A positive live stair response edit discarded the pending camera correction.");
+    auto camera=resolveGameCamera(play.presentationScene());
+    require(math::length(math::normalized(camera->target-camera->position)-forward)<1e-5,
+        "A positive live stair response edit reset mouse look.");
+
+    editTime(0);play.advance(0,input,Camera{});
+    require(play.tickCount()==beforeTicks && position(play.document().scene())==beforeActor && input.ownsKeyboard(),
+        "Disabling stair smoothing advanced physics, moved the capsule or released gameplay input.");
+    require(std::abs(eyeResidual(play))<1e-5,"Disabling stair smoothing without a fixed tick retained pending camera lag.");
+    camera=resolveGameCamera(play.presentationScene());
+    require(math::length(math::normalized(camera->target-camera->position)-forward)<1e-5,
+        "Disabling stair smoothing reset mouse look.");
+    const double firstHeight=position(play.document().scene())[1];bool disabledStep=false;
+    for(int i=0;i<40;++i) {
+        ticks(play,input,1);
+        require(std::abs(eyeResidual(play))<1e-5,"A later step regenerated camera lag while stair smoothing was disabled.");
+        if(position(play.document().scene())[1]>firstHeight+.1){disabledStep=true;break;}
+    }
+    require(disabledStep,"Live stair response fixture did not cross a tread with smoothing disabled.");
+    require(play.document().undo(),"Could not undo disabling stair smoothing.");
+    play.advance(0,input,Camera{});
+    require(play.document().scene().find(2)->playerInput->stairSmoothingTime==.2f && input.ownsKeyboard(),
+        "Undo did not restore the authored stair response and preserve gameplay input ownership.");
+    require(std::abs(eyeResidual(play))<1e-5,"Reenabling stair smoothing restored stale camera lag.");
+    bool resumed=false;
+    for(int i=0;i<45;++i){ticks(play,input,1);if(eyeResidual(play)<-.015){resumed=true;break;}}
+    require(resumed,"Undo did not reenable camera smoothing for subsequent stairs.");
+    camera=resolveGameCamera(play.presentationScene());
+    require(math::length(math::normalized(camera->target-camera->position)-forward)<1e-5,
+        "Editing and undoing stair smoothing reset the player's view direction.");
+}
+void compactStaircaseCameraContinuity() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-compact-stairs";
+    for(bool triangles:{false,true})for(double speed:{5.,8.}) {
+        SceneDocument authored(root);fixture(authored);
+        require(authored.edit("Compact staircase",[triangles](auto& records,auto&){
+            for(auto& record:records)if(record.id==2)record.playerInput->stairSmoothingTime=.15f;
+            // Match ordinary close-spaced architectural stairs. The rounded
+            // capsule finishes each ascent in its normal sweep after Jolt's
+            // stair helper; separate triangle meshes also match Quader imports.
+            for(int i=0;i<8;++i) {
+                const float width=i==7?6.f:.375f,height=.25f;
+                EntityRecord step;step.id=10+i;step.name="Compact stair tread";
+                step.local=math::translation({1.f+.375f*i+width*.5f,.25f*i+height*.5f,0});
+                step.collider=SceneCollider{{width,height,4}};
+                if(triangles) {
+                    step.collider->shape=ColliderShape::Trimesh;
+                    step.collider->mesh=makeCollisionMesh({
+                        {-width*.5f,-height*.5f,-2},{width*.5f,-height*.5f,-2},
+                        {width*.5f,height*.5f,-2},{-width*.5f,height*.5f,-2},
+                        {-width*.5f,-height*.5f,2},{width*.5f,-height*.5f,2},
+                        {width*.5f,height*.5f,2},{-width*.5f,height*.5f,2}},
+                        {0,3,2,0,2,1,4,5,6,4,6,7,0,4,7,0,7,3,
+                         1,2,6,1,6,5,0,1,5,0,5,4,3,7,6,3,6,2});
+                }
+                records.push_back(step);
+            }
+        }),"Could not author compact staircase.");
+        PlaySession play(root),coarse(root);require(play.start(authored)&&coarse.start(authored),"Could not start compact staircase.");
+        require(play.setAttributeBase(2,stats::MovementSpeed,speed),"Could not set compact stair walking speed.");
+        require(coarse.setAttributeBase(2,stats::MovementSpeed,speed),"Could not set compact stair comparison speed.");
+        GameInput input,coarseInput;activate(input);activate(coarseInput);
+        ticks(play,input,20);ticks(coarse,coarseInput,20);key(input,SDL_SCANCODE_D);key(coarseInput,SDL_SCANCODE_D);
+        constexpr double Frame=Tick/4;
+        play.advance(Frame,input,Camera{});coarse.advance(Frame,coarseInput,Camera{});
+        double previousEye=resolveGameCamera(play.presentationScene())->position[1],previousVelocity=0;
+        double largestVelocityChange=0,largestLag=0;bool reachedTop=false;
+        for(int frame=0;frame<1000;++frame) {
+            play.advance(Frame,input,Camera{});
+            if(frame%4==3) {
+                coarse.advance(Tick,coarseInput,Camera{});
+                require(std::abs(play.interpolation()-coarse.interpolation())<1e-9,
+                    "Compact stairs compared different render phases.");
+                require(std::abs(resolveGameCamera(play.presentationScene())->position[1]-
+                    resolveGameCamera(coarse.presentationScene())->position[1])<1e-5,
+                    "Compact stair camera changed between 60 and 240 Hz rendering.");
+                require(math::length(position(play.document().scene())-position(coarse.document().scene()))<1e-5,
+                    "Compact stair render timing changed physical movement.");
+            }
+            const auto actor=position(play.presentationScene());
+            const double eye=resolveGameCamera(play.presentationScene())->position[1];
+            const double velocity=(eye-previousEye)/Frame;
+            largestVelocityChange=std::max(largestVelocityChange,std::abs(velocity-previousVelocity));
+            largestLag=std::max(largestLag,-eyeResidual(play));
+            require(velocity>-.02,"Compact stair ascent made the eye move backward.");
+            previousEye=eye;previousVelocity=velocity;
+            if(actor[0]>4.2f){reachedTop=actor[1]>1.95f;break;}
+        }
+        require(reachedTop,"Compact staircase was not traversed.");
+        // Bound the change of eye velocity, not only the biggest single rise:
+        // a missed 3 cm sweep produces a visible spike between small frames.
+        require(largestVelocityChange<.18,"Compact stairs still produce abrupt camera velocity spikes.");
+        if(speed==8.)require(largestLag>.55,"Fast compact stairs clipped camera lag at the former fixed bound.");
+        key(input,SDL_SCANCODE_D,false);ticks(play,input,150);
+        require(std::abs(eyeResidual(play))<1e-4,"Compact stair camera failed to settle after stopping.");
+    }
+}
 }
 int main(){try{movementJumpAndOwnership();lookCameraAuthoringAndEdits();diagonalAndFrameRateIndependence();cancellationAndCameraLifetime();
+    staircaseAscentDescentAndSettling();staircaseRenderTimingAndJumpIsolation();staircaseCameraResets();
+    staircaseAuthoredResponseAndDisable();staircaseLiveResponseEditing();compactStaircaseCameraContinuity();
     std::cout<<"FPS controller checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

@@ -615,21 +615,23 @@ public:
     }
     void key(ImGuiKey key){auto& io=ImGui::GetIO();io.AddKeyEvent(key,true);tick();io.AddKeyEvent(key,false);tick();tick();}
     SceneDocument document;EntityId player{},camera{};
-    std::array<ImVec2,10> centers{};std::vector<PlayerInputInspectorControl> shown;
+    std::array<ImVec2,static_cast<std::size_t>(PlayerInputInspectorControl::StairSmoothingTime)+1> centers{};std::vector<PlayerInputInspectorControl> shown;
 private:
     Context context_;std::optional<PlayerInputInspectorControl> active;
 };
 void firstPersonInspector(const fs::path& root) {
     PlayerInputUi ui(root);const auto cameraBefore=*ui.document.scene().find(ui.camera),playerBefore=*ui.document.scene().find(ui.player);
-    require(ui.shown.size()==10,"Player Input Inspector omitted first-person controls.");
+    require(ui.shown.size()==11,"Player Input Inspector omitted first-person controls.");
     const std::pair<PlayerInputInspectorControl,const char*> edits[]{
-        {PlayerInputInspectorControl::MouseSensitivity,"0.27"},{PlayerInputInspectorControl::JumpHeight,"1.8"},{PlayerInputInspectorControl::StrafeTilt,"6"}};
+        {PlayerInputInspectorControl::MouseSensitivity,"0.27"},{PlayerInputInspectorControl::JumpHeight,"1.8"},{PlayerInputInspectorControl::StrafeTilt,"6"},
+        {PlayerInputInspectorControl::StairSmoothingTime,"0.245"},{PlayerInputInspectorControl::StairSmoothingTime,"0"}};
     for(const auto& [control,text]:edits) {
         const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(control,text);
         const auto live=ui.capture();require(ui.document.transactionActive()&&ui.document.history().size()==history,"FPS numeric entry committed before release.");
         if(control==PlayerInputInspectorControl::MouseSensitivity)require(std::abs(live.mouseSensitivity-.27f)<1e-5f,"Mouse sensitivity did not update.");
         else if(control==PlayerInputInspectorControl::JumpHeight)require(std::abs(live.jumpHeight-1.8f)<1e-5f,"Jump height did not update.");
-        else require(live.strafeTilt==6.f,"Strafe tilt did not update.");
+        else if(control==PlayerInputInspectorControl::StrafeTilt)require(live.strafeTilt==6.f,"Strafe tilt did not update.");
+        else require(std::abs(live.stairSmoothingTime-std::stof(text))<1e-5f,"Stair smoothing time did not update.");
         ui.key(ImGuiKey_Enter);require(!ui.document.transactionActive()&&ui.document.history().size()==history+1,"FPS scalar gesture was not one undo command.");
         require(ui.document.undo()&&ui.capture()==before,"FPS property Undo lost authored values.");ui.tick();
         require(ui.document.redo()&&ui.capture()==live,"FPS property Redo lost authored values.");ui.tick();
@@ -639,6 +641,9 @@ void firstPersonInspector(const fs::path& root) {
     const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(PlayerInputInspectorControl::MouseSensitivity,"0.65");ui.key(ImGuiKey_Escape);
     require(!ui.document.transactionActive()&&ui.capture()==before&&ui.document.history().size()==history,"Escape committed a mouse sensitivity gesture.");
     ui.tick();require(ui.capture()==before,"Canceled FPS input reapplied its value.");
+    ui.text(PlayerInputInspectorControl::StairSmoothingTime,"0.8");ui.key(ImGuiKey_Escape);
+    require(!ui.document.transactionActive()&&ui.capture()==before&&ui.document.history().size()==history,"Escape committed a stair smoothing gesture.");
+    ui.tick();require(ui.capture()==before,"Canceled stair smoothing input reapplied its value.");
 }
 
 }

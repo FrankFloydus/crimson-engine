@@ -126,6 +126,7 @@ struct ScenePlayerInput {
     float groundAcceleration{45.f},groundFriction{8.f};
     float airAcceleration{12.f},airControl{.35f};
     float strafeTilt{3.f},tiltResponse{12.f}; // Degrees and exponential response per second.
+    float stairSmoothingTime{.10f}; // Camera step response time in seconds; zero disables smoothing.
     bool operator==(const ScenePlayerInput&) const = default;
 };
 struct SceneEffects {

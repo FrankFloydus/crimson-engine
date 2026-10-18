@@ -68,7 +68,7 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
     CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
     MotorEnabled,NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,PlayerJumpHeight,
-    PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,
+    PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,PlayerStairSmoothingTime,
     EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
     VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
     CharacterRigEnabled,
@@ -1099,8 +1099,8 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
         if(!activeDrawn && state.active>=Edit::EnemyBehaviour && state.active<=Edit::EnemyMaxWait)finishEdit(document,state,state.active);
     }
     if(record.playerInput && section==SceneComponentKind::PlayerInput) {
-        static_assert(static_cast<unsigned>(Edit::PlayerTiltResponse)-static_cast<unsigned>(Edit::PlayerInputEnabled)==
-            static_cast<unsigned>(PlayerInputInspectorControl::TiltResponse));
+        static_assert(static_cast<unsigned>(Edit::PlayerStairSmoothingTime)-static_cast<unsigned>(Edit::PlayerInputEnabled)==
+            static_cast<unsigned>(PlayerInputInspectorControl::StairSmoothingTime));
         bool activeDrawn=false;
         if(componentHeader(state,record,SceneComponentKind::PlayerInput)) {
             auto value=*record.playerInput;
@@ -1112,7 +1112,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Controlled Player");
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
         }
-        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerTiltResponse)finishEdit(document,state,state.active);
+        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerStairSmoothingTime)finishEdit(document,state,state.active);
     }
     if(record.motor && section==SceneComponentKind::Motor) {
         auto value=*record.motor;

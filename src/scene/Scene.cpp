@@ -345,8 +345,8 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if(!inRange(input.mouseSensitivity,.001f,10.f)||!inRange(input.jumpHeight,0,100.f)||
                !inRange(input.groundAcceleration,0,1000.f)||!inRange(input.groundFriction,0,100.f)||
                !inRange(input.airAcceleration,0,1000.f)||!inRange(input.airControl,0,1)||
-               !inRange(input.strafeTilt,0,45.f)||!inRange(input.tiltResponse,0,100.f))
-                throw std::runtime_error("Player Input requires finite, bounded first-person look, jump, movement and tilt settings.");
+               !inRange(input.strafeTilt,0,45.f)||!inRange(input.tiltResponse,0,100.f)||!inRange(input.stairSmoothingTime,0,1))
+                throw std::runtime_error("Player Input requires finite, bounded first-person look, jump, movement, tilt and stair smoothing settings.");
         }
         if (record.controller) {
             if(!isAssetUuid(record.controller->profile.id)||(isEngineAssetId(record.controller->profile.id)&&record.controller->profile.id!=DefaultNavigationAgentProfileId))throw std::runtime_error("Character Controller requires a Navigation Agent Profile UUID.");

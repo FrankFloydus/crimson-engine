@@ -8,6 +8,7 @@
 #include <iostream>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace crimson;
@@ -124,6 +125,128 @@ void firstPersonTransientStateResets() {
     auto replacement=std::make_shared<NavigationAgentProfile>(*agentProfiles().at(profile.id));replacement->traversal.maxSlope=40;agentProfiles()[profile.id]=replacement;
     motor.jump(1.1f);firstPersonTick(scene,world);
     require(motor.grounded() && std::abs((*motor.velocity())[0])<.01,"Profile replacement retained FPS momentum or a buffered jump.");
+}
+void stairCorrectionPublication() {
+    using namespace crimson::testing;
+    const auto profile=agentProfile({1.8f,.3f,45,.3f});
+    auto player=characterRecord();player.controller->profile=profile;player.local=math::translation({0,.05f,0});
+    EntityRecord step;step.id=4;step.name="Camera stair";step.local=math::translation({1.5f,.1f,0});step.collider=SceneCollider{{1,.2f,4}};
+    Scene scene;scene.apply({floorRecord(),player,step},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());firstPersonTick(scene,world,{},60);
+    require(world.characterStepHeight(2)==0 && world.characterStepHeight(999)==0,"Stationary/unknown character published a stair correction.");
+    float climb=0,descent=0;bool climbed=false,descended=false;
+    for(int i=0;i<80;++i) {
+        firstPersonTick(scene,world,{3,0,0});const auto correction=world.characterStepHeight(2);
+        if(correction>0){climb+=correction;climbed=true;}
+        else if(correction<0){descent+=correction;descended=true;}
+    }
+    require(climbed && descended && climb>.1f && climb<.3f && descent<-.1f && descent>-.3f,
+        "Supported stairs did not publish distinct actual ascent/descent corrections: up="+std::to_string(climb)+", down="+std::to_string(descent));
+    firstPersonTick(scene,world,{},60);require(world.characterStepHeight(2)==0,"A stair correction leaked into a later stationary tick.");
+    CharacterMotor motor(world,2);motor.jump(1.1f);
+    for(int i=0;i<100;++i){firstPersonTick(scene,world);require(world.characterStepHeight(2)==0,"Jump/fall/landing was misreported as a stair correction.");}
+
+    const auto climbAgain=[&] {
+        auto records=scene.records();for(auto& record:records)if(record.id==2)record.local=math::translation({0,.05f,0});scene.apply(records,{});
+        world.reconcile(scene);require(world.characterStepHeight(2)==0,"Teleport retained the previous stair correction.");
+        firstPersonTick(scene,world,{},60);
+        for(int i=0;i<60;++i){firstPersonTick(scene,world,{3,0,0});if(world.characterStepHeight(2)>.01f)return;}
+        require(false,"Reset fixture never encountered its stair.");
+    };
+    climbAgain();world.cancelCharacterInput(2);require(world.characterStepHeight(2)==0,"Canceling gameplay input retained the previous stair correction.");
+    climbAgain();const std::vector<EntityId> locks{2};world.reconcile(scene,locks);require(world.characterStepHeight(2)==0,"Transform lock retained the previous stair correction.");
+    firstPersonTick(scene,world);
+    climbAgain();auto replacement=std::make_shared<NavigationAgentProfile>(*agentProfiles().at(profile.id));replacement->traversal.maxSlope=40;agentProfiles()[profile.id]=replacement;
+    world.reconcile(scene);require(world.characterStepHeight(2)==0,"Profile replacement retained the previous stair correction.");
+    climbAgain();auto records=scene.records();std::erase_if(records,[](const auto& record){return record.id==2;});scene.apply(records,{});world.reconcile(scene);
+    require(world.characterStepHeight(2)==0,"Removed character retained the previous stair correction.");
+}
+void narrowStairCompleteVerticalPublication() {
+    using namespace crimson::testing;
+    const auto profile=agentProfile({1.8f,.3f,45,.3f});
+    for(bool triangles:{false,true}) {
+        auto player=characterRecord();player.controller->profile=profile;player.local=math::translation({0,.05f,0});
+        std::vector<EntityRecord> records{floorRecord(),player};
+        // Match the authored staircase's .25 m risers and .375 m treads.
+        // Capsule rounding continues outside the explicit stair helper, on
+        // both native boxes and the original imported triangle geometry.
+        for(int i=0;i<8;++i) {
+            const float width=i==7?8.f:.375f,left=1.f+.375f*i;
+            EntityRecord step;step.id=10+i;step.name="Narrow stair tread";
+            step.local=math::translation({left+width*.5f,.25f*i+.125f,0});
+            step.collider=SceneCollider{{width,.25f,4}};
+            if(triangles) {
+                const float half=width*.5f;
+                step.collider->shape=ColliderShape::Trimesh;
+                step.collider->mesh=makeCollisionMesh({
+                    {-half,-.125f,-2},{half,-.125f,-2},{half,-.125f,2},{-half,-.125f,2},
+                    {-half,.125f,-2},{half,.125f,-2},{half,.125f,2},{-half,.125f,2}},
+                    {0,1,2,0,2,3,4,6,5,4,7,6,0,3,7,0,7,4,1,5,6,1,6,2,0,4,5,0,5,1,3,2,6,3,6,7});
+            }
+            records.push_back(std::move(step));
+        }
+        Scene scene;scene.apply(records,{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+        firstPersonTick(scene,world,{},60);
+        const auto label=triangles?"Trimesh":"Box";
+        for(int direction:{1,-1}) {
+            bool rounded=false,stepped=false;double displacement=0,correction=0;
+            for(int i=0;i<180;++i) {
+                const auto before=*world.characterPosition(2);const bool supported=world.grounded(2);
+                firstPersonTick(scene,world,{direction*5.f,0,0});
+                const auto after=*world.characterPosition(2);const float height=after[1]-before[1];
+                const float published=world.characterStepHeight(2);
+                // Jolt can remain supported on a steep rounded edge between
+                // its strict OnGround samples, including during stair descent.
+                displacement+=height;correction+=published;
+                if(std::abs(height)>1e-3f && ((supported && world.grounded(2)) || published!=0))
+                    require(std::abs(published-height)<1e-5f,
+                        std::string(label)+" stair sweep/settling bypassed the complete vertical correction: height="+
+                        std::to_string(height)+", published="+std::to_string(published));
+                rounded=rounded || (direction*published>.001f && direction*published<.06f);
+                stepped=stepped || direction*published>.1f;
+                if((direction>0 && after[0]>5) || (direction<0 && after[0]<0))break;
+            }
+            require(direction*displacement>1.95 && std::abs(correction-displacement)<.01,
+                std::string(label)+" narrow stairs failed to capture their full supported ascent/descent: direction="+
+                std::to_string(direction)+", displacement="+std::to_string(displacement)+", correction="+std::to_string(correction));
+            require(rounded && stepped,std::string(label)+" narrow stairs did not exercise both capsule rounding and large steps.");
+            firstPersonTick(scene,world,{},60);
+        }
+        // An unsupported drop and its eventual landing are ballistic,
+        // unlike supported downward stair snapping.
+        auto falling=scene.records();
+        for(auto& record:falling)if(record.id==2)record.local=math::translation({-2,3,0});
+        scene.apply(falling,{});world.reconcile(scene);
+        bool airborne=false,landed=false;
+        for(int i=0;i<120;++i) {
+            firstPersonTick(scene,world);
+            airborne=airborne || !world.grounded(2);landed=landed || (airborne && world.grounded(2));
+            require(world.characterStepHeight(2)==0,std::string(label)+" unsupported fall or landing entered stair smoothing.");
+        }
+        require(airborne && landed,std::string(label)+" stair fall fixture did not reach its landing.");
+    }
+}
+void rampMotionIsNotAStairCorrection() {
+    for(bool triangles:{false,true}) {
+        auto player=characterRecord();player.local=math::translation({-1,.05f,0});
+        EntityRecord ramp;ramp.id=6;ramp.name="Continuous ramp";ramp.collider=SceneCollider{{4,.2f,4}};
+        const double angle=25*std::numbers::pi/180;
+        ramp.local=math::translation({1,static_cast<float>(2*std::sin(angle)),0})*math::eulerRotationXYZ({0,0,angle});
+        if(triangles) {
+            ramp.collider->shape=ColliderShape::Trimesh;
+            ramp.collider->mesh=makeCollisionMesh({{-2,.1f,-2},{2,.1f,-2},{2,.1f,2},{-2,.1f,2}},{0,2,1,0,3,2});
+        }
+        Scene scene;scene.apply({floorRecord(),player,ramp},{});PhysicsWorld world;firstPersonTick(scene,world,{},60);
+        for(int direction:{1,-1}) {
+            int samples=0;
+            for(int i=0;i<210;++i) {
+                firstPersonTick(scene,world,{static_cast<float>(direction),0,0});const auto p=*world.characterPosition(2);
+                if(p[0]>.2f && p[0]<2.3f && world.grounded(2)) {
+                    ++samples;require(std::abs(world.characterStepHeight(2))<1e-5f,"Continuous ramp movement was misreported as a stair correction.");
+                }
+            }
+            require(samples>30,"Ramp signal fixture did not traverse the interior while supported.");
+        }
+    }
 }
 void floorWallAndLiveEdits() {
     Scene scene;auto player=characterRecord();scene.apply({floorRecord(),player},{});PhysicsWorld world;
@@ -391,4 +514,4 @@ void firstPersonWalkableSlopes() {
     }
 }
 }
-int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();firstPersonAccelerationBrakingAndAirControl();firstPersonJumpEdgesHeightAndBuffer();firstPersonCoyoteWindow();firstPersonCanceledJumpBuffer();firstPersonCeilingsWallsAndStairs();firstPersonTransientStateResets();firstPersonWalkableSlopes();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();firstPersonAccelerationBrakingAndAirControl();firstPersonJumpEdgesHeightAndBuffer();firstPersonCoyoteWindow();firstPersonCanceledJumpBuffer();firstPersonCeilingsWallsAndStairs();firstPersonTransientStateResets();stairCorrectionPublication();narrowStairCompleteVerticalPublication();rampMotionIsNotAStairCorrection();firstPersonWalkableSlopes();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

@@ -488,8 +488,9 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                 input.groundFriction=c.value("groundFriction",input.groundFriction);input.airAcceleration=c.value("airAcceleration",input.airAcceleration);
                 input.airControl=c.value("airControl",input.airControl);input.strafeTilt=c.value("strafeTilt",input.strafeTilt);
                 input.tiltResponse=c.value("tiltResponse",input.tiltResponse);
+                input.stairSmoothingTime=c.value("stairSmoothingTime",input.stairSmoothingTime);
                 constexpr std::array firstPersonFields{"mouseSensitivity","invertY","jumpHeight","groundAcceleration","groundFriction",
-                    "airAcceleration","airControl","strafeTilt","tiltResponse"};
+                    "airAcceleration","airControl","strafeTilt","tiltResponse","stairSmoothingTime"};
                 if(std::none_of(firstPersonFields.begin(),firstPersonFields.end(),[&](const char* field){return c.contains(field);}))
                     legacyPlayerInputs.insert(record.id);
             }
@@ -827,7 +828,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.playerInput) {const auto& c=*record.playerInput;entity["playerInput"]={{"enabled",c.enabled},
             {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY},{"jumpHeight",c.jumpHeight},
             {"groundAcceleration",c.groundAcceleration},{"groundFriction",c.groundFriction},{"airAcceleration",c.airAcceleration},
-            {"airControl",c.airControl},{"strafeTilt",c.strafeTilt},{"tiltResponse",c.tiltResponse}};}
+            {"airControl",c.airControl},{"strafeTilt",c.strafeTilt},{"tiltResponse",c.tiltResponse},{"stairSmoothingTime",c.stairSmoothingTime}};}
         if(record.lightRig)entity["lightRig"]=lightRigJson(*record.lightRig);
         if(record.darknessReveal)entity["darknessReveal"]={{"version",2},{"enabled",record.darknessReveal->enabled},{"spread",record.darknessReveal->spread}};
         if (record.collider) { const auto& c=*record.collider;

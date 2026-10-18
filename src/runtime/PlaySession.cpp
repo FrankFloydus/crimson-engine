@@ -18,6 +18,14 @@ std::vector<ScenePoseUpdate> characterPoses(const Scene& scene) {
     for(const auto& entity:scene.records())if(entity.controller)result.push_back({entity.id,entity.local});
     return result;
 }
+struct StepReturn {double offset{},velocity{};};
+StepReturn returnStepOffset(double offset,double velocity,double response,double seconds) {
+    const double impulse=velocity+response*offset;
+    const double decay=std::exp(-response*seconds);
+    StepReturn result{(offset+impulse*seconds)*decay,(velocity-response*impulse*seconds)*decay};
+    if((offset<=0 && result.offset>0) || (offset>=0 && result.offset<0))return {};
+    return result;
+}
 }
 PlaySession::PlaySession(std::filesystem::path projectRoot):projectRoot_(std::move(projectRoot)){
     effects_.setDefinitions([this](const std::string& id) {
@@ -323,9 +331,11 @@ void PlaySession::reconcileFirstPerson(EntityId actor,bool reset) {
     // Follow definitions are stable authored values; their resolved local pose
     // changes as the upright capsule turns, without representing a camera edit.
     const bool changed=!firstPerson_ || firstPerson_->actor!=actor || firstPerson_->camera!=cameraId ||
-        firstPerson_->follow!=record->cameraFollow || (!record->cameraFollow && firstPerson_->cameraLocal!=record->local);
+        firstPerson_->follow!=record->cameraFollow || (!record->cameraFollow && firstPerson_->cameraLocal!=record->local) ||
+        firstPerson_->traversal!=physics_->acceptedCharacterTraversal(actor);
     if(!reset && !changed)return;
     FirstPersonView view;view.actor=actor;view.camera=cameraId;view.follow=record->cameraFollow;view.cameraLocal=record->local;
+    view.traversal=physics_->acceptedCharacterTraversal(actor);
     view.offset=math::transformPoint(*cameraWorld,{})-math::transformPoint(*actorWorld,{});
     const auto forward=math::normalized(math::transformDirection(*cameraWorld,{0,0,-1}),{0,0,-1});
     view.yaw=view.initialYaw=std::atan2(-forward[0],-forward[2]);
@@ -352,9 +362,44 @@ void PlaySession::updateFirstPerson(GameInput& input,const ScenePlayerInput& set
     view.tilt+=(target-view.tilt)*(settings.tiltResponse>0?-std::expm1(-settings.tiltResponse*dt):1);
     if(std::abs(view.tilt-target)<1e-6)view.tilt=target;
 }
+void PlaySession::advanceFirstPersonStep(double seconds,float height,float smoothingTime) {
+    if(!firstPerson_)return;
+    if(smoothingTime<=0) {
+        clearFirstPersonStep();
+        return;
+    }
+    auto& view=*firstPerson_;view.previousStepOffset=view.stepOffset;view.previousStepVelocity=view.stepVelocity;
+    view.stepResponse=2.0/static_cast<double>(smoothingTime);view.stepInterval=true;
+    const auto settled=returnStepOffset(view.stepOffset,view.stepVelocity,view.stepResponse,seconds);
+    view.stepOffset=settled.offset;view.stepVelocity=settled.velocity;
+    // Preserve the entire terrain correction. A fixed offset cap releases
+    // part of every closely spaced step directly into the eye; world geometry
+    // constrains the displayed displacement separately below.
+    view.stepOffset-=static_cast<double>(height);
+    // Consecutive opposite steps must not carry a spring velocity away from
+    // the new target and produce an artificial bounce.
+    if(view.stepOffset*view.stepVelocity>0 || std::abs(view.stepOffset)<1e-6)view.stepVelocity=0;
+    if(std::abs(view.stepOffset)<1e-6 && std::abs(view.stepVelocity)<1e-5) {
+        view.stepOffset=0;view.stepVelocity=0;
+    }
+    view.stepCorrection=settled.offset-view.stepOffset;
+}
+void PlaySession::clearFirstPersonStep() {
+    if(!firstPerson_)return;
+    auto& view=*firstPerson_;
+    view.stepOffset=view.previousStepOffset=view.stepVelocity=view.previousStepVelocity=0;
+    view.stepCorrection=view.stepResponse=0;view.stepInterval=false;
+}
 SceneDocument& PlaySession::document(){if(!document_)throw std::logic_error("Play is not active.");return *document_;}
 const SceneDocument& PlaySession::document() const{if(!document_)throw std::logic_error("Play is not active.");return *document_;}
-void PlaySession::resetInterpolation(){if(document_)current_=characterPoses(document_->scene());else current_.clear();previous_=current_;}
+void PlaySession::resetInterpolation(){
+    if(document_)current_=characterPoses(document_->scene());else current_.clear();previous_=current_;
+    if(firstPerson_) {
+        firstPerson_->previousStepOffset=firstPerson_->stepOffset;
+        firstPerson_->previousStepVelocity=firstPerson_->stepVelocity;
+        firstPerson_->stepInterval=false;
+    }
+}
 void PlaySession::advance(double seconds,GameInput& input,const Camera& camera,bool active) {
     if(!active)input.cancel();
     advanceInternal(seconds,{},camera,active,&input);
@@ -402,7 +447,10 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         }
         if(acceptsInput)reconcileFirstPerson(controlled,replacedPlayer || editedPose);
         else firstPerson_.reset();
+        if(firstPerson_ && (physics_->characterLocked(controlled) || controlledRecord->playerInput->stairSmoothingTime<=0))
+            clearFirstPersonStep();
         if(!active) {
+            clearFirstPersonStep();
             clearPlayerRoute();inputOwner_=NoEntity;remainder_=0;suspended_=true;resetInterpolation();refreshPresentation();reconcileParticles(0);status_=physics_->status()+particles_.status();return;
         }
         if(input && newInputOwner) {
@@ -473,6 +521,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 motor.move(velocity);
             }
             const auto poses=physics_->step(document_->scene(),NoEntity,{},static_cast<float>(FixedStep),document_->transformEditRoots(),meshColliders_);
+            if(acceptsInput)advanceFirstPersonStep(FixedStep,physics_->characterStepHeight(controlled),controlledRecord->playerInput->stairSmoothingTime);
             if(!document_->applyRuntimePoses(poses))throw std::runtime_error(document_->status());
             const auto events=physics_->triggerEvents();
             triggerEvents_.insert(triggerEvents_.end(),events.begin(),events.end());
@@ -536,7 +585,30 @@ void PlaySession::refreshPresentation() {
             const auto offsetRotation=math::rotation(math::axisAngle({0,1,0},view.yaw-view.initialYaw));
             const auto orientation=yaw*math::rotation(math::axisAngle({1,0,0},view.pitch))*
                 math::rotation(math::axisAngle({0,0,1},view.tilt))*view.residualBasis;
-            const auto position=math::transformPoint(*actor,{})+math::transformDirection(offsetRotation,view.offset);
+            auto position=math::transformPoint(*actor,{})+math::transformDirection(offsetRotation,view.offset);
+            double stepOffset=view.stepOffset;
+            if(view.stepInterval) {
+                // Evaluate the spring between ticks rather than joining its
+                // samples with straight lines. Cancel the interpolated terrain
+                // correction at the same alpha so camera velocity stays smooth.
+                stepOffset=returnStepOffset(view.previousStepOffset,view.previousStepVelocity,view.stepResponse,alpha*FixedStep).offset-
+                    alpha*view.stepCorrection;
+            }
+            if(std::abs(stepOffset)>1e-6 && physics_) {
+                // The capsule steps immediately. Its delayed eye can therefore
+                // approach a stair soffit or ceiling; constrain only the extra
+                // camera displacement, keeping the authored view authoritative.
+                const auto camera=presentation_.find(view.camera),actorRecord=presentation_.find(view.actor);
+                const float clearance=camera && camera->camera?std::max(.05f,camera->camera->nearPlane):.05f;
+                const auto sign=stepOffset>0?1.f:-1.f;
+                const auto mask=actorRecord && actorRecord->controller?
+                    actorRecord->controller->collision.mask|WorldCollisionLayer:AllCollisionLayers;
+                if(const auto hit=physics_->raycast({position,{0,sign,0}},static_cast<float>(std::abs(stepOffset))+clearance,
+                    PhysicsQueryFilter{mask,{},true,false,false})) {
+                    stepOffset=sign*std::min(std::abs(stepOffset),std::max(0.0,math::length(hit->position-position)-clearance));
+                }
+            }
+            position[1]+=static_cast<float>(stepOffset);
             if(const auto world=math::withAffinePosition(orientation,position))presentation_.applyRuntimeCameraPose(view.camera,*world);
         }
     }

@@ -50,6 +50,10 @@ public:
     std::optional<Vec3> characterPosition(EntityId) const;
     // Accepted motion in meters per second, after collision resolution.
     std::optional<Vec3> characterVelocity(EntityId) const;
+    // Complete vertical motion over discontinuous support in the latest tick,
+    // including capsule edge sweep/settling and stair/floor helpers. Continuous
+    // planar slope travel, jumps, unsupported falling and landing do not contribute.
+    float characterStepHeight(EntityId) const;
     std::optional<AgentTraversalSettings> acceptedCharacterTraversal(EntityId) const;
     bool grounded(EntityId) const;
     bool characterLocked(EntityId) const;

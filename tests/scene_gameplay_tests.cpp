@@ -203,9 +203,9 @@ void firstPersonInputStorageAndCameraConversion() {
     const ScenePlayerInput defaults;
     require(defaults.enabled&&!defaults.invertY&&defaults.mouseSensitivity==.10f&&defaults.jumpHeight==1.1f&&
         defaults.groundAcceleration==45&&defaults.groundFriction==8&&defaults.airAcceleration==12&&defaults.airControl==.35f&&
-        defaults.strafeTilt==3&&defaults.tiltResponse==12,"First-person controller defaults changed.");
+        defaults.strafeTilt==3&&defaults.tiltResponse==12&&defaults.stairSmoothingTime==.10f,"First-person controller defaults changed.");
     auto tuned=*document.scene().find(player);
-    tuned.playerInput=ScenePlayerInput{false,.23f,true,1.7f,62.f,9.5f,15.f,.6f,5.f,17.f};
+    tuned.playerInput=ScenePlayerInput{false,.23f,true,1.7f,62.f,9.5f,15.f,.6f,5.f,17.f,.24f};
     const auto history=document.history().size();
     require(document.updateEntity(player,tuned,"Tune first-person controls")&&document.history().size()==history+1,document.status());
     require(document.undo()&&document.scene().find(player)->playerInput==std::optional<ScenePlayerInput>{defaults},"First-person controls did not undo together.");
@@ -217,13 +217,14 @@ void firstPersonInputStorageAndCameraConversion() {
     same(document.scene().records(),reopened.scene().records());
     const auto saved=Json::parse(serializeSceneSnapshot(snapshot));
     for(const auto& entity:saved.at("entities"))if(entity.contains("playerInput"))
-        require(entity.at("playerInput").size()==10&&entity.at("playerInput").at("mouseSensitivity")==.23f&&
+        require(entity.at("playerInput").size()==11&&entity.at("playerInput").at("mouseSensitivity")==.23f&&
             entity.at("playerInput").at("invertY")==true&&entity.at("playerInput").at("jumpHeight")==1.7f&&
+            entity.at("playerInput").at("stairSmoothingTime")==.24f&&
             !entity.contains("navigation"),"First-person control writer lost values or introduced Navigation.");
     const auto records=document.scene().records();const auto beforeHistory=document.history().size();
-    constexpr std::array<float ScenePlayerInput::*,8> fields{&ScenePlayerInput::mouseSensitivity,&ScenePlayerInput::jumpHeight,
+    constexpr std::array<float ScenePlayerInput::*,9> fields{&ScenePlayerInput::mouseSensitivity,&ScenePlayerInput::jumpHeight,
         &ScenePlayerInput::groundAcceleration,&ScenePlayerInput::groundFriction,&ScenePlayerInput::airAcceleration,
-        &ScenePlayerInput::airControl,&ScenePlayerInput::strafeTilt,&ScenePlayerInput::tiltResponse};
+        &ScenePlayerInput::airControl,&ScenePlayerInput::strafeTilt,&ScenePlayerInput::tiltResponse,&ScenePlayerInput::stairSmoothingTime};
     for(const auto field:fields)for(const auto bad:{-1.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
         auto invalid=tuned;(*invalid.playerInput).*field=bad;
         require(!document.updateEntity(player,invalid),"Invalid first-person control was published.");
@@ -231,6 +232,23 @@ void firstPersonInputStorageAndCameraConversion() {
     }
     auto invalid=tuned;invalid.playerInput->airControl=1.01f;require(!document.updateEntity(player,invalid),"Unbounded air control was accepted.");
     invalid=tuned;invalid.playerInput->strafeTilt=45.1f;require(!document.updateEntity(player,invalid),"Excessive strafe tilt was accepted.");
+    invalid=tuned;invalid.playerInput->stairSmoothingTime=1.01f;require(!document.updateEntity(player,invalid),"Excessive stair smoothing time was accepted.");
+    for(const float endpoint:{0.f,1.f}) {
+        auto valid=tuned;valid.playerInput->stairSmoothingTime=endpoint;
+        require(document.updateEntity(player,valid,"Tune stair smoothing endpoint"),document.status());
+        require(document.scene().find(player)->playerInput->stairSmoothingTime==endpoint,"Valid stair smoothing endpoint was not retained.");
+        require(document.undo()&&document.scene().find(player)->playerInput==tuned.playerInput,"Stair smoothing endpoint did not undo.");
+    }
+    auto missingSmoothing=saved;
+    for(auto& entity:missingSmoothing["entities"])if(entity.contains("playerInput"))entity["playerInput"].erase("stairSmoothingTime");
+    const std::string missingId="assets/scenes/missing-stair-smoothing.crimson-scene";
+    writeSceneFixture(project.root,missingId,missingSmoothing);
+    const auto missingBytes=missingSmoothing.dump();
+    SceneDocument missingDocument(project.root);require(missingDocument.load(missingId)&&!missingDocument.dirty(),missingDocument.status());
+    auto expected=*tuned.playerInput;expected.stairSmoothingTime=defaults.stairSmoothingTime;
+    require(missingDocument.scene().find(player)->playerInput==std::optional<ScenePlayerInput>{expected},"Missing stair smoothing did not retain defaults and existing controls.");
+    {std::ifstream input(sceneAssetPath(project.root,missingId),std::ios::binary);
+        require(std::string{std::istreambuf_iterator<char>(input),{}}==missingBytes,"Loading the optional stair smoothing default rewrote the scene.");}
 
     constexpr float radians=3.14159265358979323846f/180.f;
     const auto oldBasis=math::eulerRotationXYZ(Vec3{-55,45,0}*radians);
@@ -263,10 +281,11 @@ void firstPersonInputStorageAndCameraConversion() {
 
     // Any authored lens, offset, basis or current control field proves the
     // camera belongs to the user and must retain its exact saved values.
-    for(unsigned variant=0;variant<5;++variant) {
+    for(unsigned variant=0;variant<6;++variant) {
         auto custom=legacy;
         for(auto& entity:custom["entities"]) {
             if(variant==3&&entity.contains("playerInput"))entity["playerInput"]["mouseSensitivity"]=.4f;
+            if(variant==5&&entity.contains("playerInput"))entity["playerInput"]["stairSmoothingTime"]=.2f;
             if(!entity.contains("camera"))continue;
             if(variant==0)entity["camera"]["verticalFov"]=42.f;
             if(variant==1)entity["cameraFollow"]["offset"]=Vec3{6.5f,13.2f,6.5f};

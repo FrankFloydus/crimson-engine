@@ -139,7 +139,11 @@ private:
         Vec3 offset{};
         Mat4 residualBasis{},cameraLocal{};
         std::optional<SceneCameraFollow> follow;
+        std::optional<AgentTraversalSettings> traversal;
         double yaw{},pitch{},initialYaw{},tilt{};
+        double stepOffset{},previousStepOffset{},stepVelocity{},previousStepVelocity{};
+        double stepCorrection{},stepResponse{};
+        bool stepInterval{};
     };
     std::optional<FirstPersonView> firstPerson_;
     bool pendingJump_{};
@@ -164,6 +168,8 @@ private:
     bool planRoute(Agent&,const Vec3& start);
     void reconcileFirstPerson(EntityId,bool reset);
     void updateFirstPerson(GameInput&,const ScenePlayerInput&,double seconds);
+    void advanceFirstPersonStep(double seconds,float height,float smoothingTime);
+    void clearFirstPersonStep();
     Agent* commandActor(EntityId);
     const Agent* findAgent(EntityId) const;
     EntityId player() const;
