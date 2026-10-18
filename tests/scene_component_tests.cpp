@@ -64,7 +64,7 @@ void playerRemovalAndCamera(const std::filesystem::path& root) {
     const auto cameraWorld=*document.scene().worldTransform(camera);
     require(removeSceneComponent(document,player,SceneComponentKind::PlayerInput),"Could not remove player input.");
     const auto actor=*document.scene().find(player);
-    require(!document.scene().properties().playerCharacter&&actor.motor&&actor.controller&&actor.navigation&&actor.lightRig,"Input removal left a stale player role or removed shared capabilities.");
+    require(!document.scene().properties().playerCharacter&&actor.motor&&actor.controller&&!actor.navigation&&actor.lightRig,"Input removal left a stale player role or removed shared capabilities.");
     require(document.scene().worldTransform(camera)==cameraWorld,"Removing input moved the camera.");
     require(document.undo()&&document.scene().properties().playerCharacter==player,"Input undo lost the explicit player role.");
     require(removeSceneComponent(document,camera,SceneComponentKind::Camera),"Could not remove camera component.");
@@ -73,7 +73,7 @@ void playerRemovalAndCamera(const std::filesystem::path& root) {
     require(document.undo()&&document.scene().properties().activeCamera==camera&&document.scene().find(camera)->cameraFollow,"Camera undo lost its follow configuration.");
     const auto components=sceneComponents(*document.scene().find(player));
     require(components==std::vector{SceneComponentKind::Transform,SceneComponentKind::Actor,SceneComponentKind::Motor,
-        SceneComponentKind::Controller,SceneComponentKind::Navigation,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,
+        SceneComponentKind::Controller,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,
         SceneComponentKind::DarknessReveal,SceneComponentKind::Effects},
         "Player component rows were incomplete or acquired entity identities.");
 }

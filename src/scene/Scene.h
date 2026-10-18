@@ -120,6 +120,12 @@ struct SceneNavigationVolume {
 };
 struct ScenePlayerInput {
     bool enabled{true};
+    float mouseSensitivity{.10f}; // Degrees per logical mouse pixel.
+    bool invertY{false};
+    float jumpHeight{1.1f}; // Meters, converted to takeoff speed by the motor.
+    float groundAcceleration{45.f},groundFriction{8.f};
+    float airAcceleration{12.f},airControl{.35f};
+    float strafeTilt{3.f},tiltResponse{12.f}; // Degrees and exponential response per second.
     bool operator==(const ScenePlayerInput&) const = default;
 };
 struct SceneEffects {
@@ -252,6 +258,8 @@ public:
     // Runtime-only callers publish complete fixed poses without rebuilding the
     // registry or invalidating asynchronous picks through the edit revision.
     void applyRuntimePoses(std::span<const ScenePoseUpdate> poses);
+    // Presentation-only camera override; authored follow placement remains intact.
+    void applyRuntimeCameraPose(EntityId camera,const Mat4& world);
 private:
     entt::registry registry_;
     std::unordered_map<EntityId, entt::entity> entities_;

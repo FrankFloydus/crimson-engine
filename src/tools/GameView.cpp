@@ -12,7 +12,6 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
-#include <numbers>
 
 namespace crimson {
 void GameView::updateMetrics(Renderer& renderer,std::uint64_t textureAndProgramBytes) {
@@ -78,11 +77,7 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
                 imageFont_=ImGui::GetFont();imageFontSize_=ImGui::GetFontSize();
                 imageWidth_=frame.pixelWidth;imageHeight_=frame.pixelHeight;
                 frame.viewport.hovered=interaction.hovered;frame.clicked=interaction.clicked;
-                frame.leftHeld=interaction.held;
                 frame.viewport.inputBlocked=interaction.blocked;
-                if(interaction.hovered && !interaction.blocked) {
-                    const auto mouse=ImGui::GetIO().MousePos;frame.pointerPosition=Vec2{mouse.x,mouse.y};
-                }
             } else {
                 ImGui::TextUnformatted("No active camera");
                 frame.pixelWidth=frame.pixelHeight=0;
@@ -135,7 +130,7 @@ void GameView::drawAttributeDebug(const Camera& camera,const Scene& scene,Entity
     imageDrawList_->AddText(imageFont_,imageFontSize_,{minimum.x+padding.x,minimum.y+padding.y},ImGui::GetColorU32(ImGuiCol_Text),text.c_str());
     imageDrawList_->PopClipRect();
 }
-void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
+void GameView::drawRoute(const Camera& camera,std::span<const Vec3> route,
                          const std::optional<Vec3>& characterPosition) {
     if(!imageDrawList_ || !imageWidth_ || !imageHeight_)return;
     const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
@@ -149,19 +144,6 @@ void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clicked
     for(const auto& corner:route) {
         if(previous)line(*previous+Vec3{0,.03f,0},corner+Vec3{0,.03f,0},2.f);
         previous=corner;
-    }
-    // Three world-space great circles form a small sphere whose bottom touches
-    // the exact ray hit. This optional diagnostic is deliberately visible
-    // through geometry; it never becomes a scene entity or affects collision.
-    if(clickedGround && math::finite(*clickedGround))for(int plane=0;plane<3;++plane)for(int segment=0;segment<32;++segment) {
-        const auto point=[&](int index) {
-            constexpr float radius=.15f;
-            const double angle=index*2*std::numbers::pi/32;
-            auto world=*clickedGround+Vec3{0,radius,0};world[plane]+=radius*static_cast<float>(std::cos(angle));
-            world[(plane+1)%3]+=radius*static_cast<float>(std::sin(angle));
-            return world;
-        };
-        line(point(segment),point(segment+1),1.25f);
     }
     imageDrawList_->PopClipRect();
 }

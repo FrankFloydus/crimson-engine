@@ -17,8 +17,6 @@ class PlaySession {
 public:
     static constexpr double FixedStep=1.0/60.0;
     static constexpr std::uint64_t MaximumCatchUpTicks=8;
-    static constexpr double HeldRetargetInterval=.05;
-    static constexpr float HeldRetargetDistance=.05f;
     explicit PlaySession(std::filesystem::path projectRoot);
     bool start(const SceneDocument& authored);
     void stop();
@@ -57,7 +55,6 @@ public:
     std::uint64_t navigationRevision() const;
     std::uint64_t routeQueryCount() const;
     const std::optional<Vec3>& destination() const;
-    const std::optional<Vec3>& lastClickedGround() const{return lastClickedGround_;}
     std::span<const Vec3> path() const;
     std::span<const Vec3> remainingPath() const;
     // Explicit transient commands share the same steering/motor path as local
@@ -103,7 +100,7 @@ private:
     bool navigationTransaction_{},navigationCoalescing_{};
     bool prepareMeshColliders(const Scene&,bool requireReady);
     std::vector<ScenePoseUpdate> previous_,current_;
-    enum class CommandSource { None,External,PlayerInput,DirectionalInput,Enemy };
+    enum class CommandSource { None,External,DirectionalInput,Enemy };
     struct Agent {
         AgentSteering steering;
         // Original intent survives an approach point so geometry changes can
@@ -137,9 +134,15 @@ private:
     };
     std::unordered_map<EntityId,EnemyState> enemies_;
     std::vector<TriggerEvent> triggerEvents_;
-    std::optional<Vec3> lastClickedGround_;
-    std::optional<Vec3> lastHeldTarget_;
-    double heldRetargetRemaining_{};
+    struct FirstPersonView {
+        EntityId actor{},camera{};
+        Vec3 offset{};
+        Mat4 residualBasis{},cameraLocal{};
+        std::optional<SceneCameraFollow> follow;
+        double yaw{},pitch{},initialYaw{},tilt{};
+    };
+    std::optional<FirstPersonView> firstPerson_;
+    bool pendingJump_{};
     EntityId controlled_{},inputOwner_{};
     std::uint64_t inputCancellation_{};
     std::optional<Mat4> lastControlledPose_;
@@ -159,7 +162,8 @@ private:
     static void clearRoute(Agent&);
     void clearPlayerRoute();
     bool planRoute(Agent&,const Vec3& start);
-    void retargetHeld(Agent&,const Vec3& start,const Vec3& target);
+    void reconcileFirstPerson(EntityId,bool reset);
+    void updateFirstPerson(GameInput&,const ScenePlayerInput&,double seconds);
     Agent* commandActor(EntityId);
     const Agent* findAgent(EntityId) const;
     EntityId player() const;

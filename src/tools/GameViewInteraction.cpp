@@ -9,7 +9,6 @@ GameViewInteraction drawGameViewImage(ImTextureRef texture,const ImVec2& size) {
     GameViewInteraction interaction;
     interaction.hovered=ImGui::IsItemHovered();
     interaction.clicked=interaction.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-    interaction.held=imageActive && ImGui::IsMouseDown(ImGuiMouseButton_Left);
     ImGui::GetWindowDrawList()->AddImage(texture,origin,ImVec2(origin.x+size.x,origin.y+size.y));
     if(interaction.clicked)ImGui::SetWindowFocus();
     // WantTextInput is computed at NewFrame and can still describe the text

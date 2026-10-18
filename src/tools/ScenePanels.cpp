@@ -2,6 +2,7 @@
 #include "SceneInspectorSections.h"
 #include "GameplayTagControls.h"
 #include "EnemyInspectorControls.h"
+#include "PlayerInputInspectorControls.h"
 #include "CollisionFilterControls.h"
 #include "editor/CollisionLayersDocument.h"
 #include "SceneOutlinerColor.h"
@@ -66,7 +67,8 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
     EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
     CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
-    MotorEnabled,NavigationEnabled,PlayerInputEnabled,
+    MotorEnabled,NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,PlayerJumpHeight,
+    PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,
     EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
     VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
     CharacterRigEnabled,
@@ -823,7 +825,8 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
     const char* currentTemplate=matches(builtIn)?builtIn.name.c_str():"Custom";
     for(const auto& candidate:state.cameraTemplates)if(matches(candidate)){currentTemplate=candidate.name.c_str();break;}
     if(ImGui::BeginCombo("Template",currentTemplate)) {
-        const auto item=[&](const CameraTemplate& candidate) {
+        const auto item=[&](const CameraTemplate& candidate,int identity) {
+            ImGui::PushID(identity);
             if(ImGui::Selectable(candidate.name.c_str(),matches(candidate))) {
                 finishScenePanelEdit(document);
                 if(updateCameraAuthoring(document,cameraId,candidate,"Apply camera template")) {
@@ -831,9 +834,10 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
                 }
                 ImGui::CloseCurrentPopup();
             }
+            ImGui::PopID();
         };
-        item(builtIn);
-        for(const auto& candidate:state.cameraTemplates)item(candidate);
+        item(builtIn,-1);
+        for(std::size_t index=0;index<state.cameraTemplates.size();++index)item(state.cameraTemplates[index],static_cast<int>(index));
         ImGui::EndCombo();
     }
     ImGui::BeginDisabled(!state.cameraTemplatesAvailable);
@@ -1095,14 +1099,20 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
         if(!activeDrawn && state.active>=Edit::EnemyBehaviour && state.active<=Edit::EnemyMaxWait)finishEdit(document,state,state.active);
     }
     if(record.playerInput && section==SceneComponentKind::PlayerInput) {
+        static_assert(static_cast<unsigned>(Edit::PlayerTiltResponse)-static_cast<unsigned>(Edit::PlayerInputEnabled)==
+            static_cast<unsigned>(PlayerInputInspectorControl::TiltResponse));
+        bool activeDrawn=false;
         if(componentHeader(state,record,SceneComponentKind::PlayerInput)) {
             auto value=*record.playerInput;
-            const bool enabled=ImGui::Checkbox("Enabled##player-input",&value.enabled);
-            propertyEdit(document,state,Edit::PlayerInputEnabled,"Toggle player input",enabled,
-                changeEntity(record.id,[value](auto& entity){entity.playerInput=value;}));
+            drawPlayerInputInspectorControls(value,[&](PlayerInputInspectorControl control,const char* label,bool changed) {
+                const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::PlayerInputEnabled)+static_cast<unsigned>(control));
+                propertyEdit(document,state,property,label,changed,changeEntity(record.id,[value](auto& entity){entity.playerInput=value;}));
+                activeDrawn|=state.active==property;
+            });
             if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Controlled Player");
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
-        } else if(state.active==Edit::PlayerInputEnabled)finishEdit(document,state,state.active);
+        }
+        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerTiltResponse)finishEdit(document,state,state.active);
     }
     if(record.motor && section==SceneComponentKind::Motor) {
         auto value=*record.motor;

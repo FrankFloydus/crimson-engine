@@ -35,7 +35,6 @@ void validateTemplates(const std::vector<CameraTemplate>& templates) {
     std::vector<std::string> names;names.reserve(templates.size());
     for(const auto& value:templates) {
         if(!validName(value.name)||!validCameraTemplate(value))throw std::runtime_error("Camera template has an invalid name, placement or lens settings.");
-        if(sameCameraTemplateName(value.name,"ARPG"))throw std::runtime_error("ARPG is the built-in camera template; choose another name.");
         const auto key=nameKey(value.name);
         if(std::find(names.begin(),names.end(),key)!=names.end())throw std::runtime_error("Camera template names must be unique.");
         names.push_back(key);
@@ -51,8 +50,7 @@ Json serializeTemplates(const std::vector<CameraTemplate>& templates) {
 }
 
 CameraTemplate defaultPlayerCameraTemplate() {
-    CameraTemplate value;value.name="ARPG";
-    value.worldBasis=math::eulerRotationXYZ(Vec3{-55.f,45.f,0.f}*DegreesToRadians);
+    CameraTemplate value;value.name="First Person";
     return value;
 }
 bool validCameraTemplate(const CameraTemplate& value) {
@@ -123,6 +121,8 @@ void saveCameraTemplate(const std::filesystem::path& projectRoot,std::vector<Cam
     if(!validName(value.name)||!validCameraTemplate(value))throw std::runtime_error("Camera template has an invalid name, placement or lens settings.");
     auto candidate=templates;
     const auto found=std::find_if(candidate.begin(),candidate.end(),[&](const auto& item){return sameCameraTemplateName(item.name,value.name);});
+    if(found==candidate.end()&&sameCameraTemplateName(value.name,"First Person"))
+        throw std::runtime_error("First Person is the built-in camera template; choose another name.");
     if(found==candidate.end())candidate.push_back(std::move(value));else *found=std::move(value);
     validateTemplates(candidate);
     const auto serialized=serializeTemplates(candidate).dump(2)+"\n";

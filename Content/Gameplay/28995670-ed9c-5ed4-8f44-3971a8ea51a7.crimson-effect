@@ -46,7 +46,7 @@
       "attribute": "Stats.MovementSpeed",
       "magnitude": {
         "calculation": "",
-        "literal": 3.0,
+        "literal": 5.0,
         "parameters": []
       },
       "operation": "override"

@@ -1,5 +1,6 @@
 #include "tools/SceneInspectorSections.h"
 #include "tools/EnemyInspectorControls.h"
+#include "tools/PlayerInputInspectorControls.h"
 #include "tools/InspectorTransform.h"
 #include "tools/CameraAuthoringControls.h"
 #include "tools/SceneOutlinerColor.h"
@@ -146,14 +147,14 @@ void directEntitySelectionAndSections(const fs::path& root){
         std::vector<std::pair<EntityId,SceneComponentKind>>{{ui.point,SceneComponentKind::Transform},{ui.point,SceneComponentKind::Point}},
         "Selecting a Point Light did not expose its Transform and light properties directly.");
     ui.click(ui.player);
-    for(const auto kind:{SceneComponentKind::Effects,SceneComponentKind::Controller,SceneComponentKind::Motor,SceneComponentKind::Navigation,
+    for(const auto kind:{SceneComponentKind::Effects,SceneComponentKind::Controller,SceneComponentKind::Motor,
                         SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,SceneComponentKind::DarknessReveal})
         require(ui.has(ui.player,kind),"Selecting Player hid one of its capability subsections.");
     require(ui.has(ui.model,SceneComponentKind::Transform)&&ui.has(ui.model,SceneComponentKind::Model)&&
         ui.has(ui.camera,SceneComponentKind::Camera)&&!ui.has(ui.camera,SceneComponentKind::CameraFollow)&&
         !ui.has(ui.player,SceneComponentKind::Actor),"Player did not expose its owned visual/Camera in consolidated subsections.");
     const auto expected=std::vector{SceneComponentKind::Transform,SceneComponentKind::Effects,SceneComponentKind::Controller,SceneComponentKind::Motor,
-        SceneComponentKind::Navigation,SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,SceneComponentKind::DarknessReveal};
+        SceneComponentKind::PlayerInput,SceneComponentKind::LightRig,SceneComponentKind::DarknessReveal};
     require(sceneInspectorSections(*ui.document.scene().find(ui.player))==expected,
         "Player Inspector subsection ordering changed or retained an empty ownership subsection.");
     const auto history=ui.document.history().size();ui.focusInspector();ui.remove();
@@ -576,13 +577,77 @@ void enemyInspector(const fs::path& root) {
         "Switching behaviour discarded hidden Random Move values.");
 }
 
+class PlayerInputUi {
+public:
+    explicit PlayerInputUi(const fs::path& root):document(root) {
+        player=document.createPlayer();camera=document.scene().properties().activeCamera;tick();tick();
+    }
+    void tick() {
+        ImGui::NewFrame();shown.clear();
+        const bool canceled=ImGui::IsKeyPressed(ImGuiKey_Escape,false)&&document.transactionActive();
+        if(canceled){document.cancel();ImGui::ClearActiveID();active.reset();}
+        ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({760,570});
+        ImGui::Begin("Inspector",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
+        auto value=capture();
+        drawPlayerInputInspectorControls(value,[&](PlayerInputInspectorControl control,const char* label,bool changed) {
+            shown.push_back(control);const auto low=ImGui::GetItemRectMin(),high=ImGui::GetItemRectMax();
+            centers[static_cast<std::size_t>(control)]={low.x+ImGui::CalcItemWidth()*.5f,(low.y+high.y)*.5f};
+            if(!canceled&&(ImGui::IsItemActivated()||changed)) {
+                if(active!=control) {
+                    if(document.transactionActive())document.commit();
+                    require(document.begin(label),"FPS property could not begin its scene gesture.");active=control;
+                }
+                if(changed)require(document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.playerInput=value;}),"FPS property did not update atomically.");
+            }
+            if(active==control&&(ImGui::IsItemDeactivated()||(changed&&!ImGui::IsItemActive()))) {
+                require(document.commit(),"FPS property gesture did not commit.");active.reset();
+            }
+        });
+        ImGui::End();ImGui::Render();
+        require(ImGui::GetCurrentContext()->ErrorCountCurrentFrame==0,"FPS controls left invalid ImGui state.");
+    }
+    ScenePlayerInput capture()const{return *document.scene().find(player)->playerInput;}
+    void text(PlayerInputInspectorControl control,const char* text) {
+        const auto center=centers[static_cast<std::size_t>(control)];auto& io=ImGui::GetIO();
+        io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddMousePosEvent(center.x,center.y);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);tick();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);tick();io.AddKeyEvent(ImGuiMod_Ctrl,false);tick();
+        require(document.transactionActive(),"FPS numeric entry did not activate its scene transaction.");io.AddInputCharactersUTF8(text);tick();
+    }
+    void key(ImGuiKey key){auto& io=ImGui::GetIO();io.AddKeyEvent(key,true);tick();io.AddKeyEvent(key,false);tick();tick();}
+    SceneDocument document;EntityId player{},camera{};
+    std::array<ImVec2,10> centers{};std::vector<PlayerInputInspectorControl> shown;
+private:
+    Context context_;std::optional<PlayerInputInspectorControl> active;
+};
+void firstPersonInspector(const fs::path& root) {
+    PlayerInputUi ui(root);const auto cameraBefore=*ui.document.scene().find(ui.camera),playerBefore=*ui.document.scene().find(ui.player);
+    require(ui.shown.size()==10,"Player Input Inspector omitted first-person controls.");
+    const std::pair<PlayerInputInspectorControl,const char*> edits[]{
+        {PlayerInputInspectorControl::MouseSensitivity,"0.27"},{PlayerInputInspectorControl::JumpHeight,"1.8"},{PlayerInputInspectorControl::StrafeTilt,"6"}};
+    for(const auto& [control,text]:edits) {
+        const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(control,text);
+        const auto live=ui.capture();require(ui.document.transactionActive()&&ui.document.history().size()==history,"FPS numeric entry committed before release.");
+        if(control==PlayerInputInspectorControl::MouseSensitivity)require(std::abs(live.mouseSensitivity-.27f)<1e-5f,"Mouse sensitivity did not update.");
+        else if(control==PlayerInputInspectorControl::JumpHeight)require(std::abs(live.jumpHeight-1.8f)<1e-5f,"Jump height did not update.");
+        else require(live.strafeTilt==6.f,"Strafe tilt did not update.");
+        ui.key(ImGuiKey_Enter);require(!ui.document.transactionActive()&&ui.document.history().size()==history+1,"FPS scalar gesture was not one undo command.");
+        require(ui.document.undo()&&ui.capture()==before,"FPS property Undo lost authored values.");ui.tick();
+        require(ui.document.redo()&&ui.capture()==live,"FPS property Redo lost authored values.");ui.tick();
+        require(sameEntity(*ui.document.scene().find(ui.camera),cameraBefore)&&ui.document.scene().find(ui.player)->local==playerBefore.local,
+            "FPS tuning moved the actor or changed its authored camera.");
+    }
+    const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(PlayerInputInspectorControl::MouseSensitivity,"0.65");ui.key(ImGuiKey_Escape);
+    require(!ui.document.transactionActive()&&ui.capture()==before&&ui.document.history().size()==history,"Escape committed a mouse sensitivity gesture.");
+    ui.tick();require(ui.capture()==before,"Canceled FPS input reapplied its value.");
+}
+
 }
 
 int main(){
     try{
         Project project;directEntitySelectionAndSections(project.root);directEnvironmentProperties(project.root);
         preserveRealHierarchy(project.root);reparentedPlayerChildrenStaySelectable(project.root);inlineVisualTransform(project.root);
-        inlineOwnedCamera(project.root);entityColorPopup(project.root);enemyInspector(project.root);
+        inlineOwnedCamera(project.root);entityColorPopup(project.root);enemyInspector(project.root);firstPersonInspector(project.root);
         std::cout<<"Direct entity selection, retained hierarchy, complete Inspector sections, owned visual/Camera gestures and entity colors passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

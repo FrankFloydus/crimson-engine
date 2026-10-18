@@ -51,6 +51,7 @@ public:
         if(cameraPilot_.gestureActive() && (cancelCameraKey || cancelCameraWindow))cameraGestureCancel_=true;
         return gameInput_.handleEvent(event);
     }
+    bool blocksEditorEvent(const SDL_Event& event) const { return gameInput_.blocksEditorEvent(event); }
     void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested);
     void prepareFrame(AssetLibrary&,Renderer&,std::uint32_t bgfxFrame);
     void filesChanged(std::span<const std::filesystem::path>);

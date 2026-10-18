@@ -48,9 +48,13 @@ public:
     std::vector<PhysicsStaticMesh> staticMeshes() const;
     std::uint64_t geometryRevision() const;
     std::optional<Vec3> characterPosition(EntityId) const;
+    // Accepted motion in meters per second, after collision resolution.
+    std::optional<Vec3> characterVelocity(EntityId) const;
     std::optional<AgentTraversalSettings> acceptedCharacterTraversal(EntityId) const;
     bool grounded(EntityId) const;
     bool characterLocked(EntityId) const;
+    // Drop queued input and jump grace without interrupting airborne motion.
+    void cancelCharacterInput(EntityId);
     // Endpoint overlaps are sampled after all motors resolve each fixed step.
     // Events describe the latest completed step and carry persistent identities.
     std::span<const TriggerEvent> triggerEvents() const;
@@ -62,6 +66,8 @@ public:
 private:
     friend class CharacterMotor;
     void requestMovement(EntityId,const Vec3& desiredVelocity);
+    void requestFirstPersonMovement(EntityId,const Vec3& desiredHorizontalVelocity,float groundAcceleration,float groundFriction,float airAcceleration,float airControl);
+    void requestJump(EntityId,float jumpHeight);
     void requestFacing(EntityId,const Vec3& direction);
     struct Impl;
     std::unique_ptr<Impl> impl_;

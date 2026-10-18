@@ -10,9 +10,9 @@ namespace crimson {
 // No scene/entity/asset identity or live follow target is stored in a template.
 struct CameraTemplate {
     std::string name;
-    Vec3 offset{6.5f,13.1f,6.5f};
+    Vec3 offset{0,1.65f,0};
     Mat4 worldBasis{};
-    SceneCamera lens{35.f};
+    SceneCamera lens{75.f,.05f,2048.f};
     bool operator==(const CameraTemplate&) const = default;
 };
 
@@ -28,7 +28,8 @@ std::filesystem::path cameraTemplatesPath(const std::filesystem::path& projectRo
 // User-authored templates only; missing file returns an empty list. Malformed
 // files throw without changing the caller's current in-memory templates.
 std::vector<CameraTemplate> loadCameraTemplates(const std::filesystem::path& projectRoot);
-// Case-insensitive named upsert. ARPG is reserved for the built-in template.
+// Case-insensitive named upsert. First Person is reserved for the built-in template.
+// A preexisting user template with that name remains loadable and editable.
 // Validates and atomically publishes a complete
 // candidate before swapping the caller's list; failure preserves both states.
 void saveCameraTemplate(const std::filesystem::path& projectRoot,

@@ -18,9 +18,8 @@ class Renderer;
 struct GameViewFrame {
     ViewportRegion viewport;
     uint32_t pixelWidth{},pixelHeight{};
-    bool focused{},closed{},clicked{},leftHeld{};
+    bool focused{},closed{},clicked{};
     int attributeDebugCycle{};
-    std::optional<Vec2> pointerPosition;
 };
 // A diagnostic actor box includes the upright capsule and owned model visuals,
 // excluding camera/light/particle markers and independently owned actors.
@@ -57,7 +56,7 @@ public:
     GameViewFrame draw(SceneDocument&,Renderer&,bool& open,bool playing,bool focus=false,std::uint64_t textureAndProgramBytes=0,
                        bool attributeDebug=false);
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
-    void drawRoute(const Camera&,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
+    void drawRoute(const Camera&,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
     void drawActorLightRigs(const Camera&,const Scene&,const NavigationAgentProfileQuery& profiles={});
     void drawAttributeDebug(const Camera&,const Scene&,EntityId target,std::span<const AttributeDebugRow> rows,

@@ -70,6 +70,7 @@ void playMovementAndPools() {
         if(record.id==volume)record.navigationVolume->size={30,8,30};
         if(record.id==player){record.local=math::translation({0,.05f,0});record.effects=SceneEffects{{AssetRef<GameplayEffectAsset>{initial->id}}};}
     }}),"Cannot tune Play fixture.");
+    require(addSceneComponent(authored,player,SceneComponentKind::Navigation),"Cannot add Navigation to the external-destination fixture.");
     PlaySession play(root);play.setAgentProfiles(testing::agentProfileQuery());
     play.setGameplayEffects([initial](const std::string& id){return id==initial->id?EffectDefinitionSnapshot{initial,1,{}}:EffectDefinitionSnapshot{};});
     require(play.start(authored),"Cannot enter Play.");require(testing::waitForNavigation(play),"Navigation failed to prepare.");

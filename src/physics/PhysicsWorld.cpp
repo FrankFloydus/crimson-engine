@@ -115,6 +115,11 @@ bool validCharacter(const Mat4& world,const AgentTraversalSettings& character,st
     if(!math::finite(character.radius) || !math::finite(character.height) || character.radius<=0 || character.height<2*character.radius){error="Character height must be at least twice its positive radius.";return false;}
     return true;
 }
+float nonnegative(float value){return std::isfinite(value)?std::max(0.f,value):0.f;}
+Vec3 approachVelocity(const Vec3& current,const Vec3& target,float maximumChange) {
+    const auto delta=target-current;const auto length=math::length(delta);
+    return length<=maximumChange?target:current+delta*(maximumChange/length);
+}
 }
 struct PhysicsWorld::Impl final: JPH::CharacterContactListener,JPH::CharacterVsCharacterCollision {
     // Lifetime is declared first so every Jolt resource is released before it.
@@ -123,7 +128,13 @@ struct PhysicsWorld::Impl final: JPH::CharacterContactListener,JPH::CharacterVsC
     JPH::PhysicsSystem world;
     JPH::TempAllocatorImpl allocator{4*1024*1024};
     struct Collider {JPH::BodyID body;Mat4 world;SceneCollider definition;std::shared_ptr<const StaticTriangleMesh> mesh;};
-    struct Character {JPH::Ref<JPH::CharacterVirtual> motor;AgentTraversalSettings definition;std::string profile;Mat4 world;CollisionFilter collision;bool locked{},movementEnabled{},profileCurrent{true},allowSliding{true};};
+    struct FirstPersonMotion {Vec3 velocity{};float coyote{},jumpBuffer{},jumpHeight{};bool active{};};
+    struct FirstPersonRequest {Vec3 velocity{};float groundAcceleration{},groundFriction{},airAcceleration{},airControl{};};
+    struct Character {
+        JPH::Ref<JPH::CharacterVirtual> motor;AgentTraversalSettings definition;std::string profile;Mat4 world;CollisionFilter collision;
+        bool locked{},movementEnabled{},profileCurrent{true},allowSliding{true};
+        FirstPersonMotion firstPerson;Vec3 resolvedVelocity{};
+    };
     std::map<EntityId,Collider> colliders;
     struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};CollisionFilter collision{WorldCollisionLayer,AllCollisionLayers};};
     std::map<EntityId,MeshCollider> meshColliders;
@@ -134,6 +145,8 @@ struct PhysicsWorld::Impl final: JPH::CharacterContactListener,JPH::CharacterVsC
     std::vector<TriggerEvent> events;
     std::set<EntityId> initial,configured,removed;
     std::map<EntityId,Vec3> desiredVelocities;
+    std::map<EntityId,FirstPersonRequest> firstPersonRequests;
+    std::map<EntityId,float> jumpRequests;
     std::map<EntityId,Vec3> desiredFacing;
     std::string diagnostic;
     std::uint64_t geometryRevision{};
@@ -429,7 +442,7 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
         iterator=state.meshColliders.erase(iterator);collidersChanged=true;
     }
     if(collidersChanged)++state.geometryRevision;
-    if(!includeCharacters){state.characters.clear();return;}
+    if(!includeCharacters){state.characters.clear();state.desiredVelocities.clear();state.firstPersonRequests.clear();state.jumpRequests.clear();state.desiredFacing.clear();return;}
     for(const auto& record:records) {
         if(!record.controller)continue;const auto world=scene.worldTransform(record.id);if(!world)continue;
         std::string error;
@@ -441,13 +454,16 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
         const auto resolved=resolveAgentTraversal(*record.controller,state.profiles);
         if(!resolved) {
             state.report(record.id,"Navigation Agent Profile is unavailable; retaining the last accepted capsule.");
-            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;}
+            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;found->second.firstPerson={};}
+            state.jumpRequests.erase(record.id);
             continue;
         }
         if(!validCharacter(*world,*resolved,error)){state.report(record.id,error);continue;}
         const auto& definition=*resolved;
+        const bool profileChanged=found!=state.characters.end() && (found->second.definition!=definition || found->second.profile!=record.controller->profile.id);
         const auto retainPrevious=[&]{
-            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;}
+            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;found->second.firstPerson={};}
+            state.jumpRequests.erase(record.id);
         };
         const bool newCapsule=found==state.characters.end()||found->second.definition.height!=definition.height||found->second.definition.radius!=definition.radius;
         if(newCapsule) {
@@ -473,12 +489,14 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
         auto& character=found->second;const bool editing=locked(scene,record.id,locks);
         character.motor->SetMaxSlopeAngle(definition.maxSlope*std::numbers::pi_v<float>/180.f);
         character.profileCurrent=true;character.profile=record.controller->profile.id;
-        if(!close(character.world,*world) || character.locked!=editing) {
+        if(!close(character.world,*world) || character.locked!=editing || profileChanged) {
             character.motor->SetPosition(position(*world));character.motor->SetRotation(rotation(*world));
             character.motor->SetLinearVelocity(JPH::Vec3::sZero());character.world=*world;charactersChanged=true;state.configured.insert(record.id);
+            character.firstPerson={};character.resolvedVelocity={};state.jumpRequests.erase(record.id);
         }
         character.locked=editing;character.definition=definition;
         character.movementEnabled=record.motor && record.motor->enabled;keptCharacters.insert(record.id);
+        if(editing || !character.movementEnabled){character.firstPerson={};state.jumpRequests.erase(record.id);}
     }
     std::erase_if(state.characters,[&](const auto& entry){
         if(keptCharacters.contains(entry.first))return false;
@@ -492,19 +510,46 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
     reconcile(scene,locks,meshes);std::vector<ScenePoseUpdate> poses;
     if(!std::isfinite(seconds) || seconds<=0)return poses;auto& state=*impl_;
     auto movement=std::move(state.desiredVelocities);state.desiredVelocities.clear();
+    auto firstPerson=std::move(state.firstPersonRequests);state.firstPersonRequests.clear();
+    auto jumps=std::move(state.jumpRequests);state.jumpRequests.clear();
     auto facing=std::move(state.desiredFacing);state.desiredFacing.clear();
-    if(controlled!=NoEntity)movement[controlled]=math::finite(desired)?desired:Vec3{};
+    if(controlled!=NoEntity){movement[controlled]=math::finite(desired)?desired:Vec3{};firstPerson.erase(controlled);}
     // Every peer observes this tick's requested velocity, independent of its
     // stable EntityId update position. Character collision never applies forces.
     for(auto& [id,character]:state.characters) {
-        if(character.locked){character.motor->SetLinearVelocity(JPH::Vec3::sZero());continue;}
+        if(character.locked){character.motor->SetLinearVelocity(JPH::Vec3::sZero());character.firstPerson={};character.resolvedVelocity={};continue;}
         auto& motor=*character.motor;motor.UpdateGroundVelocity();
         const auto current=motor.GetLinearVelocity();
         float vertical=current.GetY();
-        if(motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<=.1f)vertical=0;
-        vertical-=9.81f*seconds;
+        const bool onGround=motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<=.1f;
+        if(onGround)vertical=0;
         const auto requested=movement.find(id);
-        const Vec3 horizontal=character.movementEnabled && requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
+        Vec3 horizontal=character.movementEnabled && requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
+        const auto fps=firstPerson.find(id);
+        if(character.movementEnabled && fps!=firstPerson.end()) {
+            auto& motion=character.firstPerson;
+            if(!motion.active){motion={};motion.active=true;motion.velocity=character.resolvedVelocity;}
+            motion.coyote=onGround?.10f:std::max(0.f,motion.coyote-seconds);
+            motion.jumpBuffer=std::max(0.f,motion.jumpBuffer-seconds);
+            if(const auto jump=jumps.find(id);jump!=jumps.end()){motion.jumpBuffer=.12f;motion.jumpHeight=jump->second;}
+            const auto& input=fps->second;const auto wish=input.velocity;
+            horizontal={motion.velocity[0],0,motion.velocity[2]};
+            if(onGround) {
+                if(math::length(wish)>1e-6)horizontal=approachVelocity(horizontal,wish,input.groundAcceleration*seconds);
+                else {
+                    const auto speed=math::length(horizontal);
+                    if(speed>1e-6)horizontal=horizontal*(std::max(0.,speed-input.groundFriction*std::max(speed,1.5)*seconds)/speed);
+                    else horizontal={};
+                }
+            } else if(math::length(wish)>1e-6) {
+                horizontal=approachVelocity(horizontal,wish,input.airAcceleration*input.airControl*seconds);
+            }
+            if(motion.jumpBuffer>0 && motion.coyote>0 && motion.jumpHeight>0) {
+                vertical=static_cast<float>(std::sqrt(2.0*9.81*motion.jumpHeight));
+                motion.coyote=0;motion.jumpBuffer=0;
+            }
+        } else character.firstPerson={};
+        vertical-=9.81f*seconds;
         character.allowSliding=!native(horizontal).IsNearZero();
         const auto requestedFacing=facing.find(id);
         const auto heading=character.movementEnabled && requestedFacing!=facing.end()?Vec3{requestedFacing->second[0],0,requestedFacing->second[2]}:horizontal;
@@ -521,10 +566,28 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
         JPH::CharacterVirtual::ExtendedUpdateSettings update;
         update.mWalkStairsStepUp={0,character.definition.maxStep,0};update.mStickToFloorStepDown={0,-.5f,0};
         auto& motor=*character.motor;
+        // A jump must leave support cleanly. Floor snapping and stair probes
+        // resume on the next supported walking tick, including downhill steps.
+        if(character.firstPerson.active && motor.GetLinearVelocity().GetY()>0){update.mWalkStairsStepUp=JPH::Vec3::sZero();update.mStickToFloorStepDown=JPH::Vec3::sZero();}
+        const auto previous=motor.GetPosition();
         motor.ExtendedUpdate(seconds,state.world.GetGravity(),update,state.world.GetDefaultBroadPhaseLayerFilter(CharacterLayer),
             state.world.GetDefaultLayerFilter(CharacterLayer),{},{},state.allocator);
         const auto resolved=own(motor.GetPosition());
-        if(!math::finite(resolved)){state.report(id,"Character produced a nonfinite pose; movement was discarded.");motor.SetPosition(position(character.world));motor.SetLinearVelocity(JPH::Vec3::sZero());continue;}
+        if(!math::finite(resolved)){state.report(id,"Character produced a nonfinite pose; movement was discarded.");motor.SetPosition(position(character.world));motor.SetLinearVelocity(JPH::Vec3::sZero());character.firstPerson={};character.resolvedVelocity={};continue;}
+        character.resolvedVelocity=own((motor.GetPosition()-previous)/seconds);
+        if(character.firstPerson.active) {
+            auto& motion=character.firstPerson;
+            // CharacterVirtual retains its commanded velocity after solving.
+            // Actual displacement supplies wall/slope-resolved momentum; keep
+            // ballistic vertical speed separate from stair and floor snapping.
+            motion.velocity=character.resolvedVelocity;
+            float vertical=motor.GetLinearVelocity().GetY();
+            for(const auto& contact:motor.GetActiveContacts())
+                if(contact.mHadCollision && !contact.mWasDiscarded && !contact.mIsSensorB && contact.mContactNormal.GetY()<-.01f && vertical>0)vertical=0;
+            if(motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<0)vertical=0;
+            motion.velocity[1]=vertical;
+            motor.SetLinearVelocity(native(motion.velocity));
+        }
         auto world=character.world;world[12]=resolved[0];world[13]=resolved[1];world[14]=resolved[2];
         const auto record=scene.find(id);if(!record)continue;
         Mat4 local=world;
@@ -538,7 +601,14 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
     return poses;
 }
 const std::string& PhysicsWorld::status() const{return impl_->diagnostic;}
-void PhysicsWorld::requestMovement(EntityId id,const Vec3& desired){if(id)impl_->desiredVelocities[id]=math::finite(desired)?desired:Vec3{};}
+void PhysicsWorld::requestMovement(EntityId id,const Vec3& desired){if(id){impl_->desiredVelocities[id]=math::finite(desired)?desired:Vec3{};impl_->firstPersonRequests.erase(id);}}
+void PhysicsWorld::requestFirstPersonMovement(EntityId id,const Vec3& desired,float groundAcceleration,float groundFriction,float airAcceleration,float airControl) {
+    if(!id)return;
+    const auto velocity=math::finite(desired)?Vec3{desired[0],0,desired[2]}:Vec3{};
+    impl_->firstPersonRequests[id]={velocity,nonnegative(groundAcceleration),nonnegative(groundFriction),nonnegative(airAcceleration),std::clamp(nonnegative(airControl),0.f,1.f)};
+    impl_->desiredVelocities.erase(id);
+}
+void PhysicsWorld::requestJump(EntityId id,float height){if(id && std::isfinite(height) && height>0)impl_->jumpRequests[id]=height;}
 void PhysicsWorld::requestFacing(EntityId id,const Vec3& direction){if(id)impl_->desiredFacing[id]=math::finite(direction)?direction:Vec3{};}
 std::size_t PhysicsWorld::colliderCount() const{return impl_->colliders.size()+impl_->meshColliders.size()+impl_->triggers.size();}
 std::uint64_t PhysicsWorld::geometryRevision() const{return impl_->geometryRevision;}
@@ -555,6 +625,7 @@ std::vector<PhysicsStaticMesh> PhysicsWorld::staticMeshes() const {
 }
 std::size_t PhysicsWorld::characterCount() const{return impl_->characters.size();}
 std::optional<Vec3> PhysicsWorld::characterPosition(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?std::nullopt:std::optional{own(found->second.motor->GetPosition())};}
+std::optional<Vec3> PhysicsWorld::characterVelocity(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?std::nullopt:std::optional{found->second.resolvedVelocity};}
 std::optional<AgentTraversalSettings> PhysicsWorld::acceptedCharacterTraversal(EntityId id) const {
     const auto found=impl_->characters.find(id);
     if(found==impl_->characters.end()||!found->second.profileCurrent)return {};
@@ -562,6 +633,10 @@ std::optional<AgentTraversalSettings> PhysicsWorld::acceptedCharacterTraversal(E
 }
 bool PhysicsWorld::grounded(EntityId id) const{const auto found=impl_->characters.find(id);return found!=impl_->characters.end() && found->second.motor->GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;}
 bool PhysicsWorld::characterLocked(EntityId id) const{const auto found=impl_->characters.find(id);return found!=impl_->characters.end() && found->second.locked;}
+void PhysicsWorld::cancelCharacterInput(EntityId id) {
+    impl_->desiredVelocities.erase(id);impl_->firstPersonRequests.erase(id);impl_->jumpRequests.erase(id);impl_->desiredFacing.erase(id);
+    if(const auto found=impl_->characters.find(id);found!=impl_->characters.end())found->second.firstPerson={};
+}
 std::span<const TriggerEvent> PhysicsWorld::triggerEvents() const{return impl_->events;}
 std::vector<EntityId> PhysicsWorld::triggerOverlaps(EntityId id) const {
     const auto found=impl_->overlaps.find(id);return found==impl_->overlaps.end()?std::vector<EntityId>{}:std::vector<EntityId>(found->second.begin(),found->second.end());

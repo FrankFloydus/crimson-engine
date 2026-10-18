@@ -17,6 +17,114 @@ EntityRecord characterRecord(){EntityRecord player;player.id=2;player.name="Char
 void tick(Scene& scene,PhysicsWorld& world,const Vec3& movement={},int count=1) {
     for(int i=0;i<count;++i)scene.applyRuntimePoses(world.step(scene,2,movement,1.f/60.f));
 }
+void firstPersonTick(Scene& scene,PhysicsWorld& world,const Vec3& movement={},int count=1,float airControl=.35f) {
+    CharacterMotor motor(world,2);
+    for(int i=0;i<count;++i){motor.moveFirstPerson(movement,45,8,12,airControl);scene.applyRuntimePoses(world.step(scene,NoEntity,{},1.f/60.f));}
+}
+void firstPersonAccelerationBrakingAndAirControl() {
+    Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});scene.apply({floorRecord(),player},{});
+    PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    firstPersonTick(scene,world,{6,0,0});const auto first=*motor.velocity();
+    require(first[0]>.6f && first[0]<.9f,"FPS movement did not accelerate smoothly from rest.");
+    firstPersonTick(scene,world,{6,0,0},15);
+    require(std::abs((*motor.velocity())[0]-6)<.02,"FPS ground acceleration did not reach the requested movement speed.");
+    const auto brakingStart=*motor.position();firstPersonTick(scene,world,{},45);
+    require(std::abs((*motor.velocity())[0])<1e-4 && (*motor.position())[0]<brakingStart[0]+1,"FPS ground friction did not stop the actor promptly.");
+    firstPersonTick(scene,world,{6,0,0},16);motor.jump(1.1f);firstPersonTick(scene,world,{6,0,0});
+    require(!motor.grounded() && (*motor.velocity())[1]>4,"FPS jump did not leave the floor with the height-derived upward impulse.");
+    firstPersonTick(scene,world,{},8);
+    require(std::abs((*motor.velocity())[0]-6)<.02,"Releasing movement in the air incorrectly applied ground friction.");
+    firstPersonTick(scene,world,{0,0,-6},6,0);
+    require(std::abs((*motor.velocity())[0]-6)<.02 && std::abs((*motor.velocity())[2])<.01,"Zero air control still redirected airborne momentum.");
+    firstPersonTick(scene,world,{0,0,-6},6,1);
+    require((*motor.velocity())[0]<5.5f && (*motor.velocity())[2]<-.5f,"Authored air control did not allow airborne steering.");
+}
+void firstPersonJumpEdgesHeightAndBuffer() {
+    Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});scene.apply({floorRecord(),player},{});
+    PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);const auto floor=(*motor.position())[1];
+    motor.jump(1.1f);firstPersonTick(scene,world);float highest=(*motor.position())[1];
+    firstPersonTick(scene,world,{},8);const auto before=(*motor.velocity())[1];motor.jump(1.1f);firstPersonTick(scene,world);
+    require((*motor.velocity())[1]<before,"A second jump press gave an unsupported actor an extra jump.");
+    for(int i=0;i<100;++i){firstPersonTick(scene,world);highest=std::max(highest,(*motor.position())[1]);}
+    require(highest-floor>1.f && highest-floor<1.15f,"FPS jump height did not match the authored 1.1 m ballistic arc.");
+    require(motor.grounded() && std::abs((*motor.position())[1]-floor)<.02,"Jump repeated without a new press edge or failed to land.");
+
+    Scene fallingScene;player.local=math::translation({0,.6f,0});fallingScene.apply({floorRecord(),player},{});PhysicsWorld fallingWorld;
+    CharacterMotor fallingMotor(fallingWorld,2);bool queued=false,rebounded=false;
+    for(int i=0;i<90;++i) {
+        if(!queued && fallingMotor.position() && !fallingMotor.grounded() && (*fallingMotor.position())[1]<.12f){fallingMotor.jump(1.1f);queued=true;}
+        firstPersonTick(fallingScene,fallingWorld);
+        if(queued && (*fallingMotor.velocity())[1]>3){rebounded=true;break;}
+    }
+    require(queued && rebounded,"A jump press just before landing was lost instead of using the landing buffer.");
+}
+void firstPersonCoyoteWindow() {
+    const auto departure=[](int ticksBeforePress) {
+        Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});scene.apply({floorRecord(),player},{});
+        PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+        auto records=scene.records();std::erase_if(records,[](const auto& record){return record.id==1;});scene.apply(records,{});
+        firstPersonTick(scene,world,{},ticksBeforePress);motor.jump(1.1f);firstPersonTick(scene,world);return (*motor.velocity())[1];
+    };
+    require(departure(3)>4,"Jump immediately after leaving support did not use the coyote window.");
+    require(departure(10)<0,"Expired coyote time permitted an unsupported jump.");
+}
+void firstPersonCanceledJumpBuffer() {
+    const auto fall=[](bool cancel) {
+        Scene scene;auto player=characterRecord();player.local=math::translation({0,1,0});scene.apply({floorRecord(),player},{});
+        PhysicsWorld world;CharacterMotor motor(world,2);
+        for(int i=0;i<60;++i){firstPersonTick(scene,world);if((*motor.position())[1]<.35f)break;}
+        motor.jump(1.1f);firstPersonTick(scene,world);
+        require(!motor.grounded() && (*motor.velocity())[1]<-1,"Canceled-jump fixture did not establish a buffered airborne press.");
+        const auto velocity=*motor.velocity();
+        if(cancel) {
+            // Focus can be lost and reacquired before another fixed tick.
+            // Cancel both the consumed landing buffer and newly queued input.
+            motor.jump(1.1f);motor.moveFirstPerson({6,0,0},45,8,12,.35f);motor.face({1,0,0});
+            world.cancelCharacterInput(2);
+            require(*motor.velocity()==velocity,"Input cancellation changed the accepted ballistic velocity.");
+        }
+        firstPersonTick(scene,world);
+        require((*motor.velocity())[1]<velocity[1]-.1f,"Input cancellation interrupted falling momentum before reacquisition.");
+        bool jumped=false;
+        for(int i=0;i<30;++i){firstPersonTick(scene,world);if((*motor.velocity())[1]>1)jumped=true;}
+        return jumped;
+    };
+    require(fall(false),"Buffered-jump cancellation fixture would not jump on its impending landing.");
+    require(!fall(true),"Canceled buffered jump survived a zero-tick input loss and reacquisition.");
+}
+void firstPersonCeilingsWallsAndStairs() {
+    Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});
+    EntityRecord ceiling;ceiling.id=3;ceiling.name="Low ceiling";ceiling.local=math::translation({0,2.3f,0});ceiling.collider=SceneCollider{{10,.2f,10}};
+    EntityRecord wall;wall.id=4;wall.name="Wall";wall.local=math::translation({1.5f,2,0});wall.collider=SceneCollider{{1,4,10}};
+    scene.apply({floorRecord(),player,ceiling,wall},{});PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    motor.jump(1.1f);float highest=0;
+    for(int i=0;i<90;++i){firstPersonTick(scene,world);highest=std::max(highest,(*motor.position())[1]);}
+    require(highest>.2f && highest<.43f && motor.grounded(),"Low ceiling did not stop ascent and promptly restore falling/landing.");
+    firstPersonTick(scene,world,{6,0,0},90);
+    require((*motor.position())[0]<.72f && std::abs((*motor.velocity())[0])<.01,"FPS wall contact retained commanded momentum or passed through collision.");
+    const float againstWall=(*motor.position())[0];firstPersonTick(scene,world,{-6,0,0});
+    require((*motor.position())[0]<againstWall-.005f,"FPS acceleration had to unwind stale into-wall velocity before reversing.");
+
+    Scene stairs;EntityRecord step;step.id=4;step.name="Low step";step.local=math::translation({1.5f,.1f,0});step.collider=SceneCollider{{1,.2f,4}};
+    stairs.apply({floorRecord(),player,step},{});PhysicsWorld stairWorld;firstPersonTick(stairs,stairWorld,{},60);firstPersonTick(stairs,stairWorld,{3,0,0},60);
+    require((*stairWorld.characterPosition(2))[0]>2.4f && stairWorld.grounded(2),"FPS momentum handling broke the shared traversal profile's stair support.");
+}
+void firstPersonTransientStateResets() {
+    using namespace crimson::testing;
+    const auto profile=agentProfile({1.8f,.3f,45,.3f});auto player=characterRecord();player.controller->profile=profile;player.local=math::translation({0,.05f,0});
+    Scene scene;scene.apply({floorRecord(),player},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    firstPersonTick(scene,world,{6,0,0},16);motor.jump(1.1f);firstPersonTick(scene,world,{6,0,0},3);
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.local=math::translation({4,3,0});scene.apply(records,{});
+    firstPersonTick(scene,world);
+    require(std::abs((*motor.velocity())[0])<.01 && (*motor.velocity())[1]<0 && (*motor.position())[1]>2.99f,"Authored teleport retained FPS horizontal/jump momentum.");
+    firstPersonTick(scene,world,{},120);motor.jump(1.1f);motor.moveFirstPerson({6,0,0},45,8,12,.35f);const std::vector<EntityId> locks{2};
+    scene.applyRuntimePoses(world.step(scene,NoEntity,{},1.f/60.f,locks));firstPersonTick(scene,world);
+    require(motor.grounded() && std::abs((*motor.velocity())[0])<.01,"Transform lock replayed FPS movement or a queued jump when released.");
+    firstPersonTick(scene,world,{6,0,0},16);
+    auto replacement=std::make_shared<NavigationAgentProfile>(*agentProfiles().at(profile.id));replacement->traversal.maxSlope=40;agentProfiles()[profile.id]=replacement;
+    motor.jump(1.1f);firstPersonTick(scene,world);
+    require(motor.grounded() && std::abs((*motor.velocity())[0])<.01,"Profile replacement retained FPS momentum or a buffered jump.");
+}
 void floorWallAndLiveEdits() {
     Scene scene;auto player=characterRecord();scene.apply({floorRecord(),player},{});PhysicsWorld world;
     tick(scene,world,{},180);
@@ -272,5 +380,15 @@ void slopeIntentIsPerActorAndSteepSlopesStillSlide() {
     const auto downhill=horizontalRampDirection(steep,{-1,0,0}),finish=*steepWorld.characterPosition(2);
     require(math::dot(finish-start,downhill)>.25&&finish[1]<start[1]-.15,"Idle support made a slope above the profile limit walkable or suspended gravity.");
 }
+void firstPersonWalkableSlopes() {
+    for(const auto degrees:{14.f,35.f}) {
+        const auto ramp=idleRamp(degrees,.6f,degrees>20);auto actor=characterRecord();actor.local=math::translation(rampSpawn(ramp,-2));
+        Scene scene;scene.apply({ramp,actor},{});PhysicsWorld world;firstPersonTick(scene,world,{},120);
+        const auto start=*world.characterPosition(2);firstPersonTick(scene,world,horizontalRampDirection(ramp,{1,0,0})*1.5,90);
+        require(world.grounded(2) && (*world.characterPosition(2))[1]>start[1]+.2,"FPS movement could not ascend a walkable shared-profile ramp.");
+        firstPersonTick(scene,world,{},90);const auto stopped=*world.characterPosition(2);firstPersonTick(scene,world,{},90);
+        require(world.grounded(2) && math::length(*world.characterPosition(2)-stopped)<.01,"FPS friction did not leave an idle actor at rest on a walkable ramp.");
+    }
 }
-int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+}
+int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();firstPersonAccelerationBrakingAndAirControl();firstPersonJumpEdgesHeightAndBuffer();firstPersonCoyoteWindow();firstPersonCanceledJumpBuffer();firstPersonCeilingsWallsAndStairs();firstPersonTransientStateResets();firstPersonWalkableSlopes();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

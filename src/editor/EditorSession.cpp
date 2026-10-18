@@ -62,7 +62,7 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
         return navigationPreview_.status(play_.playing()?play_.navigationWorld():&navigationPreview_.world(),profile);
     });
 }
-EditorSession::~EditorSession() { saveSession(); }
+EditorSession::~EditorSession() { gameInput_.cancel();saveSession(); }
 void EditorSession::restoreSession(AssetLibrary& assets) {
     const auto path=resolveAssetPath(root_,"assets/editor-session.json");
     try {
@@ -398,15 +398,16 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     // keyboard focus. Its platform window may only exist on the next frame.
     if(focusGame_ && gameWindow && SDL_GetKeyboardFocus()!=gameWindow)SDL_RaiseWindow(gameWindow);
     gameInput_.setViewport(game.viewport,play_.playing() && gameWindow && game.pixelWidth>0 && gameCamera.has_value(),game.viewport.inputBlocked || simulationSuspended_ || command.inputActive);
-    if(!game.focused)gameInput_.cancel();
-    else if(game.clicked || focusGame_)gameInput_.acquire();
-    if(game.pointerPosition)gameInput_.submitUiPointer(*game.pointerPosition,game.clicked,game.leftHeld);
+    if(!game.focused || !gameWindow || SDL_GetKeyboardFocus()!=gameWindow)gameInput_.cancel();
+    else if(game.clicked)gameInput_.acquireFromImageClick();
+    else if(focusGame_)gameInput_.acquire();
     if(game.attributeDebugCycle && game.focused && !command.inputActive && !simulationSuspended_)
         attributeDebug_.cycle(play_,game.attributeDebugCycle<0);
+    if(gameInput_.ownsKeyboard())navigation.cancel();
+    gameInput_.syncMouseCapture();
     const bool focusComplete=game.focused && gameWindow && SDL_GetKeyboardFocus()==gameWindow &&
         (!gameCamera || gameInput_.ownsKeyboard());
     focusGame_=focusGame_ && gameOpen && play_.playing() && !focusComplete;
-    if(gameInput_.ownsKeyboard())navigation.cancel();
     if(frame.cameraAction!=EditorCameraAction::None) {
         navigation.cancel();renderer.cancelPicking();
         switch(frame.cameraAction) {
@@ -442,8 +443,6 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         document.createModels(placements);renderer.cancelPicking();iterator=pendingDrops_.erase(iterator);
     }
     if(play_.playing()) {
-        // Mouse coordinates refer to the Game image already presented to the
-        // user, including its interpolated follow camera.
         const auto inputCamera=resolveGameCamera(play_.presentationScene());
         play_.advance(simulationSeconds,gameInput_,inputCamera.value_or(gameCamera.value_or(Camera{})),!simulationSuspended_);
     }
@@ -535,14 +534,12 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
     editor_.drawActorLightRigs(sceneCamera,renderScene);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
-        gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
         gameView_.drawActorLightRigs(*gameCamera,renderScene,agentProfiles);
         if(play_.playing()) {
             for(const auto& actor:renderScene.records())if(actor.navigation && actor.navigation->enabled && actor.navigation->showRoute && renderScene.isVisible(actor.id)) {
                 std::optional<Vec3> position;
                 if(const auto world=renderScene.worldTransform(actor.id))position=math::transformPoint(*world,{});
-                const auto hit=actor.id==renderScene.properties().playerCharacter?play_.lastClickedGround():std::optional<Vec3>{};
-                gameView_.drawRoute(*gameCamera,hit,play_.actorRemainingPath(actor.id),position);
+                gameView_.drawRoute(*gameCamera,play_.actorRemainingPath(actor.id),position);
             }
             if(attributeDebug_.enabled())gameView_.drawAttributeDebug(*gameCamera,renderScene,attributeDebug_.target(),attributeDebug_.rows(play_),agentProfiles,
                 [&assets](const std::string& id)->std::optional<Aabb> {

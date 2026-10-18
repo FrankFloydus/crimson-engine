@@ -69,10 +69,8 @@ public:
         imagePoint={origin.x+size.x*.5f,origin.y+size.y*.5f};
         input.setViewport(region,true,interaction.blocked);
         if(!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))input.cancel();
-        else if(interaction.clicked || focusAndAcquire)input.acquire();
-        if(interaction.hovered && !interaction.blocked) {
-            const auto pointer=ImGui::GetIO().MousePos;input.submitUiPointer({pointer.x,pointer.y},interaction.clicked,interaction.held);
-        }
+        else if(interaction.clicked)input.acquireFromImageClick();
+        else if(focusAndAcquire)input.acquire();
         ImGui::End();ImGui::Render();
     }
     void mouse(ImVec2 point,bool down) {
@@ -83,7 +81,19 @@ public:
     }
     void key(SDL_Scancode key,bool down) {
         SDL_Event event{};event.type=down?SDL_EVENT_KEY_DOWN:SDL_EVENT_KEY_UP;
-        event.key.windowID=9;event.key.scancode=key;input.handleEvent(event);tick();
+        event.key.windowID=9;event.key.scancode=key;
+        ImGuiKey uiKey=ImGuiKey_None;
+        switch(key) {
+        case SDL_SCANCODE_W:uiKey=ImGuiKey_W;break;
+        case SDL_SCANCODE_A:uiKey=ImGuiKey_A;break;
+        case SDL_SCANCODE_S:uiKey=ImGuiKey_S;break;
+        case SDL_SCANCODE_D:uiKey=ImGuiKey_D;break;
+        case SDL_SCANCODE_SPACE:uiKey=ImGuiKey_Space;break;
+        case SDL_SCANCODE_ESCAPE:uiKey=ImGuiKey_Escape;break;
+        default:break;
+        }
+        if(uiKey!=ImGuiKey_None && !input.blocksEditorEvent(event))ImGui::GetIO().AddKeyEvent(uiKey,down);
+        input.handleEvent(event);tick();
     }
     void uiKey(ImGuiKey key,bool down) {ImGui::GetIO().AddKeyEvent(key,down);tick();}
     void motion(ImVec2 point) {
@@ -91,12 +101,17 @@ public:
         SDL_Event event{};event.type=SDL_EVENT_MOUSE_MOTION;event.motion.windowID=9;event.motion.x=point.x;event.motion.y=point.y;
         input.handleEvent(event);tick();
     }
+    void relativeMotion(float dx,float dy) {
+        SDL_Event event{};event.type=SDL_EVENT_MOUSE_MOTION;event.motion.windowID=9;
+        event.motion.xrel=dx;event.motion.yrel=dy;input.handleEvent(event);tick();
+    }
     void pressThenMove(ImVec2 press,ImVec2 moved) {
         auto& io=ImGui::GetIO();io.AddMousePosEvent(press.x,press.y);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);
         SDL_Event event{};event.type=SDL_EVENT_MOUSE_BUTTON_DOWN;event.button.windowID=9;event.button.button=SDL_BUTTON_LEFT;
         event.button.x=press.x;event.button.y=press.y;input.handleEvent(event);
         io.AddMousePosEvent(moved.x,moved.y);event={};event.type=SDL_EVENT_MOUSE_MOTION;event.motion.windowID=9;
-        event.motion.x=moved.x;event.motion.y=moved.y;input.handleEvent(event);tick();
+        event.motion.x=moved.x;event.motion.y=moved.y;event.motion.xrel=moved.x-press.x;event.motion.yrel=moved.y-press.y;
+        input.handleEvent(event);tick();
     }
     void pressThenCancel(ImVec2 point) {
         auto& io=ImGui::GetIO();io.AddMousePosEvent(point.x,point.y);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);
@@ -134,30 +149,31 @@ void passiveImageLosesControl(bool docked) {
     GameUi ui(false,docked);
     ui.mouse(ui.imagePoint,true);
     require(ui.input.ownsKeyboard(),"Passive image fixture did not initially acquire gameplay input.");
-    ui.tick();
-    require(!ui.input.ownsKeyboard(),"Passive image no longer reproduces the held-click ownership bug.");
-    ui.mouse(ui.imagePoint,false);
-    require(!ui.input.consumeMoveClick(),"Passive-image reproduction unexpectedly retained its clicked destination.");
+    ui.key(SDL_SCANCODE_W,true);ui.tick();
+    require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"Passive image no longer reproduces the held-click ownership bug.");
 }
-void interactiveImageRetainsControl(bool docked) {
+void interactiveImageRetainsFpsControl(bool docked) {
     GameUi ui(true,docked);
+    ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
     ui.mouse(ui.imagePoint,true);
     require(ui.input.ownsKeyboard(),"Game image did not acquire gameplay input on mouse down.");
-    ui.tick();ui.tick();
-    require(ui.input.ownsKeyboard(),"Holding the Game image click canceled gameplay ownership.");
-    const Vec2 clicked{ui.imagePoint.x,ui.imagePoint.y};
-    require(ui.input.consumeMoveClick()==clicked && !ui.input.consumeMoveClick(),"A held image click was lost or replayed.");
+    ui.key(SDL_SCANCODE_W,true);ui.key(SDL_SCANCODE_D,true);ui.tick();ui.tick();
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{1,1},"Holding the Game image canceled WASD ownership.");
     ui.mouse(ui.imagePoint,false);ui.tick();
-    require(ui.input.ownsKeyboard() && ui.input.pointerPosition()==clicked,"Releasing the image click lost pointer facing.");
-    const ImVec2 facing{ui.imagePoint.x+20,ui.imagePoint.y+30};ui.motion(facing);
-    require(ui.input.pointerPosition()==Vec2{facing.x,facing.y} && !ui.input.consumeMoveClick(),"Mouse motion did not update facing independently of travel.");
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{1,1},"Releasing the acquisition click released held movement.");
+    ui.relativeMotion(18,-7);ui.relativeMotion(-3,2);
+    require(ui.input.consumeLookDelta()==Vec2{15,-5} && ui.input.consumeLookDelta()==Vec2{},"UI ownership lost or replayed relative mouse look.");
+    ui.key(SDL_SCANCODE_SPACE,true);
+    require(!ImGui::IsKeyDown(ImGuiKey_Space),"Game jump activated ImGui's keyboard navigation.");
+    ui.key(SDL_SCANCODE_SPACE,false);
+    require(ui.input.consumeJump() && !ui.input.consumeJump(),"UI ownership lost or repeated a short jump press.");
     ui.key(SDL_SCANCODE_ESCAPE,true);
-    require(!ui.input.ownsKeyboard(),"Escape did not release Game image input.");
+    require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"Escape did not release Game and held movement.");
+    ui.relativeMotion(30,10);require(ui.input.consumeLookDelta()==Vec2{},"Released Game retained mouse look.");
     ui.mouse(ui.imagePoint,true);ui.tick();ui.mouse(ui.imagePoint,false);
-    require(ui.input.ownsKeyboard(),"Game image did not reacquire control after Escape.");
-    require(ui.input.consumeMoveClick()==clicked,"Reacquiring Game lost the first clicked destination.");
-    ui.mouse(ui.cameraPoint,true);ui.mouse(ui.cameraPoint,false);
-    require(!ui.input.ownsKeyboard() && !ui.input.consumeMoveClick() && !ui.input.pointerPosition(),"Camera picker failed to release gameplay input.");
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"Game reacquisition restored a stale held key.");
+    ui.key(SDL_SCANCODE_S,true);ui.mouse(ui.cameraPoint,true);ui.mouse(ui.cameraPoint,false);
+    require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump(),"Camera picker failed to release FPS actions.");
     require(ui.region.inputBlocked,"An open Camera picker did not block gameplay input.");
 }
 void playAcquiresWithoutClick(bool docked) {
@@ -167,80 +183,40 @@ void playAcquiresWithoutClick(bool docked) {
     ui.tick(true);
     require(ui.input.ownsKeyboard(),"Play did not focus and acquire Game without an image click.");
     require(!ImGui::FindWindowByName("Game")->Collapsed,"Play left the Game window collapsed.");
-    ui.motion(ui.imagePoint);
-    require(ui.input.pointerPosition()==Vec2{ui.imagePoint.x,ui.imagePoint.y} && !ui.input.consumeMoveClick(),
-        "Automatic Play acquisition required a click for facing or fabricated a destination.");
+    ui.key(SDL_SCANCODE_W,true);ui.relativeMotion(7,4);
+    require(ui.input.movement()==Vec2{0,1} && ui.input.consumeLookDelta()==Vec2{7,4},"Automatic Play acquisition required another click for FPS actions.");
 }
 void imageClickReleasesText(bool docked) {
     GameUi ui(true,docked);ui.focusText();
     require(!ui.input.ownsKeyboard(),"Text editor did not block gameplay input.");
-    ui.mouse(ui.imagePoint,true);
-    require(ui.input.consumeMoveClick()==Vec2{ui.imagePoint.x,ui.imagePoint.y},"The first click leaving text editing did not issue its destination.");
-    ui.tick();ui.mouse(ui.imagePoint,false);
-    require(ui.input.ownsKeyboard(),"Stale text-input capture prevented Game image acquisition.");
-    require(ui.input.pointerPosition()==Vec2{ui.imagePoint.x,ui.imagePoint.y} && !ui.input.consumeMoveClick(),
-        "Text-to-Game handoff lost facing or replayed its destination.");
+    ui.mouse(ui.imagePoint,true);ui.tick();ui.mouse(ui.imagePoint,false);
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump(),"Text-to-Game handoff failed to acquire or fabricated FPS actions.");
+    ui.key(SDL_SCANCODE_W,true);ui.relativeMotion(9,-3);
+    require(ui.input.movement()==Vec2{0,1} && ui.input.consumeLookDelta()==Vec2{9,-3},"Stale text-input capture prevented FPS actions after reacquisition.");
+    ui.focusText();
+    require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"Editing text retained held FPS movement.");
 }
-void imageAcknowledgesPressCoordinates(bool docked) {
+void imageAcknowledgesAcquisitionOnly(bool docked) {
     GameUi ui(true,docked);const auto pressed=ui.imagePoint;const ImVec2 moved{pressed.x+50,pressed.y+40};
     ui.pressThenMove(pressed,moved);
-    require(ui.input.consumeMoveClick()==Vec2{pressed.x,pressed.y} && ui.input.pointerPosition()==Vec2{moved.x,moved.y},
-        "Game UI replaced its native press position with later motion in the same event batch.");
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump() && ui.input.consumeLookDelta()==Vec2{50,40},
+        "Image click acknowledgement changed movement or replaced relative look.");
     ui.tick();ui.mouse(moved,false);
-    require(!ui.input.consumeMoveClick(),"Game UI replayed a consumed click on release.");
-}
-void heldImageSteersUntilRelease(bool docked) {
-    GameUi ui(true,docked);
-    Camera camera;camera.position={0,10,10};camera.target={0,0,0};
-    ui.input.setProjection(camera,1280,720);
-    ui.mouse(ui.imagePoint,true);
-    require(ui.input.consumeMoveRay(camera).has_value(),"Held gesture lost its initial click ray.");
-    const auto first=ui.input.heldMoveRay(camera);
-    require(first.has_value(),"Game image did not begin held movement on press.");
-    const ImVec2 moved{ui.imagePoint.x+60,ui.imagePoint.y+30};ui.motion(moved);
-    const auto steered=ui.input.heldMoveRay(camera);
-    require(steered && math::length(steered->direction-first->direction)>.01f,
-        "Holding the Game image did not steer with the cursor.");
-    require(!ui.input.consumeMoveRay(camera),"Held movement fabricated another button-down click.");
-    // Leaving the image pauses retargeting, without turning the gesture into
-    // a window drag or requiring a second press when it comes back inside.
-    ui.motion({-20,-20});
-    require(!ui.input.heldMoveRay(camera),"Held movement used a cursor outside Game.");
-    ui.motion(moved);
-    require(ui.input.heldMoveRay(camera).has_value(),"Held movement did not resume on image re-entry.");
-    ui.mouse(moved,false);ui.motion(ui.imagePoint);
-    require(!ui.input.heldMoveRay(camera) && !ui.input.consumeMoveRay(camera),
-        "Mouse movement after release continued to steer the character.");
-}
-void heldImageCancellationNeedsNewPress(bool docked) {
-    GameUi ui(true,docked);Camera camera;
-    ui.mouse(ui.imagePoint,true);
-    require(ui.input.heldMoveRay(camera).has_value(),"Cancellation fixture did not start held movement.");
-    ui.key(SDL_SCANCODE_ESCAPE,true);ui.motion(ui.imagePoint);ui.tick();
-    require(!ui.input.heldMoveRay(camera) && !ui.input.ownsKeyboard(),
-        "An existing image hold reacquired movement after Escape.");
-    ui.mouse(ui.imagePoint,false);ui.mouse(ui.imagePoint,true);
-    require(ui.input.heldMoveRay(camera).has_value(),"A fresh press did not reacquire held movement.");
-    ui.mouse(ui.imagePoint,false);ui.mouse(ui.cameraPoint,true);
-    require(!ui.input.heldMoveRay(camera),"Camera picker retained held movement.");
+    require(ui.input.consumeLookDelta()==Vec2{},"UI acknowledgement replayed relative mouse look.");
 }
 void imageAcknowledgementRespectsNativeCancellation(bool docked) {
-    GameUi ui(true,docked);Camera camera;
-    ui.pressThenCancel(ui.imagePoint);
-    require(!ui.input.ownsKeyboard() && !ui.input.consumeMoveRay(camera) && !ui.input.heldMoveRay(camera),
-        "Delayed image acknowledgement revived an Escape-canceled press.");
+    GameUi ui(true,docked);ui.pressThenCancel(ui.imagePoint);
+    require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump(),"Delayed image acknowledgement revived an Escape-canceled press.");
     ui.mouse(ui.imagePoint,false);ui.mouse(ui.imagePoint,true);
-    require(ui.input.consumeMoveRay(camera).has_value() && ui.input.heldMoveRay(camera).has_value(),
-        "A new image press remained suppressed after acknowledging cancellation.");
+    require(ui.input.ownsKeyboard(),"A fresh image press remained suppressed after acknowledging cancellation.");
+    ui.key(SDL_SCANCODE_W,true);ui.key(SDL_SCANCODE_ESCAPE,true);ui.tick();
+    require(!ui.input.ownsKeyboard() && ui.input.movement()==Vec2{},"An existing image hold reacquired FPS ownership after Escape.");
 }
-void trickledImagePressRespectsNativeRelease(bool docked) {
-    GameUi ui(true,docked);Camera camera;
-    ui.queuedShortClick(ui.imagePoint);
-    require(ui.input.consumeMoveRay(camera).has_value(),"A trickled short press lost its destination.");
-    require(!ui.input.heldMoveRay(camera),"Delayed image press acknowledgement revived an already released hold.");
-    ui.tick();ui.tick();
-    require(!ui.input.consumeMoveRay(camera) && !ui.input.heldMoveRay(camera),
-        "Trickled release replayed its destination or restored holding.");
+void trickledShortClickAcquiresOnce(bool docked) {
+    GameUi ui(true,docked);ui.queuedShortClick(ui.imagePoint);
+    require(ui.input.ownsKeyboard() && ui.input.movement()==Vec2{} && !ui.input.consumeJump(),"A trickled short image click failed to acquire FPS input.");
+    ui.tick();ui.tick();ui.key(SDL_SCANCODE_ESCAPE,true);ui.tick();
+    require(!ui.input.ownsKeyboard(),"A trickled UI release reacquired Game after Escape.");
 }
 void attributeDebugOwnsTabOnlyInGame(bool docked) {
     GameUi ui(true,docked);ui.tick(true);ui.tick();
@@ -272,10 +248,9 @@ void attributeDebugOwnsTabOnlyInGame(bool docked) {
 int main() {
     try {
         for(const bool docked:{false,true}) {
-            passiveImageLosesControl(docked);interactiveImageRetainsControl(docked);playAcquiresWithoutClick(docked);imageClickReleasesText(docked);
-            imageAcknowledgesPressCoordinates(docked);
-            heldImageSteersUntilRelease(docked);heldImageCancellationNeedsNewPress(docked);
-            imageAcknowledgementRespectsNativeCancellation(docked);trickledImagePressRespectsNativeRelease(docked);
+            passiveImageLosesControl(docked);interactiveImageRetainsFpsControl(docked);playAcquiresWithoutClick(docked);imageClickReleasesText(docked);
+            imageAcknowledgesAcquisitionOnly(docked);
+            imageAcknowledgementRespectsNativeCancellation(docked);trickledShortClickAcquiresOnce(docked);
             attributeDebugOwnsTabOnlyInGame(docked);
         }
         std::cout<<"Game image/input integration checks passed.\n";return 0;

@@ -146,7 +146,9 @@ int run(const AppOptions& options) {
             SDL_Event event;
             bool focusLossEvent=false;
             while (SDL_PollEvent(&event)) {
-                ImGui_ImplSDL3_ProcessEvent(&event);
+                // Game relative mouse input and FPS press edges must not
+                // activate widgets beneath the captured platform cursor.
+                if(!editor || !editor->blocksEditorEvent(event))ImGui_ImplSDL3_ProcessEvent(&event);
                 if(!editor || !editor->handleEvent(event))navigation.handleEvent(event);
                 if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN) {
                     focusLossEvent=true;

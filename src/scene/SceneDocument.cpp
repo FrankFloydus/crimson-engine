@@ -367,6 +367,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     std::unordered_map<EntityId,AttributeSeeds> legacyAttributes;
+    std::unordered_set<EntityId> legacyPlayerInputs;
     const auto legacyController=[&](EntityRecord& record,float height,float radius) {
         AgentTraversalSettings traversal;traversal.height=height;traversal.radius=radius;
         if(!validAgentTraversal(traversal))throw std::runtime_error("Legacy Character capsule dimensions are invalid.");
@@ -440,7 +441,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
             record.actor.emplace();record.motor.emplace();
             legacyAttributes[record.id]={{stats::MovementSpeed,c.at("moveSpeed").get<double>()}};
             legacyController(record,c.at("height").get<float>(),c.at("radius").get<float>());
-            record.navigation=SceneNavigationAgent{c.value("showRoute",true)};record.playerInput.emplace();
+            record.navigation=SceneNavigationAgent{c.value("showRoute",true)};record.playerInput.emplace();legacyPlayerInputs.insert(record.id);
             record.lightRig.emplace();record.darknessReveal.emplace();
             record.controller->showCollisionInGame=c.value("showCollisionInGame",false);
             record.controller->collisionColor=readCollisionColor(c,record.controller->collisionColor);
@@ -478,7 +479,20 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                 if(version>=20)record.controller->collision=readCollisionFilter(c.at("collision"));
             }
             if(entity.contains("navigation")) {const auto& c=entity.at("navigation");record.navigation=SceneNavigationAgent{c.value("showRoute",true),c.value("enabled",true)};}
-            if(entity.contains("playerInput")) {const auto& c=entity.at("playerInput");record.playerInput=ScenePlayerInput{c.value("enabled",true)};}
+            if(entity.contains("playerInput")) {
+                const auto& c=entity.at("playerInput");
+                if(!c.is_object())throw std::runtime_error("Player Input must be an object.");
+                auto& input=record.playerInput.emplace();input.enabled=c.value("enabled",input.enabled);
+                input.mouseSensitivity=c.value("mouseSensitivity",input.mouseSensitivity);input.invertY=c.value("invertY",input.invertY);
+                input.jumpHeight=c.value("jumpHeight",input.jumpHeight);input.groundAcceleration=c.value("groundAcceleration",input.groundAcceleration);
+                input.groundFriction=c.value("groundFriction",input.groundFriction);input.airAcceleration=c.value("airAcceleration",input.airAcceleration);
+                input.airControl=c.value("airControl",input.airControl);input.strafeTilt=c.value("strafeTilt",input.strafeTilt);
+                input.tiltResponse=c.value("tiltResponse",input.tiltResponse);
+                constexpr std::array firstPersonFields{"mouseSensitivity","invertY","jumpHeight","groundAcceleration","groundFriction",
+                    "airAcceleration","airControl","strafeTilt","tiltResponse"};
+                if(std::none_of(firstPersonFields.begin(),firstPersonFields.end(),[&](const char* field){return c.contains(field);}))
+                    legacyPlayerInputs.insert(record.id);
+            }
             if(entity.contains("darknessReveal")) {
                 const auto& c=entity.at("darknessReveal");
                 if(!c.is_object() || (c.contains("version")&&c.at("version")!=2))throw std::runtime_error("Unsupported Darkness Reveal component.");
@@ -736,6 +750,24 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
     }
     if(version<=19)for(auto& record:result.records)if(record.controller)
         record.controller->collision={record.playerInput?PlayerCollisionLayer:record.enemy?EnemyCollisionLayer:CharacterCollisionLayer,AllCollisionLayers};
+    if(legacyPlayerInputs.contains(result.properties.playerCharacter)) {
+        // Only the exact former built-in recipe is safe to replace. Custom
+        // camera framing, standalone overrides and all authored entities survive.
+        constexpr float radians=3.14159265358979323846f/180.f;
+        const auto oldBasis=math::eulerRotationXYZ(Vec3{-55,45,0}*radians);
+        for(auto& camera:result.records)if(camera.id==result.properties.activeCamera&&camera.parent==result.properties.playerCharacter&&
+            camera.camera==std::optional<SceneCamera>{SceneCamera{35.f}}&&camera.cameraFollow&&
+            camera.cameraFollow->target==result.properties.playerCharacter&&camera.cameraFollow->offset==Vec3{6.5f,13.1f,6.5f}&&
+            camera.cameraFollow->worldBasis==oldBasis) {
+            Scene previous;previous.apply(result.records,result.properties);
+            const auto targetWorld=previous.worldTransform(camera.cameraFollow->target),parentWorld=previous.worldTransform(camera.parent);
+            const auto inverseParent=parentWorld?math::inverse(*parentWorld):std::nullopt;
+            if(!targetWorld||!inverseParent)throw std::runtime_error("The legacy player camera has an invalid parent transform.");
+            const auto firstPerson=defaultPlayerCameraTemplate();
+            camera.camera=firstPerson.lens;camera.cameraFollow->offset=firstPerson.offset;camera.cameraFollow->worldBasis=firstPerson.worldBasis;
+            camera.local=*inverseParent * *math::withAffinePosition(firstPerson.worldBasis,math::transformPoint(*targetWorld,{})+firstPerson.offset);
+        }
+    }
     Scene::validate(result.records,result.properties);
     return result;
 }
@@ -792,7 +824,10 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.navigationVolume) {const auto& volume=*record.navigationVolume;const auto& bake=volume.bake;
             entity["navigationVolume"]={{"size",volume.size},{"enabled",volume.enabled},{"profiles",volume.profiles},
                 {"bake",{{"cellSize",bake.cellSize},{"cellHeight",bake.cellHeight},{"tileSize",bake.tileSize},{"maxSimplificationError",bake.maxSimplificationError}}}};}
-        if(record.playerInput)entity["playerInput"]={{"enabled",record.playerInput->enabled}};
+        if(record.playerInput) {const auto& c=*record.playerInput;entity["playerInput"]={{"enabled",c.enabled},
+            {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY},{"jumpHeight",c.jumpHeight},
+            {"groundAcceleration",c.groundAcceleration},{"groundFriction",c.groundFriction},{"airAcceleration",c.airAcceleration},
+            {"airControl",c.airControl},{"strafeTilt",c.strafeTilt},{"tiltResponse",c.tiltResponse}};}
         if(record.lightRig)entity["lightRig"]=lightRigJson(*record.lightRig);
         if(record.darknessReveal)entity["darknessReveal"]={{"version",2},{"enabled",record.darknessReveal->enabled},{"spread",record.darknessReveal->spread}};
         if (record.collider) { const auto& c=*record.collider;
@@ -1609,7 +1644,7 @@ EntityId SceneDocument::createPlayer(const std::string& name) {
     EntityRecord player;player.name=name;player.actor.emplace();player.motor.emplace();player.controller.emplace();
     initializePlayerEffects(player);
     player.controller->collision.layers=PlayerCollisionLayer;
-    player.navigation.emplace();player.playerInput.emplace();player.lightRig.emplace();player.darknessReveal.emplace();
+    player.playerInput.emplace();player.lightRig.emplace();player.darknessReveal.emplace();
     const auto initialCamera=defaultPlayerCameraTemplate();
     EntityRecord camera;camera.name="Camera";camera.camera=initialCamera.lens;
     camera.local=*math::withAffinePosition(initialCamera.worldBasis,initialCamera.offset);

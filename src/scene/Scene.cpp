@@ -339,6 +339,15 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         }
         if (record.playerInput && (!record.motor || !record.controller))
             throw std::runtime_error("Player Input requires Motor and Character Controller components.");
+        if(record.playerInput) {
+            const auto& input=*record.playerInput;
+            const auto inRange=[](float value,float minimum,float maximum){return std::isfinite(value)&&value>=minimum&&value<=maximum;};
+            if(!inRange(input.mouseSensitivity,.001f,10.f)||!inRange(input.jumpHeight,0,100.f)||
+               !inRange(input.groundAcceleration,0,1000.f)||!inRange(input.groundFriction,0,100.f)||
+               !inRange(input.airAcceleration,0,1000.f)||!inRange(input.airControl,0,1)||
+               !inRange(input.strafeTilt,0,45.f)||!inRange(input.tiltResponse,0,100.f))
+                throw std::runtime_error("Player Input requires finite, bounded first-person look, jump, movement and tilt settings.");
+        }
         if (record.controller) {
             if(!isAssetUuid(record.controller->profile.id)||(isEngineAssetId(record.controller->profile.id)&&record.controller->profile.id!=DefaultNavigationAgentProfileId))throw std::runtime_error("Character Controller requires a Navigation Agent Profile UUID.");
             if((record.controller->collision.layers&WorldCollisionLayer)||!(record.controller->collision.mask&WorldCollisionLayer))
@@ -565,6 +574,21 @@ void Scene::applyRuntimePoses(std::span<const ScenePoseUpdate> poses) {
         throw;
     }
     if(changed)++poseRevision_;
+}
+
+void Scene::applyRuntimeCameraPose(EntityId camera,const Mat4& world) {
+    const auto found=entities_.find(camera);
+    if(found==entities_.end()||!registry_.all_of<SceneCamera>(found->second)||
+       !math::finite(world)||!math::isAffine(world)||!math::inverse(world))
+        throw std::runtime_error("Runtime camera pose requires an existing camera and a finite, invertible affine matrix.");
+    const auto parent=registry_.get<Relationship>(found->second).parent;
+    const auto parentWorld=parent?worldTransform(parent):std::optional<Mat4>{Mat4{}};
+    const auto inverseParent=parentWorld?math::inverse(*parentWorld):std::nullopt;
+    const auto next=inverseParent?std::optional<Mat4>{*inverseParent * world}:std::nullopt;
+    if(!next||!math::finite(*next)||!math::isAffine(*next))
+        throw std::runtime_error("Runtime camera pose has an invalid parent transform.");
+    auto& local=registry_.get<Transform>(found->second).local;
+    if(local!=*next){local=*next;++poseRevision_;}
 }
 
 bool Scene::resolveCameraFollow() {
