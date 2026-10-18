@@ -6,6 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/mesh/stairs.hpp>
 
+#include "polygon_document_native.hpp"
+
+#include <quader/modeling/neutral/geometry/geometry.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -16,6 +22,7 @@
 #include <new>
 #include <numbers>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -64,15 +71,24 @@ struct Route final {
   double sweep = 0.0;
 };
 
-/** A convex footprint with affine upper and lower surface heights. */
-struct VolumePatch final {
+/** One canonical rendered triangle projected onto the footprint plane. */
+struct SurfaceTriangle final {
   std::array<PlanPoint, 3> points;
-  std::array<double, 3> upper;
-  std::array<double, 3> lower;
+  std::array<double, 3> heights;
+};
+
+/** Bounds one route panel while retaining every actual exterior face. */
+struct VolumeCell final {
+  std::vector<PlanPoint> footprint;
+  std::vector<FaceId> faces;
+  std::vector<SurfaceTriangle> upper;
+  std::vector<SurfaceTriangle> lower;
   double min_x = 0.0;
   double max_x = 0.0;
   double min_z = 0.0;
   double max_z = 0.0;
+  double minimum_lower = 0.0;
+  double maximum_upper = 0.0;
   std::size_t section = 0U;
   std::size_t station = 0U;
 };
@@ -396,14 +412,17 @@ void solve_elevations(const StairsSpec &spec, Route &route, StairsMesh &result) 
   }
 }
 
-/** Joins the authored top sheet, underside, and exposed perimeter only. */
+/** One authored cross-section, with a center guide on both horizontal sheets. */
+struct FlightRing final {
+  std::array<VertexId, 3> upper;
+  std::array<VertexId, 3> lower;
+};
+
+/** Authors walking and underside rails with ordinary closed wall panels. */
 struct SurfaceBuilder final {
   AuthoredTopology topology;
   std::map<std::array<float, 3>, VertexId> vertices;
-  std::map<std::uint32_t, VertexId> lower_vertices;
-  std::map<std::pair<std::uint32_t, std::uint32_t>,
-           std::pair<VertexId, VertexId>> boundary;
-  std::vector<VolumePatch> patches;
+  std::vector<VolumeCell> cells;
 
   [[nodiscard]] VertexId vertex(WidePoint point) {
     const std::array<float, 3> key = {static_cast<float>(point.x),
@@ -425,160 +444,203 @@ struct SurfaceBuilder final {
     return id;
   }
 
-  [[nodiscard]] VertexId upper(WidePoint point, double bottom) {
-    const VertexId id = vertex(point);
-    const VertexId lower = vertex({point.x, bottom, point.z});
-    const auto [iterator, inserted] = lower_vertices.emplace(id.index, lower);
-    if (!inserted && iterator->second != lower) {
-      reject("Nonadjacent stairs surfaces touch each other.");
-    }
-    return id;
-  }
-
-  void face(std::vector<VertexId> ids, bool top, bool allow_collapse = false) {
+  void face(std::vector<VertexId> ids, std::size_t cell,
+            bool terminal_triangle = false, std::vector<Vec2> uvs = {}) {
+    const std::size_t requested_size = ids.size();
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     if (ids.size() > 1U && ids.front() == ids.back()) {
       ids.pop_back();
     }
-    if (ids.size() < 3U) {
-      if (allow_collapse) {
-        return;
-      }
+    std::vector<VertexId> unique = ids;
+    std::sort(unique.begin(), unique.end(), [](VertexId a, VertexId b) {
+      return a.index < b.index;
+    });
+    unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
+    if (ids.size() < 3U || unique.size() != ids.size() ||
+        (ids.size() != requested_size && !terminal_triangle)) {
       reject("The stairs dimensions collapse a generated face.");
     }
     if (topology.faces.size() >= kMaximumFaces) {
       reject("The stairs mesh exceeds the face budget.");
     }
-    if (top) {
-      for (std::size_t index = 0U; index < ids.size(); ++index) {
-        const VertexId first = ids[index];
-        const VertexId second = ids[(index + 1U) % ids.size()];
-        const auto key = std::minmax(first.index, second.index);
-        const auto found = boundary.find(key);
-        if (found == boundary.end()) {
-          boundary.emplace(key, std::pair{first, second});
-        } else {
-          if (found->second.first != second || found->second.second != first) {
-            reject("The stairs sections have inconsistent boundary winding.");
-          }
-          boundary.erase(found);
-        }
-      }
-    }
-    topology.faces.push_back({.id = {topology.next_face_id++, 1U},
-                              .vertices = std::move(ids),
+    const FaceId id{topology.next_face_id++, 1U};
+    topology.faces.push_back({.id = id, .vertices = std::move(ids), .uvs = std::move(uvs),
                               .shading = AuthoredSurfaceShading::Flat});
+    cells.at(cell).faces.push_back(id);
   }
 
-  void patch(std::array<PlanPoint, 3> points,
-             std::array<double, 3> upper_heights,
-             std::array<double, 3> lower_heights,
-             std::size_t section, std::size_t station) {
-    // Check the emitted float surfaces: a positive double clearance can vanish
-    // when either surface is narrowed, even without coincident vertices.
-    for (std::size_t index = 0U; index < points.size(); ++index) {
-      points[index].x = static_cast<float>(points[index].x);
-      points[index].z = static_cast<float>(points[index].z);
-      upper_heights[index] = static_cast<float>(upper_heights[index]);
-      lower_heights[index] = static_cast<float>(lower_heights[index]);
+  [[nodiscard]] std::size_t cell(std::size_t section, std::size_t station) {
+    cells.push_back({.section = section, .station = station});
+    return cells.size() - 1U;
+  }
+
+  [[nodiscard]] FlightRing ring(const std::array<PlanPoint, 3> &upper_points,
+                                 double top,
+                                 const std::array<PlanPoint, 3> &lower_points,
+                                 double bottom) {
+    FlightRing result;
+    for (std::size_t rail = 0U; rail < 3U; ++rail) {
+      result.upper[rail] = vertex(elevated(upper_points[rail], top));
+      result.lower[rail] = vertex(elevated(lower_points[rail], bottom));
     }
-    VolumePatch item{.points = points, .upper = upper_heights,
-                     .lower = lower_heights, .section = section,
-                     .station = station};
-    item.min_x = item.max_x = points[0].x;
-    item.min_z = item.max_z = points[0].z;
-    for (const PlanPoint point : points) {
-      item.min_x = std::min(item.min_x, point.x);
-      item.max_x = std::max(item.max_x, point.x);
-      item.min_z = std::min(item.min_z, point.z);
-      item.max_z = std::max(item.max_z, point.z);
-    }
-    patches.push_back(item);
+    return result;
   }
 
-  void strip(PlanPoint left_start, PlanPoint right_start,
-             PlanPoint left_end, PlanPoint right_end,
-             double start_top, double end_top,
-             double start_bottom, double end_bottom,
-             std::size_t section, std::size_t station) {
-    const VertexId first = upper(elevated(left_start, start_top), start_bottom);
-    const VertexId second = upper(elevated(left_end, end_top), end_bottom);
-    const VertexId third = upper(elevated(right_end, end_top), end_bottom);
-    const VertexId fourth = upper(elevated(right_start, start_top), start_bottom);
-    // Matching diagonals give the ramp and its underside an explicit surface.
-    face({first, second, third}, true);
-    face({first, third, fourth}, true);
-    const VertexId low_first = lower_vertices.at(first.index);
-    const VertexId low_second = lower_vertices.at(second.index);
-    const VertexId low_third = lower_vertices.at(third.index);
-    const VertexId low_fourth = lower_vertices.at(fourth.index);
-    face({low_third, low_second, low_first}, false);
-    face({low_fourth, low_third, low_first}, false);
-    patch({left_start, left_end, right_end}, {start_top, end_top, end_top},
-          {start_bottom, end_bottom, end_bottom}, section, station);
-    patch({left_start, right_end, right_start}, {start_top, end_top, start_top},
-          {start_bottom, end_bottom, start_bottom}, section, station);
-  }
-
-  void riser(PlanPoint left, PlanPoint right, double before, double after,
-             double bottom) {
-    face({upper(elevated(left, before), bottom),
-          upper(elevated(left, after), bottom),
-          upper(elevated(right, after), bottom),
-          upper(elevated(right, before), bottom)}, true);
-  }
-
-  void close_boundary() {
-    std::map<std::pair<float, float>, std::vector<VertexId>> vertical_stations;
-    const auto position = [&](VertexId id) {
-      return topology.vertices.at(id.index - 1U).position;
-    };
-    for (const auto &[key, edge] : boundary) {
-      (void)key;
-      for (const VertexId id : {edge.first, edge.second,
-                                lower_vertices.at(edge.first.index),
-                                lower_vertices.at(edge.second.index)}) {
-        const Vec3 point = position(id);
-        vertical_stations[{point.x, point.z}].push_back(id);
+  void connect(const FlightRing &first, const FlightRing &second,
+               std::size_t cell_index, bool terminal_tip = false) {
+    for (std::size_t lane = 0U; lane < 2U; ++lane) {
+      face({first.upper[lane], second.upper[lane], second.upper[lane + 1U],
+            first.upper[lane + 1U]}, cell_index);
+      if (!terminal_tip) {
+        face({first.lower[lane], first.lower[lane + 1U], second.lower[lane + 1U],
+              second.lower[lane]}, cell_index);
       }
     }
-    for (auto &[key, stations] : vertical_stations) {
-      (void)key;
-      std::sort(stations.begin(), stations.end(), [&](VertexId a, VertexId b) {
-        return position(a).y < position(b).y;
-      });
-      stations.erase(std::unique(stations.begin(), stations.end()), stations.end());
+    if (terminal_tip) {
+      // At a solid ramp tip the top and bottom centers coincide. Removing the
+      // first underside rail prevents its loop from continuing onto the top.
+      face({first.lower[0], first.lower[1], first.lower[2], second.lower[2],
+            second.lower[1], second.lower[0]}, cell_index);
     }
-    for (const auto &[key, edge] : boundary) {
-      (void)key;
-      const Vec3 first = position(edge.first);
-      const Vec3 second = position(edge.second);
-      if (first.x == second.x && first.z == second.z) {
-        continue;
+  }
+
+  [[nodiscard]] const Vec3 &position(VertexId id) const {
+    return topology.vertices.at(id.index - 1U).position;
+  }
+
+  /** Retain each wall outline, splitting only when canonical validation requires it. */
+  [[nodiscard]] std::vector<std::vector<VertexId>> wall_parts(
+      std::vector<VertexId> ids) const {
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    if (ids.size() > 1U && ids.front() == ids.back()) {
+      ids.pop_back();
+    }
+    if (ids.size() < 3U) {
+      return {};
+    }
+    quader_poly::Document probe;
+    quader_poly::Face face;
+    face.id = 1U;
+    for (std::size_t index = 0U; index < ids.size(); ++index) {
+      const auto id = static_cast<quader_poly::ElementId>(index + 1U);
+      const Vec3 &point = position(ids[index]);
+      probe.vertices.push_back({id, {point.x, point.y, point.z}});
+      face.vertices.push_back(id);
+    }
+    probe.next_vertex_id = static_cast<quader_poly::ElementId>(ids.size() + 1U);
+    probe.next_face_id = 2U;
+    probe.faces.push_back(face);
+    const quader_poly::document_internal::VertexLookupIndex lookup(probe);
+    const auto normal = quader_poly::document_internal::face_normal_from_vertex_lookup(
+        face, lookup);
+    const auto canonical = quader_poly::document_internal::triangulate_face_local_indices(
+        face, lookup, normal);
+    const bool valid = canonical.size() == ids.size() - 2U &&
+        quader_poly::validate_polygon_document(probe).ok();
+    if (valid) {
+      return {std::move(ids)};
+    }
+    for (std::size_t anchor = 0U; anchor < ids.size(); ++anchor) {
+      std::vector<std::vector<VertexId>> parts;
+      probe.faces.clear();
+      bool oriented = true;
+      for (std::size_t step = 1U; step + 1U < ids.size(); ++step) {
+        const std::array corners = {anchor, (anchor + step) % ids.size(),
+                                   (anchor + step + 1U) % ids.size()};
+        const auto point = [&](std::size_t corner) -> quader_geometry::QVec3d {
+          const Vec3 &value = position(ids[corner]);
+          return {value.x, value.y, value.z};
+        };
+        const auto area = quader_geometry::triangle_area_vector(
+            quader_geometry::QTriangle3<double>{point(corners[0]), point(corners[1]),
+                                               point(corners[2])});
+        if (!(quader_geometry::dot(area,
+                  quader_geometry::QVec3d{normal.x, normal.y, normal.z}) > 0.0)) {
+          oriented = false;
+          break;
+        }
+        parts.push_back({ids[corners[0]], ids[corners[1]], ids[corners[2]]});
+        quader_poly::Face triangle;
+        triangle.id = static_cast<quader_poly::ElementId>(parts.size());
+        for (const std::size_t corner : corners) {
+          triangle.vertices.push_back(static_cast<quader_poly::ElementId>(corner + 1U));
+        }
+        probe.faces.push_back(std::move(triangle));
       }
-      std::vector<VertexId> sides{edge.second, edge.first};
-      const auto append_vertical = [&](VertexId from, VertexId to) {
-        const Vec3 start = position(from);
-        const Vec3 end = position(to);
-        std::vector<VertexId> interior;
-        for (const VertexId id : vertical_stations.at({start.x, start.z})) {
-          const double height = position(id).y;
-          if (height > std::min(start.y, end.y) &&
-              height < std::max(start.y, end.y)) {
-            interior.push_back(id);
-          }
-        }
-        if (start.y > end.y) {
-          std::reverse(interior.begin(), interior.end());
-        }
-        sides.insert(sides.end(), interior.begin(), interior.end());
-        sides.push_back(to);
-      };
-      append_vertical(edge.first, lower_vertices.at(edge.first.index));
-      sides.push_back(lower_vertices.at(edge.second.index));
-      append_vertical(lower_vertices.at(edge.second.index), edge.second);
-      face(std::move(sides), false, true);
+      probe.next_face_id = static_cast<quader_poly::ElementId>(probe.faces.size() + 1U);
+      if (oriented && quader_poly::validate_polygon_document(probe).ok()) {
+        return parts;
+      }
     }
+    return {};
+  }
+
+  /** Affine wall UVs do not depend on the canonical diagonal of a planar patch. */
+  void wall_face(std::vector<VertexId> ids, std::size_t cell_index,
+                 PlanPoint start, PlanPoint end, double run_start) {
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    if (ids.size() > 1U && ids.front() == ids.back()) {
+      ids.pop_back();
+    }
+    const double length = distance(start, end);
+    std::vector<Vec2> uvs;
+    uvs.reserve(ids.size());
+    for (const VertexId id : ids) {
+      const Vec3 &point = position(id);
+      double run = ((static_cast<double>(point.x) - start.x) * (end.x - start.x) +
+                    (static_cast<double>(point.z) - start.z) * (end.z - start.z)) / length;
+      if (point.x == start.x && point.z == start.z) {
+        run = 0.0;
+      } else if (point.x == end.x && point.z == end.z) {
+        run = length;
+      }
+      uvs.push_back({static_cast<float>((run_start + run) * 0.5), point.y * 0.5F});
+    }
+    face(std::move(ids), cell_index, false, std::move(uvs));
+  }
+
+  /** Use the existing sheet boundary once per chord, without interior wall vertices. */
+  void wall(const FlightRing &first, const FlightRing &risen,
+            const FlightRing &last, bool has_riser, std::size_t cell_index,
+            std::array<double, 2> &runs) {
+    for (std::size_t side = 0U; side < 2U; ++side) {
+      const std::size_t rail = side * 2U;
+      const Vec3 &first_top = position(risen.upper[rail]);
+      const Vec3 &last_top = position(last.upper[rail]);
+      const PlanPoint start = {first_top.x, first_top.z};
+      const PlanPoint end = {last_top.x, last_top.z};
+      const double length = distance(start, end);
+      if (!(length > 0.0)) {
+        reject("The stairs footprint collapses a generated surface.");
+      }
+      const double run_start = runs[side];
+      runs[side] += length;
+      std::vector<VertexId> corners = {first.lower[rail]};
+      if (has_riser) {
+        corners.push_back(risen.lower[rail]);
+      }
+      corners.insert(corners.end(), {last.lower[rail], last.upper[rail],
+                                     risen.upper[rail], first.upper[rail]});
+      if (side != 0U) {
+        std::reverse(corners.begin(), corners.end());
+      }
+      auto parts = wall_parts(std::move(corners));
+      if (parts.empty()) {
+        reject("The stairs wall cannot retain its canonical surface.");
+      }
+      for (auto &part : parts) {
+        wall_face(std::move(part), cell_index, start, end, run_start);
+      }
+    }
+  }
+
+  void cap(const FlightRing &ring, bool end, std::size_t cell_index) {
+    std::vector<VertexId> perimeter = {ring.upper[0], ring.upper[1], ring.upper[2],
+                                       ring.lower[2], ring.lower[1], ring.lower[0]};
+    if (end) {
+      std::reverse(perimeter.begin(), perimeter.end());
+    }
+    face(std::move(perimeter), cell_index);
   }
 };
 
@@ -587,28 +649,26 @@ struct SurfaceBuilder final {
              ? 0.0 : grade - spec.slab_thickness;
 }
 
+[[nodiscard]] std::array<PlanPoint, 3>
+section_rails(std::pair<PlanPoint, PlanPoint> section) {
+  return {section.first, interpolate(section.first, section.second, 0.5),
+          section.second};
+}
+
 void build_flight(const StairsSpec &spec, const Route &route,
                   std::size_t index, SurfaceBuilder &builder) {
   const Flight &flight = route.flights[index];
   const bool round = circular(spec);
-  const std::uint32_t panels = round
+  const std::uint32_t target_panels = round
       ? std::max(1U, static_cast<std::uint32_t>(
           std::ceil(route.sweep / kFullTurn * spec.curved_segments))) : 1U;
-  std::vector<double> fractions = {0.0, 1.0};
-  for (std::uint32_t panel = 1U; panel < panels; ++panel) {
-    fractions.push_back(static_cast<double>(panel) / panels);
-  }
-  for (std::uint32_t step = 1U; step < flight.steps; ++step) {
-    fractions.push_back(static_cast<double>(step) / flight.steps);
-  }
-  std::sort(fractions.begin(), fractions.end());
-  fractions.erase(std::unique(fractions.begin(), fractions.end(),
-      [](double first, double second) {
-        return std::abs(first - second) < 1.0e-12;
-      }), fractions.end());
+  const std::uint32_t panels_per_tread = flight.steps == 0U ? 1U
+      : std::max(1U, (target_panels + flight.steps - 1U) / flight.steps);
+  const std::uint32_t panels = flight.steps == 0U
+      ? target_panels : flight.steps * panels_per_tread;
   const auto section = [&](double fraction) {
     if (!round) {
-      return flight_section(flight, fraction);
+      return section_rails(flight_section(flight, fraction));
     }
     const double angle = -std::numbers::pi * 0.5 +
         (spec.clockwise ? 1.0 : -1.0) * route.sweep * fraction;
@@ -619,8 +679,6 @@ void build_flight(const StairsSpec &spec, const Route &route,
     if (std::abs(quadrant - nearest_quadrant) <=
         std::numeric_limits<double>::epsilon() *
             std::max(1.0, std::abs(quadrant)) * 8.0) {
-      // Cardinal points are authored exactly; unrelated small coordinates and
-      // every riser height retain their supplied precision.
       constexpr std::array<double, 4> kCosines = {1.0, 0.0, -1.0, 0.0};
       constexpr std::array<double, 4> kSines = {0.0, 1.0, 0.0, -1.0};
       const auto cardinal = static_cast<std::size_t>(
@@ -633,96 +691,197 @@ void build_flight(const StairsSpec &spec, const Route &route,
     };
     const PlanPoint inner = at_radius(spec.inner_radius);
     const PlanPoint outer = at_radius(spec.inner_radius + spec.flight_width);
-    return spec.clockwise ? std::pair{inner, outer} : std::pair{outer, inner};
+    return section_rails(spec.clockwise ? std::pair{inner, outer}
+                                        : std::pair{outer, inner});
   };
   const auto grade = [&](double fraction) {
     return fraction == 1.0 ? flight.end_height
         : flight.start_height +
           (flight.end_height - flight.start_height) * fraction;
   };
-  double previous_top = flight.start_height;
-  for (std::size_t station = 0U; station + 1U < fractions.size(); ++station) {
-    const double start = fractions[station];
-    const double end = fractions[station + 1U];
-    const auto [left_start, right_start] = section(start);
-    const auto [left_end, right_end] = section(end);
-    double start_top = grade(start);
-    double end_top = grade(end);
-    if (flight.steps != 0U) {
-      const auto step = static_cast<std::uint32_t>(
-          std::floor((start + end) * 0.5 * flight.steps)) + 1U;
-      start_top = end_top = step == flight.steps ? flight.end_height
-          : flight.start_height +
-            (flight.end_height - flight.start_height) * step / flight.steps;
-      if (start_top > previous_top) {
-        builder.riser(left_start, right_start, previous_top, start_top,
-                      lower_height(spec, grade(start)));
-      }
+  const auto tread_height = [&](std::uint32_t step) {
+    return step == flight.steps ? flight.end_height
+        : flight.start_height +
+          (flight.end_height - flight.start_height) * step / flight.steps;
+  };
+  const bool tip = index == 0U && flight.steps == 0U &&
+                    spec.construction == StairsConstruction::Solid;
+  const auto initial = section(0.0);
+  FlightRing previous = builder.ring(initial,
+      index == 0U && flight.steps != 0U ? tread_height(1U) : flight.start_height,
+      initial, lower_height(spec, flight.start_height));
+  std::array<double, 2> wall_runs{};
+  for (std::uint32_t station = 0U; station < panels; ++station) {
+    const double start = static_cast<double>(station) / panels;
+    const double end = static_cast<double>(station + 1U) / panels;
+    const auto start_points = section(start);
+    const auto end_points = section(end);
+    const std::size_t cell = builder.cell(index * 2U, station);
+    if (index == 0U && station == 0U && !tip) {
+      builder.cap(previous, false, cell);
     }
-    builder.strip(left_start, right_start, left_end, right_end,
-                   start_top, end_top, lower_height(spec, grade(start)),
-                   lower_height(spec, grade(end)), index * 2U, station);
-    previous_top = end_top;
+    const double top = flight.steps == 0U ? grade(end)
+        : tread_height(station / panels_per_tread + 1U);
+    const FlightRing first = previous;
+    FlightRing risen = previous;
+    const bool has_riser = flight.steps != 0U && station % panels_per_tread == 0U &&
+        (station != 0U || index != 0U);
+    if (has_riser) {
+      std::array<PlanPoint, 3> middle;
+      for (std::size_t rail = 0U; rail < 3U; ++rail) {
+        middle[rail] = interpolate(start_points[rail], end_points[rail], 0.5);
+      }
+      // Retain the underside's existing chord subdivision and rendered surface;
+      // the side wall below is authored once from this panel's complete outline.
+      risen = builder.ring(start_points, top, middle,
+          lower_height(spec, grade((start + end) * 0.5)));
+      builder.connect(previous, risen, cell);
+      previous = risen;
+    }
+    const FlightRing next = builder.ring(end_points, top, end_points,
+        lower_height(spec, grade(end)));
+    builder.connect(previous, next, cell, tip && station == 0U);
+    builder.wall(first, risen, next, has_riser, cell, wall_runs);
+    previous = next;
   }
+  if (index + 1U == route.flights.size()) {
+    builder.cap(previous, true, builder.cells.size() - 1U);
+  }
+}
+
+[[nodiscard]] PlanPoint stored_point(PlanPoint point) {
+  return {static_cast<float>(point.x), static_cast<float>(point.z)};
+}
+
+[[nodiscard]] bool same_point(PlanPoint a, PlanPoint b) {
+  return a.x == b.x && a.z == b.z;
 }
 
 void build_landing(const StairsSpec &spec, const Route &route,
                    std::size_t index, SurfaceBuilder &builder) {
   const Landing &box = route.landings[index];
-  const double width = box.max_x - box.min_x;
-  const double depth = box.max_z - box.min_z;
-  const auto incoming = flight_section(route.flights[index], 1.0);
-  const auto outgoing = flight_section(route.flights[index + 1U], 0.0);
-  std::vector<PlanPoint> perimeter = {
-      {box.min_x, box.min_z}, {box.min_x, box.max_z},
-      {box.max_x, box.max_z}, {box.max_x, box.min_z},
-      incoming.first, incoming.second, outgoing.first, outgoing.second};
-  const double epsilon = std::max(width, depth) * 1.0e-9;
+  const PlanPoint minimum = stored_point({box.min_x, box.min_z});
+  const PlanPoint maximum = stored_point({box.max_x, box.max_z});
+  const double width = maximum.x - minimum.x;
+  const double depth = maximum.z - minimum.z;
+  if (!(width > 0.0 && depth > 0.0)) {
+    reject("The landing dimensions cannot be represented by the mesh.");
+  }
+  const std::array<PlanPoint, 4> corners = {{
+      minimum, {minimum.x, maximum.z}, maximum, {maximum.x, minimum.z}}};
+  const auto incoming = section_rails(flight_section(route.flights[index], 1.0));
+  const auto outgoing = section_rails(flight_section(route.flights[index + 1U], 0.0));
+  std::array<std::array<PlanPoint, 3>, 2> ports = {incoming, outgoing};
+  std::vector<PlanPoint> base(corners.begin(), corners.end());
+  for (auto &port : ports) {
+    for (PlanPoint &point : port) {
+      point = stored_point(point);
+      base.push_back(point);
+    }
+  }
+  const PlanPoint guide_start = spec.layout == StairsLayout::L
+      ? (spec.clockwise ? corners[0] : corners[3])
+      : stored_point({box.min_x, (box.min_z + box.max_z) * 0.5});
+  const PlanPoint guide_end = spec.layout == StairsLayout::L
+      ? (spec.clockwise ? corners[2] : corners[1])
+      : stored_point({box.max_x, (box.min_z + box.max_z) * 0.5});
+  base.push_back(guide_start);
+  base.push_back(guide_end);
   const auto position = [&](PlanPoint point) {
-    if (std::abs(point.x - box.min_x) <= epsilon) {
-      return point.z - box.min_z;
+    if (point.x == minimum.x) {
+      return point.z - minimum.z;
     }
-    if (std::abs(point.z - box.max_z) <= epsilon) {
-      return depth + point.x - box.min_x;
+    if (point.z == maximum.z) {
+      return depth + point.x - minimum.x;
     }
-    if (std::abs(point.x - box.max_x) <= epsilon) {
-      return depth + width + box.max_z - point.z;
+    if (point.x == maximum.x) {
+      return depth + width + maximum.z - point.z;
     }
-    return 2.0 * depth + width + box.max_x - point.x;
+    if (point.z == minimum.z) {
+      return 2.0 * depth + width + maximum.x - point.x;
+    }
+    reject("The flight and landing boundaries cannot share exact mesh vertices.");
   };
-  std::sort(perimeter.begin(), perimeter.end(), [&](PlanPoint a, PlanPoint b) {
+  std::sort(base.begin(), base.end(), [&](PlanPoint a, PlanPoint b) {
     return position(a) < position(b);
   });
-  perimeter.erase(std::unique(perimeter.begin(), perimeter.end(),
-      [&](PlanPoint a, PlanPoint b) { return distance(a, b) <= epsilon; }),
-      perimeter.end());
-  const PlanPoint center{(box.min_x + box.max_x) * 0.5,
-                         (box.min_z + box.max_z) * 0.5};
+  base.erase(std::unique(base.begin(), base.end(), same_point), base.end());
+  const auto on_port = [&](PlanPoint a, PlanPoint b) {
+    for (const auto &port : ports) {
+      const auto within = [&](PlanPoint point) {
+        return point.x >= std::min(port[0].x, port[2].x) &&
+               point.x <= std::max(port[0].x, port[2].x) &&
+               point.z >= std::min(port[0].z, port[2].z) &&
+               point.z <= std::max(port[0].z, port[2].z);
+      };
+      if (within(a) && within(b)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  std::vector<PlanPoint> perimeter;
+  std::vector<std::array<PlanPoint, 3>> walls;
+  for (std::size_t corner = 0U; corner < base.size(); ++corner) {
+    const PlanPoint a = base[corner];
+    const PlanPoint b = base[(corner + 1U) % base.size()];
+    perimeter.push_back(a);
+    if (!on_port(a, b)) {
+      const PlanPoint middle = stored_point(interpolate(a, b, 0.5));
+      if (same_point(a, middle) || same_point(b, middle)) {
+        reject("The landing wall is too small to retain its guide boundary.");
+      }
+      perimeter.push_back(middle);
+      walls.push_back({a, middle, b});
+    }
+  }
+  const auto guide_index = [&](PlanPoint point) {
+    const auto found = std::find_if(perimeter.begin(), perimeter.end(),
+        [&](PlanPoint candidate) { return same_point(candidate, point); });
+    return static_cast<std::size_t>(found - perimeter.begin());
+  };
+  const std::size_t first = guide_index(guide_start);
+  const std::size_t second = guide_index(guide_end);
   const double height = route.flights[index].end_height;
   const double bottom = lower_height(spec, height);
-  const VertexId center_id = builder.upper(elevated(center, height), bottom);
-  for (std::size_t corner = 0U; corner < perimeter.size(); ++corner) {
-    const PlanPoint a = perimeter[corner];
-    const PlanPoint b = perimeter[(corner + 1U) % perimeter.size()];
-    const VertexId first = builder.upper(elevated(a, height), bottom);
-    const VertexId second = builder.upper(elevated(b, height), bottom);
-    builder.face({center_id, first, second}, true);
-    builder.face({builder.lower_vertices.at(second.index),
-                  builder.lower_vertices.at(first.index),
-                  builder.lower_vertices.at(center_id.index)}, false);
-    builder.patch({center, a, b}, {height, height, height},
-                   {bottom, bottom, bottom}, index * 2U + 1U, 0U);
+  const std::size_t cell = builder.cell(index * 2U + 1U, 0U);
+  const auto sheet = [&](std::size_t start, std::size_t end) {
+    std::vector<VertexId> top;
+    std::vector<VertexId> lower;
+    for (std::size_t corner = start;; corner = (corner + 1U) % perimeter.size()) {
+      top.push_back(builder.vertex(elevated(perimeter[corner], height)));
+      lower.push_back(builder.vertex(elevated(perimeter[corner], bottom)));
+      if (corner == end) {
+        break;
+      }
+    }
+    if (top.size() <= 4U) {
+      reject("The landing cannot retain its independent planar guide.");
+    }
+    builder.face(std::move(top), cell);
+    std::reverse(lower.begin(), lower.end());
+    builder.face(std::move(lower), cell);
+  };
+  sheet(first, second);
+  sheet(second, first);
+  for (const auto &wall : walls) {
+    builder.face({builder.vertex(elevated(wall[2], height)),
+                  builder.vertex(elevated(wall[1], height)),
+                  builder.vertex(elevated(wall[0], height)),
+                  builder.vertex(elevated(wall[0], bottom)),
+                  builder.vertex(elevated(wall[1], bottom)),
+                  builder.vertex(elevated(wall[2], bottom))}, cell);
   }
 }
 
 [[nodiscard]] std::vector<PlanPoint>
-intersection(const VolumePatch &a, const VolumePatch &b, double epsilon) {
-  std::vector<PlanPoint> polygon(a.points.begin(), a.points.end());
-  const double sign = cross(b.points[0], b.points[1], b.points[2]) < 0.0
-                          ? -1.0 : 1.0;
-  for (std::size_t edge = 0U; edge < 3U && !polygon.empty(); ++edge) {
-    const PlanPoint start = b.points[edge];
-    const PlanPoint end = b.points[(edge + 1U) % 3U];
+intersection(std::span<const PlanPoint> a, std::span<const PlanPoint> b,
+             double epsilon) {
+  std::vector<PlanPoint> polygon(a.begin(), a.end());
+  const double sign = cross(b[0], b[1], b[2]) < 0.0 ? -1.0 : 1.0;
+  for (std::size_t edge = 0U; edge < b.size() && !polygon.empty(); ++edge) {
+    const PlanPoint start = b[edge];
+    const PlanPoint end = b[(edge + 1U) % b.size()];
     const double tolerance = epsilon * distance(start, end);
     std::vector<PlanPoint> clipped;
     PlanPoint previous = polygon.back();
@@ -746,33 +905,154 @@ intersection(const VolumePatch &a, const VolumePatch &b, double epsilon) {
   return polygon;
 }
 
-[[nodiscard]] double height_at(const VolumePatch &patch,
-                               const std::array<double, 3> &heights,
-                               PlanPoint point) {
-  const double area = cross(patch.points[0], patch.points[1], patch.points[2]);
-  const double first = cross(point, patch.points[1], patch.points[2]) / area;
-  const double second = cross(patch.points[0], point, patch.points[2]) / area;
-  return first * heights[0] + second * heights[1] +
-         (1.0 - first - second) * heights[2];
+[[nodiscard]] double height_at(const SurfaceTriangle &triangle, PlanPoint point) {
+  const double area = cross(triangle.points[0], triangle.points[1], triangle.points[2]);
+  const std::array weights = {
+      std::clamp(cross(point, triangle.points[1], triangle.points[2]) / area, 0.0, 1.0),
+      std::clamp(cross(triangle.points[0], point, triangle.points[2]) / area, 0.0, 1.0),
+      std::clamp(cross(triangle.points[0], triangle.points[1], point) / area, 0.0, 1.0)};
+  const double total = weights[0] + weights[1] + weights[2];
+  if (!(total > 0.0) || !std::isfinite(total)) {
+    reject("The stairs dimensions cannot retain a finite clearance evaluation.");
+  }
+  return (weights[0] * triangle.heights[0] + weights[1] * triangle.heights[1] +
+          weights[2] * triangle.heights[2]) / total;
 }
 
-void reject_collisions(const SurfaceBuilder &builder, double width,
-                        double depth, double height) {
-  // Normalize axes independently for intersection predicates only. A very
-  // wide flight must not erase a small rise or widen its longitudinal contacts.
-  std::vector<VolumePatch> patches = builder.patches;
-  for (VolumePatch &patch : patches) {
-    for (PlanPoint &point : patch.points) {
-      point.x /= width;
-      point.z /= depth;
-    }
-    patch.min_x /= width;
-    patch.max_x /= width;
-    patch.min_z /= depth;
-    patch.max_z /= depth;
+[[nodiscard]] std::vector<PlanPoint> projected_hull(std::vector<PlanPoint> points) {
+  std::sort(points.begin(), points.end(), [](PlanPoint a, PlanPoint b) {
+    return a.x < b.x || (a.x == b.x && a.z < b.z);
+  });
+  points.erase(std::unique(points.begin(), points.end(), same_point), points.end());
+  if (points.size() < 3U) {
+    reject("The stairs footprint collapses a generated surface.");
   }
+  std::vector<PlanPoint> hull;
+  hull.reserve(points.size() * 2U);
+  for (const PlanPoint point : points) {
+    // No area epsilon: even a narrow float-authored rail sliver must be enclosed.
+    while (hull.size() >= 2U &&
+           cross(hull[hull.size() - 2U], hull.back(), point) <= 0.0) {
+      hull.pop_back();
+    }
+    hull.push_back(point);
+  }
+  const std::size_t lower_size = hull.size();
+  for (std::size_t index = points.size() - 1U; index-- > 0U;) {
+    const PlanPoint point = points[index];
+    while (hull.size() > lower_size &&
+           cross(hull[hull.size() - 2U], hull.back(), point) <= 0.0) {
+      hull.pop_back();
+    }
+    hull.push_back(point);
+  }
+  hull.pop_back();
+  if (hull.size() < 3U) {
+    reject("The stairs footprint collapses a generated surface.");
+  }
+  return hull;
+}
+
+[[nodiscard]] double projected_area(std::span<const PlanPoint> polygon) {
+  double area = 0.0;
+  for (std::size_t index = 1U; index + 1U < polygon.size(); ++index) {
+    area += std::abs(cross(polygon[0], polygon[index], polygon[index + 1U]));
+  }
+  return area;
+}
+
+/** Uses the same float vertices and canonical diagonals as rendering and Peel. */
+void collect_cell_surfaces(const PolygonDocument &document,
+                           std::vector<VolumeCell> &cells,
+                           double width, double depth) {
+  const auto &native = PolygonDocumentNativeAccess::document(document);
+  const quader_poly::document_internal::VertexLookupIndex lookup(native);
+  std::map<quader_poly::ElementId, const quader_poly::Face *> faces;
+  for (const auto &face : native.faces) {
+    faces.emplace(face.id, &face);
+  }
+  const auto triangles = [&](VolumeCell &cell) {
+    for (const FaceId id : cell.faces) {
+      const auto &face = *faces.at(id.index);
+      const auto normal = quader_poly::document_internal::face_normal_from_vertex_lookup(
+          face, lookup);
+      const auto indices = quader_poly::document_internal::triangulate_face_local_indices(
+          face, lookup, normal);
+      if (indices.size() != face.vertices.size() - 2U) {
+        reject("A stairs surface cannot retain its canonical triangulation.");
+      }
+      for (const auto &triangle : indices) {
+        SurfaceTriangle surface;
+        std::array<quader_geometry::QVec3d, 3> positions;
+        const std::array corners = {triangle.a, triangle.b, triangle.c};
+        for (std::size_t corner = 0U; corner < corners.size(); ++corner) {
+          const auto &position = lookup.find(face.vertices[corners[corner]])->position;
+          positions[corner] = {position.x, position.y, position.z};
+          surface.points[corner] = {static_cast<double>(position.x) / width,
+                                    static_cast<double>(position.z) / depth};
+          surface.heights[corner] = position.y;
+        }
+        const auto area_vector = quader_geometry::triangle_area_vector(
+            quader_geometry::QTriangle3<double>{positions[0], positions[1], positions[2]});
+        // The renderer corrects canonical ngon triangles to the face's outward
+        // normal; clearance must classify that same final triangle winding.
+        if (quader_geometry::dot(area_vector,
+                quader_geometry::QVec3d{normal.x, normal.y, normal.z}) < 0.0) {
+          std::swap(surface.points[1], surface.points[2]);
+          std::swap(surface.heights[1], surface.heights[2]);
+        }
+        const double area = cross(surface.points[0], surface.points[1], surface.points[2]);
+        if (area == 0.0) {
+          continue;
+        }
+        // Float-rounded side and cap triangles can form narrow envelope slivers.
+        // Use their actual winding, not the face's nominal authored role.
+        (area < 0.0 ? cell.upper : cell.lower).push_back(surface);
+      }
+    }
+  };
+  for (VolumeCell &cell : cells) {
+    triangles(cell);
+    if (cell.upper.empty() || cell.lower.empty()) {
+      reject("The stairs footprint collapses a generated surface.");
+    }
+    std::vector<PlanPoint> projected_points;
+    for (const auto &surfaces : {std::span<const SurfaceTriangle>(cell.upper),
+                                  std::span<const SurfaceTriangle>(cell.lower)}) {
+      for (const SurfaceTriangle &triangle : surfaces) {
+        projected_points.insert(projected_points.end(), triangle.points.begin(),
+                                 triangle.points.end());
+      }
+    }
+    cell.footprint = projected_hull(std::move(projected_points));
+    cell.min_x = cell.max_x = cell.footprint[0].x;
+    cell.min_z = cell.max_z = cell.footprint[0].z;
+    for (const PlanPoint point : cell.footprint) {
+      cell.min_x = std::min(cell.min_x, point.x);
+      cell.max_x = std::max(cell.max_x, point.x);
+      cell.min_z = std::min(cell.min_z, point.z);
+      cell.max_z = std::max(cell.max_z, point.z);
+    }
+    cell.minimum_lower = std::numeric_limits<double>::max();
+    cell.maximum_upper = std::numeric_limits<double>::lowest();
+    for (const SurfaceTriangle &triangle : cell.lower) {
+      for (const double height : triangle.heights) {
+        cell.minimum_lower = std::min(cell.minimum_lower, height);
+      }
+    }
+    for (const SurfaceTriangle &triangle : cell.upper) {
+      for (const double height : triangle.heights) {
+        cell.maximum_upper = std::max(cell.maximum_upper, height);
+      }
+    }
+  }
+}
+
+void reject_collisions(const PolygonDocument &document, SurfaceBuilder &builder,
+                        double width, double depth, double height) {
+  collect_cell_surfaces(document, builder.cells, width, depth);
+  const auto &cells = builder.cells;
   constexpr double kPlanEpsilon = 1.0e-10;
-  const double epsilon = kPlanEpsilon;
   const double height_epsilon = std::max(1.0, height) *
       std::numeric_limits<double>::epsilon() * 16.0;
   double min_x = std::numeric_limits<double>::max();
@@ -781,47 +1061,63 @@ void reject_collisions(const SurfaceBuilder &builder, double width,
   double max_z = max_x;
   double widths = 0.0;
   double depths = 0.0;
-  for (const VolumePatch &patch : patches) {
-    min_x = std::min(min_x, patch.min_x);
-    max_x = std::max(max_x, patch.max_x);
-    min_z = std::min(min_z, patch.min_z);
-    max_z = std::max(max_z, patch.max_z);
-    widths += patch.max_x - patch.min_x;
-    depths += patch.max_z - patch.min_z;
+  for (const VolumeCell &cell : cells) {
+    min_x = std::min(min_x, cell.min_x);
+    max_x = std::max(max_x, cell.max_x);
+    min_z = std::min(min_z, cell.min_z);
+    max_z = std::max(max_z, cell.max_z);
+    widths += cell.max_x - cell.min_x;
+    depths += cell.max_z - cell.min_z;
   }
-  // Sweep along the axis that separates more patches. Straight flights must
-  // not compare every tread merely because their cross-flight bounds agree.
-  const bool sweep_x = (max_x - min_x) / std::max(widths, epsilon) >
-                       (max_z - min_z) / std::max(depths, epsilon);
-  const auto minimum = [&](const VolumePatch &patch) {
-    return sweep_x ? patch.min_x : patch.min_z;
+  // Keep the broad phase on route panels, not all detailed mesh triangles.
+  const bool sweep_x = (max_x - min_x) / std::max(widths, kPlanEpsilon) >
+                       (max_z - min_z) / std::max(depths, kPlanEpsilon);
+  const auto minimum = [&](const VolumeCell &cell) {
+    return sweep_x ? cell.min_x : cell.min_z;
   };
-  const auto maximum = [&](const VolumePatch &patch) {
-    return sweep_x ? patch.max_x : patch.max_z;
+  const auto maximum = [&](const VolumeCell &cell) {
+    return sweep_x ? cell.max_x : cell.max_z;
   };
-  std::vector<std::size_t> order(patches.size());
+  const auto above = [&](const VolumeCell &upper, const VolumeCell &lower,
+                         bool adjacent, double contact_area) {
+    for (const SurfaceTriangle &bottom : upper.lower) {
+      for (const SurfaceTriangle &top : lower.upper) {
+        // A padded clipping predicate can extrapolate far beyond a near-vertical
+        // side triangle. Only the actual projected triangles define clearance.
+        const auto overlap = intersection(bottom.points, top.points, 0.0);
+        if (adjacent && projected_area(overlap) <= contact_area) {
+          continue;
+        }
+        for (const PlanPoint point : overlap) {
+          if (!(height_at(bottom, point) > height_at(top, point) + height_epsilon)) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  };
+  std::vector<std::size_t> order(cells.size());
   std::iota(order.begin(), order.end(), 0U);
   std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-    return minimum(patches[a]) < minimum(patches[b]);
+    return minimum(cells[a]) < minimum(cells[b]);
   });
   for (std::size_t first = 0U; first < order.size(); ++first) {
-    const VolumePatch &a = patches[order[first]];
+    const VolumeCell &a = cells[order[first]];
     for (std::size_t second = first + 1U; second < order.size(); ++second) {
-      const VolumePatch &b = patches[order[second]];
-      if (minimum(b) > maximum(a) + epsilon) {
+      const VolumeCell &b = cells[order[second]];
+      if (minimum(b) > maximum(a) + kPlanEpsilon) {
         break;
       }
-      if (b.min_z > a.max_z + epsilon || a.min_z > b.max_z + epsilon ||
-          b.min_x > a.max_x + epsilon || a.min_x > b.max_x + epsilon) {
+      if (b.min_z > a.max_z + kPlanEpsilon || a.min_z > b.max_z + kPlanEpsilon ||
+          b.min_x > a.max_x + kPlanEpsilon || a.min_x > b.max_x + kPlanEpsilon ||
+          a.minimum_lower > b.maximum_upper + height_epsilon ||
+          b.minimum_lower > a.maximum_upper + height_epsilon) {
         continue;
       }
-      const std::vector<PlanPoint> overlap = intersection(a, b, epsilon);
+      const auto overlap = intersection(a.footprint, b.footprint, kPlanEpsilon);
       if (overlap.empty()) {
         continue;
-      }
-      double area = 0.0;
-      for (std::size_t index = 1U; index + 1U < overlap.size(); ++index) {
-        area += std::abs(cross(overlap[0], overlap[index], overlap[index + 1U]));
       }
       const auto section_distance = a.section > b.section
           ? a.section - b.section : b.section - a.section;
@@ -829,23 +1125,14 @@ void reject_collisions(const SurfaceBuilder &builder, double width,
           ? a.station - b.station : b.station - a.station;
       const bool adjacent = section_distance == 1U || section_distance == 2U ||
           (section_distance == 0U && station_distance <= 1U);
-      const double contact_area = epsilon *
+      const double contact_area = kPlanEpsilon *
           std::max({a.max_x - a.min_x, a.max_z - a.min_z,
-                    b.max_x - b.min_x, b.max_z - b.min_z, epsilon}) * 8.0;
-      if (area <= contact_area && adjacent) {
+                    b.max_x - b.min_x, b.max_z - b.min_z, kPlanEpsilon}) * 8.0;
+      if (projected_area(overlap) <= contact_area && adjacent) {
         continue;
       }
-      bool a_above = true;
-      bool b_above = true;
-      for (const PlanPoint point : overlap) {
-        a_above = a_above &&
-            height_at(a, a.lower, point) >
-                height_at(b, b.upper, point) + height_epsilon;
-        b_above = b_above &&
-            height_at(b, b.lower, point) >
-                height_at(a, a.upper, point) + height_epsilon;
-      }
-      if (!a_above && !b_above) {
+      if (!above(a, b, adjacent, contact_area) &&
+          !above(b, a, adjacent, contact_area)) {
         reject("The stairs body overlaps or touches a nonadjacent section; increase clearance or change the layout.");
       }
     }
@@ -888,8 +1175,6 @@ Result<StairsMesh> build_stairs_mesh(const StairsSpec &spec) {
         build_landing(spec, route, index, builder);
       }
     }
-    reject_collisions(builder, route.width, route.depth, spec.height);
-    builder.close_boundary();
     verify_closed_boundary(builder.topology);
     auto document = PolygonDocument::from_authored_topology(builder.topology);
     if (!document.ok()) {
@@ -903,6 +1188,7 @@ Result<StairsMesh> build_stairs_mesh(const StairsSpec &spec) {
       return Result<StairsMesh>::failure(make_error(
           ErrorCode::ValidationFailed, "The generated stairs geometry is invalid."));
     }
+    reject_collisions(document.value(), builder, route.width, route.depth, spec.height);
     result.document = std::move(document).value();
     return Result<StairsMesh>::success(std::move(result));
   } catch (const std::invalid_argument &error) {

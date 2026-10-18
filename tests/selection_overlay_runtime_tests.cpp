@@ -61,6 +61,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -1804,6 +1805,10 @@ public:
   }
 
   QuaderEditorApi &workflow_editor() { return array_editor(); }
+
+  void set_workflow_material_debug_mode(ViewportMaterialDebugMode mode) {
+    view_.set_material_debug_mode(mode);
+  }
 
   bool create_stairs_sample() {
     if (!array_editor().tools().begin_stairs_creation().ok()) return false;
@@ -9248,6 +9253,129 @@ TEST(SelectionOverlayRuntimeTests,
   const QImage canceled = capture("canceled");
   EXPECT_EQ(canceled, baseline)
       << "Cancel must remove the prior stairs mesh, selected outline, and depth geometry.";
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanGeneratedStairsKeepMinimalWallEdgesAndContinuousCheckerUvs) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-stairs-generated-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../stairs_generated_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto sample : {"arc", "arc-solid", "l", "spiral"}) {
+    SCOPED_TRACE(sample);
+    const bool solid = std::string_view(sample) == "arc-solid";
+    const char *layout = solid ? "arc" : sample;
+    const bool spiral = std::string_view(layout) == "spiral";
+    const bool curved = std::string_view(layout) != "l";
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0F, false));
+    ViewportCameraController camera;
+    camera.set_clip_planes(0.01F, 200.0F);
+    ASSERT_TRUE(camera.restore_perspective_pose({
+        .eye = solid ? QVec3{8.0F, 3.0F, 1.0F} : QVec3{8.0F, 7.0F, 10.0F},
+        .target = {0.0F, 1.0F, 0.0F},
+        .up = {0.0F, 1.0F, 0.0F}}));
+    harness.set_sample_camera(camera);
+    auto &editor = harness.workflow_editor();
+    ASSERT_TRUE(harness.create_stairs_sample());
+    const auto setting = [&](const char *name, const auto &value) {
+      const auto result = editor.tools().set_setting("create_stairs", name, value);
+      EXPECT_TRUE(result.ok()) << name << ": " << result.error_message();
+    };
+    setting("stairs.construction", solid ? "solid" : "slab");
+    setting("stairs.automatic_step_count", false);
+    setting("stairs.step_count", 7.0);
+    setting("stairs.curved_segments", 29.0);
+    setting("stairs.layout", layout);
+    if (curved) {
+      setting("stairs.inner_radius", 1.0);
+      setting("stairs.flight_width", 1.0);
+    }
+    if (spiral) {
+      setting("stairs.surface", "ramp");
+      setting("stairs.turns", 1.5);
+    } else if (curved) {
+      setting("stairs.sweep_degrees", 180.0);
+    }
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    const auto objects = editor.query().modeling_objects();
+    ASSERT_EQ(objects.size(), 1U);
+    const auto object = editor.query().modeling_object_for_id(
+        objects.front().modeling_object_id);
+    ASSERT_TRUE(object.has_value());
+    ASSERT_TRUE(editor.selection().select_object(*object).ok());
+    ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Edge).ok());
+    const auto snapshot = harness.modeling().polygon_document_read_snapshot(
+        objects.front().modeling_object_id, false);
+    ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+    const auto topology = snapshot.value().document.view();
+    std::cout << "Generated stairs sample=" << sample
+              << " vertices=" << topology.vertices.size()
+              << " faces=" << topology.faces.size() << '\n';
+    std::map<std::uint32_t, QVec3> positions;
+    for (const auto &vertex : topology.vertices) {
+      positions.emplace(vertex.id, vertex.position);
+    }
+    const auto entity = editor.query().entity(object->entity);
+    ASSERT_TRUE(entity.has_value());
+    QVec3 minimum{std::numeric_limits<float>::max(),
+                 std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+    QVec3 maximum{std::numeric_limits<float>::lowest(),
+                 std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+    for (const auto &[id, position] : positions) {
+      static_cast<void>(id);
+      const auto world = position + entity->transform.location;
+      minimum = {std::min(minimum.x, world.x), std::min(minimum.y, world.y),
+                 std::min(minimum.z, world.z)};
+      maximum = {std::max(maximum.x, world.x), std::max(maximum.y, world.y),
+                 std::max(maximum.z, world.z)};
+    }
+    camera.set_viewport_size(SelectionOverlayRuntimeHarness::kWidth,
+                             SelectionOverlayRuntimeHarness::kHeight);
+    camera.focus_bounds(minimum, maximum, 1.15F);
+    harness.set_sample_camera(camera);
+    const auto capture = [&](const char *phase) {
+      EXPECT_TRUE(harness.present_workflow_pane());
+      const QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("stairs-generated-%1-%2.png")
+              .arg(QString::fromLatin1(sample), QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      std::cout << "Generated stairs GPU png=" << path.toStdString() << '\n';
+      EXPECT_TRUE(harness.present_workflow_pane());
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.capture(), image);
+      return image;
+    };
+    ASSERT_TRUE(editor.viewports().set_shading_mode(
+        ViewportPaneId::Perspective, QuaderShadingMode::Wireframe).ok());
+    const QImage wires = capture("wireframe");
+    ASSERT_TRUE(editor.viewports().set_shading_mode(
+        ViewportPaneId::Perspective, QuaderShadingMode::Solid).ok());
+    harness.set_workflow_material_debug_mode(ViewportMaterialDebugMode::Uv);
+    const QImage editable = capture("editable-edges");
+    EXPECT_NE(wires, editable);
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.viewports().set_shading_mode(
+        ViewportPaneId::Perspective, QuaderShadingMode::Uv).ok());
+    harness.set_workflow_material_debug_mode(ViewportMaterialDebugMode::Uv);
+    const QImage checker = capture("checker");
+    EXPECT_NE(wires, checker);
+  }
 }
 
 } // namespace

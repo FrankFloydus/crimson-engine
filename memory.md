@@ -412,6 +412,13 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   topology and body-clearance validation. Solid fills to the placement base; repeated footprints
   need slabs with positive body clearance. Invalid options and publication failures retain the
   accepted draft and remembered settings. Readouts and unchanged frames must not regenerate it.
+  Flight rails support loop selection. Walls use only the existing panel boundary vertices,
+  with automatic UVs from side-chord distance and height; never add wall-only inset grids to
+  constrain UV Peel. Ordinary wall quads remain traversable by the current Peel walk; explicit
+  boundary controls are deferred. Landing top and underside dividers peel their own two
+  non-quad faces independently.
+  Preserve exact shared port vertices and canonical float-surface clearance when changing
+  subdivisions. See the [surface topology contract](src/sdk/core/modeling/src/stairs.md).
   Contracts: [portable generator](src/sdk/core/modeling/include/quader/modeling/mesh/stairs.hpp),
   [creation workflows](tests/stairs_creation_tool_tests.cpp),
   [geometry fixtures](tests/sdk/modeling_stairs_tests.cpp).
