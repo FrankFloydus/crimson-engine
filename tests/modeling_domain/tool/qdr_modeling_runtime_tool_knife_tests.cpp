@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -875,6 +876,147 @@ TEST(QdrModelingRuntimeToolKnifeTests,
 	EXPECT_FALSE(state.has_active_stroke);
 	EXPECT_TRUE(state.points.empty());
 	EXPECT_TRUE(state.segments.empty());
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideClipsOneIncidentFaceAndUsesUnsignedLineAngles)
+{
+	const KnifeIncidentFaceMesh mesh = make_knife_incident_face_mesh();
+	const auto diagonal = quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, { 0.5F, 0.0F, 0.0F },
+		{ 1.0F, 0.5F, 0.0F }, { 0.0F, 1.0F, 0.0F });
+	ASSERT_TRUE(diagonal.valid);
+	EXPECT_TRUE(diagonal.face_id == mesh.first_face);
+	EXPECT_TRUE(knife_points_nearly_equal(diagonal.start, { 0.5F, 0.0F, 0.0F }));
+	EXPECT_TRUE(knife_points_nearly_equal(diagonal.end, { 0.5F, 1.0F, 0.0F }));
+	EXPECT_NEAR(diagonal.angle_degrees, 45.0, 0.0001);
+	const auto aligned = quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, { 0.5F, 0.5F, 0.0F },
+		{ 0.5F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
+	ASSERT_TRUE(aligned.valid);
+	EXPECT_NEAR(aligned.angle_degrees, 0.0, 0.0001);
+	EXPECT_TRUE(knife_points_nearly_equal(aligned.end, { 0.5F, 0.0F, 0.0F }));
+	const auto perpendicular = quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, { 0.5F, 0.5F, 0.0F },
+		{ 1.0F, 0.5F, 0.0F }, { 0.0F, -1.0F, 0.0F });
+	ASSERT_TRUE(perpendicular.valid);
+	EXPECT_NEAR(perpendicular.angle_degrees, 90.0, 0.0001);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, { 0.5F, 0.0F, 0.0F },
+		{ 0.5F, 1.5F, 0.0F }, { 0.0F, 1.0F, 0.0F }).valid);
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideStopsAtFirstConcaveBoundary)
+{
+	quader_poly::Document document;
+	std::vector<quader_poly::ElementId> vertices;
+	for (const quader::QVec3 point : std::array<quader::QVec3, 6U>{
+		quader::QVec3{ 0.0F, 0.0F, 0.0F }, { 3.0F, 0.0F, 0.0F },
+		{ 3.0F, 1.0F, 0.0F }, { 1.0F, 1.0F, 0.0F },
+		{ 1.0F, 3.0F, 0.0F }, { 0.0F, 3.0F, 0.0F }}) {
+		vertices.push_back(quader_poly::add_vertex(document, point));
+	}
+	const auto face = quader_poly::add_face(document, vertices);
+	const auto guide = quader_editor_core::build_knife_straight_guide(
+		document, face, { 0.0F, 2.0F, 0.0F }, { 0.5F, 2.5F, 0.0F },
+		{ 1.0F, 0.0F, 0.0F });
+	ASSERT_TRUE(guide.valid);
+	EXPECT_TRUE(knife_points_nearly_equal(guide.end, { 1.0F, 2.0F, 0.0F }));
+	EXPECT_NEAR(guide.angle_degrees, 45.0, 0.0001);
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideKeepsTransformedBoundarySeedsAtWorldScale)
+{
+	const float cosine = std::cos(0.1F);
+	const float sine = std::sin(0.1F);
+	const auto world_point = [cosine, sine](quader::QVec3 local) {
+		return quader::QVec3{
+			cosine * local.x - sine * local.y + 1234.5F,
+			sine * local.x + cosine * local.y + 1234.5F,
+			local.z};
+	};
+	quader_poly::Document document;
+	std::vector<quader_poly::ElementId> vertices;
+	for (const quader::QVec3 local : std::array<quader::QVec3, 4U>{
+		quader::QVec3{ -128.0F, -128.0F, 0.0F }, { 128.0F, -128.0F, 0.0F },
+		{ 128.0F, 128.0F, 0.0F }, { -128.0F, 128.0F, 0.0F }}) {
+		vertices.push_back(quader_poly::add_vertex(document, world_point(local)));
+	}
+	const auto face = quader_poly::add_face(document, vertices);
+	const auto guide = quader_editor_core::build_knife_straight_guide(
+		document, face, world_point({ -64.0F, -128.0F, 0.0F }),
+		world_point({ 64.0F, 0.0F, 0.0F }), { -sine, cosine, 0.0F });
+	ASSERT_TRUE(guide.valid);
+	EXPECT_LT(quader::length_squared(guide.end - world_point({ -64.0F, 128.0F, 0.0F })),
+		0.000001F);
+	EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		document, face, world_point({ -64.0F, -129.0F, 0.0F }),
+		world_point({ 64.0F, 0.0F, 0.0F }), { -sine, cosine, 0.0F }).valid);
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideRejectsNonfiniteZeroAndOffPlaneInputs)
+{
+	const KnifeIncidentFaceMesh mesh = make_knife_incident_face_mesh();
+	const quader::QVec3 seed{ 0.5F, 0.0F, 0.0F };
+	const quader::QVec3 current{ 0.5F, 0.5F, 0.0F };
+	const quader::QVec3 direction{ 0.0F, 1.0F, 0.0F };
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, seed, seed, direction).valid);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, seed, current, {}).valid);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, seed, { 0.5F, 0.5F, 1.0F }, direction).valid);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, seed, current, { 0.0F, 0.0F, 1.0F }).valid);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, seed,
+		{ std::numeric_limits<float>::quiet_NaN(), 0.5F, 0.0F }, direction).valid);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		mesh.document, quader_poly::kInvalidElementId, seed, current, direction).valid);
+	quader_poly::Document degenerate;
+	const auto first = quader_poly::add_vertex(degenerate, {});
+	const auto second = quader_poly::add_vertex(degenerate, { 1.0F, 0.0F, 0.0F });
+	const auto third = quader_poly::add_vertex(degenerate, { 2.0F, 0.0F, 0.0F });
+	const auto face = quader_poly::add_face(degenerate, std::array{ first, second, third });
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		degenerate, face, {}, { 1.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }).valid);
+}
+
+TEST(QdrModelingRuntimeToolKnifeTests, StraightGuidePreviewIsImmutableAndRetiresWithCurrentTarget)
+{
+	const KnifeIncidentFaceMesh mesh = make_knife_incident_face_mesh();
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	object.document = mesh.document;
+	quader_editor_core::EditorSession session({ std::move(object) });
+	quader_editor_core::KnifeToolState state;
+	quader_editor_core::SelectionHoverState hover;
+	ASSERT_TRUE(seed_knife_from_shared_edge(session, state, hover, mesh, 7));
+	ASSERT_TRUE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover,
+		make_knife_face_hit(7, mesh.first_face, { 0.5F, 0.5F, 0.0F }),
+		0.25, false, false));
+	state.straight_guide = quader_editor_core::build_knife_straight_guide(
+		mesh.document, mesh.first_face, state.point_positions.back(),
+		state.current_point, { 0.0F, 1.0F, 0.0F });
+	const auto retained = quader_editor_core::knife_tool_preview(state);
+	ASSERT_TRUE(retained.straight_guide.valid);
+	ASSERT_TRUE(quader_editor_core::accept_knife_current_point(state, 0.25));
+	EXPECT_FALSE(state.straight_guide.valid);
+	EXPECT_FALSE(quader_editor_core::knife_tool_preview(state).straight_guide.valid);
+	EXPECT_TRUE(retained.straight_guide.valid);
+	state.straight_guide = retained.straight_guide;
+	ASSERT_FALSE(quader_editor_core::update_knife_preview_from_hit(
+		session, state, hover,
+		make_knife_face_hit(7, mesh.outside_face, { 0.5F, 1.5F, 0.0F }),
+		0.25, false, false));
+	EXPECT_FALSE(state.straight_guide.valid);
+	state.straight_guide = retained.straight_guide;
+	quader_editor_core::clear_knife_hover(state, hover);
+	EXPECT_FALSE(state.straight_guide.valid);
+	state.straight_guide = retained.straight_guide;
+	quader_editor_core::reset_knife_tool(state);
+	EXPECT_FALSE(state.straight_guide.valid);
 }
 
 TEST(QdrModelingRuntimeToolKnifeTests,

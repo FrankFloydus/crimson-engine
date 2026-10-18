@@ -35,7 +35,7 @@ OperationResult bridge_edge_boundaries_impl(
     std::span<const ElementId> first_vertices,
     std::span<const ElementId> second_vertices,
     bool closed,
-    int steps);
+    BridgeOptions options);
 
 std::vector<ElementId> bridge_reoriented_boundary_vertices(
     std::span<const ElementId> vertices,
@@ -147,7 +147,7 @@ public:
         std::span<const ElementId> first_vertices,
         std::span<const ElementId> second_vertices,
         bool closed,
-        int steps = 1);
+        BridgeOptions options = {});
 
     [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::BridgeEdgeBoundaries).id; }
     [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::BridgeEdgeBoundaries).label; }
@@ -157,7 +157,7 @@ private:
     std::vector<ElementId> first_vertices_;
     std::vector<ElementId> second_vertices_;
     bool closed_ = false;
-    int steps_ = 1;
+    BridgeOptions options_;
 };
 
 OperationResult bridge_edge_boundaries_impl(
@@ -166,7 +166,7 @@ OperationResult bridge_edge_boundaries_impl(
     std::span<const ElementId> first_vertices,
     std::span<const ElementId> second_vertices,
     bool closed,
-    int steps)
+    BridgeOptions options)
 {
     if (first_vertices.size() != second_vertices.size()) {
         return OperationResult::failure("Bridge needs matching boundary vertex counts.");
@@ -235,8 +235,18 @@ OperationResult bridge_edge_boundaries_impl(
         outward = normalize_or_zero(outward);
     }
 
-    const int step_count = std::clamp(steps, 1, 64);
+    const int step_count = options.steps;
     Document candidate = document;
+    std::vector<BridgeRailCurve> curves;
+    curves.reserve(vertex_count);
+    for (std::size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
+        const Vertex* first_vertex = find_vertex(document, oriented_first_vertices[vertex_index]);
+        const Vertex* second_vertex = find_vertex(document, oriented_second_vertices[vertex_index]);
+        if (first_vertex == nullptr || second_vertex == nullptr) return OperationResult::failure("Bridge could not find boundary vertices.");
+        curves.push_back(prepare_bridge_rail_curve(first_vertex->position, second_vertex->position,
+            first_outwards[vertex_index], second_outwards[vertex_index], options));
+    }
+    const BridgeShapeFeedback feedback = bridge_shape_feedback(curves, options);
     std::vector<std::vector<ElementId>> rings;
     rings.reserve(static_cast<std::size_t>(step_count + 1));
     rings.push_back(oriented_first_vertices);
@@ -249,7 +259,7 @@ OperationResult bridge_edge_boundaries_impl(
             if (first_vertex == nullptr || second_vertex == nullptr) {
                 return OperationResult::failure("Bridge could not find boundary vertices.");
             }
-            ring.push_back(add_vertex(candidate, curved_bridge_position(first_vertex->position, second_vertex->position, first_outwards[vertex_index], second_outwards[vertex_index], step_index, step_count)));
+            ring.push_back(add_vertex(candidate, evaluate_bridge_rail_curve(curves[vertex_index], step_index, step_count)));
         }
         rings.push_back(std::move(ring));
     }
@@ -286,35 +296,47 @@ OperationResult bridge_edge_boundaries_impl(
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(bridge_face_ids);
     activate_face_selection(selection, selection.faces.back());
-    return { true, {} };
+    return {.changed = true, .bridge_shape = feedback};
 }
 
 BridgeEdgeBoundariesOperation::BridgeEdgeBoundariesOperation(
     std::span<const ElementId> first_vertices,
     std::span<const ElementId> second_vertices,
     bool closed,
-    int steps) :
+    BridgeOptions options) :
     first_vertices_(first_vertices.begin(), first_vertices.end()),
     second_vertices_(second_vertices.begin(), second_vertices.end()),
     closed_(closed),
-    steps_(steps)
+    options_(options)
 {}
 
 OperationResult BridgeEdgeBoundariesOperation::apply(Document& document, Selection& selection) const
 {
-    return bridge_edge_boundaries_impl(document, selection, first_vertices_, second_vertices_, closed_, steps_);
+    return bridge_edge_boundaries_impl(document, selection, first_vertices_, second_vertices_, closed_, options_);
 }
 
 } // namespace
 
-OperationResult bridge_edge_boundaries(
-    Document& document,
-    Selection& selection,
-    std::span<const ElementId> first_vertices,
-    std::span<const ElementId> second_vertices,
-    bool closed,
-    int steps)
-{
-    return BridgeEdgeBoundariesOperation { first_vertices, second_vertices, closed, steps }.apply(document, selection);
+OperationResult
+bridge_edge_boundaries(Document &document, Selection &selection,
+                       std::span<const ElementId> first_vertices,
+                       std::span<const ElementId> second_vertices, bool closed,
+                       BridgeOptions options) {
+  const auto normalized = normalized_bridge_options(options);
+  if (!normalized.has_value())
+    return OperationResult::failure("Bridge tensions must be finite.");
+  options = *normalized;
+  return BridgeEdgeBoundariesOperation{first_vertices, second_vertices, closed,
+                                       options}
+      .apply(document, selection);
+}
+OperationResult
+bridge_edge_boundaries(Document &document, Selection &selection,
+                       std::span<const ElementId> first_vertices,
+                       std::span<const ElementId> second_vertices, bool closed,
+                       int steps) {
+  return bridge_edge_boundaries(document, selection, first_vertices,
+                                second_vertices, closed,
+                                BridgeOptions{.steps = steps});
 }
 } // namespace quader_poly

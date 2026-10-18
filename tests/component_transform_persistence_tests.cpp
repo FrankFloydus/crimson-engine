@@ -9,11 +9,15 @@
 #include "assets/mesh_asset_payload.hpp"
 #include "assets/mesh_geometry_projection.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/project_autosave_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "io/qdr/qdr_document_reader.hpp"
+#include "io/qdr/qdr_document_writer.hpp"
+#include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "scene/scene_transform.hpp"
 #include "support/command_observable_state.hpp"
 
@@ -176,6 +180,31 @@ protected:
     }
   }
 
+  void seed_component_selection(QuaderModelingObjectRef object,
+                                QuaderSelectionMode mode,
+                                const quader_poly::Document &document) {
+    if (mode == QuaderSelectionMode::Face) {
+      ASSERT_FALSE(document.faces.empty());
+      ASSERT_TRUE(editor_.selection().select_face(
+          object, static_cast<QuaderElementId>(document.faces.front().id),
+          QuaderSelectionEdit::Add).ok());
+    } else if (mode == QuaderSelectionMode::Edge) {
+      ASSERT_FALSE(document.faces.empty());
+      const auto &vertices = document.faces.front().vertices;
+      ASSERT_GE(vertices.size(), 2U);
+      ASSERT_TRUE(editor_.selection().select_edge(
+          object, static_cast<QuaderElementId>(vertices[0]),
+          static_cast<QuaderElementId>(vertices[1]),
+          QuaderSelectionEdit::Add).ok());
+    } else {
+      ASSERT_EQ(mode, QuaderSelectionMode::Vertex);
+      ASSERT_FALSE(document.vertices.empty());
+      ASSERT_TRUE(editor_.selection().select_vertex(
+          object, static_cast<QuaderElementId>(document.vertices.front().id),
+          QuaderSelectionEdit::Add).ok());
+    }
+  }
+
   void select_positive_x_face() {
     const auto document = topology();
     const auto face = std::ranges::find_if(document.faces, [&](const auto &face) {
@@ -286,6 +315,9 @@ TEST_P(ComponentNudgePersistenceTests,
                           session.scene().world_transform_matrix(objects[1].entity)};
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(GetParam()).ok());
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    seed_component_selection(objects[index], GetParam(), before[index]);
+  }
   ASSERT_TRUE(editor_.selection().select_all().ok());
   ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Scale).ok());
   ASSERT_TRUE(editor_.modeling().can_nudge_selection());
@@ -387,39 +419,89 @@ INSTANTIATE_TEST_SUITE_P(ComponentModes, ComponentNudgePersistenceTests,
                                           QuaderSelectionMode::Face));
 
 TEST_F(ComponentTransformPersistenceTests,
-       RejectedNudgeCollapsingFacePreservesRedoRepeatAndCommittedProjection) {
+       FiniteFaceCollapseNudgePreservesHistoryRepeatAndCanonicalProjection) {
   select_positive_x_face();
   const auto before = topology();
   auto &session = *project_.active_scene()->session;
+  const auto original_mesh = session.modeling().compile_object_mesh(object_.modeling_object_id);
+  ASSERT_TRUE(original_mesh.has_value());
+  const auto original_geometry = original_mesh->geometry();
+  const auto expect_committed_projection = [&](const quader_poly::Document &expected) {
+    const auto document = MeshProjectionService::sdk_document_from_polygon_document(expected);
+    ASSERT_TRUE(document.ok()) << document.error_message();
+    const auto canonical = MeshProjectionService::compile_sdk_document_mesh(document.value());
+    ASSERT_TRUE(canonical.has_value());
+    const auto mesh = session.modeling().compile_object_mesh(object_.modeling_object_id);
+    ASSERT_TRUE(mesh.has_value());
+    EXPECT_TRUE(mesh_geometry_payload_equal(mesh->geometry(), canonical->geometry()));
+    expect_same_authored_topology(topology(), expected);
+  };
   const QuaderResolvedNudgeRequest accepted{
       .tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::X,
       .move_delta = {0.25F, 0, 0}};
   ASSERT_TRUE(editor_.modeling().nudge_selection(accepted).ok());
-  const auto after = topology();
   ASSERT_TRUE(editor_.history().undo().ok());
   expect_same_authored_topology(topology(), before);
   const auto undo_before = session.history().undo_count();
-  const auto redo_before = session.history().redo_count();
+  ASSERT_GT(session.history().redo_count(), 0U);
   const auto selection_before = editor_.selection().summary();
   const auto content_before = session.modeling().content_revision();
-  const auto rejected = editor_.modeling().nudge_selection({
+  const auto collapsed = editor_.modeling().nudge_selection({
       .tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::X,
       .move_delta = {-2, 0, 0}});
-  EXPECT_FALSE(rejected.ok());
-  EXPECT_FALSE(rejected.changed());
+  ASSERT_TRUE(collapsed.ok()) << collapsed.error_message();
+  ASSERT_TRUE(collapsed.changed());
+  const auto after_collapse = topology();
+  ASSERT_EQ(after_collapse.vertices.size(), before.vertices.size());
+  ASSERT_EQ(after_collapse.faces.size(), before.faces.size());
+  for (const auto &vertex : after_collapse.vertices) {
+    EXPECT_EQ(vertex.position.x, -1.0F);
+  }
+  expect_committed_projection(after_collapse);
+  const auto collapsed_mesh = session.modeling().compile_object_mesh(object_.modeling_object_id);
+  ASSERT_TRUE(collapsed_mesh.has_value());
+  EXPECT_LT(collapsed_mesh->geometry().vertices.size(), original_geometry.vertices.size());
   EXPECT_FALSE(session.modeling().transform_drag_active());
   EXPECT_FALSE(session.modeling().transient_transform_preview_active());
   EXPECT_TRUE(session.modeling().tool_preview_meshes().empty());
+  EXPECT_EQ(session.history().undo_count(), undo_before + 1U);
+  EXPECT_EQ(session.history().redo_count(), 0U);
+  EXPECT_GT(session.modeling().content_revision(), content_before);
+  EXPECT_EQ(editor_.selection().summary().active_face_id, selection_before.active_face_id);
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_committed_projection(before);
+  const auto redo_before = session.history().redo_count();
+  const auto content_after_undo = session.modeling().content_revision();
+  const auto rejected = editor_.modeling().nudge_selection({
+      .tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::X,
+      .move_delta = {std::numeric_limits<float>::infinity(), 0, 0}});
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
   EXPECT_EQ(session.history().undo_count(), undo_before);
   EXPECT_EQ(session.history().redo_count(), redo_before);
-  EXPECT_EQ(session.modeling().content_revision(), content_before);
+  EXPECT_EQ(session.modeling().content_revision(), content_after_undo);
   EXPECT_EQ(editor_.selection().summary().active_face_id, selection_before.active_face_id);
-  expect_same_authored_topology(topology(), before);
+  expect_committed_projection(before);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_committed_projection(after_collapse);
+
   const auto repeated = editor_.history().repeat_last_action();
   ASSERT_TRUE(repeated.ok()) << repeated.error_message();
   ASSERT_TRUE(repeated.changed());
-  expect_same_authored_topology(topology(), after);
-  EXPECT_EQ(session.history().undo_count(), undo_before + 1U);
+  const auto after_repeat = topology();
+  for (const auto &vertex : after_repeat.vertices) {
+    const auto *original = quader_poly::find_vertex(before, vertex.id);
+    ASSERT_NE(original, nullptr);
+    EXPECT_EQ(vertex.position.x, original->position.x == 1.0F ? -3.0F : -1.0F);
+  }
+  expect_committed_projection(after_repeat);
+  EXPECT_EQ(session.history().undo_count(), undo_before + 2U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_committed_projection(after_collapse);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_committed_projection(after_repeat);
+  EXPECT_TRUE(mesh_geometry_payload_equal(original_mesh->geometry(), original_geometry));
 }
 
 class ComponentExtrudeNudgeTests
@@ -1688,6 +1770,7 @@ TEST_P(ComponentGridSnapPersistenceTests,
   const auto [mode, direction] = GetParam();
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
+  seed_component_selection(object_, mode, topology());
   ASSERT_TRUE(editor_.selection().select_all().ok());
   const float anchor = direction * 6.0F;
   ASSERT_TRUE(editor_.modeling().move_selection({anchor, 0, 0}).ok());
@@ -1786,6 +1869,7 @@ TEST_F(ComponentTransformPersistenceTests,
   ASSERT_NE(second, unit_box.vertices.end());
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  seed_component_selection(object_, QuaderSelectionMode::Vertex, unit_box);
   ASSERT_TRUE(editor_.selection().select_all().ok());
   const QuaderTransform3 orientation{
       .x_axis = {-1, 0, 0}, .y_axis = {0.5F, 1, 0},
@@ -2405,7 +2489,7 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
   expect_family_pick_work(3U, "Replayed independent participant edit");
 }
 
-TEST_F(ComponentTransformPersistenceTests, ParallelAffineRejectionPreservesEveryAcceptedParticipant) {
+TEST_F(ComponentTransformPersistenceTests, ParallelAffineCollapseRecoversCanonicalLayoutAndPinnedParticipants) {
   auto &session = *project_.active_scene()->session;
   std::vector<QuaderModelingObjectRef> objects{object_};
   constexpr std::size_t kParticipantCount = 72U;
@@ -2452,22 +2536,71 @@ TEST_F(ComponentTransformPersistenceTests, ParallelAffineRejectionPreservesEvery
       if (vertex.position.x == 1.0F) vertex.position.x += 0.2F;
     }
   }
-  const auto rejected = editor_.modeling().update_transform_matrix({
+  const auto expect_previews = [&](const std::vector<ModelingToolPreviewMesh> &previews,
+                                    const std::vector<quader_poly::Document> &documents) {
+    ASSERT_EQ(previews.size(), objects.size());
+    for (std::size_t index = 0U; index < objects.size(); ++index) {
+      ASSERT_EQ(previews[index].source_entity, objects[index].entity);
+      expect_preview_matches_document(previews[index], documents[index]);
+      expect_same_authored_topology(authored(objects[index]), before[index]);
+    }
+  };
+  expect_previews(accepted, expected);
+  const auto collapsed = editor_.modeling().update_transform_matrix({
       .x_axis = {0, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1}}, {});
-  EXPECT_FALSE(rejected.ok());
-  const auto retained = session.modeling().tool_preview_meshes();
-  ASSERT_EQ(retained.size(), accepted.size());
-  for (std::size_t index = 0U; index < accepted.size(); ++index) {
-    EXPECT_EQ(retained[index].source_entity, accepted[index].source_entity);
-    EXPECT_EQ(retained[index].position_revision, accepted[index].position_revision);
-    EXPECT_EQ(retained[index].geometry_projection, accepted[index].geometry_projection);
-    EXPECT_EQ(effective_preview_geometry(retained[index]),
-              effective_preview_geometry(accepted[index]));
-    EXPECT_EQ(retained[index].dynamic_position_payload, accepted[index].dynamic_position_payload);
-    ASSERT_EQ(retained[index].source_entity, objects[index].entity);
-    expect_preview_matches_document(retained[index], expected[index]);
-    expect_same_authored_topology(authored(objects[index]), before[index]);
+  ASSERT_TRUE(collapsed.ok()) << collapsed.error_message();
+  EXPECT_TRUE(collapsed.changed());
+  const auto collapsed_previews = session.modeling().tool_preview_meshes();
+  auto collapsed_documents = before;
+  for (auto &document : collapsed_documents) {
+    for (auto &vertex : document.vertices) {
+      if (vertex.position.x == 1.0F) vertex.position.x = 0.0F;
+    }
   }
+  expect_previews(collapsed_previews, collapsed_documents);
+  ASSERT_EQ(collapsed_previews.size(), accepted.size());
+  ASSERT_NE(effective_preview_geometry(collapsed_previews.back()), nullptr);
+  ASSERT_NE(effective_preview_geometry(accepted.back()), nullptr);
+  EXPECT_LT(effective_preview_geometry(collapsed_previews.back())->vertices.size(),
+            effective_preview_geometry(accepted.back())->vertices.size());
+  EXPECT_NE(collapsed_previews.back().layout_key, accepted.back().layout_key);
+  expect_previews(accepted, expected);
+
+  const auto unchanged_collapse = editor_.modeling().update_transform_matrix({
+      .x_axis = {0, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1}}, {});
+  ASSERT_TRUE(unchanged_collapse.ok()) << unchanged_collapse.error_message();
+  EXPECT_FALSE(unchanged_collapse.changed());
+  const auto rejected = editor_.modeling().update_transform_matrix({
+      .x_axis = {std::numeric_limits<float>::infinity(), 0, 0},
+      .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1}}, {});
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  const auto retained = session.modeling().tool_preview_meshes();
+  ASSERT_EQ(retained.size(), collapsed_previews.size());
+  for (std::size_t index = 0U; index < collapsed_previews.size(); ++index) {
+    EXPECT_EQ(retained[index].source_entity, collapsed_previews[index].source_entity);
+    EXPECT_EQ(retained[index].layout_key, collapsed_previews[index].layout_key);
+    EXPECT_EQ(retained[index].position_revision, collapsed_previews[index].position_revision);
+    EXPECT_EQ(retained[index].geometry_projection, collapsed_previews[index].geometry_projection);
+    EXPECT_EQ(effective_preview_geometry(retained[index]),
+              effective_preview_geometry(collapsed_previews[index]));
+    EXPECT_EQ(retained[index].dynamic_position_payload,
+              collapsed_previews[index].dynamic_position_payload);
+  }
+  expect_previews(retained, collapsed_documents);
+  const auto recovered = editor_.modeling().update_transform_translate({0.2F, 0, 0});
+  ASSERT_TRUE(recovered.ok()) << recovered.error_message();
+  EXPECT_TRUE(recovered.changed());
+  const auto recovered_previews = session.modeling().tool_preview_meshes();
+  expect_previews(recovered_previews, expected);
+  ASSERT_EQ(recovered_previews.size(), accepted.size());
+  EXPECT_EQ(recovered_previews.back().layout_key, accepted.back().layout_key);
+  for (std::size_t index = 0U; index < recovered_previews.size(); ++index) {
+    EXPECT_GT(recovered_previews[index].position_revision,
+              collapsed_previews[index].position_revision);
+  }
+  expect_previews(accepted, expected);
+  expect_previews(collapsed_previews, collapsed_documents);
   const auto unchanged = editor_.modeling().update_transform_translate({0.2F, 0, 0});
   ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
   EXPECT_FALSE(unchanged.changed());
@@ -2482,6 +2615,8 @@ TEST_F(ComponentTransformPersistenceTests, ParallelAffineRejectionPreservesEvery
   ASSERT_TRUE(editor_.history().redo().ok());
   for (std::size_t index = 0U; index < objects.size(); ++index) {
     expect_same_authored_topology(authored(objects[index]), expected[index]);
+    expect_preview_matches_document(accepted[index], expected[index]);
+    expect_preview_matches_document(collapsed_previews[index], collapsed_documents[index]);
   }
 }
 
@@ -2904,6 +3039,136 @@ TEST(ComponentTransformPerformanceTests, ClonedLargeSceneComponentDragSubmission
               << " retained_geometry=" << retained_committed_geometry
               << " candidates=" << candidate_count << std::endl;
   }
+}
+
+TEST_F(ComponentTransformPersistenceTests,
+       NonmanifoldJunctionSurvivesNativeLoadAutosaveAndObjectEditHistory) {
+  quader_poly::Document document;
+  const auto first = quader_poly::add_vertex(document, {0.0f, 0.0f, 0.0f});
+  const auto second = quader_poly::add_vertex(document, {2.0f, 0.0f, 0.0f});
+  const auto upper = quader_poly::add_vertex(document, {0.0f, 2.0f, 0.0f});
+  const auto lower = quader_poly::add_vertex(document, {0.0f, -2.0f, 0.0f});
+  const auto raised = quader_poly::add_vertex(document, {0.0f, 0.0f, 2.0f});
+  (void)quader_poly::add_face(document, std::array{first, second, upper});
+  (void)quader_poly::add_face(document, std::array{second, first, lower});
+  (void)quader_poly::add_face(document, std::array{first, second, raised});
+  for (auto &face : document.faces) {
+    face.uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}};
+    face.texture_transform = {.scale = {0.125f, -0.25f},
+                              .shift_uv = {0.25f, -0.5f},
+                              .rotation_degrees = 15.0f};
+  }
+  document.hard_normal_edges = {quader_poly::make_edge(first, second)};
+  const auto seed_path = ProjectRelativePath::parse_portable("Scenes/Junction Seed.qdr");
+  ASSERT_TRUE(seed_path.ok()) << seed_path.error().message;
+  const auto saved_seed = editor_.scene_documents().save_as(
+      project_.active_scene_id(), seed_path.value());
+  ASSERT_TRUE(saved_seed.ok()) << saved_seed.error_message();
+  const auto seed_dependencies = QdrDocumentReader::read_project_dependencies(
+      root_ / seed_path.value().native_path());
+  ASSERT_TRUE(seed_dependencies.ok) << seed_dependencies.message;
+  auto captured = qdr_project_write_snapshot_from_document(
+      project_.active_scene()->session->document());
+  ASSERT_TRUE(captured.ok()) << captured.error().message;
+  const auto scene_uuid = project_.active_scene()->scene_id.bytes();
+  auto snapshot = captured.take_value();
+  snapshot.project_asset_dependencies = seed_dependencies.project_asset_dependencies;
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  auto &stored_mesh = snapshot.meshes.front();
+  stored_mesh.name = "Three-face junction";
+  stored_mesh.has_authored_polygon_document = true;
+  stored_mesh.authored_polygon_document =
+      std::make_shared<const quader_poly::Document>(document);
+  stored_mesh.geometry.reset();
+  stored_mesh.encoded_geometry.reset();
+  const auto closed_seed = editor_.scene_documents().close_active();
+  ASSERT_TRUE(closed_seed.ok()) << closed_seed.error_message();
+  const auto written_seed = QdrDocumentWriter::write_project_document_atomic(
+      root_ / seed_path.value().native_path(), snapshot, scene_uuid);
+  ASSERT_TRUE(written_seed.ok) << written_seed.message;
+  const auto opened_seed = editor_.scene_documents().open(seed_path.value());
+  ASSERT_TRUE(opened_seed.ok()) << opened_seed.error_message();
+  const auto objects = editor_.query().modeling_objects();
+  ASSERT_EQ(objects.size(), 1u);
+  const auto rebound = editor_.query().modeling_object_for_id(
+      objects.front().modeling_object_id);
+  ASSERT_TRUE(rebound.has_value());
+  object_ = *rebound;
+  const auto renamed = editor_.scene().rename(object_.entity, "Three-face junction");
+  ASSERT_TRUE(renamed.ok()) << renamed.error_message();
+  ASSERT_TRUE(renamed.changed());
+  expect_same_authored_topology(topology(), document);
+  EXPECT_FALSE(quader_poly::validate_polygon_document(document).ok());
+
+  const SessionPreferences settings;
+  const std::chrono::steady_clock::time_point epoch{};
+  EXPECT_EQ(project_.autosave().poll(project_, settings, epoch).written, 0u);
+  const auto autosaved = project_.autosave().poll(
+      project_, settings, epoch + std::chrono::minutes(2));
+  ASSERT_TRUE(autosaved.ok)
+      << (autosaved.warnings.empty() ? "" : autosaved.warnings.front());
+  ASSERT_EQ(autosaved.written, 1u);
+  EXPECT_TRUE(editor_.scene_documents().active_scene()->dirty);
+  const auto copies = project_.autosave().entries(project_);
+  ASSERT_TRUE(copies.ok()) << copies.error().message;
+  ASSERT_EQ(copies.value().size(), 1u);
+  const auto recovery = QdrDocumentReader::read_project_document(
+      root_ / copies.value().front().path.native_path());
+  ASSERT_TRUE(recovery.ok) << recovery.message;
+  const auto *binding = recovery.document.scene().mesh(object_.entity);
+  ASSERT_NE(binding, nullptr);
+  const auto *mesh = recovery.document.assets().mesh(binding->mesh);
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_NE(mesh->authored_polygon_document, nullptr);
+  expect_same_authored_topology(*mesh->authored_polygon_document, document);
+
+  const auto before_edit = editor_.query().entity(object_.entity);
+  ASSERT_TRUE(before_edit.has_value());
+  auto transform = before_edit->transform;
+  transform.location = {3.0f, -2.0f, 1.0f};
+  const auto expect_object_state = [&](const QVec3 &location,
+                                       std::string_view name) {
+    const auto entity = editor_.query().entity(object_.entity);
+    ASSERT_TRUE(entity.has_value());
+    EXPECT_EQ(entity->name, name);
+    EXPECT_EQ(entity->transform.location.x, location.x);
+    EXPECT_EQ(entity->transform.location.y, location.y);
+    EXPECT_EQ(entity->transform.location.z, location.z);
+    expect_same_authored_topology(topology(), document);
+  };
+  const auto transformed = editor_.scene().set_transform(object_.entity, transform);
+  ASSERT_TRUE(transformed.ok()) << transformed.error_message();
+  ASSERT_TRUE(transformed.changed());
+  expect_object_state(transform.location, "Three-face junction");
+  const auto undone = editor_.history().undo();
+  ASSERT_TRUE(undone.ok()) << undone.error_message();
+  expect_object_state(before_edit->transform.location, "Three-face junction");
+  const auto redone = editor_.history().redo();
+  ASSERT_TRUE(redone.ok()) << redone.error_message();
+  expect_object_state(transform.location, "Three-face junction");
+
+  const auto saved_path = ProjectRelativePath::parse_portable("Scenes/Junction Edited.qdr");
+  ASSERT_TRUE(saved_path.ok()) << saved_path.error().message;
+  const auto saved = editor_.scene_documents().save_as(
+      project_.active_scene_id(), saved_path.value());
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  EXPECT_FALSE(editor_.scene_documents().active_scene()->dirty);
+  const auto closed = editor_.scene_documents().close_active();
+  ASSERT_TRUE(closed.ok()) << closed.error_message();
+  const auto opened = editor_.scene_documents().open(saved_path.value());
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  expect_object_state(transform.location, "Three-face junction");
+  const auto renamed_again = editor_.scene().rename(object_.entity, "Reopened junction");
+  ASSERT_TRUE(renamed_again.ok()) << renamed_again.error_message();
+  ASSERT_TRUE(renamed_again.changed());
+  EXPECT_TRUE(editor_.scene_documents().active_scene()->dirty);
+  const auto saved_again = editor_.scene_documents().save_active();
+  ASSERT_TRUE(saved_again.ok()) << saved_again.error_message();
+  const auto closed_again = editor_.scene_documents().close_active();
+  ASSERT_TRUE(closed_again.ok()) << closed_again.error_message();
+  const auto reopened = editor_.scene_documents().open(saved_path.value());
+  ASSERT_TRUE(reopened.ok()) << reopened.error_message();
+  expect_object_state(transform.location, "Reopened junction");
 }
 
 } // namespace

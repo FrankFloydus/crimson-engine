@@ -435,6 +435,83 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEd
 }
 
 TEST(QdrDocumentOperationExtrudeElementsTests,
+     BoundaryChainsAndLoopsExtrudeWithoutChangingExistingWindingMismatches) {
+  for (const bool closed_loop : {false, true}) {
+    for (const bool affine : {false, true}) {
+      SCOPED_TRACE(closed_loop);
+      SCOPED_TRACE(affine);
+      auto fixture = make_circular_boundary_fixture();
+      const Face& ring_face = fixture.document.faces.back();
+      const auto first = ring_face.vertices[2];
+      const auto second = ring_face.vertices[3];
+      const auto midpoint = (find_vertex(fixture.document, first)->position +
+          find_vertex(fixture.document, second)->position) * 0.5F;
+      const auto outside = add_vertex(fixture.document, midpoint * 1.5F);
+      // The adjacent triangle deliberately retains the ring's edge direction,
+      // as unrelated faces in selection dump SEL-20261015-DF7FF106 do.
+      ASSERT_NE(add_face(fixture.document, std::array{first, second, outside}),
+          kInvalidElementId);
+      ASSERT_FALSE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
+      std::vector<Edge> selected(fixture.inner_edges.begin(),
+          fixture.inner_edges.begin() + (closed_loop ? 8 : 6));
+      for (const Edge edge : selected) {
+        ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+            fixture.document, edge, EdgeNormalMode::Soft));
+      }
+      Selection selection = qdr_test::edge_selection({selected.back()}, selected.back());
+      selection.edges = selected;
+      const Document before = fixture.document;
+      Transform3 transform;
+      transform.origin = {0, 0.5F, 0};
+      const auto result = affine
+          ? transform_extrude_selected_elements(
+                fixture.document, selection, transform, {}, 1.0F)
+          : extrude_selected_elements(fixture.document, selection, transform.origin);
+
+      ASSERT_TRUE(result.success) << result.message;
+      ASSERT_TRUE(result.changed);
+      ASSERT_EQ(selection.edges.size(), selected.size());
+      EXPECT_EQ(fixture.document.faces.size(), before.faces.size() + selected.size());
+      EXPECT_EQ(fixture.document.vertices.size(), before.vertices.size() +
+          (closed_loop ? selected.size() : selected.size() + 1U));
+      for (const Vertex& source : before.vertices) {
+        const Vertex* retained = find_vertex(fixture.document, source.id);
+        ASSERT_NE(retained, nullptr);
+        EXPECT_TRUE(qdr_test::vec_nearly_equal(retained->position, source.position));
+      }
+      for (const Face& source : before.faces) {
+        const Face* retained = find_face(fixture.document, source.id);
+        ASSERT_NE(retained, nullptr);
+        EXPECT_EQ(retained->vertices, source.vertices);
+        EXPECT_EQ(retained->material_slot, source.material_slot);
+        ASSERT_EQ(retained->uvs.size(), source.uvs.size());
+        for (std::size_t corner = 0; corner < source.uvs.size(); ++corner) {
+          EXPECT_FLOAT_EQ(retained->uvs[corner].x, source.uvs[corner].x);
+          EXPECT_FLOAT_EQ(retained->uvs[corner].y, source.uvs[corner].y);
+        }
+        EXPECT_EQ(retained->texture_transform, source.texture_transform);
+        EXPECT_EQ(retained->normal_shading, source.normal_shading);
+      }
+      for (std::size_t index = 0; index < selected.size(); ++index) {
+        const Edge source = selected[index];
+        const Edge copied = selection.edges[index];
+        EXPECT_TRUE(qdr_test::vec_nearly_equal(
+            find_vertex(fixture.document, copied.a)->position,
+            find_vertex(before, source.a)->position + transform.origin));
+        EXPECT_TRUE(qdr_test::vec_nearly_equal(
+            find_vertex(fixture.document, copied.b)->position,
+            find_vertex(before, source.b)->position + transform.origin));
+        EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, source), EdgeNormalMode::Soft);
+        EXPECT_EQ(qdr_test::edge_normal_mode(fixture.document, copied), EdgeNormalMode::Soft);
+      }
+      EXPECT_FALSE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
+      EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+      qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+    }
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
      VertexBoundaryCornerExtendsOneWeldedQuadAndRemapsActiveVertex) {
   auto fixture = qdr_test::make_quad_document(7U);
   fixture.document.faces.front().uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};

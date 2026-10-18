@@ -6,6 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "platform/fatal_error_handler.hpp"
 #include "platform/platform_file_dialog.hpp"
+#include "quader_app_version.hpp"
+
+#include <QByteArray>
+#include <QString>
+#include <QtCore/qlogging.h>
 
 #include <gtest/gtest.h>
 
@@ -85,6 +90,24 @@ std::filesystem::path unique_test_directory(std::wstring_view label) {
   return std::filesystem::temp_directory_path() /
          (std::wstring(label) + L"-p" + std::to_wstring(GetCurrentProcessId()) +
           L"-t" + std::to_wstring(GetTickCount64()));
+}
+
+void record_qt_probe_message(QtMsgType type,
+                             const QMessageLogContext &context,
+                             const QString &message) {
+  const wchar_t *log_path = _wgetenv(L"QUADER_FATAL_CHILD_LOG");
+  if (log_path == nullptr) {
+    return;
+  }
+  const auto marker = std::filesystem::path(log_path).parent_path() /
+                      L"forwarded-qt-message.txt";
+  const QByteArray utf8_message = message.toUtf8();
+  std::ofstream stream(marker, std::ios::out | std::ios::app | std::ios::binary);
+  stream << static_cast<int>(type) << '\n'
+         << context.category << '\n' << context.file << '\n'
+         << context.line << '\n' << context.function << '\n';
+  stream.write(utf8_message.constData(), utf8_message.size());
+  stream << '\n';
 }
 #endif
 
@@ -210,6 +233,8 @@ TEST(FatalErrorHandlerTests, BuildsDeterministicArtifactNamesAndReportText) {
       .generated_at = "2026-07-17 10:20:30",
       .process_id = 42U,
       .thread_id = 7U,
+      .app_version = "0.1.42",
+      .executable_path = "app/quader.exe",
       .error_code = "QDR-FATAL-0006",
       .quick_message = "Application requested fatal shutdown.",
       .detail = "Errore \xC3\xA8 riproducibile.",
@@ -223,6 +248,8 @@ TEST(FatalErrorHandlerTests, BuildsDeterministicArtifactNamesAndReportText) {
   EXPECT_NE(report.find("Generated: 2026-07-17 10:20:30"),
             std::string::npos);
   EXPECT_NE(report.find("Error code: QDR-FATAL-0006"), std::string::npos);
+  EXPECT_NE(report.find("App version: 0.1.42"), std::string::npos);
+  EXPECT_NE(report.find("Executable: app/quader.exe"), std::string::npos);
   EXPECT_NE(report.find("Errore \xC3\xA8 riproducibile."),
             std::string::npos);
   EXPECT_NE(report.find(paths.report_path.string()), std::string::npos);
@@ -282,18 +309,31 @@ TEST(FatalErrorHandlerTests, DISABLED_FatalChildProbe) {
   if (mode == L"missing") {
     diagnostics.helper_path = std::filesystem::path(log_path).parent_path() /
                               L"missing-fatal-helper.exe";
-  } else if (mode == L"hang" || mode == L"failure") {
+  } else if (mode == L"hang" || mode == L"qt_hang" || mode == L"failure") {
     diagnostics.helper_path = current_executable_path();
     // Keep the production deadline: loading the instrumented test executable on
     // a busy machine can take several seconds before its probe begins.
     // Only the injected helper process consumes these filters. This child was
     // already selected by its explicit command-line GoogleTest filter.
-    _wputenv_s(L"GTEST_FILTER", mode == L"hang"
+    _wputenv_s(L"GTEST_FILTER", mode != L"failure"
         ? L"FatalErrorHandlerTests.DISABLED_HangingDiagnosticsHelper"
         : L"FatalErrorHandlerTests.DISABLED_FailingDiagnosticsHelper");
     _wputenv_s(L"GTEST_ALSO_RUN_DISABLED_TESTS", L"1");
   }
   quader::install_fatal_error_handler(std::filesystem::path(log_path), diagnostics);
+  if (mode == L"qt" || mode == L"qt_hang" || mode == L"qt_nonfatal") {
+    qInstallMessageHandler(record_qt_probe_message);
+    quader::install_qt_fatal_error_handler();
+    quader::install_qt_fatal_error_handler();
+    if (mode == L"qt_nonfatal") {
+      QMessageLogger("qt-warning-probe.cpp", 43, "qt_nonfatal_child_probe",
+                     "quader.warning_probe").warning("child Qt warning");
+      std::_Exit(74);
+    }
+    // An explicit context also survives Release builds without Qt log macros.
+    QMessageLogger("qt-fatal-probe.cpp", 47, "qt_fatal_child_probe",
+                   "quader.fatal_probe").fatal("child Qt fatal: errore \xC3\xA8");
+  }
 #if defined(_MSC_VER)
   if (mode == L"exception") {
     raise_fatal_probe_exception();
@@ -308,13 +348,17 @@ TEST(FatalErrorHandlerTests, DISABLED_HangingDiagnosticsHelper) {
   const wchar_t *log = _wgetenv(L"QUADER_FATAL_CHILD_LOG");
   ASSERT_NE(log, nullptr);
   const std::filesystem::path log_path(log);
+  const wchar_t *mode_value = _wgetenv(L"QUADER_FATAL_CHILD_DIAGNOSTICS");
+  const bool qt_fatal = mode_value != nullptr &&
+                        std::wstring_view(mode_value) == L"qt_hang";
   const auto report_directory = log_path.parent_path() / L"crash-reports";
   for (const auto &entry : std::filesystem::directory_iterator(report_directory)) {
     if (entry.path().extension() != ".txt") {
       continue;
     }
     const std::string initial = read_text_file(entry.path());
-    ASSERT_NE(initial.find("QDR-FATAL-0006"), std::string::npos);
+    ASSERT_NE(initial.find(qt_fatal ? "QDR-FATAL-0007" : "QDR-FATAL-0006"),
+              std::string::npos);
     ASSERT_NE(initial.find("Stack trace (raw addresses"), std::string::npos);
     ASSERT_EQ(initial.find("Detailed diagnostics result:"), std::string::npos);
     // The marker proves the initial report was flushed before optional work.
@@ -417,6 +461,10 @@ void expect_fatal_child_report(const FatalChildArtifacts &result) {
   EXPECT_TRUE(result.reports[0].filename().string().starts_with("quader-fatal-"));
   EXPECT_NE(result.report.find("Error code: QDR-FATAL-0006"), std::string::npos);
   EXPECT_NE(result.report.find("child probe detail: errore \xC3\xA8"), std::string::npos);
+  EXPECT_NE(result.report.find(std::string{"App version: "} +
+                              quader::kQuaderAppVersion), std::string::npos);
+  EXPECT_NE(result.report.find("Executable: " + current_executable_path().string()),
+            std::string::npos);
   EXPECT_NE(result.report.find("Stack trace (raw addresses"), std::string::npos);
   EXPECT_NE(read_text_file(result.log_path).find("QDR-FATAL-0006"), std::string::npos);
   EXPECT_TRUE(result.partial_files.empty());
@@ -425,6 +473,23 @@ void expect_fatal_child_report(const FatalChildArtifacts &result) {
 void remove_fatal_child_artifacts(const FatalChildArtifacts &result) {
   std::error_code ignored;
   std::filesystem::remove_all(result.root, ignored);
+}
+
+void expect_qt_fatal_child_report(const FatalChildArtifacts &result) {
+  ASSERT_EQ(result.wait, WAIT_OBJECT_0);
+  EXPECT_EQ(result.exit_code, 1U);
+  EXPECT_LT(result.elapsed_ms, 20'000U);
+  ASSERT_EQ(result.reports.size(), 1U);
+  EXPECT_NE(result.report.find("Error code: QDR-FATAL-0007"), std::string::npos);
+  EXPECT_NE(result.report.find("Qt fatal message: child Qt fatal: errore \xC3\xA8"),
+            std::string::npos);
+  EXPECT_NE(result.report.find("Category: quader.fatal_probe"), std::string::npos);
+  EXPECT_NE(result.report.find("File: qt-fatal-probe.cpp"), std::string::npos);
+  EXPECT_NE(result.report.find("Line: 47"), std::string::npos);
+  EXPECT_NE(result.report.find("Function: qt_fatal_child_probe"), std::string::npos);
+  EXPECT_NE(result.report.find("Stack trace (raw addresses"), std::string::npos);
+  EXPECT_NE(read_text_file(result.log_path).find("QDR-FATAL-0007"), std::string::npos);
+  EXPECT_TRUE(result.partial_files.empty());
 }
 } // namespace
 
@@ -437,6 +502,31 @@ TEST(FatalErrorHandlerTests,
   EXPECT_NE(result.report.find("Detailed diagnostics helper completed."), std::string::npos);
   EXPECT_NE(result.report.find("Minidump written."), std::string::npos);
   EXPECT_NE(result.report.find("Stack trace (symbolized"), std::string::npos);
+  remove_fatal_child_artifacts(result);
+}
+
+TEST(FatalErrorHandlerTests, QtFatalMessageWritesContextAndDumpBeforeWindowsFastFail) {
+  const auto result = run_fatal_child(L"qt");
+  expect_qt_fatal_child_report(result);
+  ASSERT_EQ(result.dumps.size(), 1U) << result.report;
+  EXPECT_GT(std::filesystem::file_size(result.dumps.front()), 0U);
+  EXPECT_NE(result.report.find("Detailed diagnostics helper completed."), std::string::npos);
+  EXPECT_NE(result.report.find("Minidump written."), std::string::npos);
+  EXPECT_NE(result.report.find("Stack trace (symbolized"), std::string::npos);
+  remove_fatal_child_artifacts(result);
+}
+
+TEST(FatalErrorHandlerTests, RepeatedQtInstallationPreservesNonfatalMessageForwarding) {
+  const auto result = run_fatal_child(L"qt_nonfatal");
+  ASSERT_EQ(result.wait, WAIT_OBJECT_0);
+  EXPECT_EQ(result.exit_code, 74U);
+  EXPECT_TRUE(result.reports.empty());
+  EXPECT_TRUE(result.dumps.empty());
+  const auto marker = result.log_path.parent_path() / L"forwarded-qt-message.txt";
+  const std::string expected = std::to_string(static_cast<int>(QtWarningMsg)) +
+      "\nquader.warning_probe\nqt-warning-probe.cpp\n43\n"
+      "qt_nonfatal_child_probe\nchild Qt warning\n";
+  EXPECT_EQ(read_text_file(marker), expected);
   remove_fatal_child_artifacts(result);
 }
 
@@ -478,6 +568,19 @@ TEST(FatalErrorHandlerTests, StuckHelperIsTerminatedAfterTheInitialReportIsDurab
     EXPECT_EQ(GetLastError(), ERROR_INVALID_PARAMETER);
   }
   marker.close();
+  remove_fatal_child_artifacts(result);
+}
+
+TEST(FatalErrorHandlerTests, QtFatalMessageKeepsInitialReportWhenDiagnosticsStall) {
+  const auto result = run_fatal_child(L"qt_hang");
+  expect_qt_fatal_child_report(result);
+  EXPECT_TRUE(result.dumps.empty());
+  EXPECT_NE(result.report.find("timed out after 10000 ms"), std::string::npos);
+  const std::string observed = read_text_file(
+      result.log_path.parent_path() / L"helper-observed-report.txt");
+  EXPECT_NE(observed.find("QDR-FATAL-0007"), std::string::npos);
+  EXPECT_NE(observed.find("Qt fatal message: child Qt fatal"), std::string::npos);
+  EXPECT_EQ(observed.find("Detailed diagnostics result:"), std::string::npos);
   remove_fatal_child_artifacts(result);
 }
 

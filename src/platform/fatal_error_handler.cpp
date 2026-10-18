@@ -5,6 +5,11 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "platform/fatal_error_handler.hpp"
+#include "quader_app_version.hpp"
+
+#include <QByteArray>
+#include <QString>
+#include <QtCore/qlogging.h>
 
 #include <algorithm>
 #include <atomic>
@@ -19,6 +24,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -40,6 +46,8 @@ namespace {
 std::filesystem::path g_log_path;
 FatalDiagnosticsOptions g_diagnostics;
 std::atomic_bool g_handling_fatal_error{false};
+std::atomic<QtMessageHandler> previous_qt_message_handler{nullptr};
+std::mutex qt_message_handler_install_mutex;
 
 /**
  * Describes the crash artifacts written by the fatal error boundary.
@@ -129,6 +137,8 @@ std::string format_fatal_error_report(const FatalReportData &data) {
   report << "Generated: " << data.generated_at << "\n";
   report << "Process id: " << data.process_id << "\n";
   report << "Thread id: " << data.thread_id << "\n";
+  report << "App version: " << data.app_version << "\n";
+  report << "Executable: " << data.executable_path.string() << "\n";
   report << "Error code: " << data.error_code << "\n";
   report << "Quick message: " << data.quick_message << "\n";
   report << "Detail: " << data.detail << "\n";
@@ -178,6 +188,18 @@ FatalReportWriteResult write_fatal_error_report(
 }
 
 namespace {
+
+std::filesystem::path current_executable_path() {
+#if defined(_WIN32)
+  std::vector<wchar_t> buffer(32768U, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, buffer.data(),
+                                         static_cast<DWORD>(buffer.size()));
+  if (length > 0U && length < buffer.size()) {
+    return std::filesystem::path(std::wstring(buffer.data(), length));
+  }
+#endif
+  return {};
+}
 
 std::string timestamp_for_crash_file() {
   const auto now = std::chrono::system_clock::now();
@@ -499,6 +521,8 @@ CrashArtifacts write_crash_artifacts(FatalErrorInfo info,
       .generated_at = timestamp_for_crash_report(),
       .process_id = current_process_id(),
       .thread_id = current_thread_id(),
+      .app_version = kQuaderAppVersion,
+      .executable_path = current_executable_path(),
       .error_code = info.code,
       .quick_message = info.quick_message,
       .detail = detail,
@@ -593,6 +617,43 @@ handle_fatal_error(FatalErrorCode code, const std::string &detail,
   std::_Exit(exit_code);
 }
 
+void qt_fatal_message_handler(QtMsgType type,
+                              const QMessageLogContext &context,
+                              const QString &message) {
+  if (type != QtFatalMsg) {
+    const auto previous = previous_qt_message_handler.load(
+        std::memory_order_acquire);
+    if (previous != nullptr) {
+      previous(type, context, message);
+    }
+    return;
+  }
+
+  const QByteArray utf8_message = message.toUtf8();
+  std::string detail{"Qt fatal message: "};
+  detail.append(utf8_message.constData(),
+                static_cast<std::size_t>(utf8_message.size()));
+  if (context.category != nullptr) {
+    detail += "\nCategory: ";
+    detail += context.category;
+  }
+  if (context.file != nullptr) {
+    detail += "\nFile: ";
+    detail += context.file;
+  }
+  if (context.line > 0) {
+    detail += "\nLine: ";
+    detail += std::to_string(context.line);
+  }
+  if (context.function != nullptr) {
+    detail += "\nFunction: ";
+    detail += context.function;
+  }
+  // Qt's Windows fatal termination bypasses SIGABRT and exception filters.
+  // Enter our durable reporter directly, without taking any Logger locks.
+  handle_fatal_error(FatalErrorCode::QtFatalMessage, detail, 1);
+}
+
 [[noreturn]] void terminate_handler() {
   if (std::exception_ptr current = std::current_exception()) {
     try {
@@ -678,6 +739,8 @@ FatalErrorInfo fatal_error_info(FatalErrorCode code) {
     return {"QDR-FATAL-0005", "Unhandled Windows fatal exception."};
   case FatalErrorCode::ManualFatalReport:
     return {"QDR-FATAL-0006", "Application requested fatal shutdown."};
+  case FatalErrorCode::QtFatalMessage:
+    return {"QDR-FATAL-0007", "Fatal Qt message."};
   case FatalErrorCode::UnknownFatal:
   default:
     return {"QDR-FATAL-0000", "Unexpected fatal error."};
@@ -702,6 +765,16 @@ void install_fatal_error_handler(std::filesystem::path log_path,
   _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_DEBUG);
 #endif
 #endif
+}
+
+void install_qt_fatal_error_handler() {
+  std::lock_guard lock(qt_message_handler_install_mutex);
+  const auto previous = qInstallMessageHandler(qt_fatal_message_handler);
+  if (previous != qt_fatal_message_handler) {
+    // Qt returns its default handler when no custom handler was installed.
+    // Reinstallation must retain that predecessor instead of forwarding to us.
+    previous_qt_message_handler.store(previous, std::memory_order_release);
+  }
 }
 
 [[noreturn]] void report_fatal_error_and_exit(FatalErrorCode code,

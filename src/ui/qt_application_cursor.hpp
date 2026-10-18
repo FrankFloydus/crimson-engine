@@ -18,6 +18,7 @@ enum class QtApplicationCursorVariant {
   Default,
   SelectionAdd,
   SelectionSubtract,
+  BoxCutter,
 };
 
 inline constexpr int kQtApplicationCursorCanvasLogicalExtent = 32;

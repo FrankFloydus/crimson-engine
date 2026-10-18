@@ -19,6 +19,7 @@
 
 static void initialize_quader_selection_cursor_resources() {
   Q_INIT_RESOURCE(quader_selection_cursors);
+  Q_INIT_RESOURCE(quader_box_cutter_cursor);
 }
 
 namespace quader {
@@ -34,6 +35,8 @@ QString cursor_resource_path(QtApplicationCursorVariant variant) {
     return QStringLiteral(":/quader/cursors/selection_add.png");
   case QtApplicationCursorVariant::SelectionSubtract:
     return QStringLiteral(":/quader/cursors/selection_subtract.png");
+  case QtApplicationCursorVariant::BoxCutter:
+    return QStringLiteral(":/quader/cursors/box_cutter.png");
   case QtApplicationCursorVariant::Default:
     return QStringLiteral(":/quader/cursors/selection_default.png");
   }
@@ -128,11 +131,11 @@ QPixmap qt_application_cursor_pixmap(QtApplicationCursorVariant variant,
     return source;
   }
 
-  const int physical_extent = static_cast<int>(std::lround(
-      static_cast<double>(kQtApplicationCursorCanvasLogicalExtent) * scale));
+  const QSize physical_size{
+      static_cast<int>(std::lround(source.width() * scale)),
+      static_cast<int>(std::lround(source.height() * scale))};
   QPixmap rendered = source.scaled(
-      QSize(physical_extent, physical_extent), Qt::IgnoreAspectRatio,
-      Qt::SmoothTransformation);
+      physical_size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
   rendered.setDevicePixelRatio(scale);
   return rendered;
 }
@@ -141,7 +144,14 @@ QCursor qt_application_cursor(QtApplicationCursorVariant variant,
                               qreal device_pixel_ratio) {
   const QPixmap pixmap =
       qt_application_cursor_pixmap(variant, device_pixel_ratio);
-  return pixmap.isNull() ? QCursor(Qt::ArrowCursor) : QCursor(pixmap, 0, 0);
+  if (pixmap.isNull()) {
+    return QCursor(Qt::ArrowCursor);
+  }
+  // Qt scales this logical hotspot with the pixmap at the platform boundary.
+  // The supplied cutter blade ends at the authored image's bottom-left tip.
+  const QPoint hotspot = variant == QtApplicationCursorVariant::BoxCutter
+                             ? QPoint(0, 23) : QPoint(0, 0);
+  return QCursor(pixmap, hotspot.x(), hotspot.y());
 }
 
 void install_qt_application_default_cursor(QApplication &application) {

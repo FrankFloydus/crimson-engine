@@ -20,6 +20,7 @@
 #include <QPointer>
 #include <QStyleOption>
 #include <QStyleFactory>
+#include <QTabBar>
 #include <QThread>
 #include <QVariant>
 #include <QWidget>
@@ -219,12 +220,13 @@ void QtUiScaleProxyStyle::set_metrics(
 int QtUiScaleProxyStyle::pixelMetric(PixelMetric metric,
                                      const QStyleOption *option,
                                      const QWidget *widget) const {
-  if (metric == PM_TabBarTabVSpace && widget != nullptr &&
+  if ((metric == PM_TabBarTabVSpace || metric == PM_TabBarTabHSpace) &&
+      widget != nullptr &&
       widget->property(kQtConnectedTabSurfaceProperty).toBool()) {
     QStyleOption tab_option;
     tab_option.initFrom(widget);
     if (qt_application_style_active(option != nullptr ? option : &tab_option)) {
-      return metrics_.px(4);
+      return metrics_.px(metric == PM_TabBarTabHSpace ? 40 : 4);
     }
   }
   if (widget != nullptr &&
@@ -305,6 +307,52 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
   return size;
 }
 
+QRect QtUiScaleProxyStyle::subElementRect(SubElement element,
+                                         const QStyleOption *option,
+                                         const QWidget *widget) const {
+  if ((element == SE_TabBarTabLeftButton ||
+       element == SE_TabBarTabRightButton) && widget != nullptr &&
+      widget->property(kQtConnectedTabSurfaceProperty).toBool() &&
+      qt_application_style_active(option)) {
+    const auto *tab = qstyleoption_cast<const QStyleOptionTab *>(option);
+    if (tab != nullptr && tab->shape == QTabBar::RoundedNorth) {
+      QRect button = QProxyStyle::subElementRect(element, option, widget);
+      if (!button.isEmpty()) {
+        const QRect text = QProxyStyle::subElementRect(
+            SE_TabBarTabText, option, widget);
+        const QFontMetrics &font = tab->fontMetrics;
+        const QRect ink = font.tightBoundingRect(tab->text);
+        const qreal baseline = text.top() +
+                                 (text.height() - font.height()) * 0.5 +
+                                 font.ascent();
+        const qreal center = baseline + ink.y() + ink.height() * 0.5;
+        const int top = qRound(center - button.height() * 0.5);
+        button.moveTop(std::clamp(top, tab->rect.top(),
+                                 std::max(tab->rect.top(),
+                                          tab->rect.bottom() + 1 - button.height())));
+      }
+      return button;
+    }
+  }
+  const auto *dock = qstyleoption_cast<const QStyleOptionDockWidget *>(option);
+  if (dock != nullptr && widget != nullptr &&
+      widget->property(kQtDockTitleButtonsHiddenProperty).toBool()) {
+    if (element == SE_DockWidgetCloseButton ||
+        element == SE_DockWidgetFloatButton) {
+      // Qt skips null rectangles and keeps the old button geometry. An empty,
+      // non-null rectangle clears both paint and hit area on every relayout.
+      return QRect(0, 0, 0, 1);
+    }
+    if (element == SE_DockWidgetTitleBarText) {
+      QStyleOptionDockWidget title(*dock);
+      title.closable = false;
+      title.floatable = false;
+      return QProxyStyle::subElementRect(element, &title, widget);
+    }
+  }
+  return QProxyStyle::subElementRect(element, option, widget);
+}
+
 QIcon QtUiScaleProxyStyle::standardIcon(StandardPixmap icon,
                                         const QStyleOption *option,
                                         const QWidget *widget) const {
@@ -328,6 +376,20 @@ void QtUiScaleProxyStyle::drawControl(ControlElement element,
                                       const QStyleOption *option,
                                       QPainter *painter,
                                       const QWidget *widget) const {
+  if (element == CE_DockWidgetTitle && widget != nullptr &&
+      widget->property(kQtDockTitleButtonsHiddenProperty).toBool()) {
+    if (const auto *dock =
+            qstyleoption_cast<const QStyleOptionDockWidget *>(option)) {
+      QStyleOptionDockWidget title(*dock);
+      title.closable = false;
+      title.floatable = false;
+      if (!qt_draw_application_control(element, &title, painter, *this, metrics_,
+                                       widget)) {
+        QProxyStyle::drawControl(element, &title, painter, widget);
+      }
+      return;
+    }
+  }
   if (!qt_draw_application_control(element, option, painter, *this, metrics_,
                                     widget)) {
     QProxyStyle::drawControl(element, option, painter, widget);

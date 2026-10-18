@@ -57,6 +57,13 @@ struct QuaderEdgeBevelArgs {
   int segments = 1;
 };
 
+/// Configures the segment count and independent Bridge handle strengths.
+struct QuaderBridgeArgs {
+  int steps = 1;
+  double start_tension = 1.0;
+  double end_tension = 1.0;
+};
+
 /// Selects the texture axis that follows the selected edge guides.
 enum class QuaderUvPeelAxis { U, V };
 
@@ -291,6 +298,7 @@ public:
   [[nodiscard]] const QuaderApiVoidResult &begin_result() const;
   QuaderApiVoidResult update(const QuaderPreviewSettings &settings);
   QuaderApiVoidResult update(QuaderEdgeBevelArgs args);
+  QuaderApiVoidResult update(QuaderBridgeArgs args);
   QuaderApiVoidResult update(QuaderThickenArgs args);
   QuaderApiVoidResult update(QuaderSliceQuadArgs args);
   QuaderApiVoidResult update(QuaderMergeByDistanceArgs args);
@@ -418,7 +426,8 @@ public:
   QuaderApiVoidResult soften_normals() const;
   QuaderPreviewHandle bevel(QuaderEdgeBevelArgs args = {}) const;
   QuaderApiVoidResult bridge() const;
-  QuaderPreviewHandle interpolated_bridge(int steps = 1) const;
+  QuaderPreviewHandle begin_bridge_preview(int steps = 1) const;
+  QuaderPreviewHandle begin_bridge_preview(QuaderBridgeArgs args) const;
   QuaderApiVoidResult dissolve() const;
   QuaderApiVoidResult merge() const;
   QuaderApiVoidResult collapse() const;
@@ -441,7 +450,8 @@ public:
   QuaderFaceSelection() = default;
   [[nodiscard]] std::span<const QuaderElementId> faces() const;
   QuaderApiVoidResult bridge() const;
-  QuaderPreviewHandle interpolated_bridge(int steps = 1) const;
+  QuaderPreviewHandle begin_bridge_preview(int steps = 1) const;
+  QuaderPreviewHandle begin_bridge_preview(QuaderBridgeArgs args) const;
   QuaderApiVoidResult invert() const;
   QuaderApiVoidResult combine() const;
   QuaderApiVoidResult collapse() const;

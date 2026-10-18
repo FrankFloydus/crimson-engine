@@ -455,6 +455,8 @@ inline ModelingInteractionSettings
 to_modeling_interaction_settings(const QuaderInteractionSettings &settings) {
   return {
       .bridge_steps = settings.bridge_steps,
+      .bridge_start_tension = settings.bridge_start_tension,
+      .bridge_end_tension = settings.bridge_end_tension,
       .edge_bevel_width = settings.edge_bevel_width,
       .edge_bevel_profile = settings.edge_bevel_profile,
       .edge_bevel_segments = settings.edge_bevel_segments,

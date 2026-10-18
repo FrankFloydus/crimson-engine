@@ -1693,6 +1693,9 @@ void QtViewportPanel::prepare_viewports(
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions);
   const bool selection_dimensions_visible = selection_overlays_visible &&
       settings.bool_value(ViewportBoolSettingId::ShowDimensions);
+  const bool knife_dimensions_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowDimensions) &&
+      modeling.active_viewport_tool() == ModelingViewportTool::Knife;
   const double dimension_font_size_points = static_cast<double>(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize));
   const bool viewport_info_visible =
@@ -1722,7 +1725,8 @@ void QtViewportPanel::prepare_viewports(
          !pane_state.frame->isVisible()) &&
         !footprint_dimensions_visible &&
         !(pane_dimensions_visible && overlays_visible &&
-          pane_state.frame->isVisible())) {
+          pane_state.frame->isVisible()) &&
+        !(knife_dimensions_visible && overlays_visible && pane_state.frame->isVisible())) {
       pane_state.edge_length_hud->hide();
     }
   }
@@ -1957,6 +1961,7 @@ void QtViewportPanel::prepare_viewports(
         .native_tool_overlay_visible =
             linear_array_handle.visible || radial_array_center_visible ||
             extrusion_handle.active ||
+            (gizmos_visible && native_presentation.bridge_handle.has_value()) ||
             (native_presentation.curve_preview != nullptr &&
              native_presentation.curve_preview->active) ||
             assets.curve_count() != 0u,
@@ -2025,6 +2030,12 @@ void QtViewportPanel::prepare_viewports(
             .pivot_handle = &pivot_handle,
             .linear_array_handle = &linear_array_handle,
             .extrusion_handle = &extrusion_handle,
+            .bridge_handle = native_presentation.bridge_handle
+                ? &*native_presentation.bridge_handle : nullptr,
+            .bridge_hovered_part = pane_state.id == interaction_pane_id_
+                ? native_presentation.bridge_hovered_part : BridgePreviewHandlePart::None,
+            .bridge_dragging = pane_state.id == interaction_pane_id_ &&
+                               native_presentation.bridge_dragging,
             .radial_array_center = &radial_array_center,
             .revisions = pane_tool_revisions,
             .interaction_pane = pane_state.id == interaction_pane_id_,
@@ -2112,7 +2123,8 @@ void QtViewportPanel::prepare_viewports(
         overlay_submission.selection_dimension_bounds
             ? &*overlay_submission.selection_dimension_bounds : nullptr,
         overlay_submission.selection_dimension_signature,
-        pane_dimensions_visible && overlays_visible);
+        pane_dimensions_visible && overlays_visible,
+        knife_dimensions_visible && overlays_visible);
     sync_pane_control_selection(pane_state);
   }
   composed_prepared_geometry_revision_ = composed_geometry_revision_;

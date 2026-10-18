@@ -609,8 +609,9 @@ bool collect_extrusion_edge_uses(const Document& document, ExtrusionEdgeUses& us
             const ElementId from = face.vertices[index];
             const ElementId to = face.vertices[(index + 1U) % face.vertices.size()];
             auto& edge_uses = uses[extrusion_edge_key(from, to)];
-            if (edge_uses.size() == 2U ||
-                (!edge_uses.empty() && edge_uses.front().from == from)) {
+            // Existing face winding does not change edge incidence. Each new
+            // boundary wall follows its own donor's directed edge use.
+            if (edge_uses.size() == 2U) {
                 return false;
             }
             edge_uses.push_back({face.id, from, to});
@@ -816,7 +817,7 @@ OperationResult extrude_selected_edges_through_transform(Document& document,
     }
     ExtrusionEdgeUses edge_uses;
     if (!collect_extrusion_edge_uses(document, edge_uses)) {
-        return OperationResult::failure("Edge extrusion requires consistently wound manifold edges.");
+        return OperationResult::failure("Edge extrusion requires manifold edges.");
     }
     std::set<ExtrusionEdgeKey> ridges;
     std::set<ElementId> moving;

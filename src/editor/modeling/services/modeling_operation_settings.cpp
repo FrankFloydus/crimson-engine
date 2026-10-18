@@ -47,7 +47,7 @@ const char *fallback_tool_settings_label(ModelingToolSettingsTargetKind kind) {
   case ModelingToolSettingsTargetKind::Mirror:
     return "Mirror";
   case ModelingToolSettingsTargetKind::Bridge:
-    return "Interpolated Bridge";
+    return "Bridge";
   case ModelingToolSettingsTargetKind::EdgeBevel:
     return "Bevel Edges";
   case ModelingToolSettingsTargetKind::Thicken:
@@ -76,7 +76,9 @@ quader_editor_core::EditorOperationSettings settings_for_operation(
   switch (schema->settings_kind) {
   case quader_editor_core::EditorOperationSettingsKind::Bridge:
     return quader_editor_core::BridgeOperationSettings{
-        .steps = interaction_settings.bridge_steps};
+        .steps = interaction_settings.bridge_steps,
+        .start_tension = interaction_settings.bridge_start_tension,
+        .end_tension = interaction_settings.bridge_end_tension};
   case quader_editor_core::EditorOperationSettingsKind::EdgeBevel:
     return quader_editor_core::EdgeBevelOperationSettings{
         .width = interaction_settings.edge_bevel_width,
@@ -143,8 +145,19 @@ bool apply_modeling_interaction_setting(
 
   switch (option->operation) {
   case quader_editor_core::EditorOperationId::Bridge:
-    interaction_settings.bridge_steps = static_cast<int>(value);
-    return true;
+    if (option->option_id == "steps") {
+      interaction_settings.bridge_steps = static_cast<int>(value);
+      return true;
+    }
+    if (option->option_id == "start_tension") {
+      interaction_settings.bridge_start_tension = value;
+      return true;
+    }
+    if (option->option_id == "end_tension") {
+      interaction_settings.bridge_end_tension = value;
+      return true;
+    }
+    break;
   case quader_editor_core::EditorOperationId::EdgeBevel:
     if (option->option_id == std::string_view("width")) {
       interaction_settings.edge_bevel_width = value;

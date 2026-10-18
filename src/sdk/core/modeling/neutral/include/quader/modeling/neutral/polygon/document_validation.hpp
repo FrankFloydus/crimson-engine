@@ -23,11 +23,12 @@ enum class PolygonDocumentDiagnosticSeverity {
   Error,
 };
 
-/// Separates geometric diagnostics from lossless storage of editable topology.
+/// Separates strict geometric checks from editable authored-topology validation.
 enum class PolygonDocumentValidationPolicy {
   Strict,
   // Coincident positions and untriangulatable faces remain authored geometry.
-  // Connectivity, face arity and attribute errors remain fatal.
+  // Invalid connectivity, including nonmanifold edges, face arity and
+  // attribute errors remain fatal. Lossless persistence uses its own raw path.
   AuthoredTopology,
 };
 

@@ -10,6 +10,7 @@
 
 #include <QAbstractSpinBox>
 #include <QApplication>
+#include <QMainWindow>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
@@ -110,6 +111,58 @@ void rounded_surface(QPainter &painter, const QRect &rect, const QColor &fill,
   const qreal usable_radius =
       std::min(radius, std::min(bounds.width(), bounds.height()) * 0.5);
   painter.drawRoundedRect(bounds, usable_radius, usable_radius);
+  painter.restore();
+}
+
+void draw_attached_tab(QPainter &painter, const QRectF &rect,
+                       const QColor &fill, const QColor &border,
+                       const QtUiScaleMetrics &metrics,
+                       Qt::LayoutDirection direction, bool double_slanted) {
+  if (rect.isEmpty()) {
+    return;
+  }
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing);
+  if (direction == Qt::RightToLeft) {
+    painter.translate(rect.left() + rect.right(), 0.0);
+    painter.scale(-1.0, 1.0);
+  }
+  const qreal edge = hairline(painter);
+  const QRectF bounds = rect.adjusted(edge * 0.5, edge * 0.5,
+                                       -edge * 0.5, 0.0);
+  const qreal shoulder = std::min(metrics.px(14.0), bounds.width() * 0.3);
+  const qreal radius = std::min({metrics.px(6.0), bounds.height() * 0.3,
+                                shoulder * 0.5});
+  const qreal slope = (shoulder - radius) / bounds.height();
+  QPainterPath outline;
+  outline.moveTo(bounds.bottomLeft());
+  if (double_slanted) {
+    outline.quadTo(QPointF(bounds.left() + radius, bounds.bottom()),
+                    QPointF(bounds.left() + radius + slope * radius,
+                            bounds.bottom() - radius));
+    outline.lineTo(bounds.left() + shoulder - slope * radius,
+                     bounds.top() + radius);
+    outline.quadTo(QPointF(bounds.left() + shoulder, bounds.top()),
+                    QPointF(bounds.left() + shoulder + radius, bounds.top()));
+  } else {
+    outline.lineTo(bounds.left(), bounds.top() + radius);
+    outline.quadTo(bounds.topLeft(),
+                    QPointF(bounds.left() + radius, bounds.top()));
+  }
+  outline.lineTo(bounds.right() - shoulder - radius, bounds.top());
+  outline.quadTo(QPointF(bounds.right() - shoulder, bounds.top()),
+                  QPointF(bounds.right() - shoulder + slope * radius,
+                          bounds.top() + radius));
+  outline.lineTo(bounds.right() - radius - slope * radius,
+                   bounds.bottom() - radius);
+  outline.quadTo(QPointF(bounds.right() - radius, bounds.bottom()),
+                  bounds.bottomRight());
+  QPainterPath surface(outline);
+  surface.closeSubpath();
+  painter.fillPath(surface, fill);
+  // Leave the lower edge open so the tab joins the panel rim.
+  painter.setPen(QPen(border, edge));
+  painter.drawPath(outline);
   painter.restore();
 }
 
@@ -269,6 +322,13 @@ bool qt_draw_application_primitive(
     draw_indicator(*painter, menu_glyph_option(*option, widget), metrics, true);
     return true;
   case QStyle::PE_IndicatorTabClose: {
+    const QWidget *tab_bar = qobject_cast<const QTabBar *>(widget);
+    if (tab_bar == nullptr && widget != nullptr) {
+      tab_bar = qobject_cast<const QTabBar *>(widget->parentWidget());
+    }
+    const bool scene_tab = tab_bar != nullptr &&
+                            tab_bar->property(kQtConnectedTabSurfaceProperty)
+                                .toBool();
     const bool pressed = enabled(*option) &&
                          option->state.testFlag(QStyle::State_Sunken);
     if (hovered(*option) || pressed || focused(*option)) {
@@ -278,7 +338,7 @@ bool qt_draw_application_primitive(
                             (hovered(*option) || pressed ||
                              option->state.testFlag(QStyle::State_Selected));
     const qreal extent = std::min<qreal>(
-        metrics.px(8.0),
+        metrics.px(scene_tab ? 5.0 : 8.0),
         std::min(option->rect.width(), option->rect.height()) * 0.5);
     const QPointF center = QRectF(option->rect).center();
     const QRectF glyph(center.x() - extent * 0.5,
@@ -286,7 +346,8 @@ bool qt_draw_application_primitive(
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing);
     QPen pen(color(*option, emphasized ? QPalette::Text : QPalette::WindowText),
-             std::max<qreal>(hairline(*painter), metrics.px(1.4)));
+             std::max<qreal>(hairline(*painter),
+                              metrics.px(scene_tab ? 1.1 : 1.4)));
     pen.setCapStyle(Qt::RoundCap);
     painter->setPen(pen);
     painter->drawLine(glyph.topLeft(), glyph.bottomRight());
@@ -342,36 +403,50 @@ bool qt_draw_application_control(
     if (dock == nullptr) {
       return false;
     }
-    painter->save();
-    painter->fillRect(dock->rect, color(*dock, QPalette::Button));
-    const QRectF bounds(dock->rect);
-    const qreal edge = hairline(*painter);
-    const QRectF divider = dock->verticalTitleBar
-                              ? QRectF(bounds.right() - edge, bounds.top(),
-                                       edge, bounds.height())
-                              : QRectF(bounds.left(), bounds.bottom() - edge,
-                                       bounds.width(), edge);
-    painter->fillRect(divider, color(*dock, QPalette::Midlight));
-
     // Keep Qt's title allocation, including button space and RTL placement.
     // Styling the title subcontrol with QSS bypasses its foreground/font rules.
     QRect text_rect = style.subElementRect(
         QStyle::SE_DockWidgetTitleBarText, dock, widget);
+    QRect bounds = dock->rect;
+    painter->save();
     if (dock->verticalTitleBar) {
-      painter->translate(text_rect.left(), text_rect.bottom() + 1);
+      painter->translate(bounds.left(), bounds.bottom() + 1);
       painter->rotate(-90);
-      text_rect = QRect(0, 0, text_rect.height(), text_rect.width());
+      text_rect = QRect(bounds.bottom() - text_rect.bottom(),
+                        text_rect.left() - bounds.left(),
+                        text_rect.height(), text_rect.width());
+      bounds = QRect(0, 0, bounds.height(), bounds.width());
     }
-    text_rect.adjust(metrics.px(2), 0, -metrics.px(2), 0);
     // QDockWidget seeds its painter with a platform title font that does not
     // follow our application scale controller. Use the scaled widget font.
     QFont title_font = widget != nullptr ? widget->font() : painter->font();
     title_font.setWeight(QFont::DemiBold);
+    const QFontMetrics title_metrics(title_font);
+    QRect logical_text = QStyle::visualRect(dock->direction, bounds, text_rect);
+    const int inset = metrics.px(2);
+    const int shoulder_space = metrics.px(16);
+    logical_text.adjust(inset, 0, -shoulder_space, 0);
+    const QString title = title_metrics.elidedText(
+        dock->title, Qt::ElideRight, std::max(0, logical_text.width()));
+    const int tab_width = std::clamp(
+        logical_text.left() - bounds.left() +
+            title_metrics.horizontalAdvance(title) + shoulder_space,
+        0, bounds.width());
+    const QRect tab = QStyle::visualRect(
+        dock->direction, bounds,
+        QRect(bounds.topLeft(), QSize(tab_width, bounds.height())));
+    painter->fillRect(bounds, color(*dock, QPalette::Window));
+    draw_attached_tab(*painter, QRectF(tab), color(*dock, QPalette::Button),
+                      color(*dock, QPalette::Midlight), metrics,
+                      dock->direction, false);
+    const qreal edge = hairline(*painter);
+    painter->fillRect(QRectF(bounds.left(), bounds.bottom() + 1 - edge,
+                             bounds.width(), edge),
+                       color(*dock, QPalette::Button));
+    text_rect = QStyle::visualRect(dock->direction, bounds, logical_text);
     painter->setFont(title_font);
     painter->setPen(color(*dock, QPalette::Text));
     painter->setClipRect(text_rect, Qt::IntersectClip);
-    const QString title = QFontMetrics(title_font).elidedText(
-        dock->title, Qt::ElideRight, std::max(0, text_rect.width()));
     painter->drawText(text_rect,
                      QStyle::visualAlignment(dock->direction,
                                              Qt::AlignLeft | Qt::AlignVCenter) |
@@ -480,6 +555,44 @@ bool qt_draw_application_control(
     const bool connected_surface =
         tab->shape == QTabBar::RoundedNorth && widget != nullptr &&
         widget->property(kQtConnectedTabSurfaceProperty).toBool();
+    const bool dock_tab = qobject_cast<const QTabBar *>(widget) != nullptr &&
+                          qobject_cast<const QMainWindow *>(
+                              widget->parentWidget()) != nullptr &&
+                          !widget->property(kQtConnectedTabSurfaceProperty)
+                               .toBool();
+    if (dock_tab) {
+      painter->save();
+      painter->fillRect(tab->rect, color(*tab, QPalette::Window));
+      QRectF bounds(tab->rect);
+      // Use the same open-bottom profile in each native dock-tab position.
+      switch (tab->shape) {
+      case QTabBar::RoundedSouth:
+        painter->translate(bounds.left(), bounds.top() + bounds.height());
+        painter->scale(1.0, -1.0);
+        bounds.moveTopLeft(QPointF{});
+        break;
+      case QTabBar::RoundedWest:
+        painter->translate(bounds.left(), bounds.top() + bounds.height());
+        painter->rotate(-90.0);
+        bounds = QRectF(0, 0, bounds.height(), bounds.width());
+        break;
+      case QTabBar::RoundedEast:
+        painter->translate(bounds.left() + bounds.width(), bounds.top());
+        painter->rotate(90.0);
+        bounds = QRectF(0, 0, bounds.height(), bounds.width());
+        break;
+      default:
+        break;
+      }
+      draw_attached_tab(*painter, bounds,
+                      selected || hovered(*tab)
+                          ? color(*tab, QPalette::Button)
+                          : color(*tab, QPalette::AlternateBase),
+                      color(*tab, selected ? QPalette::Midlight : QPalette::Mid),
+                      metrics, tab->direction, false);
+      painter->restore();
+      return true;
+    }
     const QColor fill =
         selected && connected_surface
             ? color(*option, QPalette::AlternateBase)
@@ -491,6 +604,14 @@ bool qt_draw_application_control(
       // Native tab geometry may reserve a base overlap. Fill through that
       // space so the selected tab joins the shared content surface below.
       surface.setBottom(widget->rect().bottom());
+    }
+    if (connected_surface) {
+      painter->fillRect(surface, color(*tab, QPalette::Window));
+      draw_attached_tab(*painter, QRectF(surface), fill,
+                        color(*tab, selected || hovered(*tab)
+                                        ? QPalette::Midlight : QPalette::Mid),
+                        metrics, tab->direction, true);
+      return true;
     }
     painter->fillRect(surface, fill);
     if (selected && !connected_surface) {

@@ -138,19 +138,19 @@ std::vector<CommandDescriptor> OperationsApi::catalog() const {
       {"harden_edge_normals", "Harden Edge Normals", "Edge"},
       {"soften_edge_normals", "Soften Edge Normals", "Edge"},
       {"bevel_edges", "Bevel Edges", "Edge", true, "", true},
-      {"bridge_edges", "Bridge Edges", "Edge"},
-      {"interpolated_bridge_edges", "Interpolated Bridge Edges", "Edge", true,
+      {"bridge_edges", "Bridge", "Edge"},
+      {"preview_bridge_edges", "Bridge", "Edge", true,
        "", true},
-      {"bridge_edge_pairs", "Bridge Edge Pairs", "Edge"},
-      {"bridge_edge_boundaries", "Bridge Edge Boundaries", "Edge"},
+      {"bridge_edge_pairs", "Bridge", "Edge"},
+      {"bridge_edge_boundaries", "Bridge", "Edge"},
       {"dissolve_edges", "Dissolve Edges", "Edge"},
       {"merge_edges", "Merge Edges", "Edge"},
       {"collapse_edges", "Collapse Edges", "Edge"},
       {"fill_hole", "Fill Hole", "Edge"},
       {"radial_align_edges", "Radial Align Edges", "Edge"},
       {"insert_edge_loop", "Insert Edge Loop", "Edge"},
-      {"bridge_faces", "Bridge Faces", "Face"},
-      {"interpolated_bridge_faces", "Interpolated Bridge Faces", "Face", true,
+      {"bridge_faces", "Bridge", "Face"},
+      {"preview_bridge_faces", "Bridge", "Face", true,
        "", true},
       {"flip_face_normals", "Flip Face Normals", "Face"},
       {"recalculate_face_normals", "Recalculate Face Normals", "Face"},
@@ -319,9 +319,9 @@ OperationReceipt OperationsApi::execute(std::string_view id,
   if (id == "bevel_edges") {
     return finish(bevel_edges(settings.edge_bevel).commit("Bevel Edges"));
   }
-  if (id == "interpolated_bridge_edges") {
-    return finish(interpolated_bridge_edges(settings.bridge)
-                      .commit("Interpolated Bridge Edges"));
+  if (id == "preview_bridge_edges") {
+    return finish(begin_bridge_edges_preview(settings.bridge)
+                      .commit("Bridge"));
   }
   if (id == "bridge_edges" || id == "bridge_edge_pairs" ||
       id == "bridge_edge_boundaries") {
@@ -348,9 +348,9 @@ OperationReceipt OperationsApi::execute(std::string_view id,
   if (id == "bridge_faces") {
     return finish(bridge_faces(settings.bridge));
   }
-  if (id == "interpolated_bridge_faces") {
-    return finish(interpolated_bridge_faces(settings.bridge)
-                      .commit("Interpolated Bridge Faces"));
+  if (id == "preview_bridge_faces") {
+    return finish(begin_bridge_faces_preview(settings.bridge)
+                      .commit("Bridge"));
   }
   if (id == "flip_face_normals") {
     return finish(invert_faces());
@@ -658,9 +658,9 @@ OperationReceipt OperationsApi::bridge_edges(BridgeOptions options) {
 }
 
 PreviewHandle
-OperationsApi::interpolated_bridge_edges(BridgeOptions options) {
+OperationsApi::begin_bridge_edges_preview(BridgeOptions options) {
   MeshHandle mesh = MeshCollection(context_).first_selected();
-  return mesh.valid() ? mesh.edges().selected().interpolated_bridge(options)
+  return mesh.valid() ? mesh.edges().selected().begin_bridge_preview(options)
                       : handle_value_failure(
                             *context_, unsupported_error("No selected mesh."),
                             PreviewHandle{});
@@ -703,9 +703,9 @@ OperationReceipt OperationsApi::bridge_faces(BridgeOptions options) {
 }
 
 PreviewHandle
-OperationsApi::interpolated_bridge_faces(BridgeOptions options) {
+OperationsApi::begin_bridge_faces_preview(BridgeOptions options) {
   MeshHandle mesh = MeshCollection(context_).first_selected();
-  return mesh.valid() ? mesh.faces().selected().interpolated_bridge(options)
+  return mesh.valid() ? mesh.faces().selected().begin_bridge_preview(options)
                       : handle_value_failure(
                             *context_, unsupported_error("No selected mesh."),
                             PreviewHandle{});

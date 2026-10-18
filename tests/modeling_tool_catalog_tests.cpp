@@ -213,13 +213,13 @@ TEST(ModelingToolCatalogTests, PreviewCommandsUseHostActionIds) {
   EXPECT_EQ(edge_bevel->preview_kind(), ModelingActionPreviewKind::EdgeBevel);
 
   const PreviewCommandTool *edge_bridge =
-      find_modeling_preview_command_tool("interpolated_bridge_edges");
+      find_modeling_preview_command_tool("preview_bridge_edges");
   ASSERT_NE(edge_bridge, nullptr);
   EXPECT_EQ(edge_bridge->operation_id(), std::string_view("bridge"));
   EXPECT_EQ(edge_bridge->preview_kind(), ModelingActionPreviewKind::Bridge);
 
   const PreviewCommandTool *face_bridge =
-      find_modeling_preview_command_tool("interpolated_bridge_faces");
+      find_modeling_preview_command_tool("preview_bridge_faces");
   ASSERT_NE(face_bridge, nullptr);
   EXPECT_EQ(face_bridge->operation_id(), std::string_view("bridge"));
   EXPECT_EQ(face_bridge->preview_kind(), ModelingActionPreviewKind::Bridge);

@@ -1707,7 +1707,7 @@ TEST(UiLayoutGuardrailTests,
   }
   for (std::string_view icon :
        {"selection_vertex.png", "selection_edge.png", "selection_face.png",
-        "selection_group.png"}) {
+        "selection_mesh.png", "selection_group.png"}) {
     expect_contains(toolbar, icon);
   }
   expect_contains(ui_system,

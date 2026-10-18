@@ -192,12 +192,14 @@ struct AuthoredTopologyFace {
 struct AuthoredTopology {
   std::vector<AuthoredTopologyVertex> vertices;
   std::vector<AuthoredTopologyFace> faces;
-  /// Canonical live edges explicitly authored Hard. Absence from both edge
-  /// mode sets means Default.
+  /// Validated authoring uses canonical live edges explicitly authored Hard;
+  /// absence from both mode sets means Default. Persistence also retains raw
+  /// invalid endpoints, ordering and duplicate/conflicting records.
   std::vector<EdgeKey> hard_normal_edges;
   std::uint32_t next_vertex_id = 1U;
   std::uint32_t next_face_id = 1U;
-  /// Canonical live edges explicitly authored Soft; disjoint from Hard.
+  /// Validated authoring uses canonical live edges explicitly authored Soft,
+  /// disjoint from Hard. Persistence retains the raw records without cleanup.
   std::vector<EdgeKey> soft_normal_edges;
 };
 

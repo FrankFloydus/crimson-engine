@@ -63,8 +63,9 @@ struct QdrDocumentDto {
  *
  * Selection and runtime revision state are intentionally excluded so the
  * resulting payload can be used as a stable, deduplicated geometry blob.
- * Finite collapsed faces retain their authored vertices, loops and attributes;
- * geometric validation is separate from the structural checks required by IO.
+ * Authored records, including malformed loops and attributes, are retained
+ * without cleanup. IO checks binary bounds and representability; modeling
+ * validation and safe derived rendering remain separate owner concerns.
  */
 [[nodiscard]] Result<std::vector<std::byte>>
 serialize_qdr_authored_topology(const PolygonDocument &document);

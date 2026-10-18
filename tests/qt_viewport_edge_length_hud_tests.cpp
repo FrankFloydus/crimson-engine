@@ -162,6 +162,79 @@ quader::ViewportOverlayFrame hover_edge_frame_with_inside_reference(
   return frame;
 }
 
+QImage render_dimension_label(QLabel &label,
+                              const QColor &background = Qt::transparent) {
+  const qreal ratio = label.devicePixelRatioF();
+  QImage image(
+      QSize{std::max(1, static_cast<int>(std::ceil(label.width() * ratio))),
+            std::max(1, static_cast<int>(std::ceil(label.height() * ratio)))},
+      QImage::Format_ARGB32_Premultiplied);
+  image.setDevicePixelRatio(ratio);
+  image.fill(background);
+  label.render(&image, QPoint{}, QRegion{}, QWidget::DrawChildren);
+  return image;
+}
+
+void expect_antialiased_dimension_raster(const QImage &image,
+                                        const QColor &glyph_color,
+                                        bool native_label) {
+  int transparent_pixels = 0;
+  int opaque_black_pixels = 0;
+  int antialiased_glyph_pixels = 0;
+  int fractional_alpha_pixels = 0;
+  int glyph_pixels = 0;
+  const int color_maximum =
+      std::max({glyph_color.red(), glyph_color.green(), glyph_color.blue()});
+  const int bright_threshold = color_maximum * glyph_color.alpha() / 255;
+  int bright_pixels = 0;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor pixel = image.pixelColor(x, y);
+      transparent_pixels += pixel.alpha() == 0 ? 1 : 0;
+      fractional_alpha_pixels +=
+          pixel.alpha() > 0 && pixel.alpha() < 255 ? 1 : 0;
+      const int maximum =
+          std::max({pixel.red(), pixel.green(), pixel.blue()});
+      opaque_black_pixels +=
+          pixel.alpha() == 255 && maximum == 0 ? 1 : 0;
+      if (pixel.alpha() == 0 || maximum == 0) {
+        continue;
+      }
+      ++glyph_pixels;
+      antialiased_glyph_pixels += maximum < bright_threshold - 3 ? 1 : 0;
+      bright_pixels += maximum >= bright_threshold - 3 ? 1 : 0;
+      // Compare premultiplied channels so even a barely covered edge cannot
+      // acquire a colored ClearType fringe through alpha unpremultiplication.
+      const QRgb premultiplied = image.pixel(x, y);
+      const int channel_maximum = std::max(
+          {qRed(premultiplied), qGreen(premultiplied), qBlue(premultiplied)});
+      EXPECT_LE(std::abs(qRed(premultiplied) * color_maximum -
+                         channel_maximum * glyph_color.red()),
+                2 * color_maximum);
+      EXPECT_LE(std::abs(qGreen(premultiplied) * color_maximum -
+                         channel_maximum * glyph_color.green()),
+                2 * color_maximum);
+      EXPECT_LE(std::abs(qBlue(premultiplied) * color_maximum -
+                         channel_maximum * glyph_color.blue()),
+                2 * color_maximum);
+    }
+  }
+  EXPECT_GT(transparent_pixels, 0);
+  EXPECT_GT(opaque_black_pixels, 0);
+  EXPECT_GT(glyph_pixels, 5);
+  EXPECT_GT(antialiased_glyph_pixels, 0)
+      << "Small glyph interiors must retain grayscale coverage.";
+  EXPECT_GT(bright_pixels, 0)
+      << "Antialiasing must retain a bright glyph core.";
+  if (native_label) {
+    EXPECT_EQ(fractional_alpha_pixels, 0)
+        << "A native child flattens glyph coverage over opaque black support.";
+  } else {
+    EXPECT_GT(fractional_alpha_pixels, 0)
+        << "Composed labels must retain transparent outline fringes.";
+  }
+}
+
 #if defined(_WIN32)
 /// Observes the old native rectangle after HUD filters retire its glyph pixels,
 /// but before Windows applies the ancestor's proposed geometry.
@@ -377,6 +450,418 @@ protected:
 };
 
 TEST_F(QtViewportEdgeLengthHudTests,
+       KnifeAngleRetainsWorldValueAndGatesIndependentlyOfHoverDimensions) {
+  quader::ViewportOverlayFrame frame;
+  frame.knife_angle_context = quader::ViewportKnifeAngleContext{
+      .start = {-1, 1, 0}, .reference_end = {-1, -1, 0},
+      .cut_point = {1, -1, 0}, .angle_degrees = 45.0};
+  auto *angle = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+  ASSERT_NE(angle, nullptr);
+  const auto present_angle = [&](bool enabled) {
+    hud_->present(frame, quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                  camera_, parent_->rect(), false, 12.0,
+                  nullptr, false, nullptr, 0u, false, enabled);
+  };
+  present_angle(true);
+  ASSERT_FALSE(angle->isHidden());
+  EXPECT_EQ(angle->text(), QStringLiteral("45.0") + QChar(0x00b0));
+  EXPECT_EQ(angle->foregroundRole(), QPalette::Text);
+  EXPECT_TRUE(label_->isHidden());
+  EXPECT_TRUE(parent_->rect().contains(angle->geometry()));
+  EdgeHudWidgetEventCounter counter;
+  angle->installEventFilter(&counter);
+  QCoreApplication::processEvents();
+  const auto events = counter.counts();
+  const auto mask_revision = angle->property("quaderDimensionMaskRevision");
+  for (int idle = 0; idle < 8; ++idle) present_angle(true);
+  EXPECT_EQ(counter.counts(), events);
+  EXPECT_EQ(angle->property("quaderDimensionMaskRevision"), mask_revision);
+  const auto text = angle->text();
+  camera_.unlock_orthographic_view();
+  present_angle(true);
+  ASSERT_FALSE(angle->isHidden());
+  EXPECT_EQ(angle->text(), text);
+  present_angle(false);
+  EXPECT_TRUE(angle->isHidden());
+  present_angle(true);
+  EXPECT_FALSE(angle->isHidden());
+  frame.knife_angle_context.reset();
+  present_angle(true);
+  EXPECT_TRUE(angle->isHidden());
+  frame.knife_angle_context = quader::ViewportKnifeAngleContext{
+      .start = {}, .reference_end = {0, 1, 0}, .cut_point = {1, 1, 0},
+      .angle_degrees = std::numeric_limits<double>::quiet_NaN()};
+  present_angle(true);
+  EXPECT_TRUE(angle->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       KnifeLengthTracksWorldSegmentWithoutAReferenceAndRetainsWidgets) {
+  quader::ViewportOverlayFrame frame;
+  frame.knife_segment_context = quader::ViewportKnifeSegmentContext{
+      .start = {-1, 1, 0}, .end = {1, -1, 0}};
+  auto *length = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+  ASSERT_NE(length, nullptr);
+  const auto present_length = [&](bool enabled = true) {
+    hud_->present(frame, quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                  camera_, parent_->rect(), false, 12.0,
+                  nullptr, false, nullptr, 0U, false, enabled);
+  };
+  present_length();
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_EQ(length->text(), QStringLiteral("90.51"));
+  EXPECT_EQ(length->foregroundRole(), QPalette::Text);
+  EXPECT_TRUE(parent_->rect().contains(length->geometry()));
+  const auto endpoint = camera_.project_world_point(frame.knife_segment_context->end);
+  const QPoint logical_endpoint{
+      qRound(endpoint.position.x * parent_->width() / camera_.viewport_size().x),
+      qRound(endpoint.position.y * parent_->height() / camera_.viewport_size().y)};
+  EXPECT_GT(length->geometry().left(), logical_endpoint.x());
+  EXPECT_LE(std::abs(length->geometry().top() - logical_endpoint.y()), 4);
+  EdgeHudWidgetEventCounter counter;
+  length->installEventFilter(&counter);
+  QCoreApplication::processEvents();
+  const auto events = counter.counts();
+  const auto mask_revision = length->property("quaderDimensionMaskRevision");
+  for (int idle = 0; idle < 16; ++idle) present_length();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(counter.counts(), events);
+  EXPECT_EQ(length->property("quaderDimensionMaskRevision"), mask_revision);
+  camera_.unlock_orthographic_view();
+  present_length();
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_EQ(length->text(), QStringLiteral("90.51"));
+  frame.knife_segment_context->end = {1, 1, 0};
+  present_length();
+  EXPECT_EQ(length->text(), QStringLiteral("64"));
+  present_length(false);
+  EXPECT_TRUE(length->isHidden());
+  present_length();
+  EXPECT_FALSE(length->isHidden());
+  parent_->hide();
+  EXPECT_TRUE(length->isHidden());
+  parent_->show();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(length->isHidden());
+  present_length();
+  EXPECT_FALSE(length->isHidden());
+  parent_->resize(2, 2);
+  camera_.set_viewport_size(4, 4);
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+  parent_->resize(400, 300);
+  camera_.set_viewport_size(800, 600);
+  present_length();
+  EXPECT_FALSE(length->isHidden());
+  frame.knife_segment_context->end = frame.knife_segment_context->start;
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+  frame.knife_segment_context->end.x = std::numeric_limits<float>::quiet_NaN();
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+  frame.knife_segment_context.reset();
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       KnifeAngleUsesSharedScaleAndStaysInsideNarrowPane) {
+  quader::ViewportOverlayFrame frame;
+  frame.knife_angle_context = quader::ViewportKnifeAngleContext{
+      .start = {-1, 1, 0}, .reference_end = {-1, -1, 0},
+      .cut_point = {1, -1, 0}, .angle_degrees = 45.0};
+  frame.knife_segment_context = quader::ViewportKnifeSegmentContext{
+      .start = {-1, 1, 0}, .end = {1, -1, 0}};
+  auto *angle = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+  auto *length = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+  ASSERT_NE(angle, nullptr);
+  ASSERT_NE(length, nullptr);
+  const auto present_angle = [&] {
+    hud_->present(frame, 1u, camera_, parent_->rect(), false, 12.0,
+                  nullptr, false, nullptr, 0u, false, true);
+  };
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  const auto capture = [&](const QString &name) {
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir{}.mkpath(review_directory));
+      ASSERT_TRUE(parent_->grab().save(QDir(review_directory).filePath(name)));
+    }
+  };
+  present_angle();
+  ASSERT_FALSE(angle->isHidden());
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_FALSE(angle->geometry().intersects(length->geometry()));
+  const QSize baseline = angle->size();
+  const QSize length_baseline = length->size();
+  capture(QStringLiteral("knife-angle-100.png"));
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1u});
+  present_angle();
+  ASSERT_FALSE(angle->isHidden());
+  EXPECT_GT(angle->width(), baseline.width());
+  EXPECT_DOUBLE_EQ(angle->font().pointSizeF(), 24.0);
+  EXPECT_GT(length->width(), length_baseline.width());
+  EXPECT_DOUBLE_EQ(length->font().pointSizeF(), 24.0);
+  capture(QStringLiteral("knife-angle-200.png"));
+  parent_->resize(180, 220);
+  camera_.set_viewport_size(360, 440);
+  present_angle();
+  ASSERT_FALSE(angle->isHidden());
+  EXPECT_TRUE(parent_->rect().contains(angle->geometry()));
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_TRUE(parent_->rect().contains(length->geometry()));
+  EXPECT_FALSE(angle->geometry().intersects(length->geometry()));
+  capture(QStringLiteral("knife-angle-narrow-200.png"));
+  hud_->apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2u});
+  present_angle();
+  ASSERT_FALSE(angle->isHidden());
+  EXPECT_EQ(angle->size(), baseline);
+  EXPECT_EQ(length->size(), length_baseline);
+  EXPECT_TRUE(parent_->rect().contains(angle->geometry()));
+  capture(QStringLiteral("knife-angle-narrow-100.png"));
+  parent_->setAutoFillBackground(true);
+  for (const bool light : {false, true}) {
+    QPalette palette = parent_->palette();
+    for (const auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+      palette.setColor(group, QPalette::Window, light ? Qt::white : Qt::black);
+      palette.setColor(group, QPalette::Text, light ? Qt::black : Qt::yellow);
+    }
+    parent_->setPalette(palette);
+    present_angle();
+    ASSERT_FALSE(angle->isHidden());
+    ASSERT_FALSE(length->isHidden());
+    EXPECT_EQ(angle->foregroundRole(), QPalette::Text);
+    EXPECT_EQ(length->foregroundRole(), QPalette::Text);
+    for (const auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+      EXPECT_EQ(angle->palette().color(group, QPalette::Text),
+                palette.color(group, QPalette::Text));
+      EXPECT_EQ(length->palette().color(group, QPalette::Text),
+                palette.color(group, QPalette::Text));
+    }
+    capture(light ? QStringLiteral("knife-angle-narrow-light.png")
+                  : QStringLiteral("knife-angle-narrow-high-contrast.png"));
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ProductionKnifePointerGestureShowsGuideAndAngleWithGridSnap) {
+  constexpr std::array kTransforms{
+      quader::QuaderTransform{},
+      quader::QuaderTransform{.location = {4096, -2048, 8192},
+                              .rotation_euler = {0.23F, 0.47F, -0.16F},
+                              .scale = {64, 40, 72}}};
+  for (std::size_t variant = 0U; variant < kTransforms.size(); ++variant) {
+    SCOPED_TRACE(variant);
+    const auto &transform = kTransforms[variant];
+    for (const bool vertex_seed : {false, true}) {
+      SCOPED_TRACE(vertex_seed);
+      quader::SceneSession session;
+      quader::QuaderEditorApi editor(
+          quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      const auto box = editor.modeling().create_box(
+          {.min = {-2, -1, -2}, .max = {2, 1, 2}}, "Knife pointer HUD");
+      ASSERT_TRUE(box.ok()) << box.error_message();
+      ASSERT_TRUE(editor.scene().set_transform(box.value().entity, transform).ok());
+      const auto world_from_object = session.scene().world_transform_matrix(box.value().entity);
+      const auto world_point = [&](quader::QVec3 local) {
+        return quader::transform_point(world_from_object, local);
+      };
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
+      ASSERT_TRUE(editor.main_viewport().set_control(
+          quader::QuaderViewportControl::SnappingEnabled, true).ok());
+      ASSERT_TRUE(editor.main_viewport().set_control(
+          quader::QuaderViewportControl::GridSnap, true).ok());
+      session.history().clear();
+      auto settings = quader::ViewportSettings::defaults();
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowHoverDimensions, false);
+      parent_->resize(800, 600);
+      quader::QtViewportPanel panel(parent_.get());
+      panel.setGeometry(parent_->rect());
+      panel.attach_workspace(session.viewport_workspace());
+      panel.set_viewport_settings(settings);
+      panel.set_startup_presentation_blocked(false);
+      panel.show();
+      QCoreApplication::processEvents();
+      auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+      ASSERT_NE(surface, nullptr);
+      quader::test_support::resize_viewport_surface(panel, *surface, {800, 600});
+      auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+      ASSERT_TRUE(camera.restore_perspective_pose(
+          {.eye = world_point({6, 7, 9}), .target = world_point({0, 1, 0}),
+           .up = quader::normalize(world_point({0, 1, 0}) - world_point({}))}));
+      QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+      QFocusEvent focus(QEvent::FocusIn);
+      const auto deliver = [&](QEvent &event) {
+        quader::test_support::send_visible_viewport_event(surface, &event);
+      };
+      deliver(enter);
+      deliver(focus);
+      quader::SceneRenderBridge bridge;
+      quader::RenderOverlaySnapshotCache cache;
+      const auto frame = [&] {
+        panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                            session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+        panel.prepare_viewports(editor, bridge, cache, session.scene(), session.assets(),
+                                session.modeling(), session.native_tools());
+      };
+      frame();
+      const auto pointer = [&](QEvent::Type type, quader::QVec3 local_point,
+                                Qt::MouseButton button, Qt::MouseButtons buttons) {
+        const auto projected = camera.project_world_point(world_point(local_point));
+        EXPECT_TRUE(projected.visible);
+        const QPointF local{static_cast<qreal>(qRound(projected.position.x / surface->input_device_pixel_ratio())),
+                            static_cast<qreal>(qRound(projected.position.y / surface->input_device_pixel_ratio()))};
+        QMouseEvent event(type, local, QPointF(surface->visible_local_to_global(local.toPoint())),
+                          button, buttons, Qt::NoModifier);
+        deliver(event);
+        frame();
+      };
+      // Seed the far edge of the top face, then move right and inward as in the report.
+      const quader::QVec3 seed = vertex_seed ? quader::QVec3{-2, 1, -2}
+                                            : quader::QVec3{0, 1, -2};
+      pointer(QEvent::MouseMove, seed, Qt::NoButton, Qt::NoButton);
+      pointer(QEvent::MouseButtonPress, seed, Qt::LeftButton, Qt::LeftButton);
+      pointer(QEvent::MouseButtonRelease, seed, Qt::LeftButton, Qt::NoButton);
+      ASSERT_TRUE(session.modeling().tool_status().knife_has_active_stroke);
+      pointer(QEvent::MouseMove, vertex_seed ? quader::QVec3{-0.75F, 1, 0}
+                                            : quader::QVec3{1, 1, 0},
+              Qt::NoButton, Qt::NoButton);
+      const auto overlay = session.modeling().volatile_overlay_frame();
+      ASSERT_TRUE(overlay.knife_angle_context.has_value());
+      ASSERT_TRUE(overlay.knife_segment_context.has_value());
+      EXPECT_EQ(std::count_if(overlay.lines.begin(), overlay.lines.end(), [](const auto &line) {
+        return line.style_role == quader::ViewportOverlayStyleRole::KnifeReferenceLine;
+      }), 1);
+      auto *angle = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+      auto *length = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+      ASSERT_NE(angle, nullptr);
+      ASSERT_NE(length, nullptr);
+      EXPECT_FALSE(angle->isHidden());
+      EXPECT_FALSE(length->isHidden());
+      for (int idle = 0; idle < 8; ++idle) frame();
+      EXPECT_FALSE(angle->isHidden());
+      EXPECT_FALSE(length->isHidden());
+      const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+      if (!review_directory.isEmpty()) {
+        ASSERT_TRUE(QDir{}.mkpath(review_directory));
+        ASSERT_TRUE(parent_->grab().save(
+            QDir(review_directory).filePath(QStringLiteral("knife-pointer-top-%1-vertex-%2.png")
+                                             .arg(static_cast<int>(variant))
+                                               .arg(vertex_seed ? 1 : 0))));
+      }
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, false);
+      panel.set_viewport_settings(settings);
+      frame();
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      const auto dimensions_hidden_overlay = session.modeling().volatile_overlay_frame();
+      EXPECT_EQ(std::count_if(dimensions_hidden_overlay.lines.begin(),
+                             dimensions_hidden_overlay.lines.end(), [](const auto &line) {
+        return line.style_role == quader::ViewportOverlayStyleRole::KnifeReferenceLine;
+      }), 1);
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+      panel.set_viewport_settings(settings);
+      frame();
+      EXPECT_FALSE(angle->isHidden());
+      EXPECT_FALSE(length->isHidden());
+      ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+      frame();
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      EXPECT_EQ(session.history().undo_count(), 0U);
+    }
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ProductionKnifeAngleFollowsShowDimensionsAndPreservesGuide) {
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Knife HUD").ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
+  session.history().clear();
+  auto settings = quader::ViewportSettings::defaults();
+  settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+  settings.set_bool_value(quader::ViewportBoolSettingId::ShowHoverDimensions, false);
+  parent_->resize(800, 600);
+  quader::QtViewportPanel panel(parent_.get());
+  panel.setGeometry(parent_->rect());
+  panel.attach_workspace(session.viewport_workspace());
+  panel.set_viewport_settings(settings);
+  panel.set_startup_presentation_blocked(false);
+  panel.show();
+  QCoreApplication::processEvents();
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  quader::test_support::resize_viewport_surface(panel, *surface, {800, 600});
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  camera.focus_origin(8);
+  camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+  quader::test_support::send_visible_viewport_event(surface, &enter);
+  quader::SceneRenderBridge bridge;
+  quader::RenderOverlaySnapshotCache cache;
+  const auto prepare = [&] {
+    panel.prepare_viewports(editor, bridge, cache, session.scene(), session.assets(),
+                            session.modeling(), session.native_tools());
+  };
+  prepare();
+  const quader::ModelingToolRayEvent seed{
+      .screen_position = {400, 150},
+      .ray = {.origin = {0, 1, 6}, .direction = {0, 0, -1}},
+      .camera = {.orthographic = true, .origin = {0, 0, 6},
+                 .x_axis = {1, 0, 0}, .y_axis = {0, 1, 0},
+                 .z_axis = {0, 0, 1}, .viewport_size = {800, 600},
+                 .orthographic_size = 4.0},
+      .grid_size = 0.5, .vertex_radius = 0.001, .edge_radius = 0.01,
+      .snap_enabled = false};
+  ASSERT_TRUE(session.modeling().accept_knife_point(seed).ok);
+  auto hover = seed;
+  hover.ray.origin = {0.5f, 0, 6};
+  hover.screen_position = {475, 300};
+  ASSERT_TRUE(session.modeling().update_knife_hover(hover).ok);
+  prepare();
+  auto *angle = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+  auto *length = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+  ASSERT_NE(angle, nullptr);
+  ASSERT_NE(length, nullptr);
+  ASSERT_FALSE(angle->isHidden());
+  ASSERT_FALSE(length->isHidden());
+  const auto text = angle->text();
+  const auto source = session.modeling().volatile_overlay_snapshot().source.publication_revision;
+  settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, false);
+  panel.set_viewport_settings(settings);
+  prepare();
+  EXPECT_TRUE(angle->isHidden());
+  EXPECT_TRUE(length->isHidden());
+  const auto frame = session.modeling().volatile_overlay_frame();
+  EXPECT_TRUE(frame.knife_angle_context.has_value());
+  EXPECT_EQ(std::count_if(frame.lines.begin(), frame.lines.end(), [](const auto &line) {
+    return line.style_role == quader::ViewportOverlayStyleRole::KnifeReferenceLine;
+  }), 1);
+  EXPECT_EQ(session.modeling().volatile_overlay_snapshot().source.publication_revision, source);
+  settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+  panel.set_viewport_settings(settings);
+  prepare();
+  EXPECT_FALSE(angle->isHidden());
+  EXPECT_FALSE(length->isHidden());
+  EXPECT_EQ(angle->text(), text);
+  ASSERT_TRUE(editor.main_viewport().set_control(
+      quader::QuaderViewportControl::ShowOverlays, false).ok());
+  prepare();
+  EXPECT_TRUE(angle->isHidden());
+  EXPECT_TRUE(length->isHidden());
+  EXPECT_EQ(session.history().undo_count(), 0u);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
        TransformHandleHoverHidesUnderlyingEdgeDimensionUntilPointerLeaves) {
   quader::SceneSession session;
   quader::QuaderEditorApi editor(
@@ -485,6 +970,11 @@ TEST_F(QtViewportEdgeLengthHudTests,
     if (mode != quader::QuaderSelectionMode::Object) {
       ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      if (mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+      } else {
+        ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+      }
       ASSERT_TRUE(editor.selection().select_all().ok());
     }
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
@@ -630,7 +1120,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
-       UsesFullWorldSpaceLengthInMapUnitsWithOutlinedShapedLabels) {
+       UsesFullWorldSpaceLengthInMapUnitsWithAntialiasedNativeLabels) {
   // The 3D length is 13; its screen-plane length is only 5. World endpoints
   // already carry object, instance, and hierarchy transforms from projection.
   present(hover_edge_frame({-1.5f, -2.0f, -6.0f}, {1.5f, 2.0f, 6.0f}));
@@ -660,92 +1150,210 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EXPECT_EQ(QFontInfo(label_->font()).family(),
             QFontInfo(application_font).family());
   EXPECT_DOUBLE_EQ(label_->font().pointSizeF(), 12.0);
-  EXPECT_EQ(label_->font().styleStrategy(), application_font.styleStrategy());
+  EXPECT_NE(label_->font().styleStrategy() & QFont::PreferAntialias, 0);
+  EXPECT_NE(label_->font().styleStrategy() & QFont::NoSubpixelAntialias, 0);
   EXPECT_EQ(label_->font().hintingPreference(),
             application_font.hintingPreference());
   EXPECT_TRUE(label_->testAttribute(Qt::WA_NativeWindow));
   EXPECT_TRUE(label_->testAttribute(Qt::WA_TransparentForMouseEvents));
   EXPECT_EQ(label_->focusPolicy(), Qt::NoFocus);
 
-  QImage painted(label_->size(), QImage::Format_ARGB32_Premultiplied);
-  painted.fill(Qt::transparent);
-  label_->render(&painted);
-  int opaque_black_pixels = 0;
-  int opaque_white_pixels = 0;
-  int blended_or_colored_pixels = 0;
-  QColor first_blended_or_colored_pixel;
-  bool found_transparent = false;
-  for (int y = 0; y < painted.height(); ++y) {
-    for (int x = 0; x < painted.width(); ++x) {
-      const QColor pixel = painted.pixelColor(x, y);
-      found_transparent = found_transparent || pixel.alpha() == 0;
-      if (pixel.alpha() == 255 && pixel.red() == 0 && pixel.green() == 0 &&
-          pixel.blue() == 0) {
-        ++opaque_black_pixels;
-      }
-      if (pixel.alpha() == 255 && pixel.red() >= 250 &&
-          pixel.green() >= 250 && pixel.blue() >= 250) {
-        ++opaque_white_pixels;
-      }
-      if (pixel.alpha() != 0) {
-        const bool exact_black =
-            pixel.alpha() == 255 && pixel.red() == 0 && pixel.green() == 0 &&
-            pixel.blue() == 0;
-        const bool exact_white = pixel.alpha() == 255 && pixel.red() == 255 &&
-                                 pixel.green() == 255 && pixel.blue() == 255;
-        if (!exact_black && !exact_white) {
-          if (blended_or_colored_pixels == 0) {
-            first_blended_or_colored_pixel = pixel;
+  expect_antialiased_dimension_raster(render_dimension_label(*label_),
+                                      QColor(Qt::white), true);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SmallDimensionsCompositeAntialiasedCoverageAcrossColorsAndUiScales) {
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));
+  // Keep every span parallel to the camera plane: even the long measurement
+  // crosses the view at a constant visible depth, with its midpoint at origin.
+  const auto pose = camera_.pose();
+  const auto dimension_tangent =
+      quader::normalize(quader::cross(pose.target - pose.eye, pose.up));
+  constexpr std::array kPointSizes{6.0, 8.0, 10.0, 12.0};
+  constexpr std::array kValues{12345.67, 890.12, 64.25};
+  const std::array backgrounds{QColor(128, 128, 128), QColor(242, 242, 242),
+                               QColor(23, 24, 25)};
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  for (const bool native_labels : {false, true}) {
+    QWidget pane;
+    pane.resize(800, 600);
+    pane.setAttribute(Qt::WA_DontShowOnScreen);
+    pane.show();
+    quader::QtViewportEdgeLengthHud hud(
+        pane, quader::ViewportPaneId::Perspective, native_labels);
+    const std::array names{
+        QStringLiteral("viewportEdgeLength_perspective"),
+        QStringLiteral("viewportSelectionDimensionX_perspective"),
+        QStringLiteral("viewportSelectionDimensionY_perspective"),
+        QStringLiteral("viewportSelectionDimensionZ_perspective")};
+    std::array<QLabel *, 4> labels{};
+    for (std::size_t index = 0U; index < labels.size(); ++index) {
+      labels[index] = pane.findChild<QLabel *>(names[index]);
+      ASSERT_NE(labels[index], nullptr);
+    }
+    camera_.set_viewport_size(1600, 1200);
+    constexpr std::array kScales{1.0F, 2.0F, 1.0F};
+    for (std::size_t scale_index = 0U; scale_index < kScales.size();
+         ++scale_index) {
+      const float scale = kScales[scale_index];
+      hud.apply_ui_scale(quader::QtUiScaleMetrics{scale, scale_index + 1U});
+      QImage review(QSize{1620, 1080}, QImage::Format_ARGB32_Premultiplied);
+      review.fill(QColor(23, 24, 25));
+      QPainter review_painter(&review);
+      int row = 0;
+      for (const double point_size : kPointSizes) {
+        for (const double value : kValues) {
+          SCOPED_TRACE(::testing::Message()
+                       << "native=" << native_labels << " scale=" << scale
+                       << " points=" << point_size << " value=" << value
+                       << " DPR=" << pane.devicePixelRatioF());
+          const float half_span = static_cast<float>(
+              value / quader::viewport_host_defaults().map_units_per_world_unit *
+              0.5);
+          const auto frame = hover_edge_frame(dimension_tangent * -half_span,
+                                               dimension_tangent * half_span);
+          ASSERT_TRUE(camera_.project_visible_world_segment(
+              frame.lines.front().start, frame.lines.front().end).has_value());
+          hud.present(frame,
+                      quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                      camera_, pane.rect(), true, point_size, nullptr, false,
+                      &bounds, 1U, true);
+          for (QLabel *label : labels) {
+            ASSERT_FALSE(label->isHidden());
+            EXPECT_EQ(label->mask().isEmpty(), !native_labels);
+            EXPECT_NE(label->font().styleStrategy() & QFont::NoSubpixelAntialias,
+                      0);
+            EXPECT_DOUBLE_EQ(label->font().pointSizeF(), point_size * scale);
+            const QImage source = render_dimension_label(*label);
+            EXPECT_EQ(label->property("quaderDimensionRasterPixelSize").toSize(),
+                      source.size());
+            EXPECT_DOUBLE_EQ(
+                label->property("quaderDimensionRasterDevicePixelRatio").toReal(),
+                label->devicePixelRatioF());
+            expect_antialiased_dimension_raster(
+                source, label->palette().color(label->foregroundRole()),
+                native_labels);
+            for (const QColor &background : backgrounds) {
+              const QImage actual = render_dimension_label(*label, background);
+              QImage expected(source.size(), source.format());
+              expected.setDevicePixelRatio(source.devicePixelRatio());
+              expected.fill(background);
+              {
+                QPainter painter(&expected);
+                painter.drawImage(QPoint{}, source);
+              }
+              int incorrect_pixels = 0;
+              for (int y = 0; y < actual.height(); ++y) {
+                for (int x = 0; x < actual.width(); ++x) {
+                  const QColor pixel = actual.pixelColor(x, y);
+                  const QColor expected_pixel = expected.pixelColor(x, y);
+                  incorrect_pixels +=
+                      pixel.alpha() != 255 ||
+                              std::abs(pixel.red() - expected_pixel.red()) > 1 ||
+                              std::abs(pixel.green() - expected_pixel.green()) > 1 ||
+                              std::abs(pixel.blue() - expected_pixel.blue()) > 1
+                          ? 1
+                          : 0;
+                }
+              }
+              EXPECT_EQ(incorrect_pixels, 0)
+                  << "Painting onto the viewport must preserve source-over coverage.";
+            }
           }
-          ++blended_or_colored_pixels;
+          for (std::size_t column = 0U; column < backgrounds.size(); ++column) {
+            const int left = static_cast<int>(column) * 540;
+            const int top = row * 90;
+            review_painter.fillRect(QRect{left, top, 540, 90},
+                                    backgrounds[column]);
+            review_painter.setPen(column == 2U ? Qt::white : Qt::black);
+            review_painter.drawText(
+                QPoint{left + 12, top + 20},
+                QStringLiteral("%1 pt (%2 pt effective), %3")
+                    .arg(point_size).arg(point_size * scale).arg(labels[0]->text()));
+            int label_left = left + 12;
+            for (QLabel *label : labels) {
+              review_painter.drawImage(QPoint{label_left, top + 32},
+                                        render_dimension_label(*label,
+                                                                backgrounds[column]));
+              label_left += label->width() + 16;
+            }
+          }
+          ++row;
         }
       }
-    }
-  }
-  EXPECT_GT(opaque_black_pixels, 20)
-      << "The outline must contain a substantial pitch-black opaque border.";
-  EXPECT_GT(opaque_white_pixels, 8)
-      << "The glyph must contain a substantial bright opaque core.";
-  EXPECT_EQ(blended_or_colored_pixels, 0)
-      << "Dimension labels must contain only exact opaque black or white; "
-         "gray antialiasing fringes make them blurry over the viewport. "
-      << "First unexpected RGBA pixel: ("
-      << first_blended_or_colored_pixel.red() << ", "
-      << first_blended_or_colored_pixel.green() << ", "
-      << first_blended_or_colored_pixel.blue() << ", "
-      << first_blended_or_colored_pixel.alpha() << ").";
-  EXPECT_TRUE(found_transparent);
-
-  for (const qreal scale : {1.25, 1.5, 2.0}) {
-    QImage scaled(
-        QSize{static_cast<int>(std::ceil(label_->width() * scale)),
-              static_cast<int>(std::ceil(label_->height() * scale))},
-        QImage::Format_ARGB32_Premultiplied);
-    scaled.fill(Qt::transparent);
-    {
-      QPainter painter(&scaled);
-      painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-      painter.scale(scale, scale);
-      label_->render(&painter);
-    }
-    int scaled_non_binary_pixels = 0;
-    for (int y = 0; y < scaled.height(); ++y) {
-      for (int x = 0; x < scaled.width(); ++x) {
-        const QColor pixel = scaled.pixelColor(x, y);
-        const bool transparent = pixel.alpha() == 0;
-        const bool exact_black =
-            pixel.alpha() == 255 && pixel.red() == 0 && pixel.green() == 0 &&
-            pixel.blue() == 0;
-        const bool exact_white = pixel.alpha() == 255 && pixel.red() == 255 &&
-                                 pixel.green() == 255 && pixel.blue() == 255;
-        scaled_non_binary_pixels +=
-            !transparent && !exact_black && !exact_white ? 1 : 0;
+      review_painter.end();
+      if (!review_directory.isEmpty()) {
+        ASSERT_TRUE(QDir{}.mkpath(review_directory));
+        const QString name = QStringLiteral("dimension-fonts-%1-%2-dpr-%3.png")
+                                 .arg(native_labels ? "native" : "composed")
+                                 .arg(scale_index)
+                                 .arg(pane.devicePixelRatioF());
+        ASSERT_TRUE(review.save(QDir(review_directory).filePath(name)));
       }
     }
-    EXPECT_EQ(scaled_non_binary_pixels, 0)
-        << "Nearest-neighbor dimension output must stay binary at a "
-        << scale << "x device scale.";
   }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ComposedDimensionsRetainRasterAcrossStableAndPositionOnlyFrames) {
+  QWidget pane;
+  pane.resize(400, 300);
+  pane.setAttribute(Qt::WA_DontShowOnScreen);
+  pane.show();
+  quader::QtViewportEdgeLengthHud hud(
+      pane, quader::ViewportPaneId::Perspective, false);
+  QLabel *label = pane.findChild<QLabel *>(
+      QStringLiteral("viewportEdgeLength_perspective"));
+  ASSERT_NE(label, nullptr);
+  EdgeHudWidgetEventCounter events;
+  label->installEventFilter(&events);
+  auto frame = hover_edge_frame({-2, 0, 0}, {2, 0, 0});
+  const auto present_composed = [&] {
+    hud.present(frame,
+                quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                camera_, pane.rect(), true, 8.0);
+  };
+  present_composed();
+  QCoreApplication::processEvents();
+  ASSERT_FALSE(label->isHidden());
+  ASSERT_TRUE(label->mask().isEmpty());
+  const int raster_revision =
+      label->property("quaderDimensionRasterRevision").toInt();
+  ASSERT_GT(raster_revision, 0);
+  const auto initial = events.counts();
+  for (int repetition = 0; repetition < 64; ++repetition) {
+    present_composed();
+  }
+  QCoreApplication::processEvents();
+  EXPECT_EQ(events.counts(), initial);
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision);
+  frame.lines.front().start.x += 2.0F;
+  frame.lines.front().end.x += 2.0F;
+  present_composed();
+  QCoreApplication::processEvents();
+  EXPECT_GT(events.counts().move, initial.move);
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision);
+  QPalette palette = label->palette();
+  palette.setColor(label->foregroundRole(), QColor(135, 214, 3, 230));
+  label->setPalette(palette);
+  present_composed();
+  (void)render_dimension_label(*label);
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision + 1);
+  EXPECT_TRUE(label->mask().isEmpty());
+  QEvent screen_change{QEvent::ScreenChangeInternal};
+  QCoreApplication::sendEvent(label, &screen_change);
+  present_composed();
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision + 2);
+  EXPECT_TRUE(label->mask().isEmpty());
+  label->removeEventFilter(&events);
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
@@ -1849,19 +2457,21 @@ TEST_F(QtViewportEdgeLengthHudTests,
                           static_cast<int>((packed >> 16U) & 0xffU),
                           static_cast<int>((packed >> 24U) & 0xffU)};
     EXPECT_EQ(label.palette().color(label.foregroundRole()), expected);
-    QImage painted(label.size(), QImage::Format_ARGB32);
-    painted.fill(Qt::transparent);
-    label.render(&painted);
+    const QImage painted = render_dimension_label(label);
+    const QColor native_core{qRound(expected.red() * expected.alpha() / 255.0),
+                             qRound(expected.green() * expected.alpha() / 255.0),
+                             qRound(expected.blue() * expected.alpha() / 255.0),
+                             255};
     int colored_pixels = 0;
     int outline_pixels = 0;
     for (int y = 0; y < painted.height(); ++y) {
       for (int x = 0; x < painted.width(); ++x) {
         const QColor pixel = painted.pixelColor(x, y);
         colored_pixels +=
-            pixel.alpha() == expected.alpha() &&
-                    std::abs(pixel.red() - expected.red()) <= 1 &&
-                    std::abs(pixel.green() - expected.green()) <= 1 &&
-                    std::abs(pixel.blue() - expected.blue()) <= 1
+            pixel.alpha() == native_core.alpha() &&
+                    std::abs(pixel.red() - native_core.red()) <= 1 &&
+                    std::abs(pixel.green() - native_core.green()) <= 1 &&
+                    std::abs(pixel.blue() - native_core.blue()) <= 1
                 ? 1
                 : 0;
         outline_pixels += pixel == QColor(0, 0, 0, 255) ? 1 : 0;
@@ -1869,6 +2479,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
     }
     EXPECT_GT(colored_pixels, 8);
     EXPECT_GT(outline_pixels, 20);
+    expect_antialiased_dimension_raster(painted, expected, true);
   }
 
   // Camera-only motion selects a new corner without needing a geometry revision.

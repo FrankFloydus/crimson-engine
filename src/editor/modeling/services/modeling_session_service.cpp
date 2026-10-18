@@ -1554,6 +1554,14 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::uint64_t reuse_count = 0u;
   };
 
+  struct ComponentSourceWireFallbackCache final {
+    bool valid = false;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    int object_id = -1;
+  };
+
   /// Fixed-size Knife cursor facts consumed by the volatile overlay builder.
   struct KnifeHoverOverlayKey final {
     quader_editor_core::KnifeToolStatus status =
@@ -1577,11 +1585,23 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     float normal_x = 0.0f;
     float normal_y = 0.0f;
     float normal_z = 0.0f;
+    bool straight_guide_valid = false;
+    quader_poly::ElementId straight_guide_face_id = quader_poly::kInvalidElementId;
+    std::array<float, 9U> straight_guide_positions{};
+    double straight_guide_angle_degrees = 0.0;
     std::size_t preview_line_count = 0u;
     std::size_t preview_point_count = 0u;
 
     friend bool operator==(const KnifeHoverOverlayKey &,
                            const KnifeHoverOverlayKey &) = default;
+  };
+
+  /// Retains transformed guide geometry without mutating accepted Knife state.
+  struct KnifeStraightGuideProjectionCache final {
+    bool valid = false;
+    QMat4 world_from_object;
+    KnifeHoverOverlayKey source;
+    quader_editor_core::KnifeStraightGuide guide;
   };
 
   /// Shared host inputs for retained texture presentation and target validity.
@@ -3084,21 +3104,29 @@ public:
 
   ModelingCommandResult transfer_face_texture_to_face(int modeling_object_id,
                                                       int face_id) {
-    const ModelingFaceTextureSettings settings = face_texture_settings();
-    if (!settings.editable) {
+    if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
+        modal_tool_owns_viewport()) {
       return {.ok = false,
-              .message = settings.disabled_reason.empty()
-                             ? "Select exactly one editable source face first."
-                             : settings.disabled_reason};
+              .message = "Commit or cancel the active tool or preview before editing textures."};
     }
-    if (settings.selected_face_count != 1u ||
-        face_texture_selection_cache_.objects.size() != 1u ||
-        face_texture_selection_cache_.objects.front().faces.size() != 1u) {
+    // A transfer consumes the selection at command execution. The retained
+    // texture-panel snapshot may describe an earlier source selection.
+    const auto source_selection =
+        sdk_projection_adapter_.selected_face_texture_settings();
+    if (!source_selection.command.ok) {
+      return source_selection.command;
+    }
+    if (source_selection.objects.empty()) {
+      return {.ok = false,
+              .message = "Select exactly one editable source face first."};
+    }
+    if (source_selection.objects.size() != 1u ||
+        source_selection.objects.front().faces.size() != 1u) {
       return {.ok = false,
               .message = "Select exactly one source face before transferring textures."};
     }
 
-    const auto &selected = face_texture_selection_cache_.objects.front();
+    const auto &selected = source_selection.objects.front();
     const modeling::FaceId source_face = selected.faces.front().face;
     const FaceMaterialTarget source = resolve_face_material(
         selected.modeling_object_id, static_cast<int>(source_face.index));
@@ -3584,7 +3612,7 @@ public:
     options.persistent_source_wire_object_id =
         persistent_tool_source_wire_object_id();
     return overlay_service_.selection_overlay_signature(
-               runtime_, options) ^
+               runtime_, options, suppressed_fallback_source_wire_object_id(options)) ^
            selection_service_.editor_mode_revision() ^
            sdk_projection_adapter_.selection_overlay_preview_signature();
   }
@@ -3706,7 +3734,8 @@ public:
           persistent_tool_source_wire_object_id();
       if (auto base = overlay_service_.accepted_coordinate_base_frame(
               *coordinates, selection_service_.viewport_visibility_revision(),
-              options, selection_service_.editor_mode_revision())) {
+              options, selection_service_.editor_mode_revision(),
+              suppressed_fallback_source_wire_object_id(options))) {
         return std::move(*base);
       }
     }
@@ -3752,11 +3781,13 @@ public:
          hover.candidate_object_id > 0 ||
          !runtime_.insert_edge_loop_state().preview_lines.empty());
     const auto *projected = needs_geometry ? &selection_projection_snapshot() : nullptr;
+    const quader_editor_core::KnifeStraightGuide knife_guide =
+        projected_knife_straight_guide();
     ViewportOverlayFrame frame = overlay_service_.volatile_overlay_frame(
         projected, app_selection_mode_to_runtime(selection_mode()),
         runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_,
-        persistent_tool_source_wire_object_id());
+        persistent_tool_source_wire_object_id(), &knife_guide);
     volatile_overlay_cache_.key = source_key;
     volatile_overlay_cache_.frame =
         std::make_shared<const ViewportOverlayFrame>(std::move(frame));
@@ -4531,7 +4562,7 @@ public:
         selection_projection_snapshot();
     if (const std::optional<ModelingSelectionProjectionCommandResult> scoped =
             selection_service_.select_all_in_constrained_component_scope(
-                projection, scene_, object_registry_)) {
+                projection, scene_, object_registry_, runtime_.hover().candidate_object_id)) {
       if (!scoped->command.ok) {
         return scoped->command;
       }
@@ -5115,8 +5146,23 @@ public:
     return interaction_settings_service_.settings();
   }
 
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const {
+    auto state = sdk_projection_adapter_.bridge_preview_handle_state();
+    if (state.has_value()) {
+      const auto settings = interaction_settings_service_.settings();
+      state->start_tension = settings.bridge_start_tension;
+      state->end_tension = settings.bridge_end_tension;
+    }
+    return state;
+  }
+
   ModelingCommandResult
   set_interaction_settings(const ModelingInteractionSettings &settings) {
+    if (!std::isfinite(settings.bridge_start_tension) ||
+        !std::isfinite(settings.bridge_end_tension)) {
+      return {.ok = false, .message = "Bridge tensions must be finite."};
+    }
     const ModelingToolSettingsTarget active_target = tool_settings_target();
     const ModelingInteractionSettings previous =
         interaction_settings_service_.settings();
@@ -8924,9 +8970,121 @@ public:
         .normal_x = state.face_normal.x,
         .normal_y = state.face_normal.y,
         .normal_z = state.face_normal.z,
+        .straight_guide_valid = state.straight_guide.valid,
+        .straight_guide_face_id = state.straight_guide.face_id,
+        .straight_guide_positions = {
+            state.straight_guide.start.x, state.straight_guide.start.y,
+            state.straight_guide.start.z, state.straight_guide.end.x,
+            state.straight_guide.end.y, state.straight_guide.end.z,
+            state.straight_guide.cut_point.x, state.straight_guide.cut_point.y,
+            state.straight_guide.cut_point.z},
+        .straight_guide_angle_degrees = state.straight_guide.angle_degrees,
         .preview_line_count = state.preview_lines.size(),
         .preview_point_count = state.preview_points.size(),
     };
+  }
+
+  [[nodiscard]] quader_editor_core::KnifeStraightGuide
+  build_knife_straight_guide_snapshot() const {
+    const quader_editor_core::KnifeToolState &knife = runtime_.knife_state();
+    if (!knife.active || !knife.has_active_stroke || !knife.has_current ||
+        !knife.current_target_valid) {
+      return {};
+    }
+    const auto &world_objects = cached_scene_transformed_objects_for_picking();
+    const auto object = std::ranges::find_if(
+        world_objects, [&knife](const auto &candidate) {
+          return candidate.id == knife.target_object_id;
+        });
+    const std::optional<QMat4> world_from_object =
+        modeling_object_world_transform(knife.target_object_id);
+    if (object == world_objects.end() || !world_from_object.has_value()) {
+      return {};
+    }
+    quader_editor_core::PickHitRecord hit;
+    hit.object_id = knife.target_object_id;
+    hit.face_id = knife.current_target.face_id;
+    hit.vertex_id = knife.current_target.vertex_id;
+    hit.edge = knife.current_target.edge;
+    hit.local_position = transform_point(*world_from_object, knife.current_point);
+    switch (knife.current_target.kind) {
+    case quader_poly::KnifePointTargetKind::ExistingVertex:
+    case quader_poly::KnifePointTargetKind::InsertedVertex:
+      hit.kind = quader_poly::ElementKind::Vertex;
+      break;
+    case quader_poly::KnifePointTargetKind::ExistingEdge:
+      hit.kind = quader_poly::ElementKind::Edge;
+      break;
+    case quader_poly::KnifePointTargetKind::FacePoint:
+      hit.kind = quader_poly::ElementKind::Face;
+      break;
+    }
+    const std::optional<KnifeStraightConstraint> constraint =
+        knife_straight_constraint(*object, hit, hit.local_position, 0.0, false);
+    if (!constraint.has_value()) {
+      return {};
+    }
+    QVec3 reference_direction = constraint->direction;
+    const auto &previous = knife.points[knife.previous_point_index];
+    if (previous.kind == quader_poly::KnifePointTargetKind::ExistingEdge) {
+      const quader_poly::Face *face =
+          quader_poly::find_face(object->document, constraint->face_id);
+      const quader_poly::Vertex *first =
+          quader_poly::find_vertex(object->document, previous.edge.a);
+      const quader_poly::Vertex *second =
+          quader_poly::find_vertex(object->document, previous.edge.b);
+      if (face == nullptr || first == nullptr || second == nullptr) {
+        return {};
+      }
+      // The reference enters this face perpendicular to the accepted seed
+      // edge. It does not replace the existing Shift constraint direction.
+      reference_direction = normalize(cross(
+          quader_poly::face_normal(object->document, *face),
+          second->position - first->position));
+    }
+    return quader_editor_core::build_knife_straight_guide(
+        object->document, constraint->face_id, constraint->previous,
+        hit.local_position, reference_direction);
+  }
+
+  void update_knife_straight_guide() {
+    knife_guide_source_world_transform_ =
+        modeling_object_world_transform(runtime_.knife_state().target_object_id);
+    runtime_.set_knife_straight_guide(build_knife_straight_guide_snapshot());
+    knife_guide_projection_cache_.valid = false;
+  }
+
+  [[nodiscard]] quader_editor_core::KnifeStraightGuide
+  projected_knife_straight_guide() const {
+    const auto &knife = runtime_.knife_state();
+    if (!knife.active || !knife.has_active_stroke || !knife.has_current ||
+        !knife.current_target_valid) {
+      return {};
+    }
+    const auto world_from_object =
+        modeling_object_world_transform(knife.target_object_id);
+    if (!world_from_object.has_value()) {
+      return {};
+    }
+    // Compare the captured transform before obtaining world geometry. Other
+    // scene edits and unchanged frames reuse the accepted guide directly.
+    if (knife_guide_source_world_transform_.has_value() &&
+        knife_guide_source_world_transform_->values == world_from_object->values) {
+      return knife.straight_guide;
+    }
+    const KnifeHoverOverlayKey source = knife_hover_overlay_key(knife);
+    if (knife_guide_projection_cache_.valid &&
+        knife_guide_projection_cache_.world_from_object.values == world_from_object->values &&
+        knife_guide_projection_cache_.source == source) {
+      return knife_guide_projection_cache_.guide;
+    }
+    knife_guide_projection_cache_ = {
+        .valid = true,
+        .world_from_object = *world_from_object,
+        .source = source,
+        .guide = build_knife_straight_guide_snapshot(),
+    };
+    return knife_guide_projection_cache_.guide;
   }
 
   ModelingCommandResult clear_knife_hover() {
@@ -9003,6 +9161,8 @@ public:
     }
     if (!target_valid) {
       runtime_.clear_knife_hover();
+    } else {
+      update_knife_straight_guide();
     }
     // A surface can expose its topology before it is a valid first Knife point.
     auto hover = runtime_.hover();
@@ -9102,6 +9262,7 @@ public:
     }
     quader_editor_core::KnifeToolState invalid = state;
     invalid.status = quader_editor_core::KnifeToolStatus::InvalidTarget;
+    invalid.straight_guide = {};
     runtime_.set_knife_state(std::move(invalid));
     return result;
   }
@@ -10989,9 +11150,83 @@ public:
     return set_component_selection(component);
   }
 
+  [[nodiscard]] bool resolved_component_body_target_eligible(
+      int modeling_object_id, EntityId source_occurrence) const {
+    const std::optional<EntityId> entity =
+        object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (!entity.has_value() || !component_target_is_editable(*entity)) {
+      return false;
+    }
+    const EntityId definition =
+        scene_.containing_instance_definition(*entity);
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const bool active_instance_edit =
+        edit_scope.occurrence != kInvalidEntityId &&
+        edit_scope.definition != kInvalidEntityId;
+    if (definition != kInvalidEntityId) {
+      return active_instance_edit && definition == edit_scope.definition &&
+             source_occurrence == edit_scope.occurrence;
+    }
+    return !active_instance_edit && source_occurrence == *entity;
+  }
+
+  ModelingCommandResult apply_resolved_component_body_selection(
+      const ModelingResolvedComponentBodySelectionRequest &request) {
+    const ModelingSelectionProjectionSnapshot &projection =
+        selection_projection_snapshot();
+    const auto object_it = std::find_if(
+        projection.objects().begin(), projection.objects().end(),
+        [&](const quader_editor_core::PolygonObject &object) {
+          return object.id == request.modeling_object_id;
+        });
+    if (object_it == projection.objects().end()) {
+      return {.ok = false,
+              .message = "Resolved component body owner is no longer live."};
+    }
+    if (request.mode == ModelingSelectionMode::Object ||
+        request.mode == ModelingSelectionMode::Group ||
+        request.mode != app_selection_mode_) {
+      return {
+          .ok = false,
+          .message =
+              "Resolved component body does not match the current selection mode.",
+      };
+    }
+    if (!resolved_component_body_target_eligible(
+            request.modeling_object_id, request.source_occurrence)) {
+      return {
+          .ok = false,
+          .message =
+              "Resolved component body is outside the active edit scope.",
+      };
+    }
+    if (request.edit == ModelingSelectionEdit::Remove ||
+        request.edit == ModelingSelectionEdit::Toggle) {
+      return {.ok = true, .changed = false};
+    }
+    if (request.preserve_existing_component_selection_on_hit &&
+        ModelingSelectionService::has_component_selection(
+            selection_summary())) {
+      return {.ok = true, .changed = false};
+    }
+    if (request.preserve_selection_on_selected_hit &&
+        (object_it->selected || object_it->component_edit_target)) {
+      return {.ok = true, .changed = false};
+    }
+
+    ModelingComponentSelectionRequest component{
+        .modeling_object_id = request.modeling_object_id,
+        .mode = request.mode,
+        .edit = request.edit,
+        .retain_component_edit_target = true,
+    };
+    return set_component_selection(component);
+  }
+
   [[nodiscard]] bool component_target_is_editable(EntityId entity) const {
-    if (!scene_.exists(entity) || !selection_service_.viewport_entity_visible(entity) ||
-        (editor_mode_service_ != nullptr && !editor_mode_service_->contains(entity))) {
+    if (!scene_.exists(entity) || !selection_service_.viewport_entity_visible(entity)) {
       return false;
     }
     const ModelingInstanceEditScope scope = instance_edit_scope();
@@ -11419,11 +11654,13 @@ public:
         request.kind == ModelingActiveSelectionKind::Face;
     if (component_hover && editor_mode_service_ != nullptr) {
       const auto entity = object_registry_.entity_for_modeling_object(request.modeling_object_id);
-      if (!entity.has_value() || !editor_mode_service_->contains(*entity)) {
+      if (!entity.has_value() || !component_target_is_editable(*entity)) {
         return {.ok = false, .message = "Component hover is outside the edit set."};
       }
     }
-    hover.candidate_object_id = -1;
+    hover.candidate_object_id = request.candidate_object_id > 0
+                                   ? request.candidate_object_id
+                                   : component_hover ? request.modeling_object_id : -1;
     switch (request.kind) {
     case ModelingActiveSelectionKind::Object:
       hover.kind = quader_editor_core::SelectionHoverKind::Object;
@@ -11467,6 +11704,32 @@ public:
   }
 
 private:
+  [[nodiscard]] int suppressed_fallback_source_wire_object_id(
+      ModelingSelectionOverlayOptions options) const {
+    if (options.suppress_persistent_selection ||
+        runtime_.hover().candidate_object_id <= 0 ||
+        !is_component_selection_mode(sdk_projection_adapter_.selection_mode())) {
+      return -1;
+    }
+    auto &cache = component_source_wire_fallback_cache_;
+    const std::uint64_t current_content_revision = content_revision();
+    const std::uint64_t current_selection_revision = selection_revision();
+    const std::uint64_t current_object_map_revision = object_registry_.revision();
+    if (!cache.valid || cache.content_revision != current_content_revision ||
+        cache.selection_revision != current_selection_revision ||
+        cache.object_map_revision != current_object_map_revision) {
+      cache.object_id =
+          ModelingOverlayService::fallback_active_source_wire_object_id(
+              selection_projection_snapshot());
+      cache.content_revision = current_content_revision;
+      cache.selection_revision = current_selection_revision;
+      cache.object_map_revision = current_object_map_revision;
+      cache.valid = true;
+    }
+    return ModelingOverlayService::suppressed_fallback_source_wire_object_id(
+        cache.object_id, runtime_.hover(), options);
+  }
+
   bool set_cutting_tool_hover_candidate(int object_id) {
     auto hover = runtime_.hover();
     if (hover.candidate_object_id == object_id) return false;
@@ -11516,6 +11779,7 @@ private:
   }
 
   void invalidate_selection_overlay_caches() const override {
+    component_source_wire_fallback_cache_.valid = false;
     overlay_service_.invalidate();
     invalidate_volatile_overlay_cache();
   }
@@ -11985,7 +12249,10 @@ private:
   mutable ViewportCurvePickCache curve_box_pick_cache_;
   SelectionProjectionService selection_projection_service_;
   mutable ModelingOverlayService overlay_service_;
+  mutable ComponentSourceWireFallbackCache component_source_wire_fallback_cache_;
   mutable VolatileOverlayCache volatile_overlay_cache_;
+  std::optional<QMat4> knife_guide_source_world_transform_;
+  mutable KnifeStraightGuideProjectionCache knife_guide_projection_cache_;
   mutable std::uint64_t volatile_overlay_runtime_revision_ = 0u;
   mutable ModelingToolPreviewWorkStats tool_preview_work_stats_;
   ModelingCommandExecutor command_executor_;
@@ -12909,6 +13176,11 @@ bool ModelingSessionService::operation_preview_active() const {
   return impl_->operation_preview_active();
 }
 
+std::optional<BridgePreviewHandleState>
+ModelingSessionService::bridge_preview_handle_state() const {
+  return impl_->bridge_preview_handle_state();
+}
+
 ModelingToolSettingsTarget
 ModelingSessionService::tool_settings_target() const {
   return impl_->tool_settings_target();
@@ -13691,6 +13963,18 @@ ModelingCommandResult ModelingSessionService::apply_resolved_component_selection
     return {.ok = false, .message = "Component click edit context is stale."};
   }
   return impl_->apply_resolved_component_selection(request, baseline ? baseline->impl_.get() : nullptr);
+}
+
+bool ModelingSessionService::resolved_component_body_target_eligible(
+    int modeling_object_id, EntityId source_occurrence) const {
+  return impl_->resolved_component_body_target_eligible(modeling_object_id,
+                                                        source_occurrence);
+}
+
+ModelingCommandResult
+ModelingSessionService::apply_resolved_component_body_selection(
+    const ModelingResolvedComponentBodySelectionRequest &request) {
+  return impl_->apply_resolved_component_body_selection(request);
 }
 
 ModelingCommandResult ModelingSessionService::set_component_selections(

@@ -841,68 +841,158 @@ quader::QVec3 bridge_edge_outward_direction(const Document& document, const Open
     return normalize_or_zero(cross(edge_direction, edge_info.face_normal));
 }
 
-quader::QVec3 curved_bridge_position(
-    quader::QVec3 start,
-    quader::QVec3 end,
-    quader::QVec3 start_outward,
-    quader::QVec3 end_outward,
-    int step_index,
-    int step_count)
-{
-    const float t = static_cast<float>(step_index) / static_cast<float>(step_count);
-    const quader::QVec3 linear = start + ((end - start) * t);
-    const float rail_length = length(end - start);
-    const quader::QVec3 start_tangent_direction = normalize_or_zero(start_outward);
-    const quader::QVec3 end_tangent_direction = normalize_or_zero(end_outward);
-    if (rail_length <= kEpsilon ||
-        length_squared(start_tangent_direction) <= kEpsilon ||
-        length_squared(end_tangent_direction) <= kEpsilon) {
-      return linear;
-    }
-
-    const quader::QVec3 end_forward_direction = end_tangent_direction * -1.0F;
-    const quader::QVec3 rail_direction = (end - start) / rail_length;
-    const quader::QVec3 tangent_bisector = start_tangent_direction + end_forward_direction;
-    float tangent_scale = 1.0F;
-    if (length_squared(tangent_bisector) > kEpsilon &&
-        dot(start_tangent_direction, rail_direction) > kEpsilon &&
-        dot(end_forward_direction, rail_direction) > kEpsilon &&
-        length_squared(cross(normalize_or_zero(tangent_bisector), rail_direction)) <= kEpsilon) {
-        // Equal-radius circular joins have their tangent bisector along the chord.
-        // Converting the cubic arc's 4/3*r*tan(turn/4) controls to Hermite tangents
-        // gives sec^2(turn/4): one for straight rails and 4-2*sqrt(2) at 90 degrees.
-        const float cos_turn = std::clamp(
-            dot(start_tangent_direction, end_forward_direction), -1.0F, 1.0F);
-        const float cos_half_turn = std::sqrt((1.0F + cos_turn) * 0.5F);
-        tangent_scale = 2.0F / (1.0F + cos_half_turn);
-    }
-    const quader::QVec3 start_tangent = start_tangent_direction * (rail_length * tangent_scale);
-    const quader::QVec3 end_tangent = end_forward_direction * (rail_length * tangent_scale);
-    const float t2 = t * t;
-    const float t3 = t2 * t;
-    const float h00 = (2.0F * t3) - (3.0F * t2) + 1.0F;
-    const float h10 = t3 - (2.0F * t2) + t;
-    const float h01 = (-2.0F * t3) + (3.0F * t2);
-    const float h11 = t3 - t2;
-    return (start * h00) + (start_tangent * h10) + (end * h01) + (end_tangent * h11);
+std::optional<BridgeOptions> normalized_bridge_options(BridgeOptions options) {
+  if (!std::isfinite(options.start_tension) ||
+      !std::isfinite(options.end_tension))
+    return std::nullopt;
+  options.steps = std::clamp(options.steps, 1, 64);
+  options.start_tension = std::clamp(options.start_tension, 0.0F, 3.0F);
+  options.end_tension = std::clamp(options.end_tension, 0.0F, 3.0F);
+  return options;
 }
 
-std::vector<ElementId> unique_bridge_vertices(Edge first_edge, Edge second_edge)
-{
-    std::vector<ElementId> vertices;
-    vertices.reserve(4);
-    auto append = [&vertices](ElementId vertex_id) {
-      if (vertex_id != kInvalidElementId &&
-          std::find(vertices.begin(), vertices.end(), vertex_id) ==
-              vertices.end()) {
-        vertices.push_back(vertex_id);
-      }
-    };
-    append(first_edge.a);
-    append(first_edge.b);
-    append(second_edge.a);
-    append(second_edge.b);
-    return vertices;
+BridgeRailCurve prepare_bridge_rail_curve(quader::QVec3 start,
+                                          quader::QVec3 end,
+                                          quader::QVec3 start_outward,
+                                          quader::QVec3 end_outward,
+                                          const BridgeOptions &options) {
+  const float rail_length = length(end - start);
+  const quader::QVec3 start_tangent_direction =
+      normalize_or_zero(start_outward);
+  const quader::QVec3 end_tangent_direction = normalize_or_zero(end_outward);
+  if (rail_length <= kEpsilon ||
+      length_squared(start_tangent_direction) <= kEpsilon ||
+      length_squared(end_tangent_direction) <= kEpsilon) {
+    return {.start = start, .end = end};
+  }
+
+  const quader::QVec3 end_forward_direction = end_tangent_direction * -1.0F;
+  const quader::QVec3 rail_direction = (end - start) / rail_length;
+  const quader::QVec3 tangent_bisector =
+      start_tangent_direction + end_forward_direction;
+  float tangent_scale = 1.0F;
+  if (length_squared(tangent_bisector) > kEpsilon &&
+      dot(start_tangent_direction, rail_direction) > kEpsilon &&
+      dot(end_forward_direction, rail_direction) > kEpsilon &&
+      length_squared(cross(normalize_or_zero(tangent_bisector),
+                           rail_direction)) <= kEpsilon) {
+    // Equal-radius circular joins have their tangent bisector along the chord.
+    // Converting the cubic arc's 4/3*r*tan(turn/4) controls to Hermite tangents
+    // gives sec^2(turn/4): one for straight rails and 4-2*sqrt(2) at 90
+    // degrees.
+    const float cos_turn = std::clamp(
+        dot(start_tangent_direction, end_forward_direction), -1.0F, 1.0F);
+    const float cos_half_turn = std::sqrt((1.0F + cos_turn) * 0.5F);
+    tangent_scale = 2.0F / (1.0F + cos_half_turn);
+  }
+  const quader::QVec3 start_tangent =
+      start_tangent_direction * (rail_length * tangent_scale);
+  const quader::QVec3 end_tangent =
+      end_forward_direction * (rail_length * tangent_scale);
+  return {.start = start,
+          .end = end,
+          .start_tangent = start_tangent * options.start_tension,
+          .end_tangent = end_tangent * options.end_tension,
+          .start_handle_axis = start_tangent / 3.0F,
+          .end_handle_axis = end_tangent * (-1.0F / 3.0F),
+          .linear = false};
+}
+
+quader::QVec3 evaluate_bridge_rail_curve(const BridgeRailCurve &curve,
+                                         int step_index, int step_count) {
+  const float t =
+      static_cast<float>(step_index) / static_cast<float>(step_count);
+  if (curve.linear) {
+    return curve.start + ((curve.end - curve.start) * t);
+  }
+  const float t2 = t * t;
+  const float t3 = t2 * t;
+  const float h00 = (2.0F * t3) - (3.0F * t2) + 1.0F;
+  const float h10 = t3 - (2.0F * t2) + t;
+  const float h01 = (-2.0F * t3) + (3.0F * t2);
+  const float h11 = t3 - t2;
+  return (curve.start * h00) + (curve.start_tangent * h10) + (curve.end * h01) +
+         (curve.end_tangent * h11);
+}
+
+BridgeShapeFeedback
+bridge_shape_feedback(std::span<const BridgeRailCurve> curves,
+                      const BridgeOptions &options) {
+  BridgeShapeFeedback feedback;
+  feedback.start_tension = options.start_tension;
+  feedback.end_tension = options.end_tension;
+  if (curves.empty())
+    return feedback;
+  const auto controls_for_curve = [](const BridgeRailCurve &curve) {
+    const quader::QVec3 chord = curve.end - curve.start;
+    const quader::QVec3 start_handle =
+        curve.linear ? curve.start + chord / 3.0F
+                     : curve.start + curve.start_tangent / 3.0F;
+    const quader::QVec3 end_handle = curve.linear
+                                         ? curve.end - chord / 3.0F
+                                         : curve.end - curve.end_tangent / 3.0F;
+    return std::array<quader::QVec3, 4>{curve.start, start_handle, end_handle,
+                                        curve.end};
+  };
+  float largest_start_axis_squared = 0.0F;
+  float largest_end_axis_squared = 0.0F;
+  for (const BridgeRailCurve &curve : curves) {
+    const auto controls = controls_for_curve(curve);
+    for (std::size_t index = 0; index < controls.size(); ++index)
+      feedback.controls[index] += controls[index];
+    feedback.start_handle_axis += curve.start_handle_axis;
+    feedback.end_handle_axis += curve.end_handle_axis;
+    largest_start_axis_squared = std::max(
+        largest_start_axis_squared, length_squared(curve.start_handle_axis));
+    largest_end_axis_squared = std::max(largest_end_axis_squared,
+                                        length_squared(curve.end_handle_axis));
+  }
+  const float inverse_count = 1.0F / static_cast<float>(curves.size());
+  for (quader::QVec3 &control : feedback.controls)
+    control = control * inverse_count;
+  feedback.start_handle_axis = feedback.start_handle_axis * inverse_count;
+  feedback.end_handle_axis = feedback.end_handle_axis * inverse_count;
+  // A symmetric boundary can change its surface while its mean derivative
+  // cancels. Keep a real rail guide available without calling it the center.
+  constexpr float kCancellationRatio =
+      32.0F * std::numeric_limits<float>::epsilon();
+  const auto cancelled_axis = [](quader::QVec3 axis, float largest_squared) {
+    return largest_squared > 0.0F &&
+           length_squared(axis) <=
+               largest_squared * kCancellationRatio * kCancellationRatio;
+  };
+  if (cancelled_axis(feedback.start_handle_axis, largest_start_axis_squared) ||
+      cancelled_axis(feedback.end_handle_axis, largest_end_axis_squared)) {
+    for (const BridgeRailCurve &curve : curves) {
+      if (length_squared(curve.start_handle_axis) <= 0.0F ||
+          length_squared(curve.end_handle_axis) <= 0.0F)
+        continue;
+      feedback.controls = controls_for_curve(curve);
+      feedback.start_handle_axis = curve.start_handle_axis;
+      feedback.end_handle_axis = curve.end_handle_axis;
+      feedback.representative_rail = true;
+      break;
+    }
+  }
+  return feedback;
+}
+
+std::vector<ElementId> unique_bridge_vertices(Edge first_edge,
+                                              Edge second_edge) {
+  std::vector<ElementId> vertices;
+  vertices.reserve(4);
+  auto append = [&vertices](ElementId vertex_id) {
+    if (vertex_id != kInvalidElementId &&
+        std::find(vertices.begin(), vertices.end(), vertex_id) ==
+            vertices.end()) {
+      vertices.push_back(vertex_id);
+    }
+  };
+  append(first_edge.a);
+  append(first_edge.b);
+  append(second_edge.a);
+  append(second_edge.b);
+  return vertices;
 }
 
 bool face_contains_reversed_bridge_edge(const Face& face, const OpenBridgeEdgeInfo& edge_info)
@@ -2330,77 +2420,88 @@ bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std
 }
 
 bool append_bridge_faces_between_loops(
-    Document& document,
-    std::span<const ElementId> first_vertices,
-    std::span<const ElementId> second_vertices,
-    quader::QVec3 first_normal,
-    quader::QVec3 second_normal,
-    std::uint32_t material_slot,
-    int steps,
-    std::vector<ElementId>& bridge_face_ids,
-    bool skip_degenerate_faces,
-    const FaceTextureTransform& texture_transform)
-{
-    if (first_vertices.size() < 3 || first_vertices.size() != second_vertices.size()) {
-        return false;
+    Document &document, std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices, quader::QVec3 first_normal,
+    quader::QVec3 second_normal, std::uint32_t material_slot,
+    BridgeOptions options, std::vector<ElementId> &bridge_face_ids,
+    bool skip_degenerate_faces, const FaceTextureTransform &texture_transform,
+    BridgeShapeFeedback &feedback) {
+  if (first_vertices.size() < 3 ||
+      first_vertices.size() != second_vertices.size()) {
+    return false;
+  }
+
+  const int step_count = options.steps;
+  const std::size_t vertex_count = first_vertices.size();
+  std::vector<BridgeRailCurve> curves;
+  curves.reserve(vertex_count);
+  for (std::size_t vertex_index = 0; vertex_index < vertex_count;
+       ++vertex_index) {
+    curves.push_back(prepare_bridge_rail_curve(
+        vertex_position_or_zero(document, first_vertices[vertex_index]),
+        vertex_position_or_zero(document, second_vertices[vertex_index]),
+        first_normal, second_normal, options));
+  }
+  feedback = bridge_shape_feedback(curves, options);
+  std::vector<std::vector<ElementId>> rings;
+  rings.reserve(static_cast<std::size_t>(step_count + 1));
+  rings.emplace_back(first_vertices.begin(), first_vertices.end());
+
+  for (int step_index = 1; step_index < step_count; ++step_index) {
+    std::vector<ElementId> ring;
+    ring.reserve(vertex_count);
+    for (std::size_t vertex_index = 0; vertex_index < vertex_count;
+         ++vertex_index) {
+      ring.push_back(add_vertex(
+          document, evaluate_bridge_rail_curve(curves[vertex_index], step_index,
+                                               step_count)));
     }
+    rings.push_back(std::move(ring));
+  }
 
-    const int step_count = std::clamp(steps, 1, 64);
-    const std::size_t vertex_count = first_vertices.size();
-    std::vector<std::vector<ElementId>> rings;
-    rings.reserve(static_cast<std::size_t>(step_count + 1));
-    rings.emplace_back(first_vertices.begin(), first_vertices.end());
-
-    for (int step_index = 1; step_index < step_count; ++step_index) {
-        std::vector<ElementId> ring;
-        ring.reserve(vertex_count);
-        for (std::size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
-            const quader::QVec3 start = vertex_position_or_zero(document, first_vertices[vertex_index]);
-            const quader::QVec3 end = vertex_position_or_zero(document, second_vertices[vertex_index]);
-            ring.push_back(add_vertex(document, curved_bridge_position(start, end, first_normal, second_normal, step_index, step_count)));
+  rings.emplace_back(second_vertices.begin(), second_vertices.end());
+  for (std::size_t ring_index = 0; ring_index + 1U < rings.size();
+       ++ring_index) {
+    for (std::size_t vertex_index = 0; vertex_index < vertex_count;
+         ++vertex_index) {
+      const std::size_t next_index = (vertex_index + 1U) % vertex_count;
+      std::vector<ElementId> quad{
+          rings[ring_index][vertex_index],
+          rings[ring_index][next_index],
+          rings[ring_index + 1U][next_index],
+          rings[ring_index + 1U][vertex_index],
+      };
+      Face expected_face;
+      expected_face.vertices = quad;
+      const quader::QVec3 expected_normal =
+          face_normal(document, expected_face);
+      if (!append_bridge_face(document, std::move(quad), material_slot,
+                              expected_normal, bridge_face_ids,
+                              texture_transform)) {
+        if (!skip_degenerate_faces) {
+          return false;
         }
-        rings.push_back(std::move(ring));
+      }
     }
+  }
 
-    rings.emplace_back(second_vertices.begin(), second_vertices.end());
-    for (std::size_t ring_index = 0; ring_index + 1U < rings.size(); ++ring_index) {
-        for (std::size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
-            const std::size_t next_index = (vertex_index + 1U) % vertex_count;
-            std::vector<ElementId> quad {
-                rings[ring_index][vertex_index],
-                rings[ring_index][next_index],
-                rings[ring_index + 1U][next_index],
-                rings[ring_index + 1U][vertex_index],
-            };
-            Face expected_face;
-            expected_face.vertices = quad;
-            const quader::QVec3 expected_normal = face_normal(document, expected_face);
-            if (!append_bridge_face(document, std::move(quad), material_slot, expected_normal, bridge_face_ids, texture_transform)) {
-                if (!skip_degenerate_faces) {
-                    return false;
-                }
-            }
-        }
-    }
-
-    return true;
+  return true;
 }
 
-quader::QVec3 face_centroid(const Document& document, const Face& face)
-{
-    quader::QVec3 centroid;
-    std::size_t count = 0;
-    for (const ElementId vertex_id : face.vertices) {
-        const Vertex* vertex = find_vertex(document, vertex_id);
-        if (vertex == nullptr) {
-            continue;
-        }
-
-        centroid += vertex->position;
-        ++count;
+quader::QVec3 face_centroid(const Document &document, const Face &face) {
+  quader::QVec3 centroid;
+  std::size_t count = 0;
+  for (const ElementId vertex_id : face.vertices) {
+    const Vertex *vertex = find_vertex(document, vertex_id);
+    if (vertex == nullptr) {
+      continue;
     }
 
-    return count == 0 ? quader::QVec3 {} : centroid / static_cast<float>(count);
+    centroid += vertex->position;
+    ++count;
+  }
+
+  return count == 0 ? quader::QVec3{} : centroid / static_cast<float>(count);
 }
 
 } // namespace quader_poly::document_internal

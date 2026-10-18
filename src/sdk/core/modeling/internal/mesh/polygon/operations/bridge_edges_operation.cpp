@@ -27,24 +27,24 @@ using namespace document_internal;
 
 namespace {
 
-OperationResult bridge_selected_edges_impl(Document& document, Selection& selection, int steps);
+OperationResult bridge_selected_edges_impl(Document& document, Selection& selection, BridgeOptions options);
 
 /**
  * Implements the Bridge Edges Operation modeling operation for the polygon document and mesh editing core.
  */
 class BridgeEdgesOperation final : public PolyOperation {
 public:
-    explicit BridgeEdgesOperation(int steps = 1);
+    explicit BridgeEdgesOperation(BridgeOptions options = {});
 
     [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::BridgeSelectedEdges).id; }
     [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::BridgeSelectedEdges).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:
-    int steps_ = 1;
+    BridgeOptions options_;
 };
 
-OperationResult bridge_selected_edges_impl(Document& document, Selection& selection, int steps)
+OperationResult bridge_selected_edges_impl(Document& document, Selection& selection, BridgeOptions options)
 {
   if (selection.mode != SelectionMode::Edge || selection.edges.size() != 2) {
     return OperationResult::failure("Bridge needs exactly two selected edges.");
@@ -58,20 +58,29 @@ OperationResult bridge_selected_edges_impl(Document& document, Selection& select
     const std::vector<std::pair<Edge, Edge>> edge_pairs {
         { selected_edges[0], selected_edges[1] },
     };
-    return bridge_edge_pairs(document, selection, edge_pairs, steps);
+    return bridge_edge_pairs(document, selection, edge_pairs, options);
 }
 
-BridgeEdgesOperation::BridgeEdgesOperation(int steps) : steps_(steps) {}
+BridgeEdgesOperation::BridgeEdgesOperation(BridgeOptions options) : options_(options) {}
 
 OperationResult BridgeEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    return bridge_selected_edges_impl(document, selection, steps_);
+    return bridge_selected_edges_impl(document, selection, options_);
 }
 
 } // namespace
 
-OperationResult bridge_selected_edges(Document& document, Selection& selection, int steps)
-{
-    return BridgeEdgesOperation { steps }.apply(document, selection);
+OperationResult bridge_selected_edges(Document &document, Selection &selection,
+                                      BridgeOptions options) {
+  const auto normalized = normalized_bridge_options(options);
+  if (!normalized.has_value())
+    return OperationResult::failure("Bridge tensions must be finite.");
+  options = *normalized;
+  return BridgeEdgesOperation{options}.apply(document, selection);
+}
+OperationResult bridge_selected_edges(Document &document, Selection &selection,
+                                      int steps) {
+  return bridge_selected_edges(document, selection,
+                               BridgeOptions{.steps = steps});
 }
 } // namespace quader_poly

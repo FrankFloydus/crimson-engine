@@ -118,6 +118,8 @@ application_cursor_variant(QtViewportCursorPresentation presentation) {
     return QtApplicationCursorVariant::SelectionAdd;
   case QtViewportCursorPresentation::SelectionSubtract:
     return QtApplicationCursorVariant::SelectionSubtract;
+  case QtViewportCursorPresentation::BoxCutter:
+    return QtApplicationCursorVariant::BoxCutter;
   case QtViewportCursorPresentation::SelectionDefault:
   default:
     return QtApplicationCursorVariant::Default;
@@ -142,6 +144,8 @@ qt_viewport_cursor_presentation(ViewportPointerCursor requested,
     return QtViewportCursorPresentation::SelectionAdd;
   case ViewportPointerCursor::SelectionSubtract:
     return QtViewportCursorPresentation::SelectionSubtract;
+  case ViewportPointerCursor::BoxCutter:
+    return QtViewportCursorPresentation::BoxCutter;
   case ViewportPointerCursor::PrecisionCross:
     return QtViewportCursorPresentation::PrecisionCross;
   case ViewportPointerCursor::OpenHand:
@@ -233,12 +237,13 @@ void QtViewportSurface::synchronize_interaction_cursor() {
   const QtViewportCursorPresentation next = qt_viewport_cursor_presentation(
       interaction_cursor_, input_ != nullptr && input_->hovered,
       pointer_captured());
-  const bool custom_selection_cursor =
+  const bool authored_cursor =
       next == QtViewportCursorPresentation::SelectionDefault ||
       next == QtViewportCursorPresentation::SelectionAdd ||
-      next == QtViewportCursorPresentation::SelectionSubtract;
+      next == QtViewportCursorPresentation::SelectionSubtract ||
+      next == QtViewportCursorPresentation::BoxCutter;
   const qreal next_device_pixel_ratio =
-      custom_selection_cursor ? std::max<qreal>(1.0, input_device_pixel_ratio()) : 0.0;
+      authored_cursor ? std::max<qreal>(1.0, input_device_pixel_ratio()) : 0.0;
   if (presented_cursor_ == next &&
       qFuzzyCompare(presented_cursor_device_pixel_ratio_ + 1.0,
                     next_device_pixel_ratio + 1.0)) {
@@ -263,6 +268,7 @@ void QtViewportSurface::synchronize_interaction_cursor() {
   case QtViewportCursorPresentation::SelectionDefault:
   case QtViewportCursorPresentation::SelectionAdd:
   case QtViewportCursorPresentation::SelectionSubtract:
+  case QtViewportCursorPresentation::BoxCutter:
     apply_cursor(qt_application_cursor(application_cursor_variant(next),
                                     next_device_pixel_ratio));
     break;

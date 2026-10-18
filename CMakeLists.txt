@@ -412,6 +412,8 @@ add_library(quader_editor_services STATIC
     src/editor/tools/extrude_tool_service.cpp
     src/editor/tools/extrude_viewport_interaction.cpp
     src/editor/tools/extrude_handle_layout.cpp
+    src/editor/tools/bridge_preview_handle_layout.cpp
+    src/editor/tools/bridge_preview_viewport_interaction.cpp
     src/editor/transform/mesh_arrangement_service.cpp
     src/editor/transform/align_tool_service.cpp
     src/editor/transform/mesh_transform_bake_service.cpp
@@ -830,10 +832,14 @@ add_library(quader_platform STATIC
 )
 
 quader_enable_common_pch(quader_platform)
-target_include_directories(quader_platform PUBLIC src)
+target_include_directories(quader_platform
+    PUBLIC src
+    PRIVATE "${QUADER_GENERATED_DIR}")
 target_link_libraries(quader_platform
     PUBLIC
-        quader_core)
+        quader_core
+    PRIVATE
+        Qt6::Core)
 if(QUADER_ENABLE_SENTRY)
     target_compile_definitions(quader_platform PRIVATE QUADER_ENABLE_SENTRY=1)
     target_link_libraries(quader_platform PRIVATE sentry::sentry)
@@ -1095,6 +1101,12 @@ qt_add_resources(quader_ui "quader_selection_cursors"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_default.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_add.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_subtract.png")
+
+qt_add_resources(quader_ui "quader_box_cutter_cursor"
+    PREFIX "/quader/cursors"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/box_cutter.png")
 
 qt_add_resources(quader_ui "quader_material_browser_icons"
     PREFIX "/quader/icons"
@@ -1762,6 +1774,7 @@ if(QUADER_BUILD_TESTS)
         tests/extrude_tool_service_tests.cpp
         tests/extrude_viewport_interaction_tests.cpp
         tests/extrude_handle_layout_tests.cpp
+        tests/bridge_preview_viewport_interaction_tests.cpp
         tests/extrude_preview_performance_tests.cpp
         tests/qt_extrude_tool_settings_tests.cpp
         tests/path_array_ui_catalog_tests.cpp

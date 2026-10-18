@@ -358,7 +358,7 @@ TEST(ViewportToolCatalogTests, CutLineCursorAndTemporaryModifiersFollowSemanticP
   EXPECT_TRUE(ports.plane_events.back().constrain_axis);
   EXPECT_FLOAT_EQ(ports.plane_events.back().screen_position.x, 345.0F);
   EXPECT_FLOAT_EQ(ports.plane_events.back().screen_position.y, 251.0F);
-  EXPECT_EQ(runtime.tool_pointer_cursor(ViewportToolId::Cut), ViewportPointerCursor::Default);
+  EXPECT_EQ(runtime.tool_pointer_cursor(ViewportToolId::Cut), ViewportPointerCursor::BoxCutter);
 }
 
 TEST(ViewportToolCatalogTests, CutModifierPolicyDoesNotChangeMirrorEvents) {
@@ -725,13 +725,16 @@ TEST(ViewportToolCatalogTests,
 }
 
 TEST(ViewportToolCatalogTests,
-     PrecisionCursorBelongsOnlyToUnifiedPrimitiveFootprintTool) {
+     AuthoredAndPrecisionCursorsBelongToTheirToolOwners) {
   ViewportToolRuntime runtime;
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
     const ViewportPointerCursor expected =
         descriptor.tool == ViewportToolId::CreatePrimitive
             ? ViewportPointerCursor::PrecisionCross
-            : ViewportPointerCursor::Default;
+            : ((descriptor.tool == ViewportToolId::Knife ||
+                descriptor.tool == ViewportToolId::Cut)
+                   ? ViewportPointerCursor::BoxCutter
+                   : ViewportPointerCursor::Default);
     EXPECT_EQ(runtime.tool_pointer_cursor(descriptor.tool), expected)
         << descriptor.id;
   }

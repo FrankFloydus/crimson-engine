@@ -14,6 +14,7 @@
 #include "editor/tools/light_creation_tool_service.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/tools/extrude_viewport_interaction.hpp"
+#include "editor/tools/bridge_preview_viewport_interaction.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/tools/viewport_curve_interaction_port.hpp"
@@ -49,6 +50,9 @@ struct NativeViewportToolPresentationSnapshot final {
   LinearArrayHandleState linear_array_handle;
   RadialArrayCenterState radial_array_center;
   ExtrudeHandleState extrusion_handle;
+  std::optional<BridgePreviewHandleState> bridge_handle;
+  BridgePreviewHandlePart bridge_hovered_part = BridgePreviewHandlePart::None;
+  bool bridge_dragging = false;
   const CurveToolPreviewState *curve_preview = nullptr;
   bool curve_controls_editable = false;
   bool curve_dragging = false;
@@ -133,6 +137,11 @@ public:
       ViewportCameraController &camera,
       const ViewportNativeToolInteractionFrame &frame);
   void clear_pointer_drag_state();
+  /// Restores only a captured Bridge handle; the shared preview stays pending.
+  [[nodiscard]] bool bridge_pointer_dragging() const {
+    return bridge_interaction_.dragging();
+  }
+  [[nodiscard]] CommandResult cancel_bridge_pointer_drag();
   [[nodiscard]] bool pointer_dragging() const;
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const;
 
@@ -191,6 +200,7 @@ private:
   ViewportToolRuntime runtime_;
   ViewportNativeToolInteraction interaction_;
   ExtrudeViewportInteraction extrude_interaction_;
+  BridgePreviewViewportInteraction bridge_interaction_;
   std::unique_ptr<ViewportCurveInteractionPort> curve_interaction_;
   mutable std::optional<std::uint64_t> hint_curve_selection_revision_;
   mutable bool hint_curve_anchor_selection_only_ = false;

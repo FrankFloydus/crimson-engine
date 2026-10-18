@@ -75,6 +75,13 @@ using quader::modeling::Vec3;
 using quader::modeling::VertexId;
 using quader::modeling::VertexPositionUpdate;
 
+[[nodiscard]] modeling::BridgeOptions sdk_bridge_options(
+    const quader_editor_core::BridgeOperationSettings &settings) {
+  return {.steps = settings.steps,
+          .start_tension = static_cast<float>(settings.start_tension),
+          .end_tension = static_cast<float>(settings.end_tension)};
+}
+
 template <typename ResultType>
 [[nodiscard]] ResultType rollback_publication_result(
     ModelingHostPublicationTransaction &publication, ResultType result) {
@@ -1275,7 +1282,7 @@ public:
         continue;
       }
       Result<PolygonDocument> document =
-          MeshProjectionService::sdk_document_from_polygon_document(
+          MeshProjectionService::sdk_persistence_document_from_polygon_document(
               *mesh->authored_polygon_document);
       if (!document.ok()) {
         continue;
@@ -1472,7 +1479,12 @@ public:
     // Retain the transaction identity so begin/end and replacement still refresh.
     const std::uint64_t semantic_revision =
         has_acknowledged_affine_transform_preview() ? 0U : fence.polygon_content_revision;
-    return (signature ^ semantic_revision) * 1099511628211ULL;
+    signature = (signature ^ semantic_revision) * 1099511628211ULL;
+    if (active_preview_operation_ == quader_editor_core::EditorOperationId::Bridge) {
+      // Handle edits remain visible even when a one-span mesh stays identical.
+      signature = (signature ^ fence.preview_content_revision) * 1099511628211ULL;
+    }
+    return signature;
   }
 
   /// Read the visible extrusion candidate without replacing its durable asset.
@@ -2147,10 +2159,7 @@ public:
         object.material_id = static_cast<int>(component->material_slot);
       }
       const auto source = sources.find(sdk_object_key(object_id));
-      object.selected = editor_mode_service_ != nullptr &&
-                                editor_mode_service_->mode() == EditorMode::Edit
-                            ? edit_scope_contains(native_id)
-                            : source != sources.end() && source->second.summary->selected;
+      object.selected = source != sources.end() && source->second.summary->selected;
       if (const auto *snapshot = mesh->authored_polygon_document.read_snapshot()) {
         object.document.share(*snapshot);
       } else {
@@ -2168,7 +2177,8 @@ public:
                           committed_documents.value()[source->second.document_index])
                     : session_.document_copy(object_id);
       if (document.ok() && (editor_mode_service_ == nullptr ||
-                            edit_scope_contains(native_id))) {
+                            (editor_mode_service_->mode() == EditorMode::Edit &&
+                             object.selected))) {
         const PolygonSelectionSnapshot selected = document.value().selection();
         switch (selected.kind) {
         case SelectionKind::Vertex:
@@ -3719,7 +3729,7 @@ public:
           quader_editor_core::normalize_bridge_operation_settings(
               value != nullptr ? *value
                                : quader_editor_core::BridgeOperationSettings{});
-      return bridge_selected_components(normalized.steps);
+      return bridge_selected_components(sdk_bridge_options(normalized));
     }
     if (operation == Id::MergeVerticesToActive) {
       const auto active = active_sdk_object();
@@ -3787,8 +3797,8 @@ public:
                                : quader_editor_core::BridgeOperationSettings{});
       mutation = [this, normalized](PolygonDocument &document) {
         return selection_mode_ == ModelingSelectionMode::Face
-                   ? document.bridge_selected_faces(normalized.steps)
-                   : document.bridge_selected_edges(normalized.steps);
+                   ? document.bridge_selected_faces(sdk_bridge_options(normalized))
+                   : document.bridge_selected_edges(sdk_bridge_options(normalized));
       };
       break;
     }
@@ -4463,7 +4473,7 @@ public:
             .message = "Half-Cut preview updated."};
   }
 
-  [[nodiscard]] ModelingCommandResult begin_bridge_preview(int steps) {
+  [[nodiscard]] ModelingCommandResult begin_bridge_preview(modeling::BridgeOptions options) {
     if (selection_mode_ != ModelingSelectionMode::Edge &&
         selection_mode_ != ModelingSelectionMode::Face) {
       return failure("Bridge works only in edge or face mode.");
@@ -4508,7 +4518,7 @@ public:
             selection_mode_ == ModelingSelectionMode::Face
                 ? SelectionKind::Face
                 : SelectionKind::Edge,
-            steps);
+            options);
     if (!candidate.ok()) {
       return failure(candidate.error_message());
     }
@@ -4587,7 +4597,7 @@ public:
             .message = "Bridge preview started."};
   }
 
-  [[nodiscard]] ModelingCommandResult update_bridge_preview(int steps) {
+  [[nodiscard]] ModelingCommandResult update_bridge_preview(modeling::BridgeOptions options) {
     const modeling::PreviewTransactionSummary preview =
         session_.preview_summary();
     if (!structural_preview_host_state_.has_value() ||
@@ -4609,7 +4619,7 @@ public:
             selection_mode_ == ModelingSelectionMode::Face
                 ? SelectionKind::Face
                 : SelectionKind::Edge,
-            steps);
+            options);
     if (!candidate.ok()) {
       return failure(candidate.error_message());
     }
@@ -5026,7 +5036,7 @@ public:
       }
       const auto normalized =
           quader_editor_core::normalize_bridge_operation_settings(*bridge);
-      ModelingCommandResult result = begin_bridge_preview(normalized.steps);
+      ModelingCommandResult result = begin_bridge_preview(sdk_bridge_options(normalized));
       if (result.ok) {
         active_preview_settings_ = settings;
       }
@@ -5108,7 +5118,7 @@ public:
       const auto normalized =
           quader_editor_core::normalize_bridge_operation_settings(*bridge);
       ModelingCommandResult result =
-          update_bridge_preview(normalized.steps);
+          update_bridge_preview(sdk_bridge_options(normalized));
       if (result.ok) {
         active_preview_settings_ = settings;
       }
@@ -5153,6 +5163,48 @@ public:
   [[nodiscard]] std::optional<quader_editor_core::EditorOperationId>
   active_preview_operation() const noexcept {
     return active_preview_operation_;
+  }
+
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const {
+    if (active_preview_operation_ != quader_editor_core::EditorOperationId::Bridge ||
+        !mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->fence_acknowledged ||
+        !session_.preview_active(mesh_preview_host_baseline_->preview_id)) {
+      return std::nullopt;
+    }
+    const auto feedback = session_.preview_bridge_shape();
+    const auto &fence = mesh_preview_host_baseline_->acknowledged_sdk;
+    const auto participant = std::ranges::find(
+        fence.preview_objects, modeling::SessionPreviewAction::ReplaceExisting,
+        &PreviewSdkObjectFence::action);
+    if (!feedback.has_value() || participant == fence.preview_objects.end()) {
+      return std::nullopt;
+    }
+    const auto native = native_object(participant->object);
+    const auto entity = native.has_value()
+        ? object_map_.entity_for_modeling_object(*native) : std::nullopt;
+    if (!native.has_value() || !entity.has_value() || !scene_.exists(*entity)) {
+      return std::nullopt;
+    }
+    const auto world = modeling_object_world_transform_resolver_
+        ? modeling_object_world_transform_resolver_(*native)
+        : std::optional<QMat4>{scene_.world_transform_matrix(*entity)};
+    if (!world.has_value()) return std::nullopt;
+    const auto native_vector = [](modeling::Vec3 value) {
+      return QVec3{value.x, value.y, value.z};
+    };
+    BridgePreviewHandleState state;
+    state.generation = (static_cast<std::uint64_t>(fence.preview.generation) << 32U) |
+                       fence.preview.index;
+    for (std::size_t index = 0; index < state.control_points.size(); ++index) {
+      state.control_points[index] = transform_point(*world, native_vector(feedback->controls[index]));
+    }
+    state.start_handle_axis = transform_vector(*world, native_vector(feedback->start_handle_axis));
+    state.end_handle_axis = transform_vector(*world, native_vector(feedback->end_handle_axis));
+    state.start_tension = feedback->start_tension;
+    state.end_tension = feedback->end_tension;
+    return state;
   }
 
   [[nodiscard]] std::optional<double>
@@ -5214,6 +5266,16 @@ public:
     const auto entity = object_map_.entity_for_modeling_object(native_id);
     return editor_mode_service_->mode() == EditorMode::Edit &&
            entity.has_value() && editor_mode_service_->contains(*entity);
+  }
+
+  [[nodiscard]] bool component_selection_target_available(int native_id) const {
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() != EditorMode::Edit) {
+      return false;
+    }
+    const auto entity = object_map_.entity_for_modeling_object(native_id);
+    return entity.has_value() && scene_.exists(*entity) &&
+           scene_.mesh(*entity) != nullptr && sdk_object(native_id).has_value();
   }
 
   [[nodiscard]] ModelingCommandResult apply_editor_mode_context(
@@ -5647,35 +5709,15 @@ public:
 
   [[nodiscard]] ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests) {
-    // Membership belongs to the mode context. A selection request cannot enroll
-    // another mesh, and validation must not settle or suspend an active draft.
+    // Selection may enroll any eligible mesh. Validate the complete batch before
+    // suspending a preview; only committed selection changes its participants.
     for (const auto &request : requests) {
-      if (!edit_scope_contains(request.modeling_object_id) ||
+      if (!component_selection_target_available(request.modeling_object_id) ||
           request.mode == ModelingSelectionMode::Object ||
           request.mode == ModelingSelectionMode::Group ||
           request.mode != requests.front().mode) {
-        return failure("Component selection requires current Edit participants and one component kind.");
+        return failure("Component selection requires live editable meshes and one component kind.");
       }
-    }
-    std::vector<ModelingComponentSelectionRequest> scoped_requests;
-    if (editor_mode_service_ != nullptr && !requests.empty() &&
-        (requests.front().edit == ModelingSelectionEdit::Replace ||
-         requests.front().mode != editor_mode_service_->snapshot().component_kind)) {
-      // Replace clears other participants' components, never their membership.
-      // Kind changes convert dormant selections in every untouched participant.
-      for (const auto &participant : editor_mode_service_->snapshot().participants) {
-        if (std::ranges::none_of(requests, [&](const auto &request) {
-              return request.modeling_object_id == participant.modeling_object_id;
-            })) {
-          scoped_requests.push_back({.modeling_object_id = participant.modeling_object_id,
-                                     .mode = requests.front().mode,
-                                     .edit = requests.front().edit == ModelingSelectionEdit::Replace
-                                                 ? ModelingSelectionEdit::Replace
-                                                 : ModelingSelectionEdit::Add});
-        }
-      }
-      scoped_requests.insert(scoped_requests.end(), requests.begin(), requests.end());
-      requests = scoped_requests;
     }
     const PreviewSelectionEditState preview_edit =
         suspend_operation_preview_for_selection_edit();
@@ -5721,10 +5763,7 @@ public:
       if (native.has_value()) {
         session_index_by_native.emplace(*native, index);
       }
-      selected_by_index.push_back(
-          editor_mode_service_ != nullptr
-              ? native.has_value() && edit_scope_contains(*native)
-              : session_objects[index].selected);
+      selected_by_index.push_back(session_objects[index].selected);
     }
 
     std::vector<StagedSelectionDocument> staged_documents;
@@ -5867,8 +5906,7 @@ public:
         // Native Add enrolls a fresh component participant. An inactive SDK
         // document can retain an earlier selection through object workflows;
         // that dormant payload must not become input to mode conversion.
-        if (editor_mode_service_ == nullptr &&
-            request.edit == ModelingSelectionEdit::Add && !target_was_selected) {
+        if (request.edit == ModelingSelectionEdit::Add && !target_was_selected) {
           Result<OperationResult> cleared = document.clear_selection();
           if (!cleared.ok()) {
             return finish_operation_preview_selection_edit(
@@ -5905,12 +5943,11 @@ public:
           !effective_selection.vertices.empty() ||
           !effective_selection.edges.empty() ||
           !effective_selection.faces.empty();
-      if (editor_mode_service_ == nullptr && request_index == 0U &&
+      if (request_index == 0U &&
           request.edit == ModelingSelectionEdit::Replace) {
         std::fill(selected_by_index.begin(), selected_by_index.end(), false);
       }
       selected_by_index[session_index->second] =
-          editor_mode_service_ != nullptr ||
           target_has_selection || request.retain_component_edit_target ||
           (request.edit == ModelingSelectionEdit::Add && target_was_selected);
     }
@@ -6058,7 +6095,8 @@ public:
 
     active_native_object_id_ = final_request.modeling_object_id;
     if (editor_mode_service_ != nullptr) {
-      editor_mode_service_->set_active_participant(*mapped_final_entity);
+      editor_mode_service_->synchronize_component_participants(
+          selected_entities, scene_active);
       editor_mode_service_->record_component_kind(final_request.mode);
     }
     if (selection_mode_ != final_request.mode) {
@@ -6096,11 +6134,14 @@ public:
 
     std::vector<int> targets;
     targets.reserve(sdk_bindings().size());
+    std::unordered_set<std::uint64_t> selected_objects;
+    for (const auto &object : session_.objects()) {
+      if (object.selected) {
+        selected_objects.insert(sdk_object_key(object.id));
+      }
+    }
     for (const auto &[native_id, object_id] : sdk_bindings()) {
-      if (editor_mode_service_ != nullptr) {
-        if (edit_scope_contains(native_id)) {
-          targets.push_back(native_id);
-        }
+      if (!selected_objects.contains(sdk_object_key(object_id))) {
         continue;
       }
       const auto entity = object_map_.entity_for_modeling_object(native_id);
@@ -6185,8 +6226,8 @@ public:
     }
 
     for (const auto &universe : universes) {
-      if (!edit_scope_contains(universe.modeling_object_id)) {
-        return failure("Selection inversion requires a current Edit participant.");
+      if (!component_selection_target_available(universe.modeling_object_id)) {
+        return failure("Selection inversion requires live editable meshes.");
       }
     }
     const PreviewSelectionEditState preview_edit =
@@ -6232,6 +6273,7 @@ public:
         sdk_universes.push_back({
             .object = *object,
             .eligible = {.mode = to_sdk_component_mode(universe.mode)},
+            .adopt_eligible_mode = true,
         });
         found = universe_by_object.find(object_key);
       }
@@ -6351,10 +6393,6 @@ public:
           rollback("Injected failure after SDK component inversion."));
     }
 
-    if (!synchronize_edit_membership(false)) {
-      return finish_operation_preview_selection_edit(
-          preview_edit, rollback("Edit membership could not be retained after inversion."));
-    }
     const std::vector<quader::modeling::SessionObjectSummary> after_objects =
         session_.objects();
     std::vector<EntityId> selected_entities;
@@ -6416,8 +6454,8 @@ public:
           preview_edit,
           commit_publication_result(publication, from_sdk(inverted)));
     }
-    // The component selection still publishes when fixed Edit membership keeps
-    // the scene selection unchanged; exercise that same rollback boundary.
+    // Component-only changes still exercise the same publication boundary when
+    // the set of selected scene entities remains unchanged.
     if (fails(ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
       return finish_operation_preview_selection_edit(
           preview_edit,
@@ -6436,6 +6474,10 @@ public:
       }
     }
     active_native_object_id_ = active_native;
+    if (editor_mode_service_ != nullptr) {
+      editor_mode_service_->synchronize_component_participants(
+          selected_entities, active_entity);
+    }
     inverted.value().changed = inverted.value().changed ||
                                scene_selection_changed ||
                                adapter_selection_changed;
@@ -7705,8 +7747,8 @@ public:
 
   [[nodiscard]] ModelingCommandResult insert_edge_loop(
       int modeling_object_id, int edge_a, int edge_b, float factor) {
-    if (!edit_scope_contains(modeling_object_id)) {
-      return failure("Operation target must be a current Edit participant.");
+    if (!component_selection_target_available(modeling_object_id)) {
+      return failure("Edge loop requires a live editable mesh.");
     }
 
     const std::optional<ObjectId> object = sdk_object(modeling_object_id);
@@ -7748,7 +7790,8 @@ public:
           if (editor_mode_service_ != nullptr) {
             editor_mode_service_->record_component_kind(selection_mode_);
             if (const auto entity = object_map_.entity_for_modeling_object(modeling_object_id)) {
-              editor_mode_service_->set_active_participant(*entity);
+              const std::array participants{*entity};
+              editor_mode_service_->synchronize_component_participants(participants, *entity);
             }
           }
           if (fails(
@@ -7765,8 +7808,8 @@ public:
       int modeling_object_id,
       std::span<const ModelingSdkKnifeTarget> points,
       std::span<const ModelingSdkKnifeStrokeSegment> segments) {
-    if (!edit_scope_contains(modeling_object_id)) {
-      return failure("Operation target must be a current Edit participant.");
+    if (!component_selection_target_available(modeling_object_id)) {
+      return failure("Knife stroke requires a live editable mesh.");
     }
 
     const std::optional<ObjectId> object = sdk_object(modeling_object_id);
@@ -7851,7 +7894,8 @@ public:
           if (editor_mode_service_ != nullptr) {
             editor_mode_service_->record_component_kind(selection_mode_);
             if (const auto entity = object_map_.entity_for_modeling_object(modeling_object_id)) {
-              editor_mode_service_->set_active_participant(*entity);
+              const std::array participants{*entity};
+              editor_mode_service_->synchronize_component_participants(participants, *entity);
             }
           }
           if (fails(
@@ -8431,14 +8475,8 @@ public:
         entry.mesh = MeshProjectionService::update_polygon_document_mesh_positions(
             std::move(*authored), entry.current_mesh,
             participant.position_update_plan.get());
-        // Collapsed authored faces can regain triangles as their neighbors move.
-        // Permit that larger render layout while retaining collapse rejection.
-        if (!entry.mesh.has_value() ||
-            entry.mesh->geometry().vertices.size() <
-                participant.base_mesh_positions.size()) {
-          entry.error = "Could not derive the transient transform mesh attributes.";
-          return;
-        }
+        // Canonical compilation can remove or restore triangles while the
+        // authored face loops remain valid. Publish its current layout.
         entry.mesh->name = entry.current_mesh.name;
         entry.layout_key = participant.layout_key;
         if (!std::ranges::equal(entry.mesh->geometry().vertices,
@@ -13231,7 +13269,7 @@ private:
         "Snap vertices to floor failed.", false, true, true, true);
   }
 
-  [[nodiscard]] ModelingCommandResult bridge_selected_components(int steps) {
+  [[nodiscard]] ModelingCommandResult bridge_selected_components(modeling::BridgeOptions options) {
     if (selection_mode_ != ModelingSelectionMode::Edge &&
         selection_mode_ != ModelingSelectionMode::Face) {
       return failure("Bridge works only in edge or face mode.");
@@ -13323,7 +13361,7 @@ private:
         survivor, merged, to_sdk(survivor_from_merged),
         selection_mode_ == ModelingSelectionMode::Face ? SelectionKind::Face
                                                         : SelectionKind::Edge,
-        steps);
+        options);
     if (!bridged.ok() || !bridged.value().success ||
         !bridged.value().changed) {
       return rollback(bridged.ok() ? bridged.value().message
@@ -15527,8 +15565,8 @@ private:
       const ModelingSelectionMode mode = selection_mode_;
       return [normalized, mode](PolygonDocument &document) {
         return mode == ModelingSelectionMode::Face
-                   ? document.bridge_selected_faces(normalized.steps)
-                   : document.bridge_selected_edges(normalized.steps);
+                   ? document.bridge_selected_faces(sdk_bridge_options(normalized))
+                   : document.bridge_selected_edges(sdk_bridge_options(normalized));
       };
     }
     case Id::EdgeBevel: {
@@ -17039,6 +17077,11 @@ std::uint64_t ModelingSdkProjectionAdapter::content_revision() const {
 
 std::uint64_t ModelingSdkProjectionAdapter::selection_overlay_preview_signature() const noexcept {
   return impl_->selection_overlay_preview_signature();
+}
+
+std::optional<BridgePreviewHandleState>
+ModelingSdkProjectionAdapter::bridge_preview_handle_state() const {
+  return impl_->bridge_preview_handle_state();
 }
 
 std::uint64_t ModelingSdkProjectionAdapter::selection_revision() const {

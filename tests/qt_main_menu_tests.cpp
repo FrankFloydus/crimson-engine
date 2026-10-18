@@ -772,7 +772,7 @@ TEST_F(QtFileMenuTests, UndoHistoryRejectsStaleRowsAndSceneRebinding) {
   EXPECT_FALSE(undo_history_menu()->actions().front()->isCheckable());
 }
 
-TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheInterpolatedBridge) {
+TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheBridgePreview) {
   for (const char *operand : {"edge", "face"}) {
     const QString component = QString::fromLatin1(operand);
     auto *menu = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_") + component);
@@ -781,7 +781,7 @@ TEST_F(QtFileMenuTests, ComponentMenusPresentOnlyTheInterpolatedBridge) {
     EXPECT_EQ(menu->findChild<QAction *>(
                   QStringLiteral("command_modeling_bridge_") + suffix), nullptr);
     auto *interpolated = menu->findChild<QAction *>(
-        QStringLiteral("command_modeling_interpolated_bridge_") + suffix);
+        QStringLiteral("command_modeling_preview_bridge_") + suffix);
     ASSERT_NE(interpolated, nullptr);
     EXPECT_TRUE(menu->actions().contains(interpolated));
     int bridge_entries = 0;

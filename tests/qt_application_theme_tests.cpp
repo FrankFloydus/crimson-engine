@@ -201,6 +201,35 @@ TEST(QtApplicationCursorTests,
 }
 
 TEST(QtApplicationCursorTests,
+     BoxCutterKeepsTheAuthoredSizeAndBladeTipAcrossDevicePixelRatios) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-box-cutter-cursor-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  using Variant = quader::QtApplicationCursorVariant;
+  const QPixmap original =
+      quader::qt_application_cursor_pixmap(Variant::BoxCutter, 1.0);
+  const QPixmap authored(QStringLiteral(":/quader/cursors/box_cutter.png"));
+  ASSERT_FALSE(original.isNull());
+  ASSERT_FALSE(authored.isNull());
+  EXPECT_EQ(original.toImage(), authored.toImage());
+  EXPECT_EQ(original.size(), QSize(24, 24));
+  EXPECT_GT(original.toImage().pixelColor(0, 23).alpha(), 0);
+
+  for (const qreal scale : {1.0, 1.5, 2.0}) {
+    SCOPED_TRACE(scale);
+    const QCursor cursor = quader::qt_application_cursor(Variant::BoxCutter, scale);
+    EXPECT_EQ(cursor.shape(), Qt::BitmapCursor);
+    EXPECT_EQ(cursor.pixmap().size(), QSize(qRound(24 * scale), qRound(24 * scale)));
+    EXPECT_DOUBLE_EQ(cursor.pixmap().devicePixelRatio(), scale);
+    EXPECT_EQ(cursor.hotSpot(), QPoint(0, 23));
+    EXPECT_GT(cursor.pixmap().toImage().pixelColor(0, qRound(23 * scale)).alpha(), 0);
+  }
+}
+
+TEST(QtApplicationCursorTests,
      InstallsTheAuthoredDefaultForAllWindowsAndPreservesSpecialCursors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -1309,10 +1338,16 @@ TEST(QtApplicationThemeTests,
                                               QColor(0, 90, 180));
 
   QApplication::setPalette(dark);
+  quader::QtUiScaleApplicationController controller(*owned_application);
   QMainWindow main_window;
+  main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
   QDockWidget dock(&main_window);
+  dock.setWidget(new QWidget(&dock));
   main_window.addDockWidget(Qt::LeftDockWidgetArea, &dock);
   quader::install_palette_aware_dock_title_presentation(dock);
+  main_window.resize(320, 200);
+  main_window.show();
+  QCoreApplication::processEvents();
   EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
 
   QAbstractButton *const close_button = dock.findChild<QAbstractButton *>(
@@ -1323,12 +1358,13 @@ TEST(QtApplicationThemeTests,
       Qt::FindDirectChildrenOnly);
   ASSERT_NE(close_button, nullptr);
   ASSERT_NE(float_button, nullptr);
-  EXPECT_TRUE(close_button->icon().availableSizes().isEmpty());
-  EXPECT_TRUE(float_button->icon().availableSizes().isEmpty());
-  EXPECT_GT(render_icon(close_button->icon(), QSize(24, 24), 3.0)
-                .pixelColor(36, 36)
-                .alpha(),
-            0);
+  const auto expect_no_button_paint_or_hit_area = [close_button, float_button]() {
+    for (QAbstractButton *button : {close_button, float_button}) {
+      EXPECT_TRUE(button->geometry().isEmpty());
+      EXPECT_TRUE(button->visibleRegion().isEmpty());
+    }
+  };
+  expect_no_button_paint_or_hit_area();
 
   const auto drain_palette_transition = []() {
     for (int event_turn = 0; event_turn < 2; ++event_turn) {
@@ -1341,19 +1377,13 @@ TEST(QtApplicationThemeTests,
   drain_palette_transition();
   const QString light_style = dock.styleSheet();
   EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
-  EXPECT_LT(relative_luminance(
-                render_icon(close_button->icon(), QSize(24, 24), 3.0)
-                    .pixelColor(36, 36)),
-            0.05);
+  expect_no_button_paint_or_hit_area();
 
   QApplication::setPalette(dark);
   drain_palette_transition();
   EXPECT_NE(dock.styleSheet(), light_style);
   EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
-  EXPECT_GT(relative_luminance(
-                render_icon(close_button->icon(), QSize(24, 24), 3.0)
-                    .pixelColor(36, 36)),
-            0.75);
+  expect_no_button_paint_or_hit_area();
 
   QPalette darker = dark;
   darker.setColor(QPalette::Active, QPalette::Button, QColor(8, 8, 8));
@@ -1363,7 +1393,9 @@ TEST(QtApplicationThemeTests,
   EXPECT_NE(dock.styleSheet(), first_dark_style);
   EXPECT_EQ(dock.styleSheet(), quader::qt_dock_title_style_sheet(darker));
   EXPECT_FALSE(dock.styleSheet().contains(QStringLiteral("url(")));
+  expect_no_button_paint_or_hit_area();
 
+  controller.apply_factor(2.0F);
   const quader::QtUiScaleMetrics doubled(2.0F, 9U);
   quader::apply_ui_scale_to_palette_aware_dock_title_presentation(
       dock, doubled);
@@ -1373,5 +1405,6 @@ TEST(QtApplicationThemeTests,
   EXPECT_EQ(dock.styleSheet(),
             quader::qt_dock_title_style_sheet(light, doubled));
   EXPECT_TRUE(dock.styleSheet().contains(QStringLiteral("width: 44px")));
+  expect_no_button_paint_or_hit_area();
   QApplication::setPalette(original_palette);
 }

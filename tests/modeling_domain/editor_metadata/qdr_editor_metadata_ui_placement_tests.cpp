@@ -293,7 +293,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractOperationTopBarPlacesSelecti
 }
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractToolSettingsPanelPlacesPreviewScopedPreferenceGroups) {
-	const qhc::HostUiPlacementDescriptor& bridge = require_placement("settings_interpolated_bridge");
+	const qhc::HostUiPlacementDescriptor& bridge = require_placement("settings_bridge");
 	const qhc::HostUiPlacementDescriptor& edge_bevel = require_placement("settings_edge_bevel");
 	const qhc::HostUiPlacementDescriptor& thicken = require_placement("settings_thicken");
 	const qhc::HostUiPlacementDescriptor& slice_quad = require_placement("settings_slice_quad");
@@ -303,7 +303,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractToolSettingsPanelPlacesPrevi
 
 	EXPECT_TRUE(same_text(bridge.surface_id, "tool_settings_panel"));
 	EXPECT_TRUE(same_text(bridge.target_id, "operation.bridge"));
-	EXPECT_TRUE(same_text(bridge.label, "Interpolated Bridge"));
+	EXPECT_TRUE(same_text(bridge.label, "Bridge"));
         EXPECT_TRUE(bridge.visibility ==
                     qhc::HostUiVisibilityCondition::BridgePreviewActive);
 

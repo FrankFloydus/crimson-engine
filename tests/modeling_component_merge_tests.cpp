@@ -62,6 +62,32 @@ std::vector<quader_poly::Edge> edges_at(const quader_poly::Document &document,
   return edges;
 }
 
+quader_poly::Document saved_folded_connect_source() {
+  // Exact authored geometry and allocation marks from SEL-20261010-EA5C510E.
+  quader_poly::Document document;
+  document.vertices = {
+      {1, {-2.0F, -0.5F, 2.0F}},
+      {2, {1.6442902088165283F, -0.5F, 1.6442902088165283F}},
+      {3, {2.0F, 3.4893150329589844F, 2.0F}},
+      {4, {-2.0F, 3.4893150329589844F, 2.0F}},
+      {5, {-2.0F, -0.5F, -2.0F}},
+      {6, {-2.0F, 3.4893150329589844F, -2.0F}},
+      {7, {2.0F, 3.4893150329589844F, -2.0F}},
+      {8, {2.0F, -0.5F, -2.0F}},
+      {14, {2.9748735427856445F, 4.489315032958984F, -1.1005066633224487F}},
+  };
+  document.faces = {
+      {.id = 1, .vertices = {1, 2, 3, 4}},
+      {.id = 2, .vertices = {5, 6, 7, 8}},
+      {.id = 4, .vertices = {5, 1, 4, 6}},
+      {.id = 6, .vertices = {5, 8, 2, 1}},
+      {.id = 5, .vertices = {2, 14, 7, 6, 4, 3}},
+  };
+  document.next_vertex_id = 15;
+  document.next_face_id = 10;
+  return document;
+}
+
 quader_poly::Document saved_insert_edge_loop_source() {
   // Authored topology from SEL-20260930-B0193489, with its original sparse IDs.
   // Both end caps contain a collinear corner opposite the selected quad strip.
@@ -860,6 +886,120 @@ TEST_F(ModelingComponentMergeTests, PolygonReadSnapshotPinsAcceptedPreviewAndRej
   EXPECT_EQ(committed.value().document.view().vertices.size(), 4U);
 }
 
+TEST_F(ModelingComponentMergeTests, ConnectsBothSavedFoldedPairsAndReplaysTwoPublishedHistorySteps) {
+  const auto document = saved_folded_connect_source();
+  const auto created = editor_.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(document),
+      {.name = "Saved folded Connect face"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor_.object(object).set_transform({
+      .location = {-2.3253774642944336F, 4.510684490203857F, 17.881729125976562F},
+      .rotation_euler = {0.0F, 0.7853982448577881F, 0.0F}}).ok());
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_.selection().select_vertices(object, {7, 3}).ok());
+  const auto before = test::capture_command_observable_state(editor_);
+  auto &history = project_.active_scene()->session->history();
+  const auto history_count = history.undo_count();
+  const auto original_mesh = editor_.query().compiled_object_mesh(object);
+  ASSERT_TRUE(original_mesh.has_value());
+
+  const auto connected = editor_.commands().execute(quader_command::kModelingConnectVertices);
+
+  ASSERT_TRUE(connected.ok()) << connected.error_message();
+  ASSERT_TRUE(connected.changed());
+  EXPECT_EQ(history.undo_count(), history_count + 1U);
+  const auto expect_published_cut = [&](bool side_cut) {
+    const auto published = topology(object);
+    ASSERT_EQ(published.vertices.size(), 9U);
+    const std::size_t expected_face_count = side_cut ? 7U : 6U;
+    ASSERT_EQ(published.faces.size(), expected_face_count);
+    const auto *roof = quader_poly::find_face(published, 5);
+    const auto *side = quader_poly::find_face(published, 10);
+    ASSERT_NE(roof, nullptr);
+    ASSERT_NE(side, nullptr);
+    EXPECT_EQ(roof->vertices, (std::vector<quader_poly::ElementId>{7, 6, 4, 3}));
+    if (side_cut) {
+      EXPECT_EQ(side->vertices, (std::vector<quader_poly::ElementId>{2, 14, 7}));
+      const auto *new_triangle = quader_poly::find_face(published, 11);
+      ASSERT_NE(new_triangle, nullptr);
+      EXPECT_EQ(new_triangle->vertices, (std::vector<quader_poly::ElementId>{7, 3, 2}));
+    } else {
+      EXPECT_EQ(side->vertices, (std::vector<quader_poly::ElementId>{3, 2, 14, 7}));
+    }
+    const auto selection = editor_.selection().summary();
+    // The native component mode is independent of the operation's SDK result.
+    EXPECT_EQ(selection.mode, QuaderSelectionMode::Vertex);
+    EXPECT_EQ(selection.selected_edge_count, 1U);
+    const auto snapshot = project_.active_scene()->session->modeling()
+        .polygon_document_read_snapshot(object.modeling_object_id);
+    ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+    const auto &selected = snapshot.value().selection;
+    EXPECT_EQ(selected.kind, modeling::SelectionKind::Edge);
+    ASSERT_EQ(selected.edges.size(), 1U);
+    EXPECT_EQ(selected.edges.front().a.index, side_cut ? 2U : 3U);
+    EXPECT_EQ(selected.edges.front().b.index, 7U);
+    EXPECT_TRUE(selected.has_active);
+    EXPECT_EQ(selected.active_edge, selected.edges.front());
+    const auto mesh = editor_.query().compiled_object_mesh(object);
+    ASSERT_TRUE(mesh.has_value());
+    EXPECT_TRUE(mesh->has_authored_polygon_document);
+    EXPECT_GT(mesh->revision, original_mesh->revision);
+    EXPECT_EQ(mesh->face_textures.size(), expected_face_count);
+    const auto first = quader_poly::find_vertex(document, side_cut ? 2 : 3)->position;
+    const auto second = quader_poly::find_vertex(document, 7)->position;
+    std::size_t connector_occurrences = 0;
+    for (std::size_t triangle = 0; triangle + 2U < mesh->indices.size(); triangle += 3U) {
+      for (std::size_t corner = 0; corner < 3U; ++corner) {
+        const auto a = mesh->indices[triangle + corner];
+        const auto b = mesh->indices[triangle + (corner + 1U) % 3U];
+        ASSERT_LT(a, mesh->vertices.size());
+        ASSERT_LT(b, mesh->vertices.size());
+        const auto start = mesh->vertices[a].position;
+        const auto end = mesh->vertices[b].position;
+        if ((same_position(start, first) && same_position(end, second)) ||
+            (same_position(start, second) && same_position(end, first))) {
+          ++connector_occurrences;
+        }
+      }
+    }
+    EXPECT_EQ(connector_occurrences, 2U);
+  };
+  expect_published_cut(false);
+  ASSERT_FALSE(HasFatalFailure());
+  const auto after_first = test::capture_command_observable_state(editor_);
+  ASSERT_TRUE(editor_.selection().select_vertices(object, {7, 2}).ok());
+  const auto before_second = test::capture_command_observable_state(editor_);
+  const auto second_connected = editor_.commands().execute(quader_command::kModelingConnectVertices);
+  ASSERT_TRUE(second_connected.ok()) << second_connected.error_message();
+  ASSERT_TRUE(second_connected.changed());
+  EXPECT_EQ(history.undo_count(), history_count + 2U);
+  expect_published_cut(true);
+  ASSERT_FALSE(HasFatalFailure());
+  const auto after_second = test::capture_command_observable_state(editor_);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_EQ(history.undo_count(), history_count + 1U);
+  expect_semantics(before_second);
+  EXPECT_EQ(topology(object).faces.size(), 6U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  EXPECT_EQ(history.undo_count(), history_count);
+  expect_semantics(before);
+  EXPECT_EQ(topology(object).faces.size(), 5U);
+  const auto undone_mesh = editor_.query().compiled_object_mesh(object);
+  ASSERT_TRUE(undone_mesh.has_value());
+  EXPECT_EQ(undone_mesh->face_textures.size(), 5U);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(history.undo_count(), history_count + 1U);
+  expect_semantics(after_first);
+  expect_published_cut(false);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  EXPECT_EQ(history.undo_count(), history_count + 2U);
+  expect_semantics(after_second);
+  expect_published_cut(true);
+}
+
 TEST_F(ModelingComponentMergeTests, ConnectBatchesApplicableMeshesAndPreservesComponentlessObject) {
   const auto first = create_quad(0.0F, "First Connect Quad");
   const auto second = create_quad(4.0F, "Second Connect Quad");
@@ -1010,7 +1150,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentPart
     ASSERT_TRUE(editor_.selection().select_edge(
         object, face.vertices[2], face.vertices[3], QuaderSelectionEdit::Add).ok());
   }
-  ASSERT_EQ(editor_.selection().summary().selected_object_count, 3U);
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 4U);
   expect_component_operation_availability(
       quader_command::kModelingConnectEdges, "connect_edges", false);
@@ -1043,7 +1183,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentPart
       first, interior_edges[0].a, interior_edges[0].b).ok());
   ASSERT_TRUE(editor_.selection().select_edge(
       second, interior_edges[1].a, interior_edges[1].b, QuaderSelectionEdit::Add).ok());
-  ASSERT_EQ(editor_.selection().summary().selected_object_count, 3U);
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 2U);
   expect_component_operation_availability(
       quader_command::kModelingDissolveEdges, "dissolve_edges", false);

@@ -9,6 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
 #include "app/app.hpp"
 #include "app/app_frame_schedule.hpp"
 #include "assets/default_material_catalog.hpp"
@@ -23,6 +24,7 @@
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "platform/window_placement.hpp"
+#include "platform/fatal_error_handler.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "support/qt_viewport_input_test_helpers.hpp"
@@ -62,6 +64,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QAbstractNativeEventFilter>
 #include <QAbstractAnimation>
 #include <QAbstractItemModel>
@@ -105,18 +108,21 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QImage>
+#include <QImageReader>
 #include <QLayout>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPointer>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QPixmap>
 #include <QRegion>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QScopeGuard>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -133,6 +139,7 @@
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QTreeWidgetItemIterator>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QScopedValueRollback>
@@ -155,6 +162,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -795,7 +803,7 @@ TEST(QtProjectWorkspaceTests,
 
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 4);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
@@ -815,7 +823,7 @@ TEST(QtProjectWorkspaceTests,
   tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 4);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
@@ -826,7 +834,7 @@ TEST(QtProjectWorkspaceTests,
   tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 4);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
@@ -973,10 +981,10 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     EditorModeDropdownProjectsOwnerModesAndRetainsUnchangedControls) {
+     SelectionToolbarKeepsAllModesAvailableAndRetainsUnchangedControls) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-editor-mode-toolbar-test";
+  char application_name[] = "quader-selection-toolbar-test";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
@@ -1013,7 +1021,7 @@ TEST(QtProjectWorkspaceTests,
   const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
   QList<QAction *> retained_actions;
   QList<QToolButton *> retained_buttons;
-  for (const auto *kind : {"Vertex", "Edge", "Face", "Group"}) {
+  for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
     const QString suffix = QString::fromLatin1(kind);
     auto *action = toolbar.findChild<QAction *>(
         QStringLiteral("selectionMode%1").arg(suffix));
@@ -1027,27 +1035,12 @@ TEST(QtProjectWorkspaceTests,
     retained_actions.push_back(action);
     retained_buttons.push_back(button);
   }
-  auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
-  ASSERT_NE(combo, nullptr);
-  ASSERT_EQ(combo->count(), 2);
-  EXPECT_EQ(toolbar.widgetForAction(toolbar.actions().front()), combo);
-  ASSERT_EQ(toolbar.actions().size(), 6);
-  QAction *selection_separator = toolbar.actions()[1];
-  ASSERT_TRUE(selection_separator->isSeparator());
+  EXPECT_EQ(toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo")), nullptr);
+  ASSERT_EQ(toolbar.actions().size(), 5);
   EXPECT_EQ(toolbar.findChild<QLabel *>(QStringLiteral("selectionToolbarLabel")), nullptr);
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
-  int requests = 0;
   int selection_requests = 0;
   int group_toggle_requests = 0;
-  bool last_mode_request_changed = false;
-  toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
-    ++requests;
-    const auto result = editor.mode().set(mode);
-    EXPECT_TRUE(result.ok());
-    last_mode_request_changed = result.changed();
-    // The production callback also restores the owner after a rejected request.
-    toolbar.synchronize(editor, editor.selection().summary().mode, true);
-  });
   toolbar.set_mode_requested_callback([&](quader::QuaderSelectionMode mode) {
     ++selection_requests;
     EXPECT_TRUE(editor.selection().set_mode(mode).ok());
@@ -1059,19 +1052,25 @@ TEST(QtProjectWorkspaceTests,
         quader::quader_command::kSelectToggleGroupSelection).ok());
     toolbar.synchronize(editor, editor.selection().summary().mode, true);
   });
-  const auto verify_controls = [&](bool edit) {
-    EXPECT_EQ(combo->currentIndex(), edit ? 1 : 0);
-    EXPECT_TRUE(selection_separator->isVisible());
-    EXPECT_EQ(toolbar.actions().size(), 6);
-    EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh")), nullptr);
+  const auto verify_controls = [&]() {
+    EXPECT_EQ(toolbar.actions().size(), 5);
+    const auto mode = editor.selection().summary().mode;
+    int checked_mode_actions = 0;
     for (qsizetype index = 0; index < retained_actions.size(); ++index) {
       QAction *action = retained_actions[index];
       QToolButton *button = retained_buttons[index];
       EXPECT_EQ(toolbar.findChild<QAction *>(action->objectName()), action);
       EXPECT_EQ(toolbar.widgetForAction(action), button);
-      const bool component = action->objectName() != "selectionModeGroup";
-      EXPECT_EQ(action->isVisible(), component == edit);
-      if (component == edit) EXPECT_TRUE(action->isEnabled());
+      EXPECT_TRUE(action->isVisible());
+      const bool group = action->objectName() == "selectionModeGroup";
+      EXPECT_EQ(action->isEnabled(), !group ||
+          editor.mode().current() == quader::QuaderEditorMode::Object);
+      if (!group && action->isChecked()) {
+        ++checked_mode_actions;
+      }
+      if (group) {
+        EXPECT_EQ(action->isChecked(), mode == quader::QuaderSelectionMode::Group);
+      }
       EXPECT_FALSE(action->text().isEmpty());
       EXPECT_FALSE(action->toolTip().isEmpty());
       EXPECT_FALSE(action->icon().isNull());
@@ -1080,6 +1079,7 @@ TEST(QtProjectWorkspaceTests,
       EXPECT_EQ(button->accessibleDescription(), action->toolTip());
       EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
     }
+    EXPECT_EQ(checked_mode_actions, 1);
   };
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!review_directory.isEmpty()) {
@@ -1101,60 +1101,7 @@ TEST(QtProjectWorkspaceTests,
       toolbar.layout()->invalidate();
       toolbar.layout()->activate();
     }
-    EXPECT_EQ(combo->height(), metrics.px(30));
-    EXPECT_GE(combo->width(), combo->minimumSizeHint().width());
-    EXPECT_GE(combo->width(), combo->sizeHint().width());
-    EXPECT_TRUE(combo->isVisible());
-    EXPECT_TRUE(toolbar.rect().contains(combo->geometry()));
-    QStyleOptionComboBox combo_option;
-    combo_option.initFrom(combo);
-    combo_option.currentText = combo->currentText();
-    combo_option.frame = combo->hasFrame();
-    const QRect text_rect = combo->style()->subControlRect(
-        QStyle::CC_ComboBox, &combo_option, QStyle::SC_ComboBoxEditField, combo);
-    const QRect arrow_rect = combo->style()->subControlRect(
-        QStyle::CC_ComboBox, &combo_option, QStyle::SC_ComboBoxArrow, combo);
-    EXPECT_TRUE(arrow_rect.isValid());
-    EXPECT_FALSE(text_rect.intersects(arrow_rect));
-    for (int index = 0; index < combo->count(); ++index) {
-      EXPECT_GE(text_rect.width(),
-                combo->fontMetrics().horizontalAdvance(combo->itemText(index)))
-          << combo->itemText(index).toStdString();
-    }
-    const int requests_before_popup = requests;
-    const auto mode_before_popup = editor.mode().current();
-    expect_popup_restores_committed_combo_item(*combo, application);
-    combo->showPopup();
-    application.processEvents();
-    QWidget *popup = combo->view()->window();
-    ASSERT_NE(popup, nullptr);
-    ASSERT_TRUE(popup->isVisible());
-    const QRect trigger(combo->mapToGlobal(QPoint{}), combo->size());
-    QScreen *popup_screen = QGuiApplication::screenAt(trigger.bottomLeft());
-    ASSERT_NE(popup_screen, nullptr);
-    ASSERT_LE(trigger.bottom() + popup->height(),
-              popup_screen->availableGeometry().bottom());
-    EXPECT_EQ(popup->geometry().top(), trigger.bottom() + 1)
-        << "Object/Edit choices must open below the whole mode field";
-    EXPECT_EQ(combo->view()->layoutDirection(), combo->layoutDirection());
-    EXPECT_TRUE(combo->view()->visualRect(combo->view()->currentIndex()).intersects(
-        combo->view()->viewport()->rect()));
-    if (!review_directory.isEmpty()) {
-      const QRect capture_rect = trigger.united(popup->geometry()).adjusted(-8, -8, 8, 8)
-                                     .intersected(popup_screen->geometry());
-      const QPixmap capture = popup_screen->grabWindow(0, capture_rect.x(), capture_rect.y(),
-                                                       capture_rect.width(), capture_rect.height());
-      ASSERT_FALSE(capture.isNull());
-      EXPECT_TRUE(capture.save(QDir(review_directory).filePath(
-          QStringLiteral("editor-mode-popup-%1.png").arg(suffix))));
-    }
-    send_key(*popup, Qt::Key_Escape);
-    EXPECT_FALSE(popup->isVisible());
-    EXPECT_EQ(requests, requests_before_popup);
-    EXPECT_EQ(editor.mode().current(), mode_before_popup);
-    verify_controls(editor.mode().current() == quader::QuaderEditorMode::Edit);
-    EXPECT_EQ(toolbar.widgetForAction(selection_separator)->isVisible(),
-              selection_separator->isVisible());
+    verify_controls();
     QList<QAction *> overflowed_actions;
     for (qsizetype index = 0; index < retained_actions.size(); ++index) {
       QAction *action = retained_actions[index];
@@ -1171,7 +1118,7 @@ TEST(QtProjectWorkspaceTests,
     }
     if (!review_directory.isEmpty()) {
       EXPECT_TRUE(toolbar.grab().save(QDir(review_directory).filePath(
-          QStringLiteral("editor-mode-toolbar-%1.png").arg(suffix))));
+          QStringLiteral("selection-toolbar-%1.png").arg(suffix))));
     }
     if (!overflowed_actions.isEmpty()) {
       auto *extension = toolbar.findChild<QToolButton *>(
@@ -1185,13 +1132,12 @@ TEST(QtProjectWorkspaceTests,
         ASSERT_TRUE(menu->isVisible());
         for (QAction *action : overflowed_actions) {
           EXPECT_TRUE(menu->actions().contains(action));
-          EXPECT_TRUE(action->isEnabled());
           EXPECT_TRUE(menu->actionGeometry(action).isValid());
           EXPECT_TRUE(menu->rect().contains(menu->actionGeometry(action)));
         }
         if (!review_directory.isEmpty()) {
           EXPECT_TRUE(menu->grab().save(QDir(review_directory).filePath(
-              QStringLiteral("editor-mode-toolbar-%1-overflow.png").arg(suffix))));
+              QStringLiteral("selection-toolbar-%1-overflow.png").arg(suffix))));
         }
         send_key(*menu, Qt::Key_Escape);
         EXPECT_FALSE(menu->isVisible());
@@ -1203,7 +1149,6 @@ TEST(QtProjectWorkspaceTests,
           ASSERT_NE(button, nullptr);
           EXPECT_TRUE(retained_buttons.contains(button));
           EXPECT_TRUE(button->isVisible());
-          EXPECT_TRUE(button->isEnabled());
         }
         click_widget(*extension, extension->rect().center());
         application.processEvents();
@@ -1211,9 +1156,14 @@ TEST(QtProjectWorkspaceTests,
     }
   };
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
-  verify_controls(false);
-  EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
-  EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Tab"), Qt::CaseInsensitive));
+  verify_controls();
+  auto *object = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
+  ASSERT_NE(object, nullptr);
+  EXPECT_TRUE(object->isChecked());
+  EXPECT_TRUE(object->toolTip().contains(QStringLiteral("[4]")));
+  ASSERT_NE(object->actionGroup(), nullptr);
+  EXPECT_EQ(object->actionGroup()->actions().size(), 4);
+  EXPECT_EQ(object->actionGroup()->checkedAction(), object);
   review_layout(QStringLiteral("object-100"), 1.0F, 1000);
   auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
   ASSERT_NE(group, nullptr);
@@ -1228,6 +1178,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_requests, 0);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Group);
   EXPECT_TRUE(group->isChecked());
+  EXPECT_TRUE(object->isChecked());
   review_layout(QStringLiteral("object-group-selected-100"), 1.0F, 1000);
   click_widget(*group_button, group_button->rect().center());
   EXPECT_EQ(group_toggle_requests, 2);
@@ -1243,14 +1194,14 @@ TEST(QtProjectWorkspaceTests,
   review_layout(QStringLiteral("object-200"), 2.0F, 1000);
   review_layout(QStringLiteral("object-narrow-200"), 2.0F, 320);
   review_layout(QStringLiteral("object-narrow-100-down"), 1.0F, 320);
-  combo->setCurrentIndex(1);
-  EXPECT_EQ(requests, 0) << "Programmatic presentation cannot enter Edit";
-  ASSERT_TRUE(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection,
-                                      Q_ARG(int, 1)));
-  EXPECT_EQ(requests, 1);
+  auto *vertex = toolbar.findChild<QAction *>(QStringLiteral("selectionModeVertex"));
+  ASSERT_NE(vertex, nullptr);
+  vertex->trigger();
+  EXPECT_EQ(selection_requests, 1);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Vertex);
   EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
   EXPECT_EQ(editor.mode().state().participants.size(), 2u);
-  verify_controls(true);
+  verify_controls();
   review_layout(QStringLiteral("edit-100"), 1.0F, 1000);
   review_layout(QStringLiteral("edit-200"), 2.0F, 1000);
   review_layout(QStringLiteral("edit-narrow-200"), 2.0F, 320);
@@ -1267,10 +1218,6 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(face->isChecked());
   EXPECT_EQ(host.focusWidget(), face_button);
   review_layout(QStringLiteral("edit-keyboard-focus"), 1.0F, 1000);
-  ASSERT_TRUE(editor.preferences().set_shortcut(
-      quader::quader_command::kEditorModeToggleEdit, "Ctrl+Alt+F23").ok());
-  toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
-  EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Ctrl+Alt+F23")));
   ASSERT_TRUE(editor.preferences().set_shortcut(
       editor.commands().keybinding_target_id_for_selection_mode(
           quader::QuaderSelectionMode::Face), "Ctrl+Alt+F22").ok());
@@ -1304,7 +1251,6 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(localization.select_locale("it-IT"));
   toolbar.set_localization(localization);
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
-  EXPECT_EQ(combo->currentText(), QString::fromUtf8("Modalità Modifica"));
   int scale_cycle = 0;
   for (const float factor : {1.0F, 2.0F, 1.0F}) {
     review_layout(QStringLiteral("edit-italian-narrow-%1-%2")
@@ -1313,7 +1259,6 @@ TEST(QtProjectWorkspaceTests,
   }
   toolbar.setLayoutDirection(Qt::RightToLeft);
   review_layout(QStringLiteral("edit-italian-rtl"), 1.0F, 1000);
-  EXPECT_EQ(combo->layoutDirection(), Qt::RightToLeft);
   review_layout(QStringLiteral("edit-italian-rtl-narrow"), 1.0F, 320);
   toolbar.setLayoutDirection(Qt::LeftToRight);
   host.removeToolBar(&toolbar);
@@ -1353,68 +1298,40 @@ TEST(QtProjectWorkspaceTests,
       native_palette, Qt::ContrastPreference::HighContrast);
   review_layout(QStringLiteral("edit-native-high-contrast"), 1.0F, 1000);
   EXPECT_EQ(application.palette().resolveMask(), 0u);
-  ASSERT_TRUE(editor.commands().execute(quader::quader_command::kEditorModeObject).ok());
+  object->trigger();
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
-  verify_controls(false);
+  verify_controls();
   EXPECT_FALSE(group->isChecked());
   review_layout(QStringLiteral("object-native-high-contrast"), 1.0F, 1000);
-  const QPoint ordinary_host_position = host.pos();
-  const QRect available = host.screen()->availableGeometry();
-  const QPoint ordinary_anchor = combo->mapToGlobal(QPoint(0, combo->height()));
-  host.move(host.x(), host.y() + available.bottom() - 2 - ordinary_anchor.y());
-  application.processEvents();
-  const QPoint edge_anchor = combo->mapToGlobal(QPoint(0, combo->height()));
-  // Sample Qt's own placement on this exact widget/palette. Native popup
-  // placement may use the full screen, including its taskbar-reserved area.
-  combo->QComboBox::showPopup();
-  application.processEvents();
-  const QRect native_fallback_geometry = combo->view()->window()->geometry();
-  combo->hidePopup();
-  combo->showPopup();
-  application.processEvents();
-  QWidget *edge_popup = combo->view()->window();
-  ASSERT_NE(edge_popup, nullptr);
-  ASSERT_TRUE(edge_popup->isVisible());
-  ASSERT_GT(edge_anchor.y() + edge_popup->height() - 1, available.bottom());
-  EXPECT_NE(edge_popup->geometry().top(), edge_anchor.y());
-  EXPECT_EQ(edge_popup->geometry(), native_fallback_geometry)
-      << "when below cannot fit, preserve Qt's native fallback geometry";
-  EXPECT_TRUE(combo->view()->visualRect(combo->view()->currentIndex()).intersects(
-      combo->view()->viewport()->rect()));
-  combo->hidePopup();
-  host.move(ordinary_host_position);
-  application.processEvents();
-  EXPECT_EQ(requests, 1);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
   const int object_toolbar_width = toolbar.sizeHint().width();
   quader::SceneSession empty_scene;
   quader::QuaderEditorApi empty_editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(empty_scene));
   ASSERT_TRUE(empty_editor.commands().set_keybinding_storage_path({}).ok());
-  toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
-    ++requests;
-    const auto result = empty_editor.mode().set(mode);
-    EXPECT_TRUE(result.ok());
-    last_mode_request_changed = result.changed();
+  toolbar.set_mode_requested_callback([&](quader::QuaderSelectionMode mode) {
+    EXPECT_TRUE(empty_editor.selection().set_mode(mode).ok());
     toolbar.synchronize(empty_editor, empty_editor.selection().summary().mode, true);
   });
   toolbar.synchronize(empty_editor, quader::QuaderSelectionMode::Object);
-  const auto empty_mode_revision = empty_editor.mode().revision();
-  const auto empty_undo_count = empty_scene.history().undo_count();
-  combo->setFocus(Qt::TabFocusReason);
-  send_key(*combo, Qt::Key_Down);
-  EXPECT_EQ(requests, 2);
-  EXPECT_FALSE(last_mode_request_changed);
-  EXPECT_EQ(empty_editor.mode().current(), quader::QuaderEditorMode::Object);
-  EXPECT_EQ(empty_editor.mode().revision(), empty_mode_revision);
-  EXPECT_EQ(empty_scene.history().undo_count(), empty_undo_count);
-  verify_controls(false);
   EXPECT_EQ(toolbar.sizeHint().width(), object_toolbar_width);
   action_changes = 0;
   for (int frame = 0; frame < 12; ++frame) {
     toolbar.synchronize(empty_editor, quader::QuaderSelectionMode::Object);
   }
   EXPECT_EQ(action_changes, 0);
+  vertex->trigger();
+  EXPECT_EQ(empty_editor.selection().summary().mode, quader::QuaderSelectionMode::Vertex);
+  EXPECT_TRUE(vertex->isChecked());
+  EXPECT_FALSE(object->isChecked());
+  EXPECT_EQ(object->actionGroup()->checkedAction(), vertex);
+  EXPECT_TRUE(object->isVisible());
+  EXPECT_TRUE(group->isVisible());
+  object->trigger();
+  EXPECT_EQ(empty_editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_TRUE(object->isChecked());
   std::filesystem::remove(keybindings);
 }
 
@@ -6182,7 +6099,7 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(vertex_mode_action, nullptr);
   ASSERT_NE(face_mode_action, nullptr);
   ASSERT_NE(group_mode_action, nullptr);
-  EXPECT_EQ(ui.main_window()->findChild<QAction *>(
+  EXPECT_NE(ui.main_window()->findChild<QAction *>(
       QStringLiteral("selectionModeMesh")), nullptr);
   EXPECT_EQ(separator->frameShape(), QFrame::VLine);
 
@@ -6315,7 +6232,7 @@ TEST(QtProjectWorkspaceTests,
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_EQ(editor.selection().summary().mode, mode);
-    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    ASSERT_TRUE(editor.mode().state().participants.empty());
     ASSERT_EQ(scene.modeling().selection_mode(),
               mode == quader::QuaderSelectionMode::Face
                   ? quader::ModelingSelectionMode::Face
@@ -6677,9 +6594,12 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(edit_location, nullptr);
   EXPECT_TRUE(edit_location->isEnabled());
   EXPECT_NEAR(edit_location->value(), settled_transform.location.x, 0.0001);
-  auto *combo = ui.main_window()->findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
-  ASSERT_NE(combo, nullptr);
-  EXPECT_EQ(combo->currentIndex(), 1);
+  EXPECT_EQ(ui.main_window()->findChild<QComboBox *>(
+      QStringLiteral("editorModeCombo")), nullptr);
+  auto *vertex_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeVertex"));
+  ASSERT_NE(vertex_action, nullptr);
+  EXPECT_TRUE(vertex_action->isChecked());
   capture_inspector(QStringLiteral("edit-stale-samples-rejected"));
   ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ui.refresh({}, {});
@@ -7332,6 +7252,214 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(rotation_field(), nullptr);
   EXPECT_NEAR(rotation_field()->value(), previous_display, 0.001);
   EXPECT_EQ(scene.history().undo_count(), undo_before + 1u);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests, FaceTextureBrowserRefreshesAfterDeletingAndReimportingAllMaterials) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-face-material-reimport-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-face-material-reimport-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto root = profile / "Project";
+  const auto recycle = profile / "Recycled";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(std::filesystem::create_directory(recycle));
+  const std::array source_paths{profile / "First.png", profile / "Second.png"};
+  QImage image(3, 2, QImage::Format_RGBA8888);
+  for (const auto &source : source_paths) {
+    image.fill(Qt::red);
+    ASSERT_TRUE(image.save(QString::fromStdWString(source.wstring())));
+  }
+  quader::ProjectSession project;
+  project.set_resource_root(resources / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  quader::QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+      editor.project_assets(), [&](std::span<const std::filesystem::path> sources) {
+        quader::ProjectAssetRecycleResult result{.ok = true};
+        for (const auto &source : sources) {
+          const auto destination = recycle / std::to_string(
+              std::chrono::steady_clock::now().time_since_epoch().count());
+          std::filesystem::rename(source, destination);
+          result.items.push_back({.original_path = source, .recycled = true});
+        }
+        return result;
+      });
+  auto imported = editor.project_assets().import_textures_as_materials(source_paths, "Materials");
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_EQ(imported.value().imported.size(), source_paths.size());
+  quader::RenderSystem renderer;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto *window = ui.main_window();
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *browser = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      window->findChild<QWidget *>(QStringLiteral("materialBrowser.embedded")));
+  ASSERT_NE(browser, nullptr);
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  ASSERT_NE(grid, nullptr);
+  auto *proxy = dynamic_cast<quader::QtMaterialBrowserProxyModel *>(grid->model());
+  ASSERT_NE(proxy, nullptr);
+  auto *model = dynamic_cast<quader::QtMaterialBrowserModel *>(proxy->sourceModel());
+  ASSERT_NE(model, nullptr);
+  ui.show();
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  const auto expect_imported_rows = [&] {
+    EXPECT_EQ(model->rowCount(), static_cast<int>(source_paths.size()) + 1);
+    EXPECT_EQ(proxy->rowCount(), model->rowCount());
+    for (const auto &entry : imported.value().imported) {
+      const auto reference = quader::QuaderMaterialReference::project(entry.material.id);
+      EXPECT_TRUE(std::ranges::any_of(model->items(), [&](const auto &item) {
+        return item.reference == reference;
+      }));
+    }
+  };
+  expect_imported_rows();
+  for (const bool hidden : {false, true}) {
+    SCOPED_TRACE(hidden);
+    if (hidden) ASSERT_TRUE(editor.ui().hide_panel("face_texture").ok());
+    std::vector<std::string> paths;
+    for (const auto &entry : imported.value().imported) paths.push_back(entry.material.project_relative_path);
+    const auto preview = editor.project_assets().preview_delete_assets(paths);
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+    ASSERT_TRUE(preview.value().complete);
+    const auto deleted = editor.project_assets().delete_assets(paths, preview.value().revision);
+    ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+    const auto remaining = editor.project_assets().materials();
+    ASSERT_TRUE(remaining.ok());
+    EXPECT_EQ(remaining.value().size(), 1u);
+    ui.refresh({}, {});
+    if (!hidden) {
+      EXPECT_EQ(model->rowCount(), 1);
+      EXPECT_EQ(proxy->rowCount(), 1);
+    }
+    imported = editor.project_assets().import_textures_as_materials(source_paths, "Materials");
+    ASSERT_TRUE(imported.ok()) << imported.error_message();
+    ASSERT_TRUE(imported.value().failed.empty());
+    ASSERT_EQ(imported.value().imported.size(), source_paths.size());
+    ui.refresh({}, {});
+    if (hidden) ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+    ui.refresh({}, {});
+    expect_imported_rows();
+    int resets = 0;
+    const auto connection = QObject::connect(model, &QAbstractItemModel::modelReset,
+        browser, [&] { ++resets; });
+    const auto builds = ui.material_presentation_snapshot_build_count();
+    for (int frame = 0; frame < 8; ++frame) ui.refresh({}, {});
+    EXPECT_EQ(resets, 0);
+    EXPECT_EQ(ui.material_presentation_snapshot_build_count(), builds);
+    QObject::disconnect(connection);
+  }
+  // Exercise the Asset Browser's actual external-drop Import route too.
+  std::vector<std::string> material_paths;
+  for (const auto &entry : imported.value().imported) {
+    material_paths.push_back(entry.material.project_relative_path);
+  }
+  const auto deletion = editor.project_assets().preview_delete_assets(material_paths);
+  ASSERT_TRUE(deletion.ok());
+  ASSERT_TRUE(deletion.value().complete);
+  ASSERT_TRUE(editor.project_assets().delete_assets(
+      material_paths, deletion.value().revision).ok());
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Imported Materials").ok());
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  ui.refresh({}, {});
+  application.processEvents();
+  auto *asset_browser = dynamic_cast<quader::QtAssetBrowser *>(
+      window->findChild<QWidget *>(QStringLiteral("assetBrowser")));
+  ASSERT_NE(asset_browser, nullptr);
+  asset_browser->set_selected_folder(QStringLiteral("Imported Materials"));
+  auto *asset_grid = asset_browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(asset_grid, nullptr);
+  QMimeData images;
+  QList<QUrl> urls;
+  for (const auto &source : source_paths) {
+    urls.push_back(QUrl::fromLocalFile(QString::fromStdWString(source.wstring())));
+  }
+  const auto drop_images = [&] {
+    images.setUrls(urls);
+    const QPoint point(asset_grid->viewport()->width() - 5,
+        asset_grid->viewport()->height() - 5);
+    QDragEnterEvent enter(point, Qt::CopyAction, &images, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(asset_grid->viewport(), &enter);
+    EXPECT_TRUE(enter.isAccepted());
+    QDropEvent drop(QPointF(point), Qt::CopyAction, &images, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(asset_grid->viewport(), &drop);
+    EXPECT_TRUE(drop.isAccepted());
+    ui.refresh({}, {});
+  };
+  for (const int batch : {1, 2}) {
+    drop_images();
+    EXPECT_EQ(asset_grid->model()->rowCount(), batch * static_cast<int>(source_paths.size()));
+    EXPECT_EQ(model->rowCount(), batch * static_cast<int>(source_paths.size()) + 1);
+    EXPECT_EQ(proxy->rowCount(), model->rowCount());
+  }
+  const auto imported_catalog = editor.project_assets().assets();
+  ASSERT_TRUE(imported_catalog.ok());
+  material_paths.clear();
+  for (const auto &asset : imported_catalog.value().assets) {
+    if (!asset.project_relative_path.starts_with("Imported Materials/")) continue;
+    ASSERT_EQ(asset.kind, quader::QuaderProjectAssetKind::Material);
+    material_paths.push_back(asset.project_relative_path);
+    const auto albedo = editor.project_assets().material_albedo_texture_info(asset.asset_id);
+    ASSERT_TRUE(albedo.ok()) << albedo.error_message();
+    EXPECT_TRUE(albedo.value().texture_id.valid());
+    EXPECT_TRUE(std::filesystem::exists(albedo.value().absolute_path));
+  }
+  ASSERT_EQ(material_paths.size(), source_paths.size() * 2u);
+  const auto deleted_batch = editor.project_assets().preview_delete_assets(material_paths);
+  ASSERT_TRUE(deleted_batch.ok());
+  ASSERT_TRUE(deleted_batch.value().complete);
+  ASSERT_TRUE(editor.project_assets().delete_assets(
+      material_paths, deleted_batch.value().revision).ok());
+  ASSERT_TRUE(editor.ui().hide_panel("face_texture").ok());
+  ui.refresh({}, {});
+  const auto invalid_source = profile / "Broken.png";
+  {
+    std::ofstream broken(invalid_source, std::ios::binary);
+    broken << "Not a PNG image";
+  }
+  urls.push_back(QUrl::fromLocalFile(QString::fromStdWString(invalid_source.wstring())));
+  bool warned = false;
+  QTimer warning_response;
+  warning_response.setSingleShot(true);
+  QObject::connect(&warning_response, &QTimer::timeout, [&] {
+    auto *warning = window->findChild<QMessageBox *>(
+        QStringLiteral("material_browser_import_warning_message_box"));
+    if (warning == nullptr || !warning->isVisible()) {
+      ADD_FAILURE() << "Expected the partial material-import warning.";
+      if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) modal->reject();
+      return;
+    }
+    warned = true;
+    EXPECT_TRUE(warning->informativeText().contains(QStringLiteral("Broken.png")));
+    auto *accept = warning->findChild<QPushButton *>(
+        QStringLiteral("materialBrowserImportWarningMessageBox.ok"));
+    if (accept != nullptr) accept->click();
+    else warning->reject();
+  });
+  warning_response.start(0);
+  drop_images();
+  warning_response.stop();
+  EXPECT_TRUE(warned);
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(asset_grid->model()->rowCount(), static_cast<int>(source_paths.size()));
+  EXPECT_EQ(editor.project_assets().materials().value().size(), source_paths.size() + 1u);
+  EXPECT_EQ(model->rowCount(), static_cast<int>(source_paths.size()) + 1);
+  EXPECT_EQ(proxy->rowCount(), model->rowCount());
   ui.shutdown();
 }
 
@@ -9583,6 +9711,447 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   }
 }
 
+TEST(QtProjectWorkspaceTests, KnifeRealAppShowsHintAngleAndLengthOnTopFace) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_KNIFE_APP_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_KNIFE_APP_TESTS=1 for the real App Knife presentation.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-knife-app-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-knife-real-app-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setApplicationName(QStringLiteral("Quader"));
+  application.setOrganizationName(QStringLiteral("Quader"));
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  quader::install_qt_application_default_cursor(application);
+  const auto executable = std::filesystem::path(
+      QCoreApplication::applicationFilePath().toStdWString());
+  const auto resources = executable.parent_path();
+  const quader::ViewportCameraPose pose{
+      .eye = {6, 7, 9}, .target = {0, 1, 0}, .up = {0, 1, 0}};
+  const auto project_root = profile / "Knife Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  {
+    quader::ProjectSession project;
+    project.set_resource_root(resources);
+    quader::QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(project_root).ok());
+    ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+    ASSERT_TRUE(editor.viewports().set_shading_mode(
+        quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {-2, -1, -2}, .max = {2, 1, 2}}, "Knife App box").ok());
+    ASSERT_TRUE(project.active_scene()->session->restore_persisted_viewport_camera_pose(pose));
+    const auto scene = editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(scene.has_value());
+    const auto path = quader::ProjectRelativePath::parse_portable("Knife.qdr");
+    ASSERT_TRUE(path.ok());
+    ASSERT_TRUE(editor.scene_documents().save_as(*scene, path.value()).ok());
+  }
+  const auto settings_paths = quader::UISettings::resolve_paths(resources);
+  auto settings = quader::UISettings::defaults();
+  settings.set_interface_scale(1.0F);
+  settings.set_panel_visible(quader::UIPanelId::AssetBrowser, false);
+  ASSERT_TRUE(settings.save(settings_paths.settings_file));
+  auto viewport_settings = quader::ViewportSettings::defaults();
+  viewport_settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+  viewport_settings.set_bool_value(quader::ViewportBoolSettingId::ShowHoverDimensions, false);
+  ASSERT_TRUE(viewport_settings.save(settings_paths.viewport_settings_file));
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review.isEmpty()) ASSERT_TRUE(QDir{}.mkpath(review));
+  const bool dimension_review = qEnvironmentVariableIntValue(
+      "QUADER_KNIFE_APP_DIMENSION_REVIEW") == 1;
+  ASSERT_FALSE(dimension_review && review.isEmpty())
+      << "Dimension review requires QUADER_UI_REVIEW_DIR for desktop captures.";
+  constexpr std::array kDimensionReviewFontPoints{6.0F, 8.0F, 10.0F, 12.0F};
+  constexpr std::array kDimensionReviewScales{1.0F, 2.0F, 1.0F};
+  constexpr std::size_t kDimensionReviewCount =
+      kDimensionReviewFontPoints.size() * kDimensionReviewScales.size();
+  const auto review_screens = QGuiApplication::screens();
+  const std::size_t screen_review_count = review_screens.size() >= 2 ? 2U : 0U;
+  const bool screen_review_only = dimension_review &&
+      qEnvironmentVariableIntValue("QUADER_KNIFE_APP_SCREEN_REVIEW_ONLY") == 1;
+  std::size_t dimension_review_index = screen_review_only ? kDimensionReviewCount : 0U;
+  QPointer<QScreen> original_review_screen;
+  QPointer<QScreen> requested_review_screen;
+  bool dimension_review_pending = false;
+  if (dimension_review && screen_review_count == 0U) {
+    std::cout << "DIMENSION_APP_SCREEN_REVIEW skipped: fewer than two physical screens."
+              << std::endl;
+  }
+  quader::App app;
+  ASSERT_TRUE(app.initialize(application, executable));
+  QPointer<QMainWindow> window;
+  QPointer<quader::QtVulkanCompositionWidget> host;
+  quader::QtViewportPanel *viewport = nullptr;
+  quader::QtViewportSurface *surface = nullptr;
+  quader::ViewportCameraController camera;
+  ASSERT_TRUE(camera.restore_perspective_pose(pose));
+  std::uint64_t submitted = 0U;
+  std::uint64_t phase_submission = 0U;
+  int phase = 0;
+  QElapsedTimer clock;
+  clock.start();
+  qint64 phase_started = 0;
+  QRect angle_pixels;
+  QRect length_pixels;
+  const auto advance = [&] {
+    ++phase;
+    phase_started = clock.elapsed();
+    phase_submission = submitted;
+    std::cout << "KNIFE_APP_PHASE " << phase << " submitted=" << submitted << std::endl;
+  };
+  const auto key = [&](int value) {
+    QKeyEvent press(QEvent::KeyPress, value, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, value, Qt::NoModifier);
+    QApplication::sendEvent(host, &press);
+    QApplication::sendEvent(host, &release);
+  };
+  const auto local_point = [&](quader::QVec3 world) {
+    const auto point = camera.project_world_point(world);
+    EXPECT_TRUE(point.visible);
+    return QPoint{qRound(point.position.x / surface->input_device_pixel_ratio()),
+                  qRound(point.position.y / surface->input_device_pixel_ratio())};
+  };
+  const auto warm_pixels = [&](const QImage &image, quader::QVec3 world, bool orange) {
+    const auto point = camera.project_world_point(world);
+    const QRect patch(qRound(point.position.x) - 5, qRound(point.position.y) - 5, 11, 11);
+    int count = 0;
+    for (int y = patch.top(); y <= patch.bottom(); ++y) {
+      for (int x = patch.left(); x <= patch.right(); ++x) {
+        if (!image.rect().contains(x, y)) continue;
+        const QColor color = image.pixelColor(x, y);
+        const bool warm = color.red() > 130 && color.green() > 80 &&
+                          color.green() > color.blue() + 35;
+        count += orange ? warm && color.red() > color.green() + 70
+                        : warm && color.green() > 180 && std::abs(color.red() - color.green()) < 65;
+      }
+    }
+    return count;
+  };
+  const auto glyph_pixels = [](const QImage &image, QRect bounds) {
+    int count = 0;
+    bounds = bounds.intersected(image.rect());
+    for (int y = bounds.top(); y <= bounds.bottom(); ++y) {
+      for (int x = bounds.left(); x <= bounds.right(); ++x) {
+        const auto color = image.pixelColor(x, y);
+        count += color.red() > 195 && color.green() > 195 && color.blue() > 195;
+      }
+    }
+    return count;
+  };
+  const auto capture = [&](const char *name) {
+    const QPoint origin = window->mapToGlobal(QPoint{}) - window->screen()->geometry().topLeft();
+    const QImage pixels = window->screen()->grabWindow(
+        0, origin.x(), origin.y(), window->width(), window->height()).toImage();
+    EXPECT_FALSE(pixels.isNull());
+    if (!review.isEmpty()) EXPECT_TRUE(pixels.save(QDir(review).filePath(
+        QStringLiteral("knife-real-app-%1.png").arg(QString::fromLatin1(name)))));
+    return pixels;
+  };
+  const auto trigger = [&](quader::QuaderCommandId id) {
+    for (auto *action : window->findChildren<QAction *>()) {
+      if (action->property("quaderCommandId").toString() !=
+          QString::fromUtf8(id.string().data(), static_cast<qsizetype>(id.string().size()))) continue;
+      if (auto *menu = qobject_cast<QMenu *>(action->parent())) {
+        while (auto *parent = qobject_cast<QMenu *>(menu->parent())) menu = parent;
+        EXPECT_TRUE(QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection));
+      }
+      std::cout << "KNIFE_APP_COMMAND " << id.string()
+                << " enabled=" << action->isEnabled() << " phase=" << phase << std::endl;
+      if (!action->isEnabled()) {
+        ADD_FAILURE() << "Disabled App command " << id.string() << " at phase " << phase;
+        capture("disabled-command");
+        application.quit();
+        return false;
+      }
+      action->trigger();
+      return true;
+    }
+    ADD_FAILURE() << "Missing App command action " << id.string();
+    capture("missing-command");
+    application.quit();
+    return false;
+  };
+  QTimer observer(&application);
+  observer.setInterval(25);
+  QObject::connect(&observer, &QTimer::timeout, &application, [&] {
+    if (::testing::Test::HasFailure()) {
+      if (window) capture("failed");
+      observer.stop();
+      application.quit();
+      return;
+    }
+    for (auto *widget : QApplication::topLevelWidgets()) {
+      if (widget->objectName() != QStringLiteral("quaderMainWindow") || !widget->isVisible()) continue;
+      auto *root = qobject_cast<QMainWindow *>(widget);
+      if (window == root) break;
+      window = root;
+      viewport = dynamic_cast<quader::QtViewportPanel *>(root->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+      ASSERT_NE(viewport, nullptr);
+      surface = viewport->surface(quader::ViewportPaneId::Perspective);
+      host = dynamic_cast<quader::QtVulkanCompositionWidget *>(root->findChild<QWidget *>(
+          QStringLiteral("viewportSurfaceContainer_perspective")));
+      ASSERT_NE(host, nullptr);
+      QObject::connect(host, &QRhiWidget::frameSubmitted, &application, [&] { ++submitted; });
+      root->raise();
+      QApplication::setActiveWindow(root);
+#if defined(_WIN32)
+      ASSERT_NE(SetWindowPos(reinterpret_cast<HWND>(root->internalWinId()), HWND_TOPMOST,
+          0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE), FALSE);
+#endif
+      break;
+    }
+    if (!window || !host) return;
+    auto *cover = window->findChild<QWidget *>(QStringLiteral("quaderLoadingCover"));
+    if (cover == nullptr || cover->isVisible()) return;
+    if (phase == 0) {
+      auto *recent = window->findChild<QTableView *>(QStringLiteral("projectHome.recentProjects.view"));
+      ASSERT_NE(recent, nullptr);
+      ASSERT_EQ(recent->model()->rowCount(), 1);
+      ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
+          Q_ARG(QModelIndex, recent->model()->index(0, 0))));
+      advance();
+      return;
+    }
+    if (!surface->ready_to_render() || submitted < phase_submission + 2U ||
+        clock.elapsed() - phase_started < 200) return;
+    const auto extent = surface->render_size_pixels();
+    camera.set_viewport_size(extent.x, extent.y);
+    auto *angle = viewport->findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+    auto *length = viewport->findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+    ASSERT_NE(angle, nullptr);
+    ASSERT_NE(length, nullptr);
+    switch (phase) {
+    case 1: {
+      auto *tree = window->findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+      ASSERT_NE(tree, nullptr);
+      const auto matches = tree->model()->match(tree->model()->index(0, 0),
+          Qt::DisplayRole, QStringLiteral("Knife App box"), 1,
+          Qt::MatchExactly | Qt::MatchRecursive);
+      ASSERT_EQ(matches.size(), 1);
+      tree->selectionModel()->setCurrentIndex(matches.front(),
+          QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+      EXPECT_EQ(tree->selectionModel()->selectedRows().size(), 1);
+      std::cout << "KNIFE_APP_TARGET name=" << matches.front().data().toString().toStdString()
+                << " entity=" << matches.front().data(Qt::UserRole + 1).toULongLong() << std::endl;
+      break;
+    }
+    case 2: {
+      // Outliner selection publishes through a queued owner callback. Enter
+      // component mode only after a later App frame has received that selection.
+      if (dimension_review &&
+          dimension_review_index < kDimensionReviewCount + screen_review_count) {
+        const bool screen_review = dimension_review_index >= kDimensionReviewCount;
+        const std::size_t scale_index = screen_review ? 2U :
+            dimension_review_index / kDimensionReviewFontPoints.size();
+        const float font_points = screen_review ? 12.0F : kDimensionReviewFontPoints[
+            dimension_review_index % kDimensionReviewFontPoints.size()];
+        const float scale = kDimensionReviewScales[scale_index];
+        if (!dimension_review_pending) {
+          if (screen_review) {
+            if (original_review_screen == nullptr) original_review_screen = window->screen();
+            QScreen *target = original_review_screen;
+            if (dimension_review_index == kDimensionReviewCount) {
+              for (auto *candidate : review_screens) {
+                if (candidate != original_review_screen) {
+                  target = candidate;
+                  break;
+                }
+              }
+            }
+            ASSERT_NE(target, nullptr);
+            requested_review_screen = target;
+            window->showNormal();
+            window->windowHandle()->setScreen(target);
+            window->setGeometry(target->availableGeometry());
+            window->showMaximized();
+          } else {
+            // Commit through the retained Settings owner so the real App applies
+            // both its font preference and scale to the composed viewport.
+            ASSERT_TRUE(viewport_settings.set_float_value(
+                quader::ViewportFloatSettingId::DimensionFontSize, font_points));
+            auto *settings_action = window->findChild<QAction *>(
+                QStringLiteral("action_settings"));
+            ASSERT_NE(settings_action, nullptr);
+            settings_action->trigger();
+            auto *dialog = window->findChild<QDialog *>(
+                QStringLiteral("settingsDialog"));
+            ASSERT_NE(dialog, nullptr);
+            ASSERT_TRUE(dialog->isVisible());
+            auto *font_setting = dialog->findChild<QDoubleSpinBox *>(
+                QStringLiteral("viewportSetting_DimensionFontSize"));
+            auto *scale_setting = dialog->findChild<QSpinBox *>(
+                QStringLiteral("settingsInterfaceScale"));
+            auto *accept = dialog->findChild<QPushButton *>(
+                QStringLiteral("settingsOk"));
+            ASSERT_NE(font_setting, nullptr);
+            ASSERT_NE(scale_setting, nullptr);
+            ASSERT_NE(accept, nullptr);
+            font_setting->setValue(viewport_settings.float_value(
+                quader::ViewportFloatSettingId::DimensionFontSize));
+            scale_setting->setValue(qRound(100.0F * scale));
+            accept->click();
+            ASSERT_FALSE(dialog->isVisible());
+          }
+          window->raise();
+          QApplication::setActiveWindow(window);
+          dimension_review_pending = true;
+          phase_started = clock.elapsed();
+          phase_submission = submitted;
+          return;
+        }
+        const QString name = screen_review
+            ? QStringLiteral("dimensions-12pt-screen-transition%1")
+                  .arg(dimension_review_index - kDimensionReviewCount)
+            : QStringLiteral("dimensions-%1pt-scale%2-pass%3")
+                  .arg(qRound(font_points)).arg(qRound(scale)).arg(scale_index);
+        const QImage pixels = capture(name.toUtf8().constData());
+        const double ratio = static_cast<double>(pixels.width()) / window->width();
+        ASSERT_NE(window->screen(), nullptr);
+        if (screen_review) EXPECT_EQ(window->screen(), requested_review_screen);
+        const qreal screen_pixel_ratio = window->screen()->devicePixelRatio();
+        int visible_dimensions = 0;
+        for (const QString &axis : {QStringLiteral("X"), QStringLiteral("Y"),
+                                    QStringLiteral("Z")}) {
+          auto *label = viewport->findChild<QLabel *>(
+              QStringLiteral("viewportSelectionDimension%1_perspective").arg(axis));
+          ASSERT_NE(label, nullptr);
+          if (!label->isVisible()) continue;
+          ++visible_dimensions;
+          EXPECT_DOUBLE_EQ(label->font().pointSizeF(), font_points * scale);
+          EXPECT_EQ(label->internalWinId(), 0U);
+          EXPECT_TRUE(label->mask().isEmpty());
+          EXPECT_DOUBLE_EQ(label->devicePixelRatioF(), screen_pixel_ratio);
+          EXPECT_DOUBLE_EQ(label->property("quaderDimensionRasterDevicePixelRatio").toReal(),
+                           screen_pixel_ratio);
+          const QPoint origin = label->mapTo(window, QPoint{});
+          const QRect bounds(qRound(origin.x() * ratio), qRound(origin.y() * ratio),
+              qRound(label->width() * ratio), qRound(label->height() * ratio));
+          EXPECT_TRUE(pixels.copy(bounds.intersected(pixels.rect())).save(
+              QDir(review).filePath(QStringLiteral("knife-real-app-%1-%2.png")
+                  .arg(name, axis))));
+          std::cout << "DIMENSION_APP_REVIEW font_pt=" << font_points
+                    << " scale=" << scale << " pass=" << scale_index
+                    << " axis=" << axis.toStdString()
+                    << " screen=" << window->screen()->name().toStdString()
+                    << " screen_dpr=" << screen_pixel_ratio
+                    << " dpr=" << label->devicePixelRatioF()
+                    << " qt_scale_factor=" << qEnvironmentVariable(
+                        "QT_SCALE_FACTOR", QStringLiteral("unset")).toStdString()
+                    << std::endl;
+        }
+        EXPECT_GE(visible_dimensions, 2);
+        ++dimension_review_index;
+        dimension_review_pending = false;
+        phase_started = clock.elapsed();
+        phase_submission = submitted;
+        return;
+      }
+      auto *face_mode = window->findChild<QAction *>(QStringLiteral("selectionModeFace"));
+      ASSERT_NE(face_mode, nullptr);
+      ASSERT_TRUE(face_mode->isEnabled());
+      face_mode->trigger();
+      ASSERT_TRUE(face_mode->isChecked());
+      host->setFocus(Qt::OtherFocusReason);
+      QEnterEvent enter(QPointF(host->rect().center()), QPointF(host->rect().center()),
+          QPointF(host->mapToGlobal(host->rect().center())));
+      QApplication::sendEvent(host, &enter);
+      break;
+    }
+    case 3:
+      if (!trigger(quader::quader_command::kToolsActivateKnife)) return;
+      break;
+    case 4: {
+      auto *knife = window->findChild<QAction *>(QStringLiteral("tool_knife"));
+      ASSERT_NE(knife, nullptr);
+      ASSERT_TRUE(knife->isChecked());
+      send_mouse_event(*host, QEvent::MouseMove, local_point({0, 1, -2}), Qt::NoButton, Qt::NoButton);
+      send_mouse_event(*host, QEvent::MouseButtonPress, local_point({0, 1, -2}), Qt::LeftButton, Qt::LeftButton);
+      break;
+    }
+    case 5:
+      send_mouse_event(*host, QEvent::MouseButtonRelease, local_point({0, 1, -2}), Qt::LeftButton, Qt::NoButton);
+      break;
+    case 6:
+      send_mouse_event(*host, QEvent::MouseMove, local_point({1, 1, 0}), Qt::NoButton, Qt::NoButton);
+      break;
+    case 7: {
+      ASSERT_TRUE(angle->isVisible());
+      ASSERT_TRUE(length->isVisible());
+      EXPECT_TRUE(angle->text().endsWith(QChar(0x00b0)));
+      EXPECT_GT(length->text().toDouble(), 0.0);
+      EXPECT_EQ(angle->internalWinId(), 0U);
+      EXPECT_EQ(length->internalWinId(), 0U);
+      const QImage viewport_pixels = host->grabFramebuffer();
+      EXPECT_GE(warm_pixels(viewport_pixels, {0, 1, 1}, true), 3);
+      EXPECT_GE(warm_pixels(viewport_pixels, {0.5F, 1, -1}, false), 3);
+      const QImage pixels = capture("live");
+      const double ratio = static_cast<double>(pixels.width()) / window->width();
+      const auto glyph_bounds = [&](QLabel &label) {
+        const QPoint origin = label.mapTo(window, QPoint{});
+        return QRect(qRound(origin.x() * ratio), qRound(origin.y() * ratio),
+                     qRound(label.width() * ratio), qRound(label.height() * ratio));
+      };
+      angle_pixels = glyph_bounds(*angle);
+      length_pixels = glyph_bounds(*length);
+      EXPECT_GT(glyph_pixels(pixels, angle_pixels), 5);
+      EXPECT_GT(glyph_pixels(pixels, length_pixels), 5);
+      if (!trigger(quader::quader_command::kViewportToggleDimensions)) return;
+      break;
+    }
+    case 8: {
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      EXPECT_GE(warm_pixels(host->grabFramebuffer(), {0, 1, 1}, true), 3);
+      const QImage pixels = capture("dimensions-off");
+      EXPECT_EQ(glyph_pixels(pixels, angle_pixels), 0);
+      EXPECT_EQ(glyph_pixels(pixels, length_pixels), 0);
+      if (!trigger(quader::quader_command::kViewportToggleDimensions)) return;
+      break;
+    }
+    case 9:
+      EXPECT_TRUE(angle->isVisible());
+      EXPECT_TRUE(length->isVisible());
+      key(Qt::Key_Escape);
+      break;
+    case 10: {
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      const QImage viewport_pixels = host->grabFramebuffer();
+      EXPECT_EQ(warm_pixels(viewport_pixels, {0, 1, 1}, true), 0);
+      EXPECT_EQ(warm_pixels(viewport_pixels, {0.5F, 1, -1}, false), 0);
+      capture("cancelled");
+      advance();
+      observer.stop();
+      application.quit();
+      return;
+    }
+    }
+    advance();
+  });
+  QTimer::singleShot(45000, &application, [&] {
+    ADD_FAILURE() << "Knife App presentation timed out at phase " << phase;
+    application.quit();
+  });
+  observer.start();
+  EXPECT_EQ(app.run(), 0);
+  observer.stop();
+  EXPECT_EQ(phase, 11);
+  if (dimension_review) {
+    EXPECT_EQ(dimension_review_index, kDimensionReviewCount + screen_review_count);
+    if (screen_review_count > 0U) EXPECT_EQ(window->screen(), original_review_screen);
+  }
+  app.shutdown();
+}
+
 TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS") != 1) {
     GTEST_SKIP() << "Set QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS=1 for the real App frame loop";
@@ -11298,6 +11867,201 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   ui.shutdown();
 }
 
+TEST(QtProjectWorkspaceTests, NativeTextureCollectionImportPaintsEveryAssetAndMaterialThumbnail) {
+  const QString source_directory = qEnvironmentVariable("QUADER_TEXTURE_IMPORT_REPRO_DIR");
+  if (source_directory.isEmpty() ||
+      qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_ASSET_BROWSER_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_TEXTURE_IMPORT_REPRO_DIR and "
+                   "QUADER_RUN_VULKAN_ASSET_BROWSER_TESTS=1 for native import reproduction.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-native-texture-import-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile, true);
+  ASSERT_TRUE(scoped_profile.active());
+  const auto log_path = profile / "native-texture-import.log";
+  quader::Logger::initialize({.file_path = log_path.string()});
+  quader::install_fatal_error_handler(log_path);
+  quader::install_qt_fatal_error_handler();
+  std::cout << "NATIVE_TEXTURE_IMPORT_LOG=" << log_path.string() << std::endl;
+  int argc = 1;
+  char application_name[] = "quader-native-texture-import-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(QApplication::palette());
+  const auto source_root = std::filesystem::path(source_directory.toStdWString());
+  std::error_code source_error;
+  ASSERT_TRUE(std::filesystem::is_directory(source_root, source_error));
+  ASSERT_FALSE(source_error) << source_error.message();
+  const auto supported = QImageReader::supportedImageFormats();
+  std::vector<std::filesystem::path> sources;
+  for (std::filesystem::recursive_directory_iterator source(source_root, source_error), end;
+       source != end && !source_error; source.increment(source_error)) {
+    if (!source->is_regular_file(source_error)) continue;
+    const auto extension = QString::fromStdWString(
+        source->path().extension().wstring()).mid(1).toLower();
+    if (supported.contains(extension.toLatin1())) sources.push_back(source->path());
+  }
+  ASSERT_FALSE(source_error) << source_error.message();
+  std::ranges::sort(sources);
+  ASSERT_FALSE(sources.empty());
+  LOG_INFO("Native texture import reproduction: {} read-only source images", sources.size());
+  const auto resources = std::filesystem::path(
+      QCoreApplication::applicationDirPath().toStdWString());
+  const auto root = profile / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  quader::RenderSystem renderer;
+  ASSERT_TRUE(renderer.initialize(nullptr, resources));
+  quader::ProjectSession project;
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  quader::SceneRenderBridge bridge;
+  renderer.initialize_scene_render_bridge(bridge, resources);
+  quader::RenderOverlaySnapshotCache overlay_cache;
+  ui.show();
+  auto *window = ui.main_window();
+  ASSERT_NE(window->screen(), nullptr);
+  window->resize(QSize(1600, 1000).boundedTo(window->screen()->availableGeometry().size()));
+  window->activateWindow();
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(dock, nullptr);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(browser, nullptr);
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(grid, nullptr);
+  class ImportPaintObserver final : public QObject {
+  public:
+    std::size_t count = 0u;
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+      if (event->type() == QEvent::Paint) ++count;
+      return QObject::eventFilter(watched, event);
+    }
+  } paint_observer;
+  grid->viewport()->installEventFilter(&paint_observer);
+  std::set<QString> material_ids;
+  std::set<QString> completed_thumbnails;
+  QObject::connect(grid->model(), &QAbstractItemModel::dataChanged, browser,
+      [&](const QModelIndex &first, const QModelIndex &last, const QList<int> &roles) {
+        if (first != last || !roles.contains(Qt::DecorationRole)) return;
+        const auto id = first.data(Qt::UserRole + 1).toString();
+        if (material_ids.contains(id)) completed_thumbnails.insert(id);
+      });
+  const auto shutdown = qScopeGuard([&] { ui.shutdown(); });
+  std::size_t accepted_frames = 0u;
+  const auto wait_until = [&](const char *stage, const auto &ready) {
+    LOG_INFO("Native texture import stage: {}", stage);
+    quader::AppFrameSchedule schedule;
+    QEventLoop loop;
+    QTimer frame_timer;
+    frame_timer.setTimerType(Qt::PreciseTimer);
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+    const int display_interval_ms = std::max(1,
+        static_cast<int>(std::lround(1000.0 / renderer.display_refresh_rate_hz())));
+    bool finished = false;
+    QObject::connect(&frame_timer, &QTimer::timeout, &loop, [&] {
+      ui.refresh({.delta_seconds = 1.0 / 60.0}, renderer.frame_performance_stats());
+      std::size_t submitted = 0u;
+      if (renderer.presentation_is_synchronized() || renderer.ready_for_next_frame()) {
+        const auto synchronized = quader::QuaderRenderApiRuntimeAccess::sync_scene(
+            editor.render(), bridge);
+        if (!synchronized.ok()) {
+          ADD_FAILURE() << synchronized.error_message();
+          loop.quit();
+          return;
+        }
+        ui.prepare_viewports(bridge, overlay_cache);
+        submitted = ui.render_viewports();
+        if (submitted == editor.viewports().active_pane_count()) ++accepted_frames;
+      }
+      finished = ready();
+      if (finished) {
+        loop.quit();
+        return;
+      }
+      frame_timer.setInterval(schedule.next_interval_ms(true,
+          renderer.presentation_is_synchronized(), display_interval_ms, submitted != 0u));
+    });
+    deadline.start(20000);
+    frame_timer.start(0);
+    loop.exec();
+    LOG_INFO("Native texture import stage {}: completed={}, viewport frames={}, paints={}, thumbnails={}",
+        stage, finished, accepted_frames, paint_observer.count, completed_thumbnails.size());
+    return finished;
+  };
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  browser->restore_presentation_state(quader::QtAssetBrowserViewMode::Grid, 64);
+  ASSERT_TRUE(wait_until("initial native presentation", [&] {
+    return accepted_frames >= 4u && browser->has_completed_visible_paint();
+  }));
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Texture Batch").ok());
+  LOG_INFO("Importing {} sources as texture assets", sources.size());
+  const auto textures = editor.project_assets().import_textures(sources, "Texture Batch");
+  ASSERT_TRUE(textures.ok()) << textures.error_message();
+  ASSERT_EQ(textures.value().size(), sources.size());
+  ui.refresh({}, {});
+  browser->set_selected_folder(QStringLiteral("Texture Batch"));
+  ASSERT_EQ(grid->model()->rowCount(), static_cast<int>(sources.size()));
+  std::size_t texture_paints = paint_observer.count;
+  int texture_row = 0;
+  grid->scrollTo(grid->model()->index(texture_row, 0), QAbstractItemView::PositionAtCenter);
+  grid->viewport()->update();
+  ASSERT_TRUE(wait_until("paint imported texture rows", [&] {
+    if (paint_observer.count == texture_paints) return false;
+    texture_paints = paint_observer.count;
+    if (++texture_row == grid->model()->rowCount()) return true;
+    grid->scrollTo(grid->model()->index(texture_row, 0), QAbstractItemView::PositionAtCenter);
+    grid->viewport()->update();
+    return false;
+  }));
+  ASSERT_TRUE(editor.project_assets().create_material_folder("Materials", "Material Batch").ok());
+  LOG_INFO("Importing {} sources as textured materials", sources.size());
+  const auto materials = editor.project_assets().import_textures_as_materials(
+      sources, "Materials/Material Batch");
+  ASSERT_TRUE(materials.ok()) << materials.error_message();
+  ASSERT_TRUE(materials.value().failed.empty());
+  ASSERT_EQ(materials.value().imported.size(), sources.size());
+  for (const auto &imported : materials.value().imported) {
+    material_ids.insert(QString::fromStdString(std::string(imported.material.id.str())));
+  }
+  ui.refresh({}, {});
+  browser->set_selected_folder(QStringLiteral("Materials/Material Batch"));
+  ASSERT_EQ(grid->model()->rowCount(), static_cast<int>(sources.size()));
+  int material_row = 0;
+  grid->scrollTo(grid->model()->index(material_row, 0), QAbstractItemView::PositionAtCenter);
+  grid->viewport()->update();
+  ASSERT_TRUE(wait_until("render every imported material thumbnail", [&] {
+    while (material_row < grid->model()->rowCount() && completed_thumbnails.contains(
+        grid->model()->index(material_row, 0).data(Qt::UserRole + 1).toString())) {
+      ++material_row;
+    }
+    if (material_row == grid->model()->rowCount()) return true;
+    grid->scrollTo(grid->model()->index(material_row, 0), QAbstractItemView::PositionAtCenter);
+    grid->viewport()->update();
+    return false;
+  }));
+  EXPECT_EQ(completed_thumbnails.size(), sources.size());
+  EXPECT_GT(accepted_frames, 4u);
+  EXPECT_GT(paint_observer.count, sources.size());
+  EXPECT_FALSE(grid->viewport()->grab().isNull());
+  LOG_INFO("Native import reproduction passed: {} textures, {} material thumbnails", sources.size(),
+      completed_thumbnails.size());
+  quader::Logger::instance()->flush();
+}
+
 TEST(QtProjectWorkspaceTests, SavingWithUnregisteredSceneCopiesRetainsDistinctBrowserRows) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const auto profile = std::filesystem::temp_directory_path() /
@@ -11542,6 +12306,150 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirect
   reveal_external("External/Deep/AfterReplacement.qdr", [&] {
     ASSERT_TRUE(std::filesystem::copy_file(source, root / "External/Deep/AfterReplacement.qdr"));
   });
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests, AssetBrowserDeleteResolvesInvalidatedCatalogOnFirstAttempt) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-asset-delete-dialog-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-asset-delete-dialog-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto root = scoped_profile.profile() / "Project";
+  const auto recycle = scoped_profile.profile() / "Recycled";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(std::filesystem::create_directory(recycle));
+  quader::ProjectSession project;
+  project.set_resource_root(resources / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Disposable").ok());
+  std::vector<std::string> paths;
+  for (int index = 0; index < 36; ++index) {
+    const auto created = editor.project_assets().create_scene_asset(
+        "Disposable", "Scene " + std::to_string(index));
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    paths.push_back(created.value().project_relative_path);
+  }
+  std::size_t recycled_count = 0u;
+  quader::QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+      editor.project_assets(), [&](std::span<const std::filesystem::path> sources) {
+        quader::ProjectAssetRecycleResult result{.ok = true};
+        for (const auto &source : sources) {
+          std::filesystem::rename(source, recycle / source.filename());
+          result.items.push_back({.original_path = source, .recycled = true});
+          ++recycled_count;
+        }
+        return result;
+      });
+  quader::RenderSystem renderer;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *window = ui.main_window();
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  window->resize(1600, 1000);
+  window->show();
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(dock, nullptr);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(browser, nullptr);
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  browser->set_selected_folder(QStringLiteral("Disposable"));
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(grid, nullptr);
+  grid->selectAll();
+  browser->focus_browser();
+  ASSERT_EQ(browser->selected_items().size(), paths.size());
+
+  const auto attempt_delete = [&](bool confirm, bool expected_confirmation) {
+    bool presented = false;
+    QTimer response;
+    response.setSingleShot(true);
+    QObject::connect(&response, &QTimer::timeout, [&] {
+      auto *dialog = window->findChild<QMessageBox *>(
+          QStringLiteral("asset_browser_delete_confirmation"));
+      if (dialog == nullptr || !dialog->isVisible()) {
+        ADD_FAILURE() << "Expected the asset deletion confirmation.";
+        if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+          modal->reject();
+        }
+        return;
+      }
+      presented = true;
+      auto *details = dialog->findChild<QPlainTextEdit *>(
+          QStringLiteral("retainedMessageBox.informativeText"));
+      EXPECT_NE(details, nullptr);
+      if (details != nullptr) {
+        EXPECT_TRUE(details->isVisible());
+        EXPECT_GT(details->verticalScrollBar()->maximum(), 0);
+        for (const auto &path : paths) {
+          EXPECT_TRUE(details->toPlainText().contains(QString::fromStdString(path)));
+        }
+      }
+      const auto role = confirm ? QMessageBox::DestructiveRole : QMessageBox::RejectRole;
+      for (auto *button : dialog->buttons()) {
+        if (dialog->buttonRole(button) == role) {
+          EXPECT_TRUE(button->isVisible());
+          EXPECT_TRUE(dialog->rect().contains(QRect(
+              button->mapTo(dialog, QPoint{}), button->size())));
+          button->click();
+          return;
+        }
+      }
+      ADD_FAILURE() << "Deletion confirmation has no expected decision button.";
+      dialog->reject();
+    });
+    response.start(0);
+    EXPECT_TRUE(browser->handle_action(quader::QtAssetBrowserAction::Delete));
+    response.stop();
+    EXPECT_EQ(presented, expected_confirmation);
+  };
+
+  const auto displayed_revision = browser->snapshot().revision;
+  ASSERT_NE(displayed_revision, 0u);
+  ASSERT_TRUE(project.refresh_asset_catalog(false).ok);
+  ASSERT_EQ(editor.project_assets().asset_revision().value().revision, 0u);
+  attempt_delete(false, true);
+  EXPECT_EQ(recycled_count, 0u);
+  for (const auto &path : paths) EXPECT_TRUE(std::filesystem::exists(root / path));
+  EXPECT_EQ(editor.project_assets().asset_revision().value().revision, displayed_revision);
+
+  const auto stale_snapshot = browser->snapshot();
+  const auto renamed = editor.project_assets().rename_asset(paths.front(), "Changed");
+  ASSERT_TRUE(renamed.ok()) << renamed.error_message();
+  paths.front() = "Disposable/Changed.qdr";
+  ASSERT_NE(editor.project_assets().asset_revision().value().revision,
+            stale_snapshot.revision);
+  (void)browser->set_snapshot(stale_snapshot);
+  grid->selectAll();
+  ASSERT_TRUE(project.refresh_asset_catalog(false).ok);
+  ASSERT_EQ(editor.project_assets().asset_revision().value().revision, 0u);
+  attempt_delete(false, false);
+  EXPECT_EQ(recycled_count, 0u);
+  for (const auto &path : paths) EXPECT_TRUE(std::filesystem::exists(root / path));
+
+  grid->selectAll();
+  ASSERT_EQ(browser->selected_items().size(), paths.size());
+  ASSERT_TRUE(project.refresh_asset_catalog(false).ok);
+  ASSERT_EQ(editor.project_assets().asset_revision().value().revision, 0u);
+  attempt_delete(true, true);
+  EXPECT_EQ(recycled_count, paths.size());
+  for (const auto &path : paths) {
+    EXPECT_FALSE(std::filesystem::exists(root / path));
+    EXPECT_TRUE(std::filesystem::exists(recycle / std::filesystem::path(path).filename()));
+  }
   ui.shutdown();
 }
 

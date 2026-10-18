@@ -437,6 +437,8 @@ public:
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
   [[nodiscard]] bool operation_preview_active() const;
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const;
   [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const;
   [[nodiscard]] ModelingInteractionSettings interaction_settings() const;
@@ -633,6 +635,10 @@ public:
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request,
       const ModelingSelectionBoxBaseline *baseline = nullptr);
+  [[nodiscard]] bool resolved_component_body_target_eligible(
+      int modeling_object_id, EntityId source_occurrence) const;
+  ModelingCommandResult apply_resolved_component_body_selection(
+      const ModelingResolvedComponentBodySelectionRequest &request);
   ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests);
   ModelingCommandResult apply_resolved_component_selections(

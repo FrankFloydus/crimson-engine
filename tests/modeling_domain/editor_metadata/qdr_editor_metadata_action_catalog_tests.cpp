@@ -53,9 +53,9 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogLinksPanelAct
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogPreservesOperationPanelVisibilityAndPreviewKinds) {
   EXPECT_TRUE(require_action("bevel_edges").preview_kind ==
               qhc::HostPreviewKind::EdgeBevel);
-  EXPECT_TRUE(require_action("interpolated_bridge_edges").preview_kind ==
+  EXPECT_TRUE(require_action("preview_bridge_edges").preview_kind ==
               qhc::HostPreviewKind::Bridge);
-  EXPECT_TRUE(require_action("interpolated_bridge_faces").preview_kind ==
+  EXPECT_TRUE(require_action("preview_bridge_faces").preview_kind ==
               qhc::HostPreviewKind::Bridge);
   EXPECT_TRUE(require_action("merge_by_distance").preview_kind ==
               qhc::HostPreviewKind::MergeByDistance);
@@ -110,7 +110,7 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogDescribesSele
         EXPECT_TRUE(fill_hole.availability.minimum_selected_edges == 3U);
 	EXPECT_TRUE(require_action("bridge_edges")
 	                .availability.exact_selected_edges == 2U);
-	EXPECT_TRUE(require_action("interpolated_bridge_edges")
+	EXPECT_TRUE(require_action("preview_bridge_edges")
 	                .availability.exact_selected_edges == 2U);
 	EXPECT_TRUE(fill_hole.availability.requires_single_object);
 

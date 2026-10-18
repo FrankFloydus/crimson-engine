@@ -1850,7 +1850,12 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto second_occurrence = duplicate.value().root_entities.front().id;
   ASSERT_NE(second_occurrence, first_occurrence);
 
-  EXPECT_FALSE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  const auto face_selection_mode =
+      api.selection().set_mode(quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(face_selection_mode.ok());
+  EXPECT_TRUE(face_selection_mode.changed());
+  EXPECT_EQ(api.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  EXPECT_EQ(api.selection().summary().selected_object_count, 0u);
   EXPECT_FALSE(api.selection().select_face(member, 1).ok());
   EXPECT_FALSE(api.modeling().face_texture_settings().editable);
   const auto blocked = apply_face_texture_action(
@@ -2452,7 +2457,12 @@ TEST(ProgrammaticBehaviorScenarioTests,
   ASSERT_EQ(duplicate.value().root_entities.size(), 1u);
   const auto second_occurrence = duplicate.value().root_entities.front().id;
   ASSERT_NE(second_occurrence, first_occurrence);
-  EXPECT_FALSE(api.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  const auto edge_selection_mode =
+      api.selection().set_mode(quader::QuaderSelectionMode::Edge);
+  ASSERT_TRUE(edge_selection_mode.ok());
+  EXPECT_TRUE(edge_selection_mode.changed());
+  EXPECT_EQ(api.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  EXPECT_EQ(api.selection().summary().selected_object_count, 0u);
   EXPECT_FALSE(api.selection().select_edge(member, 2, 5).ok());
   EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
 
@@ -3735,7 +3745,7 @@ TEST(ProgrammaticBehaviorScenarioTests, BridgeAfterShiftRotateExtrudeKeepsTransf
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
-     InterpolatedBridgePreviewUpdateCommitKeepsSceneTransformedSourceInWorldPlace) {
+     BridgePreviewUpdateCommitKeepsSceneTransformedSourceInWorldPlace) {
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("source", "Bridge Preview Source")
@@ -3775,7 +3785,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   ASSERT_NE(target_before, nullptr);
 
   const quader::QuaderApiVoidResult begin =
-      s.api().modeling().begin_preview("interpolated_bridge_faces");
+      s.api().modeling().begin_preview("preview_bridge_faces");
   ASSERT_TRUE(begin.ok()) << begin.error_message();
   EXPECT_TRUE(begin.changed());
   s.then()
@@ -3795,7 +3805,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .bounds_max_near({1.0f, 1.0f, 1.0f});
 
   const quader::QuaderApiVoidResult commit =
-      s.api().modeling().commit_preview("Interpolated Bridge");
+      s.api().modeling().commit_preview("Bridge");
   ASSERT_TRUE(commit.ok()) << commit.error_message();
   EXPECT_TRUE(commit.changed());
   s.then()
@@ -3861,7 +3871,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
-     InterpolatedBridgePreviewPreservesWindingForMirroredSceneSource) {
+     BridgePreviewPreservesWindingForMirroredSceneSource) {
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("source", "Mirrored Bridge Preview Source")
@@ -3896,7 +3906,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .active_alias("target");
 
   const quader::QuaderApiVoidResult begin =
-      s.api().modeling().begin_preview("interpolated_bridge_faces");
+      s.api().modeling().begin_preview("preview_bridge_faces");
   ASSERT_TRUE(begin.ok()) << begin.error_message();
   EXPECT_TRUE(begin.changed());
   expect_compiled_mesh_winding_coherent(s, "target");
@@ -3910,7 +3920,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   expect_compiled_mesh_winding_coherent(s, "target");
 
   const quader::QuaderApiVoidResult commit =
-      s.api().modeling().commit_preview("Interpolated Bridge");
+      s.api().modeling().commit_preview("Bridge");
   ASSERT_TRUE(commit.ok()) << commit.error_message();
   EXPECT_TRUE(commit.changed());
   expect_compiled_mesh_winding_coherent(s, "target");

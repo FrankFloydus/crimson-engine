@@ -534,7 +534,17 @@ std::optional<ProjectRelativePath> UISystem::choose_project_material_path(
 
 void UISystem::handle_asset_browser_action(QtAssetBrowserActionRequest request) {
   if (editor_ == nullptr || asset_browser_ == nullptr || !editor_->project().has_project()) return;
-  const auto observed = editor_->project_assets().asset_revision();
+  auto observed = editor_->project_assets().asset_revision();
+  if (observed.ok() && observed.value().revision == 0u) {
+    // A catalog invalidation has no revision until its owner rebuilds the
+    // snapshot. Resolve that absence before fencing the user's request.
+    const auto catalog = editor_->project_assets().assets();
+    if (!catalog.ok()) {
+      present_lifecycle_result(catalog);
+      return;
+    }
+    observed = editor_->project_assets().asset_revision();
+  }
   if (!observed.ok() || request.generation != observed.value().project_generation ||
       request.catalog_revision != observed.value().revision) {
     refresh_asset_browser(true);
@@ -684,7 +694,10 @@ void UISystem::handle_asset_browser_action(QtAssetBrowserActionRequest request) 
         sources = std::move(*selected);
       }
     }
-    if (still_current() && !sources.empty()) finish(editor_->project_assets().import_textures(sources, folder));
+    if (still_current() && !sources.empty()) {
+      const auto result = editor_->project_assets().import_textures_as_materials(sources, folder);
+      if (still_current()) finish_material_texture_import(result);
+    }
     return;
   }
   case QtAssetBrowserAction::Delete:
@@ -726,6 +739,7 @@ void UISystem::handle_asset_browser_action(QtAssetBrowserActionRequest request) 
       .title = text("ui.asset_browser.delete.title", "Delete Assets"),
       .text = text("ui.asset_browser.delete.question", "Move the selected assets to the Recycle Bin?"),
       .informative_text = details.join(QLatin1Char('\n')),
+      .scrollable_informative_text = true,
       .buttons = {
           {.button = QtRetainedMessageBoxButton::Primary, .label = text("ui.material_browser.context.delete", "Delete"), .role = QMessageBox::DestructiveRole},
           {.button = QtRetainedMessageBoxButton::Secondary, .label = text("ui.action.cancel", "Cancel"), .role = QMessageBox::RejectRole}},

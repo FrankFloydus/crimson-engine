@@ -25,6 +25,9 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 - Authored polygon data uses SDK-owned packed/CSR `QGEO` inside the geometry wrapper; compiled mesh
   fallback data also lives in `QDRG`. Native code consumes the projection owner instead of duplicating
   topology conversion.
+- Save and Auto Save retain raw authored geometry independently of modeling diagnostics. Invalid
+  loops, references, UV arrays and edge attributes round-trip without automatic cleanup. On load,
+  safe display geometry is derived separately; it never replaces the stored authored records.
 - [qdr_project_write_snapshot.*](qdr_project_write_snapshot.hpp) captures/pins export data before
   serialization. `QdrDocumentReader`/`QdrDocumentWriter` adapt files; `qdr_atomic_write.*` owns durable
   replacement. Project sessions pass their persistent scene UUID on write and consume

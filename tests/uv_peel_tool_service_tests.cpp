@@ -978,16 +978,16 @@ TEST(UvPeelToolServiceTests, InstanceContextCleanupPreservesRememberedSceneOptio
   ASSERT_EQ(harness.session.history().undo_count(), 1u);
 
   // Undo removes the occurrence and restores the same member as an ordinary
-  // mesh. The instance scope ends, while the surviving Edit participant remains.
+  // mesh. The instance scope ends and no selected component participant survives.
   ASSERT_TRUE(editor.history().undo().ok());
   EXPECT_FALSE(editor.query().entity(occurrence).has_value());
   EXPECT_FALSE(editor.modeling().instance_edit_state().active);
   const auto edit_after_undo = editor.mode().state();
   EXPECT_EQ(edit_after_undo.mode, QuaderEditorMode::Edit);
   EXPECT_EQ(edit_after_undo.generation, edit_before_undo.generation);
-  ASSERT_EQ(edit_after_undo.participants.size(), 1u);
-  EXPECT_EQ(edit_after_undo.participants.front().uuid,
-            edit_before_undo.participants.front().uuid);
+  EXPECT_TRUE(edit_after_undo.participants.empty());
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 0u);
+  EXPECT_EQ(editor.selection().summary().selected_edge_count, 0u);
   EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, remembered);
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());

@@ -1388,6 +1388,14 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
         static_cast<double>(kBridge.steps.minimum),
         static_cast<double>(kBridge.steps.maximum),
         static_cast<double>(kBridge.steps.step)));
+    result.controls.push_back(number_control(
+        "operation.bridge.start_tension", "Start Tension",
+        settings.bridge_start_tension, kBridge.start_tension.minimum,
+        kBridge.start_tension.maximum, kBridge.start_tension.step));
+    result.controls.push_back(number_control(
+        "operation.bridge.end_tension", "End Tension",
+        settings.bridge_end_tension, kBridge.end_tension.minimum,
+        kBridge.end_tension.maximum, kBridge.end_tension.step));
     break;
   case ModelingToolSettingsTargetKind::Thicken:
     result.controls.push_back(number_control(

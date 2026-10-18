@@ -13,6 +13,7 @@
 #include "editor/input/viewport_input_binding_adapter.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "support/behavior_scenario.hpp"
@@ -1123,7 +1124,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Object)),
-              "");
+              "4");
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Group)),
@@ -5133,8 +5134,6 @@ TEST(EditorApiTests, EditorPanelsResolveSelectionModesAndCustomGridPresets) {
   const auto path = keybinding_test_path("editor-panel-mode-grid");
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
   ASSERT_TRUE(editor.commands().set_shortcut(
-      quader::quader_viewport_selection_mode_target_id("object"), "4").ok());
-  ASSERT_TRUE(editor.commands().set_shortcut(
       quader::quader_viewport_selection_mode_target_id("group"), "5").ok());
   for (bool outliner : {false, true}) {
     SCOPED_TRACE(outliner);
@@ -5146,31 +5145,36 @@ TEST(EditorApiTests, EditorPanelsResolveSelectionModesAndCustomGridPresets) {
                            quader::ViewportSelectionMode::Object,
                            quader::ViewportSelectionMode::Group}) {
       SCOPED_TRACE(static_cast<int>(mode));
-      const bool component_mode = mode == quader::ViewportSelectionMode::Vertex ||
-          mode == quader::ViewportSelectionMode::Edge ||
-          mode == quader::ViewportSelectionMode::Face;
-      ASSERT_TRUE(editor.mode().set(component_mode
-          ? quader::QuaderEditorMode::Edit
-          : quader::QuaderEditorMode::Object).ok());
       const std::string target = quader::viewport_selection_mode_target_id(
           quader::viewport_selection_mode_id(mode));
       const std::string mapping = editor.commands().shortcut_for(target);
       ASSERT_FALSE(mapping.empty());
-      const auto dispatch = editor.commands().dispatch_viewport_input_binding(
-          single_input_chord(mapping), {}, false, false, context);
-      ASSERT_EQ(dispatch.kind,
-                quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
-      EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
-      EXPECT_EQ(dispatch.shortcut.selection_mode, mode);
-      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
-                    single_input_chord(mapping), {}, false, true, context).kind,
-                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
-      auto navigation_context = context;
-      navigation_context.navigation_active = true;
-      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
-                    single_input_chord(mapping), {}, false, false,
-                    navigation_context).kind,
-                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+      for (const auto editor_mode : {quader::QuaderEditorMode::Object,
+                                     quader::QuaderEditorMode::Edit}) {
+        SCOPED_TRACE(static_cast<int>(editor_mode));
+        ASSERT_TRUE(editor.mode().set(editor_mode).ok());
+        const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+            single_input_chord(mapping), {}, false, false, context);
+        if (mode == quader::ViewportSelectionMode::Group &&
+            editor_mode == quader::QuaderEditorMode::Edit) {
+          EXPECT_EQ(dispatch.kind,
+                    quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+          continue;
+        }
+        ASSERT_EQ(dispatch.kind,
+                  quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+        EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
+        EXPECT_EQ(dispatch.shortcut.selection_mode, mode);
+        EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                      single_input_chord(mapping), {}, false, true, context).kind,
+                  quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+        auto navigation_context = context;
+        navigation_context.navigation_active = true;
+        EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                      single_input_chord(mapping), {}, false, false,
+                      navigation_context).kind,
+                  quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+      }
     }
   }
 
@@ -8278,53 +8282,44 @@ TEST(EditorApiTests, GenericModalCancelRoutesThroughPrimitiveOwner) {
 }
 
 TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
-    /// Maps one viewport shortcut mode to the public modeling selection mode it should apply.
-    struct ModeCase {
-      quader::ViewportSelectionMode viewport_mode;
-    };
-    constexpr std::array kCases{
-        ModeCase{quader::ViewportSelectionMode::Vertex},
-        ModeCase{quader::ViewportSelectionMode::Edge},
-        ModeCase{quader::ViewportSelectionMode::Face},
-        ModeCase{quader::ViewportSelectionMode::Object},
-        ModeCase{quader::ViewportSelectionMode::Group},
-    };
+  constexpr std::array kCases{
+      std::pair{"1", quader::ViewportSelectionMode::Vertex},
+      std::pair{"2", quader::ViewportSelectionMode::Edge},
+      std::pair{"3", quader::ViewportSelectionMode::Face},
+      std::pair{"4", quader::ViewportSelectionMode::Object},
+      std::pair{"5", quader::ViewportSelectionMode::Group}};
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const quader::ViewportShortcutController controller;
+  create_selected_box(editor, "Selection kind shortcuts");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_viewport_selection_mode_target_id("group"), "5").ok());
 
-    CommandTestHarness harness;
-    quader::QuaderEditorApi& editor = harness.editor;
-    const quader::ViewportShortcutController controller;
-    const auto object = create_selected_box(editor, "Selection kind shortcuts");
-    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
-    ASSERT_TRUE(editor.commands().set_shortcut(
-        quader::quader_viewport_selection_mode_target_id("object"), "4").ok());
-    ASSERT_TRUE(editor.commands().set_shortcut(
-        quader::quader_viewport_selection_mode_target_id("group"), "5").ok());
-
-    for (const ModeCase &mode : kCases) {
-      SCOPED_TRACE(static_cast<int>(mode.viewport_mode));
-      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
-      if (mode.viewport_mode != quader::ViewportSelectionMode::Object &&
-          mode.viewport_mode != quader::ViewportSelectionMode::Group) {
-        enter_edit_mode_for_objects(editor, {object});
-      }
+  for (const auto editor_mode : {quader::QuaderEditorMode::Object,
+                                 quader::QuaderEditorMode::Edit}) {
+    SCOPED_TRACE(static_cast<int>(editor_mode));
+    ASSERT_TRUE(editor.mode().set(editor_mode).ok());
+    for (const auto &[key, viewport_mode] : kCases) {
+      SCOPED_TRACE(key);
       const auto before = editor.selection().summary().mode;
       const std::string target = quader::viewport_selection_mode_target_id(
-          quader::viewport_selection_mode_id(mode.viewport_mode));
-      const std::optional<std::vector<quader::QuaderInputChord>> parsed =
-          quader::quader_input_parse_shortcut(
-              editor.commands().shortcut_for(target));
-      ASSERT_TRUE(parsed.has_value()) << target;
-      ASSERT_EQ(parsed->size(), 1u) << target;
-
-      const quader::QuaderViewportKeybindingDispatch dispatch =
-          editor.commands().dispatch_viewport_input_binding(parsed->front(), {},
-                                                            true, false);
+          quader::viewport_selection_mode_id(viewport_mode));
+      EXPECT_EQ(editor.commands().shortcut_for(target), key);
+      const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(key), {}, true, false);
+      if (viewport_mode == quader::ViewportSelectionMode::Group &&
+          editor_mode == quader::QuaderEditorMode::Edit) {
+        EXPECT_EQ(dispatch.kind,
+                  quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+        continue;
+      }
       ASSERT_EQ(
           dispatch.kind,
           quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
       EXPECT_EQ(dispatch.shortcut.kind,
                 quader::ViewportShortcutKind::SetSelectionMode);
-      EXPECT_EQ(dispatch.shortcut.selection_mode, mode.viewport_mode);
+      EXPECT_EQ(dispatch.shortcut.selection_mode, viewport_mode);
 
       quader::ViewportInputResult input;
       input.shortcut_handled = true;
@@ -8337,9 +8332,9 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
       EXPECT_FALSE(result.command_executed);
       EXPECT_FALSE(result.invalidate_hover);
       EXPECT_FALSE(result.mark_overlay_dirty);
-      EXPECT_EQ(editor.selection().summary().mode,
-                before);
+      EXPECT_EQ(editor.selection().summary().mode, before);
     }
+  }
 }
 
 TEST(EditorApiTests,
@@ -8511,14 +8506,18 @@ TEST(EditorApiTests, GroupSelectionToggleKeepsLegacyOverridesAndUnassignments) {
       quader::quader_viewport_selection_mode_target_id("object");
   const auto group_target =
       quader::quader_viewport_selection_mode_target_id("group");
-  EXPECT_TRUE(editor.commands().shortcut_for(object_target).empty());
+  EXPECT_EQ(editor.commands().shortcut_for(object_target), "4");
   EXPECT_TRUE(editor.commands().shortcut_for(group_target).empty());
-  for (const auto key : {"4", "5"}) {
-    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
-        single_input_chord(key), {}, true, false).kind,
-        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
-  }
-  ASSERT_TRUE(editor.commands().set_shortcut(object_target, "4").ok());
+  const auto default_object = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("4"), {}, true, false);
+  EXPECT_EQ(default_object.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(default_object.shortcut.selection_mode,
+            quader::ViewportSelectionMode::Object);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("5"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.commands().set_shortcut(object_target, "Ctrl+Alt+4").ok());
   ASSERT_TRUE(editor.commands().set_shortcut(group_target, "5").ok());
   ASSERT_TRUE(editor.commands().set_shortcut(kToggle, "Ctrl+K F19").ok());
 
@@ -8527,7 +8526,7 @@ TEST(EditorApiTests, GroupSelectionToggleKeepsLegacyOverridesAndUnassignments) {
   ASSERT_TRUE(loaded.commands().set_keybinding_storage_path(path).ok());
   EXPECT_EQ(loaded.commands().shortcut_for(kToggle), "Ctrl+K F19");
   for (const auto &[key, mode] : {
-           std::pair{"4", quader::ViewportSelectionMode::Object},
+           std::pair{"Ctrl+Alt+4", quader::ViewportSelectionMode::Object},
            std::pair{"5", quader::ViewportSelectionMode::Group}}) {
     const auto dispatch = loaded.commands().dispatch_viewport_input_binding(
         single_input_chord(key), {}, true, false);
@@ -8536,13 +8535,22 @@ TEST(EditorApiTests, GroupSelectionToggleKeepsLegacyOverridesAndUnassignments) {
     EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
     EXPECT_EQ(dispatch.shortcut.selection_mode, mode);
   }
+  EXPECT_EQ(loaded.commands().dispatch_viewport_input_binding(
+      single_input_chord("4"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(loaded.commands().remove_shortcut(object_target).ok());
   ASSERT_TRUE(loaded.commands().remove_shortcut(group_target).ok());
   ASSERT_TRUE(loaded.commands().remove_shortcut(kToggle).ok());
   CommandTestHarness unassigned;
   ASSERT_TRUE(unassigned.editor.commands().set_keybinding_storage_path(path).ok());
-  EXPECT_EQ(unassigned.editor.commands().shortcut_for(object_target), "4");
+  EXPECT_TRUE(unassigned.editor.commands().shortcut_for(object_target).empty());
   EXPECT_TRUE(unassigned.editor.commands().shortcut_for(group_target).empty());
   EXPECT_TRUE(unassigned.editor.commands().shortcut_for(kToggle).empty());
+  for (const auto key : {"4", "Ctrl+Alt+4"}) {
+    EXPECT_EQ(unassigned.editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(key), {}, true, false).kind,
+        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
   std::filesystem::remove(path);
 }
 
@@ -9608,13 +9616,8 @@ TEST(EditorApiTests, EscapeClearsSelectionInOrdinarySelectionToolsAndModes) {
         EXPECT_EQ(cleared.changed(), press == 0);
         const auto selection = editor.selection().summary();
         EXPECT_FALSE(selection.has_selection);
-        if (mode == quader::QuaderSelectionMode::Object ||
-            mode == quader::QuaderSelectionMode::Group) {
-          EXPECT_TRUE(selected_entities(editor).empty());
-        } else {
-          EXPECT_EQ(selected_entities(editor), selected_before);
-          EXPECT_EQ(editor.mode().state().participants.size(), 2u);
-        }
+        EXPECT_TRUE(selected_entities(editor).empty());
+        EXPECT_TRUE(editor.mode().state().participants.empty());
         EXPECT_EQ(selection.selected_vertex_count, 0u);
         EXPECT_EQ(selection.selected_edge_count, 0u);
         EXPECT_EQ(selection.selected_face_count, 0u);
@@ -10246,7 +10249,7 @@ TEST(EditorApiTests, EscapeClearSelectionKeepsExplicitShortcutOverrides) {
   std::filesystem::remove(path);
 }
 
-TEST(EditorApiTests, SceneOnlySelectionRejectsComponentModesAndEscapeStillClears) {
+TEST(EditorApiTests, SceneOnlySelectionReturnsFromComponentModesAndEscapeStillClears) {
   constexpr std::array kModes{
       std::pair{quader::QuaderSelectionMode::Vertex,
                 quader::ViewportSelectionMode::Vertex},
@@ -10261,7 +10264,6 @@ TEST(EditorApiTests, SceneOnlySelectionRejectsComponentModesAndEscapeStillClears
     const auto light = editor.scene().create_point_light(
         {.name = "Escape Scene-Only Light", .select_created = true});
     ASSERT_TRUE(light.ok()) << light.error_message();
-    const auto before = editor.mode().state();
     const auto before_entry = quader::test::capture_command_observable_state(editor);
     const auto entry = editor.mode().set(quader::QuaderEditorMode::Edit);
     EXPECT_TRUE(entry.ok()) << entry.error_message();
@@ -10269,9 +10271,12 @@ TEST(EditorApiTests, SceneOnlySelectionRejectsComponentModesAndEscapeStillClears
     EXPECT_TRUE(entry.error_message().empty());
     EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
     EXPECT_EQ(quader::test::capture_command_observable_state(editor), before_entry);
-    EXPECT_FALSE(editor.selection().set_mode(mode).ok());
-    EXPECT_EQ(editor.mode().revision(), before.revision);
-    EXPECT_EQ(editor.mode().generation(), before.generation);
+    const auto component_request = editor.selection().set_mode(mode);
+    EXPECT_TRUE(component_request.ok()) << component_request.error_message();
+    EXPECT_TRUE(component_request.changed());
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.selection().select_object(light.value().id).ok());
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
     ASSERT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{light.value().id});
@@ -13283,11 +13288,285 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     BridgeShortcutCreatesOneStraightSpanAfterRememberedInterpolatedPreview) {
+     NativeBridgePreviewArgumentsUpdateBothEndpointsThroughOnePreview) {
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingPreviewBridgeEdges,
+      quader::quader_command::kModelingPreviewBridgeFaces};
+  for (const auto command : kCommands) {
+    SCOPED_TRACE(command.string());
+    const bool faces = command.string() == kCommands[1].string();
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    const auto object = editor.query().modeling_object_for_id(
+        editor.selection().summary().active_object_id);
+    ASSERT_TRUE(object.has_value());
+    const auto mesh = editor.modeling().mesh(*object);
+    ASSERT_TRUE(mesh.valid());
+    std::vector<quader::QuaderElementId> selected_faces;
+    std::vector<quader::QuaderEdgeRef> selected_edges;
+    const auto overlay = editor.query().selection_overlay();
+    for (const auto &triangle : overlay.triangles) {
+      if (triangle.element.object_id == object->modeling_object_id &&
+          triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace &&
+          std::ranges::find(selected_faces, triangle.element.face_id) ==
+              selected_faces.end()) {
+        selected_faces.push_back(triangle.element.face_id);
+      }
+    }
+    for (const auto &line : overlay.lines) {
+      if (line.element.object_id == object->modeling_object_id &&
+          line.layer == quader::QuaderOverlayLayer::SelectedEdge) {
+        selected_edges.push_back({line.element.edge_a, line.element.edge_b});
+      }
+    }
+    if (faces) ASSERT_EQ(selected_faces.size(), 2u);
+    else ASSERT_EQ(selected_edges.size(), 2u);
+    const auto begin = [&](quader::QuaderBridgeArgs args) {
+      return faces ? mesh.faces().only(selected_faces).begin_bridge_preview(args)
+                   : mesh.edges().only(selected_edges).begin_bridge_preview(args);
+    };
+    using Domain = quader::test::CommandObservableDomain;
+    ASSERT_TRUE(editor.tools().set_setting(
+        "bridge", "operation.bridge.steps", 3.0).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "bridge", "operation.bridge.start_tension", 0.75).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "bridge", "operation.bridge.end_tension", 1.25).ok());
+    const auto different_selection = faces
+        ? mesh.faces().only({selected_faces.front()}).replace()
+        : mesh.edges().only({selected_edges.front()}).replace();
+    ASSERT_TRUE(different_selection.ok()) << different_selection.error_message();
+    const auto before_rejection = quader::test::capture_command_observable_state(editor);
+    const auto history_before = editor.history().undo_history();
+    constexpr std::array kRejectedInitialArgs{
+        quader::QuaderBridgeArgs{
+            .steps = 4, .start_tension = std::numeric_limits<double>::quiet_NaN(),
+            .end_tension = 2.5},
+        quader::QuaderBridgeArgs{
+            .steps = 4, .start_tension = 2.5,
+            .end_tension = std::numeric_limits<double>::infinity()}};
+    for (const auto args : kRejectedInitialArgs) {
+      const auto rejected_begin = begin(args);
+      EXPECT_FALSE(rejected_begin.begin_result().ok());
+      EXPECT_FALSE(rejected_begin.begin_result().changed());
+      EXPECT_FALSE(rejected_begin.valid());
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      EXPECT_EQ(editor.history().undo_history().history_revision,
+                history_before.history_revision);
+      const auto after_rejection = quader::test::capture_command_observable_state(editor);
+      const auto unchanged = quader::test::diff_command_observable_state(
+          before_rejection, after_rejection, quader::test::kAllCommandObservableDomains);
+      EXPECT_TRUE(unchanged.empty()) << unchanged.summary;
+      constexpr std::array kRememberedBridgeOptions{
+          std::pair<std::string_view, double>{"operation.bridge.steps", 3.0},
+          std::pair<std::string_view, double>{"operation.bridge.start_tension", 0.75},
+          std::pair<std::string_view, double>{"operation.bridge.end_tension", 1.25}};
+      for (const auto &[setting, value] : kRememberedBridgeOptions) {
+        const auto retained = editor.tools().set_setting("bridge", setting, value);
+        ASSERT_TRUE(retained.ok()) << retained.error_message();
+        EXPECT_FALSE(retained.changed())
+            << "Rejected initial arguments must retain the remembered Bridge option: " << setting;
+      }
+    }
+    const auto restored_selection = faces
+        ? mesh.faces().only(selected_faces).replace()
+        : mesh.edges().only(selected_edges).replace();
+    ASSERT_TRUE(restored_selection.ok()) << restored_selection.error_message();
+    const auto before = quader::test::capture_command_observable_state(editor);
+    auto preview = begin({.steps = 4, .start_tension = 0.25, .end_tension = 2.0});
+    ASSERT_TRUE(preview.begin_result().ok()) << preview.begin_result().error_message();
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    const auto initial = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(initial.domain(Domain::Geometry), before.domain(Domain::Geometry));
+    const auto updated = preview.update(
+        quader::QuaderBridgeArgs{.steps = 4, .start_tension = 1.75,
+                                .end_tension = 0.5});
+    ASSERT_TRUE(updated.ok()) << updated.error_message();
+    EXPECT_TRUE(updated.changed());
+    const auto accepted = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(accepted.domain(Domain::Geometry), initial.domain(Domain::Geometry));
+    const auto settings = editor.tools().active_settings();
+    const auto *steps = find_tool_setting_control(settings, "operation.bridge.steps");
+    const auto *start = find_tool_setting_control(settings, "operation.bridge.start_tension");
+    const auto *end = find_tool_setting_control(settings, "operation.bridge.end_tension");
+    ASSERT_NE(steps, nullptr);
+    ASSERT_NE(start, nullptr);
+    ASSERT_NE(end, nullptr);
+    EXPECT_DOUBLE_EQ(steps->number_value, 4.0);
+    EXPECT_DOUBLE_EQ(start->number_value, 1.75);
+    EXPECT_DOUBLE_EQ(end->number_value, 0.5);
+    const auto settings_revision = editor.tools().active_settings_revision();
+    const auto rejected = preview.update(quader::QuaderBridgeArgs{
+        .steps = 4, .start_tension = std::numeric_limits<double>::quiet_NaN(),
+        .end_tension = 0.5});
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(editor.tools().active_settings_revision(), settings_revision);
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              accepted.domain(Domain::Geometry));
+    const auto committed = preview.commit("Bridge API preview");
+    ASSERT_TRUE(committed.ok()) << committed.error_message();
+    EXPECT_TRUE(committed.changed());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              accepted.domain(Domain::Geometry));
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undone = quader::test::capture_command_observable_state(editor);
+    const auto restored = quader::test::diff_command_observable_state(
+        before, undone, Domain::Geometry | Domain::Selection);
+    EXPECT_TRUE(restored.empty()) << restored.summary;
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              accepted.domain(Domain::Geometry));
+    ASSERT_TRUE(editor.history().undo().ok());
+    auto canceled = begin({.steps = 4, .start_tension = 2.5, .end_tension = 0.25});
+    ASSERT_TRUE(canceled.begin_result().ok()) << canceled.begin_result().error_message();
+    ASSERT_TRUE(canceled.cancel().ok());
+    const auto after_cancel = quader::test::capture_command_observable_state(editor);
+    const auto canceled_state = quader::test::diff_command_observable_state(
+        before, after_cancel, Domain::Geometry | Domain::Selection);
+    EXPECT_TRUE(canceled_state.empty()) << canceled_state.summary;
+  }
+}
+
+TEST(EditorApiTests,
+     NativeBridgePreviewArgumentsPreserveUnrelatedRememberedSettings) {
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingPreviewBridgeEdges,
+      quader::quader_command::kModelingPreviewBridgeFaces};
+  for (const auto command : kCommands) {
+    SCOPED_TRACE(command.string());
+    const bool faces = command.string() == kCommands[1].string();
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    const auto object = editor.query().modeling_object_for_id(
+        editor.selection().summary().active_object_id);
+    ASSERT_TRUE(object);
+    const auto mesh = editor.modeling().mesh(*object);
+    ASSERT_TRUE(mesh.valid());
+    std::vector<quader::QuaderElementId> selected_faces;
+    std::vector<quader::QuaderEdgeRef> selected_edges;
+    const auto overlay = editor.query().selection_overlay();
+    for (const auto &triangle : overlay.triangles) {
+      if (triangle.element.object_id == object->modeling_object_id &&
+          triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace &&
+          std::ranges::find(selected_faces, triangle.element.face_id) == selected_faces.end()) {
+        selected_faces.push_back(triangle.element.face_id);
+      }
+    }
+    for (const auto &line : overlay.lines) {
+      if (line.element.object_id == object->modeling_object_id &&
+          line.layer == quader::QuaderOverlayLayer::SelectedEdge) {
+        selected_edges.push_back({line.element.edge_a, line.element.edge_b});
+      }
+    }
+    if (faces) ASSERT_EQ(selected_faces.size(), 2u);
+    else ASSERT_EQ(selected_edges.size(), 2u);
+
+    // Cut's scope allows these options in Object Mode; Edge Mode remembers
+    // them even though an edge cut cannot edit them.
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "cut", "operation.cut.keep_mode",
+        static_cast<double>(quader::QuaderCutMode::DiscardRight)).ok());
+    ASSERT_TRUE(editor.tools().set_setting("cut", "operation.cut.cap", true).ok());
+    ASSERT_TRUE(editor.tools().set_setting("move", "auto_merge_vertices", false).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "lasso_select", "select_partial_intersection", true).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(faces ? quader::QuaderSelectionMode::Face
+                                                 : quader::QuaderSelectionMode::Edge).ok());
+    const auto restored = faces ? mesh.faces().only(selected_faces).replace()
+                                : mesh.edges().only(selected_edges).replace();
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    const auto expect_unrelated_settings = [&]() {
+      EXPECT_TRUE(editor.tools().lasso_select_partial_intersection());
+    };
+    ASSERT_NO_FATAL_FAILURE(expect_unrelated_settings());
+    using Domain = quader::test::CommandObservableDomain;
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto expect_bridge_settings = [&](quader::QuaderBridgeArgs args) {
+      const auto target = editor.tools().active_settings();
+      ASSERT_TRUE(target.preview_active);
+      const auto *steps = find_tool_setting_control(target, "operation.bridge.steps");
+      const auto *start = find_tool_setting_control(target, "operation.bridge.start_tension");
+      const auto *end = find_tool_setting_control(target, "operation.bridge.end_tension");
+      ASSERT_NE(steps, nullptr);
+      ASSERT_NE(start, nullptr);
+      ASSERT_NE(end, nullptr);
+      EXPECT_DOUBLE_EQ(steps->number_value, static_cast<double>(args.steps));
+      EXPECT_DOUBLE_EQ(start->number_value, args.start_tension);
+      EXPECT_DOUBLE_EQ(end->number_value, args.end_tension);
+      expect_unrelated_settings();
+    };
+    const auto expect_remembered_settings = [&]() {
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+      const auto cut_settings = editor.tools().active_settings();
+      const auto *keep_mode = find_tool_setting_control(
+          cut_settings, "operation.cut.keep_mode");
+      const auto *cap = find_tool_setting_control(cut_settings, "operation.cut.cap");
+      ASSERT_NE(keep_mode, nullptr);
+      ASSERT_NE(cap, nullptr);
+      EXPECT_EQ(keep_mode->choice_value,
+                std::to_string(static_cast<int>(quader::QuaderCutMode::DiscardRight)));
+      EXPECT_TRUE(cap->bool_value);
+      ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+      // The remembered Move option is presented in Vertex Mode. Cut's runtime
+      // status reports the current gesture, so read its retained controls above.
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+      const auto target = editor.tools().active_settings();
+      const auto *auto_merge = find_tool_setting_control(target, "auto_merge_vertices");
+      ASSERT_NE(auto_merge, nullptr);
+      EXPECT_FALSE(auto_merge->bool_value);
+      expect_unrelated_settings();
+      ASSERT_TRUE(editor.selection().set_mode(faces ? quader::QuaderSelectionMode::Face
+                                                   : quader::QuaderSelectionMode::Edge).ok());
+    };
+    constexpr quader::QuaderBridgeArgs kInitial{
+        .steps = 4, .start_tension = 0.25, .end_tension = 2.0};
+    auto preview = faces ? mesh.faces().only(selected_faces).begin_bridge_preview(kInitial)
+                         : mesh.edges().only(selected_edges).begin_bridge_preview(kInitial);
+    ASSERT_TRUE(preview.begin_result().ok()) << preview.begin_result().error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_bridge_settings(kInitial));
+    const auto initial = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(initial.domain(Domain::Geometry), before.domain(Domain::Geometry));
+    constexpr quader::QuaderBridgeArgs kUpdated{
+        .steps = 6, .start_tension = 1.75, .end_tension = 0.5};
+    const auto updated = preview.update(kUpdated);
+    ASSERT_TRUE(updated.ok()) << updated.error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_bridge_settings(kUpdated));
+    const auto accepted = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(accepted.domain(Domain::Geometry), initial.domain(Domain::Geometry));
+    ASSERT_TRUE(preview.cancel().ok());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              before.domain(Domain::Geometry));
+    ASSERT_NO_FATAL_FAILURE(expect_remembered_settings());
+
+    auto integer_preview = faces ? mesh.faces().only(selected_faces).begin_bridge_preview(3)
+                                 : mesh.edges().only(selected_edges).begin_bridge_preview(3);
+    ASSERT_TRUE(integer_preview.begin_result().ok())
+        << integer_preview.begin_result().error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_bridge_settings({.steps = 3}));
+    EXPECT_NE(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              before.domain(Domain::Geometry));
+    ASSERT_TRUE(integer_preview.cancel().ok());
+    ASSERT_NO_FATAL_FAILURE(expect_remembered_settings());
+  }
+}
+
+TEST(EditorApiTests,
+     BridgeShortcutCreatesOneStraightSpanAfterRememberedBridgePreview) {
   using quader::quader_command::kModelingBridgeEdges;
   using quader::quader_command::kModelingBridgeFaces;
-  using quader::quader_command::kModelingInterpolatedBridgeEdges;
-  using quader::quader_command::kModelingInterpolatedBridgeFaces;
+  using quader::quader_command::kModelingPreviewBridgeEdges;
+  using quader::quader_command::kModelingPreviewBridgeFaces;
   for (const auto command : {kModelingBridgeEdges, kModelingBridgeFaces}) {
     SCOPED_TRACE(command.string());
     const bool faces = command.string() == kModelingBridgeFaces.string();
@@ -13309,16 +13588,22 @@ TEST(EditorApiTests,
     // four side quads per step; the edge pair adds one quad per step.
     const std::size_t indices_per_bridge_step = (faces ? 4u : 1u) * 6u;
 
-    const auto preview_command = faces ? kModelingInterpolatedBridgeFaces
-                                       : kModelingInterpolatedBridgeEdges;
+    const auto preview_command = faces ? kModelingPreviewBridgeFaces
+                                      : kModelingPreviewBridgeEdges;
     ASSERT_TRUE(editor.commands().execute(preview_command).ok());
     ASSERT_TRUE(editor.tools()
                     .set_setting({}, "operation.bridge.steps", 4.0)
                     .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting({}, "operation.bridge.start_tension", 2.5)
+                    .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting({}, "operation.bridge.end_tension", 0.25)
+                    .ok());
     ASSERT_TRUE(editor.tools().active_settings().preview_active);
-    const auto interpolated = editor.query().compiled_object_mesh(*object);
-    ASSERT_TRUE(interpolated.has_value());
-    EXPECT_EQ(interpolated->indices.size(),
+    const auto preview_mesh = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(preview_mesh.has_value());
+    EXPECT_EQ(preview_mesh->indices.size(),
               initial_mesh->indices.size() + 4u * indices_per_bridge_step);
     ASSERT_TRUE(editor.modeling().cancel_preview().ok());
 
@@ -13370,6 +13655,14 @@ TEST(EditorApiTests,
         find_tool_setting_control(settings, "operation.bridge.steps");
     ASSERT_NE(steps, nullptr);
     EXPECT_DOUBLE_EQ(steps->number_value, 4.0);
+    const auto *start_tension =
+        find_tool_setting_control(settings, "operation.bridge.start_tension");
+    const auto *end_tension =
+        find_tool_setting_control(settings, "operation.bridge.end_tension");
+    ASSERT_NE(start_tension, nullptr);
+    ASSERT_NE(end_tension, nullptr);
+    EXPECT_DOUBLE_EQ(start_tension->number_value, 2.5);
+    EXPECT_DOUBLE_EQ(end_tension->number_value, 0.25);
     ASSERT_TRUE(editor.modeling().cancel_preview().ok());
   }
 }
@@ -13408,6 +13701,180 @@ TEST(EditorApiTests, BridgeShortcutPreservesRemappingAndDeliberateUnassignment) 
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   EXPECT_EQ(resolve("Ctrl+Alt+B").kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     BridgePreviewRenamesMigrateStoredSequencesAndCurrentScopes) {
+  constexpr std::string_view kSequence = "Ctrl+Alt+F23 Ctrl+Alt+F24";
+  constexpr auto kFocus = quader::quader_command::kViewportFocusAll;
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingPreviewBridgeEdges,
+      quader::quader_command::kModelingPreviewBridgeFaces};
+  constexpr std::array<std::string_view, 2> kLegacyIds{
+      "modeling.interpolated_bridge_edges",
+      "modeling.interpolated_bridge_faces"};
+  for (std::size_t index = 0; index < kCommands.size(); ++index) {
+    const auto command = kCommands[index];
+    const auto legacy_id = kLegacyIds[index];
+    SCOPED_TRACE(legacy_id);
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto initial_catalog = editor.commands().keybinding_catalog();
+    const auto *initial =
+        find_keybinding_catalog_entry(initial_catalog, command.string());
+    ASSERT_NE(initial, nullptr);
+    const std::string canonical_when = initial->when;
+    const auto path = keybinding_test_path(
+        index == 0u ? "bridge-preview-edge-migration"
+                    : "bridge-preview-face-migration");
+    {
+      std::ofstream stored(path);
+      ASSERT_TRUE(stored.is_open());
+      stored << "[{\"command\":\"" << legacy_id
+             << "\",\"key\":\"" << kSequence
+             << "\",\"when\":\"false\"},"
+             << "{\"command\":\"" << kFocus.string()
+             << "\",\"key\":\"Ctrl+Alt+F22\"}]";
+    }
+    const std::string legacy_file = read_text_file(path);
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), legacy_file);
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->action_id, "modeling.preview.bridge");
+    EXPECT_EQ(entry->when, canonical_when);
+    EXPECT_EQ(entry->shortcut, kSequence);
+    EXPECT_TRUE(entry->default_shortcut.empty());
+    EXPECT_FALSE(editor.commands().descriptor(legacy_id).has_value());
+    EXPECT_EQ(find_keybinding_catalog_entry(catalog, legacy_id), nullptr);
+    for (const auto preview_command : kCommands) {
+      EXPECT_EQ(editor.commands().shortcut_for(preview_command), kSequence);
+      EXPECT_FALSE(has_keybinding_when(editor.commands().keybindings(),
+                                      preview_command.string(), kSequence,
+                                      "false"));
+    }
+    EXPECT_EQ(editor.commands().shortcut_for(kFocus), "Ctrl+Alt+F22");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingBridge), "B");
+    quader::ViewportToolState state;
+    state.selection_mode = index == 0u ? quader::ViewportSelectionMode::Edge
+                                      : quader::ViewportSelectionMode::Face;
+    const auto prefix = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F23"), state, true, false);
+    EXPECT_EQ(prefix.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F24"), state, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id, command.string());
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), legacy_file);
+    ASSERT_TRUE(editor.commands().set_shortcut(kFocus, "Ctrl+Alt+F21").ok());
+    const std::string canonical_file = read_text_file(path);
+    for (const auto old_id : kLegacyIds) {
+      EXPECT_EQ(canonical_file.find(old_id), std::string::npos);
+    }
+    for (const auto preview_command : kCommands) {
+      EXPECT_NE(canonical_file.find(preview_command.string()), std::string::npos);
+    }
+    EXPECT_NE(canonical_file.find(kSequence), std::string::npos);
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(editor.commands().shortcut_for(command), kSequence);
+    EXPECT_EQ(editor.commands().shortcut_for(kFocus), "Ctrl+Alt+F21");
+    std::filesystem::remove(path);
+  }
+}
+
+TEST(EditorApiTests,
+     BridgePreviewMigrationKeepsLatestAssignmentsAndDeliberateUnassignment) {
+  struct MigrationCase final {
+    std::string_view json;
+    std::string_view shortcut;
+  };
+  constexpr std::array kCases{
+      MigrationCase{
+          R"([{"command":"modeling.interpolated_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"modeling.interpolated_bridge_faces","key":"Ctrl+Alt+F23 Ctrl+Alt+F24"}])",
+          "Ctrl+Alt+F23 Ctrl+Alt+F24"},
+      MigrationCase{
+          R"([{"command":"modeling.preview_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"-modeling.interpolated_bridge_faces"}])",
+          {}},
+      MigrationCase{
+          R"([{"command":"-modeling.interpolated_bridge_edges"},{"command":"modeling.preview_bridge_faces","key":"Ctrl+Alt+F23 Ctrl+Alt+F24"}])",
+          "Ctrl+Alt+F23 Ctrl+Alt+F24"},
+      MigrationCase{
+          R"([{"command":"modeling.interpolated_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"-modeling.preview_bridge_edges"}])",
+          {}},
+      MigrationCase{
+          R"([{"command":"-modeling.preview_bridge_faces"},{"command":"modeling.interpolated_bridge_faces","key":"Ctrl+Alt+F23 Ctrl+Alt+F24"}])",
+          "Ctrl+Alt+F23 Ctrl+Alt+F24"},
+  };
+  const auto path = keybinding_test_path("bridge-preview-migration-precedence");
+  for (const auto &migration : kCases) {
+    SCOPED_TRACE(migration.json);
+    {
+      std::ofstream stored(path);
+      ASSERT_TRUE(stored.is_open());
+      stored << migration.json;
+    }
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), migration.json);
+    for (const auto command : {
+             quader::quader_command::kModelingPreviewBridgeEdges,
+             quader::quader_command::kModelingPreviewBridgeFaces}) {
+      EXPECT_EQ(editor.commands().shortcut_for(command), migration.shortcut);
+    }
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto *entry = find_keybinding_catalog_entry(
+        catalog, quader::quader_command::kModelingPreviewBridgeEdges.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->unassigned, migration.shortcut.empty());
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingBridge), "B");
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_command::kViewportFocusAll, "Ctrl+Alt+F21").ok());
+    const std::string canonical_file = read_text_file(path);
+    EXPECT_EQ(canonical_file.find("interpolated_bridge"), std::string::npos);
+    if (migration.shortcut.empty()) {
+      EXPECT_EQ(canonical_file.find("modeling.preview_bridge_edges"),
+                std::string::npos);
+      EXPECT_EQ(canonical_file.find("modeling.preview_bridge_faces"),
+                std::string::npos);
+    }
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingPreviewBridgeEdges),
+              migration.shortcut);
+    std::filesystem::remove(path);
+  }
+}
+
+TEST(EditorApiTests, BridgePreviewMigrationRejectsUnrelatedUnknownTargets) {
+  const auto path = keybinding_test_path("bridge-preview-migration-unknown");
+  {
+    std::ofstream stored(path);
+    ASSERT_TRUE(stored.is_open());
+    stored << R"([{"command":"modeling.interpolated_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"modeling.interpolated_bridge_unknown","key":"Ctrl+Alt+F21"}])";
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kModelingPreviewBridgeEdges, "Ctrl+Alt+F22").ok());
+  const auto result = editor.commands().set_keybinding_storage_path(path);
+  EXPECT_FALSE(result.ok());
+  EXPECT_NE(result.error_message().find("unknown command id"), std::string::npos);
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kModelingPreviewBridgeEdges),
+            "Ctrl+Alt+F22");
   std::filesystem::remove(path);
 }
 
@@ -15078,9 +15545,15 @@ TEST(EditorApiTests, ObjectAndGroupPickingIgnoresInwardRoomBackfaces) {
       const auto before_hover =
           quader::test::capture_command_observable_state(editor);
       const auto hovered = editor.selection().hover(hover);
-      EXPECT_FALSE(hovered.ok());
-      EXPECT_FALSE(hovered.changed());
-      EXPECT_EQ(quader::test::capture_command_observable_state(editor), before_hover);
+      ASSERT_TRUE(hovered.ok()) << hovered.error_message();
+      EXPECT_TRUE(hovered.changed());
+      EXPECT_EQ(editor.selection().summary().mode, mode);
+      const auto after_hover =
+          quader::test::capture_command_observable_state(editor);
+      using Domain = quader::test::CommandObservableDomain;
+      EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{room_target});
+      EXPECT_EQ(after_hover.domain(Domain::Geometry), before_hover.domain(Domain::Geometry));
+      EXPECT_EQ(after_hover.domain(Domain::History), before_hover.domain(Domain::History));
 
       pick.select_backfaces = false;
       const auto front_facing = editor.selection().pick_select(pick);
@@ -17535,8 +18008,6 @@ TEST(EditorApiTests, DeleteSelectionDeletesSelectedLightsThroughSceneAwareRoute)
 TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInObjectMode) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
-    EXPECT_FALSE(
-        editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
 
     quader::QuaderCreatePointLightArgs args;
     args.transform.location = {2.0f, 3.0f, 4.0f};
@@ -18207,7 +18678,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentBulkSelectionIncludesEveryEnrolledMeshWithoutAComponentSeed) {
+     ComponentSelectAllKeepsSeedScopeAndInverseTargetsEveryEligibleMesh) {
   const auto create_three_boxes = [](quader::QuaderEditorApi &editor) {
     std::array<quader::QuaderModelingObjectRef, 3> boxes;
     boxes[0] = create_selected_box(editor, "Component Scope A");
@@ -18242,8 +18713,7 @@ TEST(EditorApiTests,
                     .set_mode(quader::QuaderSelectionMode::Vertex)
                     .ok());
     ASSERT_TRUE(editor.selection()
-                    .select_vertex(boxes[0], 1,
-                                   quader::QuaderSelectionEdit::Add)
+                    .select_vertex(boxes[0], 1)
                     .ok());
     ASSERT_TRUE(editor.selection()
                     .select_vertex(boxes[1], 1,
@@ -18252,8 +18722,7 @@ TEST(EditorApiTests,
     ASSERT_EQ(editor.selection().summary().selected_vertex_count, 2u);
     EXPECT_EQ(selected_entities(editor),
               (std::vector<quader::EntityId>{boxes[0].entity,
-                                             boxes[1].entity,
-                                             boxes[2].entity}));
+                                             boxes[1].entity}));
   };
 
   {
@@ -18265,11 +18734,10 @@ TEST(EditorApiTests,
         harness.editor.selection().select_all();
     ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
     EXPECT_TRUE(selected_all.changed());
-    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 24u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 16u);
     EXPECT_EQ(selected_entities(harness.editor),
               (std::vector<quader::EntityId>{boxes[0].entity,
-                                             boxes[1].entity,
-                                             boxes[2].entity}));
+                                             boxes[1].entity}));
   }
 
   {
@@ -18749,8 +19217,8 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllUsesTheFixedEditSetAfterClearAndHoverMiss) {
-  /// Describes one component-mode variant of the fixed Edit scope contract.
+     ComponentSelectAllUsesTheStickyCandidateAfterClearAndHoverMiss) {
+  /// Describes one component-mode variant of the sticky candidate scope contract.
   struct ModeCase final {
     quader::QuaderSelectionMode mode;
     quader::QuaderActiveSelectionKind hover_kind;
@@ -18770,11 +19238,10 @@ TEST(EditorApiTests,
     CommandTestHarness harness;
     quader::QuaderEditorApi &editor = harness.editor;
     const quader::QuaderModelingObjectRef box =
-        create_selected_box(editor, "Empty Edit Select All Scope");
-    enter_edit_mode_for_objects(editor, {box});
+        create_selected_box(editor, "Sticky Select All Scope");
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(editor.selection().set_mode(mode_case.mode).ok());
-    ASSERT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
+    ASSERT_TRUE(selected_entities(editor).empty());
     ASSERT_EQ(editor.selection().summary().selected_vertex_count, 0u);
     ASSERT_EQ(editor.selection().summary().selected_edge_count, 0u);
     ASSERT_EQ(editor.selection().summary().selected_face_count, 0u);
@@ -18822,7 +19289,7 @@ TEST(EditorApiTests,
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
     EXPECT_EQ(editor.selection().summary().selected_edge_count, 0u);
     EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
-    EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
+    EXPECT_TRUE(selected_entities(editor).empty());
 
     const quader::QuaderApiVoidResult selected_all =
         editor.selection().select_all();
@@ -18849,7 +19316,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllIncludesEmptyParticipantsAndIgnoresOutsideHover) {
+     ComponentSelectAllUnionsStickyCandidateWithSelectedMeshesAndExcludesEmptyPeers) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef selected_box =
@@ -18871,21 +19338,18 @@ TEST(EditorApiTests,
           "Untouched Component Scope");
   ASSERT_TRUE(untouched_box.ok()) << untouched_box.error_message();
 
-  enter_edit_mode_for_objects(editor, {selected_box, empty_box.value()});
+  ASSERT_TRUE(editor.selection().select_objects(
+      {selected_box.entity, empty_box.value().entity}, selected_box.entity).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
                   .ok());
   ASSERT_TRUE(editor.selection().select_face(selected_box, 1).ok());
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
-  const auto before_outside_selection =
-      quader::test::capture_command_observable_state(editor);
+  const auto before_hover = editor.selection().summary();
   const auto outside_hover = editor.selection().hover_face(untouched_box.value(), 1);
-  EXPECT_FALSE(outside_hover.ok());
-  EXPECT_FALSE(outside_hover.changed());
-  EXPECT_EQ(editor.mode().state().participants.size(), 2U);
-  EXPECT_FALSE(editor.selection().select_object(untouched_box.value()).ok());
-  EXPECT_FALSE(editor.selection().select_face(untouched_box.value(), 1).ok());
-  EXPECT_EQ(quader::test::capture_command_observable_state(editor),
-            before_outside_selection);
+  ASSERT_TRUE(outside_hover.ok()) << outside_hover.error_message();
+  EXPECT_EQ(editor.selection().summary().selection_revision,
+            before_hover.selection_revision);
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
 
   quader::QuaderHoverRequest miss;
   miss.ray = {
@@ -18901,9 +19365,9 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.selection().summary().selected_face_count, 12u);
   EXPECT_EQ(selected_entities(editor),
             (std::vector<quader::EntityId>{selected_box.entity,
-                                           empty_box.value().entity}));
+                                           untouched_box.value().entity}));
   const std::optional<quader::QuaderEntitySnapshot> untouched =
-      editor.query().entity(untouched_box.value().entity);
+      editor.query().entity(empty_box.value().entity);
   ASSERT_TRUE(untouched.has_value());
   EXPECT_FALSE(untouched->selected);
 }
@@ -19259,7 +19723,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     SelectMeshNGonsRequiresEditModeAndRetainsEveryParticipant) {
+     SelectMeshNGonsRequiresEditModeAndSelectsOnlyMatchingMeshes) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef first =
@@ -19284,7 +19748,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(summary.selected_face_count, 2U);
   EXPECT_EQ(summary.active_object_id, second.modeling_object_id);
   EXPECT_EQ(selected_entities(editor),
-            (std::vector<quader::EntityId>{first.entity, second.entity, quad.entity}));
+            (std::vector<quader::EntityId>{first.entity, second.entity}));
 
   CommandTestHarness instance_harness;
   quader::QuaderEditorApi &instance_editor = instance_harness.editor;
@@ -19443,7 +19907,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.selection().summary().selected_face_count, 2U);
   EXPECT_EQ(selected_entities(editor),
             (std::vector<quader::EntityId>{first.entity,
-                                           mirrored.value().entity, tilted.value().entity}));
+                                           mirrored.value().entity}));
 }
 
 TEST(EditorApiTests,
@@ -19503,17 +19967,17 @@ TEST(EditorApiTests,
   ASSERT_TRUE(selected_direction.ok()) << selected_direction.error_message();
   EXPECT_TRUE(selected_direction.changed());
   EXPECT_EQ(editor.selection().summary().selected_edge_count, 8u);
-  EXPECT_EQ(selected_entities(editor).size(), 3u);
+  EXPECT_EQ(selected_entities(editor).size(), 2u);
   const std::optional<quader::QuaderEntitySnapshot> non_matching_after =
       entity_by_id(editor, third.value().entity);
   ASSERT_TRUE(non_matching_after.has_value());
-  EXPECT_TRUE(non_matching_after->selected);
+  EXPECT_FALSE(non_matching_after->selected);
   const auto overlay = editor.render().selection_overlay_frame();
   EXPECT_FALSE(std::any_of(overlay.lines.begin(), overlay.lines.end(),
       [&](const quader::QuaderOverlayLine &line) {
         return line.layer == quader::QuaderOverlayLayer::SelectedEdge &&
                line.element.object_id == third.value().modeling_object_id;
-      })) << "The enrolled non-matching mesh retains membership without selected edges.";
+      })) << "The non-matching mesh has no selected edge overlays.";
 
 #ifndef NDEBUG
   const nlohmann::json selection = nlohmann::json::parse(
@@ -23869,10 +24333,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(selected_entities(editor),
             std::vector<quader::EntityId>{second_occurrence});
 
-  // Formal occurrences do not expose components until their definition is
-  // entered and its editable member is explicitly enrolled in Edit Mode.
-  EXPECT_FALSE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
-                   .ok());
+  // Formal occurrences do not expose definition components before instance edit.
   const auto before_occurrence_entry =
       quader::test::capture_command_observable_state(editor);
   const auto occurrence_entry = editor.mode().set(quader::QuaderEditorMode::Edit);
@@ -23884,6 +24345,12 @@ TEST(EditorApiTests,
             before_occurrence_entry);
   EXPECT_EQ(selected_entities(editor),
             std::vector<quader::EntityId>{second_occurrence});
+  const auto component_request =
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(component_request.ok()) << component_request.error_message();
+  EXPECT_TRUE(component_request.changed());
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  EXPECT_TRUE(editor.mode().state().participants.empty());
   const auto outside_direct_component =
       editor.selection().select_face(member, 0);
   EXPECT_FALSE(outside_direct_component.ok());
@@ -25567,11 +26034,12 @@ TEST(EditorApiTests,
           }));
   EXPECT_EQ(non_command_target_count, 59u);
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog, "viewport.marking_menu", "Q"));
-  for (const auto mode : {quader::QuaderSelectionMode::Object,
-                         quader::QuaderSelectionMode::Group}) {
-    EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
-        editor.commands().keybinding_target_id_for_selection_mode(mode), ""));
-  }
+  EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Object), "4"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Group), ""));
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
       quader::quader_command::kSelectToggleGroupSelection.string(), "Shift+G"));
 
@@ -25757,21 +26225,21 @@ TEST(EditorApiTests,
   EXPECT_NE(cycle_cut_keep_mode->when.find("activeTool.cut"),
             std::string::npos);
 
-  const quader::QuaderKeybindingCatalogEntry *interpolated_bridge_edges =
+  const quader::QuaderKeybindingCatalogEntry *preview_bridge_edges =
       find_keybinding_catalog_entry(
           catalog,
           editor.commands().command_id_for_modeling_action(
-              "interpolated_bridge_edges"));
-  const quader::QuaderKeybindingCatalogEntry *interpolated_bridge_faces =
+              "preview_bridge_edges"));
+  const quader::QuaderKeybindingCatalogEntry *preview_bridge_faces =
       find_keybinding_catalog_entry(
           catalog,
           editor.commands().command_id_for_modeling_action(
-              "interpolated_bridge_faces"));
-  ASSERT_NE(interpolated_bridge_edges, nullptr);
-  ASSERT_NE(interpolated_bridge_faces, nullptr);
-  EXPECT_EQ(interpolated_bridge_edges, interpolated_bridge_faces);
-  EXPECT_EQ(interpolated_bridge_edges->action_id,
-            "modeling.preview.interpolated_bridge");
+              "preview_bridge_faces"));
+  ASSERT_NE(preview_bridge_edges, nullptr);
+  ASSERT_NE(preview_bridge_faces, nullptr);
+  EXPECT_EQ(preview_bridge_edges, preview_bridge_faces);
+  EXPECT_EQ(preview_bridge_edges->action_id,
+            "modeling.preview.bridge");
 
   const quader::QuaderKeybindingCatalogEntry *spawn_viewport_window =
       find_keybinding_catalog_entry(

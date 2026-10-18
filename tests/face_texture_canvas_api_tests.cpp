@@ -218,6 +218,144 @@ TEST(FaceTextureCanvasPerformanceTests, ClonedLargeSceneSelectedFaceSettings) {
   }
 }
 
+TEST(FaceTextureCanvasProjectReplayTests,
+     LoadedSourceFaceSurvivesCacheModeAndHistoryCycles) {
+  const char *source = std::getenv("QUADER_TEST_FACE_TEXTURE_PROJECT");
+  if (source == nullptr || *source == '\0') {
+    GTEST_SKIP() << "Set QUADER_TEST_FACE_TEXTURE_PROJECT to replay a cloned project.";
+  }
+  const std::filesystem::path source_project = std::filesystem::u8path(source);
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_project));
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const std::filesystem::path root(temporary.path().toStdWString());
+  const auto project_root = root / source_project.parent_path().filename();
+  std::error_code error;
+  std::filesystem::copy(source_project.parent_path(), project_root,
+      std::filesystem::copy_options::recursive |
+          std::filesystem::copy_options::skip_symlinks, error);
+  ASSERT_FALSE(error) << error.message();
+  ProjectSession project(root / "recent-scenes.json");
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  QuaderEditorApi editor(project);
+  const auto opened_project = editor.project().open(project_root / source_project.filename());
+  ASSERT_TRUE(opened_project.ok()) << opened_project.error_message();
+  const char *source_scene = std::getenv("QUADER_TEST_FACE_TEXTURE_SCENE");
+  if (source_scene != nullptr && *source_scene != '\0') {
+    const auto requested_scene = std::filesystem::u8path(source_scene);
+    const auto original_scene = requested_scene.is_absolute()
+        ? requested_scene : source_project.parent_path() / requested_scene;
+    const auto relative_scene = std::filesystem::relative(
+        original_scene, source_project.parent_path(), error);
+    ASSERT_FALSE(error) << error.message();
+    ASSERT_FALSE(relative_scene.empty());
+    ASSERT_FALSE(relative_scene.is_absolute());
+    ASSERT_EQ(std::find(relative_scene.begin(), relative_scene.end(),
+                        std::filesystem::path("..")), relative_scene.end());
+    const auto opened_scene = editor.scene_documents().open_native_path(
+        project_root / relative_scene);
+    ASSERT_TRUE(opened_scene.ok()) << opened_scene.error_message();
+  }
+  ASSERT_NE(project.active_scene(), nullptr);
+  const auto entities = editor.query().entities();
+  const auto source_entity = std::ranges::find_if(entities, [](const auto &entity) {
+    return entity.name == "Box_008";
+  });
+  ASSERT_NE(source_entity, entities.end());
+  const auto object = editor.query().modeling_object_for_entity(source_entity->id);
+  ASSERT_TRUE(object.has_value());
+  constexpr QuaderElementId kSourceFace = 11;
+  const auto expect_source = [&] {
+    const auto selection = editor.selection().summary();
+    ASSERT_EQ(selection.mode, QuaderSelectionMode::Face);
+    ASSERT_EQ(selection.selected_object_count, 1U);
+    ASSERT_EQ(selection.selected_face_count, 1U);
+    ASSERT_EQ(selection.active_face_id, kSourceFace);
+    const auto settings = editor.modeling().face_texture_settings();
+    ASSERT_EQ(settings.selected_face_count, 1U);
+    ASSERT_TRUE(settings.editable) << settings.disabled_reason;
+    const auto canvas = editor.modeling().face_texture_canvas();
+    EXPECT_EQ(canvas.selected_face_count, 1U);
+    EXPECT_EQ(canvas.object_id, object->modeling_object_id);
+    EXPECT_EQ(canvas.face_id, kSourceFace);
+    EXPECT_TRUE(canvas.editable) << canvas.disabled_reason;
+    for (int frame = 0; frame < 4; ++frame) {
+      const auto cached = editor.modeling().face_texture_settings();
+      EXPECT_EQ(cached.selected_face_count, 1U);
+      EXPECT_EQ(cached.selection_token, settings.selection_token);
+    }
+  };
+  const auto expect_mesh_uvs = [&](const auto &expected) {
+    const auto actual = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(actual.has_value());
+    ASSERT_EQ(actual->vertices.size(), expected.vertices.size());
+    EXPECT_EQ(actual->indices, expected.indices);
+    for (std::size_t index = 0U; index < actual->vertices.size(); ++index) {
+      EXPECT_FLOAT_EQ(actual->vertices[index].uv.x, expected.vertices[index].uv.x);
+      EXPECT_FLOAT_EQ(actual->vertices[index].uv.y, expected.vertices[index].uv.y);
+    }
+  };
+  const auto transfer_sides = [&](const char *stage) {
+    SCOPED_TRACE(stage);
+    for (const QuaderElementId target : {7, 8, 9, 10}) {
+      SCOPED_TRACE(target);
+      ASSERT_NO_FATAL_FAILURE(expect_source());
+      const auto before = editor.query().compiled_object_mesh(*object);
+      ASSERT_TRUE(before.has_value());
+      const auto transferred = editor.modeling().transfer_face_texture_to_face(
+          object->modeling_object_id, target);
+      ASSERT_TRUE(transferred.ok()) << transferred.error_message();
+      ASSERT_NO_FATAL_FAILURE(expect_source());
+      if (transferred.changed()) {
+        const auto accepted = editor.query().compiled_object_mesh(*object);
+        ASSERT_TRUE(accepted.has_value());
+        ASSERT_TRUE(editor.history().undo().ok());
+        ASSERT_NO_FATAL_FAILURE(expect_source());
+        expect_mesh_uvs(*before);
+        ASSERT_TRUE(editor.history().redo().ok());
+        ASSERT_NO_FATAL_FAILURE(expect_source());
+        expect_mesh_uvs(*accepted);
+        ASSERT_TRUE(editor.history().undo().ok());
+        ASSERT_NO_FATAL_FAILURE(expect_source());
+        expect_mesh_uvs(*before);
+      }
+    }
+  };
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(*object).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(*object, kSourceFace).ok());
+  ASSERT_NO_FATAL_FAILURE(transfer_sides("Loaded source face"));
+
+  ASSERT_TRUE(editor.selection().select_faces(*object, {7, kSourceFace}).ok());
+  EXPECT_EQ(editor.modeling().face_texture_settings().selected_face_count, 2U);
+  EXPECT_EQ(editor.modeling().face_texture_canvas().selected_face_count, 2U);
+  ASSERT_TRUE(editor.selection().select_face(*object, kSourceFace).ok());
+  ASSERT_NO_FATAL_FAILURE(transfer_sides("Multi-face cache to one source face"));
+
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+  (void)editor.modeling().face_texture_settings();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(*object, kSourceFace).ok());
+  ASSERT_NO_FATAL_FAILURE(transfer_sides("Object/Edit mode cycle"));
+
+  const auto settings = editor.modeling().face_texture_settings();
+  const auto edited = editor.modeling().set_face_texture_setting({
+      .field = QuaderFaceTextureField::Rotate,
+      .value = settings.rotation_degrees + 15.0,
+      .selection_token = settings.selection_token});
+  ASSERT_TRUE(edited.ok()) << edited.error_message();
+  ASSERT_TRUE(edited.changed());
+  expect_source();
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_source();
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_NO_FATAL_FAILURE(transfer_sides("Source texture edit history"));
+}
+
 TEST(FaceTextureCanvasApiTests, OnlyOneFaceEnablesCanvasAndMissingImageKeepsOutline) {
   FaceTextureCanvasHarness harness;
   auto &editor = harness.editor;

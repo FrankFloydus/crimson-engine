@@ -94,7 +94,8 @@ public:
   select_all_in_constrained_component_scope(
       const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map) const;
+      const ModelingObjectRuntimeMap &object_map,
+      int sticky_component_object_id = -1) const;
   /**
    * Builds the directly pickable component universes for the current editing
    * scope. This is a read-only host query; inversion policy stays in the
@@ -292,7 +293,6 @@ private:
     std::uint64_t scene_layer_revision = 0;
     std::uint64_t scene_mesh_binding_revision = 0;
     std::uint64_t viewport_visibility_revision = 0;
-    std::uint64_t editor_mode_revision = 0;
     std::uint64_t object_map_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
     ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
@@ -316,7 +316,6 @@ private:
     std::uint64_t scene_mesh_binding_revision = 0;
     std::uint64_t object_map_revision = 0;
     std::uint64_t viewport_visibility_revision = 0;
-    std::uint64_t editor_mode_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
     quader_editor_core::SelectionMode selection_mode =
         quader_editor_core::SelectionMode::Object;

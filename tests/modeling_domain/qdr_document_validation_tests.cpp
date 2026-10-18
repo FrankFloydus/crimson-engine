@@ -209,8 +209,22 @@ TEST(QdrDocumentValidationTests, ReportsNonmanifoldEdges)
     EXPECT_FALSE(report.ok());
     const PolygonDocumentDiagnostic* diagnostic = find_code(report, PolygonDocumentDiagnosticCode::NonmanifoldEdge);
     ASSERT_TRUE(diagnostic != nullptr);
+    EXPECT_EQ(diagnostic->severity, PolygonDocumentDiagnosticSeverity::Error);
     EXPECT_TRUE(diagnostic->edge == make_edge(a, b));
     EXPECT_TRUE((diagnostic->vertex_ids == std::vector<ElementId> { a, b }));
+
+    const PolygonDocumentValidationReport authored_report =
+        validate_polygon_document(
+            document, PolygonDocumentValidationPolicy::AuthoredTopology);
+    EXPECT_FALSE(authored_report.ok());
+    const PolygonDocumentDiagnostic* authored_diagnostic = find_code(
+        authored_report, PolygonDocumentDiagnosticCode::NonmanifoldEdge);
+    ASSERT_NE(authored_diagnostic, nullptr);
+    EXPECT_EQ(authored_diagnostic->severity,
+              PolygonDocumentDiagnosticSeverity::Error);
+    EXPECT_EQ(authored_diagnostic->edge, diagnostic->edge);
+    EXPECT_EQ(authored_diagnostic->vertex_ids, diagnostic->vertex_ids);
+    EXPECT_EQ(authored_diagnostic->message, diagnostic->message);
 }
 
 TEST(QdrDocumentValidationTests, ReportsInvalidHardNormalEdges)

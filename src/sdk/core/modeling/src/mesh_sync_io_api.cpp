@@ -424,9 +424,9 @@ CheckedOperationsApi::bridge_edges(BridgeOptions options) {
 }
 
 Result<PreviewHandle>
-CheckedOperationsApi::interpolated_bridge_edges(BridgeOptions options) {
+CheckedOperationsApi::begin_bridge_edges_preview(BridgeOptions options) {
   return checked_preview(*context_, [&] {
-    return OperationsApi(context_).interpolated_bridge_edges(options);
+    return OperationsApi(context_).begin_bridge_edges_preview(options);
   });
 }
 
@@ -458,9 +458,9 @@ CheckedOperationsApi::bridge_faces(BridgeOptions options) {
 }
 
 Result<PreviewHandle>
-CheckedOperationsApi::interpolated_bridge_faces(BridgeOptions options) {
+CheckedOperationsApi::begin_bridge_faces_preview(BridgeOptions options) {
   return checked_preview(*context_, [&] {
-    return OperationsApi(context_).interpolated_bridge_faces(options);
+    return OperationsApi(context_).begin_bridge_faces_preview(options);
   });
 }
 

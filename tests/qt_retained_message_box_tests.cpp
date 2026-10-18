@@ -5,20 +5,31 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_retained_message_box.hpp"
+#include "ui/qt_application_theme.hpp"
 
 #include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
+#include <QEventLoop>
 #include <QLabel>
 #include <QLayout>
+#include <QMouseEvent>
 #include <QPalette>
+#include <QPlainTextEdit>
 #include <QPixmap>
 #include <QProxyStyle>
 #include <QPushButton>
 #include <QScopeGuard>
+#include <QScreen>
+#include <QScrollBar>
+#include <QStringList>
+#include <QTextBlock>
+#include <QTextCursor>
 #include <QTimer>
 #include <QWidget>
+#include <qpa/qwindowsysteminterface.h>
 
 using namespace quader;
 
@@ -276,4 +287,228 @@ TEST(QtRetainedMessageBoxTests,
             QColor(29, 197, 83));
   EXPECT_EQ(message_box.winId(), retained_window_id);
   EXPECT_EQ(message_box.layout(), retained_layout);
+}
+
+TEST(QtRetainedMessageBoxTests,
+     ScrollablePathsKeepActionsOnScreenAndRetainNativeWidgetsAcrossScaleChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-retained-message-box-scroll-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setStyle(QStringLiteral("Fusion"));
+  QFont application_font = application.font();
+  application_font.setPointSizeF(10.0);
+  application.setFont(application_font);
+  const QPalette native_palette = application.style()->standardPalette();
+  apply_qt_obsidian_application_theme(native_palette);
+  QtUiScaleApplicationController scale_controller(application);
+
+  QScreen *const primary_screen = QApplication::primaryScreen();
+  ASSERT_NE(primary_screen, nullptr);
+  const bool small_screen =
+      qEnvironmentVariableIntValue("QUADER_TEST_SMALL_SCREEN") == 1;
+  const QRect original_geometry = primary_screen->geometry();
+  const QRect original_available_geometry = primary_screen->availableGeometry();
+  const auto restore_screen_geometry = qScopeGuard([&]() {
+    if (small_screen) {
+      QWindowSystemInterface::handleScreenGeometryChange(
+          primary_screen, original_geometry, original_available_geometry);
+      QWindowSystemInterface::sendWindowSystemEvents(QEventLoop::AllEvents);
+    }
+  });
+  if (small_screen) {
+    // Only this QApplication sees the smaller work area; the Windows display
+    // mode and desktop geometry are never changed.
+    const QRect test_geometry(original_geometry.topLeft(), QSize(800, 600));
+    QWindowSystemInterface::handleScreenGeometryChange(
+        primary_screen, test_geometry, test_geometry);
+    QWindowSystemInterface::sendWindowSystemEvents(QEventLoop::AllEvents);
+    ASSERT_EQ(primary_screen->availableGeometry(), test_geometry);
+  }
+  const QString capture_suffix =
+      small_screen ? QStringLiteral("-800x600") : QString{};
+
+  QWidget owner;
+  owner.setScreen(primary_screen);
+  owner.resize(640, 480);
+  owner.move(primary_screen->availableGeometry().topLeft());
+  owner.setAttribute(Qt::WA_DontShowOnScreen);
+  owner.show();
+  QtRetainedMessageBox message_box(&owner);
+  message_box.setScreen(primary_screen);
+  message_box.setAttribute(Qt::WA_DontShowOnScreen);
+  QStringList asset_paths;
+  for (int index = 0; index < 200; ++index) {
+    asset_paths.push_back(QStringLiteral("Materials/stone_%1.qmat").arg(index));
+  }
+  asset_paths.push_back(QStringLiteral("Materials/") +
+                       QString(600, QLatin1Char('x')) +
+                       QStringLiteral("/<b>final_asset</b>.qmat"));
+  QtRetainedMessageBoxPresentation presentation{
+      .icon = QMessageBox::Warning,
+      .object_name = QStringLiteral("asset_delete_message_box"),
+      .title = QStringLiteral("Delete Assets"),
+      .text = QStringLiteral("Move the selected assets to the Recycle Bin?"),
+      .informative_text = asset_paths.join(QLatin1Char('\n')),
+      .scrollable_informative_text = true,
+      .buttons =
+          {
+              {
+                  .button = QtRetainedMessageBoxButton::Primary,
+                  .object_name = QStringLiteral("asset_delete.confirm"),
+                  .label = QStringLiteral("Delete"),
+                  .role = QMessageBox::DestructiveRole,
+              },
+              {
+                  .button = QtRetainedMessageBoxButton::Secondary,
+                  .object_name = QStringLiteral("asset_delete.cancel"),
+                  .label = QStringLiteral("Cancel"),
+                  .role = QMessageBox::RejectRole,
+              },
+          },
+      .default_button = QtRetainedMessageBoxButton::Secondary,
+      .escape_button = QtRetainedMessageBoxButton::Secondary,
+      .close_button = QtRetainedMessageBoxButton::Secondary,
+  };
+  ASSERT_TRUE(message_box.set_presentation(presentation));
+  message_box.prewarm();
+  const WId retained_window_id = message_box.internalWinId();
+  QLayout *const retained_layout = message_box.layout();
+  auto *const editor = message_box.findChild<QPlainTextEdit *>(
+      QStringLiteral("retainedMessageBox.informativeText"));
+  auto *const informative_label = message_box.findChild<QLabel *>(
+      QStringLiteral("qt_msgbox_informativelabel"));
+  QPushButton *const confirm = message_box.retained_button(
+      QtRetainedMessageBoxButton::Primary);
+  QPushButton *const cancel = message_box.retained_button(
+      QtRetainedMessageBoxButton::Secondary);
+  ASSERT_NE(editor, nullptr);
+  ASSERT_NE(informative_label, nullptr);
+  ASSERT_NE(confirm, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_NE(retained_window_id, WId{});
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+
+  QSize first_size;
+  int presentation_index = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    message_box.apply_ui_scale(scale_controller.metrics());
+    QTimer::singleShot(0, &message_box, [&]() {
+      EXPECT_EQ(message_box.layout(), retained_layout);
+      EXPECT_EQ(message_box.internalWinId(), retained_window_id);
+      EXPECT_EQ(message_box.findChild<QPlainTextEdit *>(
+                    QStringLiteral("retainedMessageBox.informativeText")),
+                editor);
+      EXPECT_TRUE(editor->isVisible());
+      EXPECT_TRUE(editor->isReadOnly());
+      EXPECT_FALSE(informative_label->isVisible());
+      EXPECT_EQ(message_box.informativeText(), presentation.informative_text);
+      EXPECT_EQ(editor->toPlainText(), presentation.informative_text);
+      EXPECT_EQ(editor->verticalScrollBar()->value(), 0);
+      EXPECT_GT(editor->verticalScrollBar()->maximum(), 0);
+      EXPECT_EQ(editor->horizontalScrollBar()->maximum(), 0);
+      EXPECT_EQ(message_box.screen(), primary_screen);
+      if (small_screen) {
+        EXPECT_EQ(message_box.screen()->availableGeometry().size(),
+                  QSize(800, 600));
+      }
+      const QSize fitted_size = message_box.size();
+      QEvent layout_request(QEvent::LayoutRequest);
+      QCoreApplication::sendEvent(&message_box, &layout_request);
+      EXPECT_EQ(message_box.size(), fitted_size);
+      EXPECT_TRUE(message_box.rect().contains(editor->geometry()));
+      const QRect available = message_box.screen()->availableGeometry();
+      EXPECT_TRUE(available.contains(message_box.frameGeometry()));
+      for (QPushButton *const button : {confirm, cancel}) {
+        const QRect button_rect(button->mapTo(&message_box, QPoint{}),
+                                button->size());
+        EXPECT_TRUE(message_box.rect().contains(button_rect));
+        EXPECT_GT(button_rect.top(), editor->geometry().bottom());
+      }
+      if (presentation_index == 0) {
+        first_size = message_box.size();
+      } else if (presentation_index == 2) {
+        EXPECT_EQ(message_box.size(), first_size);
+      }
+      if (!review_directory.isEmpty()) {
+        EXPECT_TRUE(message_box.grab().save(QDir(review_directory).filePath(
+            QStringLiteral("asset-delete-scroll-%1%2.png")
+                .arg(presentation_index).arg(capture_suffix))));
+      }
+      editor->moveCursor(QTextCursor::End);
+      editor->ensureCursorVisible();
+      EXPECT_EQ(editor->textCursor().block().text(), asset_paths.back());
+      EXPECT_GT(editor->verticalScrollBar()->value(), 0);
+      EXPECT_TRUE(editor->viewport()->rect().contains(editor->cursorRect()));
+      if (!review_directory.isEmpty()) {
+        EXPECT_TRUE(message_box.grab().save(QDir(review_directory).filePath(
+            QStringLiteral("asset-delete-scroll-%1%2-end.png")
+                .arg(presentation_index).arg(capture_suffix))));
+      }
+
+      // Exercise a pointer click at the displayed action's center after the
+      // list scrolled, preserving the native button's hit-testing behavior.
+      const QPointF position(confirm->rect().center());
+      const QPointF global_position(confirm->mapToGlobal(position.toPoint()));
+      QMouseEvent press(QEvent::MouseButtonPress, position, global_position,
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(confirm, &press);
+      QMouseEvent release(QEvent::MouseButtonRelease, position, global_position,
+                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(confirm, &release);
+    });
+    EXPECT_EQ(message_box.present(presentation),
+              QtRetainedMessageBoxButton::Primary);
+    ++presentation_index;
+  }
+
+  // A shorter subsequent confirmation should reclaim space, then an ordinary
+  // retained message must return to QMessageBox's unscrolled label layout.
+  presentation.informative_text = QStringLiteral("Materials/one.qmat");
+  QTimer::singleShot(0, &message_box, [&]() {
+    EXPECT_EQ(editor->toPlainText(), presentation.informative_text);
+    EXPECT_EQ(editor->verticalScrollBar()->maximum(), 0);
+    EXPECT_LT(message_box.height(), first_size.height());
+    cancel->click();
+  });
+  EXPECT_EQ(message_box.present(presentation),
+            QtRetainedMessageBoxButton::Secondary);
+  presentation.scrollable_informative_text = false;
+  QTimer::singleShot(0, &message_box, [&]() {
+    EXPECT_FALSE(editor->isVisible());
+    EXPECT_TRUE(informative_label->isVisible());
+    EXPECT_EQ(message_box.informativeText(), presentation.informative_text);
+    EXPECT_EQ(message_box.layout(), retained_layout);
+    EXPECT_EQ(message_box.internalWinId(), retained_window_id);
+    cancel->click();
+  });
+  EXPECT_EQ(message_box.present(presentation),
+            QtRetainedMessageBoxButton::Secondary);
+
+  apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  presentation.scrollable_informative_text = true;
+  presentation.informative_text = asset_paths.join(QLatin1Char('\n'));
+  QTimer::singleShot(0, &message_box, [&]() {
+    EXPECT_EQ(editor->palette().color(QPalette::Base),
+              QApplication::palette().color(QPalette::Base));
+    EXPECT_EQ(editor->palette().color(QPalette::Text),
+              QApplication::palette().color(QPalette::Text));
+    EXPECT_TRUE(message_box.screen()->availableGeometry().contains(
+        message_box.frameGeometry()));
+    if (!review_directory.isEmpty()) {
+      EXPECT_TRUE(message_box.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("asset-delete-scroll-high-contrast%1.png")
+              .arg(capture_suffix))));
+    }
+    cancel->click();
+  });
+  EXPECT_EQ(message_box.present(presentation),
+            QtRetainedMessageBoxButton::Secondary);
 }

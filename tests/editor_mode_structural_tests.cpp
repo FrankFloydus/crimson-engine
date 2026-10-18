@@ -90,7 +90,7 @@ protected:
 };
 
 TEST_F(EditorModeStructuralTests,
-       ComponentReplaceAddRemoveClearAndInvertRetainEveryParticipant) {
+       ComponentEditsSynchronizeParticipantsAndInvertIncludesEveryEligibleMesh) {
   const auto first = create_box(0);
   const auto second = create_box(4);
   const auto empty = create_box(8);
@@ -106,16 +106,18 @@ TEST_F(EditorModeStructuralTests,
     if (kind == QuaderComponentKind::Edge) selection.edges = {{1, 2}};
     if (kind == QuaderComponentKind::Face) selection.faces = {1};
     ASSERT_TRUE(editor_.selection().select_components(selection).ok());
-    expect_members({first.entity, second.entity, empty.entity});
+    expect_members({first.entity});
     selection.object = second;
     selection.edit = QuaderSelectionEdit::Add;
     ASSERT_TRUE(editor_.selection().select_components(selection).ok());
-    expect_members({first.entity, second.entity, empty.entity});
+    expect_members({first.entity, second.entity});
     selection.edit = QuaderSelectionEdit::Remove;
     ASSERT_TRUE(editor_.selection().select_components(selection).ok());
-    expect_members({first.entity, second.entity, empty.entity});
+    expect_members({first.entity});
     ASSERT_TRUE(editor_.selection().clear().ok());
-    ASSERT_TRUE(editor_.selection().select_inverse().ok());
+    expect_members({});
+    const auto inverted = editor_.selection().select_inverse();
+    ASSERT_TRUE(inverted.ok()) << inverted.error_message();
     expect_members({first.entity, second.entity, empty.entity});
     const auto all = editor_.selection().summary();
     EXPECT_EQ(kind == QuaderComponentKind::Vertex ? all.selected_vertex_count
@@ -124,19 +126,19 @@ TEST_F(EditorModeStructuralTests,
               kind == QuaderComponentKind::Vertex ? 24U
               : kind == QuaderComponentKind::Edge ? 36U : 18U);
     ASSERT_TRUE(editor_.selection().clear().ok());
-    expect_members({first.entity, second.entity, empty.entity});
+    expect_members({});
     EXPECT_EQ(editor_.mode().generation(), generation);
   }
 }
 
 TEST_F(EditorModeStructuralTests,
-       ComponentsOutsideEditOrOutsideMembershipRejectWithoutMutation) {
+       ComponentsOutsideEditOrOnHiddenPeersRejectWithoutMutation) {
   const auto member = create_box(0);
   const auto outside = create_box(4);
+  ASSERT_TRUE(editor_.scene().set_visible(outside.entity, false).ok());
   const auto outside_mode = session_.editor_mode().snapshot();
   const auto before = capture_command_observable_state(editor_);
   EXPECT_FALSE(editor_.selection().select_vertex(member, 1).ok());
-  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   expect_unchanged(before, outside_mode);
 
   enter({member.entity}, member.entity);
@@ -162,7 +164,7 @@ TEST_F(EditorModeStructuralTests,
 }
 
 TEST_F(EditorModeStructuralTests,
-       BridgePreservesEmptyMemberAndSameGenerationUndoRestoresConsumedMember) {
+       BridgePreservesUnselectedMeshAndSameGenerationUndoRestoresConsumedMember) {
   const auto first = create_quad(0);
   const auto second = create_quad(4);
   const auto empty = create_box(8);
@@ -176,14 +178,14 @@ TEST_F(EditorModeStructuralTests,
   const auto bridge = editor_.commands().execute(quader_command::kModelingBridgeEdges);
   ASSERT_TRUE(bridge.ok()) << bridge.error_message();
   ASSERT_TRUE(bridge.changed());
-  expect_members({second.entity, empty.entity});
+  expect_members({second.entity});
   EXPECT_FALSE(editor_.query().entity(first.entity).has_value());
   EXPECT_EQ(editor_.query().compiled_object_mesh(empty)->indices, empty_before->indices);
   ASSERT_TRUE(editor_.history().undo().ok());
-  expect_members({first.entity, second.entity, empty.entity});
+  expect_members({first.entity, second.entity});
   EXPECT_EQ(editor_.mode().generation(), generation);
   ASSERT_TRUE(editor_.history().redo().ok());
-  expect_members({second.entity, empty.entity});
+  expect_members({second.entity});
   EXPECT_EQ(editor_.mode().generation(), generation);
 
   ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
@@ -202,7 +204,7 @@ TEST_F(EditorModeStructuralTests,
 }
 
 TEST_F(EditorModeStructuralTests,
-       MergePreviewHistoryRestoresConsumedAndEmptyParticipants) {
+       MergePreviewHistoryRestoresConsumedParticipantsAndPreservesUnselectedMesh) {
   const auto first = create_box(0);
   const auto survivor = create_box(0);
   const auto empty = create_box(8);
@@ -216,27 +218,27 @@ TEST_F(EditorModeStructuralTests,
   const auto mode_before = session_.editor_mode().snapshot();
   ASSERT_TRUE(editor_.modeling().begin_preview("merge_by_distance").ok());
   {
-    SCOPED_TRACE("Active merge preview retains every participant");
-    expect_members({first.entity, survivor.entity, empty.entity});
+    SCOPED_TRACE("Active merge preview retains selected participants");
+    expect_members({first.entity, survivor.entity});
     EXPECT_EQ(editor_.mode().generation(), generation);
   }
   ASSERT_TRUE(editor_.modeling().cancel_preview().ok());
   {
     SCOPED_TRACE("Canceled merge preview restores its context");
-    expect_members({first.entity, survivor.entity, empty.entity});
+    expect_members({first.entity, survivor.entity});
     EXPECT_EQ(session_.editor_mode().snapshot(), mode_before);
   }
   ASSERT_TRUE(editor_.modeling().begin_preview("merge_by_distance").ok());
   ASSERT_TRUE(editor_.modeling().commit_preview("Merge Edit Participants").ok());
   {
     SCOPED_TRACE("Committed merge consumes only its source");
-    expect_members({survivor.entity, empty.entity});
+    expect_members({survivor.entity});
   }
   EXPECT_FALSE(editor_.query().entity(first.entity).has_value());
   ASSERT_TRUE(editor_.history().undo().ok());
   {
-    SCOPED_TRACE("Undo restores the consumed source and empty participant");
-    expect_members({first.entity, survivor.entity, empty.entity});
+    SCOPED_TRACE("Undo restores the consumed source and selected participants");
+    expect_members({first.entity, survivor.entity});
   }
   EXPECT_EQ(editor_.selection().summary().selected_vertex_count, 2U);
   EXPECT_EQ(editor_.mode().generation(), generation);
@@ -249,14 +251,14 @@ TEST_F(EditorModeStructuralTests,
   ASSERT_TRUE(editor_.history().redo().ok());
   {
     SCOPED_TRACE("Redo consumes only its source");
-    expect_members({survivor.entity, empty.entity});
+    expect_members({survivor.entity});
   }
   EXPECT_EQ(editor_.selection().summary().selected_vertex_count, 1U);
   EXPECT_EQ(editor_.mode().generation(), generation);
 }
 
 TEST_F(EditorModeStructuralTests,
-       ExtractKeepsOutputOutsideEditAndSelectsItWhenReturningToObject) {
+       ExtractKeepsOutputUnselectedUntilObjectModeAndPermitsSubsequentComponentSelection) {
   const auto source = create_box(0);
   const auto empty = create_box(4);
   enter({source.entity, empty.entity}, source.entity);
@@ -273,19 +275,23 @@ TEST_F(EditorModeStructuralTests,
   const auto output_entity = output->entity;
   const auto output_ref = editor_.query().modeling_object_for_id(output->modeling_object_id);
   ASSERT_TRUE(output_ref.has_value());
-  expect_members({source.entity, empty.entity});
-  EXPECT_FALSE(editor_.selection().select_face(*output_ref, 1).ok());
+  expect_members({source.entity});
   ASSERT_TRUE(editor_.history().undo().ok());
-  expect_members({source.entity, empty.entity});
+  expect_members({source.entity});
   EXPECT_FALSE(editor_.query().entity(output_entity).has_value());
   ASSERT_TRUE(editor_.history().redo().ok());
-  expect_members({source.entity, empty.entity});
+  expect_members({source.entity});
   ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
   auto selected = session_.scene().selected_entities();
   std::ranges::sort(selected);
-  auto expected = std::vector{source.entity, empty.entity, output_entity};
+  auto expected = std::vector{source.entity, output_entity};
   std::ranges::sort(expected);
   EXPECT_EQ(selected, expected);
+  ASSERT_TRUE(editor_.selection().select_object(source).ok());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  expect_members({source.entity});
+  ASSERT_TRUE(editor_.selection().select_face(*output_ref, 1).ok());
+  expect_members({output_entity});
 }
 
 TEST_F(EditorModeStructuralTests,

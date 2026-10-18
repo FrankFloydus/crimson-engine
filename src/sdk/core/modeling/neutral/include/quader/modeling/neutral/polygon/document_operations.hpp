@@ -11,6 +11,7 @@
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -42,6 +43,23 @@ struct EdgeBevelWidthFeedback {
   bool support_limited = false;
 };
 
+/** Configures bridge sampling and independent unitless endpoint tensions. */
+struct BridgeOptions {
+  int steps = 1;
+  float start_tension = 1.0F;
+  float end_tension = 1.0F;
+};
+
+/** Carries the exact mean cubic, or a flagged representative rail cubic. */
+struct BridgeShapeFeedback {
+  std::array<quader::QVec3, 4> controls{};
+  quader::QVec3 start_handle_axis{};
+  quader::QVec3 end_handle_axis{};
+  float start_tension = 1.0F;
+  float end_tension = 1.0F;
+  bool representative_rail = false;
+};
+
 /**
  * Stores the Operation Result data contract used by the polygon document and
  * mesh editing core.
@@ -56,6 +74,7 @@ struct OperationResult {
   // carry failure so adapters never infer severity from message text or changes.
   bool success = true;
   std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
+  std::optional<BridgeShapeFeedback> bridge_shape;
 
   /// Creates a rejected operation without authored changes or element deltas.
   [[nodiscard]] static OperationResult failure(std::string message) {
@@ -288,13 +307,16 @@ bevel_selected_edges(Document &document, Selection &selection,
 bridge_edge_pairs(Document &document, Selection &selection,
                   const std::vector<std::pair<Edge, Edge>> &edge_pairs,
                   int steps = 1);
+[[nodiscard]] OperationResult bridge_edge_pairs(Document &document, Selection &selection, const std::vector<std::pair<Edge, Edge>>& edge_pairs, BridgeOptions options);
 [[nodiscard]] OperationResult
 bridge_edge_boundaries(Document &document, Selection &selection,
                        std::span<const ElementId> first_vertices,
                        std::span<const ElementId> second_vertices, bool closed,
                        int steps = 1);
+[[nodiscard]] OperationResult bridge_edge_boundaries(Document &document, Selection &selection, std::span<const ElementId> first_vertices, std::span<const ElementId> second_vertices, bool closed, BridgeOptions options);
 [[nodiscard]] OperationResult
 bridge_selected_edges(Document &document, Selection &selection, int steps = 1);
+[[nodiscard]] OperationResult bridge_selected_edges(Document &document, Selection &selection, BridgeOptions options);
 [[nodiscard]] OperationResult combine_selected_faces(Document &document,
                                                      Selection &selection);
 [[nodiscard]] OperationResult collapse_selected_faces(Document &document,
@@ -367,6 +389,7 @@ inset_selected_elements(Document &document, Selection &selection,
                                                         Selection &selection);
 [[nodiscard]] OperationResult
 bridge_selected_faces(Document &document, Selection &selection, int steps = 1);
+[[nodiscard]] OperationResult bridge_selected_faces(Document &document, Selection &selection, BridgeOptions options);
 [[nodiscard]] OperationResult thicken_selected_faces(Document &document,
                                                      Selection &selection,
                                                      float thickness = 0.25F,

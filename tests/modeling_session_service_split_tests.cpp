@@ -5136,11 +5136,11 @@ TEST(ModelingSessionServiceSplitTests,
             quader_editor_core::EditorOperationId::Bridge);
   const auto &bridge_settings =
       std::get<quader_editor_core::BridgeOperationSettings>(bridge->settings);
-  const auto interpolated_bridge =
+  const auto preview_bridge =
       std::get<quader_editor_core::BridgeOperationSettings>(
           settings_for_operation(quader_editor_core::EditorOperationId::Bridge,
                                  interaction_settings));
-  EXPECT_EQ(interpolated_bridge.steps, 4);
+  EXPECT_EQ(preview_bridge.steps, 4);
   EXPECT_EQ(bridge_settings.steps, 1);
 
   const std::optional<quader_editor_core::EditorOperationCommand> bevel =
@@ -5439,9 +5439,10 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     KnifePrelockSourceWireCacheRetainsAllEditParticipants) {
-  SceneSession session;
-  ModelingSessionService &service = session.modeling();
+     KnifePrelockSourceWireCacheTracksActiveSelectedObject) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
   const ModelingCreateBoxResult first = service.create_box_from_bounds({
       .bounds = {.min = {-3.0f, -1.0f, -1.0f},
                  .max = {-1.0f, 1.0f, 1.0f}},
@@ -5456,7 +5457,6 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(second.ok) << second.message;
   const std::array selected{first.object.entity, second.object.entity};
   ASSERT_TRUE(service.set_object_selection(selected, first.object.entity).ok);
-  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(
       service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
 
@@ -5476,20 +5476,19 @@ TEST(ModelingSessionServiceSplitTests,
             12);
   EXPECT_EQ(source_wire_count(first_frame,
                               second.object.modeling_object_id),
-            12);
+            0);
 
   const ModelingCommandResult switched =
       service.set_object_selection(selected, second.object.entity);
-  EXPECT_FALSE(switched.ok);
-  EXPECT_FALSE(switched.changed);
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 2u);
+  ASSERT_TRUE(switched.ok) << switched.message;
+  ASSERT_TRUE(switched.changed);
   const std::uint64_t second_signature =
       service.selection_overlay_signature();
-  EXPECT_EQ(second_signature, first_signature);
+  EXPECT_NE(second_signature, first_signature);
   const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
   EXPECT_EQ(source_wire_count(second_frame,
                               first.object.modeling_object_id),
-            12);
+            0);
   EXPECT_EQ(source_wire_count(second_frame,
                               second.object.modeling_object_id),
             12);
@@ -5641,6 +5640,84 @@ TEST(ModelingSessionServiceSplitTests,
       .value = 3,
       .selection_token = locked.selection_token,
   }).ok);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     FaceTextureTransferUsesLiveSourceAfterPresentationSelectionChanges) {
+  for (const bool single_source : {true, false}) {
+    SCOPED_TRACE(single_source);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const auto created = service.create_box_from_bounds({
+        .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+        .name = "Live texture transfer source",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    const AssetId material =
+        assets.add_material(make_default_quader_material("Transfer source"));
+    ASSERT_TRUE(scene.set_material(created.object.entity, {.material = material}));
+    ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+    const auto select_faces = [&](std::vector<int> faces) {
+      return service.set_component_selection({
+          .modeling_object_id = created.object.modeling_object_id,
+          .mode = ModelingSelectionMode::Face,
+          .faces = std::move(faces),
+          .active_kind = ModelingActiveSelectionKind::Face,
+          .active_face = 1,
+      });
+    };
+    ASSERT_TRUE(select_faces({1}).ok);
+    ASSERT_TRUE(service.set_face_texture_setting({
+        .field = ModelingFaceTextureField::ShiftX,
+        .value = 17,
+        .selection_token = service.face_texture_settings().selection_token,
+    }).ok);
+    ASSERT_TRUE(select_faces(single_source ? std::vector<int>{1, 2}
+                                         : std::vector<int>{1}).ok);
+
+    // Change selection inside this synthetic provider to leave the presentation
+    // snapshot out of sync with the live command source in either direction.
+    bool change_selection = true;
+    service.set_face_texture_material_transform_provider([&](MaterialReference) {
+      if (std::exchange(change_selection, false)) {
+        EXPECT_TRUE(select_faces(single_source ? std::vector<int>{1}
+                                             : std::vector<int>{1, 2}).ok);
+      }
+      return StandardMaterialTextureTransform{};
+    });
+    EXPECT_EQ(service.face_texture_settings().selected_face_count,
+              single_source ? 2u : 1u);
+    ASSERT_EQ(service.selection_summary().selected_face_count,
+              single_source ? 1u : 2u);
+    const auto before_revision = service.content_revision();
+    const auto transferred = service.transfer_face_texture_to_face(
+        created.object.modeling_object_id, 3);
+    if (single_source) {
+      ASSERT_TRUE(transferred.ok) << transferred.message;
+      ASSERT_TRUE(transferred.changed);
+      EXPECT_GT(service.content_revision(), before_revision);
+    } else {
+      EXPECT_FALSE(transferred.ok);
+      EXPECT_FALSE(transferred.changed);
+      EXPECT_EQ(service.content_revision(), before_revision);
+    }
+    const auto selection = service.selection_summary();
+    EXPECT_EQ(selection.selected_face_count, single_source ? 1u : 2u);
+    EXPECT_EQ(selection.active_face_id, 1);
+    const auto *mesh = assets.mesh(scene.mesh(created.object.entity)->mesh);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+    const auto *source = quader_poly::find_face(*mesh->authored_polygon_document, 1);
+    const auto *target = quader_poly::find_face(*mesh->authored_polygon_document, 3);
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(target, nullptr);
+    if (single_source) {
+      EXPECT_EQ(target->texture_transform, source->texture_transform);
+    } else {
+      EXPECT_NE(target->texture_transform, source->texture_transform);
+    }
+  }
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -7054,17 +7131,15 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
        ComponentInverseFailureBoundariesRestoreExactSelectionAndOverlay) {
   const QuaderModelingObjectRef first = create_box(editor_);
   const QuaderModelingObjectRef second = create_box(editor_);
-  ASSERT_TRUE(editor_.selection().select_objects(
-      {first.entity, second.entity}, first.entity).ok());
-  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_.selection().select_object(first).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor_.selection().select_edge(first, 1, 2).ok());
   ASSERT_TRUE(editor_.selection()
                   .select_edge(first, 2, 3, QuaderSelectionEdit::Add)
                   .ok());
 
-  // Both meshes are fixed participants even though only the first has selected
-  // edges. Inversion includes the empty participant without enrolling a new mesh.
+  // The constrained scope includes the unselected second mesh for inversion.
+  // Publishing its new selection exercises the Scene rollback boundary.
   session_.modeling().set_viewport_visibility_filter(
       [first_entity = first.entity,
        second_entity = second.entity](EntityId entity) {
@@ -7125,7 +7200,7 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
   const EntityId primary_scene_selection_before =
       session_.scene().primary_selection();
   ASSERT_EQ(selected_scene_entities_before,
-            (std::vector<EntityId>{first.entity, second.entity}));
+            (std::vector<EntityId>{first.entity}));
   ASSERT_EQ(primary_scene_selection_before, first.entity);
 
   const QuaderRevisionStamp revisions_before = editor_.revisions();
@@ -7675,8 +7750,10 @@ TEST_F(CurveModelingProjectionTests,
               baseline_signature);
   }
 
-  EXPECT_FALSE(
-      editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  const auto unchanged_selection =
+      editor_.selection().set_mode(QuaderSelectionMode::Object);
+  EXPECT_TRUE(unchanged_selection.ok());
+  EXPECT_FALSE(unchanged_selection.changed());
   const ViewportOverlayFrame after_selection =
       session_.modeling().selection_overlay_frame();
   EXPECT_EQ(overlay_frame_fingerprint(after_selection), baseline_fingerprint);

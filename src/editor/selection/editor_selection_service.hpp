@@ -125,9 +125,16 @@ struct EditorSelectionBoxBaseline {
     std::optional<EditorSubSelectionBaseline> sub_selection;
 };
 
+/** Identifies a selectable mesh body hit used by component-mode fallback. */
+struct ResolvedComponentBodyTarget {
+  EntityId geometry_entity = kInvalidEntityId;
+  EntityId source_occurrence = kInvalidEntityId;
+};
+
 /** Carries one resolved click and the canonical policy used to apply it. */
 struct ResolvedSelectionClickRequest {
   std::optional<ResolvedSelectionTarget> winner;
+  std::optional<ResolvedComponentBodyTarget> component_body_target;
   ModelingPickSelectRequest policy;
   std::optional<EditorSelectionBoxBaseline> baseline;
   /**
@@ -281,10 +288,12 @@ public:
       const ModelingPickSelectRequest &request);
   ModelingCommandResult preview_resolved_hover(
       std::optional<ResolvedSelectionTarget> target);
-  /// Publishes immediate hover without changing the explicit edit context.
+  /// Publishes a spatial sample, retaining the component candidate on a miss.
+  /// Mesh-body samples adopt a candidate without selecting components.
   ModelingCommandResult preview_spatial_hover(
       std::optional<ResolvedSelectionTarget> target,
-      bool selected_modifier_pressed = false);
+      bool selected_modifier_pressed = false,
+      std::optional<ResolvedComponentBodyTarget> component_body = std::nullopt);
   [[nodiscard]] std::optional<ResolvedSelectionTarget>
   resolved_hover_target() const { return resolved_hover_target_; }
   /**

@@ -98,6 +98,7 @@ enum class ViewportOverlayStyleRole {
     ActiveSelectionWire,
     ActiveSelectedVertex,
     ActiveGroupBounds,
+    KnifeReferenceLine,
 };
 
 /**
@@ -145,6 +146,20 @@ struct ViewportHoverEdgeDimensionContext {
 struct ViewportSelectionDimensionBounds {
     QVec3 min;
     QVec3 max;
+};
+
+/** World-space Knife directions and their unsigned line angle. */
+struct ViewportKnifeAngleContext {
+    QVec3 start;
+    QVec3 reference_end;
+    QVec3 cut_point;
+    double angle_degrees = 0.0;
+};
+
+/** The live authored Knife segment, independent of reference availability. */
+struct ViewportKnifeSegmentContext {
+    QVec3 start;
+    QVec3 end;
 };
 
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
@@ -279,6 +294,8 @@ struct ViewportOverlayFrame {
     std::optional<ViewportHoverEdgeDimensionContext>
         hover_edge_dimension_context;
     bool hover_target_selected = false;
+    std::optional<ViewportKnifeAngleContext> knife_angle_context;
+    std::optional<ViewportKnifeSegmentContext> knife_segment_context;
 };
 
 } // namespace quader

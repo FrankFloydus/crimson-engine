@@ -231,6 +231,13 @@ TEST(EditorModeToolPolicyTests, ObjectMirrorAndFlipRejectEveryComponentKindBefor
     }
     ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(kind).ok());
+    if (kind == quader::QuaderSelectionMode::Vertex) {
+      ASSERT_TRUE(editor.selection().select_vertex(box, 1).ok());
+    } else if (kind == quader::QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+    } else {
+      ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+    }
     ASSERT_TRUE(editor.selection().select_all().ok());
     const auto selection = editor.selection().summary();
     ASSERT_TRUE(selection.has_selection);
@@ -277,7 +284,7 @@ TEST(EditorModeToolPolicyTests, ObjectMirrorAndFlipRejectEveryComponentKindBefor
   }
 }
 
-TEST(EditorModeToolPolicyTests, ExtractCountsMeshesWithSelectedFacesInsteadOfAllEditParticipants) {
+TEST(EditorModeToolPolicyTests, ExtractCountsMeshesWithSelectedFacesInsteadOfOtherEligibleMeshes) {
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
   const auto source = create_policy_box(editor);
@@ -287,7 +294,7 @@ TEST(EditorModeToolPolicyTests, ExtractCountsMeshesWithSelectedFacesInsteadOfAll
   ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source, 1).ok());
-  ASSERT_EQ(editor.mode().state().participants.size(), 3u);
+  ASSERT_EQ(editor.mode().state().participants.size(), 1u);
   EXPECT_TRUE(editor.modeling().can_execute_tool("extract_faces"));
   const auto operations = editor.modeling().instant_operations();
   const auto extract = std::ranges::find_if(operations, [](const auto &operation) {
@@ -306,7 +313,7 @@ TEST(EditorModeToolPolicyTests, ExtractCountsMeshesWithSelectedFacesInsteadOfAll
   EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
   EXPECT_EQ(editor.revisions().modeling_selection_revision, before.modeling_selection_revision);
   EXPECT_EQ(editor.history().undo_history().history_revision, history);
-  EXPECT_EQ(editor.mode().state().participants.size(), 3u);
+  EXPECT_EQ(editor.mode().state().participants.size(), 2u);
 
   ASSERT_TRUE(editor.selection().select_face(other, 1, quader::QuaderSelectionEdit::Remove).ok());
   EXPECT_TRUE(editor.modeling().can_execute_tool("extract_faces"));

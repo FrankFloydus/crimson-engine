@@ -466,29 +466,16 @@ std::uint16_t read_common_header(ByteReader &reader,
 }
 
 [[nodiscard]] std::uint8_t shading_byte(quader_poly::SurfaceShading shading) {
-  switch (shading) {
-  case quader_poly::SurfaceShading::Flat:
-    return 0;
-  case quader_poly::SurfaceShading::Smooth:
-    return 1;
-  case quader_poly::SurfaceShading::Authored:
-    return 2;
+  const auto value = static_cast<int>(shading);
+  if (value < 0 || value > std::numeric_limits<std::uint8_t>::max()) {
+    invalid_document("Polygon shading value exceeds its binary byte range.");
   }
-  invalid_document("Polygon face has an unsupported shading mode.");
+  return static_cast<std::uint8_t>(value);
 }
 
 [[nodiscard]] quader_poly::SurfaceShading
 shading_from_byte(std::uint8_t value) {
-  switch (value) {
-  case 0:
-    return quader_poly::SurfaceShading::Flat;
-  case 1:
-    return quader_poly::SurfaceShading::Smooth;
-  case 2:
-    return quader_poly::SurfaceShading::Authored;
-  default:
-    malformed("Authored topology contains an unsupported shading value.");
-  }
+  return static_cast<quader_poly::SurfaceShading>(value);
 }
 
 [[nodiscard]] std::uint8_t
@@ -574,101 +561,6 @@ document_selection_mode_from_byte(std::uint8_t value) {
   }
 }
 
-void validate_finite(float value, std::string_view label,
-                     bool decoding = false) {
-  if (!std::isfinite(value)) {
-    if (decoding) {
-      malformed(std::string(label) + " must be finite.");
-    }
-    invalid_document(std::string(label) + " must be finite.");
-  }
-}
-
-void validate_polygon_document(const quader_poly::Document &document,
-                               bool decoding) {
-  const auto reject = [decoding](std::string message) {
-    if (decoding) {
-      malformed(std::move(message));
-    }
-    invalid_document(std::move(message));
-  };
-
-  const quader_poly::PolygonDocumentValidationReport report =
-      quader_poly::validate_polygon_document(
-          document, quader_poly::PolygonDocumentValidationPolicy::AuthoredTopology);
-  if (!report.ok()) {
-    const auto issue = std::find_if(
-        report.diagnostics.begin(), report.diagnostics.end(),
-        [](const quader_poly::PolygonDocumentDiagnostic &diagnostic) {
-          return diagnostic.severity ==
-                 quader_poly::PolygonDocumentDiagnosticSeverity::Error;
-        });
-    reject(issue == report.diagnostics.end()
-               ? "Polygon document validation failed."
-               : issue->message);
-  }
-
-  std::uint32_t max_vertex_id = 0;
-  std::unordered_set<std::uint32_t> vertex_ids;
-  vertex_ids.reserve(document.vertices.size());
-  for (const quader_poly::Vertex &vertex : document.vertices) {
-    if (vertex.id == 0 || !vertex_ids.insert(vertex.id).second) {
-      reject("Polygon document contains an invalid or duplicate vertex ID.");
-    }
-    max_vertex_id = std::max(max_vertex_id, vertex.id);
-    validate_finite(vertex.position.x, "Polygon vertex position", decoding);
-    validate_finite(vertex.position.y, "Polygon vertex position", decoding);
-    validate_finite(vertex.position.z, "Polygon vertex position", decoding);
-  }
-
-  std::uint32_t max_face_id = 0;
-  std::unordered_set<std::uint32_t> face_ids;
-  face_ids.reserve(document.faces.size());
-  for (const quader_poly::Face &face : document.faces) {
-    if (face.id == 0 || !face_ids.insert(face.id).second) {
-      reject("Polygon document contains an invalid or duplicate face ID.");
-    }
-    max_face_id = std::max(max_face_id, face.id);
-    static_cast<void>(shading_byte(face.normal_shading));
-    for (const quader::QVec2 uv : face.uvs) {
-      validate_finite(uv.x, "Polygon face UV", decoding);
-      validate_finite(uv.y, "Polygon face UV", decoding);
-    }
-  }
-
-  if (document.next_vertex_id == 0 ||
-      (max_vertex_id != 0 &&
-       (max_vertex_id == std::numeric_limits<std::uint32_t>::max() ||
-        document.next_vertex_id <= max_vertex_id))) {
-    reject("Polygon next vertex ID is not greater than every live vertex ID.");
-  }
-  if (document.next_face_id == 0 ||
-      (max_face_id != 0 &&
-       (max_face_id == std::numeric_limits<std::uint32_t>::max() ||
-        document.next_face_id <= max_face_id))) {
-    reject("Polygon next face ID is not greater than every live face ID.");
-  }
-
-  std::unordered_set<std::uint64_t> edge_modes;
-  edge_modes.reserve(document.hard_normal_edges.size() +
-                     document.soft_normal_edges.size());
-  const auto validate_edge_mode = [&](std::span<const quader_poly::Edge> edges,
-                                      std::string_view mode) {
-    for (quader_poly::Edge edge : edges) {
-      const quader_poly::Edge canonical = quader_poly::make_edge(edge.a, edge.b);
-      const std::uint64_t key =
-          static_cast<std::uint64_t>(canonical.a) << 32U | canonical.b;
-      if (edge != canonical || !edge_modes.insert(key).second) {
-        reject("Polygon document contains a noncanonical, duplicate, or "
-               "conflicting " +
-               std::string(mode) + " edge.");
-      }
-    }
-  };
-  validate_edge_mode(document.hard_normal_edges, "hard");
-  validate_edge_mode(document.soft_normal_edges, "soft");
-}
-
 [[nodiscard]] bool edge_less(quader_poly::Edge left,
                              quader_poly::Edge right) noexcept {
   return left.a < right.a || (left.a == right.a && left.b < right.b);
@@ -721,12 +613,8 @@ void migrate_legacy_soft_normal_edges(quader_poly::Document &document) {
 encode_authored_topology(const PolygonDocument &polygon) {
   const quader_poly::Document &document =
       PolygonDocumentNativeAccess::document(polygon);
-  validate_polygon_document(document, false);
-
-  const std::vector<quader_poly::Edge> hard_edges =
-      sorted_edges(document.hard_normal_edges);
-  const std::vector<quader_poly::Edge> soft_edges =
-      sorted_edges(document.soft_normal_edges);
+  const auto &hard_edges = document.hard_normal_edges;
+  const auto &soft_edges = document.soft_normal_edges;
 
   const std::uint32_t vertex_count =
       require_u32(document.vertices.size(), "Polygon vertex count");
@@ -978,9 +866,6 @@ encode_authored_topology(const PolygonDocument &polygon) {
     }
     const std::uint32_t face_corners = corner_end - previous_corner_offset;
     const std::uint32_t face_uvs = uv_end - previous_uv_offset;
-    if (face_corners < 3 || (face_uvs != 0 && face_uvs != face_corners)) {
-      malformed("Polygon face has invalid corner or UV CSR spans.");
-    }
 
     quader_poly::Face &face = document.faces[index];
     face.id = read_u32_at(face_ids, static_cast<std::size_t>(index) * 4U,
@@ -1054,9 +939,6 @@ encode_authored_topology(const PolygonDocument &polygon) {
       }
     }
   }
-  std::ranges::sort(document.hard_normal_edges, edge_less);
-  std::ranges::sort(document.soft_normal_edges, edge_less);
-  validate_polygon_document(document, true);
   return PolygonDocumentNativeAccess::from_native(std::move(document));
 }
 

@@ -412,7 +412,7 @@ TEST(QtViewportMarkingMenuTests, FixedDirectionsShareRelevantContextCommands) {
       QAction *extract = popup.findChild<QAction *>(
           QStringLiteral("modeling.extract_faces"));
       QAction *bridge = popup.findChild<QAction *>(
-          QStringLiteral("modeling.interpolated_bridge_faces"));
+          QStringLiteral("modeling.preview_bridge_faces"));
       ASSERT_NE(extract, nullptr);
       ASSERT_NE(bridge, nullptr);
       EXPECT_TRUE(extract->isEnabled());

@@ -12,7 +12,7 @@ namespace quader {
 
 class QtUiScaleMetrics;
 
-/** Opts a north tab bar into a selected surface joined to the row below it. */
+/** Opts north tabs into a double-slanted surface joined to the row below. */
 inline constexpr char kQtConnectedTabSurfaceProperty[] =
     "quaderConnectedTabSurface";
 

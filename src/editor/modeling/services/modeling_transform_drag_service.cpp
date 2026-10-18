@@ -1515,8 +1515,8 @@ ModelingTransformDragService::publish_transform_drag_preview(
               quader_editor_core::TransformDragOperation::Transform &&
           !scene_transform_drag_service_.preview_active() &&
           context.port.portable_modeling_preview_active()) {
-        // A collapsed face or other invalid candidate rejects one mouse sample,
-        // not the drag. Reapply the accepted transform through the same owner:
+        // An invalid candidate rejects one mouse sample, not the drag.
+        // Reapply the accepted transform through the same owner:
         // transient position preparation may have touched more than one mesh
         // before a later participant failed validation.
         context.runtime.set_transform_drag_state(drag_before_update);

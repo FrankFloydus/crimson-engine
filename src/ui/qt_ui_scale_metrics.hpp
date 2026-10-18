@@ -70,6 +70,10 @@ public:
                    const QSize &contents_size,
                    const QWidget *widget = nullptr) const override;
 
+  [[nodiscard]] QRect
+  subElementRect(SubElement element, const QStyleOption *option,
+                 const QWidget *widget = nullptr) const override;
+
   [[nodiscard]] QIcon
   standardIcon(StandardPixmap icon, const QStyleOption *option = nullptr,
                 const QWidget *widget = nullptr) const override;

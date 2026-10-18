@@ -29,6 +29,11 @@ Exclude the waiting fatal thread with Windows' [IncludeThreadCallback](https://l
 so dump collection cannot suspend the thread enforcing its deadline; preserve the exception context.
 [Fatal behavior tests](tests/fatal_error_handler_behavior_tests.cpp) cover real dump creation,
 missing/failing helpers, and a stalled helper that observes the initial report before being reaped.
+Qt 6.10.3's Windows fatal path uses fast-fail rather than `SIGABRT`, bypassing those runtime hooks.
+Install the platform-owned Qt message bridge before `QApplication` so fatal message/context details
+enter the same durable reporter; preserve the previous/default handler for nonfatal messages.
+The child tests exercise actual Qt fatal logging, repeated installation, forwarding and a stalled
+helper. Reports include the app version and executable identity needed to interpret dump addresses.
 
 ## Project and runtime replacement
 
@@ -124,10 +129,16 @@ Retention tests: [editor limits](tests/editor_history_limit_tests.cpp),
 - Material components with face slots and no primary material are valid: untouched faces remain
   unassigned. Retain these components on decode so slot IDs survive and invalid references still
   reach scene validation. Covered by the public save/reopen/re-save material persistence tests.
-- Persistence preserves finite authored topology even when collapsed faces produce no triangles.
-  Authored import and QDR use structural validation; public geometric validation remains strict.
-  Missing/repeated IDs, invalid connectivity, nonfinite values and malformed UV data remain errors.
-  Component collapse must survive undo/redo, save/open and subsequent editing without dropping faces.
+- Save and Auto Save must never reject authored work because its topology is bad. Persistence
+  stores the raw authored records without requiring modeling validation, triangulation or a
+  successful render projection. Preserve short/repeated/dangling face loops, nonmanifold edges,
+  UV arrays, normal-edge attributes, identities and allocation cursors exactly; do not repair,
+  normalize or replace them with compiled triangles during save. Keep byte bounds, CSR span
+  bounds, resource limits, checksums and format checks separate from geometry diagnostics.
+  Reopening uses the same lossless storage contract and derives safe render data independently.
+  Strict validation and operation-specific requirements remain available to modeling tools.
+  Cover autosave, save/open/re-save and exact authored round trips in the component persistence
+  suites under `tests/` and `tests/sdk/`.
 - Document replacement advances binding/revision epochs beyond the outgoing document. Preview dirty
   masking applies only to an uncontaminated checkpoint; unrelated edits remain dirty.
 - Perspective camera pose is explicit-save metadata, not authored content: navigation does not alter
@@ -197,14 +208,16 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   Cancel. Coverage includes `ExtrudeToolServiceTests.SwitchingToolsAcceptsPendingExtrusionAsOneUndoStep`,
   the shared-pane activation/acquisition tests in `tests/extrude_tool_service_tests.cpp`, and
   `UnavailableActivationDoesNotAcceptPendingExtrusion` in `tests/extrude_tool_service_tests.cpp`.
-- Rejected component-transform samples (for example a box face collapsing onto its opposite)
+- Rejected component-transform samples (for example non-finite coordinates)
   retain the last accepted preview and active drag. Restore all transient participants through
   the existing preview owner; release commits that accepted shape, while explicit Cancel restores
   the baseline. Cache the rejected pointer signature so idle frames do not retry it. Protect both
   geometry/history and submitted wires in [move tests](tests/move_auto_merge_tests.cpp) and
   [retained presentation tests](tests/selected_mesh_outline_presentation_tests.cpp).
+- Finite component transforms can remove or restore rendered triangles without changing authored
+  face loops. Accept the canonical compiled layout in both directions and refresh its source-ID
+  mappings and position buffers; compiled corner counts are not modeling validity checks.
   Moving a wall after tangential extrusion can restore triangles on already-collapsed faces.
-  Accept that larger compiled layout and refresh its mappings; authored topology remains unchanged.
   Returning to zero must restore the gesture's original compiled layout.
 - Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
   pointer input but retains that preview with Apply enabled. Apply accepts it, while
@@ -295,13 +308,13 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   presentation. Clear, commit, and cancel must retire both lines and points in retained submission.
   See [loop input tests](tests/qt_input_adapter_tests.cpp) and
   [retained submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
-- Knife/Loop surface hover stays within the explicit Edit participants, whose authored source
-  wires remain visible independently of hover or component selection. Keep the actual surface
+- Knife/Loop surface acquisition and commit validation allow eligible peer meshes independently
+  of the current component participants. Keep the actual surface
   candidate separate from valid Knife seeds and retained Loop seeds. The existing
   persistent source-wire ID gates topology rebuilds; cursor movement only changes volatile cut
   feedback. Tool-owned hover survives the viewport selection pass and camera navigation (including
-  its captured release sample); ordinary pointer leave and hard interruption clear transient
-  hover while retaining the participants' editing wires.
+  its captured release sample); ordinary pointer leave clears transient tool feedback while
+  preserving the retained component candidate. Hard candidate clear preserves selected-component wires.
   Component topology retains its normal edit-wire depth classification during hover and navigation;
   tagging it as generic Tool geometry makes hidden edges appear through occluders and disappear
   again when hover is cleared. Only Object-mode silhouette replacement needs that exemption.
@@ -399,7 +412,7 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 [cube overlays](tests/primitive_cube_overlay_tests.cpp),
 [wire presentation](tests/viewport_overlay_submission_coordinator_tests.cpp).
 
-## Component picking and explicit Edit membership
+## Component picking and retained candidate presentation
 
 - Selection and hover fills must test against scene depth without writing it. A two-sided
   backface highlight must not become an occluder for otherwise visible editing wires or vertices.
@@ -446,16 +459,25 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   interior navigation, and orthographic views; a mostly culled saved camera hides the union cost.
 - Object/Edit context is owned by the scene's
   [mode service](src/editor/modes/editor_mode_service.hpp), separately from component selection.
-  Edit membership is explicit and survives empty component selections, blank clicks, hover,
-  viewport leave, gizmo hover and box/lasso completion. Only admitted meshes provide component
-  targets and editing visuals; cyan source wires apply to Shaded/Rendered panes. Hovering another
-  mesh never enrolls it. All viewports share
-  the scene context. Keep component selection in SDK documents, dormant in Object Mode, and
-  preserve it through whole-object operations. First admission in a newly opened scene is empty.
+  Direct component choices 1/2/3 allow an empty Edit context before any mesh is selected.
+  Component picking, region/paint selection and traversal use eligible scene peers independently
+  of initial Object selection. Committed selection updates participants; clear-all normally empties
+  them, while explicit body-click adoption can retain an empty target. Hover never enrolls a mesh.
+  All viewports share the scene context. Keep component selection in SDK documents, dormant in
+  Object Mode, and preserve it through whole-object operations. First entry from selected objects
+  in a newly opened scene clears their components once.
+  Retain the last eligible hovered mesh's component wire and Vertex dots across empty space and
+  viewport leave. A new peer transfers this candidate without changing selection; selected-component
+  meshes remain additive, and an old empty selected fallback must not leave an extra wire.
+  Blank clicks and finished box/lasso regions clear immediate highlighting but keep the candidate;
+  gizmo ownership hard-clears both without removing selected components. Preserve source-wire
+  depth classification and existing colors. Protect semantic state, retained submission and actual
+  GPU output separately; see the [candidate projection contract](src/editor/modeling/runtime/README.md#component-candidate-presentation).
   Object Mode retains active UUID independently of selection: deselection preserves it, a new
   selected primary replaces it, and identity removal clears it. Only empty Object selection can
   fall back to that eligible active mesh on Edit entry; an active group is not expanded. No eligible
-  target is a successful unchanged request before draft settlement. Coverage:
+  target is a successful unchanged request before draft settlement for explicit Tab/API mode
+  entry; direct component choices still activate their requested kind. Coverage:
   [mode lifecycle tests](tests/editor_mode_service_tests.cpp).
   Mode transitions add no history entry; structural operations restore membership only within
   their matching edit generation. See [mode contracts](src/editor/modes/README.md).
@@ -464,7 +486,7 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   hide stale IDs in a native summary cache. Coverage: the Delete selection/history regression in
   [SDK consumer tests](tests/sdk/modeling_sdk_consumer_tests.cpp).
   Protect partial rectangles over edited geometry with another mesh beneath the release point,
-  checking exact component IDs, unchanged edit membership and retained presentation separately.
+  checking exact component IDs, dynamic participant publication and retained presentation separately.
   Commit rectangles at the matched release edge, never the aggregate frame cursor: Qt can batch
   a later mouse move into the same frame and otherwise shrink the committed region to no hits.
   Protect that ordering through actual Qt mouse events as well as synthetic controller frames.
@@ -480,7 +502,7 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   regressions in [Qt input tests](tests/qt_input_adapter_tests.cpp).
   Gizmo hover owns immediate feedback separately from gesture consumption: the shared interaction
   controller suppresses scene picks and clears component hover while a handle is hovered
-  or consumed. Edit participant wires remain independent of that transient highlight.
+  or consumed. This also clears the retained candidate; selected-component wires remain independent.
   Clear once and re-arm the hover work key so hiding a handle under a stationary pointer restores
   scene hover. Preserve short-click selection/depth cycling; coverage:
   [interaction tests](tests/viewport_interaction_controller_tests.cpp).
@@ -509,9 +531,9 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   edge IDs and world endpoints. Otherwise cyan blends into antialiased yellow at thin widths.
   Translucent user selection colors retain normal source-wire compositing. Coverage:
   [submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
-- Vertex/Edge mesh-body clicks outside component radii never change Edit membership. Empty
-  Replace clears components; Add/Remove misses preserve them. Component scope intersects existing
-  instance, visibility and lock policy.
+- Vertex/Edge mesh-body adoption can retain a peer as an empty component target. Empty Replace
+  clears components; Add/Remove misses preserve them. Component scope intersects existing
+  instance, visibility and lock policy without a fixed-participant restriction.
 - Selection occlusion follows the shared Backface Culling preference, independently of legacy
   per-mesh sidedness, and matches Filament's front-face correction for reflected occurrences.
   The CPU rendered-surface query uses local winding against its inverse-transformed ray; explicit
@@ -533,7 +555,7 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   even-odd region contract. Ordinary pick and hover continue to honor the backface preference.
   The pane's remembered Lasso choice also applies under other selection-capable tools, including
   its partial-intersection setting; changing the executing tool must not reset either policy.
-- Paint Select uses ordinary point visibility and fixed Edit scope across its complete stroke.
+- Paint Select uses ordinary point visibility and eligible scene peers across its complete stroke.
   Preserve ordered pointer samples and event-time modifiers through the matching release; later
   coalesced hover must not paint another target. Replace only the first unmodified sample, accumulate
   later hits, and give Ctrl removal precedence over Shift addition. A sparse event stream still
@@ -544,8 +566,8 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   The remembered per-pane Box/Lasso/Paint choice governs selection fallback under Move, Rotate,
   Scale and other selection-capable tools. Their handles and native gestures keep first-press
   precedence; after selection starts, crossing a handle cannot transfer capture. Explicit Paint
-  still bypasses handles. Selection fallback must leave the executing tool active, preserve fixed
-  Edit membership, and retain each pane's choice across focus changes. The Paint interaction
+  still bypasses handles. Selection fallback must leave the executing tool active, publish dynamic
+  component participants, and retain each pane's choice across focus changes. The Paint interaction
   tests cover transform tools, handle precedence, pane memory and an active Align operation.
   Paint fallback publishes each sample but defers the dependent tool's selection-completion
   callback until release or interruption. Otherwise idle Extrude can begin and settle a preview
@@ -787,7 +809,10 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   edits and merged numeric history.
   Test non-square images and front-view feature movement for named CW/CCW actions.
 - Continue Texture retains the selected source; target material and UVs publish in one history
-  step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
+  step. Resolve and validate the donor from a fresh SDK selection at command execution, not the
+  retained Face Texture presentation snapshot. Cover both stale-many/live-one acceptance and
+  stale-one/live-many rejection in [service regressions](tests/modeling_session_service_split_tests.cpp).
+  A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
   without requiring other source corners to fit that local chart.
   Each transfer constrains that source/target seam only. Around a junction whose face angles
   do not sum to 360 degrees, different continuation routes cannot preserve both all seams
@@ -816,7 +841,7 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   at large coordinates. Semantic no-op comparisons depend on UV span/ULP, while reconstruction
   and source-fit checks use bounded float uncertainty. Do not reuse one tolerance for all three.
   UV-only publication and Peel validate authored connectivity/attributes/selection, allowing
-  unrelated finite collapsed faces; geometric edits and public strict validation remain strict.
+  unrelated finite collapsed faces; public strict validation still diagnoses those faces.
   Cover diagonal lip continuation, thin local and oblique geometry, transferred faces reused as
   sources, distant local edits, million-tile phase edits, rendered interiors and publication rollback.
   Contracts: [portable transfer](tests/sdk/modeling_sdk_consumer_tests.cpp),
@@ -1257,8 +1282,10 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 - Fusion generatedIconPixmap needs a real QStyleOption/palette. Custom stroke QIconEngine::pixmap
   must clear its image first; default uninitialized pixmaps produce random opaque glyph tiles.
 - Dimension HUDs use ordinary widgets in composed panes and non-layered masked child windows above
-  native-child Vulkan panes. Raster and region share a cached
-  binary glyph mask/DPI revision; position changes do not rebuild masks. Keep edge-face context so
+  native-child Vulkan panes. Cache grayscale glyph coverage at the actual monitor DPR, with a
+  premultiplied image and coverage-based outline. Composed labels paint without a widget mask;
+  native labels retain conservative opaque support for their masked window. Retain the glyph
+  raster/DPI revision across position changes. Keep edge-face context so
   labels choose the exterior. Retire their accepted native projection before a native ancestor
   moves or resizes; ordinary Qt Move/Resize notifications arrive after native geometry changes.
   Cache accepted glyph footprints in top-level logical coordinates, because widget coordinates

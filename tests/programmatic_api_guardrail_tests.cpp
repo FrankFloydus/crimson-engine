@@ -1755,20 +1755,30 @@ TEST(ProgrammaticApiGuardrailTests,
   EXPECT_NE(hud.find("tightBoundingRect(text)"), std::string::npos);
   EXPECT_NE(hud.find("painter.drawText("), std::string::npos);
   EXPECT_NE(
-      hud.find("setRenderHint(QPainter::TextAntialiasing, false)"),
+      hud.find("setRenderHint(QPainter::TextAntialiasing)"),
       std::string::npos);
   EXPECT_NE(hud.find("kDimensionLabelGapPixels"), std::string::npos);
   EXPECT_NE(hud.find("outside_reference"), std::string::npos);
   EXPECT_NE(hud.find("frame.hover_edge_dimension_context"),
             std::string::npos);
   EXPECT_NE(hud.find("label_support_radius"), std::string::npos);
-  EXPECT_NE(hud.find("QBitmap glyph_mask(size())"), std::string::npos);
-  EXPECT_NE(hud.find("QRegion{glyph_mask}"), std::string::npos);
-  EXPECT_NE(hud.find("QImage::Format_ARGB32"), std::string::npos);
-  EXPECT_NE(hud.find("qRgba(0, 0, 0, 255)"), std::string::npos);
+  EXPECT_NE(hud.find("dimension_outline_coverage(glyphs, physical_outline_radius)"),
+            std::string::npos);
+  EXPECT_NE(hud.find("dimension_native_support(outline,"), std::string::npos);
+  EXPECT_NE(hud.find("QImage::Format_ARGB32_Premultiplied"),
+            std::string::npos);
+  EXPECT_NE(hud.find("painter.fillRect(support, Qt::black)"),
+            std::string::npos);
   EXPECT_NE(hud.find("palette().color(foregroundRole())"), std::string::npos);
-  EXPECT_NE(hud.find("glyph_color.rgba()"), std::string::npos);
-  EXPECT_NE(hud.find("QPainter::CompositionMode_Source"),
+  EXPECT_NE(hud.find("qAlpha(glyph_row[x]) * glyph_color.alpha()"),
+            std::string::npos);
+  EXPECT_NE(hud.find("glyph_color.red() * foreground_alpha"),
+            std::string::npos);
+  EXPECT_NE(hud.find("raster_.setDevicePixelRatio(raster_device_pixel_ratio)"),
+            std::string::npos);
+  EXPECT_NE(hud.find("shape_device_pixel_ratio_ == raster_device_pixel_ratio"),
+            std::string::npos);
+  EXPECT_NE(hud.find("QPainter::CompositionMode_SourceOver"),
             std::string::npos);
   EXPECT_NE(hud.find("QPainter::SmoothPixmapTransform, false"),
             std::string::npos);

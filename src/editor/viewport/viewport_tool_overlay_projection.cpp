@@ -484,7 +484,8 @@ std::uint64_t tool_overlay_publication_revision(
       primitive_creation_visible ||
       (inputs.linear_array_handle != nullptr && inputs.linear_array_handle->visible &&
        inputs.linear_array_handle->constraint != LinearArrayAxisConstraint::Free) ||
-      (inputs.extrusion_handle != nullptr && inputs.extrusion_handle->active);
+      (inputs.extrusion_handle != nullptr && inputs.extrusion_handle->active) ||
+      (inputs.bridge_handle != nullptr && inputs.gizmos_visible);
   signature.add_bool(camera_affects_frame);
   if (camera_affects_frame) {
     add_camera(signature, inputs.overlay_camera);
@@ -523,6 +524,18 @@ std::uint64_t tool_overlay_publication_revision(
         .add_vec3(inputs.extrusion_handle->world_direction)
         .add_bool(inputs.extrusion_handle->new_hovered)
         .add_bool(inputs.extrusion_handle->dragging);
+  }
+  const bool bridge_visible = inputs.bridge_handle != nullptr && inputs.gizmos_visible;
+  signature.add_bool(bridge_visible);
+  if (bridge_visible) {
+    signature.add_value(inputs.bridge_handle->generation);
+    for (const QVec3 point : inputs.bridge_handle->control_points) {
+      signature.add_vec3(point);
+    }
+    signature.add_vec3(inputs.bridge_handle->start_handle_axis)
+        .add_vec3(inputs.bridge_handle->end_handle_axis)
+        .add_value(static_cast<std::uint64_t>(inputs.bridge_hovered_part))
+        .add_bool(inputs.bridge_dragging);
   }
   if (inputs.radial_array_center_visible) {
     add_radial_array_center(signature, inputs.radial_array_center);
@@ -588,6 +601,12 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
     ViewportToolOverlayProjection::append_extrusion_handle(
         frame, *inputs_.viewport_camera, *inputs_.extrusion_handle,
         inputs_.raster_scale);
+  }
+  if (inputs_.viewport_camera != nullptr && inputs_.bridge_handle != nullptr &&
+      inputs_.gizmos_visible) {
+    ViewportToolOverlayProjection::append_bridge_handles(
+        frame, *inputs_.viewport_camera, *inputs_.bridge_handle,
+        inputs_.bridge_hovered_part, inputs_.bridge_dragging, inputs_.raster_scale);
   }
   if (inputs_.radial_array_center_visible &&
       inputs_.radial_array_center != nullptr) {
@@ -735,6 +754,73 @@ void ViewportToolOverlayProjection::append_extrusion_handle(
     const QVec3 start = circle_point(index);
     const QVec3 end = circle_point(index + 1);
     triangle(layout.button_center, start, end, color);
+  }
+}
+
+void ViewportToolOverlayProjection::append_bridge_handles(
+    ViewportOverlayFrame &frame, const ViewportCameraController &camera,
+    const BridgePreviewHandleState &handle, BridgePreviewHandlePart hovered_part,
+    bool dragging, float raster_scale) {
+  const auto layout = build_bridge_preview_handle_layout(camera, handle, raster_scale);
+  const float scale = viewport_sanitized_pixel_scale(raster_scale);
+  const auto line = [&](QVec3 start, QVec3 end, std::uint32_t color, float width) {
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .start = start,
+        .end = end,
+        .color = color,
+        .width_pixels = width * scale,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+    });
+  };
+  const auto point_on_curve = [&](float parameter) {
+    const float inverse = 1.0F - parameter;
+    return handle.control_points[0] * (inverse * inverse * inverse) +
+           handle.control_points[1] * (3.0F * parameter * inverse * inverse) +
+           handle.control_points[2] * (3.0F * parameter * parameter * inverse) +
+           handle.control_points[3] * (parameter * parameter * parameter);
+  };
+  constexpr int kGuideSegments = 32;
+  QVec3 previous = handle.control_points[0];
+  for (int segment = 1; segment <= kGuideSegments; ++segment) {
+    const QVec3 next = point_on_curve(
+        static_cast<float>(segment) / static_cast<float>(kGuideSegments));
+    line(previous, next, kOverlayToolHandleColor, 1.5F);
+    previous = next;
+  }
+  constexpr int kHandleSegments = 24;
+  constexpr float kTau = 6.2831853071795864769F;
+  for (std::size_t index = 0u; index < layout.centers.size(); ++index) {
+    if (!layout.visible[index]) {
+      continue;
+    }
+    const bool highlighted = hovered_part ==
+        (index == 0u ? BridgePreviewHandlePart::Start : BridgePreviewHandlePart::End);
+    const auto color = highlighted ? rgba8(255, 255, 255, 255)
+                                   : kOverlayToolHandleColor;
+    const auto center = layout.centers[index];
+    line(handle.control_points[index == 0u ? 0u : 3u], center,
+         highlighted ? color : kOverlayToolAxisMixedColor,
+         highlighted && dragging ? 2.0F : 1.0F);
+    const auto circle_point = [&](int segment) {
+      const float angle = kTau * static_cast<float>(segment) /
+                          static_cast<float>(kHandleSegments);
+      return center + layout.camera_right *
+                          (std::cos(angle) * layout.world_radii[index]) +
+             layout.camera_up * (std::sin(angle) * layout.world_radii[index]);
+    };
+    for (int segment = 0; segment < kHandleSegments; ++segment) {
+      frame.triangles.push_back({
+          .layer = ViewportOverlayLayer::ToolHandle,
+          .a = center,
+          .b = circle_point(segment),
+          .c = circle_point(segment + 1),
+          .color = color,
+          .style_role = ViewportOverlayStyleRole::ExplicitColor,
+          .source = ViewportOverlaySource::Tool,
+      });
+    }
   }
 }
 

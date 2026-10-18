@@ -364,6 +364,8 @@ public:
   selection_projection_snapshot() const;
   /// Hashes the acknowledged polygon preview identity and payload publication.
   [[nodiscard]] std::uint64_t selection_overlay_preview_signature() const noexcept;
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const;
   [[nodiscard]] std::optional<EntityId> pick_object_entity(
       const ModelingPickSelectRequest &request,
       std::optional<EntityId> competing_native = std::nullopt) const;

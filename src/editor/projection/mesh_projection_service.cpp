@@ -28,6 +28,7 @@
 #include <quader/modeling/neutral/polygon/document_read_snapshot.hpp>
 #include <quader/modeling/neutral/polygon/document_selection.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
+#include <quader/modeling/neutral/polygon/document_validation.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_constants.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
@@ -865,7 +866,7 @@ to_native_shading(quader::modeling::AuthoredSurfaceShading shading) {
 }
 
 quader::modeling::AuthoredTopology
-to_sdk_topology(const quader_poly::Document &document) {
+to_sdk_topology(const quader_poly::Document &document, bool preserve_storage = false) {
   quader::modeling::AuthoredTopology topology;
   topology.next_vertex_id = document.next_vertex_id;
   topology.next_face_id = document.next_face_id;
@@ -882,7 +883,9 @@ to_sdk_topology(const quader_poly::Document &document) {
     converted.id =
         quader::modeling::make_id<quader::modeling::FaceTag>(face.id);
     converted.material_slot = face.material_slot;
-    converted.shading = to_sdk_shading(face.normal_shading);
+    converted.shading = preserve_storage
+        ? static_cast<modeling::AuthoredSurfaceShading>(face.normal_shading)
+        : to_sdk_shading(face.normal_shading);
     converted.texture_transform = {
         .scale = {face.texture_transform.scale.x,
                   face.texture_transform.scale.y},
@@ -903,15 +906,19 @@ to_sdk_topology(const quader_poly::Document &document) {
   }
   topology.hard_normal_edges.reserve(document.hard_normal_edges.size());
   for (const quader_poly::Edge edge : document.hard_normal_edges) {
-    topology.hard_normal_edges.push_back(quader::modeling::make_edge_key(
-        quader::modeling::make_id<quader::modeling::VertexTag>(edge.a),
-        quader::modeling::make_id<quader::modeling::VertexTag>(edge.b)));
+    const modeling::EdgeKey stored{
+        modeling::make_id<modeling::VertexTag>(edge.a),
+        modeling::make_id<modeling::VertexTag>(edge.b)};
+    topology.hard_normal_edges.push_back(preserve_storage ? stored
+        : modeling::make_edge_key(stored.a, stored.b));
   }
   topology.soft_normal_edges.reserve(document.soft_normal_edges.size());
   for (const quader_poly::Edge edge : document.soft_normal_edges) {
-    topology.soft_normal_edges.push_back(quader::modeling::make_edge_key(
-        quader::modeling::make_id<quader::modeling::VertexTag>(edge.a),
-        quader::modeling::make_id<quader::modeling::VertexTag>(edge.b)));
+    const modeling::EdgeKey stored{
+        modeling::make_id<modeling::VertexTag>(edge.a),
+        modeling::make_id<modeling::VertexTag>(edge.b)};
+    topology.soft_normal_edges.push_back(preserve_storage ? stored
+        : modeling::make_edge_key(stored.a, stored.b));
   }
   return topology;
 }
@@ -1661,6 +1668,54 @@ MeshProjectionService::sdk_document_from_polygon_document(
     const quader_poly::Document &document) {
   return quader::modeling::PolygonDocument::from_authored_topology(
       to_sdk_topology(document));
+}
+
+modeling::Result<modeling::PolygonDocument>
+MeshProjectionService::sdk_persistence_document_from_polygon_document(
+    const quader_poly::Document &document) {
+  return modeling::PolygonDocument::from_persisted_topology(to_sdk_topology(document, true));
+}
+
+MeshAsset MeshProjectionService::project_persisted_sdk_document_mesh(
+    const modeling::PolygonDocument &document) {
+  const auto snapshot = modeling::polygon_document_read_snapshot(document);
+  MeshAsset retained;
+  retained.share_authored_polygon_snapshot(snapshot);
+  const auto &authored = *retained.authored_polygon_document;
+  const auto finite_vec3 = [](const auto &value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+  };
+  const bool finite_authored = std::ranges::all_of(authored.vertices, [&](const auto &vertex) {
+    return vertex.id != quader_poly::kInvalidElementId && finite_vec3(vertex.position);
+  }) && std::ranges::all_of(authored.faces, [](const auto &face) {
+    return face.id != quader_poly::kInvalidElementId &&
+        quader_poly::valid_face_texture_transform(face.texture_transform) &&
+        (face.normal_shading == quader_poly::SurfaceShading::Flat ||
+         face.normal_shading == quader_poly::SurfaceShading::Smooth ||
+         face.normal_shading == quader_poly::SurfaceShading::Authored) &&
+        std::ranges::all_of(face.uvs, [](const auto &uv) {
+          return std::isfinite(uv.x) && std::isfinite(uv.y);
+        });
+  });
+  if (!finite_authored) return retained;
+  const auto validation = quader_poly::validate_polygon_document(
+      authored, quader_poly::PolygonDocumentValidationPolicy::AuthoredTopology);
+  const bool unsafe = std::ranges::any_of(validation.diagnostics, [](const auto &diagnostic) {
+    return diagnostic.severity == quader_poly::PolygonDocumentDiagnosticSeverity::Error &&
+        diagnostic.code != quader_poly::PolygonDocumentDiagnosticCode::NonmanifoldEdge;
+  });
+  if (unsafe) return retained;
+  MeshAsset projected = compile_polygon_document_mesh(authored);
+  const bool finite_projection = std::ranges::all_of(projected.geometry_vertices(), [&](const auto &vertex) {
+    return finite_vec3(vertex.position) && finite_vec3(vertex.normal) &&
+        finite_vec3(vertex.uv_geometric_normal) && std::isfinite(vertex.uv.x) &&
+        std::isfinite(vertex.uv.y) && std::ranges::all_of(vertex.uv_carrier, [](float value) {
+          return std::isfinite(value);
+        });
+  });
+  if (!finite_projection) return retained;
+  projected.share_authored_polygon_snapshot(snapshot);
+  return projected;
 }
 
 std::optional<MeshAsset> MeshProjectionService::compile_sdk_document_mesh(

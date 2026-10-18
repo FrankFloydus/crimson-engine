@@ -914,4 +914,377 @@ TEST(ModelingSdkComponentOperationWorkflowTests, RejectedOperandsPreserveDocumen
   }
 }
 
+TEST(
+    ModelingSdkComponentOperationWorkflowTests,
+    BridgeShapeOnlyUpdatesPublishWithoutRebuildingGeometryAndRestoreCheckpoint) {
+  const auto source = make_workflow_document(OperationKind::Bridge, false);
+  ModelingSession session;
+  const auto object =
+      session.add_document(source, "Bridge guide preview").or_throw();
+  session.clear_history();
+  auto candidate = source;
+  const auto receipt =
+      candidate.bridge_selected_edges(BridgeOptions{}).or_throw();
+  ASSERT_TRUE(receipt.bridge_shape.has_value());
+  const auto preview =
+      session
+          .begin_document_preview(object, "modeling.bridge", candidate, receipt)
+          .or_throw();
+  ASSERT_EQ(session.preview_bridge_shape(), receipt.bridge_shape);
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  const auto checkpoint =
+      session.capture_preview_checkpoint(preview).or_throw();
+  const auto before = session.preview_summary();
+  const auto builds = session.preview_work_stats().mesh_payload_build_count;
+  auto changed_candidate = source;
+  const auto changed_receipt =
+      changed_candidate
+          .bridge_selected_edges(
+              BridgeOptions{.start_tension = 2.0F, .end_tension = 0.0F})
+          .or_throw();
+  expect_document_equal(changed_candidate, candidate);
+  const auto updated = session.update_document_preview(
+      preview, changed_candidate, changed_receipt);
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  EXPECT_TRUE(updated.value().changed);
+  EXPECT_GT(session.preview_summary().content_revision,
+            before.content_revision);
+  ASSERT_EQ(session.preview_bridge_shape(), changed_receipt.bridge_shape);
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count, builds);
+  EXPECT_EQ(session.undo_depth(), 0U);
+  expect_document_equal(session.document_copy(object).or_throw(), source, true);
+
+  const auto stable_revision = session.preview_summary().content_revision;
+  const auto repeated = session.update_document_preview(
+      preview, changed_candidate, changed_receipt);
+  ASSERT_TRUE(repeated.ok());
+  EXPECT_FALSE(repeated.value().changed);
+  EXPECT_EQ(session.preview_summary().content_revision, stable_revision);
+
+  OperationResult rejected = changed_receipt;
+  rejected.success = false;
+  rejected.error_code = ErrorCode::InvalidArgument;
+  EXPECT_FALSE(
+      session.update_document_preview(preview, candidate, rejected).ok());
+  EXPECT_EQ(session.preview_bridge_shape(), changed_receipt.bridge_shape);
+  EXPECT_EQ(session.preview_summary().content_revision, stable_revision);
+  auto flagged_receipt = changed_receipt;
+  ASSERT_TRUE(flagged_receipt.bridge_shape.has_value());
+  flagged_receipt.bridge_shape->representative_rail = true;
+  const auto flag_update = session.update_document_preview(
+      preview, changed_candidate, flagged_receipt);
+  ASSERT_TRUE(flag_update.ok());
+  EXPECT_TRUE(flag_update.value().changed);
+  EXPECT_GT(session.preview_summary().content_revision, stable_revision);
+  ASSERT_TRUE(session.preview_bridge_shape().has_value());
+  EXPECT_TRUE(session.preview_bridge_shape()->representative_rail);
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count, builds);
+  ASSERT_TRUE(session.restore_preview_checkpoint(checkpoint).ok());
+  EXPECT_EQ(session.preview_bridge_shape(), receipt.bridge_shape);
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count, builds);
+  expect_document_equal(
+      session.preview_document_copy(preview, object).or_throw(), candidate);
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+  EXPECT_FALSE(session.preview_bridge_shape().has_value());
+  expect_document_equal(session.document_copy(object).or_throw(), source, true);
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     BridgeOptionsRejectInvalidTensionsWithoutAuthoredChanges) {
+  const auto source = make_workflow_document(OperationKind::Bridge, false);
+  for (const float invalid :
+       {-0.1F, 3.1F, std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()}) {
+    auto document = source;
+    const auto before_revision = document.content_revision();
+    const auto rejected = document.bridge_selected_edges(
+        BridgeOptions{.steps = 3, .start_tension = invalid});
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_EQ(document.content_revision(), before_revision);
+    expect_document_equal(document, source);
+    EXPECT_FALSE(document
+                     .bridge_selected_edges(
+                         BridgeOptions{.steps = 3, .end_tension = invalid})
+                     .ok());
+    expect_document_equal(document, source);
+  }
+  auto legacy = source;
+  auto explicit_defaults = source;
+  ASSERT_TRUE(legacy.bridge_selected_edges(4).ok());
+  ASSERT_TRUE(
+      explicit_defaults.bridge_selected_edges(BridgeOptions{.steps = 4}).ok());
+  expect_document_equal(explicit_defaults, legacy);
+}
+
+TEST(
+    ModelingSdkComponentOperationWorkflowTests,
+    CrossObjectSingleSpanGuideUsesSurvivorReceiptAndPublishesShapeOnlyChanges) {
+  ModelingSession session;
+  const auto first =
+      session.add_document(PolygonDocument::make_box({}).or_throw(), "Survivor")
+          .or_throw();
+  const auto second =
+      session.add_document(PolygonDocument::make_box({}).or_throw(), "Source")
+          .or_throw();
+  ASSERT_TRUE(
+      session
+          .select_face(
+              first, session.document_copy(first).or_throw().face_ids().front())
+          .ok());
+  ASSERT_TRUE(
+      session
+          .select_face(
+              second,
+              session.document_copy(second).or_throw().face_ids().front())
+          .ok());
+  session.clear_history();
+  const Transform3 placement{.origin = {4.0F, 0.0F, 0.0F}};
+  const auto candidate =
+      session
+          .prepare_bridge_documents(first, second, placement,
+                                    SelectionKind::Face, BridgeOptions{})
+          .or_throw();
+  const auto alternative =
+      session
+          .prepare_bridge_documents(
+              first, second, placement, SelectionKind::Face,
+              BridgeOptions{.start_tension = 0.5F, .end_tension = 2.0F})
+          .or_throw();
+  expect_document_equal(alternative.survivor_document,
+                        candidate.survivor_document);
+  ASSERT_NE(alternative.receipt.bridge_shape, candidate.receipt.bridge_shape);
+  SessionPreviewTransactionRequest request;
+  request.participants.push_back(
+      {.action = SessionPreviewAction::ReplaceExisting,
+       .object = first,
+       .document = candidate.survivor_document,
+       .receipt = candidate.receipt});
+  request.participants.push_back(
+      {.action = SessionPreviewAction::RemoveExisting, .object = second});
+  const auto preview =
+      session.begin_preview_transaction("modeling.bridge", std::move(request))
+          .or_throw()
+          .preview_id;
+  EXPECT_EQ(session.preview_summary().object_id, first);
+  EXPECT_EQ(session.preview_bridge_shape(), candidate.receipt.bridge_shape);
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  const auto builds = session.preview_work_stats().mesh_payload_build_count;
+  const auto revision = session.preview_summary().content_revision;
+  const auto updated = session.update_preview_transaction(
+      preview, {{.object = first,
+                 .document = alternative.survivor_document,
+                 .receipt = alternative.receipt}});
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  EXPECT_TRUE(updated.value().changed);
+  EXPECT_GT(session.preview_summary().content_revision, revision);
+  EXPECT_EQ(session.preview_bridge_shape(), alternative.receipt.bridge_shape);
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count, builds);
+  EXPECT_EQ(session.objects().size(), 2U);
+  EXPECT_EQ(session.undo_depth(), 0U);
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+  EXPECT_FALSE(session.preview_bridge_shape().has_value());
+  EXPECT_EQ(session.objects().size(), 2U);
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     PublicBridgeDescriptorIncludesIndependentTensionContract) {
+  const auto *descriptor = operation_descriptor(OperationKind::Bridge);
+  ASSERT_NE(descriptor, nullptr);
+  EXPECT_EQ(descriptor, operation_descriptor("bridge"));
+  ASSERT_EQ(descriptor->parameter_count, 3U);
+  const BridgeOptions defaults;
+  EXPECT_EQ(descriptor->parameters[0].id, "steps");
+  EXPECT_EQ(descriptor->parameters[0].kind, OperationParameterKind::Integer);
+  EXPECT_DOUBLE_EQ(descriptor->parameters[0].default_value, defaults.steps);
+  const std::array<std::string_view, 2> tension_ids{"start_tension",
+                                                    "end_tension"};
+  const std::array<float, 2> tension_defaults{defaults.start_tension,
+                                              defaults.end_tension};
+  for (std::size_t index = 0; index < tension_ids.size(); ++index) {
+    const auto &parameter = descriptor->parameters[index + 1U];
+    EXPECT_EQ(parameter.id, tension_ids[index]);
+    EXPECT_EQ(parameter.kind, OperationParameterKind::Floating);
+    EXPECT_DOUBLE_EQ(parameter.default_value, tension_defaults[index]);
+    EXPECT_DOUBLE_EQ(parameter.minimum, 0.0);
+    EXPECT_DOUBLE_EQ(parameter.maximum, 3.0);
+    EXPECT_DOUBLE_EQ(parameter.step, 0.01);
+    EXPECT_TRUE(parameter.visible);
+    EXPECT_TRUE(parameter.hard_limits);
+  }
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     PublicBridgePreviewBeginAndUpdateForwardBothEndpointTensions) {
+  const auto source = make_workflow_document(OperationKind::Bridge, false);
+  auto api = ModelingApi::create();
+  auto mesh = api.add_document(source, "Public bridge options");
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.select().replace().success);
+  const BridgeOptions initial{
+      .steps = 4, .start_tension = 0.5F, .end_tension = 2.0F};
+  auto begun = api.checked().operations().begin_bridge_edges_preview(initial);
+  ASSERT_TRUE(begun.ok()) << begun.error_message();
+  auto preview = std::move(begun).value();
+  ASSERT_TRUE(preview.active());
+  const auto expect_preview = [&](BridgeOptions options) {
+    auto candidate = source;
+    ASSERT_TRUE(candidate.bridge_selected_edges(options).ok());
+    const auto expected = candidate.compile_mesh().or_throw();
+    const auto actual = preview.mesh_payload();
+    ASSERT_EQ(actual.vertices.size(), expected.vertices.size());
+    EXPECT_EQ(actual.indices, expected.indices);
+    for (std::size_t index = 0; index < actual.vertices.size(); ++index) {
+      EXPECT_FLOAT_EQ(actual.vertices[index].position.x,
+                      expected.vertices[index].position.x);
+      EXPECT_FLOAT_EQ(actual.vertices[index].position.y,
+                      expected.vertices[index].position.y);
+      EXPECT_FLOAT_EQ(actual.vertices[index].position.z,
+                      expected.vertices[index].position.z);
+    }
+  };
+  ASSERT_NO_FATAL_FAILURE(expect_preview(initial));
+  const BridgeOptions edited{
+      .steps = 4, .start_tension = 2.0F, .end_tension = 0.5F};
+  const auto updated = preview.update(edited);
+  ASSERT_TRUE(updated.success) << updated.error.message;
+  EXPECT_TRUE(updated.changed);
+  ASSERT_NO_FATAL_FAILURE(expect_preview(edited));
+  ASSERT_TRUE(preview.cancel().success);
+}
+
+TEST(
+    ModelingSdkComponentOperationWorkflowTests,
+    BridgeGuideCacheRetainsAllocationHighWaterAndInvalidatesOnMaterialChanges) {
+  const auto source = make_workflow_document(OperationKind::Bridge, false);
+  ModelingSession session;
+  const auto object = session.add_document(source).or_throw();
+  auto candidate = source;
+  const auto receipt =
+      candidate.bridge_selected_edges(BridgeOptions{}).or_throw();
+  const auto preview =
+      session
+          .begin_document_preview(object, "modeling.bridge", candidate, receipt)
+          .or_throw();
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  const auto builds = session.preview_work_stats().mesh_payload_build_count;
+  auto edited = source;
+  auto edited_receipt =
+      edited.bridge_selected_edges(BridgeOptions{.start_tension = 1.5F})
+          .or_throw();
+  auto topology = edited.authored_topology().or_throw();
+  topology.next_vertex_id += 100U;
+  topology.next_face_id += 100U;
+  auto imported = PolygonDocument::from_authored_topology(topology).or_throw();
+  ASSERT_TRUE(imported.apply_selection(edited.selection()).ok());
+  ASSERT_TRUE(
+      session.update_document_preview(preview, imported, edited_receipt).ok());
+  ASSERT_TRUE(session.preview_payload(preview).ok());
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count, builds);
+  const auto accepted = session.preview_document_copy(preview, object)
+                            .or_throw()
+                            .authored_topology()
+                            .or_throw();
+  EXPECT_GE(accepted.next_vertex_id, topology.next_vertex_id);
+  EXPECT_GE(accepted.next_face_id, topology.next_face_id);
+
+  ASSERT_TRUE(
+      imported.assign_face_material_slot(imported.face_ids().front(), 9U).ok());
+  edited_receipt.dirty.materials = true;
+  ASSERT_TRUE(
+      session.update_document_preview(preview, imported, edited_receipt).ok());
+  const auto material_payload = session.preview_payload(preview).or_throw();
+  EXPECT_EQ(session.preview_work_stats().mesh_payload_build_count, builds + 1U);
+  // Authored slots are zero-based; SDK typed material IDs reserve index zero.
+  const MaterialId changed_material = make_id<MaterialTag>(10U);
+  EXPECT_TRUE(std::ranges::any_of(
+      material_payload.mesh.primitives,
+      [changed_material](const auto &primitive) { return primitive.material == changed_material; }));
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+  const auto restored =
+      session.document_copy(object).or_throw().authored_topology().or_throw();
+  EXPECT_GE(restored.next_vertex_id, topology.next_vertex_id);
+  EXPECT_GE(restored.next_face_id, topology.next_face_id);
+  expect_document_equal(session.document_copy(object).or_throw(), source, true);
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     CrossObjectGuideFollowsHigherIdSurvivorInsteadOfRemovedReceipt) {
+  ModelingSession session;
+  const auto document = make_workflow_document(OperationKind::Bridge, false);
+  const auto source =
+      session.add_document(document, "Lower-ID source").or_throw();
+  const auto survivor =
+      session.add_document(document, "Higher-ID survivor").or_throw();
+  ASSERT_GT(survivor.index, source.index);
+  ASSERT_TRUE(session.select_face(source, document.face_ids().front()).ok());
+  ASSERT_TRUE(session.select_face(survivor, document.face_ids().front()).ok());
+  const Transform3 placement{.x_axis = {0.0F, 2.0F, 0.0F},
+                             .y_axis = {-1.0F, 0.0F, 0.0F},
+                             .z_axis = {0.0F, 0.0F, 1.0F},
+                             .origin = {4.0F, -3.0F, 2.0F}};
+  const auto initial =
+      session
+          .prepare_bridge_documents(survivor, source, placement,
+                                    SelectionKind::Face, BridgeOptions{})
+          .or_throw();
+  const auto edited =
+      session
+          .prepare_bridge_documents(
+              survivor, source, placement, SelectionKind::Face,
+              BridgeOptions{.start_tension = 1.8F, .end_tension = 0.25F})
+          .or_throw();
+  SessionPreviewTransactionRequest request;
+  request.replace_object_selection = true;
+  request.active_participant_index = 0U;
+  request.participants.push_back(
+      {.action = SessionPreviewAction::ReplaceExisting,
+       .object = survivor,
+       .document = initial.survivor_document,
+       .receipt = initial.receipt,
+       .selected = true});
+  request.participants.push_back(
+      {.action = SessionPreviewAction::RemoveExisting,
+       .object = source,
+       .receipt = initial.receipt});
+  const auto preview =
+      session.begin_preview_transaction("modeling.bridge", std::move(request))
+          .or_throw()
+          .preview_id;
+  EXPECT_EQ(session.preview_summary().object_id, source);
+  EXPECT_EQ(session.preview_bridge_shape(), initial.receipt.bridge_shape);
+  const auto survivor_revision = [&]() -> std::uint64_t {
+    for (const auto &object : session.preview_summary().objects) {
+      if (object.object_id == survivor)
+        return object.content_revision;
+    }
+    return 0U;
+  };
+  const auto revision = survivor_revision();
+  ASSERT_GT(revision, 0U);
+  const auto updated = session.update_preview_transaction(
+      preview, {{.object = survivor,
+                 .document = edited.survivor_document,
+                 .receipt = edited.receipt}});
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  EXPECT_GT(survivor_revision(), revision);
+  const auto accepted_shape = session.preview_bridge_shape();
+  EXPECT_EQ(accepted_shape, edited.receipt.bridge_shape);
+  ASSERT_TRUE(accepted_shape.has_value());
+  const auto &shape = *accepted_shape;
+  EXPECT_FLOAT_EQ(shape.controls[0].x, 1.0F);
+  EXPECT_FLOAT_EQ(shape.controls[0].y, 1.0F);
+  EXPECT_FLOAT_EQ(shape.controls[0].z, 0.0F);
+  EXPECT_FLOAT_EQ(shape.controls[3].x, 3.0F);
+  EXPECT_FLOAT_EQ(shape.controls[3].y, -1.0F);
+  EXPECT_FLOAT_EQ(shape.controls[3].z, 2.0F);
+  EXPECT_FLOAT_EQ(shape.start_tension, 1.8F);
+  EXPECT_FLOAT_EQ(shape.end_tension, 0.25F);
+  EXPECT_EQ(session.preview_summary().object_id, source);
+  ASSERT_TRUE(session.cancel_preview(preview).ok());
+}
+
 } // namespace

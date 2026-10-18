@@ -9,6 +9,7 @@
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <cmath>
+#include <limits>
 
 using namespace quader_poly;
 
@@ -490,4 +491,176 @@ TEST(QdrDocumentOperationBridgeEdgesTests, CurvedBridgeKeepsSharedDegenerateRail
         EXPECT_NE(std::ranges::find(face->vertices, shared), face->vertices.end());
     }
     qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationBridgeEdgesTests,
+     EndpointTensionsMatchAcceptedMeanCurveAndPreserveSourceVertices) {
+  constexpr float kQuarterCircleHandle = 0.5522847498F;
+  for (const BridgeOptions options :
+       {BridgeOptions{.steps = 4},
+        BridgeOptions{.steps = 4, .start_tension = 0.0F, .end_tension = 0.0F},
+        BridgeOptions{.steps = 4, .start_tension = 0.5F, .end_tension = 2.0F},
+        BridgeOptions{
+            .steps = 4, .start_tension = 2.0F, .end_tension = 0.5F}}) {
+    SCOPED_TRACE(options.start_tension);
+    SCOPED_TRACE(options.end_tension);
+    AngledGapFixture fixture = make_quarter_turn_gap_fixture(1.0F);
+    const Document original = fixture.document;
+    Selection selection =
+        qdr_test::edge_selection({fixture.left_edge, fixture.right_edge});
+    const OperationResult result =
+        bridge_selected_edges(fixture.document, selection, options);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.bridge_shape.has_value());
+    const auto &shape = *result.bridge_shape;
+    EXPECT_FALSE(shape.representative_rail);
+    EXPECT_NEAR(shape.controls[0].x, 0.0F, 0.000001F);
+    EXPECT_NEAR(shape.controls[0].y, 0.0F, 0.000001F);
+    EXPECT_NEAR(shape.controls[3].x, 1.0F, 0.000001F);
+    EXPECT_NEAR(shape.controls[3].y, 1.0F, 0.000001F);
+    EXPECT_NEAR(shape.controls[1].x,
+                kQuarterCircleHandle * options.start_tension, 0.000001F);
+    EXPECT_NEAR(shape.controls[2].y,
+                1.0F - kQuarterCircleHandle * options.end_tension, 0.000001F);
+    EXPECT_NEAR(shape.start_handle_axis.x, kQuarterCircleHandle, 0.000001F);
+    EXPECT_NEAR(shape.end_handle_axis.y, -kQuarterCircleHandle, 0.000001F);
+    EXPECT_FLOAT_EQ(shape.start_tension, options.start_tension);
+    EXPECT_FLOAT_EQ(shape.end_tension, options.end_tension);
+    for (const Vertex &vertex : original.vertices) {
+      const Vertex *retained = find_vertex(fixture.document, vertex.id);
+      ASSERT_NE(retained, nullptr);
+      EXPECT_FLOAT_EQ(retained->position.x, vertex.position.x);
+      EXPECT_FLOAT_EQ(retained->position.y, vertex.position.y);
+      EXPECT_FLOAT_EQ(retained->position.z, vertex.position.z);
+    }
+    for (int step = 1; step < options.steps; ++step) {
+      const float t =
+          static_cast<float>(step) / static_cast<float>(options.steps);
+      const float u = 1.0F - t;
+      const auto expected = shape.controls[0] * (u * u * u) +
+                            shape.controls[1] * (3.0F * u * u * t) +
+                            shape.controls[2] * (3.0F * u * t * t) +
+                            shape.controls[3] * (t * t * t);
+      for (const float z : {0.0F, 1.0F}) {
+        EXPECT_TRUE(std::ranges::any_of(
+            fixture.document.vertices, [&](const Vertex &vertex) {
+              return std::abs(vertex.position.x - expected.x) < 0.000001F &&
+                     std::abs(vertex.position.y - expected.y) < 0.000001F &&
+                     vertex.position.z == z;
+            }));
+      }
+    }
+    ASSERT_EQ(selection.faces.size(), 4U);
+    qdr_test::expect_valid_polygon_document_after_success(fixture.document,
+                                                          result);
+  }
+}
+
+TEST(QdrDocumentOperationBridgeEdgesTests,
+     SingleSpanStillReportsShapeAndNonfiniteTensionsRejectAtomically) {
+  AngledGapFixture fixture = make_quarter_turn_gap_fixture(1.0F);
+  const Document original = fixture.document;
+  Selection selection =
+      qdr_test::edge_selection({fixture.left_edge, fixture.right_edge});
+  const auto original_document =
+      qdr_test::document_fingerprint(fixture.document);
+  const auto original_selection = qdr_test::selection_fingerprint(selection);
+  for (const float invalid : {std::numeric_limits<float>::infinity(),
+                              std::numeric_limits<float>::quiet_NaN()}) {
+    const OperationResult rejected = bridge_selected_edges(
+        fixture.document, selection,
+        BridgeOptions{.steps = 1, .start_tension = invalid});
+    EXPECT_FALSE(rejected.success);
+    EXPECT_FALSE(rejected.changed);
+    EXPECT_FALSE(rejected.bridge_shape.has_value());
+    EXPECT_EQ(qdr_test::document_fingerprint(fixture.document),
+              original_document);
+    EXPECT_EQ(qdr_test::selection_fingerprint(selection), original_selection);
+    EXPECT_EQ(fixture.document.vertices.size(), original.vertices.size());
+    EXPECT_EQ(fixture.document.faces.size(), original.faces.size());
+    EXPECT_EQ(selection.mode, SelectionMode::Edge);
+    EXPECT_EQ(selection.edges.size(), 2U);
+  }
+  const OperationResult accepted = bridge_selected_edges(
+      fixture.document, selection,
+      BridgeOptions{.steps = 1, .start_tension = -1.0F, .end_tension = 4.0F});
+  ASSERT_TRUE(accepted.success) << accepted.message;
+  ASSERT_TRUE(accepted.bridge_shape.has_value());
+  EXPECT_FLOAT_EQ(accepted.bridge_shape->start_tension, 0.0F);
+  EXPECT_FLOAT_EQ(accepted.bridge_shape->end_tension, 3.0F);
+  EXPECT_EQ(fixture.document.vertices.size(), original.vertices.size());
+  EXPECT_EQ(fixture.document.faces.size(), original.faces.size() + 1U);
+}
+
+TEST(QdrDocumentOperationBridgeEdgesTests,
+     MeanGuideMatchesAsymmetricRailPositions) {
+  AngledGapFixture fixture = make_quarter_turn_gap_fixture(1.0F);
+  Vertex *back = find_vertex(fixture.document, fixture.right_edge.b);
+  ASSERT_NE(back, nullptr);
+  back->position.x = 1.8F;
+  back->position.y = 1.2F;
+  const ElementId first_generated = fixture.document.next_vertex_id;
+  Selection selection =
+      qdr_test::edge_selection({fixture.left_edge, fixture.right_edge});
+  const OperationResult result = bridge_selected_edges(
+      fixture.document, selection,
+      BridgeOptions{.steps = 4, .start_tension = 0.5F, .end_tension = 1.5F});
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.bridge_shape.has_value());
+  const auto &controls = result.bridge_shape->controls;
+  for (int step = 1; step < 4; ++step) {
+    const float t = static_cast<float>(step) / 4.0F;
+    const float u = 1.0F - t;
+    const auto expected =
+        controls[0] * (u * u * u) + controls[1] * (3.0F * u * u * t) +
+        controls[2] * (3.0F * u * t * t) + controls[3] * (t * t * t);
+    bool found_mean = false;
+    for (const Vertex &front : fixture.document.vertices) {
+      if (front.id < first_generated)
+        continue;
+      for (const Vertex &rear : fixture.document.vertices) {
+        if (rear.id < first_generated || rear.id == front.id)
+          continue;
+        const auto mean = (front.position + rear.position) * 0.5F;
+        found_mean |= std::abs(mean.x - expected.x) < 0.000001F &&
+                      std::abs(mean.y - expected.y) < 0.000001F &&
+                      std::abs(mean.z - expected.z) < 0.000001F;
+      }
+    }
+    EXPECT_TRUE(found_mean);
+  }
+}
+
+TEST(QdrDocumentOperationBridgeEdgesTests,
+     MissingTangentFrameKeepsLinearRailsAndUnavailableHandleAxes) {
+  AngledGapFixture fixture =
+      make_curved_gap_fixture({}, {2.0F, 0.0F, 0.0F}, {}, {-1.0F, 0.0F, 0.0F});
+  // A collapsed donor uses the face-normal fallback. Align its valid
+  // boundary edge with that normal so its actual outward frame is unavailable.
+  fixture.document.vertices[1].position = {0.0F, 1.0F, 0.0F};
+  fixture.document.vertices[3].position = {0.0F, 1.0F, 0.0F};
+  Selection selection =
+      qdr_test::edge_selection({fixture.left_edge, fixture.right_edge});
+  const OperationResult result = bridge_selected_edges(
+      fixture.document, selection,
+      BridgeOptions{.steps = 4, .start_tension = 3.0F, .end_tension = 0.0F});
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.bridge_shape.has_value());
+  const auto &shape = *result.bridge_shape;
+  EXPECT_FALSE(shape.representative_rail);
+  EXPECT_FLOAT_EQ(quader::length_squared(shape.start_handle_axis), 0.0F);
+  EXPECT_FLOAT_EQ(quader::length_squared(shape.end_handle_axis), 0.0F);
+  EXPECT_NEAR(shape.controls[1].x, 2.0F / 3.0F, 0.000001F);
+  EXPECT_NEAR(shape.controls[2].x, 4.0F / 3.0F, 0.000001F);
+  for (int step = 1; step < 4; ++step) {
+    const float t = static_cast<float>(step) / 4.0F;
+    for (const bool rear : {false, true}) {
+      EXPECT_TRUE(std::ranges::any_of(
+          fixture.document.vertices, [&](const Vertex &vertex) {
+            return vertex.position.x == static_cast<float>(step) * 0.5F &&
+                   vertex.position.y == (rear ? 1.0F - t : 0.0F) &&
+                   vertex.position.z == (rear ? t : 0.0F);
+          }));
+    }
+  }
 }

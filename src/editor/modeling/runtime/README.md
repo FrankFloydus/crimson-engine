@@ -23,6 +23,32 @@ The local `quader_editor_core` namespace does not make it the SDK boundary.
 Use the matching `tests/modeling_domain/tool` and runtime suites for host interaction, and SDK
 consumer/parity tests for portable behavior. Real window/GPU output follows the root smoke workflow.
 
+## Component candidate presentation
+
+Component hover and picking use eligible scene meshes rather than a fixed Edit
+participant list. Retain the last eligible hovered mesh as a presentation candidate
+without mutating SDK component selection or scene membership. Its component wire,
+and Vertex-mode points, persist across empty-space hover and viewport leave. A new
+eligible mesh replaces the candidate; meshes with selected components remain
+additive. An empty target carried from object selection must not keep a stale wire
+when a different candidate takes over.
+
+Keep immediate component highlighting separate from the retained candidate. Blank
+clicks and finished box/lasso selection clear the immediate highlight but preserve
+the candidate. Gizmo ownership performs a hard clear of both while leaving selected
+components visible. Tool surface acquisition can target eligible peers through the
+same pick universe; operation validation must not reinstate a fixed-participant
+gate after a valid peer hit.
+
+Candidate changes and clears must reach persistent and volatile retained submission
+gates, including points. Preserve the existing wire colors, user settings, depth
+classification and Wireframe suppression policy. Verify actual submitted wire and
+point data and GPU output; a fresh semantic overlay alone cannot prove the visible
+transition. Coverage lives in
+[interaction tests](../../../../tests/viewport_interaction_controller_tests.cpp),
+[retained presentation tests](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
+and [GPU overlay tests](../../../../tests/selection_overlay_runtime_tests.cpp).
+
 ## Live preview projection contract
 
 Before adding or changing an operation that displays temporary geometry, trace its candidate
@@ -56,6 +82,18 @@ retained overlays, when reporting viewport performance.
 
 Regression examples: [submitted extrusion wires](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
 and [Vulkan outline pixels](../../../../tests/selection_overlay_runtime_tests.cpp).
+
+Knife publishes a world-space straight reference from the accepted seed to the first boundary
+of its eligible face. Edge seeds use the face-plane perpendicular to that edge; other seeds use
+the existing face directions. The smaller unsigned line angle (0–90 degrees) is independent of
+the camera and does not change Shift constraints, snapping, accepted points or history. The
+volatile source carries both the orange reference and angle context through retained submission;
+the shared dimension HUD gates the angle and live-segment length with Show Dimensions. The
+segment endpoints remain independent of reference availability, and length is placed beside
+the current endpoint. Boundary validation accounts for world-space float rounding without
+changing topology or snapping tolerances. Hover clear and stroke
+teardown retire both. See the [Knife submission tests](../../../../tests/viewport_overlay_submission_coordinator_tests.cpp)
+and [HUD tests](../../../../tests/qt_viewport_edge_length_hud_tests.cpp).
 
 Cut captures its Object, Face or Edge targets before plane placement. Its first surface hit
 sets the support plane used by subsequent endpoint and line drags. The SDK projection adapter

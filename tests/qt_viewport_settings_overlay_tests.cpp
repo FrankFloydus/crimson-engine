@@ -9,7 +9,9 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "assets/asset_registry.hpp"
 #include "core/localization_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
@@ -44,6 +46,8 @@
 #include <QTimer>
 
 #include <memory>
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <array>
 #include <filesystem>
@@ -991,6 +995,191 @@ TEST_F(QtViewportSettingsOverlayTests,
   ASSERT_TRUE(subdivided.has_value());
   EXPECT_GT(subdivided->indices.size(), widened->indices.size());
   EXPECT_TRUE(editor_->tools().active_settings().preview_active);
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       BridgeTensionFieldsStayLiveWithoutWritebackAndFitScaledLayouts) {
+  quader::apply_qt_obsidian_application_theme(QApplication::palette());
+  ASSERT_TRUE(session_->viewport_workspace().set_layout(
+      quader::ViewportLayoutId::Single));
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {-1.0F, -1.0F, -2.0F}),
+      quader_poly::add_vertex(document, {1.0F, -1.0F, -2.0F}),
+      quader_poly::add_vertex(document, {1.0F, 1.0F, -2.0F}),
+      quader_poly::add_vertex(document, {-1.0F, 1.0F, -2.0F}),
+      quader_poly::add_vertex(document, {-1.0F, -1.0F, 2.0F}),
+      quader_poly::add_vertex(document, {1.0F, -1.0F, 2.0F}),
+      quader_poly::add_vertex(document, {1.0F, 1.0F, 2.0F}),
+      quader_poly::add_vertex(document, {-1.0F, 1.0F, 2.0F})};
+  const auto first = quader_poly::add_face(
+      document, std::array{vertices[0], vertices[1], vertices[2], vertices[3]});
+  const auto second = quader_poly::add_face(
+      document, std::array{vertices[7], vertices[6], vertices[5], vertices[4]});
+  ASSERT_NE(first, quader_poly::kInvalidElementId);
+  ASSERT_NE(second, quader_poly::kInvalidElementId);
+  const auto source = editor_->modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Live Bridge settings"});
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor_->selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor_->selection().select_faces(source.value(),
+      {static_cast<quader::QuaderElementId>(first),
+       static_cast<quader::QuaderElementId>(second)}).ok());
+  ASSERT_TRUE(editor_->commands().execute(
+      quader::quader_command::kModelingPreviewBridgeFaces).ok());
+  settings_->set_expanded(true);
+  refresh();
+  ASSERT_EQ(settings_->target_id(), "bridge");
+  ASSERT_EQ(editor_->tools().active_settings().controls.size(), 3u);
+  auto *steps = settings_->findChild<QSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.bridge.steps"));
+  auto *start = settings_->findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.bridge.start_tension"));
+  auto *end = settings_->findChild<QDoubleSpinBox *>(QStringLiteral(
+      "tool_settings.control.operation.bridge.end_tension"));
+  ASSERT_NE(steps, nullptr);
+  ASSERT_NE(start, nullptr);
+  ASSERT_NE(end, nullptr);
+  EXPECT_DOUBLE_EQ(start->value(), 1.0);
+  EXPECT_DOUBLE_EQ(end->value(), 1.0);
+  for (const auto field : {start, end}) {
+    EXPECT_DOUBLE_EQ(field->minimum(), 0.0);
+    EXPECT_DOUBLE_EQ(field->maximum(), 3.0);
+  }
+  const auto settle_with_viewport_frames = [&] {
+    QEventLoop loop;
+    QTimer frames;
+    QObject::connect(&frames, &QTimer::timeout, &loop, [&] {
+      process_input();
+      refresh();
+    });
+    frames.start(5);
+    QTimer::singleShot(120, &loop, &QEventLoop::quit);
+    loop.exec();
+  };
+  steps->setValue(4);
+  settle_with_viewport_frames();
+  const auto before = editor_->query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(before.has_value());
+  const auto content_revision = session_->modeling().content_revision();
+  const auto undo_before = session_->history().undo_count();
+  const auto redo_before = session_->history().redo_count();
+  start->setValue(0.25);
+  settle_with_viewport_frames();
+  end->setValue(2.5);
+  settle_with_viewport_frames();
+  const auto shaped = editor_->query().compiled_object_mesh(source.value());
+  ASSERT_TRUE(shaped.has_value());
+  ASSERT_EQ(shaped->vertices.size(), before->vertices.size());
+  EXPECT_EQ(shaped->indices, before->indices);
+  bool position_changed = false;
+  for (std::size_t index = 0; index < shaped->vertices.size(); ++index) {
+    const auto &left = before->vertices[index].position;
+    const auto &right = shaped->vertices[index].position;
+    position_changed = position_changed || left.x != right.x ||
+                       left.y != right.y || left.z != right.z;
+  }
+  EXPECT_TRUE(position_changed);
+  EXPECT_DOUBLE_EQ(session_->modeling().interaction_settings().bridge_start_tension,
+                   0.25);
+  EXPECT_DOUBLE_EQ(session_->modeling().interaction_settings().bridge_end_tension,
+                   2.5);
+  EXPECT_EQ(session_->modeling().content_revision(), content_revision);
+  EXPECT_EQ(session_->history().undo_count(), undo_before);
+  EXPECT_EQ(session_->history().redo_count(), redo_before);
+  QObject observer;
+  int field_value_signals = 0;
+  for (const auto field : {start, end}) {
+    QObject::connect(field, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                     &observer, [&](double) { ++field_value_signals; });
+  }
+  // A viewport handle uses this same owner setter; presentation must follow it
+  // without emitting a numeric edit back into the operation.
+  ASSERT_TRUE(editor_->tools().set_setting(
+      "bridge", "operation.bridge.start_tension", 1.75).ok());
+  const auto accepted_revision = editor_->tools().active_settings_revision();
+  refresh();
+  EXPECT_DOUBLE_EQ(start->value(), 1.75);
+  EXPECT_DOUBLE_EQ(end->value(), 2.5);
+  EXPECT_EQ(field_value_signals, 0);
+  EXPECT_EQ(editor_->tools().active_settings_revision(), accepted_revision);
+  const auto revision_values = [&] {
+    const auto revisions = editor_->revisions();
+    return std::array{revisions.project_revision, revisions.scene_revision,
+        revisions.scene_layer_revision, revisions.scene_settings_revision,
+        revisions.asset_revision, revisions.modeling_content_revision,
+        revisions.modeling_selection_revision};
+  };
+  const auto revisions_before_rejection = revision_values();
+  EXPECT_FALSE(editor_->tools().set_setting(
+      "bridge", "operation.bridge.end_tension",
+      std::numeric_limits<double>::quiet_NaN()).ok());
+  refresh();
+  EXPECT_DOUBLE_EQ(end->value(), 2.5);
+  EXPECT_EQ(field_value_signals, 0);
+  EXPECT_EQ(editor_->tools().active_settings_revision(), accepted_revision);
+  EXPECT_EQ(revision_values(), revisions_before_rejection);
+  EXPECT_EQ(session_->history().undo_count(), undo_before);
+  EXPECT_EQ(session_->history().redo_count(), redo_before);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(review_directory));
+  struct LayoutCase final {
+    float scale;
+    int width;
+    int height;
+  };
+  constexpr std::array kLayouts{
+      LayoutCase{1.0F, 1200, 900}, LayoutCase{2.0F, 1600, 1200},
+      LayoutCase{1.0F, 420, 700}};
+  std::uint64_t scale_revision = 0u;
+  for (const auto &layout : kLayouts) {
+    SCOPED_TRACE(layout.scale);
+    SCOPED_TRACE(layout.width);
+    const quader::QtUiScaleMetrics metrics{layout.scale, ++scale_revision};
+    settings_->apply_ui_scale(metrics);
+    host_->apply_ui_scale(metrics);
+    host_->resize(layout.width, layout.height);
+    refresh();
+    ASSERT_FALSE(settings_->isHidden());
+    ASSERT_TRUE(settings_->parentWidget()->rect().contains(settings_->geometry()));
+    auto *scroll = settings_->findChild<QScrollArea *>(QStringLiteral(
+        "tool_settings.scroll"));
+    ASSERT_NE(scroll, nullptr);
+    EXPECT_EQ(scroll->verticalScrollBar()->maximum(), 0);
+    for (const auto field : {static_cast<QAbstractSpinBox *>(steps),
+                             static_cast<QAbstractSpinBox *>(start),
+                             static_cast<QAbstractSpinBox *>(end)}) {
+      ASSERT_TRUE(field->isVisible());
+      auto *line = field->findChild<QLineEdit *>();
+      ASSERT_NE(line, nullptr);
+      EXPECT_GE(line->contentsRect().width(),
+                line->fontMetrics().horizontalAdvance(line->text()));
+    }
+    EXPECT_EQ(settings_->findChild<QDoubleSpinBox *>(QStringLiteral(
+        "tool_settings.control.operation.bridge.start_tension")), start);
+    EXPECT_EQ(field_value_signals, 0);
+    const auto projection = session_->modeling().modeling_sdk_projection_stats_for_tests();
+    for (int idle = 0; idle < 8; ++idle) {
+      process_input();
+      refresh();
+    }
+    EXPECT_EQ(editor_->tools().active_settings_revision(), accepted_revision);
+    EXPECT_EQ(session_->modeling().modeling_sdk_projection_stats_for_tests()
+                  .preview_publication_count,
+              projection.preview_publication_count);
+    EXPECT_EQ(field_value_signals, 0);
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(settings_->grab().save(QDir(review_directory).filePath(
+          QStringLiteral("bridge_settings_scale_%1_width_%2.png")
+              .arg(layout.scale).arg(layout.width))));
+    }
+  }
+  EXPECT_TRUE(editor_->tools().active_settings().preview_active);
+  EXPECT_EQ(session_->history().undo_count(), undo_before);
+  EXPECT_EQ(session_->history().redo_count(), redo_before);
 }
 
 TEST_F(QtViewportSettingsOverlayTests,

@@ -561,6 +561,8 @@ struct QuaderToolStatus {
  */
 struct QuaderInteractionSettings {
   int bridge_steps = 1;
+  double bridge_start_tension = 1.0;
+  double bridge_end_tension = 1.0;
   double edge_bevel_width = 1.0;
   double edge_bevel_profile = 0.5;
   int edge_bevel_segments = 1;

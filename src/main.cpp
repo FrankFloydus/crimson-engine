@@ -126,6 +126,19 @@ bool sentry_debug_enabled() {
 } // namespace
 
 int main(int argc, char** argv) {
+  const std::filesystem::path exe = executable_path(argc, argv);
+  const CommandLineOptions command_line = parse_command_line(argc, argv);
+  const std::filesystem::path executable_dir = exe.parent_path();
+  const std::filesystem::path log_path =
+      executable_dir /
+      (quader::current_product_release() == quader::kInternalFullRelease
+           ? "quader.log"
+           : "quader-" + quader::product_release_label(
+                             quader::current_product_release()) + ".log");
+  quader::Logger::initialize({.file_path = log_path.string()});
+  quader::install_fatal_error_handler(log_path);
+  quader::install_qt_fatal_error_handler();
+
   // Quader's numeric editing contract is locale-independent. Installing the
   // C locale before QApplication construction makes every current and future
   // Qt decimal control use '.' without affecting translated UI catalogs.
@@ -150,17 +163,6 @@ int main(int argc, char** argv) {
   }
   qt_application.setWindowIcon(application_icon);
 
-  const std::filesystem::path exe = executable_path(argc, argv);
-  const CommandLineOptions command_line = parse_command_line(argc, argv);
-  const std::filesystem::path executable_dir = exe.parent_path();
-  const std::filesystem::path log_path =
-      executable_dir /
-      (quader::current_product_release() == quader::kInternalFullRelease
-           ? "quader.log"
-           : "quader-" + quader::product_release_label(
-                             quader::current_product_release()) + ".log");
-  quader::Logger::initialize({.file_path = log_path.string()});
-  quader::install_fatal_error_handler(log_path);
 #if defined(QUADER_ENABLE_SENTRY) && QUADER_ENABLE_SENTRY
   (void)quader::initialize_sentry_client({
       .dsn = std::string{quader::kQuaderSentryDsn},

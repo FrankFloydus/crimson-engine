@@ -18,7 +18,6 @@
 
 #include <QApplication>
 #include <QByteArray>
-#include <QBitmap>
 #include <QColor>
 #include <QEvent>
 #include <QFrame>
@@ -55,6 +54,9 @@ constexpr double kMaximumDimensionFontSizePoints = 24.0;
 QFont dimension_font(double point_size) {
   QFont font = QApplication::font();
   font.setPointSizeF(point_size);
+  font.setStyleStrategy(static_cast<QFont::StyleStrategy>(
+      (font.styleStrategy() & ~QFont::NoAntialias) |
+      QFont::PreferAntialias | QFont::NoSubpixelAntialias));
   return font;
 }
 
@@ -68,14 +70,61 @@ QPoint dimension_glyph_baseline(const QRect &glyph_bounds,
           outline_padding_pixels - glyph_bounds.top()};
 }
 
-void fill_dimension_region(QImage &image, const QRegion &region, QRgb color) {
-  for (const QRect &source_rect : region) {
-    const QRect rect = source_rect.intersected(image.rect());
-    for (int y = rect.top(); y <= rect.bottom(); ++y) {
-      QRgb *row = reinterpret_cast<QRgb *>(image.scanLine(y));
-      std::fill_n(row + rect.left(), rect.width(), color);
+QImage dimension_outline_coverage(const QImage &glyphs, int radius) {
+  QImage horizontal(glyphs.size(), QImage::Format_Alpha8);
+  QImage outline(glyphs.size(), QImage::Format_Alpha8);
+  // A separable maximum filter preserves glyph coverage without accumulating
+  // opacity where neighboring outline samples overlap.
+  for (int y = 0; y < glyphs.height(); ++y) {
+    const auto *source = reinterpret_cast<const QRgb *>(glyphs.constScanLine(y));
+    uchar *target = horizontal.scanLine(y);
+    for (int x = 0; x < glyphs.width(); ++x) {
+      int coverage = 0;
+      for (int sample = std::max(0, x - radius);
+           sample <= std::min(glyphs.width() - 1, x + radius); ++sample) {
+        coverage = std::max(coverage, qAlpha(source[sample]));
+      }
+      target[x] = static_cast<uchar>(coverage);
     }
   }
+  for (int y = 0; y < glyphs.height(); ++y) {
+    uchar *target = outline.scanLine(y);
+    for (int x = 0; x < glyphs.width(); ++x) {
+      int coverage = 0;
+      for (int sample = std::max(0, y - radius);
+           sample <= std::min(glyphs.height() - 1, y + radius); ++sample) {
+        coverage = std::max(coverage, int(horizontal.constScanLine(sample)[x]));
+      }
+      target[x] = static_cast<uchar>(coverage);
+    }
+  }
+  return outline;
+}
+
+QRegion dimension_native_support(const QImage &coverage, qreal pixel_ratio) {
+  QRegion support;
+  for (int y = 0; y < coverage.height(); ++y) {
+    const uchar *row = coverage.constScanLine(y);
+    int x = 0;
+    while (x < coverage.width()) {
+      if (row[x] == 0) {
+        ++x;
+        continue;
+      }
+      const int start = x;
+      while (x < coverage.width() && row[x] != 0) {
+        ++x;
+      }
+      // Native clipping is in logical coordinates. Cover every physical sample
+      // conservatively, including the fringe at fractional monitor scale.
+      const int left = static_cast<int>(std::floor(start / pixel_ratio));
+      const int top = static_cast<int>(std::floor(y / pixel_ratio));
+      const int right = static_cast<int>(std::ceil(x / pixel_ratio));
+      const int bottom = static_cast<int>(std::ceil((y + 1) / pixel_ratio));
+      support |= QRect(left, top, right - left, bottom - top);
+    }
+  }
+  return support;
 }
 
 /// Keeps the HUD's native child window out of viewport pointer hit testing.
@@ -121,6 +170,9 @@ public:
 
   void refresh_native_mask_if_needed() {
     rebuild_layout_if_needed();
+    if (!testAttribute(Qt::WA_NativeWindow)) {
+      return;
+    }
     if (mask_shape_revision_ == shape_revision_) {
       return;
     }
@@ -136,7 +188,7 @@ protected:
     rebuild_layout_if_needed();
     QPainter painter(this);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     painter.drawImage(QPoint{}, raster_);
   }
 
@@ -165,77 +217,68 @@ private:
         shape_device_pixel_ratio_ == raster_device_pixel_ratio) {
       return;
     }
-    // Resolve point size against this label's screen once, then use the same
-    // device-bound font for both metrics and the offscreen one-bit raster.
-    // QBitmap otherwise resolves against the primary screen and can crop the
-    // glyph after moving a viewport between mixed-DPI monitors.
+    // Resolve metrics and glyphs against the label's screen, including after a
+    // mixed-DPI move; rasterize at its actual DPR rather than enlarging an image.
     const QFont raster_font{font(), this};
     const QRect glyph_bounds = dimension_glyph_bounds(raster_font, text());
     glyph_baseline_ =
         dimension_glyph_baseline(glyph_bounds, outline_padding_pixels_);
-    QBitmap glyph_mask(size());
-    glyph_mask.fill(Qt::color0);
-    {
-      QPainter painter(&glyph_mask);
-      painter.setRenderHint(QPainter::Antialiasing, false);
-      painter.setRenderHint(QPainter::TextAntialiasing, false);
-      painter.setFont(raster_font);
-      painter.setPen(Qt::color1);
-      painter.drawText(glyph_baseline_, text());
-    }
-
-    glyph_region_ = QRegion{glyph_mask};
-    outline_region_ = glyph_region_;
-    for (int y = -outline_radius_pixels_;
-         y <= outline_radius_pixels_; ++y) {
-      for (int x = -outline_radius_pixels_;
-           x <= outline_radius_pixels_; ++x) {
-        if (x != 0 || y != 0) {
-          outline_region_ |= glyph_region_.translated(x, y);
-        }
-      }
-    }
-    outline_region_ &= QRegion{rect()};
-
     const QSize physical_size{
         std::max(1, static_cast<int>(
                         std::ceil(size().width() * raster_device_pixel_ratio))),
         std::max(1, static_cast<int>(std::ceil(
                         size().height() * raster_device_pixel_ratio))),
     };
-    QBitmap physical_glyph_mask(physical_size);
-    physical_glyph_mask.setDevicePixelRatio(raster_device_pixel_ratio);
-    physical_glyph_mask.fill(Qt::color0);
+    QImage glyphs(physical_size, QImage::Format_ARGB32_Premultiplied);
+    glyphs.setDevicePixelRatio(raster_device_pixel_ratio);
+    glyphs.fill(Qt::transparent);
     {
-      QPainter painter(&physical_glyph_mask);
-      painter.setRenderHint(QPainter::Antialiasing, false);
-      painter.setRenderHint(QPainter::TextAntialiasing, false);
+      QPainter painter(&glyphs);
+      painter.setRenderHint(QPainter::TextAntialiasing);
       painter.setFont(raster_font);
-      painter.setPen(Qt::color1);
+      painter.setPen(Qt::white);
       painter.drawText(glyph_baseline_, text());
     }
-    const QRegion physical_glyph_region{physical_glyph_mask};
-    QRegion physical_outline_region = physical_glyph_region;
     const int physical_outline_radius = std::max(
         1, static_cast<int>(std::ceil(outline_radius_pixels_ *
                                       raster_device_pixel_ratio)));
-    for (int y = -physical_outline_radius; y <= physical_outline_radius;
-         ++y) {
-      for (int x = -physical_outline_radius; x <= physical_outline_radius;
-           ++x) {
-        if (x != 0 || y != 0) {
-          physical_outline_region |= physical_glyph_region.translated(x, y);
-        }
+    const QImage outline =
+        dimension_outline_coverage(glyphs, physical_outline_radius);
+    const bool native = testAttribute(Qt::WA_NativeWindow);
+    outline_region_ = native
+                          ? dimension_native_support(outline,
+                                                     raster_device_pixel_ratio) &
+                                QRegion{rect()}
+                          : QRegion{};
+    raster_ = QImage(physical_size, QImage::Format_ARGB32_Premultiplied);
+    raster_.fill(Qt::transparent);
+    raster_.setDevicePixelRatio(raster_device_pixel_ratio);
+    if (native) {
+      // A non-layered child window cannot blend with the sibling GPU surface.
+      // Its entire logical support is opaque black; only the glyph interior
+      // blends. Composed panes retain the smooth outer alpha edge instead.
+      QPainter painter(&raster_);
+      for (const QRect &support : outline_region_) {
+        painter.fillRect(support, Qt::black);
       }
     }
-    physical_outline_region &= QRegion{QRect(QPoint{}, physical_size)};
-
-    raster_ = QImage(physical_size, QImage::Format_ARGB32);
-    raster_.fill(Qt::transparent);
-    fill_dimension_region(raster_, physical_outline_region,
-                          qRgba(0, 0, 0, 255));
-    fill_dimension_region(raster_, physical_glyph_region, glyph_color.rgba());
-    raster_.setDevicePixelRatio(raster_device_pixel_ratio);
+    for (int y = 0; y < physical_size.height(); ++y) {
+      const auto *glyph_row =
+          reinterpret_cast<const QRgb *>(glyphs.constScanLine(y));
+      const uchar *outline_row = outline.constScanLine(y);
+      auto *target = reinterpret_cast<QRgb *>(raster_.scanLine(y));
+      for (int x = 0; x < physical_size.width(); ++x) {
+        const int foreground_alpha =
+            (qAlpha(glyph_row[x]) * glyph_color.alpha() + 127) / 255;
+        const int outline_alpha = native ? qAlpha(target[x]) : outline_row[x];
+        const int alpha = foreground_alpha +
+                          (outline_alpha * (255 - foreground_alpha) + 127) / 255;
+        target[x] = qRgba((glyph_color.red() * foreground_alpha + 127) / 255,
+                         (glyph_color.green() * foreground_alpha + 127) / 255,
+                         (glyph_color.blue() * foreground_alpha + 127) / 255,
+                         alpha);
+      }
+    }
     setProperty("quaderDimensionRasterPixelSize", physical_size);
     setProperty("quaderDimensionRasterDevicePixelRatio",
                 raster_device_pixel_ratio);
@@ -246,11 +289,12 @@ private:
     shape_device_pixel_ratio_ = raster_device_pixel_ratio;
     shape_valid_ = true;
     ++shape_revision_;
+    setProperty("quaderDimensionRasterRevision",
+                QVariant::fromValue<qulonglong>(shape_revision_));
   }
 
   QPoint glyph_baseline_;
   QImage raster_;
-  QRegion glyph_region_;
   QRegion outline_region_;
   QSize shape_size_;
   QString shape_text_;
@@ -290,12 +334,15 @@ bool same_dimension_geometry(const std::optional<Dimension> &current,
                              requested->outside_reference);
 }
 
-QString dimension_length_text(QVec3 start, QVec3 end) {
+double dimension_map_length(QVec3 start, QVec3 end) {
   const double x = static_cast<double>(end.x) - start.x;
   const double y = static_cast<double>(end.y) - start.y;
   const double z = static_cast<double>(end.z) - start.z;
-  const double map_length =
-      std::hypot(x, y, z) * viewport_host_defaults().map_units_per_world_unit;
+  return std::hypot(x, y, z) * viewport_host_defaults().map_units_per_world_unit;
+}
+
+QString dimension_length_text(QVec3 start, QVec3 end) {
+  const double map_length = dimension_map_length(start, end);
   if (!std::isfinite(map_length) || map_length <= 0.0) {
     return {};
   }
@@ -431,13 +478,15 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
   const std::string_view pane_name = viewport_pane_stable_id(pane_id);
   const QString pane = QString::fromUtf8(
       pane_name.data(), static_cast<qsizetype>(pane_name.size()));
-  const std::array<QString, 6> object_names{
+  const std::array<QString, 8> object_names{
       QStringLiteral("viewportEdgeLength_%1").arg(pane),
       QStringLiteral("viewportFootprintDimension0_%1").arg(pane),
       QStringLiteral("viewportFootprintDimension1_%1").arg(pane),
       QStringLiteral("viewportSelectionDimensionX_%1").arg(pane),
       QStringLiteral("viewportSelectionDimensionY_%1").arg(pane),
       QStringLiteral("viewportSelectionDimensionZ_%1").arg(pane),
+      QStringLiteral("viewportKnifeAngle_%1").arg(pane),
+      QStringLiteral("viewportKnifeLength_%1").arg(pane),
   };
   for (std::size_t index = 0; index < labels_.size(); ++index) {
     QLabel *label = new QtViewportEdgeLengthLabel(&parent);
@@ -451,12 +500,16 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->setAutoFillBackground(false);
     label->setAttribute(Qt::WA_NoSystemBackground);
     label->setFont(dimension_font(kDefaultDimensionFontSizePoints));
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText,
-                     index < 3U ? QColor(255, 255, 255, 255)
-                                : dimension_axis_color(index - 3U));
-    label->setPalette(palette);
-    label->setForegroundRole(QPalette::WindowText);
+    if (index < 6U) {
+      QPalette palette = label->palette();
+      palette.setColor(QPalette::WindowText,
+                       index < 3U ? QColor(255, 255, 255, 255)
+                                  : dimension_axis_color(index - 3U));
+      label->setPalette(palette);
+      label->setForegroundRole(QPalette::WindowText);
+    } else {
+      label->setForegroundRole(QPalette::Text);
+    }
     label->setFocusPolicy(Qt::NoFocus);
     label->setAttribute(Qt::WA_NativeWindow, native_labels_);
     // This Qt attribute handles widget routing; the label's native hit-test
@@ -510,7 +563,8 @@ void QtViewportEdgeLengthHud::present(
     double font_size_points,
     const ModelingBoxPreview *footprint_preview, bool footprint_enabled,
     const ViewportSelectionDimensionBounds *selection_bounds,
-    std::uint64_t selection_signature, bool selection_enabled) {
+    std::uint64_t selection_signature, bool selection_enabled,
+    bool knife_dimensions_enabled) {
   if (native_cleanup_active_ ||
       (native_cleanup_pending_ && !clean_native_footprint())) {
     return;
@@ -683,7 +737,47 @@ void QtViewportEdgeLengthHud::present(
   if (dimensions_changed) {
     view_valid_ = false;
   }
-  if (std::none_of(dimensions_.begin(), dimensions_.end(),
+  if (!knife_dimensions_enabled || !knife_signature_valid_ ||
+      knife_signature_ != frame_signature) {
+    knife_angle_ = knife_dimensions_enabled ? frame.knife_angle_context : std::nullopt;
+    knife_segment_ = knife_dimensions_enabled ? frame.knife_segment_context : std::nullopt;
+    const auto finite_point = [](QVec3 point) {
+      return std::isfinite(point.x) && std::isfinite(point.y) &&
+             std::isfinite(point.z);
+    };
+    if (knife_angle_ &&
+        (!finite_point(knife_angle_->start) ||
+         !finite_point(knife_angle_->reference_end) ||
+         !finite_point(knife_angle_->cut_point) ||
+         !std::isfinite(knife_angle_->angle_degrees) ||
+         knife_angle_->angle_degrees < 0.0 ||
+         knife_angle_->angle_degrees > 90.0)) {
+      knife_angle_.reset();
+    }
+    if (knife_segment_ &&
+        (!finite_point(knife_segment_->start) ||
+         !finite_point(knife_segment_->end))) {
+      knife_segment_.reset();
+    }
+    const QString text = knife_angle_
+        ? QString::number(knife_angle_->angle_degrees, 'f', 1) + QChar(0x00b0)
+        : QString{};
+    const QString length_text = knife_segment_
+        ? selection_length_text(dimension_map_length(knife_segment_->start,
+                                                      knife_segment_->end))
+        : QString{};
+    if (knife_angle_text_ != text || knife_signature_ != frame_signature ||
+        knife_length_text_ != length_text ||
+        knife_signature_valid_ != knife_dimensions_enabled) {
+      view_valid_ = false;
+    }
+    knife_angle_text_ = text;
+    knife_length_text_ = length_text;
+    knife_signature_ = frame_signature;
+    knife_signature_valid_ = knife_dimensions_enabled;
+  }
+  if (!knife_angle_ && !knife_segment_ &&
+      std::none_of(dimensions_.begin(), dimensions_.end(),
                    [](const std::optional<Dimension> &dimension) {
                      return dimension.has_value();
                    })) {
@@ -708,7 +802,7 @@ void QtViewportEdgeLengthHud::present(
 
   std::array<QRect, 3> selection_label_geometries;
   std::size_t selection_label_count = 0U;
-  for (std::size_t index = 0; index < labels_.size(); ++index) {
+  for (std::size_t index = 0; index < dimensions_.size(); ++index) {
     QLabel *label = labels_[index];
     const std::optional<Dimension> &dimension = dimensions_[index];
     if (!dimension.has_value() || dimension_texts_[index].isEmpty()) {
@@ -851,6 +945,82 @@ void QtViewportEdgeLengthHud::present(
     }
     present_label_geometry(*label, geometry);
     retain_native_footprint(*label);
+  }
+  QLabel &angle_label = *labels_[6];
+  if (knife_angle_) {
+    const auto seed = camera.project_world_point(knife_angle_->start);
+    const auto reference = camera.project_world_point(knife_angle_->reference_end);
+    const auto cut = camera.project_world_point(knife_angle_->cut_point);
+    if (visible_in_viewport(seed, render_size) && reference.visible && cut.visible) {
+      if (angle_label.text() != knife_angle_text_) {
+        angle_label.setText(knife_angle_text_);
+        static_cast<QtViewportEdgeLengthLabel &>(angle_label).invalidate_shape();
+      }
+      const QPoint anchor = logical_point(seed.position, render_size, logical_viewport_bounds);
+      const QPoint reference_point = logical_point(reference.position, render_size, logical_viewport_bounds);
+      const QPoint cut_point = logical_point(cut.position, render_size, logical_viewport_bounds);
+      const QPointF a = reference_point - anchor;
+      const QPointF b = cut_point - anchor;
+      const double a_length = std::hypot(a.x(), a.y());
+      const double b_length = std::hypot(b.x(), b.y());
+      const QSize size = angle_label.sizeHint();
+      if (a_length > 0.001 && b_length > 0.001 &&
+          size.width() <= logical_viewport_bounds.width() &&
+          size.height() <= logical_viewport_bounds.height()) {
+        QPointF direction = a / a_length + b / b_length;
+        const double direction_length = std::hypot(direction.x(), direction.y());
+        direction = direction_length > 0.001
+            ? direction / direction_length : QPointF{-a.y(), a.x()} / a_length;
+        const double distance = ui_scale_metrics_.px(28) +
+            0.5 * std::hypot(size.width(), size.height());
+        const QRect geometry = clamped_label_geometry(
+            centered_label_geometry(QPointF(anchor) + direction * distance, size),
+            logical_viewport_bounds);
+        present_label_geometry(angle_label, geometry);
+        retain_native_footprint(angle_label);
+      } else {
+        angle_label.hide();
+      }
+    } else {
+      angle_label.hide();
+    }
+  } else if (!angle_label.isHidden()) {
+    angle_label.hide();
+  }
+  QLabel &length_label = *labels_[7];
+  const auto cut_endpoint = knife_segment_
+      ? camera.project_world_point(knife_segment_->end) : ViewportScreenPoint{};
+  if (knife_segment_ && !knife_length_text_.isEmpty() &&
+      visible_in_viewport(cut_endpoint, render_size)) {
+    if (length_label.text() != knife_length_text_) {
+      length_label.setText(knife_length_text_);
+      static_cast<QtViewportEdgeLengthLabel &>(length_label).invalidate_shape();
+    }
+    const QSize size = length_label.sizeHint();
+    if (size.width() <= logical_viewport_bounds.width() &&
+        size.height() <= logical_viewport_bounds.height()) {
+      const QPoint anchor = logical_point(cut_endpoint.position, render_size,
+                                           logical_viewport_bounds);
+      const std::array occupied{angle_label.geometry()};
+      const auto geometry = selection_label_geometry(
+          clamped_label_geometry(
+              QRect{anchor + QPoint{ui_scale_metrics_.px(8), ui_scale_metrics_.px(3)}, size},
+              logical_viewport_bounds),
+          logical_viewport_bounds,
+          angle_label.isHidden() ? std::span<const QRect>{}
+                                : std::span<const QRect>{occupied},
+          ui_scale_metrics_.px(kDimensionLabelGapPixels));
+      if (geometry) {
+        present_label_geometry(length_label, *geometry);
+        retain_native_footprint(length_label);
+      } else if (!length_label.isHidden()) {
+        length_label.hide();
+      }
+    } else if (!length_label.isHidden()) {
+      length_label.hide();
+    }
+  } else if (!length_label.isHidden()) {
+    length_label.hide();
   }
 }
 

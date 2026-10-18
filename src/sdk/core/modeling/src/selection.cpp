@@ -313,11 +313,11 @@ PreviewHandle EdgeSelection::bevel(EdgeBevelOptions options) const {
 
 OperationReceipt EdgeSelection::bridge(BridgeOptions options) const {
   return direct_mutate_selection(*context_, selection_, [&](PolygonDocument &document) {
-    return document.bridge_selected_edges(options.steps);
+    return document.bridge_selected_edges(options);
   });
 }
 
-PreviewHandle EdgeSelection::interpolated_bridge(BridgeOptions options) const {
+PreviewHandle EdgeSelection::begin_bridge_preview(BridgeOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
   state->kind = ModelingPreviewKind::BridgeEdges;
@@ -379,11 +379,11 @@ std::span<const FaceId> FaceSelection::faces() const { return selection_.faces; 
 
 OperationReceipt FaceSelection::bridge(BridgeOptions options) const {
   return direct_mutate_selection(*context_, selection_, [&](PolygonDocument &document) {
-    return document.bridge_selected_faces(options.steps);
+    return document.bridge_selected_faces(options);
   });
 }
 
-PreviewHandle FaceSelection::interpolated_bridge(BridgeOptions options) const {
+PreviewHandle FaceSelection::begin_bridge_preview(BridgeOptions options) const {
   auto state = std::make_shared<ModelingPreviewState>();
   state->context = context_;
   state->kind = ModelingPreviewKind::BridgeFaces;

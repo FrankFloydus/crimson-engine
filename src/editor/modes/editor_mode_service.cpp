@@ -71,7 +71,8 @@ EditorModeParticipant EditorModeService::participant_for(EntityId entity) const 
                                     .value_or(kInvalidModelingObjectId)};
 }
 
-std::vector<EditorModeParticipant> EditorModeService::entry_participants() const {
+std::vector<EditorModeParticipant>
+EditorModeService::entry_participants(bool use_active_fallback) const {
   const SceneDocument &scene = session_.scene();
   const ModelingInstanceEditScope instance_scope =
       session_.modeling().instance_edit_scope();
@@ -82,7 +83,7 @@ std::vector<EditorModeParticipant> EditorModeService::entry_participants() const
   for (const EntityId entity : scene.selected_entities()) {
     pending.emplace_back(entity, scene.kind(entity) == EntityKind::Empty);
   }
-  if (pending.empty() && !snapshot_.active_uuid.empty()) {
+  if (use_active_fallback && pending.empty() && !snapshot_.active_uuid.empty()) {
     const EntityId active = scene.entity_for_uuid(snapshot_.active_uuid);
     if (active != kInvalidEntityId && scene.mesh(active) != nullptr) {
       pending.emplace_back(active, false);
@@ -168,6 +169,23 @@ void EditorModeService::set_transition_settlement(
 }
 
 CommandResult EditorModeService::set_mode(EditorMode requested) {
+  return transition_mode(requested, false);
+}
+
+CommandResult EditorModeService::enter_component_selection(ModelingSelectionMode kind) {
+  if (!is_component_kind(kind)) {
+    return command_invalid_result("Unknown component selection kind.");
+  }
+  const CommandResult transition = transition_mode(EditorMode::Edit, true);
+  if (!transition.ok) {
+    return transition;
+  }
+  CommandResult component_change = set_component_kind(kind);
+  component_change.changed = component_change.changed || transition.changed;
+  return component_change;
+}
+
+CommandResult EditorModeService::transition_mode(EditorMode requested, bool allow_empty) {
   if (requested != EditorMode::Object && requested != EditorMode::Edit) {
     return command_invalid_result("Unknown editor mode.");
   }
@@ -176,8 +194,8 @@ CommandResult EditorModeService::set_mode(EditorMode requested) {
   }
   std::vector<EditorModeParticipant> participants;
   if (requested == EditorMode::Edit) {
-    participants = entry_participants();
-    if (participants.empty()) {
+    participants = entry_participants(!allow_empty);
+    if (participants.empty() && !allow_empty) {
       return command_unchanged_result();
     }
   }
@@ -206,7 +224,9 @@ CommandResult EditorModeService::set_mode(EditorMode requested) {
     const EntityId active = session_.scene().primary_selection();
     assign_active_entity(snapshot_.contains(active)
                              ? active
-                             : snapshot_.participants.front().entity);
+                             : snapshot_.participants.empty()
+                                   ? kInvalidEntityId
+                                   : snapshot_.participants.front().entity);
     for (const EditorModeParticipant &participant : snapshot_.participants) {
       if (!admitted_uuids_.contains(participant.uuid)) {
         first_admission.push_back(participant.entity);
@@ -215,6 +235,9 @@ CommandResult EditorModeService::set_mode(EditorMode requested) {
   } else {
     std::vector<EntityId> selected;
     for (const EditorModeParticipant &participant : snapshot_.participants) {
+      // These targets came from an accepted component selection publication.
+      // Remember them before leaving so a later entry preserves that selection.
+      admitted_uuids_.insert(participant.uuid);
       const EntityId live = session_.scene().entity_for_uuid(participant.uuid);
       if (live != kInvalidEntityId) {
         append_unique(selected, live);
@@ -361,6 +384,36 @@ void EditorModeService::set_active_participant(EntityId entity) {
   }
 }
 
+void EditorModeService::synchronize_component_participants(
+    std::span<const EntityId> entities, EntityId active) {
+  if (mode() != EditorMode::Edit) {
+    return;
+  }
+  std::vector<EditorModeParticipant> participants;
+  participants.reserve(entities.size());
+  for (const EntityId entity : entities) {
+    if (session_.scene().mesh(entity) == nullptr) {
+      continue;
+    }
+    EditorModeParticipant participant = participant_for(entity);
+    if (participant.modeling_object_id != kInvalidModelingObjectId) {
+      participants.push_back(std::move(participant));
+    }
+  }
+  const bool has_active = std::any_of(participants.begin(), participants.end(),
+      [active](const EditorModeParticipant &participant) {
+        return participant.entity == active;
+      });
+  const EntityId resolved_active = has_active ? active
+      : participants.empty() ? kInvalidEntityId : participants.front().entity;
+  if (participants == snapshot_.participants && resolved_active == snapshot_.active_entity) {
+    return;
+  }
+  snapshot_.participants = std::move(participants);
+  assign_active_entity(resolved_active);
+  advance_revision();
+}
+
 void EditorModeService::assign_active_entity(EntityId entity) {
   snapshot_.active_entity = entity;
   snapshot_.active_uuid = entity == kInvalidEntityId
@@ -477,7 +530,7 @@ void EditorModeService::reconcile_scene_lifecycle() {
     return !session_.scene().exists(entity);
   });
   changed = changed || result_count != snapshot_.object_results.size();
-  if (snapshot_.participants.empty()) {
+  if (changed && snapshot_.participants.empty()) {
     snapshot_.mode = EditorMode::Object;
     assign_active_entity(snapshot_.object_results.empty()
                              ? kInvalidEntityId

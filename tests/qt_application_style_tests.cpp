@@ -9,6 +9,7 @@
 #include "ui/qt_application_style.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_dock_title_presentation.hpp"
+#include "ui/qt_settings_control_widgets.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
@@ -21,6 +22,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QLayout>
 #include <QMenu>
 #include <QMainWindow>
@@ -30,8 +32,11 @@
 #include <QStyleFactory>
 #include <QStyleOption>
 #include <QTabBar>
+#include <QTabWidget>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTransform>
+#include <QTreeWidget>
 
 #include <algorithm>
 #include <array>
@@ -69,12 +74,33 @@ public:
   }
 };
 
+class InspectableDock final : public QDockWidget {
+public:
+  using QDockWidget::QDockWidget;
+
+  [[nodiscard]] QStyleOptionDockWidget title_option() const {
+    QStyleOptionDockWidget option;
+    initStyleOption(&option);
+    return option;
+  }
+};
+
+class InspectableTabBar final : public QTabBar {
+public:
+  [[nodiscard]] QStyleOptionTab tab_option(int index) const {
+    QStyleOptionTab option;
+    initStyleOption(&option, index);
+    return option;
+  }
+};
+
 QImage render_primitive(const QStyle &style, QStyle::PrimitiveElement element,
-                        const QStyleOption &option) {
+                        const QStyleOption &option,
+                        const QWidget *widget = nullptr) {
   QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
   image.fill(Qt::transparent);
   QPainter painter(&image);
-  style.drawPrimitive(element, &option, &painter);
+  style.drawPrimitive(element, &option, &painter, widget);
   return image;
 }
 
@@ -114,7 +140,29 @@ QImage render_dock_title(const QStyle &style,
   image.fill(Qt::transparent);
   QPainter painter(&image);
   painter.setFont(dock.font());
+  painter.translate(-option.rect.topLeft());
   style.drawControl(QStyle::CE_DockWidgetTitle, &option, &painter, &dock);
+  return image;
+}
+
+QImage render_tab_shape(const QStyle &style, const QStyleOptionTab &option,
+                        const QTabBar &tabs) {
+  QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  painter.translate(-option.rect.topLeft());
+  style.drawControl(QStyle::CE_TabBarTabShape, &option, &painter, &tabs);
+  return image;
+}
+
+QImage render_tab_label(const QStyle &style, const QStyleOptionTab &option,
+                        const QTabBar &tabs) {
+  QImage image(option.rect.size(), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  painter.setFont(tabs.font());
+  painter.translate(-option.rect.topLeft());
+  style.drawControl(QStyle::CE_TabBarTabLabel, &option, &painter, &tabs);
   return image;
 }
 
@@ -221,7 +269,10 @@ TEST_F(QtApplicationStyleTests,
   quader::apply_qt_obsidian_application_theme(
       QApplication::style()->standardPalette());
   quader::QtUiScaleApplicationController controller(*application_);
-  QTabBar tabs;
+  std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("fusion")));
+  ASSERT_NE(fusion, nullptr);
+  InspectableTabBar tabs;
+  tabs.setProperty(quader::kQtConnectedTabSurfaceProperty, true);
   tabs.setAttribute(Qt::WA_DontShowOnScreen, true);
   tabs.setDocumentMode(true);
   tabs.setTabsClosable(true);
@@ -237,9 +288,51 @@ TEST_F(QtApplicationStyleTests,
   if (!review_directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(review_directory));
   }
+  const auto tab_close_button = [&tabs](int index) {
+    auto *button = qobject_cast<QAbstractButton *>(
+        tabs.tabButton(index, QTabBar::RightSide));
+    return button != nullptr ? button : qobject_cast<QAbstractButton *>(
+        tabs.tabButton(index, QTabBar::LeftSide));
+  };
+  const auto contains_glyph_color = [](const QImage &image, const QColor &color) {
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        const QColor pixel = image.pixelColor(x, y);
+        // Small antialiased strokes need not contain an opaque source pixel.
+        // Unpremultiplication can round partially covered RGB channels.
+        if (pixel.alpha() >= 64 && std::abs(pixel.red() - color.red()) <= 3 &&
+            std::abs(pixel.green() - color.green()) <= 3 &&
+            std::abs(pixel.blue() - color.blue()) <= 3) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  const auto visible_glyph_bounds = [](const QImage &image) {
+    QRect bounds;
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        // Ignore faint coverage outside the round stroke; that fringe is not
+        // the visible glyph extent and varies with subpixel placement.
+        if (image.pixelColor(x, y).alpha() >= 64) {
+          bounds = bounds.united(QRect(x, y, 1, 1));
+        }
+      }
+    }
+    return bounds;
+  };
+  const auto composite = [](const QColor &pixel, const QColor &background) {
+    const qreal coverage = pixel.alphaF();
+    return QColor::fromRgbF(
+        pixel.redF() * coverage + background.redF() * (1.0 - coverage),
+        pixel.greenF() * coverage + background.greenF() * (1.0 - coverage),
+        pixel.blueF() * coverage + background.blueF() * (1.0 - coverage));
+  };
   int scale_pass = 0;
   for (const float factor : {1.0F, 2.0F, 1.0F}) {
     controller.apply_factor(factor);
+    const auto &metrics = controller.metrics();
     for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
       SCOPED_TRACE(::testing::Message() << factor << ' ' << direction);
       tabs.setLayoutDirection(direction);
@@ -247,15 +340,51 @@ TEST_F(QtApplicationStyleTests,
       // changes. Settle the fixture before inspecting its mirrored layout.
       QEvent style_change(QEvent::StyleChange);
       QApplication::sendEvent(&tabs, &style_change);
-      tabs.resize(controller.metrics().px(300), tabs.sizeHint().height());
+      QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      QCoreApplication::processEvents();
+      tabs.resize(std::max(metrics.px(300), tabs.sizeHint().width()),
+                  tabs.sizeHint().height());
       tabs.show();
       QCoreApplication::processEvents();
-      auto *close = qobject_cast<QAbstractButton *>(
-          tabs.tabButton(1, QTabBar::RightSide));
-      if (close == nullptr) {
-        close = qobject_cast<QAbstractButton *>(
-            tabs.tabButton(1, QTabBar::LeftSide));
+      for (const int index : {0, 1}) {
+        SCOPED_TRACE(index);
+        QAbstractButton *button = tab_close_button(index);
+        ASSERT_NE(button, nullptr);
+        EXPECT_TRUE(tabs.rect().contains(button->geometry()));
+        EXPECT_TRUE(tabs.tabRect(index).contains(button->geometry()));
+        // Qt retains the created close widget's native size across font-scale
+        // changes. Shrinking its glyph must not shrink that native hit target.
+        EXPECT_GE(button->width(), fusion->pixelMetric(
+                                      QStyle::PM_TabCloseIndicatorWidth));
+        EXPECT_GE(button->height(), fusion->pixelMetric(
+                                       QStyle::PM_TabCloseIndicatorHeight));
+        QStyleOption glyph_option;
+        glyph_option.initFrom(button);
+        glyph_option.rect = button->rect();
+        glyph_option.state = kEnabledState;
+        const QImage glyph = render_primitive(*tabs.style(),
+            QStyle::PE_IndicatorTabClose, glyph_option, button);
+        QImage blank(glyph.size(), glyph.format());
+        blank.fill(Qt::transparent);
+        const QRect glyph_ink = changed_pixels(blank, glyph);
+        ASSERT_FALSE(glyph_ink.isEmpty());
+        const QRect visible_ink = visible_glyph_bounds(glyph);
+        ASSERT_FALSE(visible_ink.isEmpty());
+        EXPECT_LE(visible_ink.width(), metrics.px(7));
+        EXPECT_LE(visible_ink.height(), metrics.px(7));
+        QStyleOptionTab label_option = tabs.tab_option(index);
+        label_option.state.setFlag(QStyle::State_HasFocus, false);
+        const QImage label = render_tab_label(*tabs.style(), label_option, tabs);
+        blank = QImage(label.size(), label.format());
+        blank.fill(Qt::transparent);
+        const QRect label_ink = changed_pixels(blank, label);
+        ASSERT_FALSE(label_ink.isEmpty());
+        const qreal glyph_center = QRectF(glyph_ink).center().y() + button->y();
+        const qreal label_center = QRectF(label_ink).center().y() +
+                                   label_option.rect.y();
+        EXPECT_NEAR(glyph_center, label_center, 1.0);
       }
+      QAbstractButton *close = tab_close_button(1);
       ASSERT_NE(close, nullptr);
       EXPECT_TRUE(close->rect().isValid());
       EXPECT_TRUE(tabs.rect().contains(close->geometry()));
@@ -266,25 +395,42 @@ TEST_F(QtApplicationStyleTests,
       option.rect = close->rect();
       option.state = kEnabledState;
       const QImage idle = render_primitive(*tabs.style(), QStyle::PE_IndicatorTabClose,
-                                            option);
+                                            option, close);
       EXPECT_EQ(idle.pixelColor(0, 0).alpha(), 0);
-      EXPECT_TRUE(contains_color(idle, option.palette.color(QPalette::Active,
-                                                            QPalette::WindowText)));
+      EXPECT_TRUE(contains_glyph_color(idle, option.palette.color(QPalette::Active,
+                                                                 QPalette::WindowText)));
       for (const auto state : {QStyle::State_MouseOver, QStyle::State_Sunken,
                                 QStyle::State_Selected}) {
         option.state = kEnabledState | state;
         const QImage active = render_primitive(*tabs.style(),
-                                               QStyle::PE_IndicatorTabClose, option);
+                                               QStyle::PE_IndicatorTabClose, option,
+                                               close);
         EXPECT_NE(idle, active);
-        EXPECT_TRUE(contains_color(active, option.palette.color(QPalette::Active,
-                                                                QPalette::Text)));
+        QStyleOption without_glyph = option;
+        without_glyph.palette.setColor(QPalette::Active, QPalette::Text,
+                                        Qt::transparent);
+        const QImage background = render_primitive(*tabs.style(),
+            QStyle::PE_IndicatorTabClose, without_glyph, close);
+        EXPECT_FALSE(changed_pixels(background, active).isEmpty());
+        double maximum_contrast = 1.0;
+        const QColor canvas = option.palette.color(QPalette::Active,
+                                                    QPalette::Window);
+        for (int y = 0; y < active.height(); ++y) {
+          for (int x = 0; x < active.width(); ++x) {
+            maximum_contrast = std::max(maximum_contrast, contrast_ratio(
+                composite(active.pixelColor(x, y), canvas),
+                composite(background.pixelColor(x, y), canvas)));
+          }
+        }
+        EXPECT_GE(maximum_contrast, 3.0);
       }
       option.state = QStyle::State_Active;
       const QImage disabled = render_primitive(*tabs.style(),
-                                               QStyle::PE_IndicatorTabClose, option);
+                                               QStyle::PE_IndicatorTabClose, option,
+                                               close);
       EXPECT_NE(idle, disabled);
-      EXPECT_TRUE(contains_color(disabled, option.palette.color(QPalette::Disabled,
-                                                                QPalette::WindowText)));
+      EXPECT_TRUE(contains_glyph_color(disabled, option.palette.color(QPalette::Disabled,
+                                                                     QPalette::WindowText)));
 
       for (const QString &state : {QStringLiteral("idle"), QStringLiteral("hover"),
                                    QStringLiteral("pressed")}) {
@@ -314,8 +460,6 @@ TEST_F(QtApplicationStyleTests,
     ++scale_pass;
   }
 
-  std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("fusion")));
-  ASSERT_NE(fusion, nullptr);
   QPalette light_palette = fusion->standardPalette();
   light_palette.setColor(QPalette::Window, QColor(245, 245, 245));
   light_palette.setColor(QPalette::WindowText, Qt::black);
@@ -1148,7 +1292,7 @@ TEST_F(QtApplicationStyleTests, HighContrastMenusKeepNativePaintAndSizing) {
 }
 
 TEST_F(QtApplicationStyleTests,
-       DockTitlesUsePrimaryTextAndASeparateSurfaceAcrossStateScaleAndDirection) {
+       FolderDockTitlesKeepAQuietRailAndSlopingShoulderAcrossStateScaleAndDirection) {
   for (const float factor : {1.0F, 2.0F}) {
     const quader::QtUiScaleMetrics metrics(factor);
     quader::QtUiScaleProxyStyle style(metrics);
@@ -1156,7 +1300,8 @@ TEST_F(QtApplicationStyleTests,
     QFont font = dock.font();
     font.setPointSizeF(10.0);
     dock.setFont(metrics.font(font));
-    for (const auto group : {QPalette::Active, QPalette::Inactive}) {
+    for (const auto group : {QPalette::Active, QPalette::Inactive,
+                            QPalette::Disabled}) {
       for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
         for (const bool vertical : {false, true}) {
           SCOPED_TRACE(::testing::Message()
@@ -1167,7 +1312,8 @@ TEST_F(QtApplicationStyleTests,
                                                               : QSize(320, 32)));
           option.palette = QApplication::palette();
           option.palette.setCurrentColorGroup(group);
-          option.state = QStyle::State_Enabled |
+          option.state = (group == QPalette::Disabled ? QStyle::State_None
+                                                      : QStyle::State_Enabled) |
                          (group == QPalette::Active ? QStyle::State_Active
                                                     : QStyle::State_None);
           option.direction = direction;
@@ -1184,8 +1330,34 @@ TEST_F(QtApplicationStyleTests,
           EXPECT_TRUE(contains_color(title,
                                      option.palette.color(group, QPalette::Midlight)));
           EXPECT_NE(surface, option.palette.color(group, QPalette::Base));
-          EXPECT_GE(contrast_ratio(option.palette.color(group, QPalette::Text),
-                                   surface), 4.5);
+          if (group != QPalette::Disabled) {
+            EXPECT_GE(contrast_ratio(option.palette.color(group, QPalette::Text),
+                                     surface), 4.5);
+          }
+          // Normalize orientation so the same visible contract covers docked
+          // vertical titles and the native RTL title/button allocation.
+          QImage normalized = vertical
+                                  ? title.transformed(QTransform().rotate(90))
+                                  : title;
+          if (direction == Qt::RightToLeft) {
+            normalized = normalized.flipped(Qt::Horizontal);
+          }
+          const QColor rail = option.palette.color(group, QPalette::Window);
+          EXPECT_EQ(normalized.pixelColor(normalized.width() * 3 / 4,
+                                           normalized.height() / 2), rail);
+          const auto last_surface_pixel = [&](int row) {
+            for (int x = normalized.width() - 1; x >= 0; --x) {
+              if (normalized.pixelColor(x, row) == surface) {
+                return x;
+              }
+            }
+            return -1;
+          };
+          const int upper_edge = last_surface_pixel(normalized.height() / 4);
+          const int lower_edge = last_surface_pixel(normalized.height() * 3 / 4);
+          EXPECT_GT(upper_edge, metrics.px(20));
+          EXPECT_GE(lower_edge - upper_edge, metrics.px(2));
+          EXPECT_LT(lower_edge, normalized.width() / 2);
           QStyleOptionDockWidget empty = option;
           empty.title.clear();
           EXPECT_NE(title, render_dock_title(style, empty, dock));
@@ -1196,49 +1368,386 @@ TEST_F(QtApplicationStyleTests,
 }
 
 TEST_F(QtApplicationStyleTests,
-       DockGlyphsSurviveNativeFeatureDirectionStyleAndFloatingChanges) {
-  quader::QtUiScaleProxyStyle style;
+       PanelTitlesOmitButtonPaintAndHitAreasAcrossNativeLifecycleChanges) {
+  const QPalette fusion_palette = QApplication::style()->standardPalette();
+  quader::apply_qt_obsidian_application_theme(fusion_palette);
+  quader::QtUiScaleApplicationController controller(*application_);
   QMainWindow window;
-  QDockWidget dock(QStringLiteral("Outliner"), &window);
-  dock.setStyle(&style);
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.setCentralWidget(new QWidget(&window));
+  InspectableDock dock(QStringLiteral("Outliner"), &window);
   dock.setWidget(new QWidget(&dock));
   window.addDockWidget(Qt::LeftDockWidgetArea, &dock);
-  quader::install_palette_aware_dock_title_presentation(dock);
   window.resize(360, 260);
   window.show();
   QCoreApplication::processEvents();
+  const auto initial_option = dock.title_option();
+  const QRect initial_text = dock.style()->subElementRect(
+      QStyle::SE_DockWidgetTitleBarText, &initial_option, &dock);
+  std::vector<QPoint> old_button_centers;
+  for (const char *name : {"qt_dockwidget_closebutton",
+                           "qt_dockwidget_floatbutton"}) {
+    auto *button = dock.findChild<QAbstractButton *>(
+        QString::fromLatin1(name), Qt::FindDirectChildrenOnly);
+    ASSERT_NE(button, nullptr);
+    ASSERT_FALSE(button->geometry().isEmpty());
+    old_button_centers.push_back(button->geometry().center());
+  }
 
-  const auto expect_readable_buttons = [&dock, &style]() {
-    for (const auto glyph : {quader::QtDockTitleGlyph::Close,
-                             quader::QtDockTitleGlyph::Float}) {
-      QAbstractButton *button = dock.findChild<QAbstractButton *>(
-          glyph == quader::QtDockTitleGlyph::Close
-              ? QStringLiteral("qt_dockwidget_closebutton")
-              : QStringLiteral("qt_dockwidget_floatbutton"),
-          Qt::FindDirectChildrenOnly);
-      ASSERT_NE(button, nullptr);
-      const QIcon expected = quader::qt_dock_title_glyph_icon(glyph, dock.palette());
-      EXPECT_EQ(button->icon().pixmap(QSize(24, 24)).toImage(),
-                expected.pixmap(QSize(24, 24)).toImage());
-      EXPECT_FALSE(button->accessibleName().isEmpty());
-      EXPECT_EQ(style.styleHint(QStyle::SH_DockWidget_ButtonsHaveFrame,
-                                 nullptr, button), 0);
+  quader::install_palette_aware_dock_title_presentation(dock);
+  const auto settle = [&window, &dock]() {
+    for (int pass = 0; pass < 2; ++pass) {
+      if (dock.layout() != nullptr) {
+        dock.layout()->activate();
+      }
+      window.layout()->activate();
+      QApplication::processEvents();
     }
   };
-  expect_readable_buttons();
-  dock.setFeatures(QDockWidget::DockWidgetClosable |
-                   QDockWidget::DockWidgetFloatable);
-  expect_readable_buttons();
-  dock.setLayoutDirection(Qt::RightToLeft);
-  expect_readable_buttons();
-  QEvent style_change(QEvent::StyleChange);
-  QApplication::sendEvent(&dock, &style_change);
-  expect_readable_buttons();
-  dock.setFloating(true);
-  dock.setFloating(false);
-  QCoreApplication::processEvents();
-  expect_readable_buttons();
+  const auto expect_no_buttons = [&dock, &old_button_centers, &settle]() {
+    settle();
+    EXPECT_EQ(dock.titleBarWidget(), nullptr);
+    const auto option = dock.title_option();
+    const QRect text_rect = dock.style()->subElementRect(
+        QStyle::SE_DockWidgetTitleBarText, &option, &dock);
+    for (const char *name : {"qt_dockwidget_closebutton",
+                             "qt_dockwidget_floatbutton"}) {
+      auto *button = dock.findChild<QAbstractButton *>(
+          QString::fromLatin1(name),
+          Qt::FindDirectChildrenOnly);
+      ASSERT_NE(button, nullptr);
+      EXPECT_TRUE(button->geometry().isEmpty());
+      EXPECT_TRUE(button->visibleRegion().isEmpty());
+      EXPECT_FALSE(text_rect.intersects(button->geometry()));
+      for (const QPoint &old_center : old_button_centers) {
+        EXPECT_NE(dock.childAt(old_center), button);
+      }
+    }
+  };
+  expect_no_buttons();
+  const auto installed_option = dock.title_option();
+  const QRect installed_text = dock.style()->subElementRect(
+      QStyle::SE_DockWidgetTitleBarText, &installed_option, &dock);
+  EXPECT_GT(installed_text.width(), initial_text.width());
+  const auto native_features = dock.features();
+  EXPECT_TRUE(native_features.testFlag(QDockWidget::DockWidgetClosable));
+  EXPECT_TRUE(native_features.testFlag(QDockWidget::DockWidgetFloatable));
+  EXPECT_TRUE(native_features.testFlag(QDockWidget::DockWidgetMovable));
+
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    controller.apply_factor(factor);
+    quader::apply_ui_scale_to_palette_aware_dock_title_presentation(
+        dock, controller.metrics());
+    window.resize(controller.metrics().size(QSize(360, 260)));
+    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+      dock.setLayoutDirection(direction);
+      for (const bool vertical : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << factor << ' ' << direction << ' '
+                                         << vertical);
+        dock.setFeatures(QDockWidget::NoDockWidgetFeatures);
+        expect_no_buttons();
+        dock.setFeatures(native_features |
+                         (vertical ? QDockWidget::DockWidgetVerticalTitleBar
+                                   : QDockWidget::NoDockWidgetFeatures));
+        expect_no_buttons();
+        QEvent style_change(QEvent::StyleChange);
+        QApplication::sendEvent(&dock, &style_change);
+        expect_no_buttons();
+        dock.setFloating(true);
+        EXPECT_TRUE(dock.isFloating());
+        expect_no_buttons();
+        dock.setFloating(false);
+        EXPECT_FALSE(dock.isFloating());
+        expect_no_buttons();
+      }
+    }
+  }
+
+  dock.setFeatures(native_features);
+  for (const auto contrast : {Qt::ContrastPreference::HighContrast,
+                              Qt::ContrastPreference::NoPreference}) {
+    quader::apply_qt_application_theme_for_contrast_preference(fusion_palette,
+                                                              contrast);
+    expect_no_buttons();
+  }
+  dock.toggleViewAction()->trigger();
+  settle();
+  EXPECT_FALSE(dock.isVisible());
+  dock.toggleViewAction()->trigger();
+  EXPECT_TRUE(dock.isVisible());
+  expect_no_buttons();
   window.close();
+}
+
+TEST_F(QtApplicationStyleTests,
+       FolderDocksKeepNativeLayoutBesideRetainedSectionsAtNarrowAndScaledWidths) {
+  const QPalette fusion_palette = QApplication::style()->standardPalette();
+  quader::apply_qt_obsidian_application_theme(fusion_palette);
+  quader::QtUiScaleApplicationController controller(*application_);
+  QMainWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto *viewport = new QLabel(QStringLiteral("Perspective"), &window);
+  viewport->setAlignment(Qt::AlignCenter);
+  window.setCentralWidget(viewport);
+  InspectableDock outliner(QStringLiteral("Outliner"), &window);
+  InspectableDock inspector(QStringLiteral("Inspector"), &window);
+  InspectableDock face_texture(QStringLiteral("Face Texture"), &window);
+  const std::array<InspectableDock *, 3> docks{&outliner, &inspector,
+                                             &face_texture};
+  auto *tree = new QTreeWidget(&outliner);
+  tree->setHeaderHidden(true);
+  for (const QString &name : {QStringLiteral("Curved wall"),
+                              QStringLiteral("Box"),
+                              QStringLiteral("Floor")}) {
+    tree->addTopLevelItem(new QTreeWidgetItem(QStringList{name}));
+  }
+  tree->setCurrentItem(tree->topLevelItem(1));
+  outliner.setWidget(tree);
+  const auto add_property_section = [](QDockWidget &dock, const QString &title,
+                                       const QStringList &labels) {
+    auto *body = new QWidget(&dock);
+    auto *layout = new QVBoxLayout(body);
+    quader::qt_settings_detail::set_scalable_margins(*layout, QMargins(6, 6, 6, 6));
+    quader::qt_settings_detail::set_scalable_spacing(*layout, 8);
+    auto *section = new quader::qt_settings_detail::QtSettingsSection(
+        QStringLiteral("folder-tab-review.section"), body);
+    section->set_title(title);
+    auto *fields = new QGridLayout(section->content());
+    quader::qt_settings_detail::set_scalable_margins(*fields, QMargins(8, 6, 8, 8));
+    quader::qt_settings_detail::set_scalable_grid_spacing(*fields, 6, 4);
+    for (int row = 0; row < labels.size(); ++row) {
+      fields->addWidget(new QLabel(labels[row], section->content()), row, 0);
+      auto *field = new quader::QtDoubleSpinBox(section->content());
+      field->setRange(-999.0, 999.0);
+      field->setValue(row == 0 ? 1.0 : 0.0);
+      fields->addWidget(field, row, 1);
+    }
+    fields->setColumnStretch(1, 1);
+    layout->addWidget(section);
+    layout->addStretch(1);
+    dock.setWidget(body);
+  };
+  add_property_section(inspector, QStringLiteral("Transform"),
+                       {QStringLiteral("X"), QStringLiteral("Y"),
+                        QStringLiteral("Z")});
+  add_property_section(face_texture, QStringLiteral("Texture Settings"),
+                       {QStringLiteral("Scale U"), QStringLiteral("Shift U"),
+                        QStringLiteral("Rotation")});
+  for (InspectableDock *dock : docks) {
+    quader::install_palette_aware_dock_title_presentation(*dock);
+  }
+  window.addDockWidget(Qt::LeftDockWidgetArea, &outliner);
+  window.addDockWidget(Qt::LeftDockWidgetArea, &inspector);
+  window.splitDockWidget(&outliner, &inspector, Qt::Vertical);
+  window.addDockWidget(Qt::RightDockWidgetArea, &face_texture);
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  const auto capture = [&](const QString &name) {
+    if (!review_directory.isEmpty()) {
+      EXPECT_TRUE(window.grab().save(QDir(review_directory).filePath(name +
+                                                                    ".png")));
+    }
+  };
+  const auto settle = [&]() {
+    window.show();
+    for (int pass = 0; pass < 3; ++pass) {
+      QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+      QApplication::processEvents();
+      window.layout()->activate();
+    }
+  };
+  int scale_pass = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    controller.apply_factor(factor);
+    const auto &metrics = controller.metrics();
+    for (InspectableDock *dock : docks) {
+      quader::apply_ui_scale_to_palette_aware_dock_title_presentation(*dock, metrics);
+      quader::qt_settings_detail::apply_scalable_layout_metrics(*dock, metrics);
+      quader::qt_settings_detail::apply_scalable_widget_metrics(*dock, metrics);
+    }
+    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+      window.setLayoutDirection(direction);
+      for (const bool narrow : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << scale_pass << ' ' << factor << ' '
+                                         << direction << ' ' << narrow);
+        window.resize(metrics.size(QSize(narrow ? 800 : 1100, 560)));
+        window.resizeDocks({&outliner, &face_texture},
+                           {metrics.px(narrow ? 180 : 260),
+                            metrics.px(narrow ? 180 : 280)}, Qt::Horizontal);
+        settle();
+        for (InspectableDock *dock : docks) {
+          const auto option = dock->title_option();
+          const QRect text_rect = dock->style()->subElementRect(
+              QStyle::SE_DockWidgetTitleBarText, &option, dock);
+          QFont title_font = dock->font();
+          title_font.setWeight(QFont::DemiBold);
+          EXPECT_GT(text_rect.width() - metrics.px(18),
+                    QFontMetrics(title_font).horizontalAdvance(dock->windowTitle()));
+          for (const char *name : {"qt_dockwidget_closebutton",
+                                   "qt_dockwidget_floatbutton"}) {
+            auto *button = dock->findChild<QAbstractButton *>(
+                QString::fromLatin1(name), Qt::FindDirectChildrenOnly);
+            ASSERT_NE(button, nullptr);
+            EXPECT_TRUE(button->geometry().isEmpty());
+            EXPECT_TRUE(button->visibleRegion().isEmpty());
+            EXPECT_FALSE(text_rect.intersects(button->geometry()));
+          }
+        }
+        capture(QStringLiteral("folder-docks-%1-%2-%3-%4")
+                    .arg(scale_pass).arg(qRound(factor * 100.0F))
+                    .arg(direction == Qt::LeftToRight ? "ltr" : "rtl")
+                    .arg(narrow ? "narrow" : "normal"));
+        if (narrow) {
+          face_texture.setWindowTitle(QStringLiteral(
+              "Face Texture — UV Mapping and Material Assignment"));
+          settle();
+          const auto option = face_texture.title_option();
+          const QRect text_rect = face_texture.style()->subElementRect(
+              QStyle::SE_DockWidgetTitleBarText, &option, &face_texture);
+          QFont title_font = face_texture.font();
+          title_font.setWeight(QFont::DemiBold);
+          EXPECT_LT(text_rect.width(),
+                    QFontMetrics(title_font).horizontalAdvance(option.title));
+          const QImage title = render_dock_title(*face_texture.style(), option,
+                                                 face_texture);
+          QStyleOptionDockWidget without_text = option;
+          without_text.palette.setColor(QPalette::Text, Qt::transparent);
+          const QRect text_ink = changed_pixels(
+              title, render_dock_title(*face_texture.style(), without_text,
+                                        face_texture));
+          EXPECT_FALSE(text_ink.isEmpty());
+          EXPECT_TRUE(text_rect.translated(-option.rect.topLeft()).contains(text_ink));
+          capture(QStringLiteral("folder-docks-%1-%2-%3-long-title")
+                      .arg(scale_pass).arg(qRound(factor * 100.0F))
+                      .arg(direction == Qt::LeftToRight ? "ltr" : "rtl"));
+          face_texture.setWindowTitle(QStringLiteral("Face Texture"));
+        }
+      }
+    }
+    ++scale_pass;
+  }
+
+  QPalette light_palette = fusion_palette;
+  light_palette.setColor(QPalette::Window, QColor(245, 245, 245));
+  light_palette.setColor(QPalette::WindowText, Qt::black);
+  light_palette.setColor(QPalette::Base, Qt::white);
+  light_palette.setColor(QPalette::AlternateBase, QColor(235, 235, 235));
+  light_palette.setColor(QPalette::Text, Qt::black);
+  light_palette.setColor(QPalette::Button, QColor(225, 225, 225));
+  light_palette.setColor(QPalette::ButtonText, Qt::black);
+  for (const bool high_contrast : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "high_contrast=" << high_contrast);
+    quader::apply_qt_application_theme_for_contrast_preference(
+        fusion_palette, high_contrast ? Qt::ContrastPreference::HighContrast
+                                     : Qt::ContrastPreference::NoPreference);
+    window.setPalette(high_contrast ? QPalette{} : light_palette);
+    for (InspectableDock *dock : docks) {
+      // Docks are native subwindows; a parent palette need not propagate.
+      dock->setPalette(high_contrast ? QPalette{} : light_palette);
+    }
+    settle();
+    for (InspectableDock *dock : docks) {
+      const auto option = dock->title_option();
+      EXPECT_FALSE(quader::qt_application_style_active(&option));
+    }
+    capture(QStringLiteral("folder-docks-fallback-%1")
+                .arg(high_contrast ? "high-contrast" : "light"));
+  }
+}
+
+TEST_F(QtApplicationStyleTests,
+       TabifiedDocksAndSceneTabsKeepDistinctShapesAndNativeSelection) {
+  quader::apply_qt_obsidian_application_theme(
+      QApplication::style()->standardPalette());
+  quader::QtUiScaleApplicationController controller(*application_);
+  QMainWindow window;
+  window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  window.setCentralWidget(new QWidget(&window));
+  QDockWidget first(QStringLiteral("Outliner"), &window);
+  QDockWidget second(QStringLiteral("Inspector"), &window);
+  first.setWidget(new QWidget(&first));
+  second.setWidget(new QWidget(&second));
+  window.addDockWidget(Qt::LeftDockWidgetArea, &first);
+  window.addDockWidget(Qt::LeftDockWidgetArea, &second);
+  window.tabifyDockWidget(&first, &second);
+  window.show();
+  QApplication::processEvents();
+  QTabBar *tabs = window.findChild<QTabBar *>(QString{},
+                                             Qt::FindDirectChildrenOnly);
+  ASSERT_NE(tabs, nullptr);
+  ASSERT_EQ(tabs->count(), 2);
+  QTabBar ordinary_tabs;
+  QTabBar scene_tabs(&window);
+  scene_tabs.setProperty(quader::kQtConnectedTabSurfaceProperty, true);
+  scene_tabs.hide();
+  bool first_visible = false;
+  QObject::connect(&first, &QDockWidget::visibilityChanged, &window,
+                   [&first_visible](bool visible) { first_visible = visible; });
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    controller.apply_factor(factor);
+    const auto &metrics = controller.metrics();
+    window.resize(metrics.size(QSize(520, 300)));
+    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+      window.setLayoutDirection(direction);
+      for (const auto position : {QTabWidget::North, QTabWidget::South}) {
+        SCOPED_TRACE(::testing::Message() << factor << ' ' << direction << ' '
+                                         << position);
+        window.setTabPosition(Qt::LeftDockWidgetArea, position);
+        second.raise();
+        QApplication::processEvents();
+        const int first_index = tabs->tabText(0) == first.windowTitle() ? 0 : 1;
+        tabs->setCurrentIndex(first_index);
+        QApplication::processEvents();
+        EXPECT_TRUE(first_visible);
+        EXPECT_EQ(tabs->currentIndex(), first_index);
+        EXPECT_TRUE(window.tabifiedDockWidgets(&first).contains(&second));
+        QStyleOptionTab option;
+        option.initFrom(tabs);
+        option.rect = tabs->tabRect(first_index);
+        option.shape = tabs->shape();
+        option.state = kEnabledState | QStyle::State_Selected;
+        option.palette.setCurrentColorGroup(QPalette::Active);
+        const QImage folder = render_tab_shape(*tabs->style(), option, *tabs);
+        const QImage ordinary = render_tab_shape(*tabs->style(), option,
+                                                 ordinary_tabs);
+        EXPECT_FALSE(contains_color(folder, option.palette.color(QPalette::Accent)));
+        EXPECT_TRUE(contains_color(ordinary, option.palette.color(QPalette::Accent)));
+        EXPECT_NE(folder, ordinary);
+        QImage normalized = position == QTabWidget::South
+                                ? folder.flipped(Qt::Vertical) : folder;
+        if (direction == Qt::RightToLeft) {
+          normalized = normalized.flipped(Qt::Horizontal);
+        }
+        EXPECT_EQ(normalized.pixelColor(normalized.width() - metrics.px(3),
+                                         normalized.height() / 4),
+                  option.palette.color(QPalette::Window));
+        option.shape = QTabBar::RoundedNorth;
+        const QImage connected = render_tab_shape(*tabs->style(), option,
+                                                  scene_tabs);
+        EXPECT_EQ(connected.pixelColor(metrics.px(3), connected.height() / 4),
+                  option.palette.color(QPalette::Window));
+        EXPECT_EQ(connected.pixelColor(connected.width() - metrics.px(3),
+                                        connected.height() / 4),
+                  option.palette.color(QPalette::Window));
+        EXPECT_EQ(connected.pixelColor(connected.width() / 2,
+                                        connected.height() / 4),
+                  option.palette.color(QPalette::AlternateBase));
+        if (!review_directory.isEmpty()) {
+          EXPECT_TRUE(window.grab().save(QDir(review_directory).filePath(
+              QStringLiteral("folder-tabified-%1-%2-%3.png")
+                  .arg(qRound(factor * 100.0F))
+                  .arg(direction == Qt::LeftToRight ? "ltr" : "rtl")
+                  .arg(position == QTabWidget::North ? "north" : "south"))));
+        }
+      }
+    }
+  }
 }
 
 TEST_F(QtApplicationStyleTests, HighContrastDockTitlesAndIconsUseNativeStyle) {

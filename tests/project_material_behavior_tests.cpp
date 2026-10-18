@@ -1728,7 +1728,10 @@ TEST(ProjectMaterialBehaviorTests,
     expect_meshes(false);
 
     requested_material_id = project_asset_id(kDefaultProjectMaterialId);
-    EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    const auto unchanged_group_selection =
+        editor.selection().set_mode(QuaderSelectionMode::Group);
+    EXPECT_TRUE(unchanged_group_selection.ok());
+    EXPECT_FALSE(unchanged_group_selection.changed());
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Group);
     EXPECT_EQ(scene_selection_identity(editor), scene_selection_before);
@@ -3712,7 +3715,13 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
       reference, scene_id, captured_token).ok());
   expect_same_history(editor.query().history(), replacement_history);
-  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  const auto face_selection_mode =
+      editor.selection().set_mode(QuaderSelectionMode::Face);
+  ASSERT_TRUE(face_selection_mode.ok());
+  EXPECT_TRUE(face_selection_mode.changed());
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Face);
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 0u);
+  expect_same_history(editor.query().history(), replacement_history);
   const auto replacement_id = editor.modeling().face_texture_settings_revision().scene_session_id;
   EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
       reference, replacement_id, editor.modeling().face_texture_settings().selection_token).ok());

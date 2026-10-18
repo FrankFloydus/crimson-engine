@@ -21,6 +21,13 @@
 
 namespace quader::modeling {
 
+/** Configures bridge sampling and independent unitless endpoint tensions. */
+struct BridgeOptions {
+  int steps = 1;
+  float start_tension = 1.0F;
+  float end_tension = 1.0F;
+};
+
 struct PolygonDocumentImpl;
 class PolygonDocumentNativeAccess;
 class PolygonDocumentReadSnapshot;
@@ -235,6 +242,11 @@ public:
   /// Structural errors are rejected; validate() additionally diagnoses geometry.
   [[nodiscard]] static Result<PolygonDocument>
   from_authored_topology(const AuthoredTopology &topology);
+  /// Restores durable authored records without modeling validation or cleanup.
+  /// QGEO stores component indexes with generation one; other generations are
+  /// unrepresentable. Validate/edit eligibility remains a separate owner concern.
+  [[nodiscard]] static Result<PolygonDocument>
+  from_persisted_topology(const AuthoredTopology &topology);
 
   [[nodiscard]] std::size_t vertex_count() const;
   [[nodiscard]] std::size_t face_count() const;
@@ -341,6 +353,7 @@ public:
   bevel_selected_edges(EdgeBevelSpec settings = {});
   [[nodiscard]] Result<OperationResult>
   bridge_selected_edges(int steps = 1);
+  [[nodiscard]] Result<OperationResult> bridge_selected_edges(BridgeOptions options);
   [[nodiscard]] Result<OperationResult> combine_selected_faces();
   [[nodiscard]] Result<OperationResult> collapse_selected_faces();
   [[nodiscard]] Result<OperationResult> radial_align_selection();
@@ -398,6 +411,7 @@ public:
   cut_selected_edges_by_plane(const PlaneSplitSpec &spec);
   [[nodiscard]] Result<OperationResult>
   bridge_selected_faces(int steps = 1);
+  [[nodiscard]] Result<OperationResult> bridge_selected_faces(BridgeOptions options);
   [[nodiscard]] Result<OperationResult>
   thicken_selected_faces(float thickness = 0.25F,
                          bool from_center = false);
@@ -410,6 +424,9 @@ private:
   friend class PreparedSelectionTransform;
 
   explicit PolygonDocument(std::unique_ptr<PolygonDocumentImpl> impl);
+  [[nodiscard]] static Result<PolygonDocument>
+  import_authored_topology(const AuthoredTopology &topology,
+                          bool preserve_storage);
 
   std::unique_ptr<PolygonDocumentImpl> impl_;
 };

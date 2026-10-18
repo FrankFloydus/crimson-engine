@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "assets/asset_registry.hpp"
 #include "editor/input/quader_input_binding.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "support/command_behavior_contract.hpp"
@@ -18,6 +20,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <string_view>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -536,9 +540,9 @@ TEST(SelectionToolSettingsTests,
     double value;
   };
   constexpr std::array kCases{
-      PreviewCase{quader_command::kModelingInterpolatedBridgeEdges, "bridge",
+      PreviewCase{quader_command::kModelingPreviewBridgeEdges, "bridge",
                   "operation.bridge.steps", 3.0},
-      PreviewCase{quader_command::kModelingInterpolatedBridgeFaces, "bridge",
+      PreviewCase{quader_command::kModelingPreviewBridgeFaces, "bridge",
                   "operation.bridge.steps", 3.0},
       PreviewCase{quader_command::kModelingBevelEdges, "edge_bevel",
                   "operation.edge_bevel.width", 0.2},
@@ -621,6 +625,103 @@ TEST(SelectionToolSettingsTests,
           after, redone, Domain::Geometry | Domain::Selection);
       EXPECT_TRUE(reapplied.empty()) << reapplied.summary;
     }
+  }
+}
+
+TEST(SelectionToolSettingsTests,
+     BridgeNumericSettingsExposeThreeControlsAndUpdateOneAcceptedPreview) {
+  constexpr std::array<std::string_view, 3> kIds{
+      "operation.bridge.steps", "operation.bridge.start_tension",
+      "operation.bridge.end_tension"};
+  for (const auto command : {quader_command::kModelingPreviewBridgeEdges,
+                             quader_command::kModelingPreviewBridgeFaces}) {
+    SCOPED_TRACE(command.string());
+    const auto *contract = test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    auto &session = fixture->native_scene();
+    const auto undo_before = session.history().undo_count();
+    const auto redo_before = session.history().redo_count();
+    ASSERT_TRUE(editor.commands().execute(command).ok());
+    const auto target = editor.tools().active_settings();
+    ASSERT_TRUE(target.active);
+    ASSERT_TRUE(target.preview_active);
+    EXPECT_EQ(target.tool_id, "bridge");
+    EXPECT_EQ(target.title,
+              command.string() == quader_command::kModelingPreviewBridgeEdges.string()
+                  ? "Bridge Edges" : "Bridge Faces");
+    ASSERT_EQ(target.controls.size(), kIds.size());
+    for (std::size_t index = 0; index < kIds.size(); ++index) {
+      const auto &control = target.controls[index];
+      EXPECT_EQ(control.id, kIds[index]);
+      EXPECT_EQ(control.kind, QuaderToolSettingControlKind::Number);
+      EXPECT_TRUE(control.enabled);
+      EXPECT_DOUBLE_EQ(control.number_value, 1.0);
+      if (index != 0u) {
+        EXPECT_DOUBLE_EQ(control.min_value, 0.0);
+        EXPECT_DOUBLE_EQ(control.max_value, 3.0);
+      }
+    }
+    EXPECT_EQ(target.controls[1].label, "Start Tension");
+    EXPECT_EQ(target.controls[2].label, "End Tension");
+    ASSERT_TRUE(editor.tools().set_setting("bridge", kIds[0], 4.0).ok());
+    using Domain = test::CommandObservableDomain;
+    auto previous = test::capture_command_observable_state(editor);
+    const auto content_revision = session.modeling().content_revision();
+    constexpr std::array<std::pair<std::size_t, double>, 4> kChanges{
+        {{1u, 0.25}, {2u, 2.5}, {1u, 1.75}, {2u, 0.5}}};
+    for (const auto &[index, value] : kChanges) {
+      SCOPED_TRACE(kIds[index]);
+      const auto result = editor.tools().set_setting("bridge", kIds[index], value);
+      ASSERT_TRUE(result.ok()) << result.error_message();
+      EXPECT_TRUE(result.changed());
+      const auto current = test::capture_command_observable_state(editor);
+      EXPECT_NE(current.domain(Domain::Geometry), previous.domain(Domain::Geometry));
+      const auto accepted = editor.tools().active_settings();
+      ASSERT_EQ(accepted.controls.size(), kIds.size());
+      EXPECT_DOUBLE_EQ(accepted.controls[index].number_value, value);
+      EXPECT_DOUBLE_EQ(accepted.controls[0].number_value, 4.0);
+      EXPECT_EQ(session.modeling().content_revision(), content_revision);
+      EXPECT_EQ(session.history().undo_count(), undo_before);
+      EXPECT_EQ(session.history().redo_count(), redo_before);
+      const auto revision = editor.tools().active_settings_revision();
+      const auto unchanged = editor.tools().set_setting("bridge", kIds[index], value);
+      ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+      EXPECT_FALSE(unchanged.changed());
+      EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+      previous = current;
+    }
+    const auto accepted_settings = session.modeling().interaction_settings();
+    const auto revision = editor.tools().active_settings_revision();
+    const auto revision_values = [&] {
+      const auto revisions = editor.revisions();
+      return std::array{revisions.project_revision, revisions.scene_revision,
+          revisions.scene_layer_revision, revisions.scene_settings_revision,
+          revisions.asset_revision, revisions.modeling_content_revision,
+          revisions.modeling_selection_revision};
+    };
+    const auto revisions_before_rejection = revision_values();
+    for (const auto index : {1u, 2u}) {
+      for (const auto rejected : {std::numeric_limits<double>::quiet_NaN(),
+                                 std::numeric_limits<double>::infinity(),
+                                 -std::numeric_limits<double>::infinity()}) {
+        const auto result = editor.tools().set_setting("bridge", kIds[index], rejected);
+        EXPECT_FALSE(result.ok());
+        EXPECT_FALSE(result.changed());
+        EXPECT_EQ(session.modeling().interaction_settings(), accepted_settings);
+        EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+        EXPECT_EQ(revision_values(), revisions_before_rejection);
+        EXPECT_EQ(session.history().undo_count(), undo_before);
+        EXPECT_EQ(session.history().redo_count(), redo_before);
+        EXPECT_EQ(test::capture_command_observable_state(editor).domain(Domain::Geometry),
+                  previous.domain(Domain::Geometry));
+      }
+    }
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_EQ(session.history().undo_count(), undo_before);
+    EXPECT_EQ(session.history().redo_count(), redo_before);
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
   }
 }
 

@@ -128,6 +128,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <numbers>
 #include <memory>
 #include <optional>
 #include <span>
@@ -18995,11 +18996,11 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(bevel->operation_id, "edge_bevel");
   EXPECT_EQ(bevel->preview_kind, ModelingActionPreviewKind::EdgeBevel);
 
-  const ModelingActionItem *interpolated_bridge =
-      find_action_item(*edge_panel, "interpolated_bridge_edges");
-  ASSERT_NE(interpolated_bridge, nullptr);
-  EXPECT_EQ(interpolated_bridge->operation_id, "bridge");
-  EXPECT_EQ(interpolated_bridge->preview_kind,
+  const ModelingActionItem *preview_bridge =
+      find_action_item(*edge_panel, "preview_bridge_edges");
+  ASSERT_NE(preview_bridge, nullptr);
+  EXPECT_EQ(preview_bridge->operation_id, "bridge");
+  EXPECT_EQ(preview_bridge->preview_kind,
             ModelingActionPreviewKind::Bridge);
 
   const ModelingActionItem *split =
@@ -19342,7 +19343,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(selected.changed);
 
   const ModelingCommandResult begin =
-      service.execute_context_action("interpolated_bridge_faces");
+      service.execute_context_action("preview_bridge_faces");
   ASSERT_TRUE(begin.ok) << begin.message;
   const std::optional<MeshAsset> first_preview =
       service.compile_object_mesh(mesh.object.modeling_object_id);
@@ -19368,7 +19369,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     NormalBridgeFacesIgnoresInterpolatedBridgeSteps) {
+     ImmediateBridgeFacesIgnoresPreviewBridgeSteps) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -20321,11 +20322,11 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(bridge->operation_id, "bridge");
   EXPECT_EQ(bridge->visibility, ModelingActionVisibility::Disabled);
 
-  const ModelingActionItem *interpolated_bridge =
-      find_action_item(*face_panel, "interpolated_bridge_faces");
-  ASSERT_NE(interpolated_bridge, nullptr);
-  EXPECT_EQ(interpolated_bridge->operation_id, "bridge");
-  EXPECT_EQ(interpolated_bridge->preview_kind,
+  const ModelingActionItem *preview_bridge =
+      find_action_item(*face_panel, "preview_bridge_faces");
+  ASSERT_NE(preview_bridge, nullptr);
+  EXPECT_EQ(preview_bridge->operation_id, "bridge");
+  EXPECT_EQ(preview_bridge->preview_kind,
             ModelingActionPreviewKind::Bridge);
 
   const ModelingCommandResult executed =
@@ -22123,6 +22124,414 @@ TEST(ModelingSessionServiceTests,
   EXPECT_TRUE(has_point_near({-0.47f, 0.5f, 1.0f}));
   EXPECT_FALSE(has_point_near({-0.47f, 0.38f, 1.0f}));
   EXPECT_FALSE(has_point_near({-0.5f, 0.5f, 1.0f}));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeSnappedTopFaceGuideSurvivesRepeatedPerspectiveHover) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-128.0f, -128.0f, -128.0f},
+                 .max = {128.0f, 128.0f, 128.0f}},
+      .name = "Knife Snapped Top Face Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+
+  auto camera = test_orthographic_viewport_camera();
+  camera.orthographic = false;
+  camera.origin = {350.0f, 640.0f, 700.0f};
+  camera.z_axis = normalize(camera.origin - QVec3{0.0f, 128.0f, 0.0f});
+  camera.x_axis = normalize(cross(QVec3{0.0f, 1.0f, 0.0f}, camera.z_axis));
+  camera.y_axis = normalize(cross(camera.z_axis, camera.x_axis));
+  camera.viewport_size = {800.0f, 600.0f};
+  const auto event_at = [&](QVec3 position) {
+    auto event = test_tool_screen_event(camera, position, 0.0f);
+    event.grid_size = 16.0;
+    event.snap_enabled = true;
+    return event;
+  };
+  const auto seed = event_at({-61.0f, 128.0f, -128.0f});
+  ASSERT_TRUE(service.accept_knife_point(seed).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  const auto current = event_at({61.0f, 128.0f, 3.0f});
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto initial = service.volatile_overlay_snapshot();
+  ASSERT_NE(initial.frame, nullptr);
+  ASSERT_TRUE(initial.frame->knife_angle_context.has_value());
+  const auto &guide = *initial.frame->knife_angle_context;
+  EXPECT_LT(length_squared(guide.start - QVec3{-64.0f, 128.0f, -128.0f}),
+            0.0001f);
+  EXPECT_LT(length_squared(guide.reference_end - QVec3{-64.0f, 128.0f, 128.0f}),
+            0.0001f);
+  EXPECT_LT(length_squared(guide.cut_point - QVec3{64.0f, 128.0f, 0.0f}),
+            0.0001f);
+  EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+  const auto cache = service.volatile_overlay_cache_stats();
+  for (int hover = 0; hover < 4; ++hover) {
+    const auto repeated = service.update_knife_hover(current);
+    ASSERT_TRUE(repeated.ok) << repeated.message;
+    EXPECT_FALSE(repeated.changed);
+    EXPECT_EQ(service.volatile_overlay_snapshot().frame, initial.frame);
+  }
+  EXPECT_EQ(service.volatile_overlay_cache_stats().build_count, cache.build_count);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeTransformedTopFaceKeepsAcceptedEdgeGuideAtWorldScale) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-128.0f, -128.0f, -128.0f},
+                 .max = {128.0f, 128.0f, 128.0f}},
+      .name = "Knife Transformed Top Face Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  TransformComponent transform;
+  transform.location = {1234.5f, 1234.5f, 1234.5f};
+  transform.rotation_euler = {0.0f, -0.1f, 0.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  const QMat4 world_from_object = scene.world_transform_matrix(box.object.entity);
+  const QVec3 surface_normal = normalize(
+      transform_vector(world_from_object, {0.0f, 1.0f, 0.0f}));
+  const auto event_at = [&](QVec3 local, bool snap_enabled) {
+    const QVec3 world = transform_point(world_from_object, local);
+    ModelingToolRayEvent event;
+    event.ray = {.origin = world + surface_normal * 512.0f,
+                 .direction = surface_normal * -1.0f};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.grid_size = 16.0;
+    event.snap_enabled = snap_enabled;
+    return event;
+  };
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(
+      event_at({-61.0f, 128.0f, -128.0f}, true)).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  const auto current = event_at({64.0f, 128.0f, 0.0f}, false);
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto snapshot = service.volatile_overlay_snapshot();
+  ASSERT_NE(snapshot.frame, nullptr);
+  ASSERT_TRUE(snapshot.frame->knife_angle_context.has_value());
+  const auto &guide = *snapshot.frame->knife_angle_context;
+  const QVec3 expected_start = transform_point(
+      world_from_object, {-64.0f, 128.0f, -128.0f});
+  const QVec3 expected_end = transform_point(
+      world_from_object, {-64.0f, 128.0f, 128.0f});
+  const QVec3 expected_cut = transform_point(
+      world_from_object, {64.0f, 128.0f, 0.0f});
+  EXPECT_LT(length_squared(guide.start - expected_start), 0.00001f);
+  EXPECT_LT(length_squared(guide.reference_end - expected_end), 0.00001f);
+  EXPECT_LT(length_squared(guide.cut_point - expected_cut), 0.00001f);
+  EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+  EXPECT_TRUE(std::ranges::any_of(snapshot.frame->lines, [&](const auto &line) {
+    return length_squared(line.start - expected_start) < 0.00001f &&
+           length_squared(line.end - expected_end) < 0.00001f;
+  }));
+  const auto repeated = service.update_knife_hover(current);
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(service.volatile_overlay_snapshot().frame, snapshot.frame);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifePeerMeshOutsideEditParticipantsPublishesGuideAndDimensions) {
+  SceneSession session;
+  auto &service = session.modeling();
+  const auto participant = service.create_box_from_bounds({
+      .bounds = {.min = {512.0f, -128.0f, -128.0f},
+                 .max = {768.0f, 128.0f, 128.0f}},
+      .name = "Knife Selected Participant",
+  });
+  ASSERT_TRUE(participant.ok) << participant.message;
+  const auto peer = service.create_box_from_bounds({
+      .bounds = {.min = {-128.0f, -128.0f, -128.0f},
+                 .max = {128.0f, 128.0f, 128.0f}},
+      .name = "Knife Eligible Peer",
+  });
+  ASSERT_TRUE(peer.ok) << peer.message;
+  const std::array selected{participant.object.entity};
+  ASSERT_TRUE(service.set_object_selection(selected, participant.object.entity).ok);
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  ASSERT_TRUE(session.editor_mode().contains(participant.object.entity));
+  ASSERT_FALSE(session.editor_mode().contains(peer.object.entity));
+  const auto event_at = [](QVec3 position) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = position + QVec3{0.0f, 512.0f, 0.0f},
+                 .direction = {0.0f, -1.0f, 0.0f}};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.grid_size = 16.0;
+    event.snap_enabled = true;
+    return event;
+  };
+  ASSERT_TRUE(service.update_selection_hover({
+      .ray = event_at({640.0f, 128.0f, -128.0f}).ray}).ok);
+  (void)service.selection_overlay_frame();
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(
+      event_at({-64.0f, 128.0f, -128.0f})).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  const auto current = event_at({64.0f, 128.0f, 0.0f});
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto initial = service.volatile_overlay_snapshot();
+  ASSERT_NE(initial.frame, nullptr);
+  ASSERT_TRUE(initial.frame->knife_angle_context.has_value());
+  ASSERT_TRUE(initial.frame->knife_segment_context.has_value());
+  const auto &guide = *initial.frame->knife_angle_context;
+  EXPECT_LT(length_squared(guide.start - QVec3{-64.0f, 128.0f, -128.0f}),
+            0.0001f);
+  EXPECT_LT(length_squared(guide.reference_end - QVec3{-64.0f, 128.0f, 128.0f}),
+            0.0001f);
+  EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+  EXPECT_TRUE(std::ranges::any_of(initial.frame->lines, [&](const auto &line) {
+    return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine &&
+           line.element.object_id == peer.object.modeling_object_id;
+  }));
+  (void)service.selection_overlay_frame();
+  const auto repeated = service.update_knife_hover(current);
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(service.volatile_overlay_snapshot().frame, initial.frame);
+  EXPECT_TRUE(session.editor_mode().contains(participant.object.entity));
+  EXPECT_FALSE(session.editor_mode().contains(peer.object.entity));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeStraightGuidePublishesWorldAnglesAfterNonuniformAndReflectedTransforms) {
+  for (const float scale_x : {2.0f, -2.0f}) {
+    SCOPED_TRACE(scale_x);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const ModelingCreateBoxResult box = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                   .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Knife World Guide Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    TransformComponent transform;
+    transform.location = {5.0f, -4.0f, 2.0f};
+    transform.rotation_euler = {0.4f, 0.2f, 0.6f};
+    transform.scale = {scale_x, 0.5f, 1.5f};
+    ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+    const QMat4 world_from_object = scene.world_transform_matrix(box.object.entity);
+    const QVec3 surface_normal = normalize(
+        transform_vector(world_from_object, {0.0f, 0.0f, 1.0f}));
+    const auto event_at_local_surface = [&](QVec3 local) {
+      const QVec3 world = transform_point(world_from_object, local);
+      ModelingToolRayEvent event;
+      event.ray = {.origin = world + surface_normal * 5.0f,
+                   .direction = surface_normal * -1.0f};
+      event.camera = test_orthographic_viewport_camera();
+      event.camera.origin = event.ray.origin;
+      event.grid_size = 0.5;
+      event.vertex_radius = 0.001;
+      event.edge_radius = 0.01;
+      event.snap_enabled = false;
+      return event;
+    };
+    ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+    ASSERT_TRUE(service.accept_knife_point(
+        event_at_local_surface({0.0f, -1.0f, 1.0f})).ok);
+    ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+    const auto content_revision = service.content_revision();
+    const auto selection_revision = service.selection_revision();
+    const auto cut_event = event_at_local_surface({0.25f, 0.5f, 1.0f});
+    ASSERT_TRUE(service.update_knife_hover(cut_event).ok);
+    const auto frame = service.volatile_overlay_frame();
+    ASSERT_TRUE(frame.knife_angle_context.has_value());
+    const auto guide = *frame.knife_angle_context;
+    EXPECT_NEAR(guide.angle_degrees, std::atan2(0.5, 0.75) * 180.0 / std::numbers::pi,
+                0.001);
+    const QVec3 expected_reference = transform_vector(
+        world_from_object, {0.0f, 2.0f, 0.0f});
+    EXPECT_LT(length_squared(guide.reference_end - guide.start - expected_reference),
+              0.00001f);
+    const QVec3 expected_cut = transform_vector(
+        world_from_object, {0.25f, 1.5f, 0.0f});
+    EXPECT_LT(length_squared(guide.cut_point - guide.start - expected_cut), 0.00001f);
+    auto moved_camera = cut_event;
+    moved_camera.camera.origin += QVec3{7.0f, 3.0f, -2.0f};
+    moved_camera.camera.orthographic_size *= 2.0;
+    const auto update = service.update_knife_hover(moved_camera);
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_FALSE(update.changed);
+    const auto camera_frame = service.volatile_overlay_frame();
+    ASSERT_TRUE(camera_frame.knife_angle_context.has_value());
+    EXPECT_DOUBLE_EQ(camera_frame.knife_angle_context->angle_degrees, guide.angle_degrees);
+    EXPECT_EQ(service.content_revision(), content_revision);
+    EXPECT_EQ(service.selection_revision(), selection_revision);
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeStraightGuideStaysPerpendicularToSeedEdgeForShallowCuts) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Perpendicular Reference Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  const auto event_at = [](QVec3 point) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = point + QVec3{0.0f, 0.0f, 5.0f},
+                 .direction = {0.0f, 0.0f, -1.0f}};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.snap_enabled = false;
+    return event;
+  };
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(event_at({0.0f, -1.0f, 1.0f})).ok);
+  ASSERT_TRUE(service.update_knife_hover(event_at({0.7f, -0.7f, 1.0f})).ok);
+  const auto first = service.volatile_overlay_frame();
+  ASSERT_TRUE(first.knife_angle_context.has_value());
+  EXPECT_LT(length_squared(first.knife_angle_context->reference_end -
+                           QVec3{0.0f, 1.0f, 1.0f}), 0.000001f);
+  EXPECT_NEAR(first.knife_angle_context->angle_degrees,
+              std::atan2(0.7, 0.3) * 180.0 / std::numbers::pi, 0.001);
+  ASSERT_TRUE(service.update_knife_hover(event_at({-0.7f, -0.7f, 1.0f})).ok);
+  const auto reversed = service.volatile_overlay_frame();
+  ASSERT_TRUE(reversed.knife_angle_context.has_value());
+  EXPECT_LT(length_squared(reversed.knife_angle_context->reference_end -
+                           first.knife_angle_context->reference_end), 0.000001f);
+  EXPECT_NEAR(reversed.knife_angle_context->angle_degrees,
+              first.knife_angle_context->angle_degrees, 0.001);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeStraightGuideRetiresOnZeroAcceptMissCancelAndCommit) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Guide Lifecycle Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  const auto event_at = [](QVec3 point) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = point + QVec3{0.0f, 0.0f, 5.0f},
+                 .direction = {0.0f, 0.0f, -1.0f}};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.snap_enabled = false;
+    return event;
+  };
+  const auto seed = event_at({0.0f, -1.0f, 1.0f});
+  const auto current = event_at({0.5f, 1.0f, 1.0f});
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(seed).ok);
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.update_knife_hover(seed).ok);
+  EXPECT_FALSE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.update_knife_hover(event_at({5.0f, 5.0f, 1.0f})).ok);
+  EXPECT_FALSE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.accept_knife_point(current).ok);
+  EXPECT_FALSE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.update_knife_hover(event_at({0.0f, 0.0f, 1.0f})).ok);
+  ASSERT_TRUE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.cancel_active_modal_tool(false).ok);
+  EXPECT_FALSE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  ASSERT_TRUE(service.accept_knife_point(seed).ok);
+  ASSERT_TRUE(service.accept_knife_point(current).ok);
+  ASSERT_TRUE(service.update_knife_hover(event_at({0.0f, 0.0f, 1.0f})).ok);
+  ASSERT_TRUE(service.volatile_overlay_frame().knife_angle_context.has_value());
+  const auto committed = service.commit_knife_tool();
+  ASSERT_TRUE(committed.ok) << committed.message;
+  EXPECT_FALSE(service.volatile_overlay_frame().knife_angle_context.has_value());
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeStraightGuideRefreshesWithSceneTransformWithoutPointerMotion) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Knife Stationary Transform Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  const auto event_at = [](QVec3 point) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = point + QVec3{0.0f, 0.0f, 5.0f},
+                 .direction = {0.0f, 0.0f, -1.0f}};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.snap_enabled = false;
+    return event;
+  };
+  const QVec3 local_seed{0.0f, -1.0f, 1.0f};
+  const QVec3 local_cut{0.5f, 0.5f, 1.0f};
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(event_at(local_seed)).ok);
+  ASSERT_TRUE(service.update_knife_hover(event_at(local_cut)).ok);
+  const auto initial = service.volatile_overlay_snapshot();
+  ASSERT_TRUE(initial.frame->knife_angle_context.has_value());
+  const auto content_revision = service.content_revision();
+  const auto selection_revision = service.selection_revision();
+
+  TransformComponent transform;
+  transform.location = {4.0f, 2.0f, -3.0f};
+  transform.rotation_euler = {0.4f, 0.2f, 0.6f};
+  transform.scale = {2.0f, 0.5f, 1.5f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  const QMat4 world = scene.world_transform_matrix(box.object.entity);
+  const QVec3 expected_seed = transform_point(world, local_seed);
+  const QVec3 expected_cut = transform_point(world, local_cut);
+  const QVec3 expected_end = transform_point(world, {0.0f, 1.0f, 1.0f});
+  const auto transformed = service.volatile_overlay_snapshot();
+  ASSERT_TRUE(transformed.frame->knife_angle_context.has_value());
+  const auto &angle = *transformed.frame->knife_angle_context;
+  EXPECT_LT(length_squared(angle.start - expected_seed), 0.00001f);
+  EXPECT_LT(length_squared(angle.cut_point - expected_cut), 0.00001f);
+  EXPECT_LT(length_squared(angle.reference_end - expected_end), 0.00001f);
+  EXPECT_NEAR(angle.angle_degrees,
+              std::atan2(1.0, 0.75) * 180.0 / std::numbers::pi, 0.001);
+  EXPECT_TRUE(std::ranges::any_of(transformed.frame->lines, [&](const auto &line) {
+    return line.layer == ViewportOverlayLayer::ToolPreviewLine &&
+           length_squared(line.start - expected_seed) < 0.00001f &&
+           length_squared(line.end - expected_cut) < 0.00001f;
+  }));
+  EXPECT_LT(length_squared(initial.frame->knife_angle_context->start - local_seed),
+            0.00001f);
+  const auto cache = service.volatile_overlay_cache_stats();
+  const auto work = service.tool_preview_work_stats();
+  for (int frame = 0; frame < 8; ++frame) {
+    EXPECT_EQ(service.volatile_overlay_snapshot().frame, transformed.frame);
+  }
+  EXPECT_EQ(service.volatile_overlay_cache_stats().build_count, cache.build_count);
+  EXPECT_EQ(service.tool_preview_work_stats().signature_enumeration_count,
+            work.signature_enumeration_count);
+  EXPECT_EQ(service.tool_preview_work_stats().mesh_extraction_count,
+            work.mesh_extraction_count);
+  EXPECT_EQ(service.content_revision(), content_revision);
+  EXPECT_EQ(service.selection_revision(), selection_revision);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -24092,7 +24501,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     EmptyEditParticipantVertexPointsRespectSceneTransforms) {
+     StickyCandidateVertexPointsRespectSceneTransforms) {
   SceneSession session;
   SceneDocument &scene = session.scene();
   ModelingSessionService &service = session.modeling();
@@ -24121,8 +24530,10 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
-  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
+  EXPECT_TRUE(session.editor_mode().snapshot().participants.empty());
+  EXPECT_FALSE(session.editor_mode().contains(box.object.entity));
+  EXPECT_EQ(service.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(service.selection_summary().selected_vertex_count, 0U);
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -25403,7 +25814,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentTransformCommitKeepsEmptyParticipantHandlesOnCommittedGeometry) {
+     ComponentTransformCommitKeepsStickyCandidateHandlesOnCommittedGeometry) {
   SceneSession session;
   SceneDocument &scene = session.scene();
   ModelingSessionService &service = session.modeling();
@@ -25438,8 +25849,10 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
-  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
+  EXPECT_TRUE(session.editor_mode().snapshot().participants.empty());
+  EXPECT_FALSE(session.editor_mode().contains(box.object.entity));
+  EXPECT_EQ(service.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(service.selection_summary().selected_vertex_count, 0U);
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -25558,8 +25971,10 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
-  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
+  EXPECT_TRUE(session.editor_mode().snapshot().participants.empty());
+  EXPECT_FALSE(session.editor_mode().contains(box.object.entity));
+  EXPECT_EQ(service.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(service.selection_summary().selected_vertex_count, 0U);
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -27470,7 +27885,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentModeSourceWireIncludesEveryEditParticipant) {
+     ComponentModeSourceWireIncludesSelectedMeshesAndStickyCandidate) {
   SceneSession session;
   SceneDocument &scene = session.scene();
   ModelingSessionService &service = session.modeling();
@@ -27498,10 +27913,24 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.set_object_selection(participants, second.object.entity).ok);
   ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+      service, first.object.modeling_object_id, ModelingSelectionMode::Edge,
+      ModelingSelectionEdit::Replace).ok);
+  ASSERT_TRUE(service.update_selection_hover({
+      .ray = {.origin = {5.0F, 0.0F, 5.0F},
+              .direction = {0.0F, 0.0F, -1.0F}}}).ok);
+  ASSERT_TRUE(service.update_selection_hover({
+      .ray = {.origin = {10.0F, 0.0F, 5.0F},
+              .direction = {0.0F, 0.0F, -1.0F}}}).ok);
   const ModelingSelectionSummary summary = service.selection_summary();
-  ASSERT_EQ(summary.active_object_id, second.object.modeling_object_id);
+  EXPECT_EQ(summary.active_object_id, first.object.modeling_object_id);
+  EXPECT_EQ(summary.selected_object_count, 1U);
+  EXPECT_EQ(summary.selected_edge_count, 1U);
+  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1U);
+  EXPECT_TRUE(session.editor_mode().contains(first.object.entity));
+  EXPECT_FALSE(session.editor_mode().contains(second.object.entity));
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto source_wire_count_for_object = [&](int object_id) {
     return static_cast<std::size_t>(
         std::count_if(frame.lines.begin(), frame.lines.end(),

@@ -120,17 +120,17 @@ bool topology_impossible(const ModelingSelectionSummary &summary,
   return (id == "thicken_faces" &&
           summary.selected_faces_have_open_perimeter == false) ||
          (id == "combine_faces" && summary.combinable_selected_faces == false) ||
-         ((id == "bridge_faces" || id == "interpolated_bridge_faces") &&
+         ((id == "bridge_faces" || id == "preview_bridge_faces") &&
           summary.bridge_face_pair == false) ||
          (id == "fill_hole" &&
           summary.three_selected_open_boundary_edges == false) ||
          ((id == "bevel_edges" || id == "split_edges" ||
            id == "dissolve_edges") &&
           summary.selected_edges_are_interior == false) ||
-         ((id == "bridge_edges" || id == "interpolated_bridge_edges" ||
+         ((id == "bridge_edges" || id == "preview_bridge_edges" ||
            id == "connect_edges") &&
           summary.selected_edges_belong_to_faces == false) ||
-         ((id == "bridge_edges" || id == "interpolated_bridge_edges") &&
+         ((id == "bridge_edges" || id == "preview_bridge_edges") &&
           summary.bridge_edge_pair == false) ||
          (id == "connect_vertices" &&
           summary.selected_vertices_share_face == false) ||

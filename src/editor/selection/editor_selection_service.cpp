@@ -1477,6 +1477,34 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     if (traversal_requested) {
       return {.command = {.ok = true}, .selection = summary()};
     }
+    if (request.component_body_target.has_value()) {
+      const ResolvedComponentBodyTarget &body =
+          *request.component_body_target;
+      const std::optional<int> modeling_object =
+          modeling_.modeling_object_for_entity(body.geometry_entity);
+      if (modeling_object.has_value() &&
+          modeling_.resolved_component_body_target_eligible(
+              *modeling_object, body.source_occurrence)) {
+        const auto settled = begin_selection_edit();
+        if (!settled.ok) {
+          return {.command = settled, .selection = summary()};
+        }
+        ModelingCommandResult command =
+            modeling_.apply_resolved_component_body_selection({
+                .modeling_object_id = *modeling_object,
+                .source_occurrence = body.source_occurrence,
+                .mode = selection_mode,
+                .edit = click_selection_edit(request.policy),
+                .preserve_selection_on_selected_hit =
+                    request.policy.preserve_selection_on_selected_hit,
+                .preserve_existing_component_selection_on_hit =
+                    request.policy
+                        .preserve_existing_component_selection_on_hit,
+            });
+        command.changed = command.changed || settled.changed;
+        return {.command = std::move(command), .selection = summary()};
+      }
+    }
     ModelingCommandResult command{.ok = true};
     if (!request.policy.preserve_selection_on_miss &&
         click_selection_edit(request.policy) ==
@@ -1906,9 +1934,36 @@ ModelingCommandResult EditorSelectionService::preview_resolved_hover(
 
 ModelingCommandResult EditorSelectionService::preview_spatial_hover(
     std::optional<ResolvedSelectionTarget> target,
-    bool selected_modifier_pressed) {
-  return publish_resolved_hover(std::move(target), false,
-                                selected_modifier_pressed);
+    bool selected_modifier_pressed,
+    std::optional<ResolvedComponentBodyTarget> component_body) {
+  if (target.has_value() ||
+      !is_component_selection_mode(modeling_.selection_mode())) {
+    return publish_resolved_hover(std::move(target), false,
+                                  selected_modifier_pressed);
+  }
+
+  const ModelingHoverSummary current = modeling_.selection_hover_summary();
+  int candidate_object_id = current.candidate_object_id;
+  if (component_body.has_value()) {
+    const std::optional<int> modeling_object =
+        modeling_.modeling_object_for_entity(component_body->geometry_entity);
+    if (modeling_object.has_value() &&
+        modeling_.resolved_component_body_target_eligible(
+            *modeling_object, component_body->source_occurrence)) {
+      candidate_object_id = *modeling_object;
+    }
+  }
+  if (candidate_object_id <= 0) {
+    return publish_resolved_hover(std::nullopt, false,
+                                  selected_modifier_pressed);
+  }
+
+  ModelingHoverSummary empty_spatial_sample;
+  empty_spatial_sample.candidate_object_id = candidate_object_id;
+  empty_spatial_sample.selected_modifier_pressed = selected_modifier_pressed;
+  return publish_resolved_hover(std::nullopt, false,
+                                selected_modifier_pressed, false,
+                                &empty_spatial_sample);
 }
 
 ModelingCommandResult EditorSelectionService::publish_resolved_hover(

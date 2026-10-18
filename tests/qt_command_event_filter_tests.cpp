@@ -2634,9 +2634,6 @@ TEST(QtCommandEventFilterTests,
 
   ASSERT_TRUE(editor.commands().set_shortcut(
       editor.commands().keybinding_target_id_for_selection_mode(
-          quader::QuaderSelectionMode::Object), "4").ok());
-  ASSERT_TRUE(editor.commands().set_shortcut(
-      editor.commands().keybinding_target_id_for_selection_mode(
           quader::QuaderSelectionMode::Group), "5").ok());
 
   for (const auto mode : {quader::QuaderSelectionMode::Vertex,
@@ -2648,13 +2645,13 @@ TEST(QtCommandEventFilterTests,
     const bool component = mode == quader::QuaderSelectionMode::Vertex ||
                            mode == quader::QuaderSelectionMode::Edge ||
                            mode == quader::QuaderSelectionMode::Face;
-    ASSERT_TRUE(editor.mode().set(component ? quader::QuaderEditorMode::Edit
-                                          : quader::QuaderEditorMode::Object).ok());
     const std::string target = editor.commands().keybinding_target_id_for_selection_mode(mode);
     const QString mapping = QString::fromStdString(editor.commands().shortcut_for(target));
     ASSERT_EQ(mapping.size(), 1);
     send_key_press(panel, mapping.at(0).unicode(), Qt::NoModifier, mapping);
     EXPECT_EQ(editor.selection().summary().mode, mode);
+    EXPECT_EQ(editor.mode().current(), component ? quader::QuaderEditorMode::Edit
+                                                : quader::QuaderEditorMode::Object);
     EXPECT_EQ(panel.currentItem(), panel.topLevelItem(0));
   }
 
@@ -2664,10 +2661,8 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
   ASSERT_TRUE(editor.tools().has_active_primitive_creation());
   send_key_press(panel, Qt::Key_3, Qt::NoModifier, QStringLiteral("3"));
-  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
-  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
-  EXPECT_TRUE(editor.tools().has_active_primitive_creation());
-  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
   EXPECT_FALSE(editor.tools().has_active_primitive_creation());
   EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
 
@@ -2682,10 +2677,8 @@ TEST(QtCommandEventFilterTests,
   const auto preview_mesh = editor.query().mesh(box.value().mesh);
   ASSERT_TRUE(preview_mesh.has_value());
   send_key_press(panel, Qt::Key_4, Qt::NoModifier, QStringLiteral("4"));
-  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
-  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
-  EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
-  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
   const auto mesh_after = editor.query().mesh(box.value().mesh);
   ASSERT_TRUE(mesh_after.has_value());
@@ -2713,13 +2706,15 @@ TEST(QtCommandEventFilterTests,
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Ctrl+Alt+F23").ok());
   send_key_press(panel, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
-  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  const auto edit_generation = editor.mode().generation();
   QKeyEvent release_face(QEvent::KeyRelease, Qt::Key_F23,
                           Qt::ControlModifier | Qt::AltModifier);
   QCoreApplication::sendEvent(&panel, &release_face);
-  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   send_key_press(panel, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  EXPECT_EQ(editor.mode().generation(), edit_generation);
   ASSERT_TRUE(editor.commands().reset_shortcut(face_target).ok());
 
   const std::string grid_target = editor.commands().keybinding_target_id_for_grid_preset(2);

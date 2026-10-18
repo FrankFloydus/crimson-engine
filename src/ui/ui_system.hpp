@@ -309,6 +309,8 @@ private:
   void validate_material_find_replace_context();
   void import_material_textures(QtMaterialBrowserWindow &source,
                                QString destination_folder);
+  void finish_material_texture_import(
+      const QuaderApiResult<QuaderProjectMaterialImportReport> &result);
   void delete_material_folder(QString folder);
   void finish_material_folder_operation(const QuaderApiStatus &result);
   [[nodiscard]] bool allow_main_window_close();

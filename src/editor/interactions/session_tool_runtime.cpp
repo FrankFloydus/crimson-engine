@@ -456,6 +456,9 @@ void reset_editor_runtime_knife_state(
 void set_editor_runtime_knife_active(EditorRuntimeState& runtime, bool active)
 {
 	runtime.knife.active = active;
+	if (!active) {
+		runtime.knife.straight_guide = {};
+	}
 }
 
 void set_editor_runtime_knife_state(EditorRuntimeState& runtime, KnifeToolState state)
@@ -1042,6 +1045,11 @@ void EditorRuntime::reset_knife_state(bool keep_active_when_current_tool_is_knif
 void EditorRuntime::set_knife_state(KnifeToolState state)
 {
 	set_editor_runtime_knife_state(state_, std::move(state));
+}
+
+void EditorRuntime::set_knife_straight_guide(KnifeStraightGuide guide)
+{
+	state_.knife.straight_guide = std::move(guide);
 }
 
 void EditorRuntime::set_knife_active(bool active)

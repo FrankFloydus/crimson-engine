@@ -325,6 +325,17 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
   }
 
   frame_signature.add_bool(frame.hover_target_selected);
+  if (frame.knife_angle_context.has_value()) {
+    const auto &angle = *frame.knife_angle_context;
+    frame_signature.add_vec3(angle.start)
+        .add_vec3(angle.reference_end)
+        .add_vec3(angle.cut_point)
+        .add_float(static_cast<float>(angle.angle_degrees));
+  }
+  if (frame.knife_segment_context.has_value()) {
+    frame_signature.add_vec3(frame.knife_segment_context->start)
+        .add_vec3(frame.knife_segment_context->end);
+  }
 
   result.frame_signature = frame_signature.value();
   result.component_point_geometry_signature =

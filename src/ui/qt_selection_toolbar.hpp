@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "api/quader_editor_mode_api.hpp"
+#include "api/quader_api_types.hpp"
 
 #include <QToolBar>
 
@@ -16,7 +16,6 @@
 #include <string_view>
 
 class QAction;
-class QComboBox;
 class QWidget;
 
 namespace quader {
@@ -41,8 +40,6 @@ public:
   void set_mode_requested_callback(
       std::function<void(QuaderSelectionMode)> callback);
   void set_group_selection_toggle_requested_callback(std::function<void()> callback);
-  void set_editor_mode_requested_callback(
-      std::function<void(QuaderEditorMode)> callback);
 
 private:
   /// Binds one public selection mode to its retained presentation action.
@@ -53,17 +50,14 @@ private:
     std::string_view fallback;
   };
 
-  QComboBox *editor_mode_combo_ = nullptr;
-  std::array<ModeAction, 4> mode_actions_{};
+  std::array<ModeAction, 5> mode_actions_{};
   bool synchronization_valid_ = false;
   std::optional<QuaderSelectionMode> presented_mode_;
   const QuaderEditorApi *presented_editor_ = nullptr;
   std::uint64_t presented_editor_mode_revision_ = 0;
   std::uint64_t presented_keybindings_revision_ = 0;
-  QString editor_mode_tooltip_;
   std::function<void(QuaderSelectionMode)> mode_requested_;
   std::function<void()> group_selection_toggle_requested_;
-  std::function<void(QuaderEditorMode)> editor_mode_requested_;
 };
 
 } // namespace quader
