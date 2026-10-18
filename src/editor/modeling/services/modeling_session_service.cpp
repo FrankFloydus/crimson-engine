@@ -3104,21 +3104,29 @@ public:
 
   ModelingCommandResult transfer_face_texture_to_face(int modeling_object_id,
                                                       int face_id) {
-    const ModelingFaceTextureSettings settings = face_texture_settings();
-    if (!settings.editable) {
+    if (sdk_projection_adapter_.preview_active() || transform_drag_active() ||
+        modal_tool_owns_viewport()) {
       return {.ok = false,
-              .message = settings.disabled_reason.empty()
-                             ? "Select exactly one editable source face first."
-                             : settings.disabled_reason};
+              .message = "Commit or cancel the active tool or preview before editing textures."};
     }
-    if (settings.selected_face_count != 1u ||
-        face_texture_selection_cache_.objects.size() != 1u ||
-        face_texture_selection_cache_.objects.front().faces.size() != 1u) {
+    // A transfer consumes the selection at command execution. The retained
+    // texture-panel snapshot may describe an earlier source selection.
+    const auto source_selection =
+        sdk_projection_adapter_.selected_face_texture_settings();
+    if (!source_selection.command.ok) {
+      return source_selection.command;
+    }
+    if (source_selection.objects.empty()) {
+      return {.ok = false,
+              .message = "Select exactly one editable source face first."};
+    }
+    if (source_selection.objects.size() != 1u ||
+        source_selection.objects.front().faces.size() != 1u) {
       return {.ok = false,
               .message = "Select exactly one source face before transferring textures."};
     }
 
-    const auto &selected = face_texture_selection_cache_.objects.front();
+    const auto &selected = source_selection.objects.front();
     const modeling::FaceId source_face = selected.faces.front().face;
     const FaceMaterialTarget source = resolve_face_material(
         selected.modeling_object_id, static_cast<int>(source_face.index));

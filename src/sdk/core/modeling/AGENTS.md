@@ -37,11 +37,16 @@ preview transactions, history, typed identities, neutral payloads, and binary QD
 - SDK consumer tests must include the umbrella header and link SDK targets only.
 - Portable QDR is a binary byte/span contract. Do not add JSON readers, writers, migration
   helpers, or native runtime compatibility targets under this boundary.
-- Authored-topology import and QDR preserve finite collapsed faces, coincident vertices and
-  their attributes. Strict `PolygonDocument::validate()` still reports geometric defects;
-  persistence uses the neutral `AuthoredTopology` validation policy. Keep malformed connectivity,
-  short/repeated face loops, invalid identities and nonfinite positions/UVs rejected. Never
-  substitute compiled triangles for authored topology or silently clean up faces during save.
+- `from_authored_topology()` validates modeling imports while retaining finite collapsed faces
+  and coincident vertices; invalid connectivity, including nonmanifold edges, remains rejected.
+  `from_persisted_topology()` and QDR retain raw
+  authored records without modeling validation, including malformed loops, attributes and IDs.
+  Persistence enforces binary bounds and representability; it must not reject or clean up bad
+  topology. Keep header/version, CSR bounds/coverage, size and checksum checks intact. Raw
+  component indexes use generation one because QGEO has no component-generation field.
+  Derive only safe rendering/editing views after loading; never replace the retained authored
+  payload with compiled triangles or a cleaned document. Strict `PolygonDocument::validate()`
+  and validated editing entry points keep their diagnostic and rejection contracts.
 - Preserve allocation high-water marks across history and preview rollback; stale IDs must not
   alias newly authored elements. Failed and unchanged edits preserve authored state and history.
 - Polygon rejections use `OperationResult::failure()` (or the specialized result's failure

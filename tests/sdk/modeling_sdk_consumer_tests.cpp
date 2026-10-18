@@ -1030,13 +1030,17 @@ TEST(ModelingSdkConsumerTests,
   const std::size_t positions_offset =
       56U + polygon_result.value().vertex_count() * 4U;
   write_u32_le(nonfinite_position, positions_offset, 0x7FC00000U);
-  EXPECT_FALSE(deserialize_qdr_authored_topology(nonfinite_position).ok());
+  const auto retained_nonfinite = deserialize_qdr_authored_topology(nonfinite_position);
+  ASSERT_TRUE(retained_nonfinite.ok()) << retained_nonfinite.error_message();
+  EXPECT_EQ(serialize_qdr_authored_topology(retained_nonfinite.value()).or_throw(),
+            nonfinite_position);
 
   std::vector<std::byte> bad_face_offsets = topology.value();
   const std::size_t face_offsets_offset =
       56U + polygon_result.value().vertex_count() * 16U +
       polygon_result.value().face_count() * 4U;
-  write_u32_le(bad_face_offsets, face_offsets_offset + 4U, 0U);
+  write_u32_le(bad_face_offsets, face_offsets_offset + 4U,
+               std::numeric_limits<std::uint32_t>::max());
   EXPECT_FALSE(deserialize_qdr_authored_topology(bad_face_offsets).ok());
 
   std::vector<std::byte> trailing = topology.value();
@@ -9850,7 +9854,11 @@ TEST(ModelingSdkConsumerTests,
 
   auto invalid = encoded.value();
   write_u32_le(invalid, invalid.size() - ids.size() * 20U, 0U);
-  EXPECT_FALSE(deserialize_qdr_authored_topology(invalid).ok());
+  const auto stored_invalid = deserialize_qdr_authored_topology(invalid);
+  ASSERT_TRUE(stored_invalid.ok()) << stored_invalid.error_message();
+  EXPECT_FALSE(stored_invalid.value().validate().ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(stored_invalid.value()).or_throw(),
+            invalid);
   auto unsupported = encoded.value();
   unsupported[6] = std::byte{4};
   EXPECT_FALSE(deserialize_qdr_authored_topology(unsupported).ok());
@@ -9998,7 +10006,11 @@ TEST(ModelingSdkConsumerTests,
                expected_hard.front().a.index);
   write_u32_le(conflicting_bytes, first_soft_offset + 4U,
                expected_hard.front().b.index);
-  EXPECT_FALSE(deserialize_qdr_authored_topology(conflicting_bytes).ok());
+  const auto stored_conflict = deserialize_qdr_authored_topology(conflicting_bytes);
+  ASSERT_TRUE(stored_conflict.ok()) << stored_conflict.error_message();
+  EXPECT_FALSE(stored_conflict.value().validate().ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(stored_conflict.value()).or_throw(),
+            conflicting_bytes);
 
   ASSERT_TRUE(decoded.value().select_edge(edges[1]).ok());
   const auto reset = decoded.value().reset_selected_edge_normals_to_default();

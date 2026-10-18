@@ -7,6 +7,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_wire_geometry.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "io/mesh/obj_writer.hpp"
@@ -30,7 +31,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstddef>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -594,6 +597,132 @@ void expect_polygon_topology_exact(const quader_poly::Document &actual,
   }
   EXPECT_EQ(actual.hard_normal_edges, expected.hard_normal_edges);
   EXPECT_EQ(actual.soft_normal_edges, expected.soft_normal_edges);
+}
+
+TEST(QdrBinarySceneCodecTests, MalformedAuthoredTopologyPersistsExactReferencedAndRetainedMeshes) {
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const auto path = std::filesystem::path(
+      directory.filePath(QStringLiteral("authored-validation.qdr")).toStdWString());
+  for (int corruption = 0; corruption < 11; ++corruption) {
+  for (const bool referenced : {false, true}) {
+    SCOPED_TRACE(corruption);
+    SCOPED_TRACE(referenced);
+    auto document = simple_scene();
+    const auto read_bytes = [&] {
+      std::ifstream input(path, std::ios::binary);
+      return std::string(std::istreambuf_iterator<char>(input), {});
+    };
+    auto malformed = authored_triangle_mesh("Broken retained mesh", 0.0f);
+    ASSERT_EQ(document.assets().add_mesh(20u, std::move(malformed)), 20u);
+    if (referenced) {
+      const auto entity = document.scene().create_entity_with_id(
+          101u, "Broken visible object", EntityKind::Mesh);
+      ASSERT_TRUE(document.scene().set_mesh(entity, MeshComponent{.mesh = 20u}));
+    }
+    auto snapshot = required_write_snapshot(document);
+    auto stored = std::ranges::find(snapshot.meshes, AssetId{20u},
+        &QdrProjectMeshAssetWriteSnapshot::id);
+    ASSERT_NE(stored, snapshot.meshes.end());
+    auto topology = *stored->authored_polygon_document;
+    if (corruption == 0) topology.faces.front().uvs.pop_back();
+    if (corruption == 1) topology.faces.front().vertices.back() = 1u;
+    if (corruption == 2) topology.faces.front().vertices.back() = 99u;
+    if (corruption == 3) topology.faces.front().vertices.resize(2u);
+    if (corruption == 4) topology.vertices.push_back(topology.vertices.front());
+    if (corruption == 5) topology.faces.push_back(topology.faces.front());
+    if (corruption == 6) topology.hard_normal_edges = {{1u, 99u}};
+    if (corruption == 7) {
+      topology.hard_normal_edges = {{2u, 1u}, {2u, 1u}};
+      topology.soft_normal_edges = {{1u, 2u}};
+    }
+    if (corruption == 8) topology.next_vertex_id = topology.next_face_id = 0u;
+    if (corruption == 9) topology.faces.front().texture_transform.scale.x = 0.0f;
+    if (corruption == 10) topology.faces.front().normal_shading = static_cast<quader_poly::SurfaceShading>(255);
+    stored->authored_polygon_document = std::make_shared<const quader_poly::Document>(topology);
+    stored->geometry.reset();
+    const auto written = QdrDocumentWriter::write_project_document_atomic(path, snapshot, test_uuid());
+    ASSERT_TRUE(written.ok) << written.message;
+    const auto saved_bytes = read_bytes();
+    ASSERT_FALSE(saved_bytes.empty());
+    const auto reopened = QdrDocumentReader::read_project_document(path);
+    ASSERT_TRUE(reopened.ok) << reopened.message;
+    const auto *retained = reopened.document.assets().mesh(20u);
+    ASSERT_NE(retained, nullptr);
+    ASSERT_NE(retained->authored_polygon_document, nullptr);
+    EXPECT_EQ(retained->name, "Broken retained mesh");
+    expect_polygon_topology_exact(*retained->authored_polygon_document, topology);
+    const auto resaved = QdrDocumentWriter::write_project_document_atomic(
+        path, required_write_snapshot(reopened.document), test_uuid());
+    ASSERT_TRUE(resaved.ok) << resaved.message;
+    EXPECT_EQ(read_bytes(), saved_bytes);
+    if (referenced && corruption != 8) EXPECT_TRUE(retained->geometry_indices().empty());
+  }
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, NonfiniteAuthoredValuesRemainStoredAndOutsideDerivedGeometry) {
+  auto document = simple_scene();
+  ASSERT_EQ(document.assets().add_mesh(20u, authored_triangle_mesh("Raw floating values", 0.0f)), 20u);
+  const auto entity = document.scene().create_entity_with_id(101u, "Raw object", EntityKind::Mesh);
+  ASSERT_TRUE(document.scene().set_mesh(entity, MeshComponent{.mesh = 20u}));
+  auto snapshot = required_write_snapshot(document);
+  auto stored = std::ranges::find(snapshot.meshes, AssetId{20u}, &QdrProjectMeshAssetWriteSnapshot::id);
+  ASSERT_NE(stored, snapshot.meshes.end());
+  auto topology = *stored->authored_polygon_document;
+  topology.vertices.front().position.x = std::bit_cast<float>(std::uint32_t{0x7fc00123u});
+  topology.faces.front().uvs.front().y = std::numeric_limits<float>::infinity();
+  stored->authored_polygon_document = std::make_shared<const quader_poly::Document>(topology);
+  stored->geometry.reset();
+  const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid());
+  const auto reopened = QdrDocumentReader::deserialize_project_document(bytes);
+  ASSERT_TRUE(reopened.ok) << reopened.message;
+  const auto *retained = reopened.document.assets().mesh(20u);
+  ASSERT_NE(retained, nullptr);
+  ASSERT_NE(retained->authored_polygon_document, nullptr);
+  EXPECT_EQ(std::bit_cast<std::uint32_t>(retained->authored_polygon_document->vertices.front().position.x),
+      0x7fc00123u);
+  EXPECT_EQ(retained->authored_polygon_document->faces.front().uvs.front().y,
+      std::numeric_limits<float>::infinity());
+  EXPECT_TRUE(retained->geometry_vertices().empty());
+  EXPECT_TRUE(retained->geometry_indices().empty());
+  const auto wire = build_mesh_wire_geometry_payload(*retained);
+  ASSERT_NE(wire, nullptr);
+  for (const auto &segment : wire->segments) {
+    EXPECT_TRUE(std::isfinite(segment.start.x) && std::isfinite(segment.start.y) && std::isfinite(segment.start.z));
+    EXPECT_TRUE(std::isfinite(segment.end.x) && std::isfinite(segment.end.y) && std::isfinite(segment.end.z));
+  }
+  EXPECT_EQ(QdrDocumentWriter::serialize_project_document_bytes(
+      required_write_snapshot(reopened.document), test_uuid()), bytes);
+}
+
+TEST(QdrBinarySceneCodecTests, ManyMalformedAuthoredFacesPersistWithoutDroppingRecords) {
+  auto document = simple_scene();
+  auto malformed = authored_triangle_mesh("Many invalid faces", 0.0f);
+  auto &topology = malformed.edit_authored_polygon_document();
+  auto face = topology.faces.front();
+  face.uvs.pop_back();
+  topology.faces.clear();
+  topology.next_face_id = 101u;
+  for (std::uint32_t id = 1u; id < topology.next_face_id; ++id) {
+    face.id = id;
+    topology.faces.push_back(face);
+  }
+  const auto expected = topology;
+  ASSERT_EQ(document.assets().add_mesh(20u, std::move(malformed)), 20u);
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const auto path = std::filesystem::path(
+      directory.filePath(QStringLiteral("many-diagnostics.qdr")).toStdWString());
+  const auto written = QdrDocumentWriter::write_project_document_atomic(path, document);
+  ASSERT_TRUE(written.ok) << written.message;
+  const auto reopened = QdrDocumentReader::read_project_document(path);
+  ASSERT_TRUE(reopened.ok) << reopened.message;
+  const auto *retained = reopened.document.assets().mesh(20u);
+  ASSERT_NE(retained, nullptr);
+  ASSERT_NE(retained->authored_polygon_document, nullptr);
+  EXPECT_EQ(retained->authored_polygon_document->faces.size(), 100u);
+  expect_polygon_topology_exact(*retained->authored_polygon_document, expected);
 }
 
 TEST(QdrBinarySceneCodecTests, EmptyScenePersistsDocumentSettingsAndExplicitEmptyRoots) {

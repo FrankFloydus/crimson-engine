@@ -19,6 +19,7 @@
 class QCloseEvent;
 class QEvent;
 class QLabel;
+class QPlainTextEdit;
 class QPushButton;
 class QWidget;
 
@@ -47,6 +48,7 @@ struct QtRetainedMessageBoxPresentation final {
   QString title;
   QString text;
   QString informative_text;
+  bool scrollable_informative_text = false;
   std::vector<QtRetainedMessageBoxButtonPresentation> buttons;
   QtRetainedMessageBoxButton default_button =
       QtRetainedMessageBoxButton::None;
@@ -103,6 +105,7 @@ private:
   presentation_is_valid(const QtRetainedMessageBoxPresentation &presentation)
       const noexcept;
   void apply_informative_text(const QString &text);
+  void update_scrollable_text_geometry();
   void refresh_standard_icon_cache();
   void apply_presented_icon();
 
@@ -116,6 +119,9 @@ private:
       QtRetainedMessageBoxButton::None;
   int message_icon_size_ = 0;
   qreal message_icon_device_pixel_ratio_ = 1.0;
+  QPlainTextEdit *informative_editor_ = nullptr;
+  bool scrollable_informative_text_ = false;
+  bool updating_scrollable_geometry_ = false;
   bool prewarmed_ = false;
   QtUiScaleMetrics ui_scale_metrics_;
 };

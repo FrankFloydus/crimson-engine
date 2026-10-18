@@ -98,6 +98,11 @@ Serialize operations on a handle. Independent handles may run on separate thread
 
 ## Geometry and material identity
 
+The reader uses the canonical persisted-geometry decoder. Nonmanifold topology,
+including an edge shared by more than two faces, does not reject the scene or
+modify its authored records. Ship a rebuilt native reader for this behavior;
+replacing the editor executable alone does not update a staged reader DLL.
+
 The scene-owned occurrence projection enumerates ordinary meshes and concrete
 instance placements, including hidden placements, without also emitting definition
 storage geometry. Each mesh retains effective saved visibility, an affine

@@ -71,7 +71,10 @@ void append_authored_segments(const MeshAsset &mesh,
   std::unordered_map<quader_poly::ElementId, QVec3> positions;
   positions.reserve(document.vertices.size());
   for (const quader_poly::Vertex &vertex : document.vertices) {
-    positions.emplace(vertex.id, vertex.position);
+    if (std::isfinite(vertex.position.x) && std::isfinite(vertex.position.y) &&
+        std::isfinite(vertex.position.z)) {
+      positions.emplace(vertex.id, vertex.position);
+    }
   }
   // Effective positions are independent of the retained authored topology.
   const auto compiled_vertices = mesh.geometry_vertices();

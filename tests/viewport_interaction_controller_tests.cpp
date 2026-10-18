@@ -15714,11 +15714,11 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     RejectedFaceGizmoSampleRetainsGestureAndDoesNotRetryUnchangedFrames) {
+     CollapsedFaceGizmoSamplePublishesAndRecoversWithoutRetryingUnchangedFrames) {
   ViewportInteractionHarness harness;
   harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
   harness.input.orthographic_view = true;
-  harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, true);
+  harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, false);
   harness.settings.set_bool_value(quader::ViewportBoolSettingId::VertexSnap, false);
   const auto box = create_unit_box(harness);
   const auto authored = [&]() -> const quader_poly::Document & {
@@ -15762,7 +15762,7 @@ TEST(ViewportInteractionControllerTests,
     return harness.controller.handle_before_active_tool(
         harness.editor, harness.frame(pressed, !released, released, start));
   };
-  const auto expect_preview_right_edge = [&]() {
+  const auto expect_preview_right_edge = [&](float expected) {
     const auto meshes = modeling.tool_preview_meshes();
     ASSERT_EQ(meshes.size(), 1u);
     float right_edge = -std::numeric_limits<float>::infinity();
@@ -15773,7 +15773,12 @@ TEST(ViewportInteractionControllerTests,
           : mesh.mesh.geometry().vertices[index].position;
       right_edge = std::max(right_edge, position.x);
     }
-    EXPECT_FLOAT_EQ(right_edge, 0.0f);
+    EXPECT_FLOAT_EQ(right_edge, expected);
+    const auto snapshot = modeling.polygon_document_read_snapshot(box.modeling_object_id);
+    ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
+    const auto view = snapshot.value().document.view();
+    EXPECT_EQ(view.vertices.size(), 8U);
+    EXPECT_EQ(view.faces.size(), 6U);
   };
 
   ASSERT_TRUE(move_to(start, true, false).gizmo_consumed);
@@ -15781,37 +15786,54 @@ TEST(ViewportInteractionControllerTests,
   const auto outside = quader::QVec2{0.0f, 100.0f};
   ASSERT_TRUE(move_to(start - one_unit + outside, false, false).gizmo_consumed);
   ASSERT_TRUE(harness.controller.dragging());
-  expect_preview_right_edge();
-  const auto rejected = start - one_unit * 2.0f + outside;
-  ASSERT_TRUE(move_to(rejected, false, false).gizmo_consumed);
+  expect_preview_right_edge(0.0F);
+  const auto collapsed = start - one_unit * 2.0f + outside;
+  ASSERT_TRUE(move_to(collapsed, false, false).gizmo_consumed);
   ASSERT_TRUE(harness.controller.dragging());
   ASSERT_TRUE(modeling.transform_drag_active());
-  expect_preview_right_edge();
+  // The selected face coincides with the opposite face. Side walls remain
+  // authored quads even though they temporarily produce no filled triangles.
+  expect_preview_right_edge(-1.0F);
   const auto revision = modeling.transient_transform_preview_revision();
   const auto work = modeling.modeling_sdk_projection_stats_for_tests();
   for (int frame = 0; frame < 3; ++frame) {
-    ASSERT_TRUE(move_to(rejected, false, false).gizmo_consumed);
+    ASSERT_TRUE(move_to(collapsed, false, false).gizmo_consumed);
     EXPECT_TRUE(harness.controller.dragging());
     EXPECT_EQ(modeling.transient_transform_preview_revision(), revision);
     const auto unchanged_work = modeling.modeling_sdk_projection_stats_for_tests();
     EXPECT_EQ(unchanged_work.preview_publication_count, work.preview_publication_count);
     EXPECT_EQ(unchanged_work.mesh_compile_count, work.mesh_compile_count);
   }
+  const auto recovered = start - one_unit * 0.5F + outside;
+  ASSERT_TRUE(move_to(recovered, false, false).gizmo_consumed);
+  ASSERT_TRUE(harness.controller.dragging());
+  ASSERT_TRUE(modeling.transform_drag_active());
+  expect_preview_right_edge(0.5F);
   EXPECT_EQ(harness.session.history().undo_count(), undo_before);
-  ASSERT_TRUE(move_to(rejected, false, true).gizmo_consumed);
+  ASSERT_TRUE(move_to(recovered, false, true).gizmo_consumed);
   EXPECT_FALSE(harness.controller.dragging());
   EXPECT_FALSE(modeling.transform_drag_active());
-  EXPECT_EQ(harness.session.history().undo_count(), undo_before + 1u);
+  ASSERT_EQ(harness.session.history().undo_count(), undo_before + 1u);
+  const auto expect_box_live = [&]() {
+    const auto *binding = harness.session.scene().mesh(box.entity);
+    ASSERT_NE(binding, nullptr);
+    const auto *mesh = harness.session.assets().mesh(binding->mesh);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+  };
   const auto right_edge = [&]() {
     float result = -std::numeric_limits<float>::infinity();
     for (const auto &vertex : authored().vertices) result = std::max(result, vertex.position.x);
     return result;
   };
-  EXPECT_FLOAT_EQ(right_edge(), 0.0f);
+  ASSERT_NO_FATAL_FAILURE(expect_box_live());
+  EXPECT_FLOAT_EQ(right_edge(), 0.5f);
   ASSERT_TRUE(harness.editor.history().undo().ok());
+  ASSERT_NO_FATAL_FAILURE(expect_box_live());
   EXPECT_FLOAT_EQ(right_edge(), 1.0f);
   ASSERT_TRUE(harness.editor.history().redo().ok());
-  EXPECT_FLOAT_EQ(right_edge(), 0.0f);
+  ASSERT_NO_FATAL_FAILURE(expect_box_live());
+  EXPECT_FLOAT_EQ(right_edge(), 0.5f);
 }
 
 TEST(ViewportInteractionControllerTests,
@@ -18509,6 +18531,248 @@ TEST(ViewportInteractionControllerMaterialTests,
         EXPECT_EQ(redone->vertices[corner].uv.x, transferred->vertices[corner].uv.x);
         EXPECT_EQ(redone->vertices[corner].uv.y, transferred->vertices[corner].uv.y);
       }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerMaterialTests,
+     AltRightPressContinuesDumpThinBoxBroadFaceOntoSmallSidesWithoutTransforming) {
+  for (const quader::QuaderElementId target_id : {7U, 8U, 9U, 10U}) {
+    SCOPED_TRACE(target_id);
+    ProjectViewportInteractionHarness harness;
+    harness.initialize_with_second_material();
+    // Authored Box_008 from SEL-20261015-01A0A3EC. Retain its sparse IDs,
+    // thin dimensions and UV charts while exercising the actual mouse chord.
+    quader_poly::Document document;
+    document.vertices = {
+        {.id = 11, .position = {0.75F, -0.281250060F, 0.875F}},
+        {.id = 12, .position = {-0.75F, -0.281250060F, 0.875F}},
+        {.id = 13, .position = {-0.75F, -0.468750298F, 0.625F}},
+        {.id = 14, .position = {-0.75F, -0.281250060F, 0.625F}},
+        {.id = 15, .position = {0.75F, -0.281250060F, 0.625F}},
+        {.id = 16, .position = {0.75F, -0.468750298F, 0.625F}},
+        {.id = 57, .position = {-0.75F, -0.468750298F, 0.875F}},
+        {.id = 59, .position = {0.75F, -0.468750298F, 0.875F}},
+    };
+    document.faces = {
+        {.id = 7, .vertices = {57, 59, 11, 12},
+         .uvs = {{-0.375F, -1.43750012F}, {0.375F, -1.43750012F},
+                 {0.375F, -1.53125024F}, {-0.375F, -1.53125024F}}},
+        {.id = 8, .vertices = {13, 14, 15, 16},
+         .uvs = {{-0.375F, -2.6875F}, {-0.375F, -2.59375F},
+                 {0.375F, -2.59375F}, {0.375F, -2.6875F}}},
+        {.id = 9, .vertices = {16, 15, 11, 59},
+         .uvs = {{-0.3125F, 0.437500179F}, {-0.3125F, 0.343750060F},
+                 {-0.4375F, 0.343750060F}, {-0.4375F, 0.437500179F}}},
+        {.id = 10, .vertices = {13, 57, 12, 14},
+         .uvs = {{0.3125F, 0.437500179F}, {0.4375F, 0.437500179F},
+                 {0.4375F, 0.343750060F}, {0.3125F, 0.343750060F}}},
+        {.id = 11, .vertices = {14, 12, 11, 15},
+         .uvs = {{-0.375F, 0.312499881F}, {-0.375F, 0.437499881F},
+                 {0.375F, 0.437499881F}, {0.375F, 0.312499881F}}},
+        {.id = 12, .vertices = {13, 16, 59, 57},
+         .uvs = {{-0.375F, -0.3125F}, {0.375F, -0.3125F},
+                 {0.375F, -0.4375F}, {-0.375F, -0.4375F}}},
+    };
+    for (auto &face : document.faces) {
+      if (face.id == 7U || face.id == 8U || face.id == 11U) {
+        face.texture_transform.shift_uv = {0.0433070809F, -0.629921317F};
+      }
+    }
+    document.next_vertex_id = 157;
+    document.next_face_id = 149;
+    const auto created = harness.editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(document),
+        {.name = "Thin box texture continuation"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto object = created.value();
+    constexpr quader::QVec3 kLocation{6.5F, 0.437500179F, -4.875F};
+    ASSERT_TRUE(harness.editor.scene().set_transform(
+        object.entity, {.location = kLocation}).ok());
+    ASSERT_TRUE(enter_selection_context(harness.editor, quader::QuaderSelectionMode::Face).ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+    ASSERT_TRUE(harness.editor.selection().select_face(object, 11).ok());
+    ASSERT_TRUE(harness.editor.modeling().apply_material(
+        quader::QuaderMaterialReference::project(harness.second_material())).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    harness.scene_session().history().clear();
+    const auto read_document = [&]() -> quader_poly::Document {
+      const auto *component = harness.scene_session().scene().mesh(object.entity);
+      EXPECT_NE(component, nullptr);
+      if (component == nullptr) return {};
+      const auto *mesh = harness.scene_session().assets().mesh(component->mesh);
+      EXPECT_NE(mesh, nullptr);
+      if (mesh == nullptr || mesh->authored_polygon_document == nullptr) return {};
+      return *mesh->authored_polygon_document;
+    };
+    const auto before = read_document();
+    const auto compiled_before = harness.editor.modeling().mesh(object).compiled_mesh();
+    ASSERT_TRUE(compiled_before.has_value());
+    ASSERT_EQ(compiled_before->vertices.size(), 24U);
+    const auto *source_before = quader_poly::find_face(before, 11);
+    const auto *target_before = quader_poly::find_face(before, target_id);
+    ASSERT_NE(source_before, nullptr);
+    ASSERT_NE(target_before, nullptr);
+    const auto entity = harness.editor.query().entity(object.entity);
+    ASSERT_TRUE(entity.has_value());
+    const auto sampling = entity->texture_sampling_from_local.value_or(quader::QMat4{});
+    const quader_poly::Transform3 sampling_transform{
+        .x_axis = {sampling.values[0], sampling.values[1], sampling.values[2]},
+        .y_axis = {sampling.values[4], sampling.values[5], sampling.values[6]},
+        .z_axis = {sampling.values[8], sampling.values[9], sampling.values[10]},
+        .origin = {sampling.values[12], sampling.values[13], sampling.values[14]},
+    };
+    auto &modeling = harness.scene_session().modeling();
+    const auto expect_preview_layout = [&](std::size_t compiled_corners) {
+      const auto previews = modeling.tool_preview_meshes();
+      ASSERT_EQ(previews.size(), 1U);
+      const auto &preview = previews.front();
+      EXPECT_EQ(preview.source_entity, object.entity);
+      const auto corners = preview.geometry_projection
+          ? preview.geometry_projection->vertices().size()
+          : preview.mesh.geometry().vertices.size();
+      EXPECT_EQ(corners, compiled_corners);
+      const auto snapshot = modeling.polygon_document_read_snapshot(object.modeling_object_id);
+      ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
+      const auto view = snapshot.value().document.view();
+      EXPECT_EQ(view.vertices.size(), 8U);
+      EXPECT_EQ(view.faces.size(), 6U);
+    };
+    ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+    constexpr float kCollapseDelta = -0.468750298F - -0.281250060F;
+    const auto collapsed = harness.editor.modeling().update_transform_translate({0, kCollapseDelta, 0});
+    ASSERT_TRUE(collapsed.ok()) << collapsed.error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_preview_layout(8U));
+    const auto restored = harness.editor.modeling().update_transform_translate({});
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_preview_layout(24U));
+    ASSERT_TRUE(harness.editor.modeling().cancel_transform_preview().ok());
+    EXPECT_TRUE(modeling.tool_preview_meshes().empty());
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    EXPECT_FALSE(harness.controller.dragging());
+    quader::QVec3 center{};
+    for (const auto id : target_before->vertices) {
+      center += quader_poly::find_vertex(before, id)->position;
+    }
+    center = center * 0.25F + kLocation;
+    harness.camera.set_view_direction(quader_poly::face_normal(before, *target_before) * -1.0F);
+    harness.camera.focus_bounds(center - quader::QVec3{1, 1, 1},
+                                center + quader::QVec3{1, 1, 1});
+    const auto screen = harness.camera.project_world_point(center);
+    ASSERT_TRUE(screen.visible);
+    const auto ray = harness.camera.ray_from_viewport_point(screen.position);
+    const auto hover = harness.editor.selection().preview_hover({
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .face_plane_hover = true,
+    });
+    ASSERT_EQ(hover.target.object_id, object.modeling_object_id);
+    ASSERT_EQ(hover.target.face_id, target_id);
+    MaterialGesturePointerDriver pointer(harness);
+    const auto press = pointer.dispatch("Alt+RightMouse", screen.position, true, true);
+    ASSERT_TRUE(press.material_transfer_requested);
+    EXPECT_FALSE(harness.controller.dragging());
+    EXPECT_FALSE(harness.scene_session().modeling().transform_drag_active());
+    (void)pointer.dispatch({}, screen.position + quader::QVec2{10, 5}, false, true);
+    EXPECT_FALSE(harness.controller.dragging());
+    (void)pointer.dispatch("Alt+RightMouseClick", screen.position, false, false, true);
+    EXPECT_FALSE(harness.controller.material_transfer_pointer_active());
+    EXPECT_EQ(harness.controller.material_interaction_work_stats()
+                  .transfer_face_texture_request_count, 1U);
+    EXPECT_EQ(harness.editor.query().history().undo_label, "Transfer Face Texture");
+    const auto after = read_document();
+    const auto compiled_after = harness.editor.modeling().mesh(object).compiled_mesh();
+    ASSERT_TRUE(compiled_after.has_value());
+    EXPECT_EQ(compiled_after->vertices.size(), compiled_before->vertices.size());
+    const auto expect_geometry_and_source = [&](const quader_poly::Document &actual) {
+      ASSERT_EQ(actual.vertices.size(), before.vertices.size());
+      ASSERT_EQ(actual.faces.size(), before.faces.size());
+      for (const auto &vertex : before.vertices) {
+        const auto *retained = quader_poly::find_vertex(actual, vertex.id);
+        ASSERT_NE(retained, nullptr);
+        EXPECT_FLOAT_EQ(retained->position.x, vertex.position.x);
+        EXPECT_FLOAT_EQ(retained->position.y, vertex.position.y);
+        EXPECT_FLOAT_EQ(retained->position.z, vertex.position.z);
+      }
+      for (const auto &face : before.faces) {
+        const auto *retained = quader_poly::find_face(actual, face.id);
+        ASSERT_NE(retained, nullptr);
+        EXPECT_EQ(retained->vertices, face.vertices);
+        EXPECT_EQ(retained->normal_shading, face.normal_shading);
+        if (face.id == target_id) continue;
+        EXPECT_EQ(retained->material_slot, face.material_slot);
+        EXPECT_EQ(retained->texture_transform, face.texture_transform);
+        ASSERT_EQ(retained->uvs.size(), face.uvs.size());
+        for (std::size_t corner = 0; corner < face.uvs.size(); ++corner) {
+          EXPECT_FLOAT_EQ(retained->uvs[corner].x, face.uvs[corner].x);
+          EXPECT_FLOAT_EQ(retained->uvs[corner].y, face.uvs[corner].y);
+        }
+      }
+      const auto selection = harness.editor.selection().summary();
+      EXPECT_EQ(selection.selected_face_count, 1U);
+      EXPECT_EQ(selection.active_object_id, object.modeling_object_id);
+      EXPECT_EQ(selection.active_face_id, 11);
+      EXPECT_FALSE(harness.controller.dragging());
+      EXPECT_FALSE(harness.scene_session().modeling().transform_drag_active());
+    };
+    ASSERT_NO_FATAL_FAILURE(expect_geometry_and_source(after));
+    const auto *target_after = quader_poly::find_face(after, target_id);
+    ASSERT_NE(target_after, nullptr);
+    ASSERT_EQ(target_after->uvs.size(), 4U);
+    const auto effective_uv = [&](const quader_poly::Document &geometry,
+                                  const quader_poly::Face &face, std::size_t corner) {
+      const auto *vertex = quader_poly::find_vertex(geometry, face.vertices[corner]);
+      const auto normal = quader_poly::face_normal(geometry, face);
+      const auto carrier = quader_poly::face_texture_carrier(geometry, face, normal);
+      return quader_poly::evaluate_texture_mapping(
+          quader_poly::apply_face_texture_transform(face.uvs[corner], face.texture_transform),
+          vertex->position, normal, carrier, sampling_transform);
+    };
+    std::size_t shared_corners = 0U;
+    for (std::size_t corner = 0; corner < target_after->vertices.size(); ++corner) {
+      const auto source_corner = std::ranges::find(source_before->vertices, target_after->vertices[corner]);
+      if (source_corner == source_before->vertices.end()) continue;
+      const auto source_uv = effective_uv(before, *source_before,
+          static_cast<std::size_t>(source_corner - source_before->vertices.begin()));
+      const auto target_uv = effective_uv(after, *target_after, corner);
+      EXPECT_NEAR(target_uv.x, source_uv.x, 0.00001F);
+      EXPECT_NEAR(target_uv.y, source_uv.y, 0.00001F);
+      ++shared_corners;
+    }
+    EXPECT_EQ(shared_corners, 2U);
+    for (std::size_t corner = 0; corner < target_after->vertices.size(); ++corner) {
+      const auto next = (corner + 1U) % target_after->vertices.size();
+      const auto uv_delta = effective_uv(after, *target_after, next) -
+          effective_uv(after, *target_after, corner);
+      const auto edge = quader_poly::find_vertex(after, target_after->vertices[next])->position -
+          quader_poly::find_vertex(after, target_after->vertices[corner])->position;
+      EXPECT_NEAR(std::hypot(uv_delta.x, uv_delta.y) / quader::length(edge), 0.5F, 0.00001F);
+    }
+    const auto material = harness.editor.modeling().project_material_for_face(object.modeling_object_id, target_id);
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_EQ(material.value().id, harness.second_material());
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    const auto undone = read_document();
+    ASSERT_NO_FATAL_FAILURE(expect_geometry_and_source(undone));
+    const auto *undone_target = quader_poly::find_face(undone, target_id);
+    ASSERT_NE(undone_target, nullptr);
+    EXPECT_EQ(undone_target->texture_transform, target_before->texture_transform);
+    for (std::size_t corner = 0; corner < target_before->uvs.size(); ++corner) {
+      EXPECT_FLOAT_EQ(undone_target->uvs[corner].x, target_before->uvs[corner].x);
+      EXPECT_FLOAT_EQ(undone_target->uvs[corner].y, target_before->uvs[corner].y);
+    }
+    EXPECT_EQ(harness.editor.modeling().project_material_for_face(
+        object.modeling_object_id, target_id).value().id, default_project_material_id());
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    const auto redone = read_document();
+    ASSERT_NO_FATAL_FAILURE(expect_geometry_and_source(redone));
+    const auto *redone_target = quader_poly::find_face(redone, target_id);
+    ASSERT_NE(redone_target, nullptr);
+    EXPECT_EQ(redone_target->texture_transform, target_after->texture_transform);
+    for (std::size_t corner = 0; corner < target_after->uvs.size(); ++corner) {
+      EXPECT_FLOAT_EQ(redone_target->uvs[corner].x, target_after->uvs[corner].x);
+      EXPECT_FLOAT_EQ(redone_target->uvs[corner].y, target_after->uvs[corner].y);
     }
   }
 }

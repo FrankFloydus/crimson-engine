@@ -7003,6 +7003,17 @@ void UISystem::import_material_textures(
   if (generation != runtime_binding_generation_) {
     return;
   }
+  finish_material_texture_import(result);
+}
+
+void UISystem::finish_material_texture_import(
+    const QuaderApiResult<QuaderProjectMaterialImportReport> &result) {
+  const auto generation = runtime_binding_generation_;
+  if (result.changed()) {
+    refresh_project_workspace();
+    if (generation != runtime_binding_generation_) return;
+    refresh_asset_browser();
+  }
   const std::size_t imported_count = result.value().imported.size();
   const std::size_t failed_count = result.value().failed.size();
 

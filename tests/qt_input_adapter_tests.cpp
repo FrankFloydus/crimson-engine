@@ -33,6 +33,7 @@
 #include "math/glm_bridge.hpp"
 #include "ui/qt_application_cursor.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
@@ -43,6 +44,8 @@
 #include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
+
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -8465,6 +8468,200 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_FALSE(second_session.viewport_workspace()
                    .camera(quader::ViewportPaneId::Perspective)
                    .is_dragging());
+}
+
+TEST(QtViewportSurfaceInputTests,
+     AltRightTextureContinuationUsesSingleFaceAfterWarmingTheFacePanel) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-thin-box-texture-pointer-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto created_project = editor.project().create(
+      std::filesystem::path(temporary.path().toStdWString()));
+  ASSERT_TRUE(created_project.ok()) << created_project.error_message();
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &session = *project.active_scene()->session;
+  const auto material = editor.project_assets().create_material_asset("", "Broad face material");
+  ASSERT_TRUE(material.ok()) << material.error_message();
+  // Box_008 from SEL-20261016-4778412A: the broad face is 11 and the
+  // narrow end is 9. Keep the source charts and sparse authored identities.
+  quader_poly::Document document;
+  document.vertices = {
+      {.id = 11, .position = {0.75F, -0.281250060F, 0.875F}},
+      {.id = 12, .position = {-0.75F, -0.281250060F, 0.875F}},
+      {.id = 13, .position = {-0.75F, -0.468750298F, 0.625F}},
+      {.id = 14, .position = {-0.75F, -0.281250060F, 0.625F}},
+      {.id = 15, .position = {0.75F, -0.281250060F, 0.625F}},
+      {.id = 16, .position = {0.75F, -0.468750298F, 0.625F}},
+      {.id = 57, .position = {-0.75F, -0.468750298F, 0.875F}},
+      {.id = 59, .position = {0.75F, -0.468750298F, 0.875F}},
+  };
+  document.faces = {
+      {.id = 7, .vertices = {57, 59, 11, 12},
+       .uvs = {{-0.375F, -1.43750012F}, {0.375F, -1.43750012F},
+               {0.375F, -1.53125024F}, {-0.375F, -1.53125024F}}},
+      {.id = 8, .vertices = {13, 14, 15, 16},
+       .uvs = {{-0.375F, -2.6875F}, {-0.375F, -2.59375F},
+               {0.375F, -2.59375F}, {0.375F, -2.6875F}}},
+      {.id = 9, .vertices = {16, 15, 11, 59},
+       .uvs = {{-0.3125F, 0.437500179F}, {-0.3125F, 0.343750060F},
+               {-0.4375F, 0.343750060F}, {-0.4375F, 0.437500179F}}},
+      {.id = 10, .vertices = {13, 57, 12, 14},
+       .uvs = {{0.3125F, 0.437500179F}, {0.4375F, 0.437500179F},
+               {0.4375F, 0.343750060F}, {0.3125F, 0.343750060F}}},
+      {.id = 11, .vertices = {14, 12, 11, 15},
+       .uvs = {{-0.375F, 0.312499881F}, {-0.375F, 0.437499881F},
+               {0.375F, 0.437499881F}, {0.375F, 0.312499881F}}},
+      {.id = 12, .vertices = {13, 16, 59, 57},
+       .uvs = {{-0.375F, -0.3125F}, {0.375F, -0.3125F},
+               {0.375F, -0.4375F}, {-0.375F, -0.4375F}}},
+  };
+  for (auto &face : document.faces) {
+    if (face.id == 7U || face.id == 8U || face.id == 11U) {
+      face.texture_transform.shift_uv = {0.0433070809F, -0.629921317F};
+    }
+  }
+  document.next_vertex_id = 157;
+  document.next_face_id = 149;
+  const auto created = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(document),
+      {.name = "Thin box Qt texture transfer"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object, 11).ok());
+  ASSERT_TRUE(editor.modeling().apply_material(
+      quader::QuaderMaterialReference::project(material.value().asset_id)).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+
+  quader::QtFaceTexturePanel face_panel;
+  face_panel.setAttribute(Qt::WA_DontShowOnScreen);
+  face_panel.bind(editor);
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  face_panel.refresh();
+  ASSERT_EQ(editor.modeling().face_texture_settings().selected_face_count, 6U);
+  ASSERT_TRUE(editor.selection().select_face(object, 11).ok());
+  face_panel.refresh();
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 1U);
+  ASSERT_EQ(editor.modeling().face_texture_settings().selected_face_count, 1U);
+
+  quader::QtViewportPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen);
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  resize_viewport_surface(panel, *surface, {800, 600});
+  auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+  constexpr quader::QVec3 kTargetCenter{0.75F, -0.375000179F, 0.75F};
+  const auto render_size = surface->render_size_pixels();
+  camera.set_viewport_size(render_size.x, render_size.y);
+  camera.set_view_direction({-1, 0, 0});
+  camera.focus_bounds(kTargetCenter - quader::QVec3{1, 1, 1},
+                      kTargetCenter + quader::QVec3{1, 1, 1});
+  const auto screen = camera.project_world_point(kTargetCenter);
+  ASSERT_TRUE(screen.visible);
+  const QPointF point{screen.position.x / surface->input_device_pixel_ratio(),
+                      screen.position.y / surface->input_device_pixel_ratio()};
+  QEnterEvent enter(point, point, point);
+  send_visible_viewport_event(surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  send_visible_viewport_event(surface, &focus);
+  const auto process = [&] {
+    face_panel.refresh();
+    panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+    face_panel.refresh();
+  };
+  process();
+  ASSERT_EQ(panel.tool_state().selection_mode, quader::ViewportSelectionMode::Face);
+  const auto ray = camera.ray_from_viewport_point(screen.position);
+  const auto hover = editor.selection().preview_hover({
+      .ray = {.origin = ray.origin, .direction = ray.direction},
+      .face_plane_hover = true,
+  });
+  ASSERT_EQ(hover.target.object_id, object.modeling_object_id);
+  ASSERT_EQ(hover.target.face_id, 9);
+  const auto read_document = [&]() -> quader_poly::Document {
+    const auto *binding = session.scene().mesh(object.entity);
+    EXPECT_NE(binding, nullptr);
+    if (binding == nullptr) return {};
+    const auto *mesh = session.assets().mesh(binding->mesh);
+    EXPECT_NE(mesh, nullptr);
+    if (mesh == nullptr || mesh->authored_polygon_document == nullptr) return {};
+    return *mesh->authored_polygon_document;
+  };
+  const auto before = read_document();
+  const auto *source = quader_poly::find_face(before, 11);
+  const auto *target = quader_poly::find_face(before, 9);
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(target, nullptr);
+  session.history().clear();
+  QKeyEvent alt_press(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+  send_visible_viewport_event(surface, &alt_press);
+  QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::RightButton,
+                    Qt::RightButton, Qt::AltModifier);
+  send_visible_viewport_event(surface, &press);
+  process();
+  EXPECT_FALSE(session.modeling().transform_drag_active());
+  EXPECT_FALSE(session.modeling().transient_transform_preview_active());
+  QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::RightButton,
+                      Qt::NoButton, Qt::AltModifier);
+  send_visible_viewport_event(surface, &release);
+  QKeyEvent alt_release(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+  send_visible_viewport_event(surface, &alt_release);
+  process();
+  ASSERT_EQ(session.history().undo_count(), 1U);
+  EXPECT_EQ(editor.query().history().undo_label, "Transfer Face Texture");
+  const auto after = read_document();
+  const auto *continued = quader_poly::find_face(after, 9);
+  const auto *source_after = quader_poly::find_face(after, 11);
+  ASSERT_NE(continued, nullptr);
+  ASSERT_NE(source_after, nullptr);
+  EXPECT_EQ(after.vertices.size(), before.vertices.size());
+  EXPECT_EQ(after.faces.size(), before.faces.size());
+  EXPECT_EQ(continued->vertices, target->vertices);
+  EXPECT_EQ(source_after->texture_transform, source->texture_transform);
+  ASSERT_EQ(source_after->uvs.size(), source->uvs.size());
+  for (std::size_t corner = 0; corner < source->uvs.size(); ++corner) {
+    EXPECT_FLOAT_EQ(source_after->uvs[corner].x, source->uvs[corner].x);
+    EXPECT_FLOAT_EQ(source_after->uvs[corner].y, source->uvs[corner].y);
+  }
+  bool uv_changed = continued->texture_transform != target->texture_transform;
+  ASSERT_EQ(continued->uvs.size(), target->uvs.size());
+  std::size_t shared_corners = 0U;
+  for (std::size_t corner = 0; corner < continued->uvs.size(); ++corner) {
+    uv_changed = uv_changed || continued->uvs[corner].x != target->uvs[corner].x ||
+        continued->uvs[corner].y != target->uvs[corner].y;
+    const auto shared = std::ranges::find(source->vertices, continued->vertices[corner]);
+    if (shared == source->vertices.end()) continue;
+    const auto source_uv = quader_poly::apply_face_texture_transform(
+        source->uvs[static_cast<std::size_t>(shared - source->vertices.begin())],
+        source->texture_transform);
+    const auto target_uv = quader_poly::apply_face_texture_transform(
+        continued->uvs[corner], continued->texture_transform);
+    EXPECT_NEAR(target_uv.x, source_uv.x, 0.00001F);
+    EXPECT_NEAR(target_uv.y, source_uv.y, 0.00001F);
+    ++shared_corners;
+  }
+  EXPECT_TRUE(uv_changed);
+  EXPECT_EQ(shared_corners, 2U);
+  const auto target_material = editor.modeling().project_material_for_face(object.modeling_object_id, 9);
+  ASSERT_TRUE(target_material.ok()) << target_material.error_message();
+  EXPECT_EQ(target_material.value().id, material.value().asset_id);
+  const auto selection = editor.selection().summary();
+  EXPECT_EQ(selection.selected_face_count, 1U);
+  EXPECT_EQ(selection.active_face_id, 11);
+  EXPECT_EQ(selection.active_object_id, object.modeling_object_id);
+  EXPECT_FALSE(session.modeling().transform_drag_active());
+  EXPECT_FALSE(panel.command_input_context().active_transform_drag);
+  face_panel.abandon();
 }
 
 TEST(QtViewportSurfaceInputTests,

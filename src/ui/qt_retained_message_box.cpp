@@ -8,12 +8,18 @@
 
 #include <QCloseEvent>
 #include <QEvent>
+#include <QGridLayout>
 #include <QLabel>
 #include <QLayout>
+#include <QPlainTextEdit>
 #include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollBar>
 #include <QStyle>
+#include <QTextDocument>
+#include <QTextOption>
 
 #include <algorithm>
 #include <array>
@@ -55,6 +61,26 @@ QtRetainedMessageBox::QtRetainedMessageBox(QWidget *parent)
   QPixmap icon_placeholder(1, 1);
   icon_placeholder.fill(Qt::transparent);
   setIconPixmap(icon_placeholder);
+  if (QLabel *const informative_label = findChild<QLabel *>(
+          QStringLiteral("qt_msgbox_informativelabel"))) {
+    if (auto *const grid = qobject_cast<QGridLayout *>(layout())) {
+      const int index = grid->indexOf(informative_label);
+      int row = 0;
+      int column = 0;
+      int row_span = 1;
+      int column_span = 1;
+      grid->getItemPosition(index, &row, &column, &row_span, &column_span);
+      informative_editor_ = new QPlainTextEdit(this);
+      informative_editor_->setObjectName(
+          QStringLiteral("retainedMessageBox.informativeText"));
+      informative_editor_->setReadOnly(true);
+      informative_editor_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+      informative_editor_->setWordWrapMode(QTextOption::WrapAnywhere);
+      informative_editor_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+      informative_editor_->setVisible(false);
+      grid->addWidget(informative_editor_, row, column, row_span, column_span);
+    }
+  }
   apply_informative_text(QString{});
   if (QLabel *const icon_label = findChild<QLabel *>(
           QStringLiteral("qt_msgboxex_icon_label"))) {
@@ -105,6 +131,9 @@ bool QtRetainedMessageBox::set_presentation(
   setObjectName(presentation.object_name);
   setWindowTitle(presentation.title);
   setText(presentation.text);
+  scrollable_informative_text_ =
+      presentation.scrollable_informative_text &&
+      !presentation.informative_text.isEmpty() && informative_editor_ != nullptr;
   apply_informative_text(presentation.informative_text);
   presented_icon_ = presentation.icon;
   apply_presented_icon();
@@ -133,6 +162,16 @@ bool QtRetainedMessageBox::set_presentation(
   close_button_ = presentation.close_button;
   selected_button_ = close_button_;
   setResult(QDialog::Rejected);
+  if (scrollable_informative_text_) {
+    update_scrollable_text_geometry();
+  } else {
+    setMinimumSize(0, 0);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    if (QLabel *const text_label =
+            findChild<QLabel *>(QStringLiteral("qt_msgbox_label"))) {
+      text_label->setMaximumWidth(QWIDGETSIZE_MAX);
+    }
+  }
   return true;
 }
 
@@ -146,7 +185,11 @@ QtRetainedMessageBoxButton QtRetainedMessageBox::present(
   if (QLayout *dialog_layout = layout()) {
     (void)dialog_layout->activate();
   }
-  adjustSize();
+  if (scrollable_informative_text_) {
+    update_scrollable_text_geometry();
+  } else {
+    adjustSize();
+  }
   exec();
   return selected_button_;
 }
@@ -167,7 +210,11 @@ void QtRetainedMessageBox::prewarm() {
   if (QLayout *dialog_layout = layout()) {
     (void)dialog_layout->activate();
   }
-  adjustSize();
+  if (scrollable_informative_text_) {
+    update_scrollable_text_geometry();
+  } else {
+    adjustSize();
+  }
 
   // winId() creates the hidden platform window without mapping it or entering
   // a nested event loop. done() hides rather than closing this native owner.
@@ -181,6 +228,7 @@ void QtRetainedMessageBox::apply_ui_scale(
     return;
   }
   ui_scale_metrics_ = metrics;
+  update_scrollable_text_geometry();
   if (!prewarmed_) {
     return;
   }
@@ -191,7 +239,11 @@ void QtRetainedMessageBox::apply_ui_scale(
     (void)dialog_layout->activate();
   }
   if (isVisible()) {
-    adjustSize();
+    if (scrollable_informative_text_) {
+      update_scrollable_text_geometry();
+    } else {
+      adjustSize();
+    }
   }
   update();
 }
@@ -242,6 +294,12 @@ void QtRetainedMessageBox::closeEvent(QCloseEvent *event) {
 }
 
 bool QtRetainedMessageBox::event(QEvent *event) {
+  if (scrollable_informative_text_ &&
+      event->type() == QEvent::LayoutRequest) {
+    // QMessageBox applies a stock fixed width after every layout request.
+    // The scrollable presentation already owns its measured screen budget.
+    return QDialog::event(event);
+  }
   const bool handled = QMessageBox::event(event);
   if (prewarmed_ &&
       (event->type() == QEvent::DevicePixelRatioChange ||
@@ -249,6 +307,14 @@ bool QtRetainedMessageBox::event(QEvent *event) {
        event->type() == QEvent::ApplicationPaletteChange)) {
     refresh_standard_icon_cache();
     apply_presented_icon();
+  }
+  if (scrollable_informative_text_ &&
+      (event->type() == QEvent::Show ||
+       event->type() == QEvent::FontChange ||
+       event->type() == QEvent::ApplicationFontChange ||
+       event->type() == QEvent::StyleChange ||
+       event->type() == QEvent::ScreenChangeInternal)) {
+    update_scrollable_text_geometry();
   }
   return handled;
 }
@@ -318,7 +384,92 @@ void QtRetainedMessageBox::apply_informative_text(const QString &text) {
   if (QLabel *const informative_label = findChild<QLabel *>(
           QStringLiteral("qt_msgbox_informativelabel"))) {
     informative_label->setText(text);
-    informative_label->setVisible(!text.isEmpty());
+    informative_label->setVisible(!text.isEmpty() &&
+                                  !scrollable_informative_text_);
+  }
+  if (informative_editor_ != nullptr) {
+    informative_editor_->setPlainText(scrollable_informative_text_ ? text
+                                                                : QString{});
+    informative_editor_->setVisible(scrollable_informative_text_);
+    informative_editor_->verticalScrollBar()->setValue(0);
+  }
+}
+
+void QtRetainedMessageBox::update_scrollable_text_geometry() {
+  if (!scrollable_informative_text_ || updating_scrollable_geometry_ ||
+      informative_editor_ == nullptr || layout() == nullptr ||
+      screen() == nullptr) {
+    return;
+  }
+  updating_scrollable_geometry_ = true;
+  const QMargins frame_margins(
+      std::max(0, geometry().left() - frameGeometry().left()),
+      std::max(style()->pixelMetric(QStyle::PM_TitleBarHeight, nullptr, this),
+               geometry().top() - frameGeometry().top()),
+      std::max(0, frameGeometry().right() - geometry().right()),
+      std::max(0, frameGeometry().bottom() - geometry().bottom()));
+  const QSize available = screen()->availableGeometry()
+                              .marginsRemoved(frame_margins)
+                              .adjusted(12, 12, -12, -12)
+                              .size();
+  QLayout *const dialog_layout = layout();
+  QLabel *const text_label =
+      findChild<QLabel *>(QStringLiteral("qt_msgbox_label"));
+
+  // Measure the retained header and actions separately so only the path list
+  // consumes the remaining screen budget. Recompute from design metrics to
+  // allow a smaller scale to reclaim its original compact size.
+  setMinimumSize(0, 0);
+  setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+  int editor_width = ui_scale_metrics_.px(520);
+  informative_editor_->setFixedSize(editor_width, 0);
+  if (text_label != nullptr) {
+    text_label->setWordWrap(true);
+    text_label->setMaximumWidth(editor_width);
+  }
+  dialog_layout->invalidate();
+  const int width_overflow =
+      dialog_layout->totalMinimumSize().width() - available.width();
+  if (width_overflow > 0) {
+    editor_width = std::max(1, editor_width - width_overflow);
+    informative_editor_->setFixedWidth(editor_width);
+    if (text_label != nullptr) {
+      text_label->setMaximumWidth(editor_width);
+    }
+    dialog_layout->invalidate();
+  }
+  const int dialog_width = std::min(
+      available.width(), dialog_layout->totalMinimumSize().width());
+  const int outside_height = dialog_layout->hasHeightForWidth()
+                                 ? dialog_layout->totalHeightForWidth(dialog_width)
+                                 : dialog_layout->totalMinimumSize().height();
+  const int line_count = std::clamp(informative_editor_->document()->blockCount(),
+                                   2, 12);
+  const int editor_height =
+      line_count * informative_editor_->fontMetrics().lineSpacing() +
+      2 * (informative_editor_->frameWidth() +
+           static_cast<int>(informative_editor_->document()->documentMargin()));
+  informative_editor_->setFixedHeight(
+      std::max(1, std::min(editor_height, available.height() - outside_height)));
+  dialog_layout->invalidate();
+  const int dialog_height = dialog_layout->hasHeightForWidth()
+                                ? dialog_layout->totalHeightForWidth(dialog_width)
+                                : dialog_layout->totalMinimumSize().height();
+  setFixedSize(dialog_width, dialog_height);
+  (void)dialog_layout->activate();
+  updating_scrollable_geometry_ = false;
+  if (isVisible()) {
+    const QRect available_geometry = screen()->availableGeometry();
+    const QRect frame = frameGeometry();
+    const int left = std::clamp(frame.left(), available_geometry.left(),
+                                std::max(available_geometry.left(),
+                                         available_geometry.right() -
+                                             frame.width() + 1));
+    const int top = std::clamp(frame.top(), available_geometry.top(),
+                               std::max(available_geometry.top(),
+                                        available_geometry.bottom() -
+                                            frame.height() + 1));
+    move(pos() + QPoint(left - frame.left(), top - frame.top()));
   }
 }
 

@@ -9,6 +9,7 @@
 #include <quader/modeling/modeling.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -49,8 +50,56 @@ AuthoredTopology decorated_box() {
   return topology;
 }
 
+AuthoredTopology decorated_nonmanifold_fan() {
+  const auto vertex_id = [](std::uint32_t index) {
+    return make_id<VertexTag>(index);
+  };
+  AuthoredTopology topology;
+  topology.next_vertex_id = 140U;
+  topology.next_face_id = 90U;
+  topology.vertices = {
+      {vertex_id(10U), {0.0F, 0.0F, 0.0F}},
+      {vertex_id(20U), {0.0F, 0.0F, 1.0F}},
+      {vertex_id(30U), {1.0F, 0.0F, 1.0F}},
+      {vertex_id(40U), {1.0F, 0.0F, 0.0F}},
+      {vertex_id(50U), {0.0F, 1.0F, 1.0F}},
+      {vertex_id(60U), {0.0F, 1.0F, 0.0F}},
+      {vertex_id(70U), {-1.0F, 0.0F, 1.0F}},
+      {vertex_id(80U), {-1.0F, 0.0F, 0.0F}},
+  };
+  topology.faces = {
+      {.id = make_id<FaceTag>(11U),
+       .vertices = {vertex_id(10U), vertex_id(20U), vertex_id(30U), vertex_id(40U)}},
+      {.id = make_id<FaceTag>(31U),
+       .vertices = {vertex_id(10U), vertex_id(20U), vertex_id(50U), vertex_id(60U)}},
+      {.id = make_id<FaceTag>(42U),
+       .vertices = {vertex_id(10U), vertex_id(20U), vertex_id(70U), vertex_id(80U)}},
+  };
+  for (std::size_t index = 0U; index < topology.faces.size(); ++index) {
+    auto &face = topology.faces[index];
+    face.material_slot = static_cast<std::uint32_t>(index + 5U);
+    face.shading = index == 0U ? AuthoredSurfaceShading::Smooth
+                   : index == 1U ? AuthoredSurfaceShading::Flat
+                                 : AuthoredSurfaceShading::Authored;
+    face.texture_transform = {.scale = {-2.0F, 0.5F},
+                              .shift_uv = {0.125F, -0.25F},
+                              .rotation_degrees = 45.0F};
+    face.uvs = {{0.0F, static_cast<float>(index)},
+                {0.25F, static_cast<float>(index)},
+                {0.25F, static_cast<float>(index) + 0.5F},
+                {0.0F, static_cast<float>(index) + 0.5F}};
+  }
+  topology.hard_normal_edges = {make_edge_key(vertex_id(10U), vertex_id(20U))};
+  topology.soft_normal_edges = {make_edge_key(vertex_id(20U), vertex_id(50U))};
+  return topology;
+}
+
 void expect_exact_topology(const AuthoredTopology &expected,
                            const PolygonDocument &actual_document) {
+  const auto expect_float_bits = [](float actual, float expected_value) {
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(actual),
+              std::bit_cast<std::uint32_t>(expected_value));
+  };
   const auto exported = actual_document.authored_topology();
   ASSERT_TRUE(exported.ok()) << exported.error_message();
   const auto &actual = exported.value();
@@ -63,9 +112,9 @@ void expect_exact_topology(const AuthoredTopology &expected,
   for (std::size_t index = 0; index < expected.vertices.size(); ++index) {
     SCOPED_TRACE(index);
     EXPECT_EQ(actual.vertices[index].id, expected.vertices[index].id);
-    EXPECT_EQ(actual.vertices[index].position.x, expected.vertices[index].position.x);
-    EXPECT_EQ(actual.vertices[index].position.y, expected.vertices[index].position.y);
-    EXPECT_EQ(actual.vertices[index].position.z, expected.vertices[index].position.z);
+    expect_float_bits(actual.vertices[index].position.x, expected.vertices[index].position.x);
+    expect_float_bits(actual.vertices[index].position.y, expected.vertices[index].position.y);
+    expect_float_bits(actual.vertices[index].position.z, expected.vertices[index].position.z);
   }
   for (std::size_t index = 0; index < expected.faces.size(); ++index) {
     SCOPED_TRACE(index);
@@ -75,11 +124,20 @@ void expect_exact_topology(const AuthoredTopology &expected,
     EXPECT_EQ(actual_face.vertices, expected_face.vertices);
     EXPECT_EQ(actual_face.material_slot, expected_face.material_slot);
     EXPECT_EQ(actual_face.shading, expected_face.shading);
-    EXPECT_EQ(actual_face.texture_transform, expected_face.texture_transform);
+    expect_float_bits(actual_face.texture_transform.scale.x,
+                      expected_face.texture_transform.scale.x);
+    expect_float_bits(actual_face.texture_transform.scale.y,
+                      expected_face.texture_transform.scale.y);
+    expect_float_bits(actual_face.texture_transform.shift_uv.x,
+                      expected_face.texture_transform.shift_uv.x);
+    expect_float_bits(actual_face.texture_transform.shift_uv.y,
+                      expected_face.texture_transform.shift_uv.y);
+    expect_float_bits(actual_face.texture_transform.rotation_degrees,
+                      expected_face.texture_transform.rotation_degrees);
     ASSERT_EQ(actual_face.uvs.size(), expected_face.uvs.size());
     for (std::size_t corner = 0; corner < expected_face.uvs.size(); ++corner) {
-      EXPECT_EQ(actual_face.uvs[corner].x, expected_face.uvs[corner].x);
-      EXPECT_EQ(actual_face.uvs[corner].y, expected_face.uvs[corner].y);
+      expect_float_bits(actual_face.uvs[corner].x, expected_face.uvs[corner].x);
+      expect_float_bits(actual_face.uvs[corner].y, expected_face.uvs[corner].y);
     }
   }
 }
@@ -247,6 +305,71 @@ TEST(ModelingComponentPersistenceTests,
 }
 
 TEST(ModelingComponentPersistenceTests,
+     PersistedNonmanifoldFanPreservesTopologyAttributesAndStrictDiagnostics) {
+  const auto topology = decorated_nonmanifold_fan();
+  EXPECT_FALSE(PolygonDocument::from_authored_topology(topology).ok());
+  auto imported = PolygonDocument::from_persisted_topology(topology);
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  auto &document = imported.value();
+  expect_exact_topology(topology, document);
+  const auto strict_validation = document.validate();
+  ASSERT_FALSE(strict_validation.ok());
+  EXPECT_TRUE(std::ranges::any_of(
+      strict_validation.error().diagnostics, [](const Diagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error &&
+               diagnostic.message == "Edge 10-20 is referenced by 3 faces.";
+      }));
+  ASSERT_TRUE(document.select_face(make_id<FaceTag>(31U)).ok());
+
+  const auto geometry_bytes = serialize_qdr_authored_topology(document);
+  ASSERT_TRUE(geometry_bytes.ok()) << geometry_bytes.error_message();
+  const auto geometry = deserialize_qdr_authored_topology(geometry_bytes.value());
+  ASSERT_TRUE(geometry.ok()) << geometry.error_message();
+  expect_exact_topology(topology, geometry.value());
+  EXPECT_FALSE(geometry.value().validate().ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(geometry.value()).or_throw(),
+            geometry_bytes.value());
+
+  const auto scene_bytes = serialize_single_document_as_qdr(document);
+  ASSERT_TRUE(scene_bytes.ok()) << scene_bytes.error_message();
+  const auto scene = deserialize_qdr_document(scene_bytes.value());
+  ASSERT_TRUE(scene.ok()) << scene.error_message();
+  ASSERT_EQ(scene.value().objects.size(), 1U);
+  const auto &restored = scene.value().objects.front().document;
+  expect_exact_topology(topology, restored);
+  EXPECT_FALSE(restored.validate().ok());
+  EXPECT_EQ(restored.selection().faces, document.selection().faces);
+  EXPECT_EQ(restored.selection().active_face, document.selection().active_face);
+  EXPECT_EQ(serialize_qdr_document(scene.value()).or_throw(), scene_bytes.value());
+}
+
+TEST(ModelingComponentPersistenceTests,
+     ValidatedAuthoredImportRejectsMalformedCornersUvsAndNormalEdges) {
+  for (int corruption = 0; corruption < 6; ++corruption) {
+    SCOPED_TRACE(corruption);
+    auto topology = decorated_box();
+    auto &face = topology.faces.front();
+    if (corruption == 0) {
+      face.vertices.resize(2U);
+      face.uvs.resize(2U);
+    } else if (corruption == 1) {
+      face.vertices.back() = face.vertices.front();
+    } else if (corruption == 2) {
+      face.vertices.back() = make_id<VertexTag>(130U);
+    } else if (corruption == 3) {
+      face.uvs.pop_back();
+    } else if (corruption == 4) {
+      topology.hard_normal_edges.push_back(make_edge_key(
+          topology.vertices.front().id,
+          make_id<VertexTag>(topology.next_vertex_id - 1U)));
+    } else {
+      topology.soft_normal_edges.push_back(topology.hard_normal_edges.front());
+    }
+    EXPECT_FALSE(PolygonDocument::from_authored_topology(topology).ok());
+  }
+}
+
+TEST(ModelingComponentPersistenceTests,
      AuthoredImportStillRejectsMalformedFaceIdentityAndArity) {
   const auto source = decorated_box();
   for (int corruption = 0; corruption < 5; ++corruption) {
@@ -285,7 +408,7 @@ TEST(ModelingComponentPersistenceTests,
 }
 
 TEST(ModelingComponentPersistenceTests,
-     AuthoredDecoderStillRejectsMalformedCornersAndNonfiniteCoordinates) {
+     AuthoredDecoderRetainsMalformedCornersAndNonfiniteCoordinates) {
   auto topology = decorated_box();
   for (auto &vertex : topology.vertices) {
     vertex.position = {};
@@ -314,6 +437,131 @@ TEST(ModelingComponentPersistenceTests,
                    topology.faces.front().vertices.front().index);
     } else {
       write_u32_le(bytes, corners_offset, topology.next_vertex_id - 1U);
+    }
+    const auto decoded = deserialize_qdr_authored_topology(bytes);
+    ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+    EXPECT_EQ(serialize_qdr_authored_topology(decoded.value()).or_throw(), bytes);
+  }
+}
+
+TEST(ModelingComponentPersistenceTests,
+     PersistedTopologyRetainsMalformedRecordsVerbatimThroughGeometryAndSceneIo) {
+  for (int malformed_case = 0; malformed_case < 15; ++malformed_case) {
+    SCOPED_TRACE(malformed_case);
+    auto topology = decorated_box();
+    auto &face = topology.faces.front();
+    switch (malformed_case) {
+    case 0:
+      face.vertices.resize(2U);
+      face.uvs.resize(2U);
+      break;
+    case 1:
+      face.vertices.back() = face.vertices.front();
+      break;
+    case 2:
+      face.vertices.back() = make_id<VertexTag>(topology.next_vertex_id + 20U);
+      break;
+    case 3:
+      face.uvs.pop_back();
+      break;
+    case 4: {
+      const EdgeKey reversed{topology.hard_normal_edges.front().b,
+                             topology.hard_normal_edges.front().a};
+      topology.hard_normal_edges = {reversed, reversed};
+      break;
+    }
+    case 5:
+      topology.soft_normal_edges.push_back(topology.hard_normal_edges.front());
+      break;
+    case 6:
+      topology.hard_normal_edges.push_back(
+          {make_id<VertexTag>(0U), make_id<VertexTag>(200U)});
+      break;
+    case 7:
+      topology.vertices.back().id = topology.vertices.front().id;
+      break;
+    case 8:
+      topology.faces.back().id = topology.faces.front().id;
+      break;
+    case 9:
+      topology.vertices.front().id = make_id<VertexTag>(0U);
+      face.id = make_id<FaceTag>(0U);
+      break;
+    case 10:
+      topology.next_vertex_id = 0U;
+      topology.next_face_id = 1U;
+      break;
+    case 11:
+      topology.vertices.front().position.x = std::bit_cast<float>(0x7FC12345U);
+      topology.vertices.front().position.y = std::numeric_limits<float>::infinity();
+      face.uvs.front().y = std::bit_cast<float>(0xFFC54321U);
+      face.texture_transform.scale.x = 0.0F;
+      face.texture_transform.shift_uv.x = -std::numeric_limits<float>::infinity();
+      break;
+    case 12:
+      face.shading = static_cast<AuthoredSurfaceShading>(255U);
+      break;
+    case 13:
+      face.vertices.clear();
+      face.uvs.clear();
+      break;
+    case 14:
+      for (auto &vertex : topology.vertices) vertex.position = {};
+      break;
+    }
+    const auto stored = PolygonDocument::from_persisted_topology(topology);
+    ASSERT_TRUE(stored.ok()) << stored.error_message();
+    expect_exact_topology(topology, stored.value());
+    const auto encoded = serialize_qdr_authored_topology(stored.value());
+    ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+    const auto decoded = deserialize_qdr_authored_topology(encoded.value());
+    ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+    expect_exact_topology(topology, decoded.value());
+    EXPECT_EQ(serialize_qdr_authored_topology(decoded.value()).or_throw(),
+              encoded.value());
+
+    const auto scene_bytes = serialize_single_document_as_qdr(stored.value());
+    ASSERT_TRUE(scene_bytes.ok()) << scene_bytes.error_message();
+    const auto scene = deserialize_qdr_document(scene_bytes.value());
+    ASSERT_TRUE(scene.ok()) << scene.error_message();
+    ASSERT_EQ(scene.value().objects.size(), 1U);
+    expect_exact_topology(topology, scene.value().objects.front().document);
+    EXPECT_EQ(serialize_qdr_document(scene.value()).or_throw(), scene_bytes.value());
+  }
+}
+
+TEST(ModelingComponentPersistenceTests,
+     PersistedTopologyRejectsUnrepresentableTypedGenerations) {
+  for (int identity_case = 0; identity_case < 4; ++identity_case) {
+    SCOPED_TRACE(identity_case);
+    auto topology = decorated_box();
+    if (identity_case == 0) topology.vertices.front().id.generation = 2U;
+    else if (identity_case == 1) topology.faces.front().id.generation = 2U;
+    else if (identity_case == 2) topology.faces.front().vertices.front().generation = 2U;
+    else topology.hard_normal_edges.front().a.generation = 2U;
+    EXPECT_FALSE(PolygonDocument::from_persisted_topology(topology).ok());
+  }
+}
+
+TEST(ModelingComponentPersistenceTests,
+     AuthoredDecoderStillRejectsBrokenBinaryCsrBoundsAndCoverage) {
+  const auto document = PolygonDocument::make_box({}).or_throw();
+  const auto encoded = serialize_qdr_authored_topology(document).or_throw();
+  const std::size_t offsets_offset =
+      56U + document.vertex_count() * 16U + document.face_count() * 4U;
+  const std::uint32_t corner_count = 24U;
+  for (int malformed_case = 0; malformed_case < 4; ++malformed_case) {
+    SCOPED_TRACE(malformed_case);
+    auto bytes = encoded;
+    if (malformed_case == 0) write_u32_le(bytes, offsets_offset, 1U);
+    else if (malformed_case == 1) {
+      write_u32_le(bytes, offsets_offset + document.face_count() * 4U,
+                   corner_count - 1U);
+    } else if (malformed_case == 2) {
+      write_u32_le(bytes, offsets_offset + 4U, corner_count + 1U);
+    } else {
+      write_u32_le(bytes, offsets_offset + 4U, 5U);
+      write_u32_le(bytes, offsets_offset + 8U, 4U);
     }
     EXPECT_FALSE(deserialize_qdr_authored_topology(bytes).ok());
   }

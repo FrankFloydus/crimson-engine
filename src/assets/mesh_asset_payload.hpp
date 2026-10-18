@@ -206,7 +206,8 @@ inline MeshAsset clone_mesh_asset_payload(const MeshAsset &source) {
  * vertex and index buffers.
  */
 inline MeshAsset isolate_mesh_asset_payload(MeshAsset source) {
-  if (source.geometry_projection() && source.authored_polygon_document.read_snapshot()) {
+  if (source.authored_polygon_document.read_snapshot()) {
+    (void)source.geometry_payload();
     return source;
   }
   (void)source.geometry_payload();

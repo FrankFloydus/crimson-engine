@@ -5643,6 +5643,84 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     FaceTextureTransferUsesLiveSourceAfterPresentationSelectionChanges) {
+  for (const bool single_source : {true, false}) {
+    SCOPED_TRACE(single_source);
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    const auto created = service.create_box_from_bounds({
+        .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+        .name = "Live texture transfer source",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    const AssetId material =
+        assets.add_material(make_default_quader_material("Transfer source"));
+    ASSERT_TRUE(scene.set_material(created.object.entity, {.material = material}));
+    ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+    const auto select_faces = [&](std::vector<int> faces) {
+      return service.set_component_selection({
+          .modeling_object_id = created.object.modeling_object_id,
+          .mode = ModelingSelectionMode::Face,
+          .faces = std::move(faces),
+          .active_kind = ModelingActiveSelectionKind::Face,
+          .active_face = 1,
+      });
+    };
+    ASSERT_TRUE(select_faces({1}).ok);
+    ASSERT_TRUE(service.set_face_texture_setting({
+        .field = ModelingFaceTextureField::ShiftX,
+        .value = 17,
+        .selection_token = service.face_texture_settings().selection_token,
+    }).ok);
+    ASSERT_TRUE(select_faces(single_source ? std::vector<int>{1, 2}
+                                         : std::vector<int>{1}).ok);
+
+    // Change selection inside this synthetic provider to leave the presentation
+    // snapshot out of sync with the live command source in either direction.
+    bool change_selection = true;
+    service.set_face_texture_material_transform_provider([&](MaterialReference) {
+      if (std::exchange(change_selection, false)) {
+        EXPECT_TRUE(select_faces(single_source ? std::vector<int>{1}
+                                             : std::vector<int>{1, 2}).ok);
+      }
+      return StandardMaterialTextureTransform{};
+    });
+    EXPECT_EQ(service.face_texture_settings().selected_face_count,
+              single_source ? 2u : 1u);
+    ASSERT_EQ(service.selection_summary().selected_face_count,
+              single_source ? 1u : 2u);
+    const auto before_revision = service.content_revision();
+    const auto transferred = service.transfer_face_texture_to_face(
+        created.object.modeling_object_id, 3);
+    if (single_source) {
+      ASSERT_TRUE(transferred.ok) << transferred.message;
+      ASSERT_TRUE(transferred.changed);
+      EXPECT_GT(service.content_revision(), before_revision);
+    } else {
+      EXPECT_FALSE(transferred.ok);
+      EXPECT_FALSE(transferred.changed);
+      EXPECT_EQ(service.content_revision(), before_revision);
+    }
+    const auto selection = service.selection_summary();
+    EXPECT_EQ(selection.selected_face_count, single_source ? 1u : 2u);
+    EXPECT_EQ(selection.active_face_id, 1);
+    const auto *mesh = assets.mesh(scene.mesh(created.object.entity)->mesh);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+    const auto *source = quader_poly::find_face(*mesh->authored_polygon_document, 1);
+    const auto *target = quader_poly::find_face(*mesh->authored_polygon_document, 3);
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(target, nullptr);
+    if (single_source) {
+      EXPECT_EQ(target->texture_transform, source->texture_transform);
+    } else {
+      EXPECT_NE(target->texture_transform, source->texture_transform);
+    }
+  }
+}
+
+TEST(ModelingSessionServiceSplitTests,
      FaceTextureBatchRollsBackSharedBindingsAndPublishesAllObjectsAtomically) {
   SceneDocument scene;
   AssetRegistry assets;

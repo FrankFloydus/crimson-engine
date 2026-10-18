@@ -12,6 +12,11 @@ See [README.md](README.md) for the format/owner map.
 
 - Native extraction/hydration wraps the SDK-owned authored-topology codec. Serialize from
   `QdrProjectWriteSnapshot`; preserve the persistent scene UUID supplied by the project session.
+- Save and Auto Save preserve raw authored geometry even when modeling validation fails.
+  Use the explicit persistence transfer, never validated editing import or compiled triangles
+  as the durable source. Reopening retains the same records; display geometry is a separate
+  derived projection and may omit unsafe output without changing authored data. Binary bounds,
+  checksums and container/scene references remain validated independently of topology quality.
 - Successful native read/write results carry the exact source byte count and FNV-1a fingerprint
   for save synchronization. Compute these from the bytes already being decoded/serialized.
 - Current scene metadata is schema 19; optional per-mesh wire colors inherit the viewport

@@ -29,6 +29,11 @@ Exclude the waiting fatal thread with Windows' [IncludeThreadCallback](https://l
 so dump collection cannot suspend the thread enforcing its deadline; preserve the exception context.
 [Fatal behavior tests](tests/fatal_error_handler_behavior_tests.cpp) cover real dump creation,
 missing/failing helpers, and a stalled helper that observes the initial report before being reaped.
+Qt 6.10.3's Windows fatal path uses fast-fail rather than `SIGABRT`, bypassing those runtime hooks.
+Install the platform-owned Qt message bridge before `QApplication` so fatal message/context details
+enter the same durable reporter; preserve the previous/default handler for nonfatal messages.
+The child tests exercise actual Qt fatal logging, repeated installation, forwarding and a stalled
+helper. Reports include the app version and executable identity needed to interpret dump addresses.
 
 ## Project and runtime replacement
 
@@ -124,10 +129,16 @@ Retention tests: [editor limits](tests/editor_history_limit_tests.cpp),
 - Material components with face slots and no primary material are valid: untouched faces remain
   unassigned. Retain these components on decode so slot IDs survive and invalid references still
   reach scene validation. Covered by the public save/reopen/re-save material persistence tests.
-- Persistence preserves finite authored topology even when collapsed faces produce no triangles.
-  Authored import and QDR use structural validation; public geometric validation remains strict.
-  Missing/repeated IDs, invalid connectivity, nonfinite values and malformed UV data remain errors.
-  Component collapse must survive undo/redo, save/open and subsequent editing without dropping faces.
+- Save and Auto Save must never reject authored work because its topology is bad. Persistence
+  stores the raw authored records without requiring modeling validation, triangulation or a
+  successful render projection. Preserve short/repeated/dangling face loops, nonmanifold edges,
+  UV arrays, normal-edge attributes, identities and allocation cursors exactly; do not repair,
+  normalize or replace them with compiled triangles during save. Keep byte bounds, CSR span
+  bounds, resource limits, checksums and format checks separate from geometry diagnostics.
+  Reopening uses the same lossless storage contract and derives safe render data independently.
+  Strict validation and operation-specific requirements remain available to modeling tools.
+  Cover autosave, save/open/re-save and exact authored round trips in the component persistence
+  suites under `tests/` and `tests/sdk/`.
 - Document replacement advances binding/revision epochs beyond the outgoing document. Preview dirty
   masking applies only to an uncontaminated checkpoint; unrelated edits remain dirty.
 - Perspective camera pose is explicit-save metadata, not authored content: navigation does not alter
@@ -197,14 +208,16 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   Cancel. Coverage includes `ExtrudeToolServiceTests.SwitchingToolsAcceptsPendingExtrusionAsOneUndoStep`,
   the shared-pane activation/acquisition tests in `tests/extrude_tool_service_tests.cpp`, and
   `UnavailableActivationDoesNotAcceptPendingExtrusion` in `tests/extrude_tool_service_tests.cpp`.
-- Rejected component-transform samples (for example a box face collapsing onto its opposite)
+- Rejected component-transform samples (for example non-finite coordinates)
   retain the last accepted preview and active drag. Restore all transient participants through
   the existing preview owner; release commits that accepted shape, while explicit Cancel restores
   the baseline. Cache the rejected pointer signature so idle frames do not retry it. Protect both
   geometry/history and submitted wires in [move tests](tests/move_auto_merge_tests.cpp) and
   [retained presentation tests](tests/selected_mesh_outline_presentation_tests.cpp).
+- Finite component transforms can remove or restore rendered triangles without changing authored
+  face loops. Accept the canonical compiled layout in both directions and refresh its source-ID
+  mappings and position buffers; compiled corner counts are not modeling validity checks.
   Moving a wall after tangential extrusion can restore triangles on already-collapsed faces.
-  Accept that larger compiled layout and refresh its mappings; authored topology remains unchanged.
   Returning to zero must restore the gesture's original compiled layout.
 - Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
   pointer input but retains that preview with Apply enabled. Apply accepts it, while
@@ -796,7 +809,10 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   edits and merged numeric history.
   Test non-square images and front-view feature movement for named CW/CCW actions.
 - Continue Texture retains the selected source; target material and UVs publish in one history
-  step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
+  step. Resolve and validate the donor from a fresh SDK selection at command execution, not the
+  retained Face Texture presentation snapshot. Cover both stale-many/live-one acceptance and
+  stale-one/live-many rejection in [service regressions](tests/modeling_session_service_split_tests.cpp).
+  A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
   without requiring other source corners to fit that local chart.
   Each transfer constrains that source/target seam only. Around a junction whose face angles
   do not sum to 360 degrees, different continuation routes cannot preserve both all seams
@@ -825,7 +841,7 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   at large coordinates. Semantic no-op comparisons depend on UV span/ULP, while reconstruction
   and source-fit checks use bounded float uncertainty. Do not reuse one tolerance for all three.
   UV-only publication and Peel validate authored connectivity/attributes/selection, allowing
-  unrelated finite collapsed faces; geometric edits and public strict validation remain strict.
+  unrelated finite collapsed faces; public strict validation still diagnoses those faces.
   Cover diagonal lip continuation, thin local and oblique geometry, transferred faces reused as
   sources, distant local edits, million-tile phase edits, rendered interiors and publication rollback.
   Contracts: [portable transfer](tests/sdk/modeling_sdk_consumer_tests.cpp),

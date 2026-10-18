@@ -832,10 +832,14 @@ add_library(quader_platform STATIC
 )
 
 quader_enable_common_pch(quader_platform)
-target_include_directories(quader_platform PUBLIC src)
+target_include_directories(quader_platform
+    PUBLIC src
+    PRIVATE "${QUADER_GENERATED_DIR}")
 target_link_libraries(quader_platform
     PUBLIC
-        quader_core)
+        quader_core
+    PRIVATE
+        Qt6::Core)
 if(QUADER_ENABLE_SENTRY)
     target_compile_definitions(quader_platform PRIVATE QUADER_ENABLE_SENTRY=1)
     target_link_libraries(quader_platform PRIVATE sentry::sentry)

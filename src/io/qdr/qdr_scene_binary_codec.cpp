@@ -631,7 +631,8 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
     }
     upgraded_authored = std::move(encoded).value();
   }
-  if (!mesh.geometry && !upgraded_authored) {
+  if (!mesh.geometry && !upgraded_authored &&
+      !(mesh.has_authored_polygon_document && mesh.authored_polygon_document)) {
     throw std::runtime_error("QDR mesh snapshot has no geometry payload.");
   }
   flatbuffers::FlatBufferBuilder builder;
@@ -663,12 +664,11 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
       mesh.authored_polygon_document) {
     kind = fb::GeometryKind::AuthoredPolygon;
     quader::modeling::Result<quader::modeling::PolygonDocument> imported =
-        MeshProjectionService::sdk_document_from_polygon_document(
+        MeshProjectionService::sdk_persistence_document_from_polygon_document(
             *mesh.authored_polygon_document);
     if (!imported.ok()) {
-      throw std::runtime_error(
-          "SDK authored-topology import failed: " +
-          imported.error_message());
+      throw std::runtime_error("SDK authored-topology storage transfer failed for mesh " +
+          std::to_string(mesh.id) + " (\"" + mesh.name + "\"): " + imported.error_message());
     }
     quader::modeling::PolygonDocument sdk_document =
         std::move(imported).value();
@@ -1558,17 +1558,13 @@ decode_geometry(const fb::GeometryPayload &payload,
                                       decode_started)
                                       .count();
       const auto compile_started = std::chrono::steady_clock::now();
-      std::optional<MeshAsset> mesh =
-          MeshProjectionService::compile_sdk_document_mesh(sdk_document);
+      MeshAsset mesh =
+          MeshProjectionService::project_persisted_sdk_document_mesh(sdk_document);
       stats.geometry_compile_ms += std::chrono::duration<double, std::milli>(
                                        std::chrono::steady_clock::now() -
                                        compile_started)
                                        .count();
-      if (!mesh.has_value()) {
-        throw std::runtime_error(
-            "SDK authored-topology projection failed.");
-      }
-      return std::move(*mesh);
+      return mesh;
     }
 
     if (write_disposition !=

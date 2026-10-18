@@ -24,6 +24,11 @@
 namespace quader_editor_core {
 namespace {
 
+bool overlay_position_is_finite(quader::QVec3 position) {
+  return std::isfinite(position.x) && std::isfinite(position.y) &&
+         std::isfinite(position.z);
+}
+
 std::vector<quader_poly::document_internal::Triangle> overlay_face_triangles(
     const quader_poly::DocumentReadView &document, const quader_poly::Face &face) {
   const quader_poly::document_internal::VertexLookupIndex lookup(document);
@@ -114,12 +119,16 @@ public:
 
 	[[nodiscard]] const quader_poly::Vertex* vertex(quader_poly::ElementId id) const
 	{
+		// Raw persisted records stay authored; nonfinite coordinates have no drawable overlay.
 		if (dense_vertices_ && id != quader_poly::kInvalidElementId &&
 			id <= document_.vertices.size()) {
-			return &document_.vertices[static_cast<std::size_t>(id - 1U)];
+			const auto *vertex = &document_.vertices[static_cast<std::size_t>(id - 1U)];
+			return overlay_position_is_finite(vertex->position) ? vertex : nullptr;
 		}
 		const auto found = vertices_by_id_.find(id);
-		return found == vertices_by_id_.end() ? nullptr : found->second;
+		return found != vertices_by_id_.end() &&
+		       overlay_position_is_finite(found->second->position)
+		           ? found->second : nullptr;
 	}
 
 	[[nodiscard]] const quader_poly::Face* face(quader_poly::ElementId id) const
@@ -272,6 +281,7 @@ void append_source_wire_line(
 		quader_poly::ElementId face_id,
 		quader_poly::Edge edge)
 {
+	if (!overlay_position_is_finite(start) || !overlay_position_is_finite(end)) return;
 	frame.lines.push_back({
 			SelectionOverlayLayer::SourceWire,
 			start,
@@ -671,7 +681,10 @@ bool same_overlay_topology(const quader_poly::DocumentReadView &left,
   if (left.vertices.size() != right.vertices.size() ||
       left.faces.size() != right.faces.size()) return false;
   for (std::size_t index = 0U; index < left.vertices.size(); ++index) {
-    if (left.vertices[index].id != right.vertices[index].id) return false;
+    // Eligibility changes alter retained line/point membership as well as positions.
+    if (left.vertices[index].id != right.vertices[index].id ||
+        overlay_position_is_finite(left.vertices[index].position) !=
+            overlay_position_is_finite(right.vertices[index].position)) return false;
   }
   for (std::size_t index = 0U; index < left.faces.size(); ++index) {
     if (left.faces[index].id != right.faces[index].id ||
@@ -847,6 +860,7 @@ static SelectionOverlayFrame build_selection_overlay_frame_impl(
                 int object_id = -1,
                 quader_poly::ElementId face_id = quader_poly::kInvalidElementId,
                 quader_poly::Edge edge = {}) {
+              if (!overlay_position_is_finite(a) || !overlay_position_is_finite(b)) return;
               frame.lines.push_back(
                   {layer, a, b, color, width, object_id, face_id, edge});
             };
@@ -856,6 +870,7 @@ static SelectionOverlayFrame build_selection_overlay_frame_impl(
                 std::uint32_t color, float size, int object_id = -1,
                 quader_poly::ElementId vertex_id =
                     quader_poly::kInvalidElementId) {
+              if (!overlay_position_is_finite(position)) return;
               frame.points.push_back(
                   {layer, position, color, size, object_id, vertex_id});
             };
@@ -935,7 +950,7 @@ static SelectionOverlayFrame build_selection_overlay_frame_impl(
 
                         const quader::QVec3 edge_vector = b->position - a->position;
 			const float edge_length = quader::length(edge_vector);
-                        if (edge_length <= kEdgeEpsilon) {
+                        if (!std::isfinite(edge_length) || edge_length <= kEdgeEpsilon) {
                           continue;
                         }
                         const quader::QVec3 tangent = edge_vector / edge_length;
@@ -952,10 +967,9 @@ static SelectionOverlayFrame build_selection_overlay_frame_impl(
                           continue;
                         }
                         tick_direction = quader::normalize_or_zero(tick_direction);
-                        const int tick_count =
-                            std::clamp(static_cast<int>(std::floor(
-                                           edge_length / kOpenEdgeTickSpacing)),
-                                       1, kOpenEdgeTickLimit);
+                        const int tick_count = static_cast<int>(std::clamp(
+                            std::floor(edge_length / kOpenEdgeTickSpacing),
+                            1.0F, static_cast<float>(kOpenEdgeTickLimit)));
                         const float tick_length = std::clamp(edge_length * 0.018F, 0.012F, 0.04F);
 			for (int tick_index = 0; tick_index < tick_count; ++tick_index) {
 				const float t = (static_cast<float>(tick_index) + 0.5F) / static_cast<float>(tick_count);
@@ -1499,6 +1513,7 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
               object.selection.vertices.empty()) {
             for (const quader_poly::Vertex &vertex :
                  object.document.vertices) {
+              if (!overlay_position_is_finite(vertex.position)) continue;
               frame.points.push_back({
                   SelectionOverlayLayer::UnselectedVertex,
                   vertex.position,
@@ -1603,6 +1618,8 @@ SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
       const auto *b = geometry != nullptr ? geometry->lookup.vertex(b_id)
                                           : lookup->find(b_id);
       if (a == nullptr || b == nullptr ||
+          !overlay_position_is_finite(a->position) ||
+          !overlay_position_is_finite(b->position) ||
           same_overlay_position(a->position, b->position)) {
         continue;
       }

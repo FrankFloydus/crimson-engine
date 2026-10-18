@@ -276,19 +276,6 @@ namespace {
   return id.valid() ? id.index - 1U : 0U;
 }
 
-[[nodiscard]] AuthoredSurfaceShading
-authored_shading(quader_poly::SurfaceShading shading) {
-  switch (shading) {
-  case quader_poly::SurfaceShading::Flat:
-    return AuthoredSurfaceShading::Flat;
-  case quader_poly::SurfaceShading::Smooth:
-    return AuthoredSurfaceShading::Smooth;
-  case quader_poly::SurfaceShading::Authored:
-    return AuthoredSurfaceShading::Authored;
-  }
-  return AuthoredSurfaceShading::Flat;
-}
-
 [[nodiscard]] quader_poly::SurfaceShading
 native_shading(AuthoredSurfaceShading shading) {
   switch (shading) {
@@ -1434,7 +1421,18 @@ Result<PolygonDocument> PolygonDocument::make_face(std::span<const Vec3> points,
 
 Result<PolygonDocument>
 PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
-  if (topology.next_vertex_id == 0U || topology.next_face_id == 0U) {
+  return import_authored_topology(topology, false);
+}
+
+Result<PolygonDocument>
+PolygonDocument::from_persisted_topology(const AuthoredTopology &topology) {
+  return import_authored_topology(topology, true);
+}
+
+Result<PolygonDocument> PolygonDocument::import_authored_topology(
+    const AuthoredTopology &topology, bool preserve_storage) {
+  if (!preserve_storage &&
+      (topology.next_vertex_id == 0U || topology.next_face_id == 0U)) {
     return Result<PolygonDocument>::failure(make_error(
         ErrorCode::ValidationFailed,
         "Authored topology allocation cursors must be nonzero."));
@@ -1445,11 +1443,12 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
   document.next_face_id = topology.next_face_id;
   document.vertices.reserve(topology.vertices.size());
   for (const AuthoredTopologyVertex &vertex : topology.vertices) {
-    if (!vertex.id.valid() || vertex.id.generation != 1U ||
-        vertex.id.index >= topology.next_vertex_id ||
-        !std::isfinite(vertex.position.x) ||
-        !std::isfinite(vertex.position.y) ||
-        !std::isfinite(vertex.position.z)) {
+    if (vertex.id.generation != 1U ||
+        (!preserve_storage &&
+         (!vertex.id.valid() || vertex.id.index >= topology.next_vertex_id ||
+          !std::isfinite(vertex.position.x) ||
+          !std::isfinite(vertex.position.y) ||
+          !std::isfinite(vertex.position.z)))) {
       return Result<PolygonDocument>::failure(make_error(
           ErrorCode::ValidationFailed,
           "Authored topology contains an invalid vertex record."));
@@ -1462,8 +1461,9 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
 
   document.faces.reserve(topology.faces.size());
   for (const AuthoredTopologyFace &face : topology.faces) {
-    if (!face.id.valid() || face.id.generation != 1U ||
-        face.id.index >= topology.next_face_id) {
+    if (face.id.generation != 1U ||
+        (!preserve_storage &&
+         (!face.id.valid() || face.id.index >= topology.next_face_id))) {
       return Result<PolygonDocument>::failure(make_error(
           ErrorCode::ValidationFailed,
           "Authored topology contains an invalid face record."));
@@ -1471,11 +1471,13 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
     quader_poly::Face native_face;
     native_face.id = face.id.index;
     native_face.material_slot = face.material_slot;
-    native_face.normal_shading = native_shading(face.shading);
+    native_face.normal_shading = preserve_storage
+        ? static_cast<quader_poly::SurfaceShading>(face.shading)
+        : native_shading(face.shading);
     native_face.texture_transform = to_native(face.texture_transform);
     native_face.vertices.reserve(face.vertices.size());
     for (VertexId id : face.vertices) {
-      if (!id.valid() || id.generation != 1U) {
+      if (id.generation != 1U || (!preserve_storage && !id.valid())) {
         return Result<PolygonDocument>::failure(make_error(
             ErrorCode::ValidationFailed,
             "Authored topology face contains an invalid vertex ID."));
@@ -1484,7 +1486,8 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
     }
     native_face.uvs.reserve(face.uvs.size());
     for (Vec2 uv : face.uvs) {
-      if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+      if (!preserve_storage &&
+          (!std::isfinite(uv.x) || !std::isfinite(uv.y))) {
         return Result<PolygonDocument>::failure(make_error(
             ErrorCode::ValidationFailed,
             "Authored topology contains a non-finite face UV."));
@@ -1496,26 +1499,32 @@ PolygonDocument::from_authored_topology(const AuthoredTopology &topology) {
 
   document.hard_normal_edges.reserve(topology.hard_normal_edges.size());
   for (EdgeKey edge : topology.hard_normal_edges) {
-    if (!edge.valid() || edge.a.generation != 1U ||
+    if ((!preserve_storage && !edge.valid()) || edge.a.generation != 1U ||
         edge.b.generation != 1U) {
       return Result<PolygonDocument>::failure(make_error(
           ErrorCode::ValidationFailed,
           "Authored topology contains an invalid hard edge."));
     }
-    document.hard_normal_edges.push_back(
-        quader_poly::make_edge(edge.a.index, edge.b.index));
+    document.hard_normal_edges.push_back(preserve_storage
+        ? quader_poly::Edge{edge.a.index, edge.b.index}
+        : quader_poly::make_edge(edge.a.index, edge.b.index));
   }
 
   document.soft_normal_edges.reserve(topology.soft_normal_edges.size());
   for (EdgeKey edge : topology.soft_normal_edges) {
-    if (!edge.valid() || edge.a.generation != 1U ||
+    if ((!preserve_storage && !edge.valid()) || edge.a.generation != 1U ||
         edge.b.generation != 1U) {
       return Result<PolygonDocument>::failure(make_error(
           ErrorCode::ValidationFailed,
           "Authored topology contains an invalid soft edge."));
     }
-    document.soft_normal_edges.push_back(
-        quader_poly::make_edge(edge.a.index, edge.b.index));
+    document.soft_normal_edges.push_back(preserve_storage
+        ? quader_poly::Edge{edge.a.index, edge.b.index}
+        : quader_poly::make_edge(edge.a.index, edge.b.index));
+  }
+  if (preserve_storage) {
+    return Result<PolygonDocument>::success(
+        PolygonDocumentNativeAccess::from_native(std::move(document)));
   }
   const auto edge_less = [](quader_poly::Edge left,
                             quader_poly::Edge right) noexcept {
@@ -2222,7 +2231,7 @@ Result<AuthoredTopology> PolygonDocument::authored_topology() const {
     AuthoredTopologyFace authored_face;
     authored_face.id = face_id(face.id);
     authored_face.material_slot = face.material_slot;
-    authored_face.shading = authored_shading(face.normal_shading);
+    authored_face.shading = static_cast<AuthoredSurfaceShading>(face.normal_shading);
     authored_face.texture_transform = from_native(face.texture_transform);
     authored_face.vertices.reserve(face.vertices.size());
     for (quader_poly::ElementId id : face.vertices) {
@@ -2236,11 +2245,13 @@ Result<AuthoredTopology> PolygonDocument::authored_topology() const {
   }
   topology.hard_normal_edges.reserve(impl_->document->hard_normal_edges.size());
   for (quader_poly::Edge edge : impl_->document->hard_normal_edges) {
-    topology.hard_normal_edges.push_back(edge_id(edge));
+    topology.hard_normal_edges.push_back(
+        {vertex_id(edge.a), vertex_id(edge.b)});
   }
   topology.soft_normal_edges.reserve(impl_->document->soft_normal_edges.size());
   for (quader_poly::Edge edge : impl_->document->soft_normal_edges) {
-    topology.soft_normal_edges.push_back(edge_id(edge));
+    topology.soft_normal_edges.push_back(
+        {vertex_id(edge.a), vertex_id(edge.b)});
   }
   return Result<AuthoredTopology>::success(std::move(topology));
 }

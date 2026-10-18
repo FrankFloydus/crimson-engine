@@ -59,6 +59,9 @@ public:
   /** Converts one native authored document at the host/SDK boundary. */
   [[nodiscard]] static quader::modeling::Result<quader::modeling::PolygonDocument>
   sdk_document_from_polygon_document(const quader_poly::Document &document);
+  /** Transfers exact stored authored records without authoring validation. */
+  [[nodiscard]] static quader::modeling::Result<quader::modeling::PolygonDocument>
+  sdk_persistence_document_from_polygon_document(const quader_poly::Document &document);
   /** Copies SDK-authored topology without compiling render geometry. */
   [[nodiscard]] static std::optional<quader_poly::Document>
   polygon_document_from_sdk_document(
@@ -79,6 +82,9 @@ public:
   /** Projects one SDK document into native render and persistence payloads. */
   [[nodiscard]] static std::optional<MeshAsset>
   compile_sdk_document_mesh(const quader::modeling::PolygonDocument &document);
+  /** Retains raw authored storage even when it cannot produce render geometry. */
+  [[nodiscard]] static MeshAsset
+  project_persisted_sdk_document_mesh(const quader::modeling::PolygonDocument &document);
   /** Converts an SDK-owned compiled payload without recompiling topology. */
   [[nodiscard]] static std::optional<MeshAsset>
   mesh_asset_from_sdk_payload(

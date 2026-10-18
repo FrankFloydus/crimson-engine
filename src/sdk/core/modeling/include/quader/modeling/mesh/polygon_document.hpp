@@ -242,6 +242,11 @@ public:
   /// Structural errors are rejected; validate() additionally diagnoses geometry.
   [[nodiscard]] static Result<PolygonDocument>
   from_authored_topology(const AuthoredTopology &topology);
+  /// Restores durable authored records without modeling validation or cleanup.
+  /// QGEO stores component indexes with generation one; other generations are
+  /// unrepresentable. Validate/edit eligibility remains a separate owner concern.
+  [[nodiscard]] static Result<PolygonDocument>
+  from_persisted_topology(const AuthoredTopology &topology);
 
   [[nodiscard]] std::size_t vertex_count() const;
   [[nodiscard]] std::size_t face_count() const;
@@ -419,6 +424,9 @@ private:
   friend class PreparedSelectionTransform;
 
   explicit PolygonDocument(std::unique_ptr<PolygonDocumentImpl> impl);
+  [[nodiscard]] static Result<PolygonDocument>
+  import_authored_topology(const AuthoredTopology &topology,
+                          bool preserve_storage);
 
   std::unique_ptr<PolygonDocumentImpl> impl_;
 };

@@ -54,6 +54,8 @@ file except through prior written authorization from Francesco Di Blasi.
   dependency preview and its matching revision. `QtProjectAssetDialog` shares the folder projection
   for project-rooted scene open/save; native owners enforce physical containment as well.
   Clipboard uses canonical command dispatch while native text editors retain their own shortcuts.
+  Image imports use the shared material importer so each image creates a material available in
+  Face Texture. The native texture-only import API retains its separate asset contract.
   Request material thumbnails from visible item painting only, never model layout or every frame;
   `QtAssetThumbnailCache` bounds queued requests and retains generation/revision/DPI fences.
   Ctrl+wheel within a focused browser adjusts its existing thumbnail-size setting;

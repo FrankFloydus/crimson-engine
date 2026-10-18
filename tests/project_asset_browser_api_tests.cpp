@@ -10,7 +10,9 @@
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <QColor>
 #include <QImage>
+#include <QImageReader>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -18,6 +20,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -39,6 +43,54 @@ protected:
     auto parsed = ProjectRelativePath::parse_portable(value);
     EXPECT_TRUE(parsed.ok());
     return parsed.ok() ? parsed.take_value() : ProjectRelativePath{};
+  }
+
+  void verify_texture_import_batches(
+      std::span<const std::filesystem::path> sources) {
+    ASSERT_FALSE(sources.empty());
+    ASSERT_TRUE(editor_.project_assets().create_folder("", "Texture Batch").ok());
+    ASSERT_TRUE(editor_.project_assets().create_material_folder(
+        "Materials", "Material Batch").ok());
+    const auto textures = editor_.project_assets().import_textures(
+        sources, "Texture Batch");
+    ASSERT_TRUE(textures.ok()) << textures.error_message();
+    ASSERT_EQ(textures.value().size(), sources.size());
+    for (const auto &texture : textures.value()) {
+      SCOPED_TRACE(texture.project_relative_path);
+      EXPECT_EQ(texture.kind, QuaderProjectAssetKind::Texture);
+      const auto decoded = editor_.project_assets().texture_info(texture.asset_id);
+      ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+      ASSERT_NE(decoded.value().rgba8, nullptr);
+      EXPECT_GT(decoded.value().width, 0u);
+      EXPECT_GT(decoded.value().height, 0u);
+      EXPECT_EQ(decoded.value().rgba8->size(),
+          std::size_t(decoded.value().width) * decoded.value().height * 4u);
+    }
+
+    const auto materials = editor_.project_assets().import_textures_as_materials(
+        sources, "Materials/Material Batch");
+    ASSERT_TRUE(materials.ok()) << materials.error_message();
+    for (const auto &failure : materials.value().failed) {
+      ADD_FAILURE() << failure.source_path.string() << ": " << failure.error_message;
+    }
+    ASSERT_TRUE(materials.value().failed.empty());
+    ASSERT_EQ(materials.value().imported.size(), sources.size());
+    for (const auto &imported : materials.value().imported) {
+      SCOPED_TRACE(imported.source_path.string());
+      const auto albedo = editor_.project_assets().material_albedo_texture_info(
+          imported.material.id);
+      ASSERT_TRUE(albedo.ok()) << albedo.error_message();
+      EXPECT_TRUE(albedo.value().texture_id.valid());
+      const auto decoded = editor_.project_assets().texture_info(albedo.value().texture_id);
+      ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+      QImageReader source(QString::fromStdWString(imported.source_path.wstring()));
+      ASSERT_TRUE(source.canRead());
+      EXPECT_EQ(decoded.value().width, source.size().width());
+      EXPECT_EQ(decoded.value().height, source.size().height());
+      ASSERT_NE(decoded.value().rgba8, nullptr);
+      EXPECT_EQ(decoded.value().rgba8->size(),
+          std::size_t(decoded.value().width) * decoded.value().height * 4u);
+    }
   }
 
   QTemporaryDir temporary_;
@@ -244,6 +296,47 @@ TEST_F(ProjectAssetBrowserApiTests, RefreshKeepsLegacyMigrationInMemory) {
   EXPECT_EQ(project_.manifest()->loaded_version(), 4u);
   std::ifstream unchanged(path, std::ios::binary);
   EXPECT_EQ(std::string(std::istreambuf_iterator<char>(unchanged), {}), legacy);
+}
+
+TEST_F(ProjectAssetBrowserApiTests, LargeMixedImageBatchImportsAsTexturesAndMaterials) {
+  std::vector<std::filesystem::path> sources;
+  for (int folder = 0; folder < 2; ++folder) {
+    const auto directory = std::filesystem::path(temporary_.path().toStdWString()) /
+        ("Sources " + std::to_string(folder));
+    ASSERT_TRUE(std::filesystem::create_directory(directory));
+    for (int index = 0; index < 100; ++index) {
+      const bool png = index % 2 == 0;
+      const auto path = directory / ("Tile " + std::to_string(index) +
+          (png ? ".png" : ".bmp"));
+      QImage image(24 + index % 5, 20 + folder, QImage::Format_RGBA8888);
+      image.fill(QColor(index, folder * 100, 255 - index));
+      ASSERT_TRUE(image.save(QString::fromStdWString(path.wstring()), png ? "PNG" : "BMP"));
+      sources.push_back(path);
+    }
+  }
+  ASSERT_EQ(sources.size(), 200u);
+  verify_texture_import_batches(sources);
+}
+
+TEST_F(ProjectAssetBrowserApiTests, ExternalTextureDirectoryImportReproduction) {
+  const QString source_directory = qEnvironmentVariable("QUADER_TEXTURE_IMPORT_REPRO_DIR");
+  if (source_directory.isEmpty()) {
+    GTEST_SKIP() << "Set QUADER_TEXTURE_IMPORT_REPRO_DIR to inspect an external image collection.";
+  }
+  const auto directory = std::filesystem::path(source_directory.toStdWString());
+  ASSERT_TRUE(std::filesystem::is_directory(directory));
+  const auto supported = QImageReader::supportedImageFormats();
+  std::vector<std::filesystem::path> sources;
+  for (const auto &entry : std::filesystem::recursive_directory_iterator(directory)) {
+    if (!entry.is_regular_file()) continue;
+    const QString extension = QString::fromStdWString(
+        entry.path().extension().wstring()).mid(1).toLower();
+    if (supported.contains(extension.toLatin1())) sources.push_back(entry.path());
+  }
+  std::ranges::sort(sources);
+  ASSERT_FALSE(sources.empty());
+  RecordProperty("source_count", static_cast<int>(sources.size()));
+  verify_texture_import_batches(sources);
 }
 
 } // namespace

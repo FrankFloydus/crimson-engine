@@ -1383,7 +1383,8 @@ void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
     geometry_candidates.emplace_back(geometry);
   }
 
-  if (!mesh.has_authored_polygon_document ||
+  if (mesh.authored_polygon_document.read_snapshot() ||
+      !mesh.has_authored_polygon_document ||
       !mesh.authored_polygon_document) {
     return;
   }

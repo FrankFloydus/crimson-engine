@@ -207,7 +207,7 @@ protected:
 };
 
 TEST_F(MoveAutoMergeTests,
-       RejectedFaceCollapseKeepsLastPreviewAndDragCanContinueCommitAndUndo) {
+       FaceCollapsePublishesCurrentPreviewAndDragCanContinueCommitAndUndo) {
   create_box_face();
   for (const bool auto_merge : {false, true}) {
     SCOPED_TRACE(auto_merge);
@@ -221,15 +221,15 @@ TEST_F(MoveAutoMergeTests,
     expect_box_face_position(0.0F, true);
 
     // The opposite face is x=-1: this sample collapses all four sidewalls.
-    // Repeated rejected samples must retain the accepted half-width box.
+    // The authored box remains editable with only its two caps triangulated.
     for (int sample = 0; sample < 2; ++sample) {
-      const auto rejected = drag_box_face_to(-1.0F);
-      EXPECT_FALSE(rejected.ok);
-      EXPECT_FALSE(rejected.changed);
-      EXPECT_TRUE(rejected.active);
-      EXPECT_FALSE(rejected.message.empty());
+      const auto collapsed = drag_box_face_to(-1.0F);
+      ASSERT_TRUE(collapsed.ok) << collapsed.message;
+      EXPECT_TRUE(collapsed.active);
       ASSERT_TRUE(modeling_.transform_drag_active());
-      expect_box_face_position(0.0F, true);
+      expect_box_face_position(-1.0F, true);
+      ASSERT_EQ(modeling_.tool_preview_meshes().size(), 1U);
+      EXPECT_EQ(modeling_.tool_preview_meshes().front().mesh.geometry().vertices.size(), 8U);
       EXPECT_EQ(scene_.revision(), scene_revision);
       EXPECT_EQ(assets_.revision(), asset_revision);
       EXPECT_EQ(history_.undo_count(), 0U);
@@ -254,7 +254,7 @@ TEST_F(MoveAutoMergeTests,
   }
 }
 
-TEST_F(MoveAutoMergeTests, RejectedFaceCollapseStillAllowsExplicitCancellation) {
+TEST_F(MoveAutoMergeTests, FaceCollapseStillAllowsExplicitCancellation) {
   create_box_face();
   for (const bool auto_merge : {false, true}) {
     SCOPED_TRACE(auto_merge);
@@ -262,10 +262,10 @@ TEST_F(MoveAutoMergeTests, RejectedFaceCollapseStillAllowsExplicitCancellation) 
     begin_box_face_drag();
     const auto moved = drag_box_face_to(0.0F);
     ASSERT_TRUE(moved.ok) << moved.message;
-    const auto rejected = drag_box_face_to(-1.0F);
-    EXPECT_FALSE(rejected.ok);
+    const auto collapsed = drag_box_face_to(-1.0F);
+    ASSERT_TRUE(collapsed.ok) << collapsed.message;
     ASSERT_TRUE(modeling_.transform_drag_active());
-    expect_box_face_position(0.0F, true);
+    expect_box_face_position(-1.0F, true);
     const auto canceled = modeling_.cancel_transform_drag();
     ASSERT_TRUE(canceled.ok) << canceled.message;
     EXPECT_FALSE(modeling_.transform_drag_active());
@@ -274,7 +274,7 @@ TEST_F(MoveAutoMergeTests, RejectedFaceCollapseStillAllowsExplicitCancellation) 
   }
 }
 
-TEST_F(MoveAutoMergeTests, ReleaseAfterRejectedFaceCollapseCommitsLastValidSample) {
+TEST_F(MoveAutoMergeTests, ReleaseAfterFaceCollapseCommitsItsAuthoredGeometry) {
   create_box_face();
   for (const bool auto_merge : {false, true}) {
     SCOPED_TRACE(auto_merge);
@@ -282,10 +282,10 @@ TEST_F(MoveAutoMergeTests, ReleaseAfterRejectedFaceCollapseCommitsLastValidSampl
     begin_box_face_drag();
     const auto moved = drag_box_face_to(0.0F);
     ASSERT_TRUE(moved.ok) << moved.message;
-    const auto rejected = drag_box_face_to(-1.0F);
-    EXPECT_FALSE(rejected.ok);
+    const auto collapsed = drag_box_face_to(-1.0F);
+    ASSERT_TRUE(collapsed.ok) << collapsed.message;
     ASSERT_TRUE(modeling_.transform_drag_active());
-    expect_box_face_position(0.0F, true);
+    expect_box_face_position(-1.0F, true);
 
     // Mouse release accepts the retained candidate without another valid move.
     const auto committed = modeling_.commit_transform_drag(history_);
@@ -293,19 +293,19 @@ TEST_F(MoveAutoMergeTests, ReleaseAfterRejectedFaceCollapseCommitsLastValidSampl
     EXPECT_TRUE(committed.changed);
     EXPECT_FALSE(modeling_.transform_drag_active());
     EXPECT_EQ(history_.undo_count(), 1U);
-    expect_box_face_position(0.0F, false);
+    expect_box_face_position(-1.0F, false);
     ASSERT_TRUE(history_.undo().ok);
     expect_box_face_position(1.0F, false);
     ASSERT_TRUE(history_.redo().ok);
-    expect_box_face_position(0.0F, false);
+    expect_box_face_position(-1.0F, false);
     ASSERT_TRUE(history_.undo().ok);
     history_.clear();
   }
 }
 
-TEST_F(MoveAutoMergeTests, FaceCollapseRestoresEarlierParticipantPreviewBeforeRelease) {
+TEST_F(MoveAutoMergeTests, FaceCollapsePublishesEveryParticipantBeforeRelease) {
   // This independent face precedes the box in the portable participant order.
-  // Its candidate can advance before the later box rejects its collapsed walls.
+  // Both candidates must advance when the box loses its sidewall triangles.
   quader_poly::Document other_document;
   const auto a = quader_poly::add_vertex(other_document, {5.0F, -1.0F, -1.0F});
   const auto b = quader_poly::add_vertex(other_document, {5.0F, 1.0F, -1.0F});
@@ -332,8 +332,8 @@ TEST_F(MoveAutoMergeTests, FaceCollapseRestoresEarlierParticipantPreviewBeforeRe
   const auto asset_revision = assets_.revision();
   const auto moved = drag_box_face_to(0.0F);
   ASSERT_TRUE(moved.ok) << moved.message;
-  const auto rejected = drag_box_face_to(-1.0F);
-  EXPECT_FALSE(rejected.ok);
+  const auto collapsed = drag_box_face_to(-1.0F);
+  ASSERT_TRUE(collapsed.ok) << collapsed.message;
   ASSERT_TRUE(modeling_.transform_drag_active());
   EXPECT_EQ(scene_.revision(), scene_revision);
   EXPECT_EQ(assets_.revision(), asset_revision);
@@ -353,9 +353,7 @@ TEST_F(MoveAutoMergeTests, FaceCollapseRestoresEarlierParticipantPreviewBeforeRe
       const auto position = mesh.dynamic_position_payload
           ? (*mesh.dynamic_position_payload)[index]
           : vertex.position;
-      const bool moved_box_vertex = std::ranges::find(
-          box_face_vertices_, vertex.source_vertex_id) != box_face_vertices_.end();
-      EXPECT_FLOAT_EQ(position.x, is_box ? (moved_box_vertex ? 0.0F : -1.0F) : 4.0F);
+      EXPECT_FLOAT_EQ(position.x, is_box ? -1.0F : 3.0F);
     }
   }
 
@@ -379,11 +377,11 @@ TEST_F(MoveAutoMergeTests, FaceCollapseRestoresEarlierParticipantPreviewBeforeRe
   const auto committed = modeling_.commit_transform_drag(history_);
   ASSERT_TRUE(committed.ok) << committed.message;
   EXPECT_EQ(history_.undo_count(), 1U);
-  expect_committed_positions(0.0F, 4.0F);
+  expect_committed_positions(-1.0F, 3.0F);
   ASSERT_TRUE(history_.undo().ok);
   expect_committed_positions(1.0F, 5.0F);
   ASSERT_TRUE(history_.redo().ok);
-  expect_committed_positions(0.0F, 4.0F);
+  expect_committed_positions(-1.0F, 3.0F);
 }
 
 TEST_F(MoveAutoMergeTests, MoveAndWeldCommitAsOneUndoStepAndPreserveTarget) {

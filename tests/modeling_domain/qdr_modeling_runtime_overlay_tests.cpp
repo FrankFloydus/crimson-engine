@@ -14,10 +14,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -2091,4 +2093,151 @@ TEST(QdrModelingRuntimeOverlayTests,
   ASSERT_NE(quader_poly::add_face(object.document, vertices),
             quader_poly::kInvalidElementId);
   EXPECT_TRUE(build_diagnostic_edge_overlay_frame(object).lines.empty());
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+     RawNonfinitePositionsStayStoredButNeverEnterDerivedOverlays) {
+  using namespace quader_editor_core;
+  const auto finite_position = [](quader::QVec3 value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+  };
+  const auto expect_finite_frame = [&](const SelectionOverlayFrame &frame) {
+    for (const auto &point : frame.points) EXPECT_TRUE(finite_position(point.position));
+    for (const auto &line : frame.lines) {
+      EXPECT_TRUE(finite_position(line.start));
+      EXPECT_TRUE(finite_position(line.end));
+    }
+    for (const auto &triangle : frame.triangles) {
+      EXPECT_TRUE(finite_position(triangle.a));
+      EXPECT_TRUE(finite_position(triangle.b));
+      EXPECT_TRUE(finite_position(triangle.c));
+    }
+  };
+  for (const bool sparse_ids : {false, true}) {
+    SCOPED_TRACE(sparse_ids ? "sparse IDs" : "dense IDs");
+    const std::array<quader_poly::ElementId, 5> ids = sparse_ids
+        ? std::array<quader_poly::ElementId, 5>{11u, 23u, 31u, 44u, 55u}
+        : std::array<quader_poly::ElementId, 5>{1u, 2u, 3u, 4u, 5u};
+    quader_poly::Document raw;
+    raw.vertices = {
+        {.id = ids[0], .position = {0.0F, 0.0F, 0.0F}},
+        {.id = ids[1], .position = {2.0F, 0.0F, 0.0F}},
+        {.id = ids[2], .position = {0.0F, 2.0F, 0.0F}},
+        {.id = ids[3], .position = {std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F}},
+        {.id = ids[4], .position = {0.0F, std::numeric_limits<float>::infinity(), 0.0F}},
+    };
+    raw.faces = {
+        {.id = 1u, .vertices = {ids[0], ids[1], ids[2]}},
+        {.id = 2u, .vertices = {ids[0], ids[1], ids[3]}},
+        {.id = 3u, .vertices = {ids[0], ids[3], ids[4], ids[2]}},
+    };
+    raw.next_vertex_id = ids.back() + 1u;
+    raw.next_face_id = 4u;
+    const auto nan_bits = std::bit_cast<std::uint32_t>(raw.vertices[3].position.x);
+    PolygonObject object;
+    object.id = 41;
+    object.selected = true;
+    object.component_edit_target = true;
+    object.document = std::move(raw);
+    object.selection.mode = quader_poly::SelectionMode::Vertex;
+    SelectionOverlayGeometryWorkCounters work;
+    const auto geometry = build_selection_overlay_geometry(object.document, work);
+    const std::array objects{object};
+    const auto vertex_frame = build_selection_overlay_frame(
+        objects, SelectionMode::Vertex, object.id, {});
+    const auto retained_vertex_frame = build_selection_overlay_frame(
+        object, SelectionMode::Vertex, object.id, {}, {}, *geometry);
+    for (const auto *frame : {&vertex_frame, &retained_vertex_frame}) {
+      expect_finite_frame(*frame);
+      ASSERT_EQ(frame->points.size(), 3u);
+      for (std::size_t index = 0u; index < frame->points.size(); ++index) {
+        EXPECT_EQ(frame->points[index].vertex_id, ids[index]);
+        EXPECT_EQ(frame->points[index].object_id, object.id);
+      }
+    }
+    object.selection.mode = quader_poly::SelectionMode::Face;
+    object.selection.faces = {1u, 2u, 3u};
+    const auto face_frame = build_selection_overlay_frame(
+        object, SelectionMode::Face, object.id, {}, {}, *geometry);
+    expect_finite_frame(face_frame);
+    ASSERT_FALSE(face_frame.triangles.empty());
+    for (const auto &triangle : face_frame.triangles) EXPECT_EQ(triangle.face_id, 1u);
+    expect_finite_frame(build_object_selection_wire_overlay_frame(object, {}, geometry.get()));
+    expect_finite_frame(build_source_wire_overlay_frame(object, {}, geometry.get()));
+    const auto diagnostic = build_diagnostic_edge_overlay_frame(object);
+    expect_finite_frame(diagnostic);
+    EXPECT_EQ(diagnostic.lines.size(), 1u);
+    expect_finite_frame(build_diagnostic_edge_overlay_frame(object, {}, geometry.get()));
+
+    object.selected = false;
+    object.component_edit_target = false;
+    object.selection.faces.clear();
+    const std::array candidates{object};
+    const SelectionHoverState hover{
+        .object_id = object.id,
+        .kind = SelectionHoverKind::Vertex,
+        .vertex_id = ids[3],
+        .candidate_object_id = object.id,
+    };
+    const auto hover_frame = build_selection_hover_overlay_frame(
+        candidates, SelectionMode::Vertex, hover);
+    expect_finite_frame(hover_frame);
+    ASSERT_EQ(hover_frame.points.size(), 3u);
+    for (std::size_t index = 0u; index < hover_frame.points.size(); ++index) {
+      EXPECT_EQ(hover_frame.points[index].vertex_id, ids[index]);
+      EXPECT_EQ(hover_frame.points[index].layer, SelectionOverlayLayer::UnselectedVertex);
+    }
+    EXPECT_EQ(object.document.vertices.size(), 5u);
+    EXPECT_EQ(object.document.faces.size(), 3u);
+    EXPECT_EQ(std::bit_cast<std::uint32_t>(object.document.vertices[3].position.x), nan_bits);
+    EXPECT_TRUE(std::isinf(object.document.vertices[4].position.y));
+  }
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+     RetainedGeometryRebuildsWhenFinitePositionMembershipChanges) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 42;
+  object.document = make_open_quad_document();
+  SelectionOverlayGeometryWorkCounters work;
+  const auto before = build_selection_overlay_geometry(object.document, work);
+  const auto vertex_id = object.document.vertices.front().id;
+  const float original_x = object.document.vertices.front().position.x;
+  object.document.edit().vertices.front().position.x = std::numeric_limits<float>::quiet_NaN();
+  const auto invalid = build_selection_overlay_geometry(object.document, work, before.get());
+  EXPECT_EQ(work.geometry_build_count, 2u);
+  EXPECT_EQ(work.geometry_position_refresh_count, 0u);
+  const auto invalid_wire = build_object_selection_wire_overlay_frame(object, {}, invalid.get());
+  ASSERT_EQ(invalid_wire.lines.size(), 2u);
+  for (const auto &line : invalid_wire.lines) {
+    EXPECT_NE(line.edge.a, vertex_id);
+    EXPECT_NE(line.edge.b, vertex_id);
+  }
+  object.document.edit().vertices.front().position.x = original_x;
+  const auto restored = build_selection_overlay_geometry(object.document, work, invalid.get());
+  EXPECT_EQ(work.geometry_build_count, 3u);
+  EXPECT_EQ(work.geometry_position_refresh_count, 0u);
+  EXPECT_EQ(build_object_selection_wire_overlay_frame(object, {}, restored.get()).lines.size(), 4u);
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+     OpenEdgeTicksStayFiniteAndBoundedForExtremeStoredPositions) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 43;
+  object.selected = true;
+  object.component_edit_target = true;
+  object.document = make_open_quad_document();
+  // Tick demand exceeds int range while the face-normal products remain finite.
+  for (auto &vertex : object.document.edit().vertices) vertex.position = vertex.position * 1.0e9F;
+  object.selection.mode = quader_poly::SelectionMode::Edge;
+  object.selection.edges = quader_poly::document_edges(object.document);
+  const std::array objects{object};
+  const auto frame = build_selection_overlay_frame(objects, SelectionMode::Edge, {});
+  EXPECT_EQ(line_count_for_layer(frame, SelectionOverlayLayer::OpenEdge), 4u * 257u);
+  for (const auto &line : frame.lines) {
+    EXPECT_TRUE(std::isfinite(line.start.x) && std::isfinite(line.start.y) && std::isfinite(line.start.z));
+    EXPECT_TRUE(std::isfinite(line.end.x) && std::isfinite(line.end.y) && std::isfinite(line.end.z));
+  }
 }

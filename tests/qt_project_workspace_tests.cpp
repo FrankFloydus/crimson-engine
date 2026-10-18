@@ -9,6 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
 #include "app/app.hpp"
 #include "app/app_frame_schedule.hpp"
 #include "assets/default_material_catalog.hpp"
@@ -23,6 +24,7 @@
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "platform/window_placement.hpp"
+#include "platform/fatal_error_handler.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "support/qt_viewport_input_test_helpers.hpp"
@@ -106,18 +108,21 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QImage>
+#include <QImageReader>
 #include <QLayout>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPointer>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QPixmap>
 #include <QRegion>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QScopeGuard>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSpinBox>
@@ -134,6 +139,7 @@
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QTreeWidgetItemIterator>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QScopedValueRollback>
@@ -156,6 +162,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -7248,6 +7255,214 @@ TEST(QtProjectWorkspaceTests,
   ui.shutdown();
 }
 
+TEST(QtProjectWorkspaceTests, FaceTextureBrowserRefreshesAfterDeletingAndReimportingAllMaterials) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-face-material-reimport-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-face-material-reimport-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto root = profile / "Project";
+  const auto recycle = profile / "Recycled";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(std::filesystem::create_directory(recycle));
+  const std::array source_paths{profile / "First.png", profile / "Second.png"};
+  QImage image(3, 2, QImage::Format_RGBA8888);
+  for (const auto &source : source_paths) {
+    image.fill(Qt::red);
+    ASSERT_TRUE(image.save(QString::fromStdWString(source.wstring())));
+  }
+  quader::ProjectSession project;
+  project.set_resource_root(resources / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  quader::QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+      editor.project_assets(), [&](std::span<const std::filesystem::path> sources) {
+        quader::ProjectAssetRecycleResult result{.ok = true};
+        for (const auto &source : sources) {
+          const auto destination = recycle / std::to_string(
+              std::chrono::steady_clock::now().time_since_epoch().count());
+          std::filesystem::rename(source, destination);
+          result.items.push_back({.original_path = source, .recycled = true});
+        }
+        return result;
+      });
+  auto imported = editor.project_assets().import_textures_as_materials(source_paths, "Materials");
+  ASSERT_TRUE(imported.ok()) << imported.error_message();
+  ASSERT_EQ(imported.value().imported.size(), source_paths.size());
+  quader::RenderSystem renderer;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto *window = ui.main_window();
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *browser = dynamic_cast<quader::QtMaterialBrowserWindow *>(
+      window->findChild<QWidget *>(QStringLiteral("materialBrowser.embedded")));
+  ASSERT_NE(browser, nullptr);
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("materialBrowser.gridView"));
+  ASSERT_NE(grid, nullptr);
+  auto *proxy = dynamic_cast<quader::QtMaterialBrowserProxyModel *>(grid->model());
+  ASSERT_NE(proxy, nullptr);
+  auto *model = dynamic_cast<quader::QtMaterialBrowserModel *>(proxy->sourceModel());
+  ASSERT_NE(model, nullptr);
+  ui.show();
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  const auto expect_imported_rows = [&] {
+    EXPECT_EQ(model->rowCount(), static_cast<int>(source_paths.size()) + 1);
+    EXPECT_EQ(proxy->rowCount(), model->rowCount());
+    for (const auto &entry : imported.value().imported) {
+      const auto reference = quader::QuaderMaterialReference::project(entry.material.id);
+      EXPECT_TRUE(std::ranges::any_of(model->items(), [&](const auto &item) {
+        return item.reference == reference;
+      }));
+    }
+  };
+  expect_imported_rows();
+  for (const bool hidden : {false, true}) {
+    SCOPED_TRACE(hidden);
+    if (hidden) ASSERT_TRUE(editor.ui().hide_panel("face_texture").ok());
+    std::vector<std::string> paths;
+    for (const auto &entry : imported.value().imported) paths.push_back(entry.material.project_relative_path);
+    const auto preview = editor.project_assets().preview_delete_assets(paths);
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+    ASSERT_TRUE(preview.value().complete);
+    const auto deleted = editor.project_assets().delete_assets(paths, preview.value().revision);
+    ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+    const auto remaining = editor.project_assets().materials();
+    ASSERT_TRUE(remaining.ok());
+    EXPECT_EQ(remaining.value().size(), 1u);
+    ui.refresh({}, {});
+    if (!hidden) {
+      EXPECT_EQ(model->rowCount(), 1);
+      EXPECT_EQ(proxy->rowCount(), 1);
+    }
+    imported = editor.project_assets().import_textures_as_materials(source_paths, "Materials");
+    ASSERT_TRUE(imported.ok()) << imported.error_message();
+    ASSERT_TRUE(imported.value().failed.empty());
+    ASSERT_EQ(imported.value().imported.size(), source_paths.size());
+    ui.refresh({}, {});
+    if (hidden) ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+    ui.refresh({}, {});
+    expect_imported_rows();
+    int resets = 0;
+    const auto connection = QObject::connect(model, &QAbstractItemModel::modelReset,
+        browser, [&] { ++resets; });
+    const auto builds = ui.material_presentation_snapshot_build_count();
+    for (int frame = 0; frame < 8; ++frame) ui.refresh({}, {});
+    EXPECT_EQ(resets, 0);
+    EXPECT_EQ(ui.material_presentation_snapshot_build_count(), builds);
+    QObject::disconnect(connection);
+  }
+  // Exercise the Asset Browser's actual external-drop Import route too.
+  std::vector<std::string> material_paths;
+  for (const auto &entry : imported.value().imported) {
+    material_paths.push_back(entry.material.project_relative_path);
+  }
+  const auto deletion = editor.project_assets().preview_delete_assets(material_paths);
+  ASSERT_TRUE(deletion.ok());
+  ASSERT_TRUE(deletion.value().complete);
+  ASSERT_TRUE(editor.project_assets().delete_assets(
+      material_paths, deletion.value().revision).ok());
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Imported Materials").ok());
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  ui.refresh({}, {});
+  application.processEvents();
+  auto *asset_browser = dynamic_cast<quader::QtAssetBrowser *>(
+      window->findChild<QWidget *>(QStringLiteral("assetBrowser")));
+  ASSERT_NE(asset_browser, nullptr);
+  asset_browser->set_selected_folder(QStringLiteral("Imported Materials"));
+  auto *asset_grid = asset_browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(asset_grid, nullptr);
+  QMimeData images;
+  QList<QUrl> urls;
+  for (const auto &source : source_paths) {
+    urls.push_back(QUrl::fromLocalFile(QString::fromStdWString(source.wstring())));
+  }
+  const auto drop_images = [&] {
+    images.setUrls(urls);
+    const QPoint point(asset_grid->viewport()->width() - 5,
+        asset_grid->viewport()->height() - 5);
+    QDragEnterEvent enter(point, Qt::CopyAction, &images, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(asset_grid->viewport(), &enter);
+    EXPECT_TRUE(enter.isAccepted());
+    QDropEvent drop(QPointF(point), Qt::CopyAction, &images, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(asset_grid->viewport(), &drop);
+    EXPECT_TRUE(drop.isAccepted());
+    ui.refresh({}, {});
+  };
+  for (const int batch : {1, 2}) {
+    drop_images();
+    EXPECT_EQ(asset_grid->model()->rowCount(), batch * static_cast<int>(source_paths.size()));
+    EXPECT_EQ(model->rowCount(), batch * static_cast<int>(source_paths.size()) + 1);
+    EXPECT_EQ(proxy->rowCount(), model->rowCount());
+  }
+  const auto imported_catalog = editor.project_assets().assets();
+  ASSERT_TRUE(imported_catalog.ok());
+  material_paths.clear();
+  for (const auto &asset : imported_catalog.value().assets) {
+    if (!asset.project_relative_path.starts_with("Imported Materials/")) continue;
+    ASSERT_EQ(asset.kind, quader::QuaderProjectAssetKind::Material);
+    material_paths.push_back(asset.project_relative_path);
+    const auto albedo = editor.project_assets().material_albedo_texture_info(asset.asset_id);
+    ASSERT_TRUE(albedo.ok()) << albedo.error_message();
+    EXPECT_TRUE(albedo.value().texture_id.valid());
+    EXPECT_TRUE(std::filesystem::exists(albedo.value().absolute_path));
+  }
+  ASSERT_EQ(material_paths.size(), source_paths.size() * 2u);
+  const auto deleted_batch = editor.project_assets().preview_delete_assets(material_paths);
+  ASSERT_TRUE(deleted_batch.ok());
+  ASSERT_TRUE(deleted_batch.value().complete);
+  ASSERT_TRUE(editor.project_assets().delete_assets(
+      material_paths, deleted_batch.value().revision).ok());
+  ASSERT_TRUE(editor.ui().hide_panel("face_texture").ok());
+  ui.refresh({}, {});
+  const auto invalid_source = profile / "Broken.png";
+  {
+    std::ofstream broken(invalid_source, std::ios::binary);
+    broken << "Not a PNG image";
+  }
+  urls.push_back(QUrl::fromLocalFile(QString::fromStdWString(invalid_source.wstring())));
+  bool warned = false;
+  QTimer warning_response;
+  warning_response.setSingleShot(true);
+  QObject::connect(&warning_response, &QTimer::timeout, [&] {
+    auto *warning = window->findChild<QMessageBox *>(
+        QStringLiteral("material_browser_import_warning_message_box"));
+    if (warning == nullptr || !warning->isVisible()) {
+      ADD_FAILURE() << "Expected the partial material-import warning.";
+      if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) modal->reject();
+      return;
+    }
+    warned = true;
+    EXPECT_TRUE(warning->informativeText().contains(QStringLiteral("Broken.png")));
+    auto *accept = warning->findChild<QPushButton *>(
+        QStringLiteral("materialBrowserImportWarningMessageBox.ok"));
+    if (accept != nullptr) accept->click();
+    else warning->reject();
+  });
+  warning_response.start(0);
+  drop_images();
+  warning_response.stop();
+  EXPECT_TRUE(warned);
+  ASSERT_TRUE(editor.ui().show_panel("face_texture").ok());
+  ui.refresh({}, {});
+  EXPECT_EQ(asset_grid->model()->rowCount(), static_cast<int>(source_paths.size()));
+  EXPECT_EQ(editor.project_assets().materials().value().size(), source_paths.size() + 1u);
+  EXPECT_EQ(model->rowCount(), static_cast<int>(source_paths.size()) + 1);
+  EXPECT_EQ(proxy->rowCount(), model->rowCount());
+  ui.shutdown();
+}
+
 TEST(QtProjectWorkspaceTests,
      FaceMaterialHighlightAndEmbeddedPrimitiveChoiceStayPresentationOnly) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
@@ -11652,6 +11867,201 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   ui.shutdown();
 }
 
+TEST(QtProjectWorkspaceTests, NativeTextureCollectionImportPaintsEveryAssetAndMaterialThumbnail) {
+  const QString source_directory = qEnvironmentVariable("QUADER_TEXTURE_IMPORT_REPRO_DIR");
+  if (source_directory.isEmpty() ||
+      qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_ASSET_BROWSER_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_TEXTURE_IMPORT_REPRO_DIR and "
+                   "QUADER_RUN_VULKAN_ASSET_BROWSER_TESTS=1 for native import reproduction.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-native-texture-import-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile, true);
+  ASSERT_TRUE(scoped_profile.active());
+  const auto log_path = profile / "native-texture-import.log";
+  quader::Logger::initialize({.file_path = log_path.string()});
+  quader::install_fatal_error_handler(log_path);
+  quader::install_qt_fatal_error_handler();
+  std::cout << "NATIVE_TEXTURE_IMPORT_LOG=" << log_path.string() << std::endl;
+  int argc = 1;
+  char application_name[] = "quader-native-texture-import-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(QApplication::palette());
+  const auto source_root = std::filesystem::path(source_directory.toStdWString());
+  std::error_code source_error;
+  ASSERT_TRUE(std::filesystem::is_directory(source_root, source_error));
+  ASSERT_FALSE(source_error) << source_error.message();
+  const auto supported = QImageReader::supportedImageFormats();
+  std::vector<std::filesystem::path> sources;
+  for (std::filesystem::recursive_directory_iterator source(source_root, source_error), end;
+       source != end && !source_error; source.increment(source_error)) {
+    if (!source->is_regular_file(source_error)) continue;
+    const auto extension = QString::fromStdWString(
+        source->path().extension().wstring()).mid(1).toLower();
+    if (supported.contains(extension.toLatin1())) sources.push_back(source->path());
+  }
+  ASSERT_FALSE(source_error) << source_error.message();
+  std::ranges::sort(sources);
+  ASSERT_FALSE(sources.empty());
+  LOG_INFO("Native texture import reproduction: {} read-only source images", sources.size());
+  const auto resources = std::filesystem::path(
+      QCoreApplication::applicationDirPath().toStdWString());
+  const auto root = profile / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  quader::RenderSystem renderer;
+  ASSERT_TRUE(renderer.initialize(nullptr, resources));
+  quader::ProjectSession project;
+  project.set_resource_root(std::filesystem::path(QUADER_SOURCE_DIR) /
+      "resources/modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  quader::SceneRenderBridge bridge;
+  renderer.initialize_scene_render_bridge(bridge, resources);
+  quader::RenderOverlaySnapshotCache overlay_cache;
+  ui.show();
+  auto *window = ui.main_window();
+  ASSERT_NE(window->screen(), nullptr);
+  window->resize(QSize(1600, 1000).boundedTo(window->screen()->availableGeometry().size()));
+  window->activateWindow();
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(dock, nullptr);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(browser, nullptr);
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(grid, nullptr);
+  class ImportPaintObserver final : public QObject {
+  public:
+    std::size_t count = 0u;
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+      if (event->type() == QEvent::Paint) ++count;
+      return QObject::eventFilter(watched, event);
+    }
+  } paint_observer;
+  grid->viewport()->installEventFilter(&paint_observer);
+  std::set<QString> material_ids;
+  std::set<QString> completed_thumbnails;
+  QObject::connect(grid->model(), &QAbstractItemModel::dataChanged, browser,
+      [&](const QModelIndex &first, const QModelIndex &last, const QList<int> &roles) {
+        if (first != last || !roles.contains(Qt::DecorationRole)) return;
+        const auto id = first.data(Qt::UserRole + 1).toString();
+        if (material_ids.contains(id)) completed_thumbnails.insert(id);
+      });
+  const auto shutdown = qScopeGuard([&] { ui.shutdown(); });
+  std::size_t accepted_frames = 0u;
+  const auto wait_until = [&](const char *stage, const auto &ready) {
+    LOG_INFO("Native texture import stage: {}", stage);
+    quader::AppFrameSchedule schedule;
+    QEventLoop loop;
+    QTimer frame_timer;
+    frame_timer.setTimerType(Qt::PreciseTimer);
+    QTimer deadline;
+    deadline.setSingleShot(true);
+    QObject::connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+    const int display_interval_ms = std::max(1,
+        static_cast<int>(std::lround(1000.0 / renderer.display_refresh_rate_hz())));
+    bool finished = false;
+    QObject::connect(&frame_timer, &QTimer::timeout, &loop, [&] {
+      ui.refresh({.delta_seconds = 1.0 / 60.0}, renderer.frame_performance_stats());
+      std::size_t submitted = 0u;
+      if (renderer.presentation_is_synchronized() || renderer.ready_for_next_frame()) {
+        const auto synchronized = quader::QuaderRenderApiRuntimeAccess::sync_scene(
+            editor.render(), bridge);
+        if (!synchronized.ok()) {
+          ADD_FAILURE() << synchronized.error_message();
+          loop.quit();
+          return;
+        }
+        ui.prepare_viewports(bridge, overlay_cache);
+        submitted = ui.render_viewports();
+        if (submitted == editor.viewports().active_pane_count()) ++accepted_frames;
+      }
+      finished = ready();
+      if (finished) {
+        loop.quit();
+        return;
+      }
+      frame_timer.setInterval(schedule.next_interval_ms(true,
+          renderer.presentation_is_synchronized(), display_interval_ms, submitted != 0u));
+    });
+    deadline.start(20000);
+    frame_timer.start(0);
+    loop.exec();
+    LOG_INFO("Native texture import stage {}: completed={}, viewport frames={}, paints={}, thumbnails={}",
+        stage, finished, accepted_frames, paint_observer.count, completed_thumbnails.size());
+    return finished;
+  };
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  browser->restore_presentation_state(quader::QtAssetBrowserViewMode::Grid, 64);
+  ASSERT_TRUE(wait_until("initial native presentation", [&] {
+    return accepted_frames >= 4u && browser->has_completed_visible_paint();
+  }));
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Texture Batch").ok());
+  LOG_INFO("Importing {} sources as texture assets", sources.size());
+  const auto textures = editor.project_assets().import_textures(sources, "Texture Batch");
+  ASSERT_TRUE(textures.ok()) << textures.error_message();
+  ASSERT_EQ(textures.value().size(), sources.size());
+  ui.refresh({}, {});
+  browser->set_selected_folder(QStringLiteral("Texture Batch"));
+  ASSERT_EQ(grid->model()->rowCount(), static_cast<int>(sources.size()));
+  std::size_t texture_paints = paint_observer.count;
+  int texture_row = 0;
+  grid->scrollTo(grid->model()->index(texture_row, 0), QAbstractItemView::PositionAtCenter);
+  grid->viewport()->update();
+  ASSERT_TRUE(wait_until("paint imported texture rows", [&] {
+    if (paint_observer.count == texture_paints) return false;
+    texture_paints = paint_observer.count;
+    if (++texture_row == grid->model()->rowCount()) return true;
+    grid->scrollTo(grid->model()->index(texture_row, 0), QAbstractItemView::PositionAtCenter);
+    grid->viewport()->update();
+    return false;
+  }));
+  ASSERT_TRUE(editor.project_assets().create_material_folder("Materials", "Material Batch").ok());
+  LOG_INFO("Importing {} sources as textured materials", sources.size());
+  const auto materials = editor.project_assets().import_textures_as_materials(
+      sources, "Materials/Material Batch");
+  ASSERT_TRUE(materials.ok()) << materials.error_message();
+  ASSERT_TRUE(materials.value().failed.empty());
+  ASSERT_EQ(materials.value().imported.size(), sources.size());
+  for (const auto &imported : materials.value().imported) {
+    material_ids.insert(QString::fromStdString(std::string(imported.material.id.str())));
+  }
+  ui.refresh({}, {});
+  browser->set_selected_folder(QStringLiteral("Materials/Material Batch"));
+  ASSERT_EQ(grid->model()->rowCount(), static_cast<int>(sources.size()));
+  int material_row = 0;
+  grid->scrollTo(grid->model()->index(material_row, 0), QAbstractItemView::PositionAtCenter);
+  grid->viewport()->update();
+  ASSERT_TRUE(wait_until("render every imported material thumbnail", [&] {
+    while (material_row < grid->model()->rowCount() && completed_thumbnails.contains(
+        grid->model()->index(material_row, 0).data(Qt::UserRole + 1).toString())) {
+      ++material_row;
+    }
+    if (material_row == grid->model()->rowCount()) return true;
+    grid->scrollTo(grid->model()->index(material_row, 0), QAbstractItemView::PositionAtCenter);
+    grid->viewport()->update();
+    return false;
+  }));
+  EXPECT_EQ(completed_thumbnails.size(), sources.size());
+  EXPECT_GT(accepted_frames, 4u);
+  EXPECT_GT(paint_observer.count, sources.size());
+  EXPECT_FALSE(grid->viewport()->grab().isNull());
+  LOG_INFO("Native import reproduction passed: {} textures, {} material thumbnails", sources.size(),
+      completed_thumbnails.size());
+  quader::Logger::instance()->flush();
+}
+
 TEST(QtProjectWorkspaceTests, SavingWithUnregisteredSceneCopiesRetainsDistinctBrowserRows) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const auto profile = std::filesystem::temp_directory_path() /
@@ -11896,6 +12306,150 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirect
   reveal_external("External/Deep/AfterReplacement.qdr", [&] {
     ASSERT_TRUE(std::filesystem::copy_file(source, root / "External/Deep/AfterReplacement.qdr"));
   });
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests, AssetBrowserDeleteResolvesInvalidatedCatalogOnFirstAttempt) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-asset-delete-dialog-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-asset-delete-dialog-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto root = scoped_profile.profile() / "Project";
+  const auto recycle = scoped_profile.profile() / "Recycled";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(std::filesystem::create_directory(recycle));
+  quader::ProjectSession project;
+  project.set_resource_root(resources / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Disposable").ok());
+  std::vector<std::string> paths;
+  for (int index = 0; index < 36; ++index) {
+    const auto created = editor.project_assets().create_scene_asset(
+        "Disposable", "Scene " + std::to_string(index));
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    paths.push_back(created.value().project_relative_path);
+  }
+  std::size_t recycled_count = 0u;
+  quader::QuaderProjectAssetsApiInternalAccess::set_recycle_port(
+      editor.project_assets(), [&](std::span<const std::filesystem::path> sources) {
+        quader::ProjectAssetRecycleResult result{.ok = true};
+        for (const auto &source : sources) {
+          std::filesystem::rename(source, recycle / source.filename());
+          result.items.push_back({.original_path = source, .recycled = true});
+          ++recycled_count;
+        }
+        return result;
+      });
+  quader::RenderSystem renderer;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *window = ui.main_window();
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  window->resize(1600, 1000);
+  window->show();
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(dock, nullptr);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(browser, nullptr);
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  application.processEvents();
+  ui.refresh({}, {});
+  browser->set_selected_folder(QStringLiteral("Disposable"));
+  auto *grid = browser->findChild<QListView *>(QStringLiteral("assetBrowser.grid"));
+  ASSERT_NE(grid, nullptr);
+  grid->selectAll();
+  browser->focus_browser();
+  ASSERT_EQ(browser->selected_items().size(), paths.size());
+
+  const auto attempt_delete = [&](bool confirm, bool expected_confirmation) {
+    bool presented = false;
+    QTimer response;
+    response.setSingleShot(true);
+    QObject::connect(&response, &QTimer::timeout, [&] {
+      auto *dialog = window->findChild<QMessageBox *>(
+          QStringLiteral("asset_browser_delete_confirmation"));
+      if (dialog == nullptr || !dialog->isVisible()) {
+        ADD_FAILURE() << "Expected the asset deletion confirmation.";
+        if (auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+          modal->reject();
+        }
+        return;
+      }
+      presented = true;
+      auto *details = dialog->findChild<QPlainTextEdit *>(
+          QStringLiteral("retainedMessageBox.informativeText"));
+      EXPECT_NE(details, nullptr);
+      if (details != nullptr) {
+        EXPECT_TRUE(details->isVisible());
+        EXPECT_GT(details->verticalScrollBar()->maximum(), 0);
+        for (const auto &path : paths) {
+          EXPECT_TRUE(details->toPlainText().contains(QString::fromStdString(path)));
+        }
+      }
+      const auto role = confirm ? QMessageBox::DestructiveRole : QMessageBox::RejectRole;
+      for (auto *button : dialog->buttons()) {
+        if (dialog->buttonRole(button) == role) {
+          EXPECT_TRUE(button->isVisible());
+          EXPECT_TRUE(dialog->rect().contains(QRect(
+              button->mapTo(dialog, QPoint{}), button->size())));
+          button->click();
+          return;
+        }
+      }
+      ADD_FAILURE() << "Deletion confirmation has no expected decision button.";
+      dialog->reject();
+    });
+    response.start(0);
+    EXPECT_TRUE(browser->handle_action(quader::QtAssetBrowserAction::Delete));
+    response.stop();
+    EXPECT_EQ(presented, expected_confirmation);
+  };
+
+  const auto displayed_revision = browser->snapshot().revision;
+  ASSERT_NE(displayed_revision, 0u);
+  ASSERT_TRUE(project.refresh_asset_catalog(false).ok);
+  ASSERT_EQ(editor.project_assets().asset_revision().value().revision, 0u);
+  attempt_delete(false, true);
+  EXPECT_EQ(recycled_count, 0u);
+  for (const auto &path : paths) EXPECT_TRUE(std::filesystem::exists(root / path));
+  EXPECT_EQ(editor.project_assets().asset_revision().value().revision, displayed_revision);
+
+  const auto stale_snapshot = browser->snapshot();
+  const auto renamed = editor.project_assets().rename_asset(paths.front(), "Changed");
+  ASSERT_TRUE(renamed.ok()) << renamed.error_message();
+  paths.front() = "Disposable/Changed.qdr";
+  ASSERT_NE(editor.project_assets().asset_revision().value().revision,
+            stale_snapshot.revision);
+  (void)browser->set_snapshot(stale_snapshot);
+  grid->selectAll();
+  ASSERT_TRUE(project.refresh_asset_catalog(false).ok);
+  ASSERT_EQ(editor.project_assets().asset_revision().value().revision, 0u);
+  attempt_delete(false, false);
+  EXPECT_EQ(recycled_count, 0u);
+  for (const auto &path : paths) EXPECT_TRUE(std::filesystem::exists(root / path));
+
+  grid->selectAll();
+  ASSERT_EQ(browser->selected_items().size(), paths.size());
+  ASSERT_TRUE(project.refresh_asset_catalog(false).ok);
+  ASSERT_EQ(editor.project_assets().asset_revision().value().revision, 0u);
+  attempt_delete(true, true);
+  EXPECT_EQ(recycled_count, paths.size());
+  for (const auto &path : paths) {
+    EXPECT_FALSE(std::filesystem::exists(root / path));
+    EXPECT_TRUE(std::filesystem::exists(recycle / std::filesystem::path(path).filename()));
+  }
   ui.shutdown();
 }
 

@@ -24,6 +24,7 @@ enum class FatalErrorCode {
   InvalidRuntimeParameter,
   WindowsUnhandledException,
   ManualFatalReport,
+  QtFatalMessage,
 };
 
 /**
@@ -49,6 +50,8 @@ struct FatalReportData {
   std::string generated_at;
   std::uint32_t process_id = 0;
   std::uint32_t thread_id = 0;
+  std::string app_version;
+  std::filesystem::path executable_path;
   std::string error_code;
   std::string quick_message;
   std::string detail;
@@ -92,6 +95,8 @@ format_fatal_error_report(const FatalReportData &data);
 platform_utf8_to_wide(std::string_view value);
 void install_fatal_error_handler(std::filesystem::path log_path,
                                   FatalDiagnosticsOptions diagnostics = {});
+/** Captures Qt fatal messages before Windows fast-fail; preserves other handlers. */
+void install_qt_fatal_error_handler();
 [[noreturn]] void report_fatal_error_and_exit(FatalErrorCode code,
                                               const char *detail = nullptr,
                                               int exit_code = 1);

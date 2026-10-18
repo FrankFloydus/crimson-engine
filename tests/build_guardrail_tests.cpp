@@ -1569,7 +1569,8 @@ TEST(BuildGuardrailTests,
   const std::string retired_quoted_include = joined("#include \"me", "sh/");
   const std::string neutral_internal_include =
       joined("quader/modeling/neutral/polygon/", "internal/");
-  constexpr std::array<std::string_view, 9> kNeutralInternalConsumers = {
+  constexpr std::array<std::string_view, 10> kNeutralInternalConsumers = {
+      "src/editor/interactions/knife_tool.cpp",
       "src/editor/modeling/runtime/session_picking.cpp",
       "src/editor/modeling/runtime/session_selection_overlay.cpp",
       "src/editor/projection/mesh_projection_service.cpp",
@@ -4962,14 +4963,16 @@ TEST(BuildGuardrailTests, NativeSourcesDoNotIncludePrivateModelingSdkHeaders) {
       {"src", "editor", "projection", "mesh_projection_service.cpp"});
   expect_contains(
       codec,
-      "MeshProjectionService::sdk_document_from_polygon_document(");
+      "MeshProjectionService::sdk_persistence_document_from_polygon_document(");
   expect_contains(codec,
-                  "MeshProjectionService::compile_sdk_document_mesh(");
+                  "MeshProjectionService::project_persisted_sdk_document_mesh(");
   expect_contains(codec,
                   "MeshProjectionService::compile_polygon_document_mesh(");
   expect_missing(codec, "PolygonDocument::from_authored_topology(");
+  expect_missing(codec, "PolygonDocument::from_persisted_topology(");
   expect_missing(codec, ".authored_topology()");
   expect_contains(projection, "PolygonDocument::from_authored_topology(");
+  expect_contains(projection, "PolygonDocument::from_persisted_topology(");
   expect_contains(projection, ".authored_topology()");
 }
 

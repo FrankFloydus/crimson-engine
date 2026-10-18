@@ -1282,7 +1282,7 @@ public:
         continue;
       }
       Result<PolygonDocument> document =
-          MeshProjectionService::sdk_document_from_polygon_document(
+          MeshProjectionService::sdk_persistence_document_from_polygon_document(
               *mesh->authored_polygon_document);
       if (!document.ok()) {
         continue;
@@ -8475,14 +8475,8 @@ public:
         entry.mesh = MeshProjectionService::update_polygon_document_mesh_positions(
             std::move(*authored), entry.current_mesh,
             participant.position_update_plan.get());
-        // Collapsed authored faces can regain triangles as their neighbors move.
-        // Permit that larger render layout while retaining collapse rejection.
-        if (!entry.mesh.has_value() ||
-            entry.mesh->geometry().vertices.size() <
-                participant.base_mesh_positions.size()) {
-          entry.error = "Could not derive the transient transform mesh attributes.";
-          return;
-        }
+        // Canonical compilation can remove or restore triangles while the
+        // authored face loops remain valid. Publish its current layout.
         entry.mesh->name = entry.current_mesh.name;
         entry.layout_key = participant.layout_key;
         if (!std::ranges::equal(entry.mesh->geometry().vertices,
