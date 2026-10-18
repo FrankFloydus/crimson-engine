@@ -1,0 +1,59 @@
+diff --git a/Jolt/Physics/Character/CharacterVirtual.cpp b/Jolt/Physics/Character/CharacterVirtual.cpp
+index b7029d2..77d8eab 100644
+--- a/Jolt/Physics/Character/CharacterVirtual.cpp
++++ b/Jolt/Physics/Character/CharacterVirtual.cpp
+@@ -1774,26 +1774,38 @@ void CharacterVirtual::ExtendedUpdate(float inDeltaTime, Vec3Arg inGravity, cons
+ 			if (achieved_horizontal_step_len + 1.0e-4f < desired_horizontal_step_len
+ 				&& CanWalkStairs(desired_velocity))
+ 			{
++				// Find the contact that is most opposing our movement. Our extra walk stairs test is going to go in that direction instead
++				// of the movement direction. This allows us to step up stairs if we're moving at a big angle along the stairs.
++				Vec3 walk_stairs_direction = step_forward_normalized;
++				float max_dot = inSettings.mWalkStairsCosAngleForwardContact; // Discard contacts that have an angle that is too big
++				for (const Contact &c : mActiveContacts)
++					if (c.mHadCollision
++						&& c.mCharacterIDB.IsInvalid() // Virtual peers block sweeps but are not terrain risers
++						&& !c.mWasDiscarded
++						&& c.mSurfaceNormal.Dot(desired_velocity - c.mLinearVelocity) < 0.0f // Pushing into the contact
++						&& IsSlopeTooSteep(c.mSurfaceNormal)) // Slope too steep
++					{
++						// Remove vertical component of the surface normal and negate it so that it points in the direction of movement
++						Vec3 test = c.mSurfaceNormal.Dot(mUp) * mUp - c.mSurfaceNormal;
++						float test_len = test.Length();
++						if (test_len > 1.0e-6f)
++						{
++							test /= test_len;
++							float dot = test.Dot(step_forward_normalized);
++							if (dot > max_dot)
++							{
++								walk_stairs_direction = test;
++								max_dot = dot;
++							}
++						}
++					}
++
+ 				// Calculate how much we should step forward
+ 				// Note that we clamp the step forward to a minimum distance. This is done because at very high frame rates the delta time
+ 				// may be very small, causing a very small step forward. If the step becomes small enough, we may not move far enough
+ 				// horizontally to actually end up at the top of the step.
+-				Vec3 step_forward = step_forward_normalized * max(inSettings.mWalkStairsMinStepForward, desired_horizontal_step_len - achieved_horizontal_step_len);
+-
+-				// Calculate how far to scan ahead for a floor. This is only used in case the floor normal at step_forward is too steep.
+-				// In that case an additional check will be performed at this distance to check if that normal is not too steep.
+-				// Start with the ground normal in the horizontal plane and normalizing it
+-				Vec3 step_forward_test = -mGroundNormal;
+-				step_forward_test -= step_forward_test.Dot(mUp) * mUp;
+-				step_forward_test = step_forward_test.NormalizedOr(step_forward_normalized);
+-
+-				// If this normalized vector and the character forward vector is bigger than a preset angle, we use the character forward vector instead of the ground normal
+-				// to do our forward test
+-				if (step_forward_test.Dot(step_forward_normalized) < inSettings.mWalkStairsCosAngleForwardContact)
+-					step_forward_test = step_forward_normalized;
+-
+-				// Calculate the correct magnitude for the test vector
+-				step_forward_test *= inSettings.mWalkStairsStepForwardTest;
++				Vec3 step_forward = walk_stairs_direction * max(inSettings.mWalkStairsMinStepForward, desired_horizontal_step_len - achieved_horizontal_step_len);
++				Vec3 step_forward_test = walk_stairs_direction * inSettings.mWalkStairsStepForwardTest;
+ 
+ 				WalkStairs(inDeltaTime, inSettings.mWalkStairsStepUp, step_forward, step_forward_test, inSettings.mWalkStairsStepDownExtra, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter, inAllocator);
+ 			}

@@ -601,6 +601,10 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
         if(character.locked)continue;
         JPH::CharacterVirtual::ExtendedUpdateSettings update;
         update.mWalkStairsStepUp={0,character.definition.maxStep,0};update.mStickToFloorStepDown={0,-.5f,0};
+        // Follow an opposing riser even when most movement is along its face.
+        // The native stair sweep still requires progress into an actual steep
+        // contact, a reachable support surface and clearance for the capsule.
+        update.mWalkStairsCosAngleForwardContact=0;
         auto& motor=*character.motor;
         // A jump must leave support cleanly. Floor snapping and stair probes
         // resume on the next supported walking tick, including downhill steps.

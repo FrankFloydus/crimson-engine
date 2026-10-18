@@ -443,8 +443,58 @@ void compactStaircaseCameraContinuity() {
         require(std::abs(eyeResidual(play))<1e-4,"Compact stair camera failed to settle after stopping.");
     }
 }
+void staircaseStrafingAndDiagonalInput() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-stair-strafing";
+    SceneDocument authored(root);fixture(authored);
+    require(authored.edit("Add strafing staircase",[](auto& records,auto&){
+        for(int i=0;i<8;++i) {
+            const float width=i==7?8.f:.375f;
+            EntityRecord step;step.id=10+i;step.name="Strafing stair tread";
+            step.local=math::translation({1.f+.375f*i+width*.5f,.25f*i+.125f,0});
+            step.collider=SceneCollider{{width,.25f,80}};records.push_back(step);
+        }
+    }),"Could not author strafing staircase.");
+    struct Approach {SDL_Scancode first,second;float lookX;int lateral;};
+    // Pure A/D must work while looking across the stairs. W+A/W+D and
+    // oblique pure strafing must also retain a valid upward stair attempt.
+    const Approach approaches[]{
+        {SDL_SCANCODE_D,SDL_SCANCODE_UNKNOWN,0,0},
+        {SDL_SCANCODE_A,SDL_SCANCODE_UNKNOWN,1800,0},
+        {SDL_SCANCODE_W,SDL_SCANCODE_D,900,1},
+        {SDL_SCANCODE_W,SDL_SCANCODE_A,900,-1},
+        {SDL_SCANCODE_D,SDL_SCANCODE_UNKNOWN,450,1},
+        {SDL_SCANCODE_A,SDL_SCANCODE_UNKNOWN,1350,-1}};
+    for(const auto& approach:approaches) {
+        PlaySession play(root);require(play.start(authored),"Could not start strafing staircase.");
+        GameInput input;activate(input);ticks(play,input,20);
+        look(input,approach.lookX,0);play.advance(0,input,Camera{});
+        const auto initialCamera=resolveGameCamera(play.presentationScene());
+        const auto forward=math::normalized(initialCamera->target-initialCamera->position);
+        key(input,approach.first);
+        if(approach.second!=SDL_SCANCODE_UNKNOWN)key(input,approach.second);
+        bool reachedTop=false,smoothed=false;
+        for(int tick=0;tick<240;++tick) {
+            ticks(play,input,1);const auto actor=position(play.document().scene());
+            smoothed=smoothed || eyeResidual(play)<-.015;
+            if(actor[0]>4.25f){reachedTop=actor[1]>1.95f;break;}
+        }
+        require(reachedTop,"A/D strafing or diagonal WASD movement stalled on a climbable stair riser.");
+        require(smoothed,"Strafing stair ascent bypassed camera smoothing.");
+        if(approach.lateral)require(approach.lateral*position(play.document().scene())[2]>1.f,
+            "Diagonal stair traversal discarded the requested lateral movement.");
+        key(input,approach.first,false);
+        if(approach.second!=SDL_SCANCODE_UNKNOWN)key(input,approach.second,false);
+        ticks(play,input,120);
+        require(std::abs(eyeResidual(play))<1e-4,"Strafing stair smoothing failed to settle after stopping.");
+        const auto camera=resolveGameCamera(play.presentationScene());
+        require(math::length(math::normalized(camera->target-camera->position)-forward)<1e-5,
+            "Stair traversal changed mouse-look direction to face the stairs.");
+        require(!play.document().dirty() && play.document().history().size()==0,
+            "Strafing stair traversal changed authored scene data.");
+    }
+}
 }
 int main(){try{movementJumpAndOwnership();lookCameraAuthoringAndEdits();diagonalAndFrameRateIndependence();cancellationAndCameraLifetime();
     staircaseAscentDescentAndSettling();staircaseRenderTimingAndJumpIsolation();staircaseCameraResets();
-    staircaseAuthoredResponseAndDisable();staircaseLiveResponseEditing();compactStaircaseCameraContinuity();
+    staircaseAuthoredResponseAndDisable();staircaseLiveResponseEditing();compactStaircaseCameraContinuity();staircaseStrafingAndDiagonalInput();
     std::cout<<"FPS controller checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

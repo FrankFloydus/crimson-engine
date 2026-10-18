@@ -225,6 +225,184 @@ void narrowStairCompleteVerticalPublication() {
         require(airborne && landed,std::string(label)+" stair fall fixture did not reach its landing.");
     }
 }
+SceneCollider stairCollider(float width,float height,float depth,bool triangles) {
+    SceneCollider collider{{width,height,depth}};
+    if(triangles) {
+        const float x=width*.5f,y=height*.5f,z=depth*.5f;
+        collider.shape=ColliderShape::Trimesh;
+        collider.mesh=makeCollisionMesh({{-x,-y,-z},{x,-y,-z},{x,-y,z},{-x,-y,z},
+            {-x,y,-z},{x,y,-z},{x,y,z},{-x,y,z}},
+            {0,1,2,0,2,3,4,6,5,4,7,6,0,3,7,0,7,4,1,5,6,1,6,2,0,4,5,0,5,1,3,2,6,3,6,7});
+    }
+    return collider;
+}
+void obliqueStairTraversalAndIndependentFacing() {
+    using namespace crimson::testing;
+    // A capsule must step while most of its velocity is parallel to a riser.
+    // Rotation and +/- approaches prevent an axis- or facing-dependent fix.
+    struct Approach {float degrees,yaw;};
+    constexpr Approach approaches[]{{0,0},{30,-.45f},{45,0},{-45,0},{60,.61f},{-60,.61f},
+        {75,-.39f},{-75,-.39f},{85,.27f},{-85,.27f}};
+    for(bool triangles:{false,true})for(const auto approach:approaches) {
+        const auto basis=math::eulerRotationXYZ({0,approach.yaw,0});
+        const auto inverse=*math::inverse(basis);
+        auto player=characterRecord();player.local=math::translation({0,.05f,0});
+        player.controller->profile=agentProfile({1.8f,.3f,45,.3f});
+        auto floor=floorRecord();floor.collider->size={256,1,256};
+        std::vector<EntityRecord> records{floor,player};
+        for(int i=0;i<8;++i) {
+            const float width=i==7?8.f:.375f;
+            EntityRecord tread;tread.id=10+i;tread.name="Oblique stair tread";
+            tread.local=basis*math::translation({1.f+.375f*i+width*.5f,.25f*i+.125f,0});
+            tread.collider=stairCollider(width,.25f,128,triangles);records.push_back(std::move(tread));
+        }
+        Scene scene;scene.apply(records,{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+        firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+        const float angle=approach.degrees*std::numbers::pi_v<float>/180;
+        const Vec3 wish=math::transformDirection(basis,{5*std::cos(angle),0,5*std::sin(angle)});
+        const Vec3 facing=math::normalized(Vec3{-wish[2],0,wish[0]});
+        const int budget=static_cast<int>(std::ceil((4.5f/(5*std::cos(angle))+1.5f)*60));
+        for(int direction:{1,-1}) {
+            Vec3 position{};
+            for(int i=0;i<budget;++i) {
+                motor.face(facing);firstPersonTick(scene,world,wish*direction);
+                position=math::transformPoint(inverse,*motor.position());
+                if((direction>0 && position[0]>4.5f) || (direction<0 && position[0]<0))break;
+            }
+            const auto label=std::string(triangles?"Trimesh":"Box")+" at "+std::to_string(approach.degrees)+" degrees";
+            require(direction>0?position[0]>4.5f:position[0]<0,
+                label+" stalled on stairs while facing perpendicular to movement: x="+std::to_string(position[0]));
+            firstPersonTick(scene,world,{},60);
+            require(world.grounded(2) && std::abs((*motor.position())[1]-(direction>0?2.f:0.f))<.03f,
+                label+" crossed the stair run without settling on its actual support.");
+        }
+    }
+}
+void obliqueStairsRespectStepAndCeilingLimits() {
+    using namespace crimson::testing;
+    for(bool triangles:{false,true})for(int restriction:{0,1,2}) {
+        auto player=characterRecord();player.local=math::translation({0,.05f,0});
+        player.controller->profile=agentProfile({1.8f,.3f,45,restriction==0?0.f:.3f});
+        auto floor=floorRecord();floor.collider->size={40,1,40};
+        EntityRecord step;step.id=3;step.name="Restricted diagonal step";
+        const float height=restriction==2?.6f:.25f;
+        step.local=math::translation({2.5f,height*.5f,0});step.collider=stairCollider(3,height,40,triangles);
+        std::vector<EntityRecord> records{floor,player,step};
+        if(restriction==1) {
+            EntityRecord roof;roof.id=4;roof.name="Stair head clearance";
+            roof.local=math::translation({2,2,0});roof.collider=stairCollider(8,.2f,40,triangles);records.push_back(std::move(roof));
+        }
+        Scene scene;scene.apply(records,{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+        firstPersonTick(scene,world,{},60);
+        for(int i=0;i<180;++i) {
+            firstPersonTick(scene,world,{3.535534f,0,3.535534f});
+            require((*world.characterVelocity(2))[2]<3.555534f,
+                "A rejected diagonal stair attempt accelerated motion parallel to the blocker.");
+        }
+        const auto position=*world.characterPosition(2);
+        require(position[0]<.95f && position[1]<.15f,
+            std::string(triangles?"Trimesh":"Box")+" diagonal stair traversal bypassed "+
+            (restriction==0?"the disabled step profile.":restriction==1?"head clearance.":"a step above the profile limit."));
+    }
+    for(bool triangles:{false,true}) {
+        auto player=characterRecord();player.local=math::translation({.69f,.05f,0});
+        player.controller->profile=agentProfile({1.8f,.3f,45,.3f});
+        EntityRecord wall;wall.id=3;wall.name="Parallel stair riser";
+        wall.local=math::translation({2.5f,.125f,0});wall.collider=stairCollider(3,.25f,40,triangles);
+        auto floor=floorRecord();floor.collider->size={40,1,40};
+        Scene scene;scene.apply({floor,player,wall},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+        firstPersonTick(scene,world,{},60);const auto start=*world.characterPosition(2);
+        firstPersonTick(scene,world,{0,0,5},120);const auto finish=*world.characterPosition(2);
+        require(finish[2]>start[2]+8 && std::abs(finish[0]-start[0])<.01f && std::abs(finish[1]-start[1])<.01f,
+            std::string(triangles?"Trimesh":"Box")+" motion parallel to a riser gained height or turned into the stair.");
+    }
+}
+std::shared_ptr<const StaticTriangleMesh> spiralStairGeometry() {
+    // Reconstruct Main's authored Spiral Steps independently of mutable project
+    // data: 18 risers over 270 degrees, radii 1.4/3.7 m, 32-sided arc samples.
+    std::vector<Vec3> vertices;std::vector<std::uint32_t> indices;
+    const auto rounded=[](double value){return static_cast<float>(std::round(value*10000)/10000);};
+    const auto point=[&](double radius,double angle,float height){return Vec3{rounded(radius*std::cos(angle)),height,rounded(radius*std::sin(angle))};};
+    const auto quad=[&](const Vec3& a,const Vec3& b,const Vec3& c,const Vec3& d) {
+        const auto base=static_cast<std::uint32_t>(vertices.size());
+        vertices.insert(vertices.end(),{a,b,c,d});indices.insert(indices.end(),{base,base+1,base+2,base,base+2,base+3});
+    };
+    const double pi=std::numbers::pi;
+    for(int step=0;step<18;++step) {
+        const double start=-pi/2-step*pi/12,end=start-pi/12;
+        std::vector<double> angles{start};
+        for(int sample=9;sample<=32;++sample) {
+            const double angle=-sample*pi/16;
+            if(angle<start-1e-8 && angle>end+1e-8)angles.push_back(angle);
+        }
+        angles.push_back(end);const float top=rounded(-.5+(step+1)*3.5/18);
+        for(std::size_t segment=1;segment<angles.size();++segment) {
+            const auto a=angles[segment-1],b=angles[segment];
+            quad(point(1.4,a,top),point(3.7,a,top),point(3.7,b,top),point(1.4,b,top));
+            quad(point(1.4,b,-.5f),point(3.7,b,-.5f),point(3.7,a,-.5f),point(1.4,a,-.5f));
+            quad(point(3.7,a,-.5f),point(3.7,b,-.5f),point(3.7,b,top),point(3.7,a,top));
+            quad(point(1.4,b,-.5f),point(1.4,a,-.5f),point(1.4,a,top),point(1.4,b,top));
+        }
+        quad(point(1.4,start,-.5f),point(3.7,start,-.5f),point(3.7,start,top),point(1.4,start,top));
+        quad(point(3.7,end,-.5f),point(1.4,end,-.5f),point(1.4,end,top),point(3.7,end,top));
+    }
+    return makeCollisionMesh(std::move(vertices),std::move(indices));
+}
+void spiralStairObliqueEntry() {
+    using namespace crimson::testing;
+    const double start=-97.5*std::numbers::pi/180;
+    const Vec3 spawn{3.1*std::cos(start),.25f,3.1*std::sin(start)};
+    auto player=characterRecord();player.local=math::translation(spawn);
+    player.controller->profile=agentProfile({1.8f,.3f,45,.3f});
+    EntityRecord stairs;stairs.id=3;stairs.name="Spiral Steps regression";
+    stairs.local=math::translation({0,.5f,0});stairs.collider.emplace();
+    stairs.collider->shape=ColliderShape::Trimesh;stairs.collider->mesh=spiralStairGeometry();
+    Scene scene;scene.apply({floorRecord(),player,stairs},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+    firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    // Walk inward at 45 degrees to the ascending tangent. The old direction
+    // test slid along the first riser and out of the stair's inner edge.
+    const Vec3 wish=math::normalized(Vec3{std::sin(start)-std::cos(start),0,-std::cos(start)-std::sin(start)})*5;
+    float highest=0;
+    for(int i=0;i<100;++i) {
+        motor.face(math::normalized(Vec3{-wish[2],0,wish[0]}));firstPersonTick(scene,world,wish);
+        const auto position=*motor.position();highest=std::max(highest,position[1]);
+        if(highest>.55f || std::hypot(position[0],position[2])<1.7f)break;
+    }
+    require(highest>.55f,"Oblique spiral entry slid along its first riser instead of ascending: height="+std::to_string(highest));
+}
+void spiralStairCurvedTraversal() {
+    using namespace crimson::testing;
+    const auto geometry=spiralStairGeometry();const double pi=std::numbers::pi;
+    for(int direction:{1,-1}) {
+        const double start=(-97.5-(direction<0?255:0))*pi/180;
+        auto player=characterRecord();player.controller->profile=agentProfile({1.8f,.3f,45,.3f});
+        player.local=math::translation({2.5*std::cos(start),direction>0?.25f:3.55f,2.5*std::sin(start)});
+        EntityRecord stairs;stairs.id=3;stairs.name="Curved spiral traversal";
+        stairs.local=math::translation({0,.5f,0});stairs.collider.emplace();
+        stairs.collider->shape=ColliderShape::Trimesh;stairs.collider->mesh=geometry;
+        Scene scene;scene.apply({floorRecord(),player,stairs},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+        firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+        double previous=start,progress=0;
+        // Begin braking inside the final tread, before momentum reaches its
+        // open outer edge; the route still visits all eighteen support levels.
+        const double goal=250*pi/180;
+        for(int i=0;i<360 && progress<goal;++i) {
+            auto position=*motor.position();const double angle=std::atan2(position[2],position[0]);
+            const double target=angle-direction*.1;
+            const Vec3 wish=math::normalized(Vec3{2.5*std::cos(target)-position[0],0,2.5*std::sin(target)-position[2]})*5;
+            motor.face(math::normalized(Vec3{-wish[2],0,wish[0]}));firstPersonTick(scene,world,wish);
+            position=*motor.position();const double current=std::atan2(position[2],position[0]);
+            progress-=direction*std::remainder(current-previous,2*pi);previous=current;
+            require(std::abs(std::hypot(position[0],position[2])-2.5f)<.1f,
+                "Curving stair traversal was redirected away from its requested path.");
+        }
+        require(progress>=goal,"Curving stair traversal stalled before completing the 18-tread spiral.");
+        firstPersonTick(scene,world,{},60);
+        require(world.grounded(2) && std::abs((*motor.position())[1]-(direction>0?3.5f:.1944f))<.04f,
+            "Curving stair traversal lost the spiral's final support height: direction="+std::to_string(direction)+
+            ", height="+std::to_string((*motor.position())[1])+", grounded="+std::to_string(world.grounded(2)));
+    }
+}
 void rampMotionIsNotAStairCorrection() {
     for(bool triangles:{false,true}) {
         auto player=characterRecord();player.local=math::translation({-1,.05f,0});
@@ -514,4 +692,4 @@ void firstPersonWalkableSlopes() {
     }
 }
 }
-int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();firstPersonAccelerationBrakingAndAirControl();firstPersonJumpEdgesHeightAndBuffer();firstPersonCoyoteWindow();firstPersonCanceledJumpBuffer();firstPersonCeilingsWallsAndStairs();firstPersonTransientStateResets();stairCorrectionPublication();narrowStairCompleteVerticalPublication();rampMotionIsNotAStairCorrection();firstPersonWalkableSlopes();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();firstPersonAccelerationBrakingAndAirControl();firstPersonJumpEdgesHeightAndBuffer();firstPersonCoyoteWindow();firstPersonCanceledJumpBuffer();firstPersonCeilingsWallsAndStairs();firstPersonTransientStateResets();stairCorrectionPublication();narrowStairCompleteVerticalPublication();obliqueStairTraversalAndIndependentFacing();obliqueStairsRespectStepAndCeilingLimits();spiralStairObliqueEntry();spiralStairCurvedTraversal();rampMotionIsNotAStairCorrection();firstPersonWalkableSlopes();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

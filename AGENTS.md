@@ -1,10 +1,17 @@
 # Crimson Engine repository instructions
 
-Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx with Direct3D 12 by default and optional Direct3D 11, and Dear ImGui docking. The official renderer target/executable is `crimson-renderer` / `crimson-renderer.exe`.
+Native Windows x64 first-person action game engine and editor: C++20, MSVC, CMake, SDL3, bgfx with Direct3D 12 by default and optional Direct3D 11, and Dear ImGui docking. The official renderer target/executable is `crimson-renderer` / `crimson-renderer.exe`.
+
+## Current game direction
+
+- The game now uses first-person movement and an editor-authored eye camera. DUSK and Quake are references for movement and camera feel: WASD, direct mouse look, jumping and lateral camera tilt. Keep new gameplay and level work consistent with that perspective.
+- The former isometric ARPG player recipe and click-to-move input have been replaced. Retain precise legacy scene conversion and custom authored cameras; do not reintroduce the old player mode. Enemy and externally commanded actor navigation remain independent reusable systems.
+- Actors, collision, navigation, gameplay tags, Attributes and Gameplay Effects remain implemented foundations. Their presence does not define weapons, combat, inventory, loot or progression rules for the new game; implement those only within an agreed feature slice.
+- Historical D2R and ARPG renderer checkpoints remain evidence for existing code and measurements. They do not set the current game scope or require a fixed camera, a particular player-light rig, or the rest of the reference game's pipeline. Use the current architecture and lighting guide for implemented behavior and limits.
 
 ## Task context
 
-- Use the relevant sections of [ENGINE_ARCHITECTURE.md](docs/ENGINE_ARCHITECTURE.md) for renderer, asset, scene, controller/input, simulation, and lifetime changes. It is authoritative for ownership contracts, implementation status, and the milestone marked **Next**.
+- Use the relevant sections of [ENGINE_ARCHITECTURE.md](docs/ENGINE_ARCHITECTURE.md) for renderer, asset, scene, controller/input, simulation, and lifetime changes. It is authoritative for the current game scope, ownership contracts and implementation status. Select further milestones from the requested feature slice rather than the former ARPG roadmap.
 - For lighting or character-rig changes, start with [RENDERER_AND_CHARACTER_LIGHTING.md](docs/RENDERER_AND_CHARACTER_LIGHTING.md) for current controls, source ownership, shader contracts and implementation limits. Use [MATERIAL_SHADER_STARTUP.md](docs/MATERIAL_SHADER_STARTUP.md) for material compilation/cache behavior; checkpoint and D2R findings documents retain historical evidence and do not override the current architecture.
 - Keep work within the requested slice. Add later systems when their slice needs them; a planned interface is not evidence that it already exists.
 - When replacing a system, remove superseded code, settings, and UI instead of retaining a legacy mode, unless the user explicitly requests compatibility. Read existing project data through a one-time conversion when needed to avoid losing authored assets; write only the current representation.
@@ -15,7 +22,15 @@ Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx with D
 
 ## Current implementation contracts
 
-These checkpoints describe the implementation as of 2026-10-17. Preserve them when changing the relevant system; consult the linked architecture sections for full details instead of reconstructing decisions from old checkpoints or experiments.
+These checkpoints describe the implementation as of 2026-10-18. Preserve them when changing the relevant system; consult the linked architecture sections for full details instead of reconstructing decisions from old checkpoints or experiments.
+
+### First-person player, camera and stairs
+
+- `runtime/GameInput` owns physical WASD, relative mouse look and Space jump edges while Game owns input. `PlaySession` owns transient look, strafe tilt and camera presentation; `physics/CharacterMotor` / `PhysicsWorld` own the collision-resolved capsule. Player input requires no Navigation Agent, volume or bake. Movement speed comes from resolved `Stats.MovementSpeed`; acceleration, friction, air control, jump height and view response belong to Player Input.
+- Preserve the [project Jolt overlay](cmake/vcpkg-ports/joltphysics/README.md), which backports opposing-contact stair probes into pinned Jolt 5.5.0. Both probes follow the blocking terrain riser independently of camera/body facing, including A/D strafing and oblique spiral-stair approaches. Virtual characters remain blockers in every sweep but cannot select the riser direction; their requested velocities differ from Crimson's no-pushing contact policy. The contact must oppose movement; profile step/slope limits and capsule clearance still apply. Change the overlay and rebuild through the wrapper; never edit extracted dependencies under `build/`.
+- The Player's real child/follow camera remains editable in the Inspector and through camera authoring. Preserve its authored offset, lens and affine basis; runtime look, tilt and stair compensation affect only the interpolated presentation camera, never saved transforms, follow settings or history. The First Person template uses a 1.65 m eye offset, 75° vertical FOV, 0.05 m near and 2048 m far planes.
+- Stair smoothing uses the complete supported vertical terrain correction, including capsule rounding and settling outside Jolt's stair helpers. Exclude continuous travel on the actual support plane, upward jumps, unsupported falls and landing ticks. Keep native Jolt `ExtendedUpdate` traversal; do not alter physical movement to disguise camera jitter. Presentation samples the critically damped return analytically between fixed ticks and cancels terrain displacement at the same interpolation fraction. Retain full accumulated compensation and the world-collision camera-clearance guard; a fixed 0.5 m offset cap reintroduces jolts on closely spaced stairs.
+- **Player Input → Stair Smoothing (s)** authors `stairSmoothingTime` in [0,1], default 0.10 s. Lower is faster, higher is softer, and zero clears pending compensation immediately even without a physics tick. Positive live edits preserve current look and compensation. Camera/player identity, authored pose/profile edits, transform locks, suspension and Play teardown reset transient state. Preserve 60 Hz fixed simulation, responsive render-frame mouse look and explicit Scene/Game input ownership.
 
 ### Renderer backends and shader publication
 
@@ -41,7 +56,7 @@ These checkpoints describe the implementation as of 2026-10-17. Preserve them wh
 
 - One authored entity has one Outliner row; capabilities appear together as ordered Inspector subsections, without outer empty/component rows or component-selection mode. `SceneOutlinerRows` and `tools/SceneInspectorSections.h` own this presentation. This does **not** flatten real spatial parenting: imported model hierarchies, explicit groups, visual attachments and collider children retain their entity IDs and affine local transforms.
 - A Player is a composed actor, not a special entity class. Its direct following camera is edited inline; attached models/particles keep their own selectable rows. `sceneEntityOwner` must not remap arbitrary visual children to their actor. Reparenting a Box/model onto Player must retain visibility, selection, world placement and its real parent. Camera Follow retains its world offset and full translation-free affine world basis; camera edits do not move the controller. Nearest-actor lighting ownership stops at nested actors. Keep actor ownership, controller, input, navigation, Light Rig and Darkness Reveal independent.
-- Scene Save writes schema v20; readers accept v1–v20 and convert older composed-actor/camera data in memory. Collision modes/layers/masks, navigation volumes, shared agent profiles and Enemy behaviour settings use the current representation. Save alone writes the current representation. Keep Edit/Play copies isolated, entity IDs stable and all property/reparent operations transactional with undo/redo and cancellation. See [scene/actor architecture](docs/ENGINE_ARCHITECTURE.md#composed-actors-and-scene-migration).
+- Scene Save writes schema v23; readers accept v1–v23 and convert older scene data in memory. Collision modes/layers/masks, navigation volumes, shared agent profiles, Enemy behaviour, Tags and Gameplay Effects use the current representation. FPS Player Input fields, including stair smoothing, are optional v23 fields with defaults and need no new schema version. Save alone writes the current representation. Keep Edit/Play copies isolated, entity IDs stable and all property/reparent operations transactional with undo/redo and cancellation. See [scene/actor architecture](docs/ENGINE_ARCHITECTURE.md#composed-actors-and-scene-migration).
 
 ### Quader imports, bundles and material slots
 
@@ -91,6 +106,7 @@ Select existing focused checks for the changed contract after the integration bu
 | Quader publication, material assignments, hierarchy, Play/history | `quader_bridge_core`, `quader_scene_core`, `model_core`, `model_animation_metadata_core` |
 | Bundle resource dependencies, browser paths and deletion policy | `asset_resource_core`, `asset_browser_core`, `asset_browser_path_core`, `asset_library_deletion_core`, `import_identity_core` |
 | Entity selection, parenting and scene transactions | `scene_core`, `scene_gameplay_core`, `scene_component_ui_core`, `scene_extraction_core`; focused `player_parenting_render_core`/DX11 counterpart when rendering is affected |
+| First-person input, motor, camera or stair presentation | `fps_controller_core`, `physics_core`, `play_runtime_core`, `game_input_core`, `game_view_input_core`, `camera_authoring_core`, `camera_pilot_core`; add `scene_gameplay_core` and `scene_component_ui_core` for authored controls |
 | Backend selection, shaders, GI/AO/fog/tone mapping | `app_options_core`, `editor_preferences_core`, `shader_preflight_core`, `render_pass_plan_core`, `ssgi_core`, `environment_presentation_core`, `tone_mapping_core`; relevant `ssgi_render_core`, `ssao_render_core`, `fog_background_render_core`/DX11 counterparts when GPU behavior changes |
 
 ## Source layout
@@ -123,7 +139,7 @@ Select existing focused checks for the changed contract after the integration bu
 - Treat generated headers and cached dependency sources under `build/` as read-only to manual edits. Change project sources/manifests/build configuration and let tools regenerate outputs.
 - Rendering changes must preserve linear HDR lighting, one final sRGB encoding, and the grid/tools' independence from scene exposure. Texture roles determine color decoding and channels; follow the material contract in the architecture.
 - Environment preprocessing belongs outside frame submission. Its derived cache is disposable; update preprocessing/BRDF versions when their equations or output conventions change. Preserve the managed source and `assets/environment.json`.
-- Preserve explicit GPU/resource owners and release their resources before bgfx shutdown. Keep viewport input ownership explicit so editor widgets, navigation, and future player controls do not consume the same gesture.
+- Preserve explicit GPU/resource owners and release their resources before bgfx shutdown. Keep viewport input ownership explicit so editor widgets, Scene navigation and first-person Game input do not consume the same gesture.
 - Construct ResourceManager before GPU owners. Worker jobs never call bgfx/ImGui or mutate documents; publish coherent CPU/GPU replacements on the main thread. Persistent AssetRef values are separate from live handles/snapshots and GPU leases. Count pending/retired allocations and drain readbacks before shutdown.
 - Keep authored reference/deletion policy separate from runtime residency. Deletion is a staged project transaction; preserve stable IDs, protected role-correct defaults, project-wide saved-scene updates and unrelated unsaved edits. Legacy material/environment/preview files and virtual browser organization remain compatible.
 - Use familiar asset fields adjacent to their property: picker, thumbnail/name, clear, and drag-and-drop with immediate assignment.
