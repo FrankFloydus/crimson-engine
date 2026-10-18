@@ -9408,6 +9408,32 @@ TEST(ViewportWorkspaceServiceTests,
 
 
 TEST(ViewportWorkspaceServiceTests,
+     AppendedCreationToolsPropagateWithoutReplacingSelectionPreferences) {
+  ViewportWorkspaceService workspace;
+  ASSERT_TRUE(workspace.record_selected_tool(ViewportPaneId::Perspective,
+                                            ViewportToolId::LassoSelect));
+  ASSERT_TRUE(workspace.record_selected_tool(ViewportPaneId::Top,
+                                            ViewportToolId::PaintSelect));
+  ASSERT_TRUE(workspace.record_shared_selected_tool(ViewportToolId::CreateStairs));
+  for (const auto pane : {ViewportPaneId::Perspective, ViewportPaneId::Top,
+                         ViewportPaneId::Front, ViewportPaneId::Side}) {
+    EXPECT_EQ(workspace.selected_tool(pane), ViewportToolId::CreateStairs);
+    const auto revision = workspace.control_revision(pane);
+    EXPECT_FALSE(workspace.record_selected_tool(pane, ViewportToolId::CreateStairs));
+    EXPECT_FALSE(workspace.record_selected_tool(pane, static_cast<ViewportToolId>(99)));
+    EXPECT_EQ(workspace.control_revision(pane), revision);
+  }
+  EXPECT_EQ(workspace.preferred_selection_tool(ViewportPaneId::Perspective),
+            ViewportToolId::LassoSelect);
+  EXPECT_EQ(workspace.preferred_selection_tool(ViewportPaneId::Top),
+            ViewportToolId::PaintSelect);
+  EXPECT_FALSE(workspace.record_shared_selected_tool(ViewportToolId::CreateStairs));
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(workspace.focus_pane(ViewportPaneId::Top));
+  EXPECT_EQ(workspace.selected_tool(ViewportPaneId::Top), ViewportToolId::CreateStairs);
+}
+
+TEST(ViewportWorkspaceServiceTests,
      SelectionToolPreferenceSurvivesOtherToolsAndImplicitFallback) {
   ViewportWorkspaceService workspace;
   constexpr auto kPane = ViewportPaneId::Top;

@@ -139,8 +139,9 @@ TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanAssembleChromeFrom
 	EXPECT_TRUE(contains_target(operation_bar_items, "edge_operations"));
 	EXPECT_TRUE(contains_target(operation_bar_items, "face_operations"));
 
-	EXPECT_TRUE(viewport_toolbar_items.size() == 13U);
+	EXPECT_TRUE(viewport_toolbar_items.size() == 14U);
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "create_primitive"));
+	EXPECT_TRUE(contains_target(viewport_toolbar_items, "create_stairs"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "pivot"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "extrude"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "insert_edge_loop"));

@@ -410,6 +410,8 @@ ModelingCommandResult set_primitive_segments(QuaderEditorApi &editor, int axis, 
     if (axis == 0) setting = "primitive.torus.major_segments";
     else if (axis == 1) setting = "primitive.torus.minor_segments";
     break;
+  case QuaderPrimitiveCreationShape::Stairs:
+    break;
   }
   if (setting.empty()) {
     return ModelingCommandResult{.ok = false, .changed = false,

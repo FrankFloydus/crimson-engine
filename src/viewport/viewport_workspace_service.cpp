@@ -366,8 +366,7 @@ ViewportWorkspaceService::preferred_selection_tool(ViewportPaneId pane_id) const
 bool ViewportWorkspaceService::record_selected_tool(ViewportPaneId pane_id,
                                                     ViewportToolId tool,
                                                     bool remember_selection) {
-  if (!valid_pane(pane_id) ||
-      static_cast<unsigned>(tool) > static_cast<unsigned>(ViewportToolId::PaintSelect)) {
+  if (!valid_pane(pane_id) || viewport_tool_contract_id(tool).empty()) {
     return false;
   }
   auto &state = pane(pane_id);

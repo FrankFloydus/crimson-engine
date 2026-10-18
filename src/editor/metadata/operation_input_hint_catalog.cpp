@@ -123,7 +123,9 @@ primitive_creation_input_hints(QuaderPrimitiveCreationShape kind, bool can_final
   }
   hints.push_back({Gesture::Command, kToolsCancelPrimitiveCreation, "operation.hints.cancel_creation", "Cancel Creation", 90});
   grid_snap(hints, context);
-  hints.push_back({Gesture::Command, kToolsFlipPrimitiveFaces, "operation.hints.flip_faces", "Flip Faces"});
+  if (kind != QuaderPrimitiveCreationShape::Stairs) {
+    hints.push_back({Gesture::Command, kToolsFlipPrimitiveFaces, "operation.hints.flip_faces", "Flip Faces"});
+  }
   if (kind == QuaderPrimitiveCreationShape::Cylinder || kind == QuaderPrimitiveCreationShape::Cone) {
     hints.push_back({Gesture::Command, kToolsTogglePrimitiveCaps, "operation.hints.toggle_caps", "Toggle Caps"});
   } else if (kind == QuaderPrimitiveCreationShape::Sphere) {

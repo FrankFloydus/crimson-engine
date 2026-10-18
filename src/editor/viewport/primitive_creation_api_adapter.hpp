@@ -74,6 +74,7 @@ public:
     case QuaderPrimitiveCreationShape::Cone: return ViewportPrimitiveCreationShape::Cone;
     case QuaderPrimitiveCreationShape::Sphere: return ViewportPrimitiveCreationShape::Sphere;
     case QuaderPrimitiveCreationShape::Torus: return ViewportPrimitiveCreationShape::Torus;
+    case QuaderPrimitiveCreationShape::Stairs: return ViewportPrimitiveCreationShape::Stairs;
     }
     return ViewportPrimitiveCreationShape::Box;
   }

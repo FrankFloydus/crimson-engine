@@ -11,6 +11,7 @@
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/project_session.hpp"
@@ -413,6 +414,169 @@ struct ExtrudeOutlineHarness {
               work.dynamic_source_compose_count);
   }
 };
+
+TEST(SelectedMeshOutlinePresentationTests,
+     StairsSettingsRefreshRetainedWiresAndSurfaceGeometryWithoutIdleRebuilds) {
+  ExtrudeOutlineHarness harness;
+  auto render_snapshot = build_render_scene_snapshot(
+      harness.session.scene(), harness.session.assets());
+  const auto submit = [&] {
+    auto stamp = harness.source_stamp();
+    stamp.selection_context = ViewportOverlaySelectionContext::Object;
+    render_snapshot = build_render_scene_snapshot(
+        harness.session.scene(), harness.session.assets(),
+        {.previous = &render_snapshot});
+    const auto live = harness.editor.tools().live_primitive_creation();
+    return harness.coordinator.submit({
+        .viewport_index = 0U,
+        .layer_mask = 1U,
+        .construction_object_id = live ? live->object_id : -1,
+        .selection_source = stamp,
+        .selection_frame_provider = &harness.provider,
+        .scene_selection_mode = RenderOverlaySelectionMode::Object,
+        .style_selection_context = ViewportOverlaySelectionContext::Object,
+        .overlays_visible = true,
+        .selection_dimensions_visible = false,
+    }, harness.settings, harness.target);
+  };
+  const auto expect_unchanged = [&] {
+    const auto builds = harness.provider.builds;
+    const auto submissions = harness.target.submissions;
+    const auto projection = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+    const auto preview_work = harness.session.modeling().tool_preview_work_stats();
+    const auto geometry_token = render_snapshot.meshes.empty()
+        ? std::uintptr_t{0U} : render_snapshot.meshes.front().mesh.geometry_token;
+    for (int frame = 0; frame < 8; ++frame) {
+      const auto unchanged = submit();
+      EXPECT_FALSE(unchanged.selection_source_refreshed);
+      EXPECT_FALSE(unchanged.persistent_submitted);
+      EXPECT_FALSE(unchanged.dynamic_submitted);
+      if (!render_snapshot.meshes.empty()) {
+        EXPECT_FALSE(render_snapshot.meshes.front().mesh_dirty);
+        EXPECT_EQ(render_snapshot.meshes.front().mesh.geometry_token, geometry_token);
+      }
+    }
+    EXPECT_EQ(harness.provider.builds, builds);
+    EXPECT_EQ(harness.target.submissions, submissions);
+    EXPECT_EQ(harness.session.modeling().modeling_sdk_projection_stats_for_tests()
+                  .native_selection_projection_build_count,
+              projection.native_selection_projection_build_count);
+    EXPECT_EQ(harness.session.modeling().tool_preview_work_stats().signature_enumeration_count,
+              preview_work.signature_enumeration_count);
+    EXPECT_EQ(harness.session.modeling().tool_preview_work_stats().mesh_extraction_count,
+              preview_work.mesh_extraction_count);
+  };
+  ASSERT_TRUE(submit().persistent_submitted);
+  ASSERT_TRUE(harness.target.persistent.lines.empty());
+  ASSERT_TRUE(harness.target.persistent.triangles.empty());
+  ASSERT_TRUE(harness.editor.tools().begin_stairs_creation().ok());
+  ModelingBoxPreview placement;
+  placement.ok = true;
+  placement.valid = true;
+  placement.drag_state = ModelingBoxDragState::Height;
+  placement.corner_count = 8U;
+  placement.corners = {{{-2, 0, -4}, {-2, 0, 4}, {2, 0, 4}, {2, 0, -4},
+                        {-2, 2, -4}, {-2, 2, 4}, {2, 2, 4}, {2, 2, -4}}};
+  const auto accepted = harness.session.primitive_creation().accept_preview(
+      placement, "Stairs retained submission");
+  ASSERT_TRUE(accepted.ok) << accepted.message;
+  const auto objects = harness.editor.query().modeling_objects();
+  ASSERT_EQ(objects.size(), 1U);
+  const auto object = harness.editor.query().modeling_object_for_id(
+      objects.front().modeling_object_id);
+  ASSERT_TRUE(object.has_value());
+  const auto capture_geometry = [&] {
+    std::vector<std::array<float, 6U>> wires;
+    for (const auto &line : harness.target.persistent.lines) {
+      std::array<float, 3U> first{line.start.x, line.start.y, line.start.z};
+      std::array<float, 3U> second{line.end.x, line.end.y, line.end.z};
+      if (second < first) std::swap(first, second);
+      wires.push_back({first[0], first[1], first[2],
+                       second[0], second[1], second[2]});
+    }
+    std::ranges::sort(wires);
+    return wires;
+  };
+  const auto expect_current_geometry = [&] {
+    const auto mesh = harness.editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(mesh.has_value());
+    ASSERT_FALSE(mesh->indices.empty());
+    ASSERT_FALSE(harness.target.persistent.lines.empty());
+    const auto world = harness.session.scene().world_transform_matrix(object->entity);
+    ASSERT_EQ(render_snapshot.meshes.size(), 1U);
+    const auto &displayed = render_snapshot.meshes.front();
+    EXPECT_EQ(displayed.entity_id, object->entity);
+    ASSERT_EQ(displayed.mesh.vertices.size(), mesh->vertices.size());
+    ASSERT_EQ(displayed.mesh.indices.size(), mesh->indices.size());
+    EXPECT_TRUE(std::equal(displayed.mesh.indices.begin(), displayed.mesh.indices.end(),
+                           mesh->indices.begin()));
+    for (std::size_t index = 0U; index < mesh->vertices.size(); ++index) {
+      const auto actual = transform_point(displayed.world_transform,
+                                           displayed.mesh.vertices[index].position);
+      const auto expected = transform_point(world, mesh->vertices[index].position);
+      EXPECT_LT(length_squared(actual - expected), 1.0e-12F);
+    }
+    const auto expect_endpoint = [&](QVec3 endpoint) {
+      EXPECT_TRUE(std::ranges::any_of(mesh->vertices, [&](const auto &vertex) {
+        return length_squared(transform_point(world, vertex.position) - endpoint) < 1.0e-12F;
+      })) << "Stale stairs submission at " << endpoint.x << ", "
+          << endpoint.y << ", " << endpoint.z;
+    };
+    for (const auto &line : harness.target.persistent.lines) {
+      EXPECT_EQ(line.element.object_id, object->modeling_object_id);
+      expect_endpoint(line.start);
+      expect_endpoint(line.end);
+    }
+    // Creation suppresses selection/hover fills. Any remaining overlay
+    // triangles are source-wire visibility metadata; the retained scene mesh
+    // above owns the actual rendered surface in Object Mode.
+    for (const auto &triangle : harness.target.persistent.triangles) {
+      EXPECT_EQ(triangle.element.object_id, object->modeling_object_id);
+      EXPECT_EQ(triangle.layer, ViewportOverlayLayer::SourceWireDepthStamp);
+      for (const auto endpoint : {triangle.a, triangle.b, triangle.c}) {
+        expect_endpoint(endpoint);
+      }
+    }
+  };
+  ASSERT_TRUE(submit().persistent_submitted);
+  ASSERT_NO_FATAL_FAILURE(expect_current_geometry());
+  const auto straight = capture_geometry();
+  ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+  ASSERT_TRUE(harness.editor.tools().set_setting(
+      "create_stairs", "stairs.automatic_step_count", false).ok());
+  ASSERT_TRUE(harness.editor.tools().set_setting(
+      "create_stairs", "stairs.step_count", 7.0).ok());
+  ASSERT_TRUE(submit().persistent_submitted);
+  ASSERT_NO_FATAL_FAILURE(expect_current_geometry());
+  const auto seven_steps = capture_geometry();
+  EXPECT_NE(seven_steps, straight);
+  ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+  ASSERT_TRUE(harness.editor.tools().set_setting(
+      "create_stairs", "stairs.surface", "ramp").ok());
+  ASSERT_TRUE(submit().persistent_submitted);
+  ASSERT_NO_FATAL_FAILURE(expect_current_geometry());
+  const auto ramp = capture_geometry();
+  EXPECT_NE(ramp, seven_steps);
+  ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+  ASSERT_TRUE(harness.editor.tools().set_setting(
+      "create_stairs", "stairs.construction", "slab").ok());
+  ASSERT_TRUE(harness.editor.tools().set_setting(
+      "create_stairs", "stairs.layout", "spiral").ok());
+  ASSERT_TRUE(harness.editor.tools().set_setting(
+      "create_stairs", "stairs.turns", 2.0).ok());
+  ASSERT_TRUE(submit().persistent_submitted);
+  ASSERT_NO_FATAL_FAILURE(expect_current_geometry());
+  EXPECT_NE(capture_geometry(), ramp);
+  ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(submit().persistent_submitted);
+  EXPECT_TRUE(harness.target.persistent.lines.empty());
+  EXPECT_TRUE(harness.target.persistent.triangles.empty());
+  EXPECT_TRUE(render_snapshot.meshes.empty());
+  EXPECT_TRUE(harness.editor.query().modeling_objects().empty());
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
+  ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+}
 
 TEST(SelectedMeshOutlinePresentationTests,
      BridgeOwnerSignatureRefreshesSubmittedWiresWhileAuthoringStaysUncommitted) {

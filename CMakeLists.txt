@@ -1875,6 +1875,7 @@ if(QUADER_BUILD_TESTS)
         tests/project_workspace_storage_tests.cpp
         tests/project_session_workspace_tests.cpp
         tests/primitive_creation_tool_service_tests.cpp
+        tests/stairs_creation_tool_tests.cpp
         tests/primitive_cube_interaction_tests.cpp
         tests/primitive_cube_overlay_tests.cpp
         tests/selected_mesh_outline_cache_tests.cpp

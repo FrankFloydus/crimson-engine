@@ -16,7 +16,7 @@
 namespace quader {
 
 /// Shapes that currently expose creation controls in the viewport.
-enum class ViewportPrimitiveCreationShape { Box, Cylinder, Cone, Sphere, Torus };
+enum class ViewportPrimitiveCreationShape { Box, Cylinder, Cone, Sphere, Torus, Stairs };
 /// Sphere topology used by the projected creation controls.
 enum class ViewportSphereType { Uv, Quad };
 /// Semantic resize intent sent from a projected dot to the primitive owner.

@@ -43,8 +43,9 @@ struct ToolIconSpec {
   bool separator_before = false;
 };
 
-constexpr std::array<ToolIconSpec, 20> kToolIconSpecs{{
+constexpr std::array<ToolIconSpec, 21> kToolIconSpecs{{
     {ViewportToolId::CreatePrimitive, ":/quader/icons/tool_create_box.png"},
+    {ViewportToolId::CreateStairs, nullptr},
     {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
     {ViewportToolId::Align, ":/quader/icons/tool_align.png"},
     {ViewportToolId::Extrude, ":/quader/icons/tool_extrude.png"},
@@ -131,6 +132,41 @@ QIcon curve_tool_icon(const QPalette &palette) {
   return icon;
 }
 
+QPixmap stairs_tool_icon_pixmap(const QPalette &palette, int extent) {
+  QPixmap pixmap(extent, extent);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing);
+  constexpr qreal kDesignExtent = 64.0;
+  const qreal drawing_scale = static_cast<qreal>(extent) / kDesignExtent;
+  painter.scale(drawing_scale, drawing_scale);
+  painter.setPen(QPen(palette.color(QPalette::ButtonText), 3.5,
+                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+  painter.setBrush(palette.color(QPalette::Button));
+  QPainterPath stairs(QPointF(9, 53));
+  stairs.lineTo(9, 41);
+  stairs.lineTo(23, 41);
+  stairs.lineTo(23, 29);
+  stairs.lineTo(37, 29);
+  stairs.lineTo(37, 17);
+  stairs.lineTo(54, 17);
+  stairs.lineTo(54, 53);
+  stairs.closeSubpath();
+  painter.drawPath(stairs);
+  return pixmap;
+}
+
+QIcon stairs_tool_icon(const QPalette &palette) {
+  constexpr std::array<int, 9> kGeneratedExtents{
+      16, 24, 32, 48, 64, 96, 128, 192, 384,
+  };
+  QIcon icon;
+  for (const int extent : kGeneratedExtents) {
+    icon.addPixmap(stairs_tool_icon_pixmap(palette, extent));
+  }
+  return icon;
+}
+
 QString localized_tool_text(const LocalizationService &localization,
                             std::string_view tool_id,
                             std::string_view fallback) {
@@ -165,9 +201,11 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     const QIcon icon =
         spec.tool == ViewportToolId::Curve
             ? curve_tool_icon(palette())
-            : spec.icon_path != nullptr
-                ? qt_multiresolution_icon(QString::fromUtf8(spec.icon_path))
-                : QIcon{};
+            : spec.tool == ViewportToolId::CreateStairs
+                ? stairs_tool_icon(palette())
+                : spec.icon_path != nullptr
+                    ? qt_multiresolution_icon(QString::fromUtf8(spec.icon_path))
+                    : QIcon{};
     QAction *action = new QAction(icon, QString::fromUtf8(fallback.data()), this);
     if (spec.toolbar_visible) {
       if (separator_pending && !actions().empty()) {
@@ -246,6 +284,9 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     if (spec.tool == ViewportToolId::Curve) {
       curve_action_ = action;
     }
+    if (spec.tool == ViewportToolId::CreateStairs) {
+      stairs_action_ = action;
+    }
   }
   QStyle &button_presentation =
       install_native_toolbar_button_presentation(*this);
@@ -278,6 +319,7 @@ bool QtToolToolbar::event(QEvent *event) {
       (event->type() == QEvent::PaletteChange ||
        event->type() == QEvent::ApplicationPaletteChange)) {
     refresh_curve_tool_icon();
+    refresh_stairs_tool_icon();
   }
   return handled;
 }
@@ -285,6 +327,12 @@ bool QtToolToolbar::event(QEvent *event) {
 void QtToolToolbar::refresh_curve_tool_icon() {
   if (curve_action_ != nullptr) {
     curve_action_->setIcon(curve_tool_icon(palette()));
+  }
+}
+
+void QtToolToolbar::refresh_stairs_tool_icon() {
+  if (stairs_action_ != nullptr) {
+    stairs_action_->setIcon(stairs_tool_icon(palette()));
   }
 }
 

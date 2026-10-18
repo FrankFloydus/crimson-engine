@@ -10,6 +10,7 @@
 #include "core/command_result.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include <quader/modeling/mesh/stairs.hpp>
 
 #include <array>
 #include <cstddef>
@@ -24,6 +25,7 @@ namespace quader {
 class EditorHistoryService;
 
 inline constexpr std::string_view kCreatePrimitiveToolId = "create_primitive";
+inline constexpr std::string_view kCreateStairsToolId = "create_stairs";
 
 inline constexpr std::string_view kPrimitiveTypeSetting = "primitive.type";
 inline constexpr std::string_view kPrimitiveFlipFacesSetting =
@@ -83,6 +85,7 @@ enum class PrimitiveCreationKind {
   Sphere = 2,
   Cone = 3,
   Torus = 4,
+  Stairs = 5,
 };
 
 /// Selects the topology family used by authored spheres.
@@ -194,6 +197,16 @@ struct PrimitiveCreationSessionDefaults {
   ConePrimitiveCreationSettings cone;
   SpherePrimitiveCreationSettings sphere;
   TorusPrimitiveCreationSettings torus;
+  modeling::StairsSpec stairs;
+  PrimitiveCreationKind preferred_regular_kind = PrimitiveCreationKind::Box;
+};
+
+/// Retained calculated results from the latest accepted stair geometry.
+struct StairsCreationMetrics {
+  std::uint32_t step_count = 0;
+  double riser_height = 0.0;
+  double tread_depth = 0.0;
+  double slope_degrees = 0.0;
 };
 
 /**
@@ -225,9 +238,13 @@ public:
   [[nodiscard]] std::optional<PrimitiveCreationKind> active_kind() const;
   /// Active shape, or the latest application-owned choice when idle.
   [[nodiscard]] PrimitiveCreationKind preferred_kind() const;
+  [[nodiscard]] PrimitiveCreationKind preferred_regular_kind() const;
   [[nodiscard]] std::string_view active_tool_id() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const {
     return tool_settings_revision_;
+  }
+  [[nodiscard]] std::uint64_t creation_revision() const {
+    return primitive_revision_ + tool_settings_revision_;
   }
 
   [[nodiscard]] const BoxPrimitiveCreationSettings &box_settings() const {
@@ -245,6 +262,12 @@ public:
   }
   [[nodiscard]] const TorusPrimitiveCreationSettings &torus_settings() const {
     return torus_settings_;
+  }
+  [[nodiscard]] const modeling::StairsSpec &stairs_settings() const {
+    return stairs_settings_;
+  }
+  [[nodiscard]] const StairsCreationMetrics &stairs_metrics() const {
+    return stairs_metrics_;
   }
 
   CommandResult activate();
@@ -327,6 +350,7 @@ private:
       QVec3 radial_axis = {1.0f, 0.0f, 0.0f};
       double radial_distance = 0.0;
       double tube_radius_ratio = 0.2;
+      modeling::StairsSpec stairs;
     };
     std::optional<ResizeBaseline> resize;
   };
@@ -338,7 +362,8 @@ private:
                                                 bool report_failure);
   [[nodiscard]] bool live_primitive_is_selected() const;
   [[nodiscard]] CommandResult
-  update_live_primitive(bool preserve_selection = false);
+  update_live_primitive(bool preserve_selection = false,
+                        const modeling::StairsMesh *prepared_stairs = nullptr);
   [[nodiscard]] CommandResult freeze_live_primitive_if_selection_changed();
   [[nodiscard]] CommandResult reset_footprint();
   [[nodiscard]] CommandResult restore_shape_history(
@@ -347,6 +372,7 @@ private:
   void finish_checkpoint(bool restored_by_cancel);
   void load_settings(const PrimitiveCreationSessionDefaults &settings);
   void remember_settings();
+  CommandResult set_stairs_setting(std::string_view name, double value);
 
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
@@ -358,7 +384,10 @@ private:
   ConePrimitiveCreationSettings cone_settings_;
   SpherePrimitiveCreationSettings sphere_settings_;
   TorusPrimitiveCreationSettings torus_settings_;
+  modeling::StairsSpec stairs_settings_;
+  StairsCreationMetrics stairs_metrics_;
   PrimitiveCreationKind preferred_kind_ = PrimitiveCreationKind::Box;
+  PrimitiveCreationKind preferred_regular_kind_ = PrimitiveCreationKind::Box;
   std::optional<Session> session_;
   std::optional<LivePrimitive> live_primitive_;
   std::uint64_t tool_settings_revision_ = 0;

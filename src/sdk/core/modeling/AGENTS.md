@@ -17,6 +17,9 @@ preview transactions, history, typed identities, neutral payloads, and binary QD
   `quader::modeling`.
 - `src/`: public API implementations; `session.cpp` owns workspace/history/preview state,
   `polygon_document.cpp` and `curve_document.cpp` own portable document facades.
+- `include/quader/modeling/mesh/stairs.hpp`, `src/stairs.cpp`: stairs/ramp preset
+  generation and fitted dimensions; [portable tests](../../../../tests/sdk/modeling_stairs_tests.cpp)
+  protect closed boundaries, landings, equal risers and body clearance.
 - [neutral/README.md](neutral/README.md): source-only declarations shared with native adapters.
 - [internal/mesh/polygon/README.md](internal/mesh/polygon/README.md): polygon implementation.
 - [internal/mesh/geometry/README.md](internal/mesh/geometry/README.md): geometry implementation.

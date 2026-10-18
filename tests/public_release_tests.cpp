@@ -139,6 +139,7 @@ constexpr auto kExcludedCommands = std::to_array<QuaderCommandId>({
     quader_command::kToolsActivateCreateCurve,
     quader_command::kToolsActivateCreateTorus,
     quader_command::kToolsActivateCreateCone,
+    quader_command::kToolsActivateCreateStairs,
     quader_command::kToolsActivateExtrude,
     quader_command::kToolsActivateExtrudeIndividual,
     quader_command::kToolsActivateExtrudeAlongNormals,

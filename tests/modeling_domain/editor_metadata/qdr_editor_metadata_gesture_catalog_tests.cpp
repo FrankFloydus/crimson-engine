@@ -88,7 +88,7 @@ bool has_interaction_kind(std::string_view id, qhc::HostInteractionKind kind)
 
 TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogStaysDescriptorOnlyAndResolvesToolReferences) {
 	const std::span<const qhc::HostGestureDescriptor> gestures = qhc::gesture_catalog();
-	EXPECT_EQ(gestures.size(), 17U);
+	EXPECT_EQ(gestures.size(), 18U);
 
 	for (const qhc::HostGestureDescriptor& gesture : gestures) {
 		EXPECT_FALSE(gesture.id.empty());
@@ -142,8 +142,9 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogPreservesVi
 	EXPECT_TRUE(active_tools.requires_active_tool);
 	EXPECT_TRUE(active_tools.consumes_pointer_when_active);
 	EXPECT_TRUE(active_tools.suppresses_gizmo);
-	check_tool_order(active_tools, std::array<std::string_view, 6> {{
+	check_tool_order(active_tools, std::array<std::string_view, 7> {{
 		"create_primitive",
+		"create_stairs",
 		"insert_edge_loop",
 		"knife",
 		"cut",
@@ -174,6 +175,23 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesMo
                               qhc::HostPointerInputKind::PrimaryUp));
 	EXPECT_TRUE(has_key_input(primitive, "Escape"));
 	EXPECT_TRUE(has_tool(primitive, "create_primitive"));
+
+        const qhc::HostGestureDescriptor &stairs =
+            require_gesture("create_stairs_gesture");
+        EXPECT_TRUE(stairs.requires_active_tool);
+        EXPECT_TRUE(stairs.consumes_pointer_when_active);
+        EXPECT_TRUE(stairs.suppresses_gizmo);
+        EXPECT_FALSE(stairs.returns_to_select_on_cancel);
+        EXPECT_FALSE(stairs.returns_to_select_on_success);
+        EXPECT_TRUE(stairs.rebuilds_mesh_on_success);
+        EXPECT_TRUE(has_tool(stairs, "create_stairs"));
+        EXPECT_TRUE(has_key_input(stairs, "Escape"));
+        for (const auto input : {qhc::HostPointerInputKind::MouseMove,
+                                 qhc::HostPointerInputKind::PrimaryDown,
+                                 qhc::HostPointerInputKind::PrimaryDrag,
+                                 qhc::HostPointerInputKind::PrimaryUp}) {
+          EXPECT_TRUE(has_pointer_input(stairs, input));
+        }
 
 	const qhc::HostGestureDescriptor& insert_edge_loop = require_gesture("insert_edge_loop_gesture");
 	EXPECT_TRUE(insert_edge_loop.returns_to_select_on_cancel);

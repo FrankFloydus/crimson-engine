@@ -20,6 +20,7 @@ file except through prior written authorization from Francesco Di Blasi.
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |
 | Native tool lifecycle and semantic input | `tools/`, then [input guide](../../INPUT_KEYBINDINGS.md) |
+| Primitive and Stairs & Ramps creation | `modeling/services/primitive_creation_tool_service.*`; portable stairs geometry stays in the SDK generator |
 | Face extrusion, pending operation boundaries and remembered options | `tools/extrude_tool_service.*`; geometry and source snapshots stay in the modeling owner |
 | Application-lifetime tool options | `session/tool_session_defaults.hpp`, plus Path Array and Extrude defaults supplied by `ProjectSession`/`SceneSessionService` |
 | Light range and live scene-color previews | `viewport/point_light_range_interaction.*`, `commands/document_command_service.*` |

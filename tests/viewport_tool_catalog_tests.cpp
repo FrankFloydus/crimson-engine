@@ -24,6 +24,7 @@
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/transform/align_tool_service.hpp"
 #include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
+#include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -428,7 +429,7 @@ TEST(ViewportToolCatalogTests, StrokeClosureHintsFollowOwnerHoverAndClearWhenInt
 /// Drives the real persistent primitive owner through deterministic rays.
 class PrimitivePointerHarness final {
 public:
-  PrimitivePointerHarness()
+  explicit PrimitivePointerHarness(ViewportToolId tool_id = ViewportToolId::CreatePrimitive)
       : editor(QuaderApiSessionInternalAccess::from_scene_session(session)),
         tool_ports(session.modeling()),
         context{
@@ -439,9 +440,9 @@ public:
             .modal_state = &modal_state,
             .box = &box_context,
         } {
-    state.active_tool = ViewportToolId::CreatePrimitive;
-    tool = find_viewport_tool(ViewportToolId::CreatePrimitive);
-    activated = editor.tools().activate(ViewportToolId::CreatePrimitive).ok();
+    state.active_tool = tool_id;
+    tool = find_viewport_tool(tool_id);
+    activated = editor.tools().activate(tool_id).ok();
     box_context.make_event_at = [](QVec2 local) {
       return ModelingBoxToolEvent{
           .screen_position = local,
@@ -472,6 +473,11 @@ public:
           .message = result.message,
       };
     };
+    box_context.apply_session = [&]() {
+      const auto result = editor.tools().commit_active_tool_preview();
+      return ModelingCommandResult{.ok = result.ok(), .changed = result.changed(),
+                                   .message = std::string(result.error_message())};
+    };
     box_context.session_active = [&]() {
       return editor.tools().has_active_primitive_creation();
     };
@@ -485,7 +491,7 @@ public:
     return tool->handle_event(
         context, ViewportToolEvent{
                      .kind = ViewportToolEventKind::Frame,
-                     .tool = ViewportToolId::CreatePrimitive,
+                     .tool = state.active_tool,
                      .pointer = pointer,
                  });
   }
@@ -729,7 +735,8 @@ TEST(ViewportToolCatalogTests,
   ViewportToolRuntime runtime;
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
     const ViewportPointerCursor expected =
-        descriptor.tool == ViewportToolId::CreatePrimitive
+        (descriptor.tool == ViewportToolId::CreatePrimitive ||
+         descriptor.tool == ViewportToolId::CreateStairs)
             ? ViewportPointerCursor::PrecisionCross
             : ((descriptor.tool == ViewportToolId::Knife ||
                 descriptor.tool == ViewportToolId::Cut)
@@ -757,6 +764,13 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
   EXPECT_TRUE(primitive->shortcut().empty());
   EXPECT_TRUE(primitive->owns_viewport());
   EXPECT_FALSE(primitive->blocks_viewport_focus_shortcuts());
+  const Tool *stairs = find_viewport_tool("create_stairs");
+  ASSERT_NE(stairs, nullptr);
+  EXPECT_EQ(stairs->viewport_tool(), ViewportToolId::CreateStairs);
+  EXPECT_EQ(stairs->modeling_tool(), ModelingViewportTool::Box);
+  EXPECT_EQ(stairs->kind(), ToolKind::Modal);
+  EXPECT_TRUE(stairs->owns_viewport());
+  EXPECT_TRUE(stairs->shortcut().empty());
   EXPECT_EQ(find_viewport_tool("box"), nullptr);
   EXPECT_EQ(find_viewport_tool("cylinder"), nullptr);
   EXPECT_EQ(find_viewport_tool("sphere"), nullptr);
@@ -1085,7 +1099,8 @@ TEST(ViewportToolRuntimeTests,
     }
     const auto local_history = coordinator.active_history_state();
     EXPECT_EQ(local_history.has_value(),
-              descriptor.tool == ViewportToolId::CreatePrimitive);
+              descriptor.tool == ViewportToolId::CreatePrimitive ||
+                  descriptor.tool == ViewportToolId::CreateStairs);
     if (local_history) {
       EXPECT_FALSE(local_history->can_undo);
       EXPECT_FALSE(local_history->can_redo);
@@ -1584,7 +1599,7 @@ TEST(ViewportToolRuntimeTests,
 TEST(ViewportToolRuntimeTests,
      ImplicitSettlementRetiresEmptyNativeToolsWithoutAuthoredHistory) {
   for (const ViewportToolId tool :
-       {ViewportToolId::Curve, ViewportToolId::CreatePrimitive,
+       {ViewportToolId::Curve, ViewportToolId::CreatePrimitive, ViewportToolId::CreateStairs,
         ViewportToolId::RadialArray, ViewportToolId::PathArray,
         ViewportToolId::Pivot, ViewportToolId::UvPeel, ViewportToolId::Extrude}) {
     SCOPED_TRACE(static_cast<int>(tool));
@@ -2142,6 +2157,82 @@ TEST(ViewportToolRuntimeTests, BoxToolAcceptUsesCommandOwnedTransaction) {
     EXPECT_EQ(session.scene().material(committed_entity)->material,
               material.value.id);
     EXPECT_EQ(session.scene().primary_selection(), committed_entity);
+}
+
+TEST(ViewportToolRuntimeTests,
+     StairsPointerGestureSharesPlacementNavigationAndApplyCancelLifecycle) {
+  for (const bool cancel : {false, true}) {
+    SCOPED_TRACE(cancel);
+    PrimitivePointerHarness harness(ViewportToolId::CreateStairs);
+    ASSERT_NE(harness.tool, nullptr);
+    ASSERT_TRUE(harness.activated);
+    EXPECT_EQ(harness.editor.tools().active_tool(), "create_stairs");
+    constexpr QVec2 kPress{20.0f, 20.0f};
+    constexpr QVec2 kEnd{70.0f, 90.0f};
+    ASSERT_TRUE(harness.dispatch_direct({
+        .hovered = true, .left_clicked = true, .left_down = true,
+        .viewport_focused = true, .mouse_local = kPress,
+        .mouse_screen = kPress, .left_click_local = kPress,
+    }).consumed);
+    const auto before_navigation = harness.session.modeling().box_preview();
+    ASSERT_EQ(before_navigation.drag_state, ModelingBoxDragState::Footprint);
+    ASSERT_TRUE(harness.dispatch_direct({
+        .hovered = true, .left_down = true,
+        .navigation_active = true, .viewport_focused = true,
+        .mouse_local = kEnd, .mouse_screen = kEnd,
+    }).consumed);
+    EXPECT_EQ(harness.accept_count, 0);
+    EXPECT_EQ(harness.session.modeling().box_preview().footprint_count,
+              before_navigation.footprint_count);
+
+    ASSERT_TRUE(harness.dispatch_direct({
+        .hovered = true, .left_released = true,
+        .viewport_focused = true, .mouse_local = kEnd, .mouse_screen = kEnd,
+    }).consumed);
+    EXPECT_EQ(harness.accept_count, 1);
+    ASSERT_EQ(harness.session.scene().entities().size(), 1U);
+    ASSERT_TRUE(harness.editor.tools().has_active_stairs_creation());
+    EXPECT_EQ(harness.session.modeling().box_preview().drag_state,
+              ModelingBoxDragState::Idle);
+    const auto stairs = harness.editor.tools().stairs_creation_state();
+    ASSERT_TRUE(stairs.has_value());
+    EXPECT_GT(stairs->actual_step_count, 0U);
+    EXPECT_DOUBLE_EQ(stairs->specification.footprint_width, 5.0);
+    EXPECT_DOUBLE_EQ(stairs->specification.footprint_depth, 7.0);
+    const auto live = harness.editor.tools().live_primitive_creation();
+    ASSERT_TRUE(live.has_value());
+    EXPECT_EQ(live->shape, QuaderPrimitiveCreationShape::Stairs);
+    PrimitiveCreationInteraction controls;
+    harness.camera.set_viewport_size(800.0f, 600.0f);
+    const auto &projected = controls.project(
+        ViewportPrimitiveCreationApiAdapter::from_api(live), harness.camera, 1.0f);
+    EXPECT_TRUE(projected.visible);
+    for (std::size_t index = 6U; index < projected.controls.size(); ++index) {
+      EXPECT_FALSE(projected.controls[index].visible);
+    }
+    EXPECT_EQ(harness.session.history().undo_count(), 0U);
+    if (cancel) {
+      const auto canceled = harness.tool->handle_event(harness.context, {
+          .kind = ViewportToolEventKind::Cancel,
+          .tool = ViewportToolId::CreateStairs,
+          .exit_active_modal_tool = true,
+      });
+      EXPECT_TRUE(canceled.consumed);
+      EXPECT_TRUE(harness.session.scene().entities().empty());
+      EXPECT_FALSE(harness.session.history().can_undo());
+    } else {
+      EXPECT_TRUE(harness.dispatch_direct({
+          .hovered = true, .finalize_pressed = true, .viewport_focused = true,
+      }).consumed);
+      EXPECT_EQ(harness.session.scene().entities().size(), 1U);
+      EXPECT_EQ(harness.session.history().undo_count(), 1U);
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      EXPECT_TRUE(harness.session.scene().entities().empty());
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+      EXPECT_EQ(harness.session.scene().entities().size(), 1U);
+    }
+    EXPECT_FALSE(harness.editor.tools().has_active_stairs_creation());
+  }
 }
 
 TEST(ViewportToolRuntimeTests,

@@ -16,9 +16,9 @@ namespace quader {
  */
 class CreatePrimitiveTool final : public TwoStageBoxTool {
 public:
-  CreatePrimitiveTool()
+  explicit CreatePrimitiveTool(ViewportToolId tool = ViewportToolId::CreatePrimitive)
       : TwoStageBoxTool(
-            viewport_tool_descriptor(ViewportToolId::CreatePrimitive)) {}
+            viewport_tool_descriptor(tool)) {}
   [[nodiscard]] bool handles_wheel_events() const override { return true; }
   [[nodiscard]] ViewportToolResult
   handle_event(ViewportToolContext &context,

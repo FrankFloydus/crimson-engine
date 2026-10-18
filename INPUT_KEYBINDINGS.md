@@ -163,6 +163,9 @@ their release profile exposes them. The old `tools.activate.create_primitive` ta
 presentation-hidden alias of Create Box in the same keybinding action group; preserve its
 stored assignments, removals and sequences. Both alias and canonical command dispatch to the
 shape-specific owner route, including when a different primitive is already active.
+Stairs & Ramps has its own `tools.activate.create_stairs` target with no default shortcut.
+Its dedicated creation lifecycle shares the primitive Apply/Cancel targets, preserving their
+existing assignments while retaining the ordinary primitive toolbar's remembered shape.
 `B` invokes the immediate Bridge action in Edge/Face mode, using one straight span regardless of
 remembered Bridge preview steps. The edge/face menus expose the Bridge preview;
 its remembered settings stay independent. Canonical quick-Bridge aliases share the remappable binding.

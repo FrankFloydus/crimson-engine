@@ -445,6 +445,7 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
          command_id == quader_command::kToolsActivateCreateSphere.string() ||
          command_id == quader_command::kToolsActivateCreateTorus.string() ||
          command_id == quader_command::kToolsActivateCreateCone.string() ||
+         command_id == quader_command::kToolsActivateCreateStairs.string() ||
          command_id == quader_command::kToolsActivateCreateCurve.string() ||
          command_id == quader_command::kToolsActivateExtrudeIndividual.string() ||
          command_id == quader_command::kToolsActivateExtrudeAlongNormals.string() ||
@@ -673,7 +674,8 @@ viewport_keybinding_context(const ViewportToolState &state,
   context.set("activeTool." + std::string(viewport_tool_id(state.active_tool)),
               true);
   const std::string primitive_kind =
-      state.active_tool == ViewportToolId::CreatePrimitive
+      (state.active_tool == ViewportToolId::CreatePrimitive ||
+       state.active_tool == ViewportToolId::CreateStairs)
           ? tools.active_primitive_type() : std::string{};
   context.set("primitiveCreation.box", primitive_kind == "box");
   context.set("primitiveCreation.cylinder", primitive_kind == "cylinder");
@@ -887,6 +889,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   }
   if (is(quader_command::kToolsActivateCreateCone)) {
     return "Create Cone";
+  }
+  if (is(quader_command::kToolsActivateCreateStairs)) {
+    return "Stairs & Ramps";
   }
   if (is(quader_command::kToolsActivateCreateCurve)) {
     return "Activate New Curve Creation Tool";
@@ -3202,7 +3207,8 @@ void QuaderCommandsApi::Impl::register_commands() {
                    "Flip Primitive Faces",
                    [this] { return tools_.flip_primitive_faces(); }, "Shift+F",
                    [this] {
-                     return !tools_.active_primitive_type().empty();
+                     const auto kind = tools_.active_primitive_type();
+                     return !kind.empty() && kind != "stairs";
                    });
   register_command(quader_command::kToolsTogglePrimitiveCaps,
                    "Toggle Primitive Caps",
@@ -3322,6 +3328,13 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_primitive_creation_command(
       quader_command::kToolsActivateCreateCone, "Create Cone",
       QuaderPrimitiveCreationShape::Cone);
+  register_command(
+      quader_command::kToolsActivateCreateStairs, "Stairs & Ramps",
+      [this] { return tools_.begin_stairs_creation(); }, {},
+      [this] {
+        return scene_documents_.has_active_scene() &&
+               tools_.can_activate(ViewportToolId::CreateStairs);
+      });
   // Preserve old assignments and deliberate removals as aliases of Create Box.
   // The presentation catalog keeps this compatibility target out of menus.
   register_primitive_creation_command(
@@ -3691,7 +3704,8 @@ void QuaderCommandsApi::Impl::register_commands() {
       kSelectionModeObject | kSelectionModeGroup);
   for (const ViewportTool *tool : viewport_tool_catalog()) {
     if (tool == nullptr ||
-        tool->viewport_tool() == ViewportToolId::CreatePrimitive) {
+        tool->viewport_tool() == ViewportToolId::CreatePrimitive ||
+        tool->viewport_tool() == ViewportToolId::CreateStairs) {
       continue;
     }
     const std::string activation_command =
@@ -3809,7 +3823,7 @@ void QuaderCommandsApi::Impl::register_default_keybindings() {
       "!navigation.active && operationPreview.active";
   constexpr std::string_view kPrimitiveToolContext =
       "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
-      "!navigation.active && activeTool.create_primitive";
+      "!navigation.active && (activeTool.create_primitive || activeTool.create_stairs)";
   register_keybinding_target_metadata(
       std::string(quader_command::kModelingApplyActivePreview.string()),
       "Apply Active Preview",
@@ -3879,7 +3893,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       "!navigation.active && operationPreview.active";
   constexpr std::string_view kPrimitiveToolContext =
       "(viewportFocus || outlinerFocus || editorFocus) && !textInputActive && "
-      "!navigation.active && activeTool.create_primitive";
+      "!navigation.active && (activeTool.create_primitive || activeTool.create_stairs)";
 
   register_keybinding_target_metadata(
       viewport_input_action_target_id("cancel_active_tool"),
@@ -3887,7 +3901,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       QuaderKeybindingContextKind::ModalTool,
       "(viewportFocus || ((outlinerFocus || editorFocus) && "
       "activeTool.insert_edge_loop)) && !textInputActive && !navigation.active && "
-      "!operationPreview.active && !activeTool.create_primitive && "
+      "!operationPreview.active && !activeTool.create_primitive && !activeTool.create_stairs && "
       "(modalTool.active || activeTool.ownsViewport || "
       "transformDrag.active || activeTool.nativeLifecycle || activeTool.insert_edge_loop)",
       {}, "tools.cancel");
@@ -3992,7 +4006,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
       viewport_input_action_target_id("cancel_active_tool"), "Escape",
       "(viewportFocus || ((outlinerFocus || editorFocus) && "
       "activeTool.insert_edge_loop)) && !textInputActive && !navigation.active && "
-      "!operationPreview.active && !activeTool.create_primitive && "
+      "!operationPreview.active && !activeTool.create_primitive && !activeTool.create_stairs && "
       "(modalTool.active || activeTool.ownsViewport || "
       "transformDrag.active || activeTool.nativeLifecycle || activeTool.insert_edge_loop)",
       10);

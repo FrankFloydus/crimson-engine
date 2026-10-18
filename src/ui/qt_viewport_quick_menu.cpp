@@ -106,8 +106,9 @@ QAction *add_command_action(
   if (!release_allows_command(command_id.string())) {
     return nullptr;
   }
-  QAction *action = menu.addAction(
-      localized(localization, localization_key, fallback));
+  QString label = localized(localization, localization_key, fallback);
+  label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+  QAction *action = menu.addAction(label);
   action->setObjectName(QString::fromUtf8(
       command_id.string().data(),
       static_cast<qsizetype>(command_id.string().size())));
@@ -153,6 +154,10 @@ void build_add_menu(QMenu &menu,
       *mesh_menu, bound_commands, editor, localization,
       "ui.viewport.quick_menu.add.cone", "Cone",
       quader_command::kToolsActivateCreateCone);
+  (void)add_command_action(
+      *mesh_menu, bound_commands, editor, localization,
+      "ui.viewport.quick_menu.add.stairs", "Stairs & Ramps",
+      quader_command::kToolsActivateCreateStairs);
 
   (void)add_command_action(
       menu, bound_commands, editor, localization,

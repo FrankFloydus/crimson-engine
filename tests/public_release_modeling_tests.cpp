@@ -251,14 +251,17 @@ TEST_F(PublicReleaseModelingTests, PrimitiveChoicesAndEditsRespectTheRelease) {
   auto &tools = editor().tools();
   ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
   for (const auto shape : {QuaderPrimitiveCreationShape::Cone,
-                           QuaderPrimitiveCreationShape::Torus}) {
+                           QuaderPrimitiveCreationShape::Torus,
+                           QuaderPrimitiveCreationShape::Stairs}) {
     expect_release_rejection(editor(), [&] { return tools.begin_primitive_creation(shape); });
   }
   for (const auto command : {quader_command::kToolsActivateCreateCone,
-                             quader_command::kToolsActivateCreateTorus}) {
+                             quader_command::kToolsActivateCreateTorus,
+                             quader_command::kToolsActivateCreateStairs}) {
     expect_release_rejection(editor(), [&] { return editor().commands().execute(command); });
   }
   ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
+  expect_release_rejection(editor(), [&] { return tools.begin_stairs_creation(); });
   const auto activated = tools.begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere);
   ASSERT_TRUE(activated.ok()) << activated.error_message();
   for (const auto type : {"cone", "torus"}) {

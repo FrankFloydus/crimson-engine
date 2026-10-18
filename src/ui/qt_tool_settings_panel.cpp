@@ -124,6 +124,10 @@ QString localized_target_title(const LocalizationService *localization,
   return localized_text(localization, "ui.viewport.settings", "Settings");
 }
 
+QString target_title_button_text(QString title) {
+  return title.replace(QLatin1Char('&'), QStringLiteral("&&"));
+}
+
 QString localized_descriptor_label(const LocalizationService *localization,
                                    std::string_view id,
                                    std::string_view fallback) {
@@ -1524,8 +1528,10 @@ private:
     cancel_button_->setText(
         localized_text(localization_, "ui.action.cancel", "Cancel"));
     if (last_target_.has_value()) {
-      target_title_->setText(
-          localized_target_title(localization_, *last_target_));
+      const QString title = localized_target_title(localization_, *last_target_);
+      target_title_->setText(target_title_button_text(title));
+      target_title_->setAccessibleName(title);
+      panel_.setWindowTitle(title);
     }
   }
 
@@ -2342,8 +2348,9 @@ private:
     }
     const QString target_title =
         localized_target_title(localization_, target);
-    if (target_title_->text() != target_title) {
-      target_title_->setText(target_title);
+    const QString button_title = target_title_button_text(target_title);
+    if (target_title_->text() != button_title) {
+      target_title_->setText(button_title);
       target_title_->setAccessibleName(target_title);
       panel_.setWindowTitle(target_title);
     }

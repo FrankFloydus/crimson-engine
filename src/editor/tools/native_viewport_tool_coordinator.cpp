@@ -154,36 +154,47 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .cancel = [&] { return curve_.cancel(); },
       .reset = [&] { (void)curve_.cancel(); },
   });
-  (void)runtime_.register_native_lifecycle({
-      .tool = ViewportToolId::CreatePrimitive,
+  for (const bool stairs : {false, true}) {
+    const auto owns_operation = [&, stairs] {
+      return primitives_.active() &&
+             (primitives_.active_kind() == PrimitiveCreationKind::Stairs) == stairs;
+    };
+    (void)runtime_.register_native_lifecycle({
+      .tool = stairs ? ViewportToolId::CreateStairs : ViewportToolId::CreatePrimitive,
       .active_priority = 4,
       .unavailable_message =
           "Select one visible, unlocked mesh or group in object mode.",
-      .commit_label = "Apply Primitive Tool",
+      .commit_label = stairs ? "Create Stairs & Ramps" : "Apply Primitive Tool",
       .can_activate = [] { return true; },
-      .active = [&] { return primitives_.active(); },
-      .pending = [&] { return primitives_.active(); },
-      .pending_history_preview = [&] { return primitives_.active(); },
-      .blocks_modeling_content_mutation = [&] { return primitives_.active(); },
-      .blocks_document_mutation = [&](EntityId entity) {
+      .active = owns_operation,
+      .pending = owns_operation,
+      .pending_history_preview = owns_operation,
+      .blocks_modeling_content_mutation = owns_operation,
+      .blocks_document_mutation = [&, owns_operation](EntityId entity) {
         const std::optional<int> object_id =
             modeling_.modeling_object_for_entity(entity);
-        return object_id.has_value() &&
+        return owns_operation() && object_id.has_value() &&
                primitives_.owns_created_object(*object_id);
       },
-      .activate = [&](double) { return primitives_.activate(); },
+      .activate = [&, stairs](double) {
+        return stairs ? primitives_.activate(PrimitiveCreationKind::Stairs)
+                      : primitives_.activate();
+      },
       .commit = [&] { return primitives_.apply(); },
       .settle = [&] { return primitives_.finish(); },
-      .cancel = [&] { return primitives_.cancel(); },
-      .reset = [&] { (void)primitives_.cancel(); },
+      .cancel = [&, owns_operation] {
+        return owns_operation() ? primitives_.cancel() : command_unchanged_result();
+      },
+      .reset = [&, owns_operation] { if (owns_operation()) (void)primitives_.cancel(); },
       .local_history = ViewportNativeToolHistoryAdapter{
-          .label = "Create Primitive",
+          .label = stairs ? "Create Stairs & Ramps" : "Create Primitive",
           .can_undo = [&] { return primitives_.can_undo(); },
           .can_redo = [&] { return primitives_.can_redo(); },
           .undo = [&] { return primitives_.undo(); },
           .redo = [&] { return primitives_.redo(); },
       },
-  });
+    });
+  }
   (void)runtime_.register_native_lifecycle({
       .tool = ViewportToolId::LinearArray,
       .active_priority = 1,

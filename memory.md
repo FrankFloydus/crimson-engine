@@ -406,6 +406,16 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   Guide loops use `ToolPreviewLine`, below the `ToolHandle` triangles, so neither guides nor mesh
   edges can paint over the dots and +/- glyphs.
 
+- Stairs & Ramps uses the same creation transaction through a dedicated `create_stairs` tool.
+  Keep the ordinary primitive preference independent. Parameters and fitted readouts are
+  creation-time state; accepted scenes contain an ordinary editable mesh. SDK generation owns
+  topology and body-clearance validation. Solid fills to the placement base; repeated footprints
+  need slabs with positive body clearance. Invalid options and publication failures retain the
+  accepted draft and remembered settings. Readouts and unchanged frames must not regenerate it.
+  Contracts: [portable generator](src/sdk/core/modeling/include/quader/modeling/mesh/stairs.hpp),
+  [creation workflows](tests/stairs_creation_tool_tests.cpp),
+  [geometry fixtures](tests/sdk/modeling_stairs_tests.cpp).
+
 Owner: [PrimitiveCreationToolService](src/editor/modeling/services/primitive_creation_tool_service.cpp).
 Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 [cube interaction](tests/primitive_cube_interaction_tests.cpp),

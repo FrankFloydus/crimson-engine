@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 20> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 21> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
@@ -100,6 +100,17 @@ constexpr std::array<ToolDescriptor, 20> kViewportToolDescriptors{{
         .id = "create_primitive",
         .label = "Create Primitive",
         .shortcut = "",
+        .kind = ToolKind::Modal,
+        .menu_group = ToolMenuGroup::Modeling,
+        .owns_viewport = true,
+        .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
+    },
+    {
+        .tool = ViewportToolId::CreateStairs,
+        .modeling_tool = ModelingViewportTool::Box,
+        .id = "create_stairs",
+        .label = "Stairs & Ramps",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,

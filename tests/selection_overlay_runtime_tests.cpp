@@ -13,6 +13,7 @@
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
@@ -1804,6 +1805,19 @@ public:
 
   QuaderEditorApi &workflow_editor() { return array_editor(); }
 
+  bool create_stairs_sample() {
+    if (!array_editor().tools().begin_stairs_creation().ok()) return false;
+    ModelingBoxPreview placement;
+    placement.ok = true;
+    placement.valid = true;
+    placement.drag_state = ModelingBoxDragState::Height;
+    placement.corner_count = 8U;
+    placement.corners = {{{-2, 0, -4}, {-2, 0, 4}, {2, 0, 4}, {2, 0, -4},
+                          {-2, 2, -4}, {-2, 2, 4}, {2, 2, 4}, {2, 2, -4}}};
+    return session_.primitive_creation().accept_preview(
+        placement, "Stairs Vulkan preview").ok;
+  }
+
   bool present_workflow_pane(std::size_t pane = 0u,
                              const ViewportSettings *appearance = nullptr,
                              bool dimensions_visible = false) {
@@ -1815,7 +1829,8 @@ public:
     const auto mode = modeling.selection_mode();
     const bool selection_visible =
         modeling.active_viewport_tool() != ModelingViewportTool::Cut;
-    const bool outline_only = selection_visible &&
+    const auto live_primitive = editor.tools().live_primitive_creation();
+    const bool outline_only = selection_visible && !live_primitive &&
         (mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group);
     const auto context = mode == ModelingSelectionMode::Vertex ? ViewportOverlaySelectionContext::Vertex
         : mode == ModelingSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
@@ -1858,6 +1873,7 @@ public:
     last_submission_ = bridge_.submit_viewport_overlay(
         {.viewport_index = pane,
          .layer_mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)),
+         .construction_object_id = live_primitive ? live_primitive->object_id : -1,
          .camera = ViewportCameraAdapter::overlay_camera(camera, {kWidth, kHeight}),
          .selection_source = {
              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
@@ -9120,6 +9136,118 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchPi
                 << pink_delta[0] << ',' << pink_delta[1] << '\n';
     }
   }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanStairsAndRampPreviewsUpdateRetainedSurfacesAndCancelWithoutGhosts) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-stairs-preview-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../stairs_creation_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0F, false));
+  ViewportCameraController camera;
+  camera.set_clip_planes(0.01F, 200.0F);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {10.0F, 8.0F, 12.0F}, .target = {0.0F, 1.0F, 0.0F},
+      .up = {0.0F, 1.0F, 0.0F}}));
+  harness.set_sample_camera(camera);
+  auto &editor = harness.workflow_editor();
+  const auto changed_pixels = [](const QImage &first, const QImage &second) {
+    std::size_t changed = 0U;
+    if (first.isNull() || second.isNull() || first.size() != second.size()) return changed;
+    for (int y = 0; y < first.height(); ++y) {
+      for (int x = 0; x < first.width(); ++x) {
+        const auto a = first.pixelColor(x, y);
+        const auto b = second.pixelColor(x, y);
+        if (std::abs(a.red() - b.red()) > 2 ||
+            std::abs(a.green() - b.green()) > 2 ||
+            std::abs(a.blue() - b.blue()) > 2) ++changed;
+      }
+    }
+    return changed;
+  };
+  const auto capture = [&](const char *phase) {
+    EXPECT_TRUE(harness.present_workflow_pane());
+    const QImage image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    const QString path = QDir(directory).filePath(
+        QStringLiteral("stairs-%1.png").arg(QString::fromLatin1(phase)));
+    EXPECT_TRUE(image.save(path));
+    std::cout << "Stairs preview GPU png=" << path.toStdString() << '\n';
+    const auto builds = harness.selection_frame_builds();
+    const auto outlines = harness.mesh_outline_work();
+    const auto uploads = harness.component_overlay_stats().uploads;
+    const auto projection = harness.modeling().modeling_sdk_projection_stats_for_tests();
+    for (int frame = 0; frame < 8; ++frame) {
+      EXPECT_TRUE(harness.present_workflow_pane());
+      EXPECT_FALSE(harness.last_submission().selection_source_refreshed);
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    }
+    EXPECT_EQ(harness.selection_frame_builds(), builds);
+    EXPECT_EQ(harness.mesh_outline_work().geometry_builds, outlines.geometry_builds);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count,
+              uploads.geometry_creation_count);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.position_upload_count,
+              uploads.position_upload_count);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.index_upload_count,
+              uploads.index_upload_count);
+    EXPECT_EQ(harness.modeling().modeling_sdk_projection_stats_for_tests()
+                  .native_selection_projection_build_count,
+              projection.native_selection_projection_build_count);
+    EXPECT_EQ(harness.capture(), image);
+    return image;
+  };
+  const QImage baseline = capture("baseline");
+  ASSERT_TRUE(harness.create_stairs_sample());
+  const auto objects = editor.query().modeling_objects();
+  ASSERT_EQ(objects.size(), 1U);
+  const auto object = editor.query().modeling_object_for_id(
+      objects.front().modeling_object_id);
+  ASSERT_TRUE(object.has_value());
+  const auto initial_mesh = editor.query().compiled_object_mesh(*object);
+  ASSERT_TRUE(initial_mesh.has_value());
+  ASSERT_FALSE(initial_mesh->indices.empty());
+  const QImage straight = capture("straight");
+  EXPECT_GT(changed_pixels(baseline, straight), 256U);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_stairs", "stairs.automatic_step_count", false).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_stairs", "stairs.step_count", 6.0).ok());
+  const QImage six_steps = capture("six-steps");
+  EXPECT_GT(changed_pixels(straight, six_steps), 32U);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_stairs", "stairs.surface", "ramp").ok());
+  const QImage ramp = capture("ramp");
+  EXPECT_GT(changed_pixels(six_steps, ramp), 32U);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_stairs", "stairs.construction", "slab").ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_stairs", "stairs.layout", "spiral").ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "create_stairs", "stairs.turns", 2.0).ok());
+  const QImage spiral = capture("slab-spiral-two-turns");
+  EXPECT_GT(changed_pixels(ramp, spiral), 256U);
+  EXPECT_GT(changed_pixels(baseline, spiral), 256U);
+  EXPECT_EQ(harness.undo_count(), 0U);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_TRUE(editor.query().modeling_objects().empty());
+  EXPECT_EQ(harness.undo_count(), 0U);
+  const QImage canceled = capture("canceled");
+  EXPECT_EQ(canceled, baseline)
+      << "Cancel must remove the prior stairs mesh, selected outline, and depth geometry.";
 }
 
 } // namespace

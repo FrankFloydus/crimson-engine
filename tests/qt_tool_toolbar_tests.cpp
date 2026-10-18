@@ -28,8 +28,9 @@
 
 namespace {
 
-constexpr std::array<quader::ViewportToolId, 14> kModelingTools{
+constexpr std::array<quader::ViewportToolId, 15> kModelingTools{
     quader::ViewportToolId::CreatePrimitive,
+    quader::ViewportToolId::CreateStairs,
     quader::ViewportToolId::Pivot,
     quader::ViewportToolId::Align,
     quader::ViewportToolId::Extrude,
@@ -44,7 +45,7 @@ constexpr std::array<quader::ViewportToolId, 14> kModelingTools{
     quader::ViewportToolId::PathArray,
     quader::ViewportToolId::UvPeel};
 
-constexpr std::array<qsizetype, 3> kSeparatorPositions{9, 12, 15};
+constexpr std::array<qsizetype, 3> kSeparatorPositions{10, 13, 16};
 
 } // namespace
 
@@ -309,4 +310,88 @@ TEST(QtToolToolbarTests, AlignIconButtonDispatchesForLightsAndScalesWithNativeTo
   ASSERT_TRUE(editor.selection().clear().ok());
   toolbar.synchronize(editor, editor.selection().summary());
   EXPECT_FALSE(align->isEnabled());
+}
+
+TEST(QtToolToolbarTests,
+     StairsLauncherUsesCanonicalCommandAndRetainsScaledNativePresentation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_stairs_toolbar_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(application.palette());
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::QtToolToolbar toolbar;
+  toolbar.setAttribute(Qt::WA_DontShowOnScreen, true);
+  toolbar.set_tool_requested_callback([&](std::string_view tool_id) {
+    EXPECT_EQ(tool_id, "create_stairs");
+    const auto command_id = editor.commands().command_id_for_tool_activation(tool_id);
+    EXPECT_EQ(command_id,
+              quader::quader_command::kToolsActivateCreateStairs.string());
+    const auto result = editor.commands().execute(command_id);
+    EXPECT_TRUE(result.ok()) << result.error_message();
+  });
+  toolbar.synchronize(editor, editor.selection().summary());
+  auto *stairs = toolbar.tool_action(quader::ViewportToolId::CreateStairs);
+  ASSERT_NE(stairs, nullptr);
+  ASSERT_TRUE(stairs->isEnabled());
+  const auto command = editor.commands().descriptor(
+      quader::quader_command::kToolsActivateCreateStairs);
+  ASSERT_TRUE(command.has_value());
+  EXPECT_TRUE(command->shortcut.empty());
+  EXPECT_TRUE(stairs->shortcuts().isEmpty());
+  stairs->trigger();
+  toolbar.synchronize(editor, editor.selection().summary());
+  EXPECT_EQ(editor.tools().active_tool(), "create_stairs");
+  EXPECT_TRUE(stairs->isChecked());
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  for (const auto *locale : {"en-US", "it-IT"}) {
+    ASSERT_TRUE(localization.select_locale(locale));
+    toolbar.set_localization(localization);
+    EXPECT_EQ(stairs->text(), QString::fromStdString(localization.text(
+        "viewport.tool.create_stairs.label", "Stairs & Ramps")));
+    for (const float scale : {1.0F, 2.0F, 1.0F}) {
+      SCOPED_TRACE(locale);
+      SCOPED_TRACE(scale);
+      const quader::QtUiScaleMetrics metrics(scale);
+      toolbar.apply_ui_scale(metrics);
+      toolbar.resize(metrics.px(400), metrics.px(60));
+      toolbar.show();
+      QCoreApplication::processEvents();
+      auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(stairs));
+      ASSERT_NE(button, nullptr);
+      EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+      EXPECT_EQ(button->iconSize(), metrics.size(QSize(32, 32)));
+      for (const auto mode : {QIcon::Normal, QIcon::Disabled, QIcon::Active}) {
+        const auto pixmap = stairs->icon().pixmap(button->iconSize(), 1.0, mode);
+        ASSERT_FALSE(pixmap.isNull());
+        EXPECT_EQ(pixmap.size(), button->iconSize());
+        EXPECT_TRUE(pixmap.hasAlphaChannel());
+      }
+      const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+      if (!directory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(directory));
+        QImage image(toolbar.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        toolbar.render(&image);
+        EXPECT_TRUE(image.save(QDir(directory).filePath(
+            QStringLiteral("stairs-toolbar-%1-%2.png")
+                .arg(QString::fromUtf8(locale))
+                .arg(static_cast<int>(scale * 100.0F)))));
+      }
+    }
+  }
+  toolbar.synchronize(editor, editor.selection().summary());
+  int presentation_changes = 0;
+  QObject::connect(stairs, &QAction::changed, &toolbar,
+                   [&]() { ++presentation_changes; });
+  for (int frame = 0; frame < 10; ++frame) {
+    toolbar.synchronize(editor, editor.selection().summary());
+  }
+  EXPECT_EQ(presentation_changes, 0);
 }

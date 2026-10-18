@@ -142,7 +142,8 @@ const PrimitiveCreationControlsFrame &PrimitiveCreationInteraction::project(
   frame_.visible = true;
   ++frame_.revision;
   const QVec3 center = (cube->local_min + cube->local_max) * 0.5f;
-  if (cube->shape != ViewportPrimitiveCreationShape::Box) {
+  if (cube->shape != ViewportPrimitiveCreationShape::Box &&
+      cube->shape != ViewportPrimitiveCreationShape::Stairs) {
     const bool cone = cube->shape == ViewportPrimitiveCreationShape::Cone;
     const bool sphere = cube->shape == ViewportPrimitiveCreationShape::Sphere;
     const bool torus = cube->shape == ViewportPrimitiveCreationShape::Torus;
@@ -220,6 +221,10 @@ const PrimitiveCreationControlsFrame &PrimitiveCreationInteraction::project(
           static_cast<ViewportPrimitiveResizeControl>(axis * 2 + side);
     }
     const int index = 6 + axis;
+    if (cube->shape == ViewportPrimitiveCreationShape::Stairs) {
+      frame_.controls[index] = {};
+      continue;
+    }
     // Keep the accepted world anchor until release, while refreshing its
     // physical-pixel hit/render target for the current camera and DPI.
     if (frame_.active == index) {
@@ -283,6 +288,7 @@ PrimitiveCreationInteraction::project_presentation(
       cache_valid_ = false;
     }
   } else if (cube && cube->shape != ViewportPrimitiveCreationShape::Box &&
+             cube->shape != ViewportPrimitiveCreationShape::Stairs &&
              (active == 0 ||
               (cube->shape == ViewportPrimitiveCreationShape::Torus && active == 1))) {
     // A radial drag keeps the source pane's chosen local axis. Idle controls
@@ -401,7 +407,8 @@ void PrimitiveCreationInteraction::update_subdivision_controls() {
       count = axis == 0 ? cached_cube_->major_segments : cached_cube_->minor_segments;
       minimum = 3;
       break;
-    case ViewportPrimitiveCreationShape::Box: break;
+    case ViewportPrimitiveCreationShape::Box:
+    case ViewportPrimitiveCreationShape::Stairs: break;
     }
     control.segment_count = count;
     control.minimum_segments = minimum;
@@ -427,7 +434,8 @@ void PrimitiveCreationInteraction::update_feedback() {
   const bool sphere = primitive.shape == ViewportPrimitiveCreationShape::Sphere;
   const bool torus = primitive.shape == ViewportPrimitiveCreationShape::Torus;
   const bool cone = primitive.shape == ViewportPrimitiveCreationShape::Cone;
-  const bool box = primitive.shape == ViewportPrimitiveCreationShape::Box;
+  const bool box = primitive.shape == ViewportPrimitiveCreationShape::Box ||
+                   primitive.shape == ViewportPrimitiveCreationShape::Stairs;
   constexpr std::array<std::string_view, 3> kDimensions{
       "primitive.controls.width", "primitive.controls.height", "primitive.controls.depth"};
   frame_.label_position = control.screen_position +

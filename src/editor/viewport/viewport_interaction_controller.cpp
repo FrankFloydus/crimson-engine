@@ -327,6 +327,8 @@ void ViewportInteractionController::populate_operation_input_context(
       context.primitive_control = control == 6 ? Control::MajorSegments
                                               : Control::MinorSegments;
       break;
+    case ViewportPrimitiveCreationShape::Stairs:
+      break;
     }
   }
   if (material_input_blocked(frame) || !frame.input.viewport_hovered) return;

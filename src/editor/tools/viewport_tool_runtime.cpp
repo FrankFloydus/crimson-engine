@@ -159,7 +159,7 @@ ViewportToolRuntime::tool_pointer_cursor(ViewportToolId tool) const {
     if (modal_state_.cut_line_drag_active) return ViewportPointerCursor::ClosedHand;
     if (modal_state_.plane_body_hovered) return ViewportPointerCursor::OpenHand;
   }
-  if (tool == ViewportToolId::CreatePrimitive) {
+  if (tool == ViewportToolId::CreatePrimitive || tool == ViewportToolId::CreateStairs) {
     const auto cursor = modal_state_.primitive_creation.pointer_cursor(
         modal_state_.primitive_creation_drag_started);
     if (cursor != ViewportPointerCursor::Default) return cursor;
@@ -353,6 +353,7 @@ ViewportToolRuntime::handle_active_tool_event(ViewportToolState &state,
   }
   if (event.kind == ViewportToolEventKind::Frame &&
       active_tool_->viewport_tool() != ViewportToolId::CreatePrimitive &&
+      active_tool_->viewport_tool() != ViewportToolId::CreateStairs &&
       modal_state_.primary_release_suppression.consume(
           QuaderMouseButton::Left, event.pointer.left_clicked,
           event.pointer.left_down, event.pointer.left_released)) {

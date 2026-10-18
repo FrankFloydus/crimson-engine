@@ -34,6 +34,7 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const RotateTool kRotateTool;
   static const ScaleTool kScaleTool;
   static const CreatePrimitiveTool kCreatePrimitiveTool;
+  static const CreatePrimitiveTool kCreateStairsTool(ViewportToolId::CreateStairs);
   static const InsertEdgeLoopTool kInsertEdgeLoopTool;
   static const KnifeTool kNifeTool;
   static const CutTool kCutTool;
@@ -46,7 +47,7 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const ViewportTool kPathArrayTool(ViewportToolId::PathArray);
   static const ViewportTool kCurveTool(ViewportToolId::Curve);
   static const ViewportTool kAlignTool(ViewportToolId::Align);
-  static const std::array<const ViewportTool *, 20> kTools{{
+  static const std::array<const ViewportTool *, 21> kTools{{
       &kSelectTool,
       &kLassoSelectTool,
       &kPaintSelectTool,
@@ -55,6 +56,7 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
       &kRotateTool,
       &kScaleTool,
       &kCreatePrimitiveTool,
+      &kCreateStairsTool,
       &kInsertEdgeLoopTool,
       &kNifeTool,
       &kCutTool,

@@ -441,6 +441,8 @@ inline constexpr QuaderCommandId kToolsActivateCreateTorus{
     "tools.activate.create_torus"};
 inline constexpr QuaderCommandId kToolsActivateCreateCone{
     "tools.activate.create_cone"};
+inline constexpr QuaderCommandId kToolsActivateCreateStairs{
+    "tools.activate.create_stairs"};
 inline constexpr QuaderCommandId kToolsActivateCreateCurve{
     "tools.activate.create_curve"};
 inline constexpr QuaderCommandId kToolsActivateExtrude{
@@ -704,6 +706,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsActivateCreateSphere,
     kToolsActivateCreateTorus,
     kToolsActivateCreateCone,
+    kToolsActivateCreateStairs,
     kToolsActivateCreateCurve,
     kToolsActivateExtrude,
     kToolsActivateExtrudeIndividual,

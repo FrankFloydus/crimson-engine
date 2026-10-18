@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_api_types.hpp"
+#include <quader/modeling/mesh/stairs.hpp>
 
 #include <array>
 #include <cstdint>
@@ -17,7 +18,18 @@ namespace quader {
 enum class QuaderPrimitiveCubeAxis { X, Y, Z };
 
 /// Authored shapes that expose live creation controls through the native API.
-enum class QuaderPrimitiveCreationShape { Box, Cylinder, Cone, Sphere, Torus };
+enum class QuaderPrimitiveCreationShape { Box, Cylinder, Cone, Sphere, Torus, Stairs };
+
+/// Creation parameters and calculated dimensions; generated meshes retain no parameters.
+struct QuaderStairsCreationState {
+  modeling::StairsSpec specification;
+  std::uint32_t actual_step_count = 0;
+  double riser_height = 0.0;
+  double tread_depth = 0.0;
+  double slope_degrees = 0.0;
+  bool preview_active = false;
+  std::uint64_t revision = 0;
+};
 
 /// Selects the sphere's authored topology without changing its placement.
 enum class QuaderSphereType { Uv = 0, Quad = 1 };

@@ -54,6 +54,7 @@ protected:
 
 private:
   void refresh_curve_tool_icon();
+  void refresh_stairs_tool_icon();
 
   /// Binds one canonical viewport tool identity to its retained Qt action.
   struct ToolAction {
@@ -70,10 +71,11 @@ private:
     QString label;
   };
 
-  std::array<ToolAction, 20> tool_actions_{};
+  std::array<ToolAction, 21> tool_actions_{};
   std::array<PrimitiveAction, 5> primitive_actions_{};
   QAction *primitive_action_ = nullptr;
   QAction *curve_action_ = nullptr;
+  QAction *stairs_action_ = nullptr;
   const QuaderEditorApi *synchronized_editor_ = nullptr;
   bool synchronization_valid_ = false;
   ViewportToolId synchronized_selected_tool_ = ViewportToolId::Select;

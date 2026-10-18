@@ -247,6 +247,7 @@ add_library(quader_modeling_sdk_polygon STATIC
     src/sdk/core/modeling/src/uv_peel.cpp
     src/sdk/core/modeling/src/uv_peel_structured.cpp
     src/sdk/core/modeling/src/uv_peel_solver.cpp
+    src/sdk/core/modeling/src/stairs.cpp
     src/sdk/core/modeling/src/polygon_document.cpp
     ${QUADER_CANONICAL_POLYGON_SOURCES})
 add_library(quader::modeling_sdk_polygon ALIAS quader_modeling_sdk_polygon)
@@ -634,6 +635,7 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/modeling_curve_document_tests.cpp
         tests/sdk/modeling_curve_session_tests.cpp
         tests/sdk/modeling_curve_tube_tests.cpp
+        tests/sdk/modeling_stairs_tests.cpp
         tests/sdk/modeling_sdk_consumer_tests.cpp
         tests/sdk/modeling_sdk_face_extrude_tests.cpp
         tests/sdk/dissolve_saved_scene_tests.cpp

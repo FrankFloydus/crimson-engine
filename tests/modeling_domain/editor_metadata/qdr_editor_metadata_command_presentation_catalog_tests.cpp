@@ -214,7 +214,8 @@ TEST(QdrEditorMetadataCommandPresentationCatalogTests,
   for (const auto shape : {quader::quader_command::kToolsActivateCreateCylinder,
                            quader::quader_command::kToolsActivateCreateSphere,
                            quader::quader_command::kToolsActivateCreateCone,
-                           quader::quader_command::kToolsActivateCreateTorus}) {
+                           quader::quader_command::kToolsActivateCreateTorus,
+                           quader::quader_command::kToolsActivateCreateStairs}) {
     const auto &presentation = require_presentation(shape);
     EXPECT_FALSE(quader::has_command_presentation_surface(
         presentation, CommandPresentationSurface::MainMenu));

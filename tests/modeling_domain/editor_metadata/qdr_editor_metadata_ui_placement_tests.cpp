@@ -147,7 +147,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractUIPlacementsResolveToKnownDescriptorOnlyTargets) {
 	const std::span<const qhc::HostUiPlacementDescriptor> placements = qhc::ui_placement_catalog();
-	EXPECT_TRUE(placements.size() == 39U);
+	EXPECT_TRUE(placements.size() == 40U);
 
 	for (const qhc::HostUiPlacementDescriptor& placement : placements) {
 		EXPECT_FALSE(placement.id.empty());
@@ -238,8 +238,9 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractMainMenuPlacementPreservesEd
 }
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractToolbarPlacementMirrorsCurrentEditorChromeOrder) {
-	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 13> {{
+	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 14> {{
 		"create_primitive",
+		"create_stairs",
 		"pivot",
 		"extrude",
 		"insert_edge_loop",

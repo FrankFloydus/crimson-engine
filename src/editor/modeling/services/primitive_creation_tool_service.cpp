@@ -9,6 +9,7 @@
 
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "math/types.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -19,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <tuple>
 #include <utility>
 
 namespace quader {
@@ -35,6 +37,8 @@ std::string_view primitive_creation_default_name(PrimitiveCreationKind kind) {
     return "Cone";
   case PrimitiveCreationKind::Torus:
     return "Torus";
+  case PrimitiveCreationKind::Stairs:
+    return "Stairs";
   }
   return "Mesh";
 }
@@ -62,6 +66,100 @@ float &cube_axis_component(QVec3 &value, PrimitiveCubeAxis axis) {
 
 bool same_bounds(QVec3 left, QVec3 right) {
   return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+bool circular_stairs(const modeling::StairsSpec &spec) {
+  return spec.layout == modeling::StairsLayout::Arc ||
+         spec.layout == modeling::StairsLayout::Spiral;
+}
+
+double stairs_footprint_width(const modeling::StairsSpec &spec) {
+  if (circular_stairs(spec)) return 2.0 * (spec.inner_radius + spec.flight_width);
+  if (spec.layout == modeling::StairsLayout::U ||
+      spec.layout == modeling::StairsLayout::Switchback) {
+    const auto lanes = spec.layout == modeling::StairsLayout::Switchback &&
+                               spec.switchback_arrangement == modeling::StairsSwitchbackArrangement::Spread
+                           ? spec.flight_count : 2U;
+    return spec.flight_width * lanes + spec.gap * (lanes - 1U);
+  }
+  return spec.footprint_width;
+}
+
+void fit_stairs_dimensions(modeling::StairsSpec &spec, double width,
+                          double depth, double height, bool initial_footprint) {
+  const double old_width = stairs_footprint_width(spec);
+  if (circular_stairs(spec)) {
+    const double ratio = (initial_footprint ? std::min(width, depth) : width) / old_width;
+    spec.inner_radius *= ratio;
+    spec.flight_width *= ratio;
+    depth = width = stairs_footprint_width(spec);
+  } else if (spec.layout == modeling::StairsLayout::U ||
+             spec.layout == modeling::StairsLayout::Switchback) {
+    const double ratio = width / old_width;
+    spec.flight_width *= ratio;
+    spec.gap *= ratio;
+  } else if (initial_footprint && spec.layout == modeling::StairsLayout::L) {
+    const double ratio = std::min(width / spec.footprint_width,
+                                  depth / spec.footprint_depth);
+    spec.flight_width *= ratio;
+    spec.landing_depth *= ratio;
+  }
+  if (initial_footprint && !circular_stairs(spec) &&
+      spec.layout != modeling::StairsLayout::L) {
+    spec.landing_depth *= depth / spec.footprint_depth;
+  }
+  spec.footprint_width = width;
+  spec.footprint_depth = depth;
+  spec.height = height;
+}
+
+StairsCreationMetrics calculated_stairs_metrics(const modeling::StairsMesh &mesh) {
+  return {.step_count = mesh.effective_step_count,
+          .riser_height = mesh.riser_height,
+          .tread_depth = mesh.tread_depth,
+          .slope_degrees = mesh.slope_degrees};
+}
+
+std::optional<quader_poly::Document> stairs_document(
+    const modeling::StairsSpec &spec, QVec3 center, double base,
+    StairsCreationMetrics &metrics, double &width, double &depth,
+    std::string &message, const modeling::StairsMesh *prepared = nullptr) {
+  std::optional<modeling::StairsMesh> generated;
+  if (prepared == nullptr) {
+    auto result = modeling::build_stairs_mesh(spec);
+    if (!result.ok()) {
+      message = result.error_message();
+      return std::nullopt;
+    }
+    generated = std::move(result.value());
+    prepared = &*generated;
+  }
+  const auto &mesh = *prepared;
+  auto document = MeshProjectionService::polygon_document_from_sdk_document(mesh.document);
+  if (!document) {
+    message = "Stair geometry could not be projected into the editor.";
+    return std::nullopt;
+  }
+  for (auto &vertex : document->vertices) {
+    vertex.position = vertex.position + QVec3{center.x, static_cast<float>(base), center.z};
+  }
+  metrics = calculated_stairs_metrics(mesh);
+  width = mesh.footprint_width;
+  depth = mesh.footprint_depth;
+  return document;
+}
+
+bool same_stairs_settings(const modeling::StairsSpec &left,
+                         const modeling::StairsSpec &right) {
+  const auto values = [](const modeling::StairsSpec &spec) {
+    return std::tie(spec.layout, spec.surface, spec.construction,
+        spec.switchback_arrangement, spec.footprint_width, spec.footprint_depth,
+        spec.height, spec.flight_width, spec.landing_depth, spec.gap,
+        spec.inner_radius, spec.sweep_degrees, spec.turns, spec.slab_thickness,
+        spec.preferred_riser, spec.flight_count, spec.step_count,
+        spec.curved_segments, spec.automatic_step_count, spec.clockwise);
+  };
+  return values(left) == values(right);
 }
 
 void fit_unit_document_to_bounds(quader_poly::Document &document,
@@ -251,6 +349,8 @@ quader_poly::Document build_primitive_document(
         .flip_faces = torus.flip_faces,
     });
     break;
+  case PrimitiveCreationKind::Stairs:
+    break;
   }
   return document;
 }
@@ -300,6 +400,8 @@ bool primitive_creation_available_in_release(PrimitiveCreationKind kind) noexcep
     return release_has_feature(ReleaseFeature::ConePrimitive);
   case PrimitiveCreationKind::Torus:
     return release_has_feature(ReleaseFeature::TorusPrimitive);
+  case PrimitiveCreationKind::Stairs:
+    return release_has_feature(ReleaseFeature::StairsAndRamps);
   case PrimitiveCreationKind::Box:
   case PrimitiveCreationKind::Cylinder:
   case PrimitiveCreationKind::Sphere:
@@ -316,6 +418,9 @@ bool primitive_sphere_type_available_in_release(PrimitiveSphereType type) noexce
 
 bool primitive_setting_available_in_release(std::string_view name,
                                             double value) noexcept {
+  if (name.starts_with("stairs.")) {
+    return release_has_feature(ReleaseFeature::StairsAndRamps);
+  }
   if (name.starts_with("primitive.cone.")) {
     return release_has_feature(ReleaseFeature::ConePrimitive);
   }
@@ -420,13 +525,27 @@ PrimitiveCreationKind PrimitiveCreationToolService::preferred_kind() const {
              ? kind : PrimitiveCreationKind::Box;
 }
 
+PrimitiveCreationKind PrimitiveCreationToolService::preferred_regular_kind() const {
+  const auto kind = session_ && session_->kind != PrimitiveCreationKind::Stairs
+                        ? session_->kind
+                    : session_defaults_ && session_defaults_->preferred_kind != PrimitiveCreationKind::Stairs
+                        ? session_defaults_->preferred_kind
+                    : session_defaults_ ? session_defaults_->preferred_regular_kind
+                                        : preferred_regular_kind_;
+  return kind != PrimitiveCreationKind::Stairs && primitive_creation_available_in_release(kind)
+             ? kind : PrimitiveCreationKind::Box;
+}
+
 std::string_view PrimitiveCreationToolService::active_tool_id() const {
-  return session_.has_value() ? kCreatePrimitiveToolId : std::string_view{};
+  return !session_ ? std::string_view{}
+         : session_->kind == PrimitiveCreationKind::Stairs ? kCreateStairsToolId
+                                                         : kCreatePrimitiveToolId;
 }
 
 CommandResult
 PrimitiveCreationToolService::activate() {
-  return activate(preferred_kind());
+  const auto kind = preferred_kind();
+  return activate(kind == PrimitiveCreationKind::Stairs ? preferred_regular_kind() : kind);
 }
 
 CommandResult
@@ -476,6 +595,7 @@ PrimitiveCreationToolService::activate(PrimitiveCreationKind kind) {
   }
   load_settings(accepted_settings_);
   preferred_kind_ = kind;
+  if (kind != PrimitiveCreationKind::Stairs) preferred_regular_kind_ = kind;
   remember_settings();
   ++tool_settings_revision_;
   return {
@@ -493,6 +613,10 @@ PrimitiveCreationToolService::set_kind(PrimitiveCreationKind kind) {
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
+  if ((kind == PrimitiveCreationKind::Stairs) !=
+      (session_->kind == PrimitiveCreationKind::Stairs)) {
+    return command_invalid_result("Use the Stairs & Ramps launcher to change creation tools.");
+  }
   if (modeling_.box_preview(false).drag_state !=
       ModelingBoxDragState::Idle) {
     return command_invalid_result(
@@ -507,6 +631,7 @@ PrimitiveCreationToolService::set_kind(PrimitiveCreationKind kind) {
     return command_invalid_result("Finish resizing before changing primitive type.");
   }
   preferred_kind_ = kind;
+  if (kind != PrimitiveCreationKind::Stairs) preferred_regular_kind_ = kind;
   if (session_->kind == kind) {
     return frozen;
   }
@@ -556,7 +681,8 @@ CommandResult PrimitiveCreationToolService::accept_volume(
   QVec3 local_min{-frame->width * 0.5f, -frame->height * 0.5f,
                   -frame->depth * 0.5f};
   QVec3 local_max = local_min * -1.0f;
-  if (session_->kind != PrimitiveCreationKind::Box) {
+  if (session_->kind != PrimitiveCreationKind::Box &&
+      session_->kind != PrimitiveCreationKind::Stairs) {
     // Capture the generator's dimension clamp and complete radial volume,
     // including extrema omitted by odd tessellation counts.
     const auto volume = quader_poly::make_cube({
@@ -590,8 +716,27 @@ CommandResult PrimitiveCreationToolService::accept_volume(
     local_min.y = -height * 0.5f;
     local_max.y = height * 0.5f;
   }
-  quader_poly::Document document =
-      session_->kind == PrimitiveCreationKind::Box ||
+  modeling::StairsSpec candidate_stairs = stairs_settings_;
+  StairsCreationMetrics candidate_metrics;
+  quader_poly::Document document;
+  if (session_->kind == PrimitiveCreationKind::Stairs) {
+    fit_stairs_dimensions(candidate_stairs, frame->width, frame->depth,
+                          frame->height, true);
+    double width = 0.0;
+    double depth = 0.0;
+    std::string message;
+    auto candidate = stairs_document(candidate_stairs, {}, local_min.y,
+                                    candidate_metrics, width, depth, message);
+    if (!candidate) return command_invalid_result(std::move(message));
+    document = std::move(*candidate);
+    candidate_stairs.footprint_width = width;
+    candidate_stairs.footprint_depth = depth;
+    local_min.x = static_cast<float>(-width * 0.5);
+    local_min.z = static_cast<float>(-depth * 0.5);
+    local_max.x = -local_min.x;
+    local_max.z = -local_min.z;
+  } else {
+    document = session_->kind == PrimitiveCreationKind::Box ||
               session_->kind == PrimitiveCreationKind::Cylinder
           ? build_primitive_document(session_->kind, *frame, box_settings_,
                                      cylinder_settings_, cone_settings_,
@@ -599,6 +744,7 @@ CommandResult PrimitiveCreationToolService::accept_volume(
           : curved_document_with_bounds(session_->kind, local_min, local_max,
                                         box_settings_, cylinder_settings_,
                                         cone_settings_, sphere_settings_, torus_settings_);
+  }
   if (document.vertices.empty() || document.faces.empty()) {
     return command_invalid_result("Primitive geometry could not be generated.");
   }
@@ -695,6 +841,11 @@ CommandResult PrimitiveCreationToolService::accept_volume(
       .local_min = local_min,
       .local_max = local_max,
   };
+  if (session_->kind == PrimitiveCreationKind::Stairs) {
+    stairs_settings_ = candidate_stairs;
+    stairs_metrics_ = candidate_metrics;
+    remember_settings();
+  }
   apply_history_limit();
   modeling_.release_redundant_sdk_history();
   return command_changed_result();
@@ -736,7 +887,8 @@ CommandResult PrimitiveCreationToolService::apply() {
       return command_invalid_result("Primitive tool could not capture its applied state.");
     }
     commands.push_back(std::make_unique<RecordedModelingMementoCommand>(
-        modeling_, "Create Primitive", before, after));
+        modeling_, session_->kind == PrimitiveCreationKind::Stairs
+                       ? "Create Stairs & Ramps" : "Create Primitive", before, after));
   }
   // Prepare every memento before publishing any history entry. Recording a
   // non-null, already-executed command performs no further document mutation.
@@ -884,6 +1036,9 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
+  if (session_->kind == PrimitiveCreationKind::Stairs) {
+    return set_stairs_setting(name, value);
+  }
   const bool drawing =
       modeling_.box_drag_state() != ModelingBoxDragState::Idle;
   const bool pending_toggle =
@@ -966,6 +1121,7 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
     case PrimitiveCreationKind::Box:
     case PrimitiveCreationKind::Cylinder:
     case PrimitiveCreationKind::Sphere:
+    case PrimitiveCreationKind::Stairs:
       break;
     }
     if (!valid) {
@@ -978,6 +1134,8 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   }
   const bool toggle = value != 0.0;
   switch (session_->kind) {
+  case PrimitiveCreationKind::Stairs:
+    return command_invalid_result("Stairs settings require the Stairs & Ramps tool.");
   case PrimitiveCreationKind::Box: {
     int count = 0;
     int *setting = nullptr;
@@ -1183,6 +1341,84 @@ CommandResult PrimitiveCreationToolService::set_setting(std::string_view name,
   return command_invalid_result("Unknown primitive setting.");
 }
 
+CommandResult PrimitiveCreationToolService::set_stairs_setting(
+    std::string_view name, double value) {
+  if (!std::isfinite(value)) return command_invalid_result("Stair setting must be finite.");
+  if (modeling_.box_drag_state() != ModelingBoxDragState::Idle) {
+    return command_invalid_result("Finish the stair footprint before changing settings.");
+  }
+  modeling::StairsSpec candidate = stairs_settings_;
+  int integer = 0;
+  if (name == "stairs.layout" && integer_setting_value(value, 0, 5, integer)) {
+    candidate.layout = static_cast<modeling::StairsLayout>(integer);
+  } else if (name == "stairs.surface" && integer_setting_value(value, 0, 1, integer)) {
+    candidate.surface = static_cast<modeling::StairsSurface>(integer);
+  } else if (name == "stairs.construction" && integer_setting_value(value, 0, 1, integer)) {
+    candidate.construction = static_cast<modeling::StairsConstruction>(integer);
+  } else if (name == "stairs.switchback_arrangement" && integer_setting_value(value, 0, 1, integer)) {
+    candidate.switchback_arrangement = static_cast<modeling::StairsSwitchbackArrangement>(integer);
+  } else if (name == "stairs.automatic_step_count" && (value == 0.0 || value == 1.0)) {
+    candidate.automatic_step_count = value != 0.0;
+  } else if (name == "stairs.clockwise" && (value == 0.0 || value == 1.0)) {
+    candidate.clockwise = value != 0.0;
+  } else if (name == "stairs.flight_count" && integer_setting_value(value,
+                 modeling::kStairsMinimumFlightCount, modeling::kStairsMaximumFlightCount, integer)) {
+    candidate.flight_count = static_cast<std::uint32_t>(integer);
+  } else if (name == "stairs.step_count" && integer_setting_value(value,
+                 modeling::kStairsMinimumStepCount, modeling::kStairsMaximumStepCount, integer)) {
+    candidate.step_count = static_cast<std::uint32_t>(integer);
+  } else if (name == "stairs.curved_segments" && integer_setting_value(value,
+                 modeling::kStairsMinimumCurvedSegments, modeling::kStairsMaximumCurvedSegments, integer)) {
+    candidate.curved_segments = static_cast<std::uint32_t>(integer);
+  } else {
+    double *field = nullptr;
+    if (name == "stairs.width") field = &candidate.footprint_width;
+    else if (name == "stairs.depth") field = &candidate.footprint_depth;
+    else if (name == "stairs.height") field = &candidate.height;
+    else if (name == "stairs.flight_width") field = &candidate.flight_width;
+    else if (name == "stairs.landing_depth") field = &candidate.landing_depth;
+    else if (name == "stairs.gap") field = &candidate.gap;
+    else if (name == "stairs.inner_radius") field = &candidate.inner_radius;
+    else if (name == "stairs.sweep_degrees") field = &candidate.sweep_degrees;
+    else if (name == "stairs.turns") field = &candidate.turns;
+    else if (name == "stairs.slab_thickness") field = &candidate.slab_thickness;
+    else if (name == "stairs.preferred_riser") field = &candidate.preferred_riser;
+    if (field == nullptr || value < modeling::kStairsMinimumDimension || value > 1000000.0) {
+      return command_invalid_result("Invalid or unknown stair setting.");
+    }
+    *field = value;
+    if (name == "stairs.width") {
+      fit_stairs_dimensions(candidate, value, candidate.footprint_depth, candidate.height, false);
+    }
+  }
+  if (same_stairs_settings(candidate, stairs_settings_)) return command_unchanged_result();
+
+  // Validate before settling a captured resize or freezing the selected draft.
+  // Generation is triggered only by changed parameters, never by readers.
+  auto generated = modeling::build_stairs_mesh(candidate);
+  if (!generated.ok()) return command_invalid_result(generated.error_message());
+  const CommandResult frozen = freeze_live_primitive_if_selection_changed();
+  if (!frozen.ok) return frozen;
+  if (live_primitive_ && live_primitive_->resize) {
+    const CommandResult ended = end_resize();
+    if (!ended.ok) return ended;
+  }
+  const auto previous = stairs_settings_;
+  stairs_settings_ = candidate;
+  if (!live_primitive_) {
+    stairs_settings_.footprint_width = generated.value().footprint_width;
+    stairs_settings_.footprint_depth = generated.value().footprint_depth;
+    stairs_metrics_ = calculated_stairs_metrics(generated.value());
+    remember_settings();
+    ++tool_settings_revision_;
+    return command_changed_result();
+  }
+  const CommandResult updated = update_live_primitive(false, &generated.value());
+  if (!updated.ok) stairs_settings_ = previous;
+  else ++tool_settings_revision_;
+  return updated;
+}
+
 CommandResult PrimitiveCreationToolService::reset_settings() {
   apply_history_limit();
   if (!session_.has_value()) {
@@ -1199,6 +1435,27 @@ CommandResult PrimitiveCreationToolService::reset_settings() {
   }
   bool changed = false;
   switch (session_->kind) {
+  case PrimitiveCreationKind::Stairs: {
+    modeling::StairsSpec defaults;
+    defaults.footprint_width = stairs_settings_.footprint_width;
+    defaults.footprint_depth = stairs_settings_.footprint_depth;
+    defaults.height = stairs_settings_.height;
+    if (same_stairs_settings(stairs_settings_, defaults)) return frozen;
+    auto generated = modeling::build_stairs_mesh(defaults);
+    if (!generated.ok()) return command_invalid_result(generated.error_message());
+    stairs_settings_ = defaults;
+    if (!live_primitive_) {
+      stairs_settings_.footprint_width = generated.value().footprint_width;
+      stairs_settings_.footprint_depth = generated.value().footprint_depth;
+      stairs_metrics_ = calculated_stairs_metrics(generated.value());
+      remember_settings();
+      ++tool_settings_revision_;
+      return command_changed_result();
+    }
+    const CommandResult updated = update_live_primitive(false, &generated.value());
+    if (updated.ok) ++tool_settings_revision_;
+    return updated;
+  }
   case PrimitiveCreationKind::Box: {
     const BoxPrimitiveCreationSettings defaults;
     changed = box_settings_.subdivisions_x != defaults.subdivisions_x ||
@@ -1295,6 +1552,7 @@ PrimitiveCreationToolService::live_primitive_creation() const {
           : session_->kind == PrimitiveCreationKind::Cylinder ? cylinder_settings_.flip_faces
           : session_->kind == PrimitiveCreationKind::Cone ? cone_settings_.flip_faces
           : session_->kind == PrimitiveCreationKind::Sphere ? sphere_settings_.flip_faces
+          : session_->kind == PrimitiveCreationKind::Stairs ? false
           : torus_settings_.flip_faces,
       .resizing = live_primitive_->resize.has_value(),
       .revision = primitive_revision_ + tool_settings_revision_,
@@ -1369,6 +1627,7 @@ CommandResult PrimitiveCreationToolService::begin_resize(
   bool allowed = false;
   switch (primitive->kind) {
   case PrimitiveCreationKind::Box:
+  case PrimitiveCreationKind::Stairs:
     allowed = !radial;
     break;
   case PrimitiveCreationKind::Cylinder:
@@ -1390,6 +1649,7 @@ CommandResult PrimitiveCreationToolService::begin_resize(
       .local_min = live_primitive_->local_min,
       .local_max = live_primitive_->local_max,
       .tube_radius_ratio = torus_settings_.tube_radius_ratio,
+      .stairs = stairs_settings_,
   };
   if (radial) {
     if (!finite_vector(radial_axis)) {
@@ -1529,6 +1789,15 @@ CommandResult PrimitiveCreationToolService::update_resize(double displacement) {
   const QVec3 previous_maximum = live_primitive_->local_max;
   live_primitive_->local_min = minimum;
   live_primitive_->local_max = maximum;
+  if (session_->kind == PrimitiveCreationKind::Stairs) {
+    stairs_settings_ = baseline.stairs;
+    const auto width = circular_stairs(stairs_settings_) &&
+                               (baseline.control == PrimitiveResizeControl::PositiveZ ||
+                                baseline.control == PrimitiveResizeControl::NegativeZ)
+                           ? maximum.z - minimum.z : maximum.x - minimum.x;
+    fit_stairs_dimensions(stairs_settings_, width,
+                          maximum.z - minimum.z, maximum.y - minimum.y, false);
+  }
   if (ratio_changed) {
     torus_settings_.tube_radius_ratio = next_ratio;
     ++tool_settings_revision_;
@@ -1572,6 +1841,7 @@ CommandResult PrimitiveCreationToolService::cancel_resize() {
     const QVec3 previous_maximum = live_primitive_->local_max;
     live_primitive_->local_min = baseline.local_min;
     live_primitive_->local_max = baseline.local_max;
+    if (session_->kind == PrimitiveCreationKind::Stairs) stairs_settings_ = baseline.stairs;
     if (restore_ratio) {
       torus_settings_.tube_radius_ratio = baseline.tube_radius_ratio;
       ++tool_settings_revision_;
@@ -1603,6 +1873,8 @@ CommandResult PrimitiveCreationToolService::flip_faces() {
   case PrimitiveCreationKind::Cone: flipped = cone_settings_.flip_faces; break;
   case PrimitiveCreationKind::Sphere: flipped = sphere_settings_.flip_faces; break;
   case PrimitiveCreationKind::Torus: flipped = torus_settings_.flip_faces; break;
+  case PrimitiveCreationKind::Stairs:
+    return command_invalid_result("Stairs do not support flipped creation faces.");
   }
   return set_setting(kPrimitiveFlipFacesSetting, flipped ? 0.0 : 1.0);
 }
@@ -1658,7 +1930,7 @@ PrimitiveCreationToolService::freeze_live_primitive_if_selection_changed() {
 }
 
 CommandResult PrimitiveCreationToolService::update_live_primitive(
-    bool preserve_selection) {
+    bool preserve_selection, const modeling::StairsMesh *prepared_stairs) {
   if (!session_.has_value()) {
     return command_invalid_result("No primitive tool is active.");
   }
@@ -1682,8 +1954,20 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
     return reject_candidate(
         "Live primitive no longer has a valid placement volume.");
   }
-  quader_poly::Document document =
-      session_->kind == PrimitiveCreationKind::Box
+  quader_poly::Document document;
+  StairsCreationMetrics candidate_metrics = stairs_metrics_;
+  double stairs_width = 0.0;
+  double stairs_depth = 0.0;
+  if (session_->kind == PrimitiveCreationKind::Stairs) {
+    std::string message;
+    const QVec3 center = (live_primitive_->local_min + live_primitive_->local_max) * 0.5f;
+    auto candidate = stairs_document(stairs_settings_, center, live_primitive_->local_min.y,
+                                    candidate_metrics, stairs_width, stairs_depth,
+                                    message, prepared_stairs);
+    if (!candidate) return reject_candidate(std::move(message));
+    document = std::move(*candidate);
+  } else {
+    document = session_->kind == PrimitiveCreationKind::Box
           ? cube_document_with_bounds(live_primitive_->local_min,
                                       live_primitive_->local_max, box_settings_)
           : session_->kind == PrimitiveCreationKind::Cylinder
@@ -1694,6 +1978,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
                                              live_primitive_->local_max, box_settings_,
                                              cylinder_settings_, cone_settings_,
                                              sphere_settings_, torus_settings_);
+  }
   if (document.vertices.empty() || document.faces.empty()) {
     return reject_candidate("Live primitive geometry could not be generated.");
   }
@@ -1706,7 +1991,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
   if (checkpoint_hooks_.record_after_projection) {
     checkpoint_hooks_.record_after_projection();
   }
-  if (!updated.ok || !updated.changed) {
+  if (!updated.ok || (!updated.changed && session_->kind != PrimitiveCreationKind::Stairs)) {
     return reject_candidate(
         updated.message.empty() ? "Live primitive could not be updated."
                                 : updated.message,
@@ -1714,6 +1999,18 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
   }
   live_primitive_->selection_revision =
       modeling_.selection_summary().selection_revision;
+  if (session_->kind == PrimitiveCreationKind::Stairs) {
+    const auto center = (live_primitive_->local_min + live_primitive_->local_max) * 0.5f;
+    live_primitive_->local_min.x = center.x - static_cast<float>(stairs_width * 0.5);
+    live_primitive_->local_max.x = center.x + static_cast<float>(stairs_width * 0.5);
+    live_primitive_->local_min.z = center.z - static_cast<float>(stairs_depth * 0.5);
+    live_primitive_->local_max.z = center.z + static_cast<float>(stairs_depth * 0.5);
+    live_primitive_->local_max.y = live_primitive_->local_min.y + static_cast<float>(stairs_settings_.height);
+    stairs_settings_.footprint_width = stairs_width;
+    stairs_settings_.footprint_depth = stairs_depth;
+    stairs_metrics_ = candidate_metrics;
+    ++primitive_revision_;
+  }
   modeling_.release_redundant_sdk_history();
   remember_settings();
   return command_changed_result();
@@ -1794,9 +2091,15 @@ void PrimitiveCreationToolService::load_settings(
     sphere_settings_.type = PrimitiveSphereType::Uv;
   }
   torus_settings_ = settings.torus;
+  stairs_settings_ = settings.stairs;
+  preferred_regular_kind_ = settings.preferred_kind != PrimitiveCreationKind::Stairs
+                               ? settings.preferred_kind : settings.preferred_regular_kind;
 }
 
 void PrimitiveCreationToolService::remember_settings() {
+  if (session_defaults_ && preferred_kind_ == PrimitiveCreationKind::Stairs) {
+    preferred_regular_kind_ = preferred_regular_kind();
+  }
   accepted_settings_ = {
       .preferred_kind = preferred_kind_,
       .box = box_settings_,
@@ -1804,11 +2107,16 @@ void PrimitiveCreationToolService::remember_settings() {
       .cone = cone_settings_,
       .sphere = sphere_settings_,
       .torus = torus_settings_,
+      .stairs = stairs_settings_,
+      .preferred_regular_kind = preferred_regular_kind_,
   };
   if (!session_defaults_) {
     return;
   }
   session_defaults_->preferred_kind = preferred_kind_;
+  if (preferred_kind_ != PrimitiveCreationKind::Stairs) {
+    session_defaults_->preferred_regular_kind = preferred_regular_kind_;
+  }
   // Other scenes may have accepted new options for other shapes since this
   // session began. Publishing the edited shape must not replace those options.
   switch (preferred_kind_) {
@@ -1826,6 +2134,9 @@ void PrimitiveCreationToolService::remember_settings() {
     break;
   case PrimitiveCreationKind::Torus:
     session_defaults_->torus = torus_settings_;
+    break;
+  case PrimitiveCreationKind::Stairs:
+    session_defaults_->stairs = stairs_settings_;
     break;
   }
 }

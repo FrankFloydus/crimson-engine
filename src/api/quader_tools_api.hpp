@@ -66,6 +66,11 @@ public:
     /** Starts the requested shape, finishing the current valid shape on a kind switch. */
     QuaderApiVoidResult
     begin_primitive_creation(QuaderPrimitiveCreationShape shape);
+    /// Starts the Full-only procedural stairs/ramp creation lifecycle.
+    QuaderApiVoidResult begin_stairs_creation();
+    [[nodiscard]] bool has_active_stairs_creation() const;
+    /// Returns retained parameters and fit metrics without regenerating geometry.
+    [[nodiscard]] std::optional<QuaderStairsCreationState> stairs_creation_state() const;
     /** Enters Curve creation without attaching to an already selected Curve. */
     QuaderApiVoidResult begin_new_curve_creation();
     [[nodiscard]] bool can_begin_new_curve_creation() const;

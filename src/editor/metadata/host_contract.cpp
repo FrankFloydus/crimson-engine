@@ -480,7 +480,7 @@ HostUiPlacementDescriptor viewport_tool_placement(
 
 std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 {
-  static const std::array<HostUiPlacementDescriptor, 39> kDescriptors{{
+  static const std::array<HostUiPlacementDescriptor, 40> kDescriptors{{
       {"menu_open_editor", "main_menu", "editor", "Open Editor",
        HostUiPlacementTargetKind::EditorAction, "open_editor", 0, false},
       {"menu_new_scene", "main_menu", "file", "New",
@@ -535,6 +535,8 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
        30, false},
       viewport_tool_placement("toolbar_create_primitive_tool", "modal_modeling_tools",
                               "create_primitive", 0),
+      viewport_tool_placement("toolbar_create_stairs_tool", "modal_modeling_tools",
+                              "create_stairs", 5),
       viewport_tool_placement("toolbar_pivot_tool", "transform_tools", "pivot",
                               10),
       viewport_tool_placement("toolbar_extrude_tool", "modal_modeling_tools",
@@ -671,8 +673,9 @@ std::span<const HostToolGroupDescriptor> tool_group_descriptors()
       "rotate",
       "scale",
   }};
-  static constexpr std::array<std::string_view, 9> kModalModelingTools{{
+  static constexpr std::array<std::string_view, 10> kModalModelingTools{{
       "create_primitive",
+      "create_stairs",
       "insert_edge_loop",
       "knife",
       "cut",
@@ -892,8 +895,9 @@ HostGestureDescriptor gesture(
 
 std::span<const HostGestureDescriptor> gesture_descriptors()
 {
-  static constexpr std::array<std::string_view, 6> kModalTools{{
+  static constexpr std::array<std::string_view, 7> kModalTools{{
       "create_primitive",
+      "create_stairs",
       "insert_edge_loop",
       "knife",
       "cut",
@@ -917,6 +921,9 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
   }};
   static constexpr std::array<std::string_view, 1> kCreatePrimitiveTool{{
       "create_primitive",
+  }};
+  static constexpr std::array<std::string_view, 1> kCreateStairsTool{{
+      "create_stairs",
   }};
   static constexpr std::array<std::string_view, 1> kInsertEdgeLoopTool{{
       "insert_edge_loop",
@@ -1037,7 +1044,7 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
       "shift:pan",
       "alt:orbit_snap_modifier",
   }};
-  static const std::array<HostGestureDescriptor, 17> kDescriptors{{
+  static const std::array<HostGestureDescriptor, 18> kDescriptors{{
       gesture("active_modal_tool_precedence", "Active Modal Tool Precedence",
               HostGestureTargetKind::InputPolicy,
               "active_modal_tool_precedence", 0, kModalTools, {}, {}, {}, true,
@@ -1045,6 +1052,11 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
       gesture("create_primitive_gesture", "Create Primitive Gesture",
               HostGestureTargetKind::Tool, "create_primitive", 10,
               kCreatePrimitiveTool,
+              kHoverPrimaryDrag, kCancelEscape, {}, true, false, false, false,
+              true, true, false, false, true),
+      gesture("create_stairs_gesture", "Create Stairs & Ramps Gesture",
+              HostGestureTargetKind::Tool, "create_stairs", 15,
+              kCreateStairsTool,
               kHoverPrimaryDrag, kCancelEscape, {}, true, false, false, false,
               true, true, false, false, true),
       gesture("insert_edge_loop_gesture", "Insert Edge Loop Gesture",

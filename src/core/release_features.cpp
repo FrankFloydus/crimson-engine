@@ -52,6 +52,7 @@ constexpr std::array kFeatures{
     ReleaseFeatureDescriptor{ReleaseFeature::AdvancedSelectionUi, "advanced_selection_ui", "Advanced selection controls", kUnreleasedProductRelease},
     ReleaseFeatureDescriptor{ReleaseFeature::Instancing, "instancing", "Scene instancing", kUnreleasedProductRelease},
     ReleaseFeatureDescriptor{ReleaseFeature::PaintSelection, "paint_selection", "Paint selection", kPublicRelease01},
+    ReleaseFeatureDescriptor{ReleaseFeature::StairsAndRamps, "stairs_and_ramps", "Stairs & Ramps", kUnreleasedProductRelease},
 };
 
 static_assert(kFeatures.size() == static_cast<std::size_t>(ReleaseFeature::Count));

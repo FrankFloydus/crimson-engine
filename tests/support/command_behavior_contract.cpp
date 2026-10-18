@@ -802,6 +802,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kToolsActivateCreateCone,
                Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
                UndoRepeat::None),
+      contract(quader_command::kToolsActivateCreateStairs,
+               Fixture::Viewport, kToolDomains, Outcome::ChangeRequired,
+               UndoRepeat::None),
       contract(quader_command::kToolsActivateCreateCurve,
                Fixture::Viewport, kToolDomains | Domain::Selection,
                Outcome::ChangeRequired, UndoRepeat::None),
@@ -851,9 +854,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 236U);
+  static_assert(std::size(kContracts) == 237U);
 #else
-  static_assert(std::size(kContracts) == 235U);
+  static_assert(std::size(kContracts) == 236U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

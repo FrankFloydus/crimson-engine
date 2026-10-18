@@ -76,6 +76,8 @@ bool pane_hosts_active_settings(const SceneSession &session,
 
 bool release_allows_tool_setting(std::string_view tool_id,
                                  std::string_view setting_id) {
+  if (setting_id.starts_with("stairs.") &&
+      !release_has_feature(ReleaseFeature::StairsAndRamps)) return false;
   if (!release_allows_tool(tool_id)) {
     return false;
   }
@@ -97,6 +99,7 @@ primitive_creation_shape(PrimitiveCreationKind kind) {
   case PrimitiveCreationKind::Cone: return QuaderPrimitiveCreationShape::Cone;
   case PrimitiveCreationKind::Sphere: return QuaderPrimitiveCreationShape::Sphere;
   case PrimitiveCreationKind::Torus: return QuaderPrimitiveCreationShape::Torus;
+  case PrimitiveCreationKind::Stairs: return QuaderPrimitiveCreationShape::Stairs;
   }
   return std::nullopt;
 }
@@ -114,6 +117,8 @@ primitive_creation_kind(QuaderPrimitiveCreationShape shape) {
     return PrimitiveCreationKind::Sphere;
   case QuaderPrimitiveCreationShape::Torus:
     return PrimitiveCreationKind::Torus;
+  case QuaderPrimitiveCreationShape::Stairs:
+    return PrimitiveCreationKind::Stairs;
   }
   return std::nullopt;
 }
@@ -240,7 +245,12 @@ active_tool_settings_source(const SceneSession &session) {
   if (primitive.active()) {
     return {
         .identity = &primitive,
-        .revision = primitive.tool_settings_revision(),
+        .revision = primitive.active_kind() == PrimitiveCreationKind::Stairs
+                        ? primitive.creation_revision() : primitive.tool_settings_revision(),
+        .dependent_revision = primitive.active_kind() == PrimitiveCreationKind::Stairs
+                                  ? session.scene().selection_revision() +
+                                        session.modeling().selection_revision()
+                                  : 0U,
         .kind = ActiveToolSettingsSourceKind::Primitive,
         .reset_availability_token = primitive.can_reset_settings(),
     };
@@ -486,6 +496,8 @@ std::string_view primitive_kind_setting_id(PrimitiveCreationKind kind) {
     return "cone";
   case PrimitiveCreationKind::Torus:
     return "torus";
+  case PrimitiveCreationKind::Stairs:
+    return "stairs";
   }
   return {};
 }
@@ -1048,14 +1060,156 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
   return result;
 }
 
+QuaderToolSettingsTarget stairs_tool_settings_target(
+    const PrimitiveCreationToolService &primitive) {
+  const auto &spec = primitive.stairs_settings();
+  const auto &metrics = primitive.stairs_metrics();
+  const bool active = primitive.active_kind() == PrimitiveCreationKind::Stairs;
+  const bool circular = spec.layout == modeling::StairsLayout::Arc ||
+                        spec.layout == modeling::StairsLayout::Spiral;
+  const bool multiple = spec.layout == modeling::StairsLayout::L ||
+                        spec.layout == modeling::StairsLayout::U ||
+                        spec.layout == modeling::StairsLayout::Switchback;
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = active && primitive.live_primitive_creation().has_value(),
+      .tool_id = std::string(kCreateStairsToolId),
+      .title = "Stairs & Ramps",
+      .can_reset = active && primitive.can_reset_settings(),
+      .apply_visible = active,
+      .can_apply = active && primitive.can_apply(),
+      .can_cancel = active,
+  };
+  result.groups = {{"stairs.layout", "Layout"},
+                   {"stairs.dimensions", "Dimensions"},
+                   {"stairs.steps", "Steps"},
+                   {"stairs.construction", "Construction"}};
+  const auto append = [&](QuaderToolSettingControl control, std::string_view group) {
+    control.group_id = group;
+    result.controls.push_back(std::move(control));
+  };
+  const auto dimension = [&](std::string_view id, std::string_view label, double value) {
+    auto control = number_control(std::string(id), std::string(label), value,
+        modeling::kStairsMinimumDimension, 1000000.0, 0.01,
+        QuaderToolSettingNumberInteraction::Continuous,
+        QuaderToolSettingNumberPresentation::SpinBoxOnly);
+    control.number_positive_only = true;
+    control.number_decimals = 4;
+    append(std::move(control), "stairs.dimensions");
+  };
+  constexpr std::array<std::string_view, 6> kLayoutIds{
+      "straight", "l", "u", "switchback", "arc", "spiral"};
+  append(choice_control("stairs.layout", "Layout",
+      std::string(kLayoutIds[static_cast<std::size_t>(spec.layout)]),
+      {{"straight", "Straight", {}, 0.0}, {"l", "L", {}, 1.0},
+       {"u", "U", {}, 2.0}, {"switchback", "Switchback", {}, 3.0},
+       {"arc", "Arc", {}, 4.0}, {"spiral", "Spiral", {}, 5.0}},
+      QuaderToolSettingChoicePresentation::Dropdown), "stairs.layout");
+  append(choice_control("stairs.surface", "Surface",
+      spec.surface == modeling::StairsSurface::Steps ? "stairs" : "ramp",
+      {{"stairs", "Stairs", {}, 0.0}, {"ramp", "Ramp", {}, 1.0}},
+      QuaderToolSettingChoicePresentation::Dropdown), "stairs.layout");
+  if (spec.layout == modeling::StairsLayout::Switchback) {
+    append(choice_control("stairs.switchback_arrangement", "Arrangement",
+        spec.switchback_arrangement == modeling::StairsSwitchbackArrangement::Spread ? "spread" : "stacked",
+        {{"spread", "Spread", {}, 0.0}, {"stacked", "Stacked", {}, 1.0}},
+        QuaderToolSettingChoicePresentation::Dropdown), "stairs.layout");
+    append(number_control("stairs.flight_count", "Flights", spec.flight_count,
+        modeling::kStairsMinimumFlightCount, modeling::kStairsMaximumFlightCount, 1.0,
+        QuaderToolSettingNumberInteraction::Stepped,
+        QuaderToolSettingNumberPresentation::SpinBoxOnly), "stairs.layout");
+  }
+  if (circular || multiple) {
+    auto direction = toggle_control("stairs.clockwise", circular ? "Clockwise" : "Turn Right", spec.clockwise);
+    if (!circular) direction.label_key = "stairs.turn_right";
+    append(std::move(direction), "stairs.layout");
+  }
+  if (circular) {
+    dimension("stairs.inner_radius", "Inner Radius", spec.inner_radius);
+    dimension("stairs.flight_width", "Width", spec.flight_width);
+    if (spec.layout == modeling::StairsLayout::Arc) {
+      append(number_control("stairs.sweep_degrees", "Sweep", spec.sweep_degrees,
+          0.0001, 360.0, 1.0), "stairs.dimensions");
+    } else {
+      append(number_control("stairs.turns", "Turns", spec.turns,
+          0.0001, modeling::kStairsMaximumTurns, 0.25), "stairs.dimensions");
+    }
+    append(number_control("stairs.curved_segments", "Curve Segments", spec.curved_segments,
+        modeling::kStairsMinimumCurvedSegments, modeling::kStairsMaximumCurvedSegments, 1.0,
+        QuaderToolSettingNumberInteraction::Stepped,
+        QuaderToolSettingNumberPresentation::SpinBoxOnly), "stairs.dimensions");
+  } else {
+    if (spec.layout == modeling::StairsLayout::Straight ||
+        spec.layout == modeling::StairsLayout::L) {
+      dimension("stairs.width", "Width", spec.footprint_width);
+    }
+    dimension("stairs.depth", "Run", spec.footprint_depth);
+    if (multiple) {
+      dimension("stairs.flight_width", "Flight Width", spec.flight_width);
+      dimension("stairs.landing_depth", "Landing Length", spec.landing_depth);
+      if (spec.layout != modeling::StairsLayout::L) dimension("stairs.gap", "Gap", spec.gap);
+    }
+  }
+  dimension("stairs.height", "Total Rise", spec.height);
+  if (spec.surface == modeling::StairsSurface::Steps) {
+    append(toggle_control("stairs.automatic_step_count", "Automatic Steps", spec.automatic_step_count), "stairs.steps");
+    if (spec.automatic_step_count) {
+      auto preferred = number_control("stairs.preferred_riser", "Preferred Riser Height",
+          spec.preferred_riser, modeling::kStairsMinimumDimension, 1000000.0, 0.01,
+          QuaderToolSettingNumberInteraction::Continuous,
+          QuaderToolSettingNumberPresentation::SpinBoxOnly);
+      preferred.number_positive_only = true;
+      append(std::move(preferred), "stairs.steps");
+    } else {
+      append(number_control("stairs.step_count", "Step Count", spec.step_count,
+          modeling::kStairsMinimumStepCount, modeling::kStairsMaximumStepCount, 1.0,
+          QuaderToolSettingNumberInteraction::Stepped,
+          QuaderToolSettingNumberPresentation::SpinBoxOnly), "stairs.steps");
+    }
+  }
+  if (result.preview_active) {
+    const auto calculated = [&](std::string_view id, std::string_view label, double value) {
+      auto control = number_control(std::string(id), std::string(label), value, 0.0, 1000000.0, 0.0,
+          QuaderToolSettingNumberInteraction::Continuous,
+          QuaderToolSettingNumberPresentation::SpinBoxOnly);
+      control.enabled = false;
+      append(std::move(control), spec.surface == modeling::StairsSurface::Ramp
+                                    ? "stairs.dimensions" : "stairs.steps");
+    };
+    if (spec.surface == modeling::StairsSurface::Steps) {
+      calculated("stairs.actual_step_count", "Actual Step Count", metrics.step_count);
+      calculated("stairs.actual_riser_height", "Riser Height", metrics.riser_height);
+      calculated("stairs.actual_tread_depth", "Tread Depth", metrics.tread_depth);
+    } else {
+      calculated("stairs.slope_degrees", "Slope", metrics.slope_degrees);
+    }
+  }
+  auto construction = choice_control("stairs.construction", "Type",
+      spec.construction == modeling::StairsConstruction::Solid ? "solid" : "slab",
+      {{"solid", "Solid", {}, 0.0}, {"slab", "Slab", {}, 1.0}},
+      QuaderToolSettingChoicePresentation::Dropdown);
+  construction.label_key = "stairs.construction.type";
+  append(std::move(construction), "stairs.construction");
+  if (spec.construction == modeling::StairsConstruction::Slab) {
+    auto thickness = number_control("stairs.slab_thickness", "Thickness", spec.slab_thickness,
+        modeling::kStairsMinimumDimension, 1000000.0, 0.01,
+        QuaderToolSettingNumberInteraction::Continuous,
+        QuaderToolSettingNumberPresentation::SpinBoxOnly);
+    thickness.number_positive_only = true;
+    append(std::move(thickness), "stairs.construction");
+  }
+  return result;
+}
+
 QuaderToolSettingsTarget primitive_tool_settings_target(
     const PrimitiveCreationToolService &primitive, bool selected_only = false) {
   const std::optional<PrimitiveCreationKind> kind = selected_only
-      ? std::optional<PrimitiveCreationKind>(primitive.preferred_kind())
+      ? std::optional<PrimitiveCreationKind>(primitive.preferred_regular_kind())
       : primitive.active_kind();
   if (!kind.has_value()) {
     return {};
   }
+  if (*kind == PrimitiveCreationKind::Stairs) return stairs_tool_settings_target(primitive);
 
   QuaderToolSettingsTarget result{
       .active = true,
@@ -1073,6 +1227,8 @@ QuaderToolSettingsTarget primitive_tool_settings_target(
                    std::string(primitive_kind_setting_id(*kind)) + ".label",
   };
   switch (*kind) {
+  case PrimitiveCreationKind::Stairs:
+    break;
   case PrimitiveCreationKind::Box: {
     const BoxPrimitiveCreationSettings &settings = primitive.box_settings();
     result.controls.push_back(number_control(
@@ -1840,7 +1996,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   }
   CommandResult activated = session.primitive_creation().activate(*kind);
   if (activated.ok) {
-    activated.changed = origin.record_selected_tool(ViewportToolId::CreatePrimitive) ||
+    activated.changed = origin.record_selected_tool(
+                            *kind == PrimitiveCreationKind::Stairs
+                                ? ViewportToolId::CreateStairs : ViewportToolId::CreatePrimitive) ||
                         activated.changed;
   }
   if (activated.ok && activated.changed && !same_operation) {
@@ -1850,6 +2008,31 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   return api_status_from_command(session, activated,
                                  QuaderMutationKind::Runtime,
                                  "Create Primitive");
+}
+
+QuaderApiVoidResult QuaderToolsApi::begin_stairs_creation() {
+  return begin_primitive_creation(QuaderPrimitiveCreationShape::Stairs);
+}
+
+bool QuaderToolsApi::has_active_stairs_creation() const {
+  return scene_session(session_).primitive_creation().active_kind() == PrimitiveCreationKind::Stairs;
+}
+
+std::optional<QuaderStairsCreationState> QuaderToolsApi::stairs_creation_state() const {
+  const auto &session = scene_session(session_);
+  const auto &primitive = session.primitive_creation();
+  if (primitive.active_kind() != PrimitiveCreationKind::Stairs) return std::nullopt;
+  const auto &metrics = primitive.stairs_metrics();
+  return QuaderStairsCreationState{
+      .specification = primitive.stairs_settings(),
+      .actual_step_count = metrics.step_count,
+      .riser_height = metrics.riser_height,
+      .tread_depth = metrics.tread_depth,
+      .slope_degrees = metrics.slope_degrees,
+      .preview_active = primitive.live_primitive_creation().has_value(),
+      .revision = primitive.creation_revision() + session.scene().selection_revision() +
+                  session.modeling().selection_revision(),
+  };
 }
 
 QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
@@ -2023,6 +2206,9 @@ QuaderToolsApi::settings_for_pane(ViewportPaneId pane) const {
   case ViewportToolId::CreatePrimitive:
     target = primitive_tool_settings_target(session.primitive_creation(), true);
     break;
+  case ViewportToolId::CreateStairs:
+    target = stairs_tool_settings_target(session.primitive_creation());
+    break;
   case ViewportToolId::Extrude:
     target = extrude_tool_settings_target(session.extrude());
     break;
@@ -2096,6 +2282,8 @@ std::uint64_t QuaderToolsApi::settings_revision(ViewportPaneId pane) const {
     parameter_revision = session.align_tool().settings_revision(); break;
   case ViewportToolId::CreatePrimitive:
     parameter_revision = session.primitive_creation().tool_settings_revision(); break;
+  case ViewportToolId::CreateStairs:
+    parameter_revision = session.primitive_creation().creation_revision(); break;
   case ViewportToolId::Extrude:
     parameter_revision = session.extrude().tool_settings_revision(); break;
   case ViewportToolId::UvPeel:
@@ -2722,7 +2910,7 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
         "Set Curve Closed");
   }
   if (session.primitive_creation().active()) {
-    if (!tool_id.empty() && tool_id != kCreatePrimitiveToolId) {
+    if (!tool_id.empty() && tool_id != session.primitive_creation().active_tool_id()) {
       return quader_api_failure_status(
           session, "Tool setting does not belong to the active primitive.");
     }
@@ -2891,6 +3079,26 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                      release_feature_unavailable_message());
   }
   SceneSession &session = scene_session(session_);
+  if (session.primitive_creation().active_kind() == PrimitiveCreationKind::Stairs &&
+      name.starts_with("stairs.")) {
+    std::optional<double> choice;
+    if (name == "stairs.layout") {
+      constexpr std::array<std::string_view, 6> kIds{"straight", "l", "u", "switchback", "arc", "spiral"};
+      for (std::size_t index = 0; index < kIds.size(); ++index) {
+        if (value == kIds[index]) choice = static_cast<double>(index);
+      }
+    } else if (name == "stairs.surface") {
+      if (value == "stairs") choice = 0.0;
+      else if (value == "ramp") choice = 1.0;
+    } else if (name == "stairs.construction") {
+      if (value == "solid") choice = 0.0;
+      else if (value == "slab") choice = 1.0;
+    } else if (name == "stairs.switchback_arrangement") {
+      if (value == "spread") choice = 0.0;
+      else if (value == "stacked") choice = 1.0;
+    }
+    if (choice) return set_setting(tool_id, name, *choice);
+  }
   if (session.extrude().active() && name == "extrude.type") {
     if (value != "region" && value != "along_normals" && value != "individual") {
       return quader_api_failure_status(session, "Invalid Extrusion type.");
@@ -3139,7 +3347,7 @@ bool QuaderToolsApi::has_active_primitive_creation() const {
 
 QuaderPrimitiveCreationShape QuaderToolsApi::preferred_primitive_shape() const {
   return primitive_creation_shape(
-             scene_session(session_).primitive_creation().preferred_kind())
+             scene_session(session_).primitive_creation().preferred_regular_kind())
       .value_or(QuaderPrimitiveCreationShape::Box);
 }
 
@@ -3160,6 +3368,8 @@ std::string QuaderToolsApi::active_primitive_type() const {
     return "cone";
   case PrimitiveCreationKind::Torus:
     return "torus";
+  case PrimitiveCreationKind::Stairs:
+    return "stairs";
   }
   return {};
 }

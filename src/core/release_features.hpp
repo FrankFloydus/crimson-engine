@@ -67,6 +67,7 @@ enum class ReleaseFeature {
   AdvancedSelectionUi,
   Instancing,
   PaintSelection,
+  StairsAndRamps,
   Count,
 };
 

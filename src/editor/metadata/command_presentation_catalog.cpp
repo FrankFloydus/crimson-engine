@@ -75,6 +75,7 @@ constexpr std::string_view kExtrudeAlongNormalsKeywords[]{
     "extrude", "face", "normal", "connected"};
 constexpr std::string_view kShadingKeywords[]{"shade", "surface"};
 constexpr std::string_view kTextureKeywords[]{"texture", "uv"};
+constexpr std::string_view kStairsKeywords[]{"stairs", "ramp", "flight", "spiral"};
 constexpr std::string_view kMirrorFaceUvKeywords[]{
     "texture", "uv", "mirror", "face", "flip"};
 constexpr std::string_view kSearchKeywords[]{"search", "command", "palette", "finder"};
@@ -270,6 +271,10 @@ constexpr CommandPresentationDescriptor kCatalog[]{
     presentation(quader_command::kToolsActivateCreateCurve, Domain::Create,
                  Group::Creation, 16u, kPalette, Palette::Searchable,
                  Activation::InteractiveTool, Danger::None, {}, {},
+                 "tool_settings"),
+    presentation(quader_command::kToolsActivateCreateStairs, Domain::Create,
+                 Group::Creation, 17u, kToolbarPalette, Palette::Searchable,
+                 Activation::InteractiveTool, Danger::None, {}, kStairsKeywords,
                  "tool_settings"),
     presentation(quader_command::kToolsActivatePoly, Domain::Create,
                  Group::Creation, 20u, kViewportToolbarPalette,

@@ -56,6 +56,7 @@ constexpr auto kToolRequirements = std::to_array<FeatureRequirement>({
     {"align", ReleaseFeature::Arrangement},
     {"create_cone", ReleaseFeature::ConePrimitive},
     {"create_torus", ReleaseFeature::TorusPrimitive},
+    {"create_stairs", ReleaseFeature::StairsAndRamps},
     {"extrude", ReleaseFeature::ExtrudeTool},
     {"extrude_individual", ReleaseFeature::ExtrudeTool},
     {"extrude_along_normals", ReleaseFeature::ExtrudeTool},

@@ -229,18 +229,19 @@ TEST(QtViewportQuickMenuTests,
   EXPECT_EQ(mesh.text, QStringLiteral("Mesh"));
   EXPECT_EQ(mesh.submenu_object_name,
             QStringLiteral("viewport_add_mesh_submenu"));
-  ASSERT_EQ(mesh.children.size(), 5u);
+  ASSERT_EQ(mesh.children.size(), 6u);
   const std::vector<QString> expected_mesh_ids{
       QStringLiteral("tools.activate.create_box"),
       QStringLiteral("tools.activate.create_cylinder"),
       QStringLiteral("tools.activate.create_sphere"),
       QStringLiteral("tools.activate.create_torus"),
       QStringLiteral("tools.activate.create_cone"),
+      QStringLiteral("tools.activate.create_stairs"),
   };
   const std::vector<QString> expected_mesh_labels{
       QStringLiteral("Box"), QStringLiteral("Cylinder"),
       QStringLiteral("Sphere"), QStringLiteral("Torus"),
-      QStringLiteral("Cone"),
+      QStringLiteral("Cone"), QStringLiteral("Stairs && Ramps"),
   };
   for (std::size_t index = 0; index < mesh.children.size(); ++index) {
     EXPECT_EQ(mesh.children[index].object_name, expected_mesh_ids[index]);
