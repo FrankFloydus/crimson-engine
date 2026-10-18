@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "physics/PhysicsWorld.h"
 #include "physics/CharacterMotor.h"
 #include "agent_profile_fixture.h"
@@ -7,6 +8,7 @@
 #include <iostream>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace crimson;
@@ -15,6 +17,236 @@ EntityRecord floorRecord(){EntityRecord floor;floor.id=1;floor.name="Floor colli
 EntityRecord characterRecord(){EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.motor.emplace();player.local=math::translation({0,2,0});return player;}
 void tick(Scene& scene,PhysicsWorld& world,const Vec3& movement={},int count=1) {
     for(int i=0;i<count;++i)scene.applyRuntimePoses(world.step(scene,2,movement,1.f/60.f));
+}
+void firstPersonTick(Scene& scene,PhysicsWorld& world,const Vec3& movement={},int count=1,float airControl=.35f) {
+    CharacterMotor motor(world,2);
+    for(int i=0;i<count;++i){motor.moveFirstPerson(movement,45,8,12,airControl);scene.applyRuntimePoses(world.step(scene,NoEntity,{},1.f/60.f));}
+}
+void firstPersonAccelerationBrakingAndAirControl() {
+    Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});scene.apply({floorRecord(),player},{});
+    PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    firstPersonTick(scene,world,{6,0,0});const auto first=*motor.velocity();
+    require(first[0]>.6f && first[0]<.9f,"FPS movement did not accelerate smoothly from rest.");
+    firstPersonTick(scene,world,{6,0,0},15);
+    require(std::abs((*motor.velocity())[0]-6)<.02,"FPS ground acceleration did not reach the requested movement speed.");
+    const auto brakingStart=*motor.position();firstPersonTick(scene,world,{},45);
+    require(std::abs((*motor.velocity())[0])<1e-4 && (*motor.position())[0]<brakingStart[0]+1,"FPS ground friction did not stop the actor promptly.");
+    firstPersonTick(scene,world,{6,0,0},16);motor.jump(1.1f);firstPersonTick(scene,world,{6,0,0});
+    require(!motor.grounded() && (*motor.velocity())[1]>4,"FPS jump did not leave the floor with the height-derived upward impulse.");
+    firstPersonTick(scene,world,{},8);
+    require(std::abs((*motor.velocity())[0]-6)<.02,"Releasing movement in the air incorrectly applied ground friction.");
+    firstPersonTick(scene,world,{0,0,-6},6,0);
+    require(std::abs((*motor.velocity())[0]-6)<.02 && std::abs((*motor.velocity())[2])<.01,"Zero air control still redirected airborne momentum.");
+    firstPersonTick(scene,world,{0,0,-6},6,1);
+    require((*motor.velocity())[0]<5.5f && (*motor.velocity())[2]<-.5f,"Authored air control did not allow airborne steering.");
+}
+void firstPersonJumpEdgesHeightAndBuffer() {
+    Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});scene.apply({floorRecord(),player},{});
+    PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);const auto floor=(*motor.position())[1];
+    motor.jump(1.1f);firstPersonTick(scene,world);float highest=(*motor.position())[1];
+    firstPersonTick(scene,world,{},8);const auto before=(*motor.velocity())[1];motor.jump(1.1f);firstPersonTick(scene,world);
+    require((*motor.velocity())[1]<before,"A second jump press gave an unsupported actor an extra jump.");
+    for(int i=0;i<100;++i){firstPersonTick(scene,world);highest=std::max(highest,(*motor.position())[1]);}
+    require(highest-floor>1.f && highest-floor<1.15f,"FPS jump height did not match the authored 1.1 m ballistic arc.");
+    require(motor.grounded() && std::abs((*motor.position())[1]-floor)<.02,"Jump repeated without a new press edge or failed to land.");
+
+    Scene fallingScene;player.local=math::translation({0,.6f,0});fallingScene.apply({floorRecord(),player},{});PhysicsWorld fallingWorld;
+    CharacterMotor fallingMotor(fallingWorld,2);bool queued=false,rebounded=false;
+    for(int i=0;i<90;++i) {
+        if(!queued && fallingMotor.position() && !fallingMotor.grounded() && (*fallingMotor.position())[1]<.12f){fallingMotor.jump(1.1f);queued=true;}
+        firstPersonTick(fallingScene,fallingWorld);
+        if(queued && (*fallingMotor.velocity())[1]>3){rebounded=true;break;}
+    }
+    require(queued && rebounded,"A jump press just before landing was lost instead of using the landing buffer.");
+}
+void firstPersonCoyoteWindow() {
+    const auto departure=[](int ticksBeforePress) {
+        Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});scene.apply({floorRecord(),player},{});
+        PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+        auto records=scene.records();std::erase_if(records,[](const auto& record){return record.id==1;});scene.apply(records,{});
+        firstPersonTick(scene,world,{},ticksBeforePress);motor.jump(1.1f);firstPersonTick(scene,world);return (*motor.velocity())[1];
+    };
+    require(departure(3)>4,"Jump immediately after leaving support did not use the coyote window.");
+    require(departure(10)<0,"Expired coyote time permitted an unsupported jump.");
+}
+void firstPersonCanceledJumpBuffer() {
+    const auto fall=[](bool cancel) {
+        Scene scene;auto player=characterRecord();player.local=math::translation({0,1,0});scene.apply({floorRecord(),player},{});
+        PhysicsWorld world;CharacterMotor motor(world,2);
+        for(int i=0;i<60;++i){firstPersonTick(scene,world);if((*motor.position())[1]<.35f)break;}
+        motor.jump(1.1f);firstPersonTick(scene,world);
+        require(!motor.grounded() && (*motor.velocity())[1]<-1,"Canceled-jump fixture did not establish a buffered airborne press.");
+        const auto velocity=*motor.velocity();
+        if(cancel) {
+            // Focus can be lost and reacquired before another fixed tick.
+            // Cancel both the consumed landing buffer and newly queued input.
+            motor.jump(1.1f);motor.moveFirstPerson({6,0,0},45,8,12,.35f);motor.face({1,0,0});
+            world.cancelCharacterInput(2);
+            require(*motor.velocity()==velocity,"Input cancellation changed the accepted ballistic velocity.");
+        }
+        firstPersonTick(scene,world);
+        require((*motor.velocity())[1]<velocity[1]-.1f,"Input cancellation interrupted falling momentum before reacquisition.");
+        bool jumped=false;
+        for(int i=0;i<30;++i){firstPersonTick(scene,world);if((*motor.velocity())[1]>1)jumped=true;}
+        return jumped;
+    };
+    require(fall(false),"Buffered-jump cancellation fixture would not jump on its impending landing.");
+    require(!fall(true),"Canceled buffered jump survived a zero-tick input loss and reacquisition.");
+}
+void firstPersonCeilingsWallsAndStairs() {
+    Scene scene;auto player=characterRecord();player.local=math::translation({0,.05f,0});
+    EntityRecord ceiling;ceiling.id=3;ceiling.name="Low ceiling";ceiling.local=math::translation({0,2.3f,0});ceiling.collider=SceneCollider{{10,.2f,10}};
+    EntityRecord wall;wall.id=4;wall.name="Wall";wall.local=math::translation({1.5f,2,0});wall.collider=SceneCollider{{1,4,10}};
+    scene.apply({floorRecord(),player,ceiling,wall},{});PhysicsWorld world;firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    motor.jump(1.1f);float highest=0;
+    for(int i=0;i<90;++i){firstPersonTick(scene,world);highest=std::max(highest,(*motor.position())[1]);}
+    require(highest>.2f && highest<.43f && motor.grounded(),"Low ceiling did not stop ascent and promptly restore falling/landing.");
+    firstPersonTick(scene,world,{6,0,0},90);
+    require((*motor.position())[0]<.72f && std::abs((*motor.velocity())[0])<.01,"FPS wall contact retained commanded momentum or passed through collision.");
+    const float againstWall=(*motor.position())[0];firstPersonTick(scene,world,{-6,0,0});
+    require((*motor.position())[0]<againstWall-.005f,"FPS acceleration had to unwind stale into-wall velocity before reversing.");
+
+    Scene stairs;EntityRecord step;step.id=4;step.name="Low step";step.local=math::translation({1.5f,.1f,0});step.collider=SceneCollider{{1,.2f,4}};
+    stairs.apply({floorRecord(),player,step},{});PhysicsWorld stairWorld;firstPersonTick(stairs,stairWorld,{},60);firstPersonTick(stairs,stairWorld,{3,0,0},60);
+    require((*stairWorld.characterPosition(2))[0]>2.4f && stairWorld.grounded(2),"FPS momentum handling broke the shared traversal profile's stair support.");
+}
+void firstPersonTransientStateResets() {
+    using namespace crimson::testing;
+    const auto profile=agentProfile({1.8f,.3f,45,.3f});auto player=characterRecord();player.controller->profile=profile;player.local=math::translation({0,.05f,0});
+    Scene scene;scene.apply({floorRecord(),player},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());firstPersonTick(scene,world,{},60);CharacterMotor motor(world,2);
+    firstPersonTick(scene,world,{6,0,0},16);motor.jump(1.1f);firstPersonTick(scene,world,{6,0,0},3);
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.local=math::translation({4,3,0});scene.apply(records,{});
+    firstPersonTick(scene,world);
+    require(std::abs((*motor.velocity())[0])<.01 && (*motor.velocity())[1]<0 && (*motor.position())[1]>2.99f,"Authored teleport retained FPS horizontal/jump momentum.");
+    firstPersonTick(scene,world,{},120);motor.jump(1.1f);motor.moveFirstPerson({6,0,0},45,8,12,.35f);const std::vector<EntityId> locks{2};
+    scene.applyRuntimePoses(world.step(scene,NoEntity,{},1.f/60.f,locks));firstPersonTick(scene,world);
+    require(motor.grounded() && std::abs((*motor.velocity())[0])<.01,"Transform lock replayed FPS movement or a queued jump when released.");
+    firstPersonTick(scene,world,{6,0,0},16);
+    auto replacement=std::make_shared<NavigationAgentProfile>(*agentProfiles().at(profile.id));replacement->traversal.maxSlope=40;agentProfiles()[profile.id]=replacement;
+    motor.jump(1.1f);firstPersonTick(scene,world);
+    require(motor.grounded() && std::abs((*motor.velocity())[0])<.01,"Profile replacement retained FPS momentum or a buffered jump.");
+}
+void stairCorrectionPublication() {
+    using namespace crimson::testing;
+    const auto profile=agentProfile({1.8f,.3f,45,.3f});
+    auto player=characterRecord();player.controller->profile=profile;player.local=math::translation({0,.05f,0});
+    EntityRecord step;step.id=4;step.name="Camera stair";step.local=math::translation({1.5f,.1f,0});step.collider=SceneCollider{{1,.2f,4}};
+    Scene scene;scene.apply({floorRecord(),player,step},{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());firstPersonTick(scene,world,{},60);
+    require(world.characterStepHeight(2)==0 && world.characterStepHeight(999)==0,"Stationary/unknown character published a stair correction.");
+    float climb=0,descent=0;bool climbed=false,descended=false;
+    for(int i=0;i<80;++i) {
+        firstPersonTick(scene,world,{3,0,0});const auto correction=world.characterStepHeight(2);
+        if(correction>0){climb+=correction;climbed=true;}
+        else if(correction<0){descent+=correction;descended=true;}
+    }
+    require(climbed && descended && climb>.1f && climb<.3f && descent<-.1f && descent>-.3f,
+        "Supported stairs did not publish distinct actual ascent/descent corrections: up="+std::to_string(climb)+", down="+std::to_string(descent));
+    firstPersonTick(scene,world,{},60);require(world.characterStepHeight(2)==0,"A stair correction leaked into a later stationary tick.");
+    CharacterMotor motor(world,2);motor.jump(1.1f);
+    for(int i=0;i<100;++i){firstPersonTick(scene,world);require(world.characterStepHeight(2)==0,"Jump/fall/landing was misreported as a stair correction.");}
+
+    const auto climbAgain=[&] {
+        auto records=scene.records();for(auto& record:records)if(record.id==2)record.local=math::translation({0,.05f,0});scene.apply(records,{});
+        world.reconcile(scene);require(world.characterStepHeight(2)==0,"Teleport retained the previous stair correction.");
+        firstPersonTick(scene,world,{},60);
+        for(int i=0;i<60;++i){firstPersonTick(scene,world,{3,0,0});if(world.characterStepHeight(2)>.01f)return;}
+        require(false,"Reset fixture never encountered its stair.");
+    };
+    climbAgain();world.cancelCharacterInput(2);require(world.characterStepHeight(2)==0,"Canceling gameplay input retained the previous stair correction.");
+    climbAgain();const std::vector<EntityId> locks{2};world.reconcile(scene,locks);require(world.characterStepHeight(2)==0,"Transform lock retained the previous stair correction.");
+    firstPersonTick(scene,world);
+    climbAgain();auto replacement=std::make_shared<NavigationAgentProfile>(*agentProfiles().at(profile.id));replacement->traversal.maxSlope=40;agentProfiles()[profile.id]=replacement;
+    world.reconcile(scene);require(world.characterStepHeight(2)==0,"Profile replacement retained the previous stair correction.");
+    climbAgain();auto records=scene.records();std::erase_if(records,[](const auto& record){return record.id==2;});scene.apply(records,{});world.reconcile(scene);
+    require(world.characterStepHeight(2)==0,"Removed character retained the previous stair correction.");
+}
+void narrowStairCompleteVerticalPublication() {
+    using namespace crimson::testing;
+    const auto profile=agentProfile({1.8f,.3f,45,.3f});
+    for(bool triangles:{false,true}) {
+        auto player=characterRecord();player.controller->profile=profile;player.local=math::translation({0,.05f,0});
+        std::vector<EntityRecord> records{floorRecord(),player};
+        // Match the authored staircase's .25 m risers and .375 m treads.
+        // Capsule rounding continues outside the explicit stair helper, on
+        // both native boxes and the original imported triangle geometry.
+        for(int i=0;i<8;++i) {
+            const float width=i==7?8.f:.375f,left=1.f+.375f*i;
+            EntityRecord step;step.id=10+i;step.name="Narrow stair tread";
+            step.local=math::translation({left+width*.5f,.25f*i+.125f,0});
+            step.collider=SceneCollider{{width,.25f,4}};
+            if(triangles) {
+                const float half=width*.5f;
+                step.collider->shape=ColliderShape::Trimesh;
+                step.collider->mesh=makeCollisionMesh({
+                    {-half,-.125f,-2},{half,-.125f,-2},{half,-.125f,2},{-half,-.125f,2},
+                    {-half,.125f,-2},{half,.125f,-2},{half,.125f,2},{-half,.125f,2}},
+                    {0,1,2,0,2,3,4,6,5,4,7,6,0,3,7,0,7,4,1,5,6,1,6,2,0,4,5,0,5,1,3,2,6,3,6,7});
+            }
+            records.push_back(std::move(step));
+        }
+        Scene scene;scene.apply(records,{});PhysicsWorld world;world.setAgentProfiles(agentProfileQuery());
+        firstPersonTick(scene,world,{},60);
+        const auto label=triangles?"Trimesh":"Box";
+        for(int direction:{1,-1}) {
+            bool rounded=false,stepped=false;double displacement=0,correction=0;
+            for(int i=0;i<180;++i) {
+                const auto before=*world.characterPosition(2);const bool supported=world.grounded(2);
+                firstPersonTick(scene,world,{direction*5.f,0,0});
+                const auto after=*world.characterPosition(2);const float height=after[1]-before[1];
+                const float published=world.characterStepHeight(2);
+                // Jolt can remain supported on a steep rounded edge between
+                // its strict OnGround samples, including during stair descent.
+                displacement+=height;correction+=published;
+                if(std::abs(height)>1e-3f && ((supported && world.grounded(2)) || published!=0))
+                    require(std::abs(published-height)<1e-5f,
+                        std::string(label)+" stair sweep/settling bypassed the complete vertical correction: height="+
+                        std::to_string(height)+", published="+std::to_string(published));
+                rounded=rounded || (direction*published>.001f && direction*published<.06f);
+                stepped=stepped || direction*published>.1f;
+                if((direction>0 && after[0]>5) || (direction<0 && after[0]<0))break;
+            }
+            require(direction*displacement>1.95 && std::abs(correction-displacement)<.01,
+                std::string(label)+" narrow stairs failed to capture their full supported ascent/descent: direction="+
+                std::to_string(direction)+", displacement="+std::to_string(displacement)+", correction="+std::to_string(correction));
+            require(rounded && stepped,std::string(label)+" narrow stairs did not exercise both capsule rounding and large steps.");
+            firstPersonTick(scene,world,{},60);
+        }
+        // An unsupported drop and its eventual landing are ballistic,
+        // unlike supported downward stair snapping.
+        auto falling=scene.records();
+        for(auto& record:falling)if(record.id==2)record.local=math::translation({-2,3,0});
+        scene.apply(falling,{});world.reconcile(scene);
+        bool airborne=false,landed=false;
+        for(int i=0;i<120;++i) {
+            firstPersonTick(scene,world);
+            airborne=airborne || !world.grounded(2);landed=landed || (airborne && world.grounded(2));
+            require(world.characterStepHeight(2)==0,std::string(label)+" unsupported fall or landing entered stair smoothing.");
+        }
+        require(airborne && landed,std::string(label)+" stair fall fixture did not reach its landing.");
+    }
+}
+void rampMotionIsNotAStairCorrection() {
+    for(bool triangles:{false,true}) {
+        auto player=characterRecord();player.local=math::translation({-1,.05f,0});
+        EntityRecord ramp;ramp.id=6;ramp.name="Continuous ramp";ramp.collider=SceneCollider{{4,.2f,4}};
+        const double angle=25*std::numbers::pi/180;
+        ramp.local=math::translation({1,static_cast<float>(2*std::sin(angle)),0})*math::eulerRotationXYZ({0,0,angle});
+        if(triangles) {
+            ramp.collider->shape=ColliderShape::Trimesh;
+            ramp.collider->mesh=makeCollisionMesh({{-2,.1f,-2},{2,.1f,-2},{2,.1f,2},{-2,.1f,2}},{0,2,1,0,3,2});
+        }
+        Scene scene;scene.apply({floorRecord(),player,ramp},{});PhysicsWorld world;firstPersonTick(scene,world,{},60);
+        for(int direction:{1,-1}) {
+            int samples=0;
+            for(int i=0;i<210;++i) {
+                firstPersonTick(scene,world,{static_cast<float>(direction),0,0});const auto p=*world.characterPosition(2);
+                if(p[0]>.2f && p[0]<2.3f && world.grounded(2)) {
+                    ++samples;require(std::abs(world.characterStepHeight(2))<1e-5f,"Continuous ramp movement was misreported as a stair correction.");
+                }
+            }
+            require(samples>30,"Ramp signal fixture did not traverse the interior while supported.");
+        }
+    }
 }
 void floorWallAndLiveEdits() {
     Scene scene;auto player=characterRecord();scene.apply({floorRecord(),player},{});PhysicsWorld world;
@@ -151,7 +383,7 @@ void controllerAndMotorComposition() {
     scene.apply({floorRecord(),body},{});PhysicsWorld world;tick(scene,world,{4,0,0},60);
     require(world.characterCount()==1&&world.grounded(2)&&std::abs((*world.characterPosition(2))[0])<1e-5,
         "A controller without a Motor lost gravity/grounding or accepted horizontal movement.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor.emplace();scene.apply(records,{});
+    auto records=scene.records();for(auto& record:records)if(record.id==2){record.motor.emplace();}scene.apply(records,{});
     tick(scene,world,{2,0,0},30);require((*world.characterPosition(2))[0]>.95f,"Attaching Motor did not enable the existing controller.");
     records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;scene.apply(records,{});
     const auto stopped=*world.characterPosition(2);tick(scene,world,{4,0,0},30);
@@ -166,7 +398,7 @@ void geometryPublication() {
     const auto revision=world.geometryRevision();const auto boxes=world.staticBoxes();
     require(boxes.size()==1 && boxes[0].entity==1 && boxes[0].size==Vec3{20,1,20},"Published navigation geometry did not match the accepted static world.");
     tick(scene,world,{1,0,0},60);require(world.geometryRevision()==revision,"Character poses invalidated static geometry.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor->moveSpeed=8;
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision,"Unrelated scene edit invalidated static geometry.");
     records=scene.records();for(auto& record:records)if(record.id==1)record.local=math::translation({0,-2,0});
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision+1,"Live geometry edit did not publish a new revision.");
@@ -271,5 +503,15 @@ void slopeIntentIsPerActorAndSteepSlopesStillSlide() {
     const auto downhill=horizontalRampDirection(steep,{-1,0,0}),finish=*steepWorld.characterPosition(2);
     require(math::dot(finish-start,downhill)>.25&&finish[1]<start[1]-.15,"Idle support made a slope above the profile limit walkable or suspended gravity.");
 }
+void firstPersonWalkableSlopes() {
+    for(const auto degrees:{14.f,35.f}) {
+        const auto ramp=idleRamp(degrees,.6f,degrees>20);auto actor=characterRecord();actor.local=math::translation(rampSpawn(ramp,-2));
+        Scene scene;scene.apply({ramp,actor},{});PhysicsWorld world;firstPersonTick(scene,world,{},120);
+        const auto start=*world.characterPosition(2);firstPersonTick(scene,world,horizontalRampDirection(ramp,{1,0,0})*1.5,90);
+        require(world.grounded(2) && (*world.characterPosition(2))[1]>start[1]+.2,"FPS movement could not ascend a walkable shared-profile ramp.");
+        firstPersonTick(scene,world,{},90);const auto stopped=*world.characterPosition(2);firstPersonTick(scene,world,{},90);
+        require(world.grounded(2) && math::length(*world.characterPosition(2)-stopped)<.01,"FPS friction did not leave an idle actor at rest on a walkable ramp.");
+    }
 }
-int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+}
+int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();sharedProfilePublicationAndStaticPreview();profileStepAndSlopeLimits();idleWalkableSlopeSupport();slopeIntentIsPerActorAndSteepSlopesStillSlide();firstPersonAccelerationBrakingAndAirControl();firstPersonJumpEdgesHeightAndBuffer();firstPersonCoyoteWindow();firstPersonCanceledJumpBuffer();firstPersonCeilingsWallsAndStairs();firstPersonTransientStateResets();stairCorrectionPublication();narrowStairCompleteVerticalPublication();rampMotionIsNotAStairCorrection();firstPersonWalkableSlopes();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

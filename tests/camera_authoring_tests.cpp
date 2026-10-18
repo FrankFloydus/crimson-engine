@@ -32,9 +32,10 @@ void ownedCameraAndDefaults(const std::filesystem::path& root) {
     require(record.parent==player&&record.cameraFollow&&record.cameraFollow->target==player,"Camera is not an actual following child inside the character.");
     const auto snapshot=captureCameraTemplate(document.scene(),camera,player);
     require(snapshot.has_value(),"Could not capture the owned camera.");
-    near(snapshot->offset,{6.5f,13.1f,6.5f},"Player camera offset does not match the agreed framing.");
-    near(cameraTemplateRotationDegrees(*snapshot),{-55.f,45.f,0.f},"Player camera rotation does not match the agreed framing.");
-    require(snapshot->lens.verticalFov==35.f,"Player camera FOV does not match the agreed framing.");
+    near(snapshot->offset,{0,1.65f,0},"Player camera offset does not match first-person eye height.");
+    near(cameraTemplateRotationDegrees(*snapshot),{},"Player camera does not face forward along -Z.");
+    require(snapshot->lens==SceneCamera{75,.05f,2048},"Player camera lens does not match the first-person defaults.");
+    require(!document.scene().find(player)->navigation,"First-person Player recipe acquired an unsolicited Navigation Agent.");
     require(document.scene().properties().activeCamera==external,"Creating a character replaced an explicitly chosen scene camera.");
     const auto enemy=document.createEnemy();require(!resolveOwnedActorCamera(document.scene(),enemy),"Enemy acquired an unsolicited camera.");
     document.select({player});require(document.duplicateSelection(),"Could not duplicate character fixture.");

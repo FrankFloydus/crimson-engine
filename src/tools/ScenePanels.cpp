@@ -1,5 +1,10 @@
 #include "ScenePanels.h"
 #include "SceneInspectorSections.h"
+#include "GameplayTagControls.h"
+#include "EnemyInspectorControls.h"
+#include "PlayerInputInspectorControls.h"
+#include "CollisionFilterControls.h"
+#include "editor/CollisionLayersDocument.h"
 #include "SceneOutlinerColor.h"
 #include "CameraAuthoringControls.h"
 #include "InspectorTransform.h"
@@ -61,8 +66,10 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
     EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
-    CharacterSpeed, CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
-    MotorEnabled,NavigationEnabled,PlayerInputEnabled,
+    CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
+    MotorEnabled,NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,PlayerJumpHeight,
+    PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,PlayerStairSmoothingTime,
+    EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
     VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
     CharacterRigEnabled,
     CharacterRigLast=CharacterRigEnabled+static_cast<unsigned>(ActorLightRigControl::ShadowNormalBias),
@@ -97,6 +104,7 @@ struct PanelsState {
     EntityId inspectorEntity{},editingEntity{};
     std::optional<SceneComponentTarget> removeComponent;
     std::unordered_map<EntityId,ColliderInspectorState> colliders;
+    std::unordered_map<EntityId,GameplayTagPickerState> tags;
     std::string materialDiagnostic;
     SceneOutlinerColorPopupState outlinerColor;
     std::unordered_map<EntityId,CameraAuthoringControlsState> cameraControls;
@@ -116,6 +124,7 @@ PanelsState& stateFor(SceneDocument& document) {
     }
     std::erase_if(state.transforms,[&](const auto& entry){return !document.scene().contains(entry.first);});
     std::erase_if(state.cameraControls,[&](const auto& entry){return !document.scene().contains(entry.first);});
+    std::erase_if(state.tags,[&](const auto& entry){return !document.scene().contains(entry.first);});
     for(auto it=state.colliders.begin();it!=state.colliders.end();) {
         if(document.scene().contains(it->first)){++it;continue;}
         releaseColliderInspector(it->second);it=state.colliders.erase(it);
@@ -145,6 +154,7 @@ bool selected(const SceneDocument& document, EntityId id) {
 const char* kind(const EntityRecord& record) {
     if(record.quader)return "Quader";
     if(record.navigationVolume)return "NavigationVolume";
+    if(record.enemy)return "Enemy";
     if (record.playerInput) return "Player";
     if (record.actor) return "Actor";
     if (record.controller) return "Character Controller";
@@ -815,7 +825,8 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
     const char* currentTemplate=matches(builtIn)?builtIn.name.c_str():"Custom";
     for(const auto& candidate:state.cameraTemplates)if(matches(candidate)){currentTemplate=candidate.name.c_str();break;}
     if(ImGui::BeginCombo("Template",currentTemplate)) {
-        const auto item=[&](const CameraTemplate& candidate) {
+        const auto item=[&](const CameraTemplate& candidate,int identity) {
+            ImGui::PushID(identity);
             if(ImGui::Selectable(candidate.name.c_str(),matches(candidate))) {
                 finishScenePanelEdit(document);
                 if(updateCameraAuthoring(document,cameraId,candidate,"Apply camera template")) {
@@ -823,9 +834,10 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
                 }
                 ImGui::CloseCurrentPopup();
             }
+            ImGui::PopID();
         };
-        item(builtIn);
-        for(const auto& candidate:state.cameraTemplates)item(candidate);
+        item(builtIn,-1);
+        for(std::size_t index=0;index<state.cameraTemplates.size();++index)item(state.cameraTemplates[index],static_cast<int>(index));
         ImGui::EndCombo();
     }
     ImGui::BeginDisabled(!state.cameraTemplatesAvailable);
@@ -1004,16 +1016,103 @@ void navigationVolumeControls(SceneDocument& document,PanelsState& state,const E
         if(context.buildStatus)ImGui::TextWrapped("%s",context.buildStatus(*context.previewProfile).c_str());
     }
 }
-void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,SceneComponentKind section,AssetLibrary& assets,const NavigationInspectorContext& navigation) {
+void startingEffectControls(SceneDocument& document,AssetLibrary& assets,const EntityRecord& record,std::string* openEffect) {
+    const auto& starting=record.effects->starting;
+    const auto assign=[&](std::vector<AssetRef<GameplayEffectAsset>> values,const char* label) {
+        finishScenePanelEdit(document);
+        document.edit(label,changeEntity(record.id,[values=std::move(values)](auto& entity){entity.effects->starting=values;}));
+    };
+    ImGui::TextUnformatted("Starting Effects");
+    for(std::size_t index=0;index<starting.size();++index) {
+        ImGui::PushID(static_cast<int>(index));
+        const auto& id=starting[index].id;
+        const auto staged=document.gameplayEffect(id);
+        const auto managed=assets.findGameplayEffect(id);
+        const auto definition=managed?managed:staged;
+        const auto name=managed?assets.displayName(id):staged?staged->name:std::string("Missing Effect");
+        const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+        const auto openWidth=ImGui::CalcTextSize("Open").x+ImGui::GetStyle().FramePadding.x*2;
+        const auto fieldWidth=std::max(height,ImGui::GetContentRegionAvail().x-openWidth-height*3-gap*4);
+        if(ImGui::Button((name+"##effect").c_str(),{fieldWidth,height}))ImGui::OpenPopup("Choose Effect");
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("%s",id.c_str());
+        if(ImGui::BeginDragDropTarget()) {
+            if(const auto* payload=ImGui::AcceptDragDropPayload("CC_GAMEPLAY_EFFECT")) {
+                if(payload->DataSize>1&&static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
+                    const std::string candidate(static_cast<const char*>(payload->Data),payload->DataSize-1);
+                    if(assets.findGameplayEffect(candidate)||document.gameplayEffect(candidate)) {
+                        auto values=starting;values[index]=AssetRef<GameplayEffectAsset>{candidate};assign(std::move(values),"Assign starting effect");
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::SameLine(0,gap);ImGui::BeginDisabled(!openEffect||!definition);
+        if(ImGui::Button("Open",{openWidth,height})&&openEffect)*openEffect=id;
+        ImGui::EndDisabled();ImGui::SameLine(0,gap);
+        if(ImGui::Button("X",{height,height})) {auto values=starting;values.erase(values.begin()+static_cast<std::ptrdiff_t>(index));assign(std::move(values),"Remove starting effect");}
+        ImGui::SameLine(0,gap);ImGui::BeginDisabled(index==0);
+        if(ImGui::Button("^",{height,height})) {auto values=starting;std::swap(values[index],values[index-1]);assign(std::move(values),"Reorder starting effects");}
+        ImGui::EndDisabled();ImGui::SameLine(0,gap);ImGui::BeginDisabled(index+1==starting.size());
+        if(ImGui::Button("v",{height,height})) {auto values=starting;std::swap(values[index],values[index+1]);assign(std::move(values),"Reorder starting effects");}
+        ImGui::EndDisabled();
+        if(ImGui::BeginPopup("Choose Effect")) {
+            static ImGuiTextFilter filter;filter.Draw("Search");
+            for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect&&filter.PassFilter(asset.name.c_str()))
+                if(ImGui::Selectable(asset.name.c_str(),asset.id==id)) {auto values=starting;values[index]=AssetRef<GameplayEffectAsset>{asset.id};assign(std::move(values),"Assign starting effect");ImGui::CloseCurrentPopup();}
+            ImGui::EndPopup();
+        }
+        if(!definition) {
+            const auto diagnostic=assets.gameplayEffectDiagnostic(id);
+            ImGui::TextWrapped("%s",diagnostic.empty()?("Effect unavailable: "+id).c_str():diagnostic.c_str());
+        }
+        ImGui::PopID();
+    }
+    if(ImGui::Button("Add Effect"))ImGui::OpenPopup("Add Starting Effect");
+    if(ImGui::BeginPopup("Add Starting Effect")) {
+        static ImGuiTextFilter filter;filter.Draw("Search");
+        for(const auto& asset:assets.catalog())if(asset.kind==AssetKind::GameplayEffect&&filter.PassFilter(asset.name.c_str()))
+            if(ImGui::Selectable(asset.name.c_str())){auto values=starting;values.emplace_back(asset.id);assign(std::move(values),"Add starting effect");ImGui::CloseCurrentPopup();}
+        ImGui::EndPopup();
+    }
+}
+void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,SceneComponentKind section,AssetLibrary& assets,const NavigationInspectorContext& navigation,const CollisionLayerNames& collisionNames,const GameplayInspectorContext& gameplay) {
+    if(record.effects && section==SceneComponentKind::Effects && componentHeader(state,record,section))
+        startingEffectControls(document,assets,record,gameplay.openEffect);
+    if(record.tags && section==SceneComponentKind::Tags && componentHeader(state,record,section)) {
+        auto value=*record.tags;
+        if(drawGameplayTagContainerControl("Tags",value,state.tags[record.id])) {
+            finishScenePanelEdit(document);
+            document.edit("Change entity tags",changeEntity(record.id,[value=std::move(value)](auto& entity){entity.tags=value;}));
+        }
+    }
+    if(record.enemy && section==SceneComponentKind::Enemy) {
+        static_assert(static_cast<unsigned>(Edit::EnemyMaxWait)-static_cast<unsigned>(Edit::EnemyBehaviour)==static_cast<unsigned>(EnemyInspectorControl::MaxWait));
+        bool activeDrawn=false;
+        if(componentHeader(state,record,SceneComponentKind::Enemy)) {
+            auto value=*record.enemy;
+            drawEnemyInspectorControls(value,[&](EnemyInspectorControl control,const char* label,bool changed) {
+                const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::EnemyBehaviour)+static_cast<unsigned>(control));
+                propertyEdit(document,state,property,label,changed,changeEntity(record.id,[value](auto& entity){entity.enemy=value;}));
+                activeDrawn|=state.active==property;
+            });
+        }
+        if(!activeDrawn && state.active>=Edit::EnemyBehaviour && state.active<=Edit::EnemyMaxWait)finishEdit(document,state,state.active);
+    }
     if(record.playerInput && section==SceneComponentKind::PlayerInput) {
+        static_assert(static_cast<unsigned>(Edit::PlayerStairSmoothingTime)-static_cast<unsigned>(Edit::PlayerInputEnabled)==
+            static_cast<unsigned>(PlayerInputInspectorControl::StairSmoothingTime));
+        bool activeDrawn=false;
         if(componentHeader(state,record,SceneComponentKind::PlayerInput)) {
             auto value=*record.playerInput;
-            const bool enabled=ImGui::Checkbox("Enabled##player-input",&value.enabled);
-            propertyEdit(document,state,Edit::PlayerInputEnabled,"Toggle player input",enabled,
-                changeEntity(record.id,[value](auto& entity){entity.playerInput=value;}));
+            drawPlayerInputInspectorControls(value,[&](PlayerInputInspectorControl control,const char* label,bool changed) {
+                const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::PlayerInputEnabled)+static_cast<unsigned>(control));
+                propertyEdit(document,state,property,label,changed,changeEntity(record.id,[value](auto& entity){entity.playerInput=value;}));
+                activeDrawn|=state.active==property;
+            });
             if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Controlled Player");
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
-        } else if(state.active==Edit::PlayerInputEnabled)finishEdit(document,state,state.active);
+        }
+        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerStairSmoothingTime)finishEdit(document,state,state.active);
     }
     if(record.motor && section==SceneComponentKind::Motor) {
         auto value=*record.motor;
@@ -1021,10 +1120,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             const bool enabled=ImGui::Checkbox("Enabled##motor",&value.enabled);
             propertyEdit(document,state,Edit::MotorEnabled,"Toggle motor",enabled,
                 changeEntity(record.id,[value](auto& entity){entity.motor=value;}));
-            const bool speed=ImGui::DragFloat("Speed (m/s)",&value.moveSpeed,.1f,0,1000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-            propertyEdit(document,state,Edit::CharacterSpeed,"Change movement speed",speed,
-                changeEntity(record.id,[v=value.moveSpeed](auto& entity){entity.motor->moveSpeed=v;}));
-        } else if(state.active==Edit::CharacterSpeed || state.active==Edit::MotorEnabled) {
+        } else if(state.active==Edit::MotorEnabled) {
             finishEdit(document,state,state.active);
         }
     }
@@ -1046,6 +1142,14 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
         auto value=*record.controller;
         if(componentHeader(state,record,SceneComponentKind::Controller)) {
             if(!record.navigation)controllerProfileControls(document,record,assets,navigation);
+            if(drawCollisionMaskControl("Collision Layers",value.collision.layers,collisionNames,~WorldCollisionLayer,
+                                        "%s is reserved for shared level collision.")) {
+                finishScenePanelEdit(document);document.edit("Change character collision layers",changeEntity(record.id,[value](auto& entity){entity.controller->collision.layers=value.collision.layers;}));
+            }
+            if(drawCollisionMaskControl("Collision Mask",value.collision.mask,collisionNames,~WorldCollisionLayer,
+                                        "Character Controllers always collide with %s shared level collision.")) {
+                finishScenePanelEdit(document);document.edit("Change character collision mask",changeEntity(record.id,[value](auto& entity){entity.controller->collision.mask=value.collision.mask;}));
+            }
             const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
             propertyEdit(document,state,Edit::CharacterCollisionVisible,"Toggle character collision display",visible,
                 changeEntity(record.id,[v=value.showCollisionInGame](auto& entity){entity.controller->showCollisionInGame=v;}));
@@ -1276,8 +1380,9 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay) {
     auto& state=stateFor(document);
+    const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if(!ImGui::Begin("Inspector")) {
         releasePanelColliders(state);
@@ -1297,18 +1402,44 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     [&](unsigned field){finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));}};
                 drawInspectorTransform(document,state.transforms[record.id],record,transactions);
             }
-            gameplayControls(document,state,record,section,assets,navigation);
+            gameplayControls(document,state,record,section,assets,navigation,collisionNames,gameplay);
             if(section==SceneComponentKind::NavigationVolume && record.navigationVolume)navigationVolumeControls(document,state,record,assets,navigation);
             if(section==SceneComponentKind::Camera)drawCameraSection(document,state,record.id,ownedCamera);
             if(section==SceneComponentKind::Quader && record.quader && quader && componentHeader(state,record,SceneComponentKind::Quader))drawQuaderInspector(document,record,*quader);
             if(section==SceneComponentKind::Collider && record.collider) {
                 if(componentHeader(state,record,SceneComponentKind::Collider)) {
+                    auto value=*record.collider;
+                    const auto originalMode=value.mode;
+                    if(ImGui::BeginCombo("Mode",value.mode==ColliderMode::Solid?"Solid":"Trigger")) {
+                        if(ImGui::Selectable("Solid",value.mode==ColliderMode::Solid))value.mode=ColliderMode::Solid;
+                        ImGui::BeginDisabled(value.shape==ColliderShape::Trimesh || record.controller.has_value());
+                        if(ImGui::Selectable("Trigger",value.mode==ColliderMode::Trigger))value.mode=ColliderMode::Trigger;
+                        ImGui::EndDisabled();
+                        if((value.shape==ColliderShape::Trimesh || record.controller) && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
+                            ImGui::SetTooltip("Triggers require a primitive Collider on a separate entity.");
+                        ImGui::EndCombo();
+                    }
+                    if(value.mode!=originalMode) {
+                        value.collision=collisionFilterForMode(value.collision,value.mode);
+                        finishScenePanelEdit(document);document.edit("Change collider mode",changeEntity(record.id,[value](auto& entity){entity.collider->mode=value.mode;entity.collider->collision=value.collision;}));
+                    }
+                    if(drawCollisionMaskControl("Collision Layers",value.collision.layers,collisionNames,~WorldCollisionLayer,
+                                                value.mode==ColliderMode::Solid?
+                                                "Solid Colliders always belong to %s shared level collision.":
+                                                "%s is reserved for shared level collision.")) {
+                        finishScenePanelEdit(document);document.edit("Change collider collision layers",changeEntity(record.id,[value](auto& entity){entity.collider->collision.layers=value.collision.layers;}));
+                    }
+                    if(drawCollisionMaskControl("Collision Mask",value.collision.mask,collisionNames,value.mode==ColliderMode::Solid?0u:AllCollisionLayers,
+                                                "Solid Colliders use every layer for shared level collision.")) {
+                        finishScenePanelEdit(document);document.edit("Change collider collision mask",changeEntity(record.id,[value](auto& entity){entity.collider->collision.mask=value.collision.mask;}));
+                    }
                     static_assert(static_cast<unsigned>(Edit::ColliderColor)-static_cast<unsigned>(Edit::ColliderShape)==static_cast<unsigned>(ColliderControl::Color));
                     const auto property=[](ColliderControl control){return static_cast<Edit>(static_cast<unsigned>(Edit::ColliderShape)+static_cast<unsigned>(control));};
                     const ColliderInspectorTransactions transactions{
                         [&](ColliderControl control,const char* label){return beginEdit(document,state,property(control),label);},
                         [&](ColliderControl control){finishEdit(document,state,property(control));}};
-                    drawColliderInspector(document,state.colliders[record.id],record,{assets.catalog(),[&assets](const std::string& id){return assets.displayName(id);}},transactions);
+                    auto current=record;current.collider=value;
+                    drawColliderInspector(document,state.colliders[record.id],current,{assets.catalog(),[&assets](const std::string& id){return assets.displayName(id);}},transactions);
                 } else if(state.active>=Edit::ColliderShape&&state.active<=Edit::ColliderColor) {
                     releaseColliderInspector(state.colliders[record.id]);finishEdit(document,state,state.active);
                 }

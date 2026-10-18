@@ -28,6 +28,8 @@ struct SceneSnapshot {
     // Unsaved, immutable legacy conversion payloads; never an inline scene format.
     std::vector<std::shared_ptr<const NavigationAgentProfile>> stagedNavigationProfiles;
     std::vector<std::pair<EntityId,std::string>> stagedNavigationControllers;
+    std::vector<std::shared_ptr<const GameplayEffectAsset>> stagedGameplayEffects;
+    std::vector<std::pair<EntityId,std::string>> stagedGameplayEffectEntities;
 };
 struct ScenePersistencePlan {
     std::vector<AssetFileChange> files;
@@ -49,7 +51,7 @@ bool deleteSceneAsset(const std::filesystem::path& projectRoot, const std::strin
 struct EntityChange {
     EntityId id{};
     std::optional<EntityRecord> before, after;
-    uint32_t fields{};
+    uint64_t fields{};
 };
 struct SceneCommand {
     std::string label;
@@ -95,6 +97,8 @@ public:
         std::string expectedId,status,name;
         uint64_t expectedGeneration{},expectedRevision{},expectedState{},expectedSavedState{},expectedFingerprint{},savedFingerprint{};
         bool wasDirty{},newDocument{};
+        std::unordered_map<std::string,std::shared_ptr<const GameplayEffectAsset>> stagedEffects;
+        std::unordered_map<EntityId,std::string> stagedEffectEntities;
     };
     using Mutation = std::function<void(std::vector<EntityRecord>&, SceneProperties&)>;
     explicit SceneDocument(std::filesystem::path projectRoot);
@@ -138,6 +142,10 @@ public:
     std::vector<std::shared_ptr<const NavigationAgentProfile>> stagedNavigationAgentProfiles() const;
     // Conversion provenance only; runtime resolution must use navigationAgentProfile.
     std::shared_ptr<const NavigationAgentProfile> legacyNavigationAgentProfileSeedForController(EntityId) const;
+    std::vector<std::string> historicalGameplayEffectReferences() const;
+    std::shared_ptr<const GameplayEffectAsset> gameplayEffect(const std::string& id) const;
+    std::vector<std::shared_ptr<const GameplayEffectAsset>> stagedGameplayEffects() const;
+    std::shared_ptr<const GameplayEffectAsset> legacyGameplayEffectSeedForEntity(EntityId) const;
     // Global resource deletion is outside scene undo. Install its complete
     // validated candidate and remove history that could resurrect deleted IDs.
     bool applyExternalAssetChanges(const std::vector<EntityRecord>& records, const SceneProperties& properties,
@@ -206,6 +214,8 @@ private:
     bool transient_{};
     std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> stagedNavigationProfiles_;
     std::unordered_map<EntityId,std::string> stagedNavigationControllers_;
+    std::unordered_map<std::string,std::shared_ptr<const GameplayEffectAsset>> stagedGameplayEffects_;
+    std::unordered_map<EntityId,std::string> stagedGameplayEffectEntities_;
     EntityId create(EntityRecord record, const std::string& label);
     bool applyHistory(const SceneCommand& command, bool forward);
     bool duplicateInTransaction(const std::vector<EntityId>& roots,std::vector<EntityId>* copiedRoots=nullptr);

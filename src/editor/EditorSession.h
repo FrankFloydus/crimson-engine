@@ -6,6 +6,8 @@
 #include "tools/ParticleEditor.h"
 #include "tools/MaterialEditor.h"
 #include "tools/NavigationAgentProfileEditor.h"
+#include "tools/CollisionLayersEditor.h"
+#include "tools/GameplayEffectEditor.h"
 #include "NavigationPreview.h"
 #include "SceneParticles.h"
 #include "PlayShortcuts.h"
@@ -13,6 +15,8 @@
 #include "runtime/GameInput.h"
 #include "runtime/SceneAnimations.h"
 #include "tools/GameView.h"
+#include "tools/CommandBar.h"
+#include "AttributeDebug.h"
 #include "CollisionResources.h"
 #include "CollisionOverlays.h"
 #include "PlayerOcclusion.h"
@@ -47,6 +51,7 @@ public:
         if(cameraPilot_.gestureActive() && (cancelCameraKey || cancelCameraWindow))cameraGestureCancel_=true;
         return gameInput_.handleEvent(event);
     }
+    bool blocksEditorEvent(const SDL_Event& event) const { return gameInput_.blocksEditorEvent(event); }
     void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested);
     void prepareFrame(AssetLibrary&,Renderer&,std::uint32_t bgfxFrame);
     void filesChanged(std::span<const std::filesystem::path>);
@@ -60,11 +65,15 @@ private:
     PlayShortcuts playShortcuts_;
     GameInput gameInput_;
     GameView gameView_;
+    CommandBar commandBar_;
+    AttributeDebug attributeDebug_;
     SceneEditor editor_;
     CameraPilot cameraPilot_;
     ParticleEditor particleEditor_;
     MaterialEditor materialEditor_;
     NavigationAgentProfileEditor navigationProfileEditor_;
+    CollisionLayersEditor collisionLayersEditor_;
+    GameplayEffectEditor gameplayEffectEditor_;
     SceneParticles particles_;
     SceneAnimations editAnimations_,playAnimations_;
     std::uint64_t animationPlayTick_{};

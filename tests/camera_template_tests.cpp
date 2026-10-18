@@ -42,12 +42,11 @@ std::string readText(const std::filesystem::path& path) {
 }
 void defaultsAndValidation() {
     auto value=defaultPlayerCameraTemplate();
-    require(value.name=="ARPG"&&value.offset==Vec3{6.5f,13.1f,6.5f}&&value.lens.verticalFov==35,
-        "Built-in ARPG camera did not retain the agreed placement and field of view.");
+    require(value.name=="First Person"&&value.offset==Vec3{0,1.65f,0}&&value.lens==SceneCamera{75,.05f,2048},
+        "Built-in first-person camera did not retain eye height, clipping and field of view.");
     const auto rotation=cameraTemplateRotationDegrees(value);
-    require(std::abs(rotation[0]+55)<.001f&&std::abs(rotation[1]-45)<.001f&&std::abs(rotation[2])<.001f,
-        "Built-in ARPG camera did not retain the agreed world rotation.");
-    require(validCameraTemplate(value),"Built-in ARPG camera failed validation.");
+    require(rotation==Vec3{}&&value.worldBasis==Mat4{},"Built-in first-person camera did not look straight along -Z.");
+    require(validCameraTemplate(value),"Built-in first-person camera failed validation.");
     value.name.clear();require(validCameraTemplate(value),"Unnamed live camera snapshots were rejected.");
     const auto unchanged=value;
     require(!setCameraTemplateRotationDegrees(value,{std::numeric_limits<float>::infinity(),0,0})&&value==unchanged,
@@ -110,7 +109,7 @@ void persistenceAndFailurePreservation() {
     require(templates.size()==2&&loadCameraTemplates(project.root)==templates,"Saving a new template replaced an unrelated one.");
     const auto before=templates;const auto text=readText(cameraTemplatesPath(project.root));
     auto invalid=value;invalid.name=" \t ";rejects([&]{saveCameraTemplate(project.root,templates,invalid);},"An empty template name was saved.");
-    invalid=value;invalid.name="arpg";rejects([&]{saveCameraTemplate(project.root,templates,invalid);},"A user template duplicated the built-in ARPG name.");
+    invalid=value;invalid.name="first person";rejects([&]{saveCameraTemplate(project.root,templates,invalid);},"A user template duplicated the built-in First Person name.");
     invalid=value;invalid.lens.verticalFov=std::numeric_limits<float>::infinity();
     rejects([&]{saveCameraTemplate(project.root,templates,invalid);},"Nonfinite template settings were saved.");
     require(templates==before&&readText(cameraTemplatesPath(project.root))==text,"Rejected save changed memory or the previous template file.");
@@ -133,11 +132,20 @@ void persistenceAndFailurePreservation() {
     writeFileAtomically(cameraTemplatesPath(project.root),std::string(1024*1024+1,'x'));
     rejects([&]{templates=loadCameraTemplates(project.root);},"An unbounded camera template file was read.");
     require(templates==before,"Oversized-file load changed in-memory camera templates.");
+    // First Person was a valid custom name before this built-in was introduced.
+    // Keep those authored settings, including their ability to be updated.
+    json=nlohmann::json::parse(text);json["templates"][0]["name"]="First Person";
+    writeFileAtomically(cameraTemplatesPath(project.root),json.dump());templates=loadCameraTemplates(project.root);
+    require(templates.front().name=="First Person"&&templates.front().offset==before.front().offset&&templates.front().lens==before.front().lens,
+        "Replacing the built-in camera template discarded an existing user template.");
+    auto existing=templates.front();existing.lens.verticalFov=63;saveCameraTemplate(project.root,templates,existing);
+    require(loadCameraTemplates(project.root)==templates&&templates.front()==existing,
+        "A preexisting user template could not be edited after the built-in template changed.");
 }
 }
 int main() {
     try {
         defaultsAndValidation();captureFullWorldPlacement();persistenceAndFailurePreservation();
-        std::cout<<"ARPG camera defaults, full-world capture, named templates and atomic failure preservation passed.\n";return 0;
+        std::cout<<"First-person camera defaults, full-world capture, named templates and atomic failure preservation passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

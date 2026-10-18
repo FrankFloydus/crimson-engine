@@ -1,9 +1,22 @@
 #include "SceneComponents.h"
+#include "assets/GameplayEffectAsset.h"
 #include <algorithm>
 #include <exception>
 #include <unordered_map>
 
 namespace crimson {
+void initializePlayerEffects(EntityRecord& entity) {
+    if(!entity.effects)entity.effects.emplace();
+    const AssetRef<GameplayEffectAsset> starter{PlayerStartingEffectId};
+    if(std::find(entity.effects->starting.begin(),entity.effects->starting.end(),starter)==entity.effects->starting.end())
+        entity.effects->starting.insert(entity.effects->starting.begin(),starter);
+}
+void initializeEnemyEffects(EntityRecord& entity) {
+    if(!entity.effects)entity.effects.emplace();
+    const AssetRef<GameplayEffectAsset> starter{EnemyStartingEffectId};
+    if(std::find(entity.effects->starting.begin(),entity.effects->starting.end(),starter)==entity.effects->starting.end())
+        entity.effects->starting.insert(entity.effects->starting.begin(),starter);
+}
 const char* sceneComponentName(SceneComponentKind kind) {
     switch(kind) {
     case SceneComponentKind::Transform:return "Transform";
@@ -11,6 +24,10 @@ const char* sceneComponentName(SceneComponentKind kind) {
     case SceneComponentKind::Motor:return "Motor";
     case SceneComponentKind::Controller:return "Character Controller";
     case SceneComponentKind::Navigation:return "Navigation Agent";
+    case SceneComponentKind::Enemy:return "Enemy";
+    case SceneComponentKind::Attributes:return "Attributes";
+    case SceneComponentKind::Tags:return "Tags";
+    case SceneComponentKind::Effects:return "Effects";
     case SceneComponentKind::NavigationVolume:return "Navigation Volume";
     case SceneComponentKind::PlayerInput:return "Player Input";
     case SceneComponentKind::LightRig:return "Light Rig";
@@ -64,14 +81,21 @@ bool addSceneComponent(SceneDocument& document,EntityId id,SceneComponentKind ki
     }
     return document.edit(std::string("Add ")+sceneComponentName(kind),[=](auto& records,auto& properties) {
         for(auto& entity:records)if(entity.id==id) {
-            const auto body=[&] {if(!entity.controller)entity.controller.emplace();};
-            const auto motor=[&] {body();if(!entity.motor)entity.motor.emplace();};
+            const auto body=[&](std::uint32_t layer=CharacterCollisionLayer) {if(!entity.controller){entity.controller.emplace();entity.controller->collision.layers=layer;}};
+            const auto motor=[&](std::uint32_t layer=CharacterCollisionLayer) {body(layer);if(!entity.motor)entity.motor.emplace();};
             switch(kind) {
             case SceneComponentKind::Actor:entity.actor.emplace();break;
+            case SceneComponentKind::Tags:entity.tags.emplace();break;
+            case SceneComponentKind::Effects:entity.effects.emplace();break;
             case SceneComponentKind::Controller:body();break;
             case SceneComponentKind::Motor:motor();break;
             case SceneComponentKind::Navigation:motor();entity.navigation.emplace();break;
-            case SceneComponentKind::PlayerInput:motor();entity.playerInput.emplace();break;
+            case SceneComponentKind::Enemy:
+                if(!entity.actor)entity.actor.emplace();motor(EnemyCollisionLayer);
+                if(!entity.navigation)entity.navigation.emplace();entity.enemy.emplace();
+                if(entity.playerInput||properties.playerCharacter==entity.id)initializePlayerEffects(entity);
+                else initializeEnemyEffects(entity);break;
+            case SceneComponentKind::PlayerInput:motor(PlayerCollisionLayer);entity.playerInput.emplace();initializePlayerEffects(entity);break;
             case SceneComponentKind::LightRig:
                 if(!entity.actor)entity.actor.emplace();
                 entity.lightRig.emplace();entity.lightRig->localWorld.enabled=false;break;
@@ -98,10 +122,13 @@ bool removeSceneComponents(SceneDocument& document,std::span<const SceneComponen
     return document.edit(label,[&](auto& records,auto& properties) {
         for(auto& entity:records)if(const auto found=targets.find(entity.id);found!=targets.end()) {
             for(const auto kind:found->second)switch(kind) {
-            case SceneComponentKind::Actor:entity.actor.reset();entity.lightRig.reset();break;
+            case SceneComponentKind::Actor:entity.actor.reset();entity.lightRig.reset();entity.enemy.reset();break;
+            case SceneComponentKind::Tags:entity.tags.reset();break;
+            case SceneComponentKind::Effects:entity.effects.reset();break;
             case SceneComponentKind::Controller:entity.controller.reset();[[fallthrough]];
-            case SceneComponentKind::Motor:entity.motor.reset();entity.navigation.reset();entity.playerInput.reset();break;
-            case SceneComponentKind::Navigation:entity.navigation.reset();break;
+            case SceneComponentKind::Motor:entity.motor.reset();entity.navigation.reset();entity.playerInput.reset();entity.enemy.reset();break;
+            case SceneComponentKind::Navigation:entity.navigation.reset();entity.enemy.reset();break;
+            case SceneComponentKind::Enemy:entity.enemy.reset();break;
             case SceneComponentKind::PlayerInput:entity.playerInput.reset();break;
             case SceneComponentKind::LightRig:entity.lightRig.reset();break;
             case SceneComponentKind::DarknessReveal:entity.darknessReveal.reset();break;

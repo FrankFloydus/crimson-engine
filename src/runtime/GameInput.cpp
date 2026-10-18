@@ -1,10 +1,13 @@
 #include "GameInput.h"
+#include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_video.h>
 #include <cmath>
+#include <optional>
+#include <utility>
 
 namespace crimson {
 namespace {
-bool sameWindow(std::uint32_t event,std::uint32_t owner) { return event==owner; }
 std::optional<Vec2> eventPosition(float x,float y,SDL_WindowID id,bool desktop) {
     if(desktop && id) {
         int wx{},wy{};auto* window=SDL_GetWindowFromID(id);
@@ -14,122 +17,120 @@ std::optional<Vec2> eventPosition(float x,float y,SDL_WindowID id,bool desktop) 
     if(!std::isfinite(x) || !std::isfinite(y))return {};
     return Vec2{x,y};
 }
+std::optional<std::size_t> actionKey(SDL_Scancode code) {
+    switch(code) {
+    case SDL_SCANCODE_W:return 0;
+    case SDL_SCANCODE_A:return 1;
+    case SDL_SCANCODE_S:return 2;
+    case SDL_SCANCODE_D:return 3;
+    case SDL_SCANCODE_SPACE:return 4;
+    default:return {};
+    }
 }
+}
+bool gameInputBlocksEditorEvent(const SDL_Event& event,SDL_WindowID owner,bool gameplayOwned,bool relativeMouseCaptured) {
+    if(!gameplayOwned)return false;
+    if(event.type==SDL_EVENT_KEY_DOWN)return event.key.windowID==owner && actionKey(event.key.scancode).has_value();
+    if(!relativeMouseCaptured)return false;
+    switch(event.type) {
+    case SDL_EVENT_MOUSE_MOTION:return event.motion.windowID==owner;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:return event.button.windowID==owner;
+    case SDL_EVENT_MOUSE_WHEEL:return event.wheel.windowID==owner;
+    default:return false;
+    }
+}
+GameInput::~GameInput() { releaseMouseCapture(); }
 bool GameInput::contains(Vec2 position) const {
-    return std::isfinite(position[0]) && std::isfinite(position[1]) &&
-        position[0]>=viewport_.x && position[1]>=viewport_.y &&
+    return math::finite(position) && position[0]>=viewport_.x && position[1]>=viewport_.y &&
         position[0]<viewport_.x+viewport_.width && position[1]<viewport_.y+viewport_.height;
 }
 void GameInput::setViewport(const ViewportRegion& viewport,bool enabled,bool keyboardBlocked) {
-    if(viewport.windowId!=viewport_.windowId || !enabled)projection_.reset();
-    if(viewport.windowId!=viewport_.windowId || !enabled || keyboardBlocked || viewport.inputBlocked ||
-       viewport.width<=0 || viewport.height<=0)cancel();
-    viewport_=viewport;enabled_=enabled;blocked_=keyboardBlocked || viewport.inputBlocked;
-    if(pointer_ && !contains(*pointer_))pointer_.reset();
+    const bool valid=std::isfinite(viewport.x) && std::isfinite(viewport.y) &&
+        std::isfinite(viewport.width) && std::isfinite(viewport.height) && viewport.width>0 && viewport.height>0;
+    if(viewport.windowId!=viewport_.windowId || !enabled || !valid || keyboardBlocked || viewport.inputBlocked)cancel();
+    viewport_=viewport;enabled_=enabled && valid;blocked_=keyboardBlocked || viewport.inputBlocked;
 }
-void GameInput::cancel(){
-    pointer_.reset();moveClick_.reset();moveRay_.reset();leftHeld_=false;armed_=false;++cancellationRevision_;
-    // ImGui may acknowledge this native press in a later frame. Keep its
-    // cancellation until that acknowledgment, so it cannot revive the gesture.
-    if(nativeClick_)nativeClickCanceled_=true;
+void GameInput::acquire() {
+    if(enabled_ && !blocked_)armed_=true;
 }
-std::optional<Ray> GameInput::pointerRay(Vec2 position,const Camera& fallback) const {
-    if(projection_) {
-        const auto& image=*projection_;
-        const float x=(position[0]-image.viewport.x)/image.viewport.width*image.width;
-        const float y=(position[1]-image.viewport.y)/image.viewport.height*image.height;
-        return image.camera.screenRay(x,y,{0,0,static_cast<float>(image.width),static_cast<float>(image.height)});
-    }
-    return fallback.screenRay(position[0],position[1],viewport_);
+void GameInput::acquireFromImageClick() {
+    const auto acquisition=std::exchange(imageAcquisition_,ImageAcquisition::None);
+    if(acquisition!=ImageAcquisition::Canceled)acquire();
 }
-void GameInput::submitPointer(Vec2 position,bool moveClick) {
-    if(!ownsKeyboard() || !contains(position)) { pointer_.reset();return; }
-    pointer_=position;
-    if(moveClick) {
-        moveClick_=position;moveRay_.reset();
-        if(projection_)moveRay_=pointerRay(position,projection_->camera);
-    }
+void GameInput::releaseMouseCapture() {
+    if(auto* window=captureWindowId_?SDL_GetWindowFromID(captureWindowId_):nullptr)
+        SDL_SetWindowRelativeMouseMode(window,false);
+    captureWindowId_=0;discardNextMotion_=false;
 }
-void GameInput::submitUiPointer(Vec2 position,bool moveClick,bool leftHeld) {
-    bool canHold=ownsKeyboard() && contains(position) && (leftHeld_ || moveClick);
-    // SDL and ImGui report the same press at different stages (and sometimes
-    // different frames). Never turn its UI acknowledgement into another goal
-    // through a later follow-camera pose, or replace button-down coordinates
-    // with the cursor's position after it has moved.
-    if(moveClick && nativeClick_) {
-        if(nativeClickCanceled_) {
-            nativeClick_.reset();nativeClickSubmitted_=nativeClickCanceled_=nativeClickReleased_=false;
-            cancel();return;
-        }
-        canHold=canHold && !nativeClickReleased_;
-        if(!nativeClickSubmitted_)submitPointer(*nativeClick_,true);
-        nativeClick_.reset();nativeClickSubmitted_=nativeClickCanceled_=nativeClickReleased_=false;
-        submitPointer(position,false);
-    } else submitPointer(position,moveClick);
-    // A held widget alone cannot restart a gesture after Escape, capture or
-    // focus cancellation. A fresh owned press is required to start it again.
-    leftHeld_=leftHeld && canHold;
+void GameInput::cancel() {
+    releaseMouseCapture();held_.fill(false);lookDelta_={};jumpPending_=false;armed_=false;++cancellationRevision_;
+    if(imageAcquisition_==ImageAcquisition::Pending)imageAcquisition_=ImageAcquisition::Canceled;
 }
-void GameInput::setProjection(const Camera& camera,std::uint32_t width,std::uint32_t height) {
-    if(!width || !height || viewport_.width<=0 || viewport_.height<=0) { projection_.reset();return; }
-    projection_=Projection{camera,viewport_,width,height};
+void GameInput::syncMouseCapture() {
+    if(!ownsKeyboard()) { releaseMouseCapture();return; }
+    auto* window=viewport_.windowId?SDL_GetWindowFromID(viewport_.windowId):nullptr;
+    if(!window || SDL_GetKeyboardFocus()!=window) { cancel();return; }
+    if(captureWindowId_==viewport_.windowId && SDL_GetWindowRelativeMouseMode(window))return;
+    releaseMouseCapture();
+    if(!SDL_SetWindowRelativeMouseMode(window,true)) { cancel();return; }
+    captureWindowId_=viewport_.windowId;
+    // Acquisition can include a platform cursor reposition. Never turn that
+    // transition or pre-capture motion into a jump in the player's view.
+    float discardedX{},discardedY{};SDL_GetRelativeMouseState(&discardedX,&discardedY);
+    lookDelta_={};discardNextMotion_=true;
 }
-std::optional<Vec2> GameInput::pointerPosition() const {
-    return ownsKeyboard() && viewport_.hovered && pointer_ && contains(*pointer_)?pointer_:std::nullopt;
+Vec2 GameInput::movement() const {
+    return ownsKeyboard()?Vec2{float(held_[3])-float(held_[1]),float(held_[0])-float(held_[2])}:Vec2{};
 }
-std::optional<Vec2> GameInput::consumeMoveClick() {
-    const auto result=ownsKeyboard()?moveClick_:std::nullopt;moveClick_.reset();moveRay_.reset();return result;
+Vec2 GameInput::consumeLookDelta() {
+    const auto result=ownsKeyboard()?lookDelta_:Vec2{};lookDelta_={};return result;
 }
-std::optional<Ray> GameInput::consumeMoveRay(const Camera& fallback) {
-    const auto result=ownsKeyboard() && moveClick_?
-        (moveRay_?moveRay_:fallback.screenRay((*moveClick_)[0],(*moveClick_)[1],viewport_)):std::nullopt;
-    moveClick_.reset();moveRay_.reset();return result;
-}
-std::optional<Ray> GameInput::heldMoveRay(const Camera& fallback) const {
-    const auto pointer=pointerPosition();
-    return leftHeld_ && pointer?pointerRay(*pointer,fallback):std::nullopt;
+bool GameInput::consumeJump() {
+    const bool result=ownsKeyboard() && jumpPending_;jumpPending_=false;return result;
 }
 bool GameInput::handleEvent(const SDL_Event& event) {
     if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST || event.type==SDL_EVENT_WINDOW_HIDDEN ||
        event.type==SDL_EVENT_WINDOW_MINIMIZED || event.type==SDL_EVENT_WINDOW_CLOSE_REQUESTED ||
        event.type==SDL_EVENT_WINDOW_DESTROYED) {
-        if(sameWindow(event.window.windowID,viewport_.windowId))cancel();
+        if(event.window.windowID==viewport_.windowId)cancel();
         return false;
     }
-    if(event.type==SDL_EVENT_MOUSE_BUTTON_UP && event.button.button==SDL_BUTTON_LEFT) {
-        // SDL may deliver release to another owned native window after the
-        // pointer leaves Game. Release ends holding without canceling its goal.
-        leftHeld_=false;
-        if(nativeClick_)nativeClickReleased_=true;
-        return ownsKeyboard() && sameWindow(event.button.windowID,viewport_.windowId);
-    }
     if(event.type==SDL_EVENT_MOUSE_MOTION) {
-        const auto position=eventPosition(event.motion.x,event.motion.y,event.motion.windowID,desktopCoordinates_);
-        if(!sameWindow(event.motion.windowID,viewport_.windowId) || !position || !contains(*position)) {
-            pointer_.reset();return false;
-        }
-        submitPointer(*position,false);return ownsKeyboard();
+        if(!ownsKeyboard() || event.motion.windowID!=viewport_.windowId)return false;
+        if(discardNextMotion_) { discardNextMotion_=false;return true; }
+        const Vec2 delta{event.motion.xrel,event.motion.yrel};
+        const Vec2 accumulated{lookDelta_[0]+delta[0],lookDelta_[1]+delta[1]};
+        if(math::finite(delta) && math::finite(accumulated))lookDelta_=accumulated;
+        return true;
     }
     if(event.type==SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        // During relative capture the platform cursor need not be in the image
+        // (Play also acquires automatically). Its absolute position is irrelevant.
+        if(ownsKeyboard() && captureWindowId_==event.button.windowID)return true;
         const auto position=eventPosition(event.button.x,event.button.y,event.button.windowID,desktopCoordinates_);
-        const bool inside=enabled_ && !blocked_ && sameWindow(event.button.windowID,viewport_.windowId) &&
-            position && contains(*position);
-        if(!inside) {
-            cancel();
-            if(event.button.button==SDL_BUTTON_LEFT && enabled_ && sameWindow(event.button.windowID,viewport_.windowId) && position && contains(*position)) {
-                nativeClick_=position;nativeClickSubmitted_=nativeClickCanceled_=nativeClickReleased_=false;
-            }
-            return false;
+        const bool imagePress=enabled_ && event.button.windowID==viewport_.windowId && position && contains(*position);
+        if(!imagePress || blocked_)cancel();
+        if(imagePress && event.button.button==SDL_BUTTON_LEFT) {
+            imageAcquisition_=ImageAcquisition::Pending;
+            acquire();
         }
-        if(event.button.button==SDL_BUTTON_LEFT) {
-            acquire();leftHeld_=true;submitPointer(*position,true);nativeClick_=position;nativeClickSubmitted_=true;
-            nativeClickCanceled_=nativeClickReleased_=false;
-        }
-        return ownsKeyboard();
+        return ownsKeyboard() && imagePress;
+    }
+    if(event.type==SDL_EVENT_MOUSE_BUTTON_UP || event.type==SDL_EVENT_MOUSE_WHEEL) {
+        const auto window=event.type==SDL_EVENT_MOUSE_BUTTON_UP?event.button.windowID:event.wheel.windowID;
+        return ownsKeyboard() && window==viewport_.windowId;
     }
     if(event.type!=SDL_EVENT_KEY_DOWN && event.type!=SDL_EVENT_KEY_UP)return false;
-    if(!ownsKeyboard() || !sameWindow(event.key.windowID,viewport_.windowId))return false;
-    if(event.key.scancode==SDL_SCANCODE_ESCAPE){cancel();return true;}
-    return false;
+    if(!ownsKeyboard() || event.key.windowID!=viewport_.windowId)return false;
+    if(event.key.scancode==SDL_SCANCODE_ESCAPE) { if(event.type==SDL_EVENT_KEY_DOWN)cancel();return true; }
+    const auto index=actionKey(event.key.scancode);
+    if(!index)return false;
+    const bool down=event.type==SDL_EVENT_KEY_DOWN;
+    // Repeats cannot resurrect a key cleared by lost ownership, or queue
+    // another jump while Space is held. A new physical press is required.
+    if(down && event.key.repeat)return true;
+    if(*index==4 && down && !held_[*index])jumpPending_=true;
+    held_[*index]=down;
+    return true;
 }
 }

@@ -249,7 +249,7 @@ void discoverContentFiles(const std::filesystem::path& root) {
         }
         if(!entry.is_regular_file()||indexed.contains(utf8(std::filesystem::weakly_canonical(entry.path()))))continue;
         const auto extension=entry.path().extension();
-        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-agent-profile"||extension==".crimson-scene") {
+        if(extension==".crimson-material"||extension==".crimson-particle"||extension==".crimson-agent-profile"||extension==".crimson-effect"||extension==".crimson-scene") {
             std::ifstream input(entry.path());const auto data=nlohmann::json::parse(input);
             auto id=data.value("id",std::string{});
             if(id.empty())id="assets/scenes/"+utf8(entry.path().filename());
@@ -275,6 +275,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     try{discoverContentFiles(projectRoot_);}catch(const std::exception& error){status_+=std::string(error.what())+'\n';}
     ensureEngineMaterialAssets(projectRoot_);
     ensureEngineNavigationAgentProfile(projectRoot_);
+    ensureEngineGameplayEffects(projectRoot_);
     std::vector<std::filesystem::path> files;
     for(const auto& entry:storedAssetPaths(projectRoot_))if(std::filesystem::is_regular_file(entry.file)) {
         if(textureFile(entry.file)&&!references_.deleted(entry.id)) {
@@ -318,6 +319,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     refreshScenes();
     refreshParticles();
     refreshNavigationAgentProfiles();
+    refreshGameplayEffects();
     storageRevision_=contentStorageRevision(projectRoot_);
     for(const auto& entry:storedAssetPaths(projectRoot_))storageLocations_.emplace(entry.id,entry.file);
 }
@@ -416,6 +418,54 @@ std::shared_ptr<const NavigationAgentProfile> AssetLibrary::copyNavigationAgentP
     const auto original=findNavigationAgentProfile(id);if(!original)throw std::runtime_error("Navigation Agent Profile is unavailable.");
     auto profile=std::make_shared<const NavigationAgentProfile>(crimson::copyNavigationAgentProfile(projectRoot_,*original,name));
     publishNavigationAgentProfile(profile);noteAssetWrite(profile->id);refreshNavigationAgentProfiles();select(profile->id);return profile;
+}
+void AssetLibrary::refreshGameplayEffects() {
+    std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::GameplayEffect;});
+    std::unordered_set<std::string> present;
+    for(const auto& builtin:{playerStartingEffect(),enemyStartingEffect()}) { gameplayEffects_[builtin->id]={builtin,1,{}};present.insert(builtin->id); }
+    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-effect"&&!references_.deleted(file.id)) {
+        present.insert(file.id);auto& entry=gameplayEffects_[file.id];
+        if(file.id!=gameplayEffectDocumentId_)try {
+            auto profile=std::make_shared<const GameplayEffectAsset>(loadGameplayEffectAsset(projectRoot_,file.id));
+            if(!entry.definition||*entry.definition!=*profile){entry.definition=std::move(profile);entry.revision=nextGameplayEffectRevision_++;}
+            entry.diagnostic.clear();
+        } catch(const std::exception& error){entry.diagnostic=error.what();}
+        const auto name=entry.definition?entry.definition->name:utf8(file.file.stem());
+        catalog_.push_back({file.id,name,AssetKind::GameplayEffect});
+    }
+    for(const auto& builtin:{playerStartingEffect(),enemyStartingEffect()})if(std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==builtin->id;}))
+        catalog_.push_back({builtin->id,builtin->name,AssetKind::GameplayEffect});
+    std::erase_if(gameplayEffects_,[&](const auto& entry){return !present.contains(entry.first)&&entry.first!=gameplayEffectDocumentId_;});
+    ++catalogRevision_;
+}
+std::shared_ptr<const GameplayEffectAsset> AssetLibrary::findGameplayEffect(const std::string& id) const {
+    try {const auto resolved=references_.resolveGameplayEffect(id);const auto found=gameplayEffects_.find(resolved);
+        return found==gameplayEffects_.end()||!found->second.diagnostic.empty()?nullptr:found->second.definition;
+    }catch(const std::exception&){return nullptr;}
+}
+std::uint64_t AssetLibrary::gameplayEffectRevision(const std::string& id) const {
+    try {const auto found=gameplayEffects_.find(references_.resolveGameplayEffect(id));return found==gameplayEffects_.end()?0:found->second.revision;}
+    catch(const std::exception&){return 0;}
+}
+std::string AssetLibrary::gameplayEffectDiagnostic(const std::string& id) const {
+    try {const auto found=gameplayEffects_.find(references_.resolveGameplayEffect(id));
+        return found==gameplayEffects_.end()?"Gameplay Effect is unavailable: "+id:found->second.diagnostic;
+    }catch(const std::exception& error){return error.what();}
+}
+void AssetLibrary::publishGameplayEffect(std::shared_ptr<const GameplayEffectAsset> profile) {
+    if(!profile)return;validateGameplayEffectAsset(*profile);
+    if(isEngineAssetId(profile->id)||references_.deleted(profile->id))throw std::runtime_error("Protected or deleted Gameplay Effect cannot be published.");
+    auto& entry=gameplayEffects_[profile->id];if(!entry.definition||*entry.definition!=*profile){entry.definition=std::move(profile);entry.revision=nextGameplayEffectRevision_++;}
+    entry.diagnostic.clear();++catalogRevision_;
+}
+std::shared_ptr<const GameplayEffectAsset> AssetLibrary::createGameplayEffect(const std::string& name) {
+    auto profile=std::make_shared<const GameplayEffectAsset>(crimson::createGameplayEffectAsset(projectRoot_,name));
+    publishGameplayEffect(profile);noteAssetWrite(profile->id);refreshGameplayEffects();select(profile->id);return profile;
+}
+std::shared_ptr<const GameplayEffectAsset> AssetLibrary::copyGameplayEffect(const std::string& id,const std::string& name) {
+    const auto original=findGameplayEffect(id);if(!original)throw std::runtime_error("Gameplay Effect is unavailable.");
+    auto profile=std::make_shared<const GameplayEffectAsset>(crimson::copyGameplayEffectAsset(projectRoot_,*original,name));
+    publishGameplayEffect(profile);noteAssetWrite(profile->id);refreshGameplayEffects();select(profile->id);return profile;
 }
 std::shared_ptr<const ParticleEffectAsset> AssetLibrary::findParticle(const std::string& id) const {
     const auto resolved=references_.resolveParticle(id);
@@ -777,6 +827,7 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     if(changed.extension()==".crimson-material") refreshMaterials();
     if(changed.extension()==".crimson-particle") refreshParticles();
     if(changed.extension()==".crimson-agent-profile")refreshNavigationAgentProfiles();
+    if(changed.extension()==".crimson-effect")refreshGameplayEffects();
 }
 std::uint64_t AssetLibrary::materialShaderRevision()const {return graphPrograms_?graphPrograms_->revision():0;}
 std::vector<std::filesystem::path> AssetLibrary::materialShaderDependencies() const {return graphPrograms_?graphPrograms_->sourceDependencies():std::vector<std::filesystem::path>{};}
@@ -1582,6 +1633,19 @@ size_t replaceDeletedNavigationProfiles(SceneSnapshot& snapshot,const AssetRefer
     }
     Scene::validate(snapshot.records,snapshot.properties);return changed;
 }
+size_t replaceDeletedGameplayEffects(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,
+    const std::unordered_set<std::string>& deletedEffects) {
+    size_t changed{};
+    for(auto& record:snapshot.records)if(record.effects) {
+        auto& starting=record.effects->starting;
+        for(auto& effect:starting)if(deletedEffects.contains(previous.resolveGameplayEffect(effect.id))) {
+            const auto replacement=next.resolveGameplayEffect(effect.id);
+            if(effect.id!=replacement){effect.id=replacement;++changed;}
+        }
+        std::erase_if(starting,[](const auto& effect){return effect.empty();});
+    }
+    Scene::validate(snapshot.records,snapshot.properties);return changed;
+}
 }
 void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::vector<AssetUsage> usages;
@@ -1617,6 +1681,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
+            if(record.effects)for(const auto& effect:record.effects->starting)usages.push_back({effect.id,id,name,record.name+" / Starting Effect",isActive,false});
             if(record.controller)usages.push_back({record.controller->profile.id,id,name,record.name+" / Navigation Agent Profile",isActive,false});
             if(record.navigationVolume)for(const auto& profile:record.navigationVolume->profiles)usages.push_back({profile.id,id,name,record.name+" / Supported Agent Profile",isActive,false});
             if(record.collider && !record.collider->source.empty())usages.push_back({record.collider->source.id,id,name,record.name+" / Collider source",isActive,false});
@@ -1631,6 +1696,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
         for(const auto& id:active->historicalMaterialReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history / Material slot",true,true});
         for(const auto& id:active->historicalParticleReferences())usages.push_back({id,active->assetId(),active->displayName(),"Particle undo / redo history",true,true});}
     if(active)for(const auto& id:active->historicalNavigationAgentProfileReferences())usages.push_back({id,active->assetId(),active->displayName(),"Navigation profile undo / redo history",true,true});
+    if(active)for(const auto& id:active->historicalGameplayEffectReferences())usages.push_back({id,active->assetId(),active->displayName(),"Starting effects undo / redo history",true,true});
     for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
         const auto source=resolveAssetPath(projectRoot_,"assets/"+std::string(file));if(!std::filesystem::exists(source))continue;
         try{std::ifstream input(source);const auto j=nlohmann::json::parse(input);
@@ -1648,12 +1714,12 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
     try{auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
         for(const auto& id:ids){if(!browser.contains(id))throw std::runtime_error("A selected asset no longer exists.");expanded.insert(id);
             if(browser.isFolder(id))for(const auto& child:browser.descendants(id))expanded.insert(child);}
-        std::unordered_set<std::string> models,particles,materials,profiles;
+        std::unordered_set<std::string> models,particles,materials,profiles,effects;
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
             if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
                 throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
-            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);}
+            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);if(entry->kind==AssetKind::Material)materials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)profiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)effects.insert(id);}
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
         for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableOwners.insert(entry.id);
@@ -1664,6 +1730,7 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
         for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
             if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
+                (entity.effects&&std::any_of(entity.effects->starting.begin(),entity.effects->starting.end(),[&](const auto& effect){return effects.contains(references_.resolveGameplayEffect(effect.id));}))||
                 (entity.controller&&profiles.contains(references_.resolveNavigationAgentProfile(entity.controller->profile.id)))||
                 (entity.navigationVolume&&std::any_of(entity.navigationVolume->profiles.begin(),entity.navigationVolume->profiles.end(),[&](const auto& profile){return profiles.contains(references_.resolveNavigationAgentProfile(profile.id));}))||
                 std::any_of(entity.modelMaterials.begin(),entity.modelMaterials.end(),[&](const auto& assigned){return !assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id));}))++count;
@@ -1676,6 +1743,7 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
             for(const auto& entity:active->scene().records())if(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(particles.contains(references_.resolveParticle(id)))plan.clearsActiveHistory=true;}
         if(active)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(profiles.contains(references_.resolveNavigationAgentProfile(id)))plan.clearsActiveHistory=true;
+        if(active)for(const auto& id:active->historicalGameplayEffectReferences())if(effects.contains(references_.resolveGameplayEffect(id)))plan.clearsActiveHistory=true;
         std::sort(plan.assetIds.begin(),plan.assetIds.end());std::sort(plan.folderIds.begin(),plan.folderIds.end());
         plan.revision=deletionRevision(projectRoot_,references_,catalogRevision_,active);
     }catch(const std::exception& e){plan.error=e.what();}return plan;
@@ -1719,18 +1787,20 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(pendingDeletion_&&(pendingDeletion_->active!=active||(active&&pendingDeletion_->documentGeneration!=active->documentGeneration())||
             pendingDeletion_->plan.revision!=plan.revision||pendingDeletion_->plan.assetIds!=plan.assetIds||pendingDeletion_->replacements!=replacements))
             throw std::runtime_error("The document or deletion choices changed while validation was pending.");
-        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedMaterials,deletedProfiles,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
+        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedMaterials,deletedProfiles,deletedEffects,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
         if(!particleDocumentId_.empty()&&deletedIds.contains(particleDocumentId_))throw std::runtime_error("Close the particle document before deleting its asset.");
         if(!materialDocumentId_.empty()&&deletedIds.contains(materialDocumentId_))throw std::runtime_error("Close the material document before deleting its asset.");
         if(!navigationProfileDocumentId_.empty()&&deletedIds.contains(navigationProfileDocumentId_))throw std::runtime_error("Close the Navigation Agent Profile document before deleting its asset.");
+        if(!gameplayEffectDocumentId_.empty()&&deletedIds.contains(gameplayEffectDocumentId_))throw std::runtime_error("Close the Gameplay Effect document before deleting its asset.");
         for(const auto& id:plan.assetIds){const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Deletion target disappeared.");
             if(entry->kind==AssetKind::Model&&quaderBundleSource(projectRoot_,id))
                 throw std::runtime_error("Imported Quader meshes belong to their scene bundle and cannot be deleted independently.");
-            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)deletedProfiles.insert(id);
+            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);if(entry->kind==AssetKind::Material)deletedMaterials.insert(id);if(entry->kind==AssetKind::NavigationAgentProfile)deletedProfiles.insert(id);if(entry->kind==AssetKind::GameplayEffect)deletedEffects.insert(id);
             if(const auto chosen=replacements.find(id);chosen!=replacements.end()&&!chosen->second.empty()){
                 const auto options=fallbackCandidates(id);if(std::none_of(options.begin(),options.end(),[&](const auto& option){return option.id==chosen->second;}))throw std::runtime_error("Fallback has an incompatible asset type.");}}
         auto nextReferences=references_;nextReferences.replace(deleted,replacements);
         for(const auto& id:deletedProfiles)(void)loadNavigationAgentProfile(projectRoot_,nextReferences.resolveNavigationAgentProfile(id));
+        for(const auto& id:deletedEffects){const auto target=nextReferences.resolveGameplayEffect(id);if(!target.empty())(void)loadGameplayEffectAsset(projectRoot_,target);}
         std::vector<std::shared_ptr<const ModelAsset>> nextModels;
         std::vector<AssetEntry> surviving;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model&&!deletedModels.contains(entry.id))surviving.push_back(entry);
         std::vector<AssetEntry> survivingParticles;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle&&!deletedParticles.contains(entry.id))survivingParticles.push_back(entry);
@@ -1780,26 +1850,39 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
                 const auto seed=std::find_if(scene.stagedNavigationProfiles.begin(),scene.stagedNavigationProfiles.end(),[&](const auto& profile){return profile&&profile->id==record.controller->profile.id;});
                 if(seed!=scene.stagedNavigationProfiles.end()&&(*seed)->traversal==original->traversal){record.controller->profile.id=original->id;*seed=original;}
             }
+            if(active&&scene.id==active->assetId()&&scene.fingerprint==active->loadedFingerprint())for(auto& record:scene.records)if(record.effects) {
+                const auto original=active->legacyGameplayEffectSeedForEntity(record.id);if(!original)continue;
+                for(auto& assigned:record.effects->starting) {
+                    const auto seed=std::find_if(scene.stagedGameplayEffects.begin(),scene.stagedGameplayEffects.end(),[&](const auto& effect){return effect&&effect->id==assigned.id;});
+                    if(seed!=scene.stagedGameplayEffects.end()) {
+                        auto equivalent=**seed;equivalent.id=original->id;equivalent.name=original->name;
+                        if(equivalent==*original){assigned.id=original->id;*seed=original;}
+                    }
+                }
+            }
             const auto removed=removeDeletedModels(scene,references_,nextReferences,deletedModels);
             const auto replaced=replaceDeletedParticles(scene,references_,nextReferences,deletedParticles);
             const auto materials=replaceDeletedModelMaterials(scene,references_,nextReferences,deletedMaterials,projectRoot_);
             const auto profiles=replaceDeletedNavigationProfiles(scene,references_,nextReferences,deletedProfiles);
-            if(removed||replaced||materials||profiles) {
+            const auto effects=replaceDeletedGameplayEffects(scene,references_,nextReferences,deletedEffects);
+            if(removed||replaced||materials||profiles||effects) {
                 auto persistence=prepareScenePersistence(projectRoot_,scene.id,scene);
                 changes.insert(changes.end(),std::make_move_iterator(persistence.files.begin()),std::make_move_iterator(persistence.files.end()));
                 profileRegistrations.insert(profileRegistrations.end(),persistence.registrations.begin(),persistence.registrations.end());
             }
         }
         SceneSnapshot activeCandidate;bool activeChanged=false,clearHistory=false,activeDeleted=active&&deletedIds.contains(active->assetId());const bool wasDirty=active&&active->dirty();
-        if(active&&!activeDeleted){activeCandidate.records=active->scene().records();activeCandidate.properties=active->scene().properties();
+        if(active&&!activeDeleted){activeCandidate.records=active->scene().records();activeCandidate.properties=active->scene().properties();activeCandidate.stagedGameplayEffects=active->stagedGameplayEffects();
             activeChanged=removeDeletedModels(activeCandidate,references_,nextReferences,deletedModels)!=0;
             activeChanged=replaceDeletedParticles(activeCandidate,references_,nextReferences,deletedParticles)!=0||activeChanged;
             activeChanged=replaceDeletedModelMaterials(activeCandidate,references_,nextReferences,deletedMaterials,projectRoot_)!=0||activeChanged;
             activeChanged=replaceDeletedNavigationProfiles(activeCandidate,references_,nextReferences,deletedProfiles)!=0||activeChanged;
+            activeChanged=replaceDeletedGameplayEffects(activeCandidate,references_,nextReferences,deletedEffects)!=0||activeChanged;
             for(const auto& id:active->historicalMaterialReferences())if(deletedMaterials.contains(references_.resolveMaterial(id)))clearHistory=true;
             for(const auto& id:active->historicalModelReferences())if(deletedModels.contains(references_.resolve(id))&&nextReferences.resolve(id).empty())clearHistory=true;
             for(const auto& id:active->historicalParticleReferences())if(deletedParticles.contains(references_.resolveParticle(id)))clearHistory=true;}
         if(active&&!activeDeleted)for(const auto& id:active->historicalNavigationAgentProfileReferences())if(deletedProfiles.contains(references_.resolveNavigationAgentProfile(id)))clearHistory=true;
+        if(active&&!activeDeleted)for(const auto& id:active->historicalGameplayEffectReferences())if(deletedEffects.contains(references_.resolveGameplayEffect(id)))clearHistory=true;
         std::vector<std::filesystem::path> removedDirectories,selectedDirectories;
         for(const auto& id:plan.folderIds)if(browserCatalog().writableFolder(id)) {
             const auto directory=browserCatalog().folderPath(id);selectedDirectories.push_back(directory);removedDirectories.push_back(directory);
@@ -1841,7 +1924,8 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);particles_=std::move(preparedParticles);
         authoredMaterials_=std::move(preparedAuthoredMaterials);nextMaterialRevision_=preparedMaterialRevision;nextParticleRevision_=preparedParticleRevision;
         std::erase_if(navigationProfiles_,[&](const auto& entry){return deletedIds.contains(entry.first);});
-        if(!profileRegistrations.empty())refreshNavigationAgentProfiles();
+        std::erase_if(gameplayEffects_,[&](const auto& entry){return deletedIds.contains(entry.first);});
+        if(!profileRegistrations.empty()){refreshNavigationAgentProfiles();refreshGameplayEffects();}
         std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return deletedIds.contains(entry.first);});++catalogRevision_;browserRevision_=profileRegistrations.empty()?catalogRevision_:0;
         for(auto it=assets_.begin();it!=assets_.end();)if(deletedIds.contains(it->id)){retiredTextures_.push_back(std::move(*it));it=assets_.erase(it);}else ++it;
         browserSelection_.clear();

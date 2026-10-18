@@ -1,3 +1,4 @@
+#include "scene/SceneComponents.h"
 #include "agent_profile_fixture.h"
 #include "editor/PlayerOcclusion.h"
 #include <array>

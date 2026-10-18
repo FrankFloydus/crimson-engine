@@ -1,7 +1,10 @@
 #include "scene/SceneDocument.h"
+#include "scene/SceneComponents.h"
 #include "scene/SceneExtraction.h"
 #include "scene/BuiltinModels.h"
 #include "assets/MaterialAsset.h"
+#include "assets/GameplayEffectAsset.h"
+#include "assets/AtomicFile.h"
 #include "math/Json.h"
 #include "crimson-renderer/shaders/point_light.sh"
 #include "crimson-renderer/shaders/ambient_visibility_response.sh"
@@ -15,6 +18,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <utility>
 
@@ -36,10 +40,43 @@ void pose(SceneDocument& document,EntityId id,const Vec3& location){
 }
 void move(SceneDocument& document,EntityId id,const Vec3& location){auto record=*document.scene().find(id);record.local=*math::withAffinePosition(record.local,location);require(document.updateEntity(id,record),document.status());}
 void same(const std::vector<EntityRecord>& a,const std::vector<EntityRecord>& b){require(a.size()==b.size(),"Record count changed.");for(size_t i=0;i<a.size();++i)require(sameEntity(a[i],b[i]),"Authored records changed.");}
+void writeSceneFixture(const std::filesystem::path& root,const std::string& id,const Json& data) {
+    auto file=root/id;bool registerFile=false;
+    if(contentStorageReady(root)) {
+        const auto entries=storedAssetPaths(root);const auto canonical=canonicalAssetId(id);
+        const auto found=std::find_if(entries.begin(),entries.end(),[&](const auto& entry){return entry.id==canonical;});
+        if(found!=entries.end())file=found->file;
+        else {file=root/"Content"/(canonical+".crimson-scene");registerFile=true;}
+    }
+    writeFileAtomically(file,data.dump());if(registerFile)registerAssetPath(root,canonicalAssetId(id),file);
+}
+void sameAfterLegacyInitialization(const std::vector<EntityRecord>& expected,const SceneDocument& converted) {
+    auto actual=converted.scene().records();require(expected.size()==actual.size(),"Legacy conversion changed record count.");
+    const auto initialValues=[&](const EntityRecord& record) {
+        std::map<GameplayTag,double> result;
+        if(record.effects)for(const auto& reference:record.effects->starting) {
+            auto effect=engineGameplayEffect(reference.id);if(!effect)effect=converted.gameplayEffect(reference.id);
+            if(!effect)effect=std::make_shared<const GameplayEffectAsset>(loadGameplayEffectAsset(converted.projectRoot(),reference.id));
+            require(effect->durationPolicy==EffectDurationPolicy::Instant&&effect->period==0,"Legacy initialization changed effect lifetime.");
+            for(const auto& modifier:effect->modifiers) {
+                require(modifier.operation==EffectModifierOperation::Override&&modifier.magnitude.calculation.empty(),"Legacy initialization changed literal Override semantics.");
+                result[modifier.attribute]=modifier.magnitude.literal;
+            }
+        }
+        return result;
+    };
+    for(std::size_t index=0;index<actual.size();++index) {
+        require(initialValues(expected[index])==initialValues(actual[index]),"Legacy initialization lost an authored starting value.");
+        actual[index].effects=expected[index].effects;
+    }
+    same(expected,actual);
+}
 
 EntityId addControlledActor(SceneDocument& document,const std::string& name="Actor") {
     if(!document.begin("Compose controlled actor"))return NoEntity;
     EntityRecord record;record.name=name;record.actor.emplace();record.controller.emplace();record.motor.emplace();
+    initializePlayerEffects(record);
+    record.controller->collision.layers=PlayerCollisionLayer;
     record.navigation.emplace();record.playerInput.emplace();record.lightRig.emplace();record.darknessReveal.emplace();
     if(!document.update([&](auto& records,auto& properties){
         record.id=1;for(const auto& current:records)record.id=std::max(record.id,current.id+1);
@@ -53,13 +90,14 @@ Json legacyComposition(Json data,const NavigationAgentProfileQuery& profiles={})
     for(auto& entity:data["entities"]) {
         if(entity.contains("controller")) {
             auto character=entity.at("controller");const auto profile=resolveNavigationAgentProfile(character.at("profile").get<std::string>(),profiles);
-            require(profile!=nullptr,"Legacy fixture profile is unavailable.");character["height"]=profile->traversal.height;character["radius"]=profile->traversal.radius;character.erase("profile");character["moveSpeed"]=entity.value("motor",Json::object()).value("moveSpeed",5.f);
+            require(profile!=nullptr,"Legacy fixture profile is unavailable.");character["height"]=profile->traversal.height;character["radius"]=profile->traversal.radius;character.erase("profile");character["moveSpeed"]=5.0;
+            for(const auto& seed:entity.value("attributes",Json::array()))if(seed.is_object()&&GameplayTag{seed.at("tag").get<std::string>()}==stats::MovementSpeed)character["moveSpeed"]=seed.at("startingBase");
             character["showRoute"]=entity.value("navigation",Json::object()).value("showRoute",true);
             if(entity.contains("lightRig"))character["lightRig"]=entity.at("lightRig");
             if(entity.contains("darknessReveal"))character["darknessReveal"]=entity.at("darknessReveal");
             entity["character"]=std::move(character);
         }
-        for(const auto* field:{"actor","motor","controller","navigation","playerInput","lightRig","darknessReveal"})entity.erase(field);
+        for(const auto* field:{"actor","motor","controller","navigation","playerInput","lightRig","darknessReveal","attributes","tags","effects"})entity.erase(field);
         if(entity.contains("camera")) {
             const auto follow=entity.value("cameraFollow",Json::object());
             entity["camera"]["followTarget"]=follow.value("target",Json("0000000000000000"));
@@ -73,17 +111,15 @@ void composedPlayerRecipeAndMigration() {
     TempProject project;SceneDocument document(project.root);
     const auto player=document.createPlayer("Hero");require(player&&document.history().size()==1,document.status());
     const auto root=*document.scene().find(player);const auto children=document.scene().children(player);
-    require(!root.parent&&!root.model&&root.actor&&root.motor&&root.controller&&root.navigation&&root.playerInput&&root.lightRig&&root.darknessReveal,
+    require(!root.parent&&!root.model&&root.actor&&root.motor&&root.controller&&!root.navigation&&root.playerInput&&root.lightRig&&root.darknessReveal,
         "Create Player did not compose independent capabilities on a generic root.");
     require(children.size()==1&&document.selection().ids==std::vector<EntityId>{player}&&document.selection().primary==player,
         "Create Player did not create one real child camera and select its root.");
     const auto camera=children.front();const auto child=*document.scene().find(camera);
-    require(child.camera&&child.camera->verticalFov==35&&child.cameraFollow&&child.cameraFollow->target==player&&
-        child.cameraFollow->offset==Vec3{6.5f,13.1f,6.5f}&&document.scene().properties().activeCamera==camera&&document.scene().properties().playerCharacter==player,
+    require(child.camera==std::optional<SceneCamera>{SceneCamera{75,.05f,2048}}&&child.cameraFollow&&child.cameraFollow->target==player&&
+        child.cameraFollow->offset==Vec3{0,1.65f,0}&&document.scene().properties().activeCamera==camera&&document.scene().properties().playerCharacter==player,
         "Create Player camera lens, follow settings or explicit roles are incorrect.");
-    constexpr float radians=3.14159265358979323846f/180.f;
-    const auto expectedBasis=math::eulerRotationXYZ(Vec3{-55,45,0}*radians);
-    require(child.cameraFollow->worldBasis==expectedBasis,"Create Player lost the authored ARPG camera rotation.");
+    require(child.cameraFollow->worldBasis==Mat4{},"Create Player camera does not face forward.");
     const auto created=document.scene().records();
     require(document.undo()&&document.scene().records().empty()&&!document.scene().properties().activeCamera&&!document.scene().properties().playerCharacter,
         "Create Player did not undo its entire recipe in one command.");
@@ -102,7 +138,7 @@ void composedPlayerRecipeAndMigration() {
     for(unsigned axis=0;axis<3;++axis)near(math::transformDirection(runtimeWorld,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}),
         math::transformDirection(viewBefore,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}));
     const auto json=Json::parse(serializeSceneSnapshot({{},"Composed",document.scene().records(),document.scene().properties()}));
-    require(json.at("version")==18,"Component scene writer did not use schema18.");
+    require(json.at("version")==23,"Component scene writer did not use schema23.");
     for(const auto& entity:json.at("entities")) {
         require(!entity.contains("character"),"Current scene writer retained the removed Character representation.");
         if(entity.contains("camera"))require(!entity.at("camera").contains("followTarget")&&!entity.at("camera").contains("followOffset"),
@@ -127,13 +163,14 @@ void composedPlayerRecipeAndMigration() {
 
     SceneDocument legacySource(project.root);const auto legacyActor=addControlledActor(legacySource,"Old actor"),legacyCamera=legacySource.createCamera("Old camera");
     auto old=*legacySource.scene().find(legacyActor);const auto oldProfile=std::make_shared<const NavigationAgentProfile>(NavigationAgentProfile{newAssetId(),"Old custom agent",{2.4f,.4f,45,.3f}});
-    old.controller->profile=AssetRef<NavigationAgentProfile>{oldProfile->id};old.motor->moveSpeed=8.25f;
+    old.controller->profile=AssetRef<NavigationAgentProfile>{oldProfile->id};
     const NavigationAgentProfileQuery oldProfiles=[&](const auto& id){return id==oldProfile->id?oldProfile:nullptr;};
     old.navigation->showRoute=false;old.controller->showCollisionInGame=true;old.controller->collisionColor={.2f,.6f,.8f,.7f};
     old.lightRig->showGizmos=false;old.darknessReveal=DarknessRevealSettings{false,12.f};
     require(legacySource.updateEntity(legacyActor,old)&&legacySource.setCameraFollow(legacyCamera,legacyActor),legacySource.status());
     const auto legacyWorld=*legacySource.scene().worldTransform(legacyCamera);
     auto legacy=legacyComposition(Json::parse(serializeSceneSnapshot({{},"Legacy composition",legacySource.scene().records(),legacySource.scene().properties()})),oldProfiles);
+    for(auto& entity:legacy["entities"])if(entity.contains("character"))entity["character"]["moveSpeed"]=8.25;
     const std::string legacyId="assets/scenes/legacy-composition.crimson-scene";const auto bytes=legacy.dump();
     {std::ofstream file(project.root/legacyId,std::ios::binary);file<<bytes;}
     const auto loaded=readSceneSnapshot(project.root,legacyId);Scene migrated;migrated.apply(loaded.records,loaded.properties);
@@ -145,11 +182,153 @@ void composedPlayerRecipeAndMigration() {
     require(converted.actor&&converted.motor==old.motor&&converted.controller->showCollisionInGame==old.controller->showCollisionInGame&&
         converted.controller->collisionColor==old.controller->collisionColor&&converted.navigation==old.navigation&&converted.playerInput&&
         converted.lightRig==old.lightRig&&converted.darknessReveal==old.darknessReveal,"Legacy Character migration lost independently authored values.");
+    require(loaded.stagedGameplayEffects.size()==1&&converted.effects&&converted.effects->starting.front().id==loaded.stagedGameplayEffects.front()->id,
+        "Legacy Character migration omitted its independent initialization effect.");
+    const auto& initial=*loaded.stagedGameplayEffects.front();
+    for(const auto& [tag,value]:std::array{std::pair{stats::Vitality,50.0},std::pair{stats::Spirit,50.0},std::pair{stats::MovementSpeed,8.25}}) {
+        const auto modifier=std::find_if(initial.modifiers.begin(),initial.modifiers.end(),[&](const auto& mod){return mod.attribute==tag;});
+        require(modifier!=initial.modifiers.end()&&modifier->operation==EffectModifierOperation::Override&&modifier->magnitude.literal==value,
+            "Legacy Character migration lost primary stats or movement speed from its initialization effect.");
+    }
     const auto convertedWorld=*migrated.worldTransform(legacyCamera);
     for(unsigned index=0;index<16;++index)require(std::abs(convertedWorld[index]-legacyWorld[index])<.0002f,"Legacy follow migration changed the visible camera pose.");
     {std::ifstream file(project.root/legacyId,std::ios::binary);const std::string unchanged{std::istreambuf_iterator<char>(file),{}};require(unchanged==bytes,"Read migration rewrote the saved legacy scene.");}
-    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==18,"Migrated scene did not write only the current representation.");
+    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==23,"Migrated scene did not write only the current representation.");
     for(const auto& entity:current.at("entities"))require(!entity.contains("character"),"Saving migrated components retained Character data.");
+}
+
+void firstPersonInputStorageAndCameraConversion() {
+    TempProject project;SceneDocument document(project.root);
+    const auto player=document.createPlayer("First-person player"),camera=document.scene().properties().activeCamera;
+    const ScenePlayerInput defaults;
+    require(defaults.enabled&&!defaults.invertY&&defaults.mouseSensitivity==.10f&&defaults.jumpHeight==1.1f&&
+        defaults.groundAcceleration==45&&defaults.groundFriction==8&&defaults.airAcceleration==12&&defaults.airControl==.35f&&
+        defaults.strafeTilt==3&&defaults.tiltResponse==12&&defaults.stairSmoothingTime==.10f,"First-person controller defaults changed.");
+    auto tuned=*document.scene().find(player);
+    tuned.playerInput=ScenePlayerInput{false,.23f,true,1.7f,62.f,9.5f,15.f,.6f,5.f,17.f,.24f};
+    const auto history=document.history().size();
+    require(document.updateEntity(player,tuned,"Tune first-person controls")&&document.history().size()==history+1,document.status());
+    require(document.undo()&&document.scene().find(player)->playerInput==std::optional<ScenePlayerInput>{defaults},"First-person controls did not undo together.");
+    require(document.redo()&&document.scene().find(player)->playerInput==tuned.playerInput,"First-person controls did not redo exactly.");
+    require(document.save("First-person controls"),document.status());
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());
+    same(document.scene().records(),snapshot.records);
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty(),reopened.status());
+    same(document.scene().records(),reopened.scene().records());
+    const auto saved=Json::parse(serializeSceneSnapshot(snapshot));
+    for(const auto& entity:saved.at("entities"))if(entity.contains("playerInput"))
+        require(entity.at("playerInput").size()==11&&entity.at("playerInput").at("mouseSensitivity")==.23f&&
+            entity.at("playerInput").at("invertY")==true&&entity.at("playerInput").at("jumpHeight")==1.7f&&
+            entity.at("playerInput").at("stairSmoothingTime")==.24f&&
+            !entity.contains("navigation"),"First-person control writer lost values or introduced Navigation.");
+    const auto records=document.scene().records();const auto beforeHistory=document.history().size();
+    constexpr std::array<float ScenePlayerInput::*,9> fields{&ScenePlayerInput::mouseSensitivity,&ScenePlayerInput::jumpHeight,
+        &ScenePlayerInput::groundAcceleration,&ScenePlayerInput::groundFriction,&ScenePlayerInput::airAcceleration,
+        &ScenePlayerInput::airControl,&ScenePlayerInput::strafeTilt,&ScenePlayerInput::tiltResponse,&ScenePlayerInput::stairSmoothingTime};
+    for(const auto field:fields)for(const auto bad:{-1.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        auto invalid=tuned;(*invalid.playerInput).*field=bad;
+        require(!document.updateEntity(player,invalid),"Invalid first-person control was published.");
+        same(records,document.scene().records());require(document.history().size()==beforeHistory,"Rejected FPS property added history.");
+    }
+    auto invalid=tuned;invalid.playerInput->airControl=1.01f;require(!document.updateEntity(player,invalid),"Unbounded air control was accepted.");
+    invalid=tuned;invalid.playerInput->strafeTilt=45.1f;require(!document.updateEntity(player,invalid),"Excessive strafe tilt was accepted.");
+    invalid=tuned;invalid.playerInput->stairSmoothingTime=1.01f;require(!document.updateEntity(player,invalid),"Excessive stair smoothing time was accepted.");
+    for(const float endpoint:{0.f,1.f}) {
+        auto valid=tuned;valid.playerInput->stairSmoothingTime=endpoint;
+        require(document.updateEntity(player,valid,"Tune stair smoothing endpoint"),document.status());
+        require(document.scene().find(player)->playerInput->stairSmoothingTime==endpoint,"Valid stair smoothing endpoint was not retained.");
+        require(document.undo()&&document.scene().find(player)->playerInput==tuned.playerInput,"Stair smoothing endpoint did not undo.");
+    }
+    auto missingSmoothing=saved;
+    for(auto& entity:missingSmoothing["entities"])if(entity.contains("playerInput"))entity["playerInput"].erase("stairSmoothingTime");
+    const std::string missingId="assets/scenes/missing-stair-smoothing.crimson-scene";
+    writeSceneFixture(project.root,missingId,missingSmoothing);
+    const auto missingBytes=missingSmoothing.dump();
+    SceneDocument missingDocument(project.root);require(missingDocument.load(missingId)&&!missingDocument.dirty(),missingDocument.status());
+    auto expected=*tuned.playerInput;expected.stairSmoothingTime=defaults.stairSmoothingTime;
+    require(missingDocument.scene().find(player)->playerInput==std::optional<ScenePlayerInput>{expected},"Missing stair smoothing did not retain defaults and existing controls.");
+    {std::ifstream input(sceneAssetPath(project.root,missingId),std::ios::binary);
+        require(std::string{std::istreambuf_iterator<char>(input),{}}==missingBytes,"Loading the optional stair smoothing default rewrote the scene.");}
+
+    constexpr float radians=3.14159265358979323846f/180.f;
+    const auto oldBasis=math::eulerRotationXYZ(Vec3{-55,45,0}*radians);
+    auto legacy=saved;
+    for(auto& entity:legacy["entities"]) {
+        if(entity.contains("playerInput")) {
+            entity["playerInput"]={{"enabled",true}};entity["navigation"]={{"enabled",false},{"showRoute",false}};
+        }
+        if(entity.contains("camera")) {
+            entity["camera"]={{"verticalFov",35.f},{"near",.1f},{"far",2048.f}};
+            entity["cameraFollow"]["offset"]=Vec3{6.5f,13.1f,6.5f};entity["cameraFollow"]["worldBasis"]=oldBasis;
+            entity["local"]=*math::withAffinePosition(oldBasis,{6.5f,13.1f,6.5f});
+        }
+    }
+    const std::string legacyId="assets/scenes/legacy-first-person.crimson-scene";
+    writeSceneFixture(project.root,legacyId,legacy);const auto legacyPath=sceneAssetPath(project.root,legacyId);
+    const auto bytes=legacy.dump();const auto converted=readSceneSnapshot(project.root,legacyId);Scene scene;scene.apply(converted.records,converted.properties);
+    const auto convertedCamera=*scene.find(camera);
+    require(scene.find(player)->playerInput==std::optional<ScenePlayerInput>{defaults}&&scene.find(player)->navigation==std::optional<SceneNavigationAgent>{SceneNavigationAgent{false,false}},
+        "Old player conversion lost defaults or the independent Navigation capability.");
+    require(convertedCamera.camera==std::optional<SceneCamera>{SceneCamera{75,.05f,2048}}&&
+        convertedCamera.cameraFollow->offset==Vec3{0,1.65f,0}&&convertedCamera.cameraFollow->worldBasis==Mat4{},
+        "Exact old built-in camera was not converted to first person.");
+    near(position(scene,camera),{0,1.65f,0});
+    {std::ifstream input(legacyPath,std::ios::binary);require(std::string{std::istreambuf_iterator<char>(input),{}}==bytes,"FPS conversion rewrote the saved scene.");}
+    require(reopened.load(legacyId)&&!reopened.dirty(),"In-memory FPS conversion dirtied the scene.");
+    const auto convertedCurrent=Json::parse(serializeSceneSnapshot(converted));
+    for(const auto& entity:convertedCurrent.at("entities"))if(entity.contains("playerInput"))
+        require(entity.at("playerInput").contains("mouseSensitivity"),"Converted player did not write the current input representation.");
+
+    // Any authored lens, offset, basis or current control field proves the
+    // camera belongs to the user and must retain its exact saved values.
+    for(unsigned variant=0;variant<6;++variant) {
+        auto custom=legacy;
+        for(auto& entity:custom["entities"]) {
+            if(variant==3&&entity.contains("playerInput"))entity["playerInput"]["mouseSensitivity"]=.4f;
+            if(variant==5&&entity.contains("playerInput"))entity["playerInput"]["stairSmoothingTime"]=.2f;
+            if(!entity.contains("camera"))continue;
+            if(variant==0)entity["camera"]["verticalFov"]=42.f;
+            if(variant==1)entity["cameraFollow"]["offset"]=Vec3{6.5f,13.2f,6.5f};
+            if(variant==2)entity["cameraFollow"]["worldBasis"]=math::eulerRotationXYZ(Vec3{-55,45,1}*radians);
+            if(variant==4)entity["parent"]="0000000000000000";
+        }
+        writeSceneFixture(project.root,legacyId,custom);const auto retained=readSceneSnapshot(project.root,legacyId);
+        const auto found=std::find_if(retained.records.begin(),retained.records.end(),[&](const auto& record){return record.id==camera;});
+        for(const auto& entity:custom.at("entities"))if(entity.contains("camera"))
+            require(found!=retained.records.end()&&found->camera->verticalFov==entity.at("camera").at("verticalFov").get<float>()&&
+                found->cameraFollow->offset==entity.at("cameraFollow").at("offset").get<Vec3>()&&
+                found->cameraFollow->worldBasis==entity.at("cameraFollow").at("worldBasis").get<Mat4>(),
+                "Legacy FPS conversion changed an authored camera or a standalone override.");
+    }
+}
+
+void presentationCameraPoseOverrides() {
+    TempProject project;SceneDocument document(project.root);const auto player=document.createPlayer();
+    const auto camera=document.scene().properties().activeCamera;
+    auto actor=*document.scene().find(player);actor.local=math::translation({3,1,-2})*math::eulerRotationXYZ({0,.4f,0})*math::scaling({2,1.5f,.7f});
+    require(document.updateEntity(player,actor),document.status());
+    Scene presentation;presentation.apply(document.scene().records(),document.scene().properties());
+    const auto authored=*presentation.find(camera),actorBefore=*presentation.find(player);
+    const auto revision=presentation.revision(),generation=presentation.generation(),poseRevision=presentation.poseRevision();
+    const auto world=math::translation({3,2.65f,-2})*math::eulerRotationXYZ({.3f,.8f,-.04f});
+    presentation.applyRuntimeCameraPose(camera,world);
+    const auto resolved=*presentation.worldTransform(camera);
+    for(unsigned index=0;index<16;++index)require(std::abs(resolved[index]-world[index])<.0001f,"Presentation camera override lost the world affine pose.");
+    require(presentation.find(camera)->cameraFollow==authored.cameraFollow&&presentation.find(camera)->camera==authored.camera&&
+        sameEntity(*presentation.find(player),actorBefore)&&presentation.revision()==revision&&presentation.generation()==generation&&
+        presentation.poseRevision()==poseRevision+1,"Presentation camera override changed authored data, controller pose or edit identity.");
+    presentation.applyRuntimeCameraPose(camera,world);require(presentation.poseRevision()==poseRevision+1,"Equal runtime camera pose caused an invalidation.");
+    for(const auto id:{NoEntity,player,EntityId{999}}) {
+        bool rejected=false;try{presentation.applyRuntimeCameraPose(id,world);}catch(const std::exception&){rejected=true;}
+        require(rejected,"Runtime camera pose accepted a missing entity or a non-camera.");
+    }
+    auto invalid=world;invalid[0]=std::numeric_limits<float>::quiet_NaN();
+    bool rejected=false;try{presentation.applyRuntimeCameraPose(camera,invalid);}catch(const std::exception&){rejected=true;}
+    require(rejected&&presentation.poseRevision()==poseRevision+1,"Invalid camera pose mutated presentation.");
+    presentation.applyRuntimePoses({});
+    require(presentation.find(camera)->cameraFollow==authored.cameraFollow,"Follow reset lost authored camera settings.");
+    const auto restored=*presentation.worldTransform(camera),expected=*document.scene().worldTransform(camera);
+    for(unsigned index=0;index<16;++index)require(std::abs(restored[index]-expected[index])<.0001f,"Follow did not restore authored camera placement after a transient view override.");
 }
 
 void nativeColliderStorageAndValidation() {
@@ -171,7 +350,7 @@ void nativeColliderStorageAndValidation() {
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     require(snapshot.records.size()==2&&sameCollisionMesh(snapshot.records[0].collider->mesh,geometry)&&snapshot.records[0].collider->source.empty(),"Native collision persistence required a model asset or changed its triangles.");
     auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==18&&json["entities"][0]["collider"].contains("mesh"),"Native collision did not write schema18 triangle data.");
+    require(json.at("version")==23&&json["entities"][0]["collider"].contains("mesh"),"Native collision did not write schema21 triangle data.");
     for(const auto index:Json::array({-1,4294967296ull,.5})) {
         auto malformed=json;malformed["entities"][0]["collider"]["mesh"]["indices"][0]=index;
         {std::ofstream output(sceneAssetPath(project.root,document.assetId()),std::ios::binary);output<<malformed.dump();}
@@ -196,10 +375,12 @@ void componentsAndStorage(){
     require(document.scene().find(box)->model->id==BuiltinBoxModelId,"Box did not use builtin geometry.");
     require(document.scene().find(collider)->parent==box && document.scene().find(collider)->local==Mat4{},"Collider child was not identity local.");
     require(document.setCameraFollow(camera,character),document.status());
-    auto characterRecord=*document.scene().find(character);characterRecord.motor->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
+    auto characterRecord=*document.scene().find(character);
+    characterRecord.effects->starting.emplace_back(canonicalAssetId("tests/gameplay/custom-initialization"));
+    require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==18,"Scene writer did not use version 18.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==23,"Scene writer did not use version 23.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=legacyComposition(Json::parse(serializeSceneSnapshot(snapshot)));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -283,7 +464,7 @@ void unifiedColliderStorageHistoryAndCompatibility() {
         require(document.save("Unified colliders"),document.status());SceneDocument loaded(project.root);
         require(loaded.load(document.assetId())&&loaded.scene().find(id)->collider==authored.collider,"A collider shape lost retained dimensions/source/display on save/reopen.");
         const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-        require(json.at("version")==18&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
+        require(json.at("version")==23&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
         SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&runtime.scene().find(id)->collider==authored.collider,"Play copy lost unified collider settings.");
     }
     auto invalid=authored;invalid.collider->shape=static_cast<ColliderShape>(255);
@@ -309,7 +490,7 @@ void unifiedColliderStorageHistoryAndCompatibility() {
     writeLegacy();loaded=readSceneSnapshot(project.root,legacyId);
     require(loaded.records[0].collider&&loaded.records[0].collider->shape==ColliderShape::Trimesh&&loaded.records[0].collider->showCollisionInGame&&
         loaded.records[0].collider->collisionColor==Vec4{.2f,.3f,.4f,.5f}&&!loaded.records[0].collider->source.empty(),"A v11 meshCollider did not migrate its source/display to Trimesh.");
-    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==18&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
+    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==23&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
 }
 
 void runtimePatches(){
@@ -507,7 +688,7 @@ void modelFadeParticipationStorageAndRuntime() {
     require(document.save(),document.status());
     require(sceneFileFingerprint(project.root,document.assetId())!=originalFingerprint,"Participation save did not invalidate the scene preview fingerprint.");
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==18,"Fade participation did not use the current scene schema.");
+    require(serialized.at("version")==23,"Fade participation did not use the current scene schema.");
     for(const auto& entity:serialized.at("entities")) {
         if(entity.contains("model"))require(entity.at("fadeWhenOccluding").is_boolean(),"A model did not write its explicit boolean participation.");
         else require(!entity.contains("fadeWhenOccluding"),"A nonmodel wrote model-only fade settings.");
@@ -565,7 +746,7 @@ void entityVisibilityStorageAndRuntime() {
         "Showing the original group ignored child overrides or changed its independent duplicate.");
     require(document.save(),document.status());require(sceneFileFingerprint(project.root,document.assetId())!=initialFingerprint,"Visibility save left the scene fingerprint unchanged.");
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==18,"Entity visibility did not write scene schema 18.");
+    require(serialized.at("version")==23,"Entity visibility did not write scene schema 23.");
     for(const auto& entity:serialized.at("entities"))require(entity.at("visible").is_boolean(),"An entity did not write its authored visibility flag.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(reopened.scene().isVisible(actor)&&!reopened.scene().isVisible(model)&&!reopened.scene().isVisible(duplicate),"Save/load lost effective hierarchy visibility.");
@@ -605,7 +786,7 @@ void pointFalloffAndSpecularStorageAndRuntime() {
         "Point falloff/specular redo lost the authored values.");
     require(document.save("Point falloff"),document.status());const auto authored=document.scene().records();
     const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(serialized.at("version")==18&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
+    require(serialized.at("version")==23&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
         serialized["entities"][0]["point"].at("specularStrength")==.35f&&serialized["entities"][0]["point"].at("attenuation")==1.25f,
         "Point falloff/specular fields did not persist in the current scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
@@ -700,7 +881,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==18,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==23,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=legacyComposition(serialized);legacy["version"]=version;
@@ -1014,9 +1195,9 @@ void lightingRolesRigStorageAndRuntime() {
         }
     }
     const std::string formerSourceId="assets/scenes/former-source-radius.crimson-scene";
-    {std::ofstream file(project.root/formerSourceId);file<<formerSource.dump();}
-    require(reopened.load(formerSourceId),reopened.status());same(authored,reopened.scene().records());
-    require(reopened.save()&&reopened.load(formerSourceId),reopened.status());same(authored,reopened.scene().records());
+    writeSceneFixture(project.root,formerSourceId,formerSource);
+    require(reopened.load(formerSourceId),reopened.status());sameAfterLegacyInitialization(authored,reopened);
+    require(reopened.save()&&reopened.load(formerSourceId),reopened.status());sameAfterLegacyInitialization(authored,reopened);
     const auto upgradedSource=legacyComposition(Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,formerSourceId))));
     for(const auto& record:upgradedSource["entities"]) {
         if(record.contains("character"))require(record["character"]["lightRig"]["localWorld"].contains("sourceRadius")&&
@@ -1033,7 +1214,7 @@ void lightingRolesRigStorageAndRuntime() {
         if(record.contains("point")){record["point"].erase("sourceRadius");record["point"].erase("attenuation");}
     }
     const std::string absentSourceId="assets/scenes/absent-source-radius.crimson-scene";
-    {std::ofstream file(project.root/absentSourceId);file<<absentSource.dump();}
+    writeSceneFixture(project.root,absentSourceId,absentSource);
     require(reopened.load(absentSourceId),reopened.status());
     require(reopened.scene().find(player)->lightRig.value().localWorld.sourceRadius==0&&
         reopened.scene().find(point)->point->sourceRadius==0&&reopened.scene().find(point)->point->attenuation==2&&
@@ -1043,7 +1224,7 @@ void lightingRolesRigStorageAndRuntime() {
         auto data=currentJson;
         for(auto& record:data["entities"])if(record.contains("character"))record["character"]["darknessReveal"]=reveal;
         const std::string id=std::string("assets/scenes/")+fileName+".crimson-scene";
-        {std::ofstream file(project.root/id);file<<data.dump();}
+        writeSceneFixture(project.root,id,data);
         return reopened.load(id);
     };
     for(const auto& old:std::array<Json,2>{Json{{"enabled",false},{"radius",6.5f}},Json{{"version",1},{"enabled",false},{"radius",6.5f}}}) {
@@ -1074,7 +1255,7 @@ void lightingRolesRigStorageAndRuntime() {
         stored["localWorld"].erase("nearFalloffRadius");stored["localWorld"].erase("specularStrength");
     }
     const std::string missingLocalControlsId="assets/scenes/local-world-v2-defaults.crimson-scene";
-    {std::ofstream stream(project.root/missingLocalControlsId);stream<<missingLocalControls.dump();}
+    writeSceneFixture(project.root,missingLocalControlsId,missingLocalControls);
     require(reopened.load(missingLocalControlsId),reopened.status());
     auto expectedOldV2=rig;expectedOldV2.localWorld.radius=13;expectedOldV2.localWorld.nearFalloffRadius=1.5f;
     expectedOldV2.localWorld.specularStrength=0;expectedOldV2.localWorld.rangeFalloffExponent=4;
@@ -1095,7 +1276,7 @@ void lightingRolesRigStorageAndRuntime() {
         record["character"]["lightRig"]["localWorld"]["specularStrength"]=.4f;
     }
     const std::string customV2Id="assets/scenes/local-world-v2-custom.crimson-scene";
-    {std::ofstream stream(project.root/customV2Id);stream<<customV2.dump();}
+    writeSceneFixture(project.root,customV2Id,customV2);
     require(reopened.load(customV2Id),reopened.status());
     auto expectedCustomV2=expectedOldV2;expectedCustomV2.localWorld.nearFalloffRadius=2.25f;expectedCustomV2.localWorld.specularStrength=.4f;
     require(reopened.scene().find(player)->lightRig.value()==expectedCustomV2,
@@ -1106,7 +1287,7 @@ void lightingRolesRigStorageAndRuntime() {
         stored["worldFill"]=stored["localWorld"];stored.erase("localWorld");
     }
     const std::string oldFillId="assets/scenes/world-fill-v3-migration.crimson-scene";
-    {std::ofstream stream(project.root/oldFillId);stream<<oldFill.dump();}
+    writeSceneFixture(project.root,oldFillId,oldFill);
     require(reopened.load(oldFillId),reopened.status());
     auto expectedOldFill=rig;auto& convertedFill=expectedOldFill.localWorld;
     convertedFill.radius=22;convertedFill.nearFalloffRadius=1.5f;convertedFill.specularStrength=0;
@@ -1129,7 +1310,7 @@ void lightingRolesRigStorageAndRuntime() {
         record["character"]["darknessReveal"]["spread"]=.5f;
     }
     const std::string narrowFillId="assets/scenes/world-fill-v3-narrow-spread.crimson-scene";
-    {std::ofstream stream(project.root/narrowFillId);stream<<narrowFill.dump();}
+    writeSceneFixture(project.root,narrowFillId,narrowFill);
     require(reopened.load(narrowFillId),reopened.status());
     const auto narrowPoint=reopened.scene().find(player)->lightRig.value().localWorld;
     const float footAttenuation=point_lighting::pointLightAttenuation(narrowPoint.height*narrowPoint.height,
@@ -1146,7 +1327,7 @@ void lightingRolesRigStorageAndRuntime() {
         old["height"]=.01f;old["intensity"]=10000;old["radius"]=100000;old["nearFalloffRadius"]=0;
     }
     const std::string extremeV2Id="assets/scenes/local-world-v2-extreme.crimson-scene";
-    {std::ofstream stream(project.root/extremeV2Id);stream<<extremeV2.dump();}
+    writeSceneFixture(project.root,extremeV2Id,extremeV2);
     require(reopened.load(extremeV2Id)&&reopened.scene().find(player)->lightRig.value().localWorld.intensity==10000&&
         reopened.scene().find(player)->lightRig.value().localWorld.nearFalloffRadius==0,
         "Valid extreme v2 authored point settings were changed during migration.");
@@ -1155,7 +1336,7 @@ void lightingRolesRigStorageAndRuntime() {
         {"nearFalloffRadius",-.01f},{"nearFalloffRadius",100001.f},{"specularStrength",-.01f},{"specularStrength",1.01f}}}) {
         auto invalidData=missingLocalControls;
         for(auto& record:invalidData["entities"])if(record.contains("character"))record["character"]["lightRig"]["localWorld"][field]=bad;
-        {std::ofstream stream(project.root/invalidLoadId);stream<<invalidData.dump();}
+        writeSceneFixture(project.root,invalidLoadId,invalidData);
         require(!reopened.load(invalidLoadId),"Invalid superseded local world control was ignored by migration.");
         same(beforeInvalidLoad,reopened.scene().records());
     }
@@ -1169,7 +1350,7 @@ void lightingRolesRigStorageAndRuntime() {
             {"reveal",{{"enabled",true},{"radius",9},{"strength",1}}}};
     }
     const std::string pointRigId="assets/scenes/old-point-rig.crimson-scene";
-    {std::ofstream stream(project.root/pointRigId);stream<<pointRig.dump();}
+    writeSceneFixture(project.root,pointRigId,pointRig);
     require(reopened.load(pointRigId),reopened.status());
     const auto converted=reopened.scene().find(player)->lightRig.value();
     const auto formerKeyEnergy=40*point_lighting::pointLightAttenuation(43,1.f/144);
@@ -1208,7 +1389,7 @@ void lightingRolesRigStorageAndRuntime() {
             {{"enabled",true},{"direction",Vec3{0,0,1}},{"color",Vec3{1,1,1}},{"intensity",1.f}}})}};
     }
     const std::string directionalRigId="assets/scenes/replaced-directional-rig.crimson-scene";
-    {std::ofstream stream(project.root/directionalRigId);stream<<directionalRig.dump();}
+    writeSceneFixture(project.root,directionalRigId,directionalRig);
     require(reopened.load(directionalRigId),reopened.status());
     const auto migrated=reopened.scene().find(player)->lightRig.value();
     require(migrated.enabled&&migrated.showGizmos&&migrated.key.intensity==2&&
@@ -1231,7 +1412,7 @@ void lightingRolesRigStorageAndRuntime() {
         if(record.contains("environment"))record["environment"]["environment"].erase("ambientVisibility");
     }
     const std::string legacyId="assets/scenes/legacy-lighting.crimson-scene";
-    {std::ofstream stream(project.root/legacyId);stream<<legacy.dump();}
+    writeSceneFixture(project.root,legacyId,legacy);
     require(reopened.load(legacyId),reopened.status());
     require(reopened.scene().find(box)->lightingScopes==SurfaceLightingScopes{} &&
         !reopened.scene().find(player)->lightRig.value().enabled &&
@@ -1256,7 +1437,7 @@ void lightingRolesRigStorageAndRuntime() {
         auto invalidData=currentJson;
         for(auto& record:invalidData["entities"])if(record.contains("character"))
             record["character"]["lightRig"]["localWorld"][field]=bad;
-        {std::ofstream stream(project.root/invalidLoadId);stream<<invalidData.dump();}
+        writeSceneFixture(project.root,invalidLoadId,invalidData);
         const auto before=reopened.scene().records();
         require(!reopened.load(invalidLoadId),"Invalid current point attenuation/source settings were accepted.");
         same(before,reopened.scene().records());
@@ -1384,7 +1565,7 @@ void modelAnimationStorageAndRuntime() {
         "Animation controls did not participate in scene history.");
     require(document.save("Animated scene"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==18,"Animation writer did not use scene schema 18.");
+    require(json.at("version")==23,"Animation writer did not use scene schema 23.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());
     const auto history=document.history().size();const auto records=document.scene().records();
@@ -1421,4 +1602,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();modelFadeParticipationStorageAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();modelFadeParticipationStorageAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

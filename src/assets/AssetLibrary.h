@@ -9,6 +9,7 @@
 #include "MaterialAsset.h"
 #include "ParticleAsset.h"
 #include "NavigationAgentProfile.h"
+#include "GameplayEffectAsset.h"
 #include "AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
@@ -98,6 +99,14 @@ public:
     std::shared_ptr<const NavigationAgentProfile> createNavigationAgentProfile(const std::string& name="New Navigation Agent Profile");
     std::shared_ptr<const NavigationAgentProfile> copyNavigationAgentProfile(const std::string& id,const std::string& name={});
     void protectNavigationAgentProfileDocument(std::string id){navigationProfileDocumentId_=std::move(id);}
+    std::shared_ptr<const GameplayEffectAsset> findGameplayEffect(const std::string& id) const;
+    std::uint64_t gameplayEffectRevision(const std::string& id) const;
+    std::string gameplayEffectDiagnostic(const std::string& id) const;
+    void publishGameplayEffect(std::shared_ptr<const GameplayEffectAsset>);
+    void refreshGameplayEffects();
+    std::shared_ptr<const GameplayEffectAsset> createGameplayEffect(const std::string& name="New Gameplay Effect");
+    std::shared_ptr<const GameplayEffectAsset> copyGameplayEffect(const std::string& id,const std::string& name={});
+    void protectGameplayEffectDocument(std::string id){gameplayEffectDocumentId_=std::move(id);}
     ResourceManager* resources() const { return resources_; }
     void setMaterialGraphPrograms(MaterialGraphPrograms* programs) { graphPrograms_=programs; }
     std::vector<std::filesystem::path> materialShaderDependencies() const;
@@ -174,6 +183,10 @@ private:
     std::unordered_map<std::string,NavigationProfileVersion> navigationProfiles_;
     std::uint64_t nextNavigationProfileRevision_{1};
     std::string navigationProfileDocumentId_;
+    struct GameplayEffectVersion {std::shared_ptr<const GameplayEffectAsset> definition;std::uint64_t revision{};std::string diagnostic;};
+    std::unordered_map<std::string,GameplayEffectVersion> gameplayEffects_;
+    std::uint64_t nextGameplayEffectRevision_{1};
+    std::string gameplayEffectDocumentId_;
     struct MaterialVersion { std::shared_ptr<const MaterialAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,MaterialVersion> authoredMaterials_;
     struct MaterialCompatibility {std::weak_ptr<const MaterialAsset> source;bool compatible{};};

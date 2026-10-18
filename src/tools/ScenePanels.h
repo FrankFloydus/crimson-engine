@@ -1,7 +1,9 @@
 #pragma once
+#include "GameplayInspectorContext.h"
 #include <cstdint>
 #include <string>
 #include <functional>
+#include <array>
 
 namespace crimson {
 class SceneDocument;
@@ -20,5 +22,7 @@ bool finishScenePanelEdit(SceneDocument& document);
 void drawSceneOutliner(SceneDocument& document, AssetLibrary& assets, bool allowEdits = true);
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits = true,
                         std::uint64_t* playParticle = nullptr,std::string* openParticle = nullptr,QuaderBridge* quader=nullptr,
-                        std::string* openMaterial=nullptr,const NavigationInspectorContext& navigation={});
+                        std::string* openMaterial=nullptr,const NavigationInspectorContext& navigation={},
+                        const std::array<std::string,32>* collisionLayerNames=nullptr,
+                        const GameplayInspectorContext& gameplay={});
 } // namespace crimson

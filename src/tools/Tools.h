@@ -50,6 +50,8 @@ struct EditorFrame {
     std::string openMaterial, materialFolder;
     bool createNavigationAgentProfile{false};
     std::string openNavigationAgentProfile,navigationAgentProfileFolder;
+    bool createGameplayEffect{false};
+    std::string openGameplayEffect,gameplayEffectFolder;
 };
 
 struct BrowserActions {
@@ -64,6 +66,8 @@ struct BrowserActions {
     std::string openMaterial, materialFolder;
     bool createNavigationAgentProfile{false};
     std::string openNavigationAgentProfile,navigationAgentProfileFolder;
+    bool createGameplayEffect{false};
+    std::string openGameplayEffect,gameplayEffectFolder;
 };
 
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);

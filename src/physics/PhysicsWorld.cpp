@@ -10,7 +10,9 @@
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -19,11 +21,14 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <limits>
 #include <mutex>
 #include <numbers>
+#include <set>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -69,6 +74,13 @@ bool underCharacter(const Scene& scene,EntityId id) {
     while(entity && entity->parent){entity=scene.find(entity->parent);if(entity && entity->controller)return true;}
     return false;
 }
+EntityId characterOwner(const Scene& scene,EntityId id) {
+    auto entity=scene.find(id);
+    while(entity){if(entity->controller)return entity->id;entity=entity->parent?scene.find(entity->parent):std::nullopt;}
+    return NoEntity;
+}
+CollisionFilter characterFilter(CollisionFilter value){value.mask|=WorldCollisionLayer;return value;}
+CollisionFilter solidFilter(CollisionFilter value){value.layers|=WorldCollisionLayer;value.mask=AllCollisionLayers;return value;}
 bool locked(const Scene& scene,EntityId id,std::span<const EntityId> locks) {
     const auto character=id;
     while(id) {
@@ -103,28 +115,151 @@ bool validCharacter(const Mat4& world,const AgentTraversalSettings& character,st
     if(!math::finite(character.radius) || !math::finite(character.height) || character.radius<=0 || character.height<2*character.radius){error="Character height must be at least twice its positive radius.";return false;}
     return true;
 }
+float nonnegative(float value){return std::isfinite(value)?std::max(0.f,value):0.f;}
+Vec3 approachVelocity(const Vec3& current,const Vec3& target,float maximumChange) {
+    const auto delta=target-current;const auto length=math::length(delta);
+    return length<=maximumChange?target:current+delta*(maximumChange/length);
 }
-struct PhysicsWorld::Impl final: JPH::CharacterContactListener {
+float updateCharacter(JPH::CharacterVirtual& motor,float seconds,JPH::PhysicsSystem& world,
+    const JPH::CharacterVirtual::ExtendedUpdateSettings& settings,JPH::TempAllocator& allocator) {
+    const auto desired=motor.GetLinearVelocity();
+    const auto previous=motor.GetPosition();const auto up=motor.GetUp();
+    const bool supported=motor.IsSupported();
+    const auto groundPoint=motor.GetGroundPosition();auto groundNormal=motor.GetGroundNormal();
+    if(supported && desired.Dot(up)<=0) {
+        // Jolt may replace triangle surface normals with upward contact normals
+        // and average them. Use the original collider plane for continuity so
+        // those changing solver normals do not turn a smooth ramp into stairs.
+        JPH::BodyLockRead ground(world.GetBodyLockInterface(),motor.GetGroundBodyID());
+        if(ground.Succeeded()) {
+            auto normal=ground.GetBody().GetWorldSpaceSurfaceNormal(motor.GetGroundSubShapeID(),groundPoint);
+            if(normal.Dot(groundNormal)<0)normal=-normal;
+            groundNormal=normal;
+        }
+    }
+    motor.ExtendedUpdate(seconds,world.GetGravity(),settings,
+        world.GetDefaultBroadPhaseLayerFilter(CharacterLayer),world.GetDefaultLayerFilter(CharacterLayer),{},{},allocator);
+    // The rounded capsule can rise before WalkStairs and settle afterwards in
+    // the ordinary sweep. Publish the complete supported vertical motion so
+    // that those smaller changes do not bypass camera smoothing. Unsupported
+    // falling, the landing tick and an upward jump remain immediate.
+    if(!supported || !motor.IsSupported() || desired.Dot(up)>0)return 0;
+    const auto displacement=JPH::Vec3(motor.GetPosition()-previous);
+    // A smooth ramp can need StickToFloor every tick. Its foot motion remains
+    // tangent to the same support plane. Testing contacts alone is insufficient:
+    // a capsule rounding a tread edge can keep the same flat contact plane while
+    // its distance above that plane changes. A vertical riser is never a ramp.
+    const bool continuous=groundNormal.Dot(up)>1e-3f &&
+        std::abs(JPH::Vec3(motor.GetGroundPosition()-groundPoint).Dot(groundNormal))<1e-3f &&
+        std::abs(displacement.Dot(groundNormal))<1e-3f;
+    const float correction=continuous?0:displacement.GetY();
+    return std::isfinite(correction)?correction:0;
+}
+}
+struct PhysicsWorld::Impl final: JPH::CharacterContactListener,JPH::CharacterVsCharacterCollision {
     // Lifetime is declared first so every Jolt resource is released before it.
     std::shared_ptr<JoltLifetime> lifetime{acquireJolt()};
     Layers layers;Pairs pairs;BroadPairs broadPairs;
     JPH::PhysicsSystem world;
     JPH::TempAllocatorImpl allocator{4*1024*1024};
     struct Collider {JPH::BodyID body;Mat4 world;SceneCollider definition;std::shared_ptr<const StaticTriangleMesh> mesh;};
-    struct Character {JPH::Ref<JPH::CharacterVirtual> motor;AgentTraversalSettings definition;std::string profile;Mat4 world;bool locked{},movementEnabled{},profileCurrent{true},allowSliding{true};};
+    struct FirstPersonMotion {Vec3 velocity{};float coyote{},jumpBuffer{},jumpHeight{};bool active{};};
+    struct FirstPersonRequest {Vec3 velocity{};float groundAcceleration{},groundFriction{},airAcceleration{},airControl{};};
+    struct Character {
+        JPH::Ref<JPH::CharacterVirtual> motor;AgentTraversalSettings definition;std::string profile;Mat4 world;CollisionFilter collision;
+        bool locked{},movementEnabled{},profileCurrent{true},allowSliding{true};
+        FirstPersonMotion firstPerson;Vec3 resolvedVelocity{};float stepHeight{};
+    };
     std::map<EntityId,Collider> colliders;
-    struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};};
+    struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};CollisionFilter collision{WorldCollisionLayer,AllCollisionLayers};};
     std::map<EntityId,MeshCollider> meshColliders;
     std::map<EntityId,Character> characters;
+    struct Trigger {JPH::RefConst<JPH::Shape> shape;Mat4 world;SceneCollider definition;EntityId owner{};};
+    std::map<EntityId,Trigger> triggers;
+    std::map<EntityId,std::set<EntityId>> overlaps;
+    std::vector<TriggerEvent> events;
+    std::set<EntityId> initial,configured,removed;
     std::map<EntityId,Vec3> desiredVelocities;
+    std::map<EntityId,FirstPersonRequest> firstPersonRequests;
+    std::map<EntityId,float> jumpRequests;
     std::map<EntityId,Vec3> desiredFacing;
     std::string diagnostic;
     std::uint64_t geometryRevision{};
+    inline static std::atomic_uint64_t nextWorld{1};
+    const std::uint64_t identity=nextWorld.fetch_add(1);
+    std::uint64_t ticks{};
+    std::uint32_t nextCharacter{1};
     NavigationAgentProfileQuery profiles;
     Impl(){world.Init(4096,0,1024,1024,layers,broadPairs,pairs);world.SetGravity({0,-9.81f,0});}
     ~Impl(){characters.clear();for(const auto& [id,collider]:colliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}
         for(const auto& [id,collider]:meshColliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}}
     void report(EntityId id,const std::string& text){diagnostic+="Entity "+std::to_string(id)+": "+text+"\n";}
+    bool peerAllowed(const JPH::CharacterVirtual* mover,const Character& target) const {
+        const auto found=characters.find(mover->GetUserData());
+        return found!=characters.end()&&found->second.motor.GetPtr()==mover&&target.motor.GetPtr()!=mover&&
+            (found->second.collision.mask&target.collision.layers)!=0;
+    }
+    bool OnCharacterContactValidate(const JPH::CharacterVirtual* mover,const JPH::CharacterVirtual* target,const JPH::SubShapeID&) override {
+        const auto found=characters.find(target->GetUserData());return found!=characters.end()&&found->second.motor.GetPtr()==target&&peerAllowed(mover,found->second);
+    }
+    bool peerContactNeedsRecovery(const JPH::CharacterVirtual* mover,const JPH::CharacterVirtual* other) const {
+        const auto first=characters.find(mover->GetUserData()),second=characters.find(other->GetUserData());
+        if(first==characters.end()||second==characters.end())return false;
+        // Jolt's "can push" flag also controls penetration recovery. Permit
+        // that recovery after a resize/teleport overlap, while normal contacts
+        // keep peers' requested velocities from bulldozing stationary actors.
+        const auto a=mover->GetPosition(),b=other->GetPosition();
+        const auto& one=first->second.definition;const auto& two=second->second.definition;
+        const double lowA=a.GetY()+mover->GetCharacterPadding()+one.radius,highA=a.GetY()+mover->GetCharacterPadding()+one.height-one.radius;
+        const double lowB=b.GetY()+other->GetCharacterPadding()+two.radius,highB=b.GetY()+other->GetCharacterPadding()+two.height-two.radius;
+        const double vertical=std::max({0.0,lowA-highB,lowB-highA});
+        const double x=a.GetX()-b.GetX(),z=a.GetZ()-b.GetZ();
+        const double radius=one.radius+two.radius+mover->GetCharacterPadding()+other->GetCharacterPadding();
+        return std::sqrt(x*x+z*z+vertical*vertical)<radius-.003;
+    }
+    void peerContactSettings(const JPH::CharacterVirtual* mover,const JPH::CharacterVirtual* other,JPH::CharacterContactSettings& settings) const {
+        settings.mCanPushCharacter=peerContactNeedsRecovery(mover,other);
+    }
+    void OnCharacterContactAdded(const JPH::CharacterVirtual* mover,const JPH::CharacterVirtual* other,const JPH::SubShapeID&,JPH::RVec3Arg,JPH::Vec3Arg,JPH::CharacterContactSettings& settings) override {peerContactSettings(mover,other,settings);}
+    void OnCharacterContactPersisted(const JPH::CharacterVirtual* mover,const JPH::CharacterVirtual* other,const JPH::SubShapeID&,JPH::RVec3Arg,JPH::Vec3Arg,JPH::CharacterContactSettings& settings) override {peerContactSettings(mover,other,settings);}
+    void OnCharacterContactSolve(const JPH::CharacterVirtual* mover,const JPH::CharacterVirtual* other,const JPH::SubShapeID&,
+        JPH::RVec3Arg,JPH::Vec3Arg normal,JPH::Vec3Arg,const JPH::PhysicsMaterial*,
+        JPH::Vec3Arg incomingVelocity,JPH::Vec3& resolvedVelocity) override {
+        // Jolt selects the constraint using peer/recovery velocity before our
+        // no-pushing policy zeroes it. A shallow rear contact can then clip an
+        // actor moving away. Preserve that outgoing motion; deeper overlaps
+        // still use Jolt's recovery and approaching contacts retain blocking.
+        if(incomingVelocity.Dot(normal)>0 && !peerContactNeedsRecovery(mover,other))
+            resolvedVelocity=incomingVelocity;
+    }
+    void CollideCharacter(const JPH::CharacterVirtual* mover,JPH::RMat44Arg transform,const JPH::CollideShapeSettings& settings,JPH::RVec3Arg base,JPH::CollideShapeCollector& collector) const override {
+        const auto first=transform.PostTranslated(-base).ToMat44();const auto* shape=mover->GetShape();
+        const auto bounds=shape->GetWorldSpaceBounds(first,JPH::Vec3::sOne());
+        for(const auto& [id,peer]:characters) {
+            (void)id;if(!peerAllowed(mover,peer)||collector.ShouldEarlyOut())continue;
+            const auto other=peer.motor->GetCenterOfMassTransform().PostTranslated(-base).ToMat44();
+            auto configuration=settings;configuration.mMaxSeparationDistance+=peer.motor->GetCharacterPadding();
+            auto otherBounds=peer.motor->GetShape()->GetWorldSpaceBounds(other,JPH::Vec3::sOne());otherBounds.ExpandBy(JPH::Vec3::sReplicate(configuration.mMaxSeparationDistance));
+            if(!bounds.Overlaps(otherBounds))continue;
+            collector.SetUserData(reinterpret_cast<JPH::uint64>(peer.motor.GetPtr()));
+            JPH::CollisionDispatch::sCollideShapeVsShape(shape,peer.motor->GetShape(),JPH::Vec3::sOne(),JPH::Vec3::sOne(),first,other,{},{},configuration,collector);
+        }
+        collector.SetUserData(0);
+    }
+    void CastCharacter(const JPH::CharacterVirtual* mover,JPH::RMat44Arg transform,JPH::Vec3Arg direction,const JPH::ShapeCastSettings& settings,JPH::RVec3Arg base,JPH::CastShapeCollector& collector) const override {
+        const auto start=transform.PostTranslated(-base).ToMat44();const auto* shape=mover->GetShape();
+        const JPH::ShapeCast cast(shape,JPH::Vec3::sOne(),start,direction);
+        auto bounds=cast.mShapeWorldBounds;bounds.Encapsulate(cast.mShapeWorldBounds.mMin+direction);bounds.Encapsulate(cast.mShapeWorldBounds.mMax+direction);
+        for(const auto& [id,peer]:characters) {
+            (void)id;if(!peerAllowed(mover,peer)||collector.ShouldEarlyOut())continue;
+            const auto other=peer.motor->GetCenterOfMassTransform().PostTranslated(-base).ToMat44();
+            auto otherBounds=peer.motor->GetShape()->GetWorldSpaceBounds(other,JPH::Vec3::sOne());otherBounds.ExpandBy(JPH::Vec3::sReplicate(peer.motor->GetCharacterPadding()));
+            if(!bounds.Overlaps(otherBounds))continue;
+            collector.SetUserData(reinterpret_cast<JPH::uint64>(peer.motor.GetPtr()));
+            JPH::CollisionDispatch::sCastShapeVsShapeWorldSpace(cast,settings,peer.motor->GetShape(),JPH::Vec3::sOne(),{},other,{},{},collector);
+        }
+        collector.SetUserData(0);
+    }
     void OnContactSolve(const JPH::CharacterVirtual* character,const JPH::BodyID&,const JPH::SubShapeID&,
         JPH::RVec3Arg,JPH::Vec3Arg normal,JPH::Vec3Arg contactVelocity,const JPH::PhysicsMaterial*,
         JPH::Vec3Arg,JPH::Vec3& resolvedVelocity) override {
@@ -141,7 +276,64 @@ struct PhysicsWorld::Impl final: JPH::CharacterContactListener {
     void eraseCollider(std::map<EntityId,Collider>::iterator iterator) {
         world.GetBodyInterface().RemoveBody(iterator->second.body);world.GetBodyInterface().DestroyBody(iterator->second.body);colliders.erase(iterator);
     }
+    void sampleTriggers(const Scene& scene);
 };
+void PhysicsWorld::Impl::sampleTriggers(const Scene& scene) {
+    ++ticks;events.clear();
+    if(triggers.empty()&&overlaps.empty()){initial.clear();configured.clear();removed.clear();return;}
+    // Resolve descendants from the newly accepted motor poses, before callers
+    // publish those poses to their scene. Attachments follow this same tick.
+    std::map<EntityId,Mat4> transforms;
+    std::function<std::optional<Mat4>(EntityId)> resolvedWorld=[&](EntityId id)->std::optional<Mat4> {
+        if(const auto known=transforms.find(id);known!=transforms.end())return known->second;
+        if(const auto character=characters.find(id);character!=characters.end())return transforms[id]=character->second.world;
+        const auto record=scene.find(id);if(!record)return {};
+        auto value=record->local;
+        if(record->parent){const auto parent=resolvedWorld(record->parent);if(!parent)return {};value=*parent*value;}
+        return transforms[id]=value;
+    };
+    struct Target {EntityId id{},owner{};CollisionFilter collision;JPH::TransformedShape shape;bool sensor{};};
+    std::vector<Target> targets;targets.reserve(colliders.size()+meshColliders.size()+characters.size()+triggers.size());
+    const auto addBody=[&](EntityId id,const JPH::BodyID& body,CollisionFilter collision) {
+        const JPH::BodyLockRead lock(world.GetBodyLockInterface(),body);
+        if(lock.Succeeded())targets.push_back({id,NoEntity,collision,lock.GetBody().GetTransformedShape()});
+    };
+    for(const auto& [id,collider]:colliders)addBody(id,collider.body,collider.definition.collision);
+    for(const auto& [id,collider]:meshColliders)addBody(id,collider.body,collider.collision);
+    for(const auto& [id,character]:characters)targets.push_back({id,id,character.collision,character.motor->GetTransformedShape()});
+    for(auto& [id,trigger]:triggers) {
+        if(const auto transform=resolvedWorld(id))trigger.world=*transform;
+        const auto fields=math::affineTransformFields(trigger.world);if(!fields)continue;
+        JPH::TransformedShape shape;shape.mShape=trigger.shape;shape.SetWorldTransform(position(trigger.world),rotation(fields->rotation),JPH::Vec3::sOne());
+        targets.push_back({id,trigger.owner,trigger.definition.collision,std::move(shape),true});
+    }
+    std::map<EntityId,std::set<EntityId>> current;
+    for(const auto& [id,trigger]:triggers) {
+        const auto self=std::find_if(targets.begin(),targets.end(),[id](const auto& target){return target.id==id&&target.sensor;});if(self==targets.end())continue;
+        auto& detected=current[id];const auto bounds=self->shape.GetWorldSpaceBounds();
+        JPH::CollideShapeSettings settings;settings.mBackFaceMode=JPH::EBackFaceMode::CollideWithBackFaces;
+        for(const auto& target:targets) {
+            if(target.id==id||(trigger.owner&&trigger.owner==target.owner)||!(trigger.definition.collision.mask&target.collision.layers)||!bounds.Overlaps(target.shape.GetWorldSpaceBounds()))continue;
+            JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> collector;
+            target.shape.CollideShape(trigger.shape,JPH::Vec3::sOne(),self->shape.GetCenterOfMassTransform(),settings,self->shape.mShapePositionCOM,collector);
+            if(collector.HadHit())detected.insert(target.id);
+        }
+    }
+    const auto reason=[&](EntityId trigger,EntityId other,bool enter) {
+        if(!enter&&(removed.contains(trigger)||removed.contains(other)))return TriggerEventReason::Removed;
+        if(configured.contains(trigger)||configured.contains(other))return TriggerEventReason::Configuration;
+        if(enter&&(initial.contains(trigger)||initial.contains(other)))return TriggerEventReason::Initial;
+        return TriggerEventReason::Motion;
+    };
+    for(const auto& [id,previous]:overlaps)for(const auto other:previous) {
+        const auto next=current.find(id);if(next==current.end()||!next->second.contains(other))events.push_back({identity,ticks,id,other,TriggerEventKind::Exit,reason(id,other,false)});
+    }
+    for(const auto& [id,next]:current)for(const auto other:next) {
+        const auto previous=overlaps.find(id);if(previous==overlaps.end()||!previous->second.contains(other))events.push_back({identity,ticks,id,other,TriggerEventKind::Enter,reason(id,other,true)});
+    }
+    std::sort(events.begin(),events.end(),[](const auto& a,const auto& b){if(a.trigger!=b.trigger)return a.trigger<b.trigger;if(a.other!=b.other)return a.other<b.other;return a.kind<b.kind;});
+    overlaps=std::move(current);initial.clear();configured.clear();removed.clear();
+}
 PhysicsWorld::PhysicsWorld():impl_(std::make_unique<Impl>()){}
 PhysicsWorld::~PhysicsWorld()=default;
 void PhysicsWorld::setAgentProfiles(NavigationAgentProfileQuery query){impl_->profiles=std::move(query);}
@@ -153,14 +345,16 @@ void PhysicsWorld::reconcileStatics(const Scene& scene,std::span<const PhysicsMe
 }
 void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes,bool includeCharacters) {
     auto& state=*impl_;state.diagnostic.clear();
-    bool collidersChanged=false;
-    std::unordered_set<EntityId> keptColliders,keptCharacters;
+    bool collidersChanged=false,charactersChanged=false;
+    std::unordered_set<EntityId> keptColliders,keptCharacters,keptTriggers;
     const auto records=scene.records();
     for(const auto& record:records) {
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         if(record.collider && record.collider->shape!=ColliderShape::Trimesh) {
-            const auto fields=math::affineTransformFields(*world);const auto& definition=*record.collider;
-            if(underCharacter(scene,record.id) || record.controller){state.report(record.id,"Static Collider cannot be attached beneath a Character Controller; its capsule supplies collision.");continue;}
+            const auto fields=math::affineTransformFields(*world);auto definition=*record.collider;
+            const bool trigger=definition.mode==ColliderMode::Trigger;
+            if(!trigger)definition.collision=solidFilter(definition.collision);
+            if(!trigger&&(underCharacter(scene,record.id) || record.controller)){state.report(record.id,"Static Collider cannot be attached beneath a Character Controller; its capsule supplies collision.");continue;}
             if(!fields || fields->singular || fields->sheared){state.report(record.id,"Collider is disabled: its world transform is collapsed or sheared.");continue;}
             const auto bounds=primitiveColliderBounds(definition);const auto localHalf=bounds.maximum;
             Vec3 half{},scale{};bool valid=bounds.valid && math::finite(localHalf);
@@ -168,7 +362,15 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
             valid=valid && (definition.shape!=ColliderShape::Capsule || definition.height>=2*definition.radius);
             if(!valid){state.report(record.id,"Collider requires positive finite dimensions and nonzero world scale; capsule height includes both caps.");continue;}
             auto found=state.colliders.find(record.id);
-            if(found!=state.colliders.end() && sameCollider(found->second.definition,definition) && close(found->second.world,*world)){keptColliders.insert(record.id);continue;}
+            auto sensor=state.triggers.find(record.id);
+            if(trigger&&sensor!=state.triggers.end()&&sameCollider(sensor->second.definition,definition)&&close(sensor->second.world,*world)) {
+                if(sensor->second.definition.collision!=definition.collision||sensor->second.owner!=characterOwner(scene,record.id))state.configured.insert(record.id);
+                sensor->second.definition=definition;sensor->second.owner=characterOwner(scene,record.id);keptTriggers.insert(record.id);continue;
+            }
+            if(!trigger&&found!=state.colliders.end() && sameCollider(found->second.definition,definition) && close(found->second.world,*world)) {
+                if(found->second.definition.collision!=definition.collision)state.configured.insert(record.id);
+                found->second.definition.collision=definition.collision;keptColliders.insert(record.id);continue;
+            }
             JPH::ShapeSettings::ShapeResult shape;
             std::shared_ptr<const StaticTriangleMesh> geometry;
             const auto same=[](float a,float b){return std::abs(a-b)<=1e-6f*std::max(a,b);};
@@ -194,6 +396,11 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
                 }
             }
             if(shape.HasError()){state.report(record.id,shape.GetError().c_str());continue;}
+            if(trigger) {
+                if(sensor==state.triggers.end())state.initial.insert(record.id);else state.configured.insert(record.id);
+                state.triggers[record.id]=Impl::Trigger{shape.Get(),*world,definition,characterOwner(scene,record.id)};keptTriggers.insert(record.id);continue;
+            }
+            if(found==state.colliders.end())state.initial.insert(record.id);else state.configured.insert(record.id);
             if(found!=state.colliders.end())state.eraseCollider(found);
             collidersChanged=true;
             JPH::BodyCreationSettings settings(shape.Get(),position(*world),rotation(fields->rotation),JPH::EMotionType::Static,StaticLayer);
@@ -204,14 +411,22 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
         }
     }
     for(auto iterator=state.colliders.begin();iterator!=state.colliders.end();) {
-        if(keptColliders.contains(iterator->first)){++iterator;continue;}auto remove=iterator++;state.eraseCollider(remove);collidersChanged=true;
+        if(keptColliders.contains(iterator->first)){++iterator;continue;}
+        (scene.find(iterator->first)?state.configured:state.removed).insert(iterator->first);auto remove=iterator++;state.eraseCollider(remove);collidersChanged=true;
+    }
+    for(auto iterator=state.triggers.begin();iterator!=state.triggers.end();) {
+        if(keptTriggers.contains(iterator->first)){++iterator;continue;}
+        (scene.find(iterator->first)?state.configured:state.removed).insert(iterator->first);iterator=state.triggers.erase(iterator);
     }
     std::unordered_set<EntityId> keptMeshes;
     for(const auto& record:records) {
         if(!record.collider || record.collider->shape!=ColliderShape::Trimesh || (!record.collider->mesh && record.collider->source.empty()))continue;
+        if(record.collider->mode==ColliderMode::Trigger){state.report(record.id,"Trimesh triggers are unsupported; use a primitive Trigger.");continue;}
         if(underCharacter(scene,record.id) || record.controller){state.report(record.id,"Static mesh collision cannot be attached beneath a Character Controller.");continue;}
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         const auto found=state.meshColliders.find(record.id);
+        const auto filter=solidFilter(record.collider->collision);
+        if(found!=state.meshColliders.end()&&found->second.collision!=filter){found->second.collision=filter;state.configured.insert(record.id);}
         const auto prepared=std::find_if(meshes.begin(),meshes.end(),[&](const auto& mesh){return mesh.entity==record.id;});
         const PhysicsMeshCollider native{record.id,record.collider->mesh,record.collider->mesh?record.collider->mesh->fingerprint:0};
         const auto* pending=record.collider->mesh?&native:prepared!=meshes.end()?&*prepared:nullptr;
@@ -246,8 +461,9 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
             if(body.IsInvalid())throw std::runtime_error("Physics body capacity exceeded.");
             if(found!=state.meshColliders.end()) {
                 state.world.GetBodyInterface().RemoveBody(found->second.body);state.world.GetBodyInterface().DestroyBody(found->second.body);
-                found->second={body,*world,pending->mesh,pending->revision};
-            } else state.meshColliders.emplace(record.id,Impl::MeshCollider{body,*world,pending->mesh,pending->revision});
+                found->second={body,*world,pending->mesh,pending->revision,filter};
+            } else state.meshColliders.emplace(record.id,Impl::MeshCollider{body,*world,pending->mesh,pending->revision,filter});
+            (found==state.meshColliders.end()?state.initial:state.configured).insert(record.id);
             keptMeshes.insert(record.id);collidersChanged=true;
         } catch(const std::exception& error) {
             if(found!=state.meshColliders.end())keptMeshes.insert(record.id);
@@ -257,25 +473,32 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
     for(auto iterator=state.meshColliders.begin();iterator!=state.meshColliders.end();) {
         if(keptMeshes.contains(iterator->first)){++iterator;continue;}
         state.world.GetBodyInterface().RemoveBody(iterator->second.body);state.world.GetBodyInterface().DestroyBody(iterator->second.body);
+        (scene.find(iterator->first)?state.configured:state.removed).insert(iterator->first);
         iterator=state.meshColliders.erase(iterator);collidersChanged=true;
     }
     if(collidersChanged)++state.geometryRevision;
-    if(!includeCharacters){state.characters.clear();return;}
+    if(!includeCharacters){state.characters.clear();state.desiredVelocities.clear();state.firstPersonRequests.clear();state.jumpRequests.clear();state.desiredFacing.clear();return;}
     for(const auto& record:records) {
         if(!record.controller)continue;const auto world=scene.worldTransform(record.id);if(!world)continue;
         std::string error;
         if(underCharacter(scene,record.id)){state.report(record.id,"A Character cannot be nested beneath another Character.");continue;}
         auto found=state.characters.find(record.id);
+        if(found!=state.characters.end()&&found->second.collision!=characterFilter(record.controller->collision)) {
+            found->second.collision=characterFilter(record.controller->collision);state.configured.insert(record.id);charactersChanged=true;
+        }
         const auto resolved=resolveAgentTraversal(*record.controller,state.profiles);
         if(!resolved) {
             state.report(record.id,"Navigation Agent Profile is unavailable; retaining the last accepted capsule.");
-            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;}
+            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;found->second.firstPerson={};found->second.stepHeight=0;}
+            state.jumpRequests.erase(record.id);
             continue;
         }
         if(!validCharacter(*world,*resolved,error)){state.report(record.id,error);continue;}
         const auto& definition=*resolved;
+        const bool profileChanged=found!=state.characters.end() && (found->second.definition!=definition || found->second.profile!=record.controller->profile.id);
         const auto retainPrevious=[&]{
-            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;}
+            if(found!=state.characters.end()){keptCharacters.insert(record.id);found->second.profileCurrent=false;found->second.movementEnabled=false;found->second.firstPerson={};found->second.stepHeight=0;}
+            state.jumpRequests.erase(record.id);
         };
         const bool newCapsule=found==state.characters.end()||found->second.definition.height!=definition.height||found->second.definition.radius!=definition.radius;
         if(newCapsule) {
@@ -287,44 +510,82 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
             const auto shifted=JPH::RotatedTranslatedShapeSettings(JPH::Vec3(0,definition.height*.5f,0),JPH::Quat::sIdentity(),capsule.Get()).Create();
             if(shifted.HasError()){state.report(record.id,shifted.GetError().c_str());retainPrevious();continue;}
             JPH::CharacterVirtualSettings settings;settings.mShape=shifted.Get();settings.mMaxSlopeAngle=definition.maxSlope*std::numbers::pi_v<float>/180.f;
+            settings.mID=JPH::CharacterID(state.nextCharacter++);
             settings.mSupportingVolume=JPH::Plane(JPH::Vec3::sAxisY(),-definition.radius);
             settings.mMaxStrength=0;settings.mInnerBodyShape=nullptr;
-            Impl::Character character;character.definition=definition;character.profile=record.controller->profile.id;character.world=*world;
+            Impl::Character character;character.definition=definition;character.profile=record.controller->profile.id;character.world=*world;character.collision=characterFilter(record.controller->collision);
             character.motor=new JPH::CharacterVirtual(&settings,position(*world),rotation(*world),record.id,&state.world);
             character.motor->SetListener(&state);
-            state.refresh(*character.motor);
+            character.motor->SetCharacterVsCharacterCollision(&state);
+            charactersChanged=true;(found==state.characters.end()?state.initial:state.configured).insert(record.id);
             if(found==state.characters.end())found=state.characters.emplace(record.id,std::move(character)).first;
             else found->second=std::move(character);
         }
         auto& character=found->second;const bool editing=locked(scene,record.id,locks);
         character.motor->SetMaxSlopeAngle(definition.maxSlope*std::numbers::pi_v<float>/180.f);
         character.profileCurrent=true;character.profile=record.controller->profile.id;
-        if(!close(character.world,*world) || character.locked!=editing) {
+        if(!close(character.world,*world) || character.locked!=editing || profileChanged) {
             character.motor->SetPosition(position(*world));character.motor->SetRotation(rotation(*world));
-            character.motor->SetLinearVelocity(JPH::Vec3::sZero());state.refresh(*character.motor);character.world=*world;
-        } else if(collidersChanged)state.refresh(*character.motor);
+            character.motor->SetLinearVelocity(JPH::Vec3::sZero());character.world=*world;charactersChanged=true;state.configured.insert(record.id);
+            character.firstPerson={};character.resolvedVelocity={};character.stepHeight=0;state.jumpRequests.erase(record.id);
+        }
         character.locked=editing;character.definition=definition;
         character.movementEnabled=record.motor && record.motor->enabled;keptCharacters.insert(record.id);
+        if(editing || !character.movementEnabled){character.firstPerson={};character.stepHeight=0;state.jumpRequests.erase(record.id);}
     }
-    std::erase_if(state.characters,[&](const auto& entry){return !keptCharacters.contains(entry.first);});
+    std::erase_if(state.characters,[&](const auto& entry){
+        if(keptCharacters.contains(entry.first))return false;
+        (scene.find(entry.first)?state.configured:state.removed).insert(entry.first);charactersChanged=true;return true;
+    });
+    // Publish every replacement/removal before querying peers. The provider
+    // reads this owning map and never retains dangling registration pointers.
+    if(collidersChanged||charactersChanged)for(auto& [id,character]:state.characters){(void)id;state.refresh(*character.motor);}
 }
 std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId controlled,const Vec3& desired,float seconds,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes) {
     reconcile(scene,locks,meshes);std::vector<ScenePoseUpdate> poses;
+    for(auto& [id,character]:impl_->characters){(void)id;character.stepHeight=0;}
     if(!std::isfinite(seconds) || seconds<=0)return poses;auto& state=*impl_;
     auto movement=std::move(state.desiredVelocities);state.desiredVelocities.clear();
+    auto firstPerson=std::move(state.firstPersonRequests);state.firstPersonRequests.clear();
+    auto jumps=std::move(state.jumpRequests);state.jumpRequests.clear();
     auto facing=std::move(state.desiredFacing);state.desiredFacing.clear();
-    if(controlled!=NoEntity)movement[controlled]=math::finite(desired)?desired:Vec3{};
+    if(controlled!=NoEntity){movement[controlled]=math::finite(desired)?desired:Vec3{};firstPerson.erase(controlled);}
+    // Every peer observes this tick's requested velocity, independent of its
+    // stable EntityId update position. Character collision never applies forces.
     for(auto& [id,character]:state.characters) {
-        if(character.locked)continue;
-        JPH::CharacterVirtual::ExtendedUpdateSettings update;
-        update.mWalkStairsStepUp={0,character.definition.maxStep,0};update.mStickToFloorStepDown={0,-.5f,0};
+        if(character.locked){character.motor->SetLinearVelocity(JPH::Vec3::sZero());character.firstPerson={};character.resolvedVelocity={};continue;}
         auto& motor=*character.motor;motor.UpdateGroundVelocity();
         const auto current=motor.GetLinearVelocity();
         float vertical=current.GetY();
-        if(motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<=.1f)vertical=0;
-        vertical-=9.81f*seconds;
+        const bool onGround=motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<=.1f;
+        if(onGround)vertical=0;
         const auto requested=movement.find(id);
-        const Vec3 horizontal=character.movementEnabled && requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
+        Vec3 horizontal=character.movementEnabled && requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
+        const auto fps=firstPerson.find(id);
+        if(character.movementEnabled && fps!=firstPerson.end()) {
+            auto& motion=character.firstPerson;
+            if(!motion.active){motion={};motion.active=true;motion.velocity=character.resolvedVelocity;}
+            motion.coyote=onGround?.10f:std::max(0.f,motion.coyote-seconds);
+            motion.jumpBuffer=std::max(0.f,motion.jumpBuffer-seconds);
+            if(const auto jump=jumps.find(id);jump!=jumps.end()){motion.jumpBuffer=.12f;motion.jumpHeight=jump->second;}
+            const auto& input=fps->second;const auto wish=input.velocity;
+            horizontal={motion.velocity[0],0,motion.velocity[2]};
+            if(onGround) {
+                if(math::length(wish)>1e-6)horizontal=approachVelocity(horizontal,wish,input.groundAcceleration*seconds);
+                else {
+                    const auto speed=math::length(horizontal);
+                    if(speed>1e-6)horizontal=horizontal*(std::max(0.,speed-input.groundFriction*std::max(speed,1.5)*seconds)/speed);
+                    else horizontal={};
+                }
+            } else if(math::length(wish)>1e-6) {
+                horizontal=approachVelocity(horizontal,wish,input.airAcceleration*input.airControl*seconds);
+            }
+            if(motion.jumpBuffer>0 && motion.coyote>0 && motion.jumpHeight>0) {
+                vertical=static_cast<float>(std::sqrt(2.0*9.81*motion.jumpHeight));
+                motion.coyote=0;motion.jumpBuffer=0;
+            }
+        } else character.firstPerson={};
+        vertical-=9.81f*seconds;
         character.allowSliding=!native(horizontal).IsNearZero();
         const auto requestedFacing=facing.find(id);
         const auto heading=character.movementEnabled && requestedFacing!=facing.end()?Vec3{requestedFacing->second[0],0,requestedFacing->second[2]}:horizontal;
@@ -335,25 +596,56 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
             motor.SetRotation(rotation(character.world));
         }
         motor.SetLinearVelocity(native(horizontal)+JPH::Vec3(0,vertical,0));
-        motor.ExtendedUpdate(seconds,state.world.GetGravity(),update,state.world.GetDefaultBroadPhaseLayerFilter(CharacterLayer),
-            state.world.GetDefaultLayerFilter(CharacterLayer),{},{},state.allocator);
+    }
+    for(auto& [id,character]:state.characters) {
+        if(character.locked)continue;
+        JPH::CharacterVirtual::ExtendedUpdateSettings update;
+        update.mWalkStairsStepUp={0,character.definition.maxStep,0};update.mStickToFloorStepDown={0,-.5f,0};
+        auto& motor=*character.motor;
+        // A jump must leave support cleanly. Floor snapping and stair probes
+        // resume on the next supported walking tick, including downhill steps.
+        if(character.firstPerson.active && motor.GetLinearVelocity().GetY()>0){update.mWalkStairsStepUp=JPH::Vec3::sZero();update.mStickToFloorStepDown=JPH::Vec3::sZero();}
+        const auto previous=motor.GetPosition();
+        character.stepHeight=updateCharacter(motor,seconds,state.world,update,state.allocator);
         const auto resolved=own(motor.GetPosition());
-        if(!math::finite(resolved)){state.report(id,"Character produced a nonfinite pose; movement was discarded.");motor.SetPosition(position(character.world));motor.SetLinearVelocity(JPH::Vec3::sZero());continue;}
+        if(!math::finite(resolved)){state.report(id,"Character produced a nonfinite pose; movement was discarded.");motor.SetPosition(position(character.world));motor.SetLinearVelocity(JPH::Vec3::sZero());character.firstPerson={};character.resolvedVelocity={};character.stepHeight=0;continue;}
+        character.resolvedVelocity=own((motor.GetPosition()-previous)/seconds);
+        if(character.firstPerson.active) {
+            auto& motion=character.firstPerson;
+            // CharacterVirtual retains its commanded velocity after solving.
+            // Actual displacement supplies wall/slope-resolved momentum; keep
+            // ballistic vertical speed separate from stair and floor snapping.
+            motion.velocity=character.resolvedVelocity;
+            float vertical=motor.GetLinearVelocity().GetY();
+            for(const auto& contact:motor.GetActiveContacts())
+                if(contact.mHadCollision && !contact.mWasDiscarded && !contact.mIsSensorB && contact.mContactNormal.GetY()<-.01f && vertical>0)vertical=0;
+            if(motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<0)vertical=0;
+            motion.velocity[1]=vertical;
+            motor.SetLinearVelocity(native(motion.velocity));
+        }
         auto world=character.world;world[12]=resolved[0];world[13]=resolved[1];world[14]=resolved[2];
         const auto record=scene.find(id);if(!record)continue;
         Mat4 local=world;
         if(record->parent) {
             const auto parent=scene.worldTransform(record->parent);const auto inverse=parent?math::inverse(*parent):std::nullopt;
-            if(!inverse){state.report(id,"Character parent transform is not invertible.");continue;}local=*inverse*world;
+            if(!inverse){state.report(id,"Character parent transform is not invertible.");character.stepHeight=0;continue;}local=*inverse*world;
         }
         poses.push_back({id,local});character.world=world;
     }
+    state.sampleTriggers(scene);
     return poses;
 }
 const std::string& PhysicsWorld::status() const{return impl_->diagnostic;}
-void PhysicsWorld::requestMovement(EntityId id,const Vec3& desired){if(id)impl_->desiredVelocities[id]=math::finite(desired)?desired:Vec3{};}
+void PhysicsWorld::requestMovement(EntityId id,const Vec3& desired){if(id){impl_->desiredVelocities[id]=math::finite(desired)?desired:Vec3{};impl_->firstPersonRequests.erase(id);}}
+void PhysicsWorld::requestFirstPersonMovement(EntityId id,const Vec3& desired,float groundAcceleration,float groundFriction,float airAcceleration,float airControl) {
+    if(!id)return;
+    const auto velocity=math::finite(desired)?Vec3{desired[0],0,desired[2]}:Vec3{};
+    impl_->firstPersonRequests[id]={velocity,nonnegative(groundAcceleration),nonnegative(groundFriction),nonnegative(airAcceleration),std::clamp(nonnegative(airControl),0.f,1.f)};
+    impl_->desiredVelocities.erase(id);
+}
+void PhysicsWorld::requestJump(EntityId id,float height){if(id && std::isfinite(height) && height>0)impl_->jumpRequests[id]=height;}
 void PhysicsWorld::requestFacing(EntityId id,const Vec3& direction){if(id)impl_->desiredFacing[id]=math::finite(direction)?direction:Vec3{};}
-std::size_t PhysicsWorld::colliderCount() const{return impl_->colliders.size()+impl_->meshColliders.size();}
+std::size_t PhysicsWorld::colliderCount() const{return impl_->colliders.size()+impl_->meshColliders.size()+impl_->triggers.size();}
 std::uint64_t PhysicsWorld::geometryRevision() const{return impl_->geometryRevision;}
 std::vector<PhysicsBox> PhysicsWorld::staticBoxes() const {
     std::vector<PhysicsBox> boxes;boxes.reserve(impl_->colliders.size());
@@ -368,30 +660,74 @@ std::vector<PhysicsStaticMesh> PhysicsWorld::staticMeshes() const {
 }
 std::size_t PhysicsWorld::characterCount() const{return impl_->characters.size();}
 std::optional<Vec3> PhysicsWorld::characterPosition(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?std::nullopt:std::optional{own(found->second.motor->GetPosition())};}
+std::optional<Vec3> PhysicsWorld::characterVelocity(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?std::nullopt:std::optional{found->second.resolvedVelocity};}
+float PhysicsWorld::characterStepHeight(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?0.f:found->second.stepHeight;}
 std::optional<AgentTraversalSettings> PhysicsWorld::acceptedCharacterTraversal(EntityId id) const {
     const auto found=impl_->characters.find(id);
     if(found==impl_->characters.end()||!found->second.profileCurrent)return {};
     return found->second.definition;
 }
 bool PhysicsWorld::grounded(EntityId id) const{const auto found=impl_->characters.find(id);return found!=impl_->characters.end() && found->second.motor->GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;}
+bool PhysicsWorld::characterLocked(EntityId id) const{const auto found=impl_->characters.find(id);return found!=impl_->characters.end() && found->second.locked;}
+void PhysicsWorld::cancelCharacterInput(EntityId id) {
+    impl_->desiredVelocities.erase(id);impl_->firstPersonRequests.erase(id);impl_->jumpRequests.erase(id);impl_->desiredFacing.erase(id);
+    if(const auto found=impl_->characters.find(id);found!=impl_->characters.end()){found->second.firstPerson={};found->second.stepHeight=0;}
+}
+std::span<const TriggerEvent> PhysicsWorld::triggerEvents() const{return impl_->events;}
+std::vector<EntityId> PhysicsWorld::triggerOverlaps(EntityId id) const {
+    const auto found=impl_->overlaps.find(id);return found==impl_->overlaps.end()?std::vector<EntityId>{}:std::vector<EntityId>(found->second.begin(),found->second.end());
+}
 std::optional<PhysicsRayHit> PhysicsWorld::raycast(const Ray& ray,float maxDistance) const {
+    PhysicsQueryFilter filter;filter.includeCharacters=false;return raycast(ray,maxDistance,filter);
+}
+std::optional<PhysicsRayHit> PhysicsWorld::raycast(const Ray& ray,float maxDistance,const PhysicsQueryFilter& filter) const {
     if(!math::finite(ray.origin) || !math::finite(ray.direction) || !std::isfinite(maxDistance) || maxDistance<=0)return {};
     const auto length=math::length(ray.direction);if(length<=1e-8)return {};
     const auto displacement=ray.direction*(static_cast<double>(maxDistance)/length);
     if(!math::finite(displacement) || !math::finite(ray.origin+displacement))return {};
     const JPH::RRayCast query(JPH::RVec3(ray.origin[0],ray.origin[1],ray.origin[2]),native(displacement));
-    auto& world=impl_->world;
-    JPH::RayCastSettings settings;settings.mBackFaceModeTriangles=JPH::EBackFaceMode::CollideWithBackFaces;
-    JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
-    world.GetNarrowPhaseQuery().CastRay(query,settings,collector,JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0)),JPH::SpecifiedObjectLayerFilter(StaticLayer));
-    if(!collector.HadHit())return {};
-    const auto& result=collector.mHit;
-    const JPH::BodyLockRead body(world.GetBodyLockInterface(),result.mBodyID);
-    if(!body.Succeeded())return {};
-    const auto point=query.GetPointOnRay(result.mFraction);
-    const auto normal=body.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2,point);
-    PhysicsRayHit hit{body.GetBody().GetUserData(),own(point),{normal.GetX(),normal.GetY(),normal.GetZ()}};
-    if(!math::finite(hit.position) || !math::finite(hit.normal) || math::length(hit.normal)<=1e-8)return {};
-    hit.normal=math::normalized(hit.normal);return hit;
+    auto& world=impl_->world;std::optional<PhysicsRayHit> nearest;float fraction=1.f;
+    const auto ignored=[&](EntityId id){return std::find(filter.ignored.begin(),filter.ignored.end(),id)!=filter.ignored.end();};
+    const auto acceptHit=[&](EntityId id,const JPH::TransformedShape& shape,const JPH::RayCastResult& result) {
+        if(result.mFraction>fraction)return;
+        const auto point=query.GetPointOnRay(result.mFraction);const auto normal=shape.GetWorldSpaceSurfaceNormal(result.mSubShapeID2,point);
+        PhysicsRayHit hit{id,own(point),{normal.GetX(),normal.GetY(),normal.GetZ()}};
+        if(!math::finite(hit.position)||!math::finite(hit.normal)||math::length(hit.normal)<=1e-8)return;
+        if(nearest&&result.mFraction==fraction&&nearest->entity<id)return;
+        hit.normal=math::normalized(hit.normal);nearest=hit;fraction=result.mFraction;
+    };
+    const auto accept=[&](EntityId id,const JPH::TransformedShape& shape) {
+        JPH::RayCastSettings settings;settings.mBackFaceModeTriangles=JPH::EBackFaceMode::CollideWithBackFaces;
+        JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;shape.CastRay(query,settings,collector);
+        if(collector.HadHit())acceptHit(id,shape,collector.mHit);
+    };
+    if(filter.includeWorld&&filter.mask) {
+        class QueryBodies final:public JPH::BodyFilter {
+        public:
+            const Impl* state{};const PhysicsQueryFilter* query{};
+            bool ShouldCollideLocked(const JPH::Body& body) const override {
+                const auto id=body.GetUserData();if(std::find(query->ignored.begin(),query->ignored.end(),id)!=query->ignored.end())return false;
+                if(const auto found=state->colliders.find(id);found!=state->colliders.end())return (query->mask&found->second.definition.collision.layers)!=0;
+                if(const auto found=state->meshColliders.find(id);found!=state->meshColliders.end())return (query->mask&found->second.collision.layers)!=0;
+                return false;
+            }
+        } bodies;
+        bodies.state=impl_.get();bodies.query=&filter;
+        JPH::RayCastSettings settings;settings.mBackFaceModeTriangles=JPH::EBackFaceMode::CollideWithBackFaces;
+        JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
+        world.GetNarrowPhaseQuery().CastRay(query,settings,collector,JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0)),JPH::SpecifiedObjectLayerFilter(StaticLayer),bodies);
+        if(collector.HadHit()) {
+            const auto& result=collector.mHit;const JPH::BodyLockRead body(world.GetBodyLockInterface(),result.mBodyID);
+            if(body.Succeeded())acceptHit(body.GetBody().GetUserData(),body.GetBody().GetTransformedShape(),result);
+        }
+    }
+    if(filter.includeCharacters)for(const auto& [id,character]:impl_->characters)
+        if(!ignored(id)&&(filter.mask&character.collision.layers))accept(id,character.motor->GetTransformedShape());
+    if(filter.includeTriggers)for(const auto& [id,trigger]:impl_->triggers) {
+        if(ignored(id)||!(filter.mask&trigger.definition.collision.layers))continue;
+        const auto fields=math::affineTransformFields(trigger.world);if(!fields)continue;
+        JPH::TransformedShape shape;shape.mShape=trigger.shape;shape.SetWorldTransform(position(trigger.world),rotation(fields->rotation),JPH::Vec3::sOne());accept(id,shape);
+    }
+    return nearest;
 }
 }

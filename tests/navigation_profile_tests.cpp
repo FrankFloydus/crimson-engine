@@ -70,7 +70,7 @@ void legacyProfilesAndExplicitVolume() {
     require(document.save(),document.status());
     const auto materialized=loadNavigationAgentProfile(project.root,first.controller->profile.id);
     require(materialized.traversal==definition->traversal&&!document.navigationAgentProfile(first.controller->profile.id),"Scene Save did not materialize/retire its staged definition.");
-    const auto saved=Json::parse(read(sceneAssetPath(project.root,document.assetId())));require(saved.at("version")==18,"Profile scene did not write schema 18.");
+    const auto saved=Json::parse(read(sceneAssetPath(project.root,document.assetId())));require(saved.at("version")==23,"Profile scene did not write schema 23.");
     for(const auto& entity:saved["entities"])if(entity.contains("controller"))require(entity["controller"].contains("profile")&&!entity["controller"].contains("height")&&!entity["controller"].contains("radius"),"Current scene wrote obsolete inline capsule dimensions.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&reopened.stagedNavigationAgentProfiles().empty(),"Current scene recreated legacy conversion state.");
     auto edited=materialized;edited.traversal.height=3;saveNavigationAgentProfile(project.root,edited);

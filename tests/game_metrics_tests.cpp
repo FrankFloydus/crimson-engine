@@ -59,7 +59,8 @@ public:
         ImGui::SetNextWindowPos({500,20});ImGui::SetNextWindowSize({300,200});if(!focus)ImGui::SetNextWindowFocus();
         ImGui::Begin("Inspector");ImGui::TextUnformatted("Other editor");ImGui::End();
         ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({440,450});if(focus)ImGui::SetNextWindowFocus();
-        ImGui::Begin("Game");imageHeld_=drawGameViewImage(ImTextureRef(static_cast<ImTextureID>(1)),{380,340}).held;
+        ImGui::Begin("Game");drawGameViewImage(ImTextureRef(static_cast<ImTextureID>(1)),{380,340});
+        imageHeld_=ImGui::IsItemActive()&&ImGui::IsMouseDown(ImGuiMouseButton_Left);
         io.WantTextInput=text;context_->PlatformImeData.WantTextInput=ime;
         if(popup)ImGui::OpenPopup("Metrics test modal");
         const auto active=context_->ActiveId;const auto toggled=gameMetricsToggleRequested(playing);

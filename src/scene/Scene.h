@@ -7,6 +7,8 @@
 #include "resources/AssetRef.h"
 #include "assets/ModelMaterialOverrides.h"
 #include "assets/NavigationAgentProfile.h"
+#include "physics/CollisionFilter.h"
+#include "gameplay/GameplayTags.h"
 #include <entt/entt.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +22,7 @@ namespace crimson {
 struct ModelAsset;
 struct ParticleEffectAsset;
 struct MaterialAsset;
+struct GameplayEffectAsset;
 
 using EntityId = uint64_t;
 inline constexpr EntityId NoEntity = 0;
@@ -84,12 +87,12 @@ struct SceneEnvironment {
 // Explicit capabilities compose ordinary entities; Actor marks a visual boundary.
 struct SceneActor { bool operator==(const SceneActor&) const = default; };
 struct SceneMotor {
-    float moveSpeed{5.f};
     bool enabled{true};
     bool operator==(const SceneMotor&) const = default;
 };
 struct SceneCharacterController {
     AssetRef<NavigationAgentProfile> profile{DefaultNavigationAgentProfileId};
+    CollisionFilter collision;
     bool showCollisionInGame{false};
     Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
     bool operator==(const SceneCharacterController&) const = default;
@@ -102,6 +105,12 @@ struct SceneNavigationAgent {
     bool showRoute{true},enabled{true};
     bool operator==(const SceneNavigationAgent&) const = default;
 };
+enum class EnemyBehaviour : std::uint8_t { Idle, ChasePlayer, RandomMove };
+struct SceneEnemy {
+    EnemyBehaviour behaviour{EnemyBehaviour::Idle};
+    float radius{5.f},minWait{1.f},maxWait{3.f};
+    bool operator==(const SceneEnemy&) const = default;
+};
 struct SceneNavigationVolume {
     Vec3 size{20,10,20};
     bool enabled{true};
@@ -111,7 +120,20 @@ struct SceneNavigationVolume {
 };
 struct ScenePlayerInput {
     bool enabled{true};
+    float mouseSensitivity{.10f}; // Degrees per logical mouse pixel.
+    bool invertY{false};
+    float jumpHeight{1.1f}; // Meters, converted to takeoff speed by the motor.
+    float groundAcceleration{45.f},groundFriction{8.f};
+    float airAcceleration{12.f},airControl{.35f};
+    float strafeTilt{3.f},tiltResponse{12.f}; // Degrees and exponential response per second.
+    float stairSmoothingTime{.10f}; // Camera step response time in seconds; zero disables smoothing.
     bool operator==(const ScenePlayerInput&) const = default;
+};
+struct SceneEffects {
+    // Application order and repeated references are meaningful. Active handles,
+    // captured values and clocks belong to the running simulation.
+    std::vector<AssetRef<GameplayEffectAsset>> starting;
+    bool operator==(const SceneEffects&) const = default;
 };
 
 enum class ColliderShape : std::uint8_t { Box, Sphere, Cylinder, Capsule, Trimesh };
@@ -123,9 +145,11 @@ struct SceneCollider {
     float radius{.5f},height{1.f}; // Height includes both capsule hemispheres.
     AssetRef<ModelAsset> source; // Retained when changing shape; used by Trimesh.
     std::shared_ptr<const CollisionMesh> mesh; // Native triangles, retained across primitive shape edits.
+    ColliderMode mode{ColliderMode::Solid};
+    CollisionFilter collision{WorldCollisionLayer,AllCollisionLayers};
     bool operator==(const SceneCollider& other) const {
         return size==other.size && showCollisionInGame==other.showCollisionInGame && collisionColor==other.collisionColor &&
-            shape==other.shape && radius==other.radius && height==other.height && source==other.source && sameCollisionMesh(mesh,other.mesh);
+            shape==other.shape && radius==other.radius && height==other.height && source==other.source && sameCollisionMesh(mesh,other.mesh) && mode==other.mode && collision==other.collision;
     }
 };
 struct QuaderLink {
@@ -172,6 +196,9 @@ struct EntityRecord {
     std::optional<SceneMotor> motor;
     std::optional<SceneCharacterController> controller;
     std::optional<SceneNavigationAgent> navigation;
+    std::optional<SceneEnemy> enemy;
+    std::optional<GameplayTagContainer> tags;
+    std::optional<SceneEffects> effects;
     std::optional<SceneNavigationVolume> navigationVolume;
     std::optional<ScenePlayerInput> playerInput;
     std::optional<ActorLightRigSettings> lightRig;
@@ -232,6 +259,8 @@ public:
     // Runtime-only callers publish complete fixed poses without rebuilding the
     // registry or invalidating asynchronous picks through the edit revision.
     void applyRuntimePoses(std::span<const ScenePoseUpdate> poses);
+    // Presentation-only camera override; authored follow placement remains intact.
+    void applyRuntimeCameraPose(EntityId camera,const Mat4& world);
 private:
     entt::registry registry_;
     std::unordered_map<EntityId, entt::entity> entities_;

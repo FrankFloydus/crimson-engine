@@ -1,0 +1,47 @@
+{
+  "assetTags": [],
+  "duration": 0.0,
+  "durationPolicy": "instant",
+  "executeOnApplication": true,
+  "grantedTags": [],
+  "id": "6e935a86-7cee-56fd-b94f-ad94c52bf3ba",
+  "modifiers": [
+    {
+      "attribute": "Stats.MaxHealth",
+      "magnitude": {
+        "calculation": "",
+        "literal": 100.0,
+        "parameters": []
+      },
+      "operation": "override"
+    },
+    {
+      "attribute": "Stats.MovementSpeed",
+      "magnitude": {
+        "calculation": "",
+        "literal": 5.0,
+        "parameters": []
+      },
+      "operation": "override"
+    }
+  ],
+  "name": "Enemy Defaults",
+  "period": 0.0,
+  "sourceBlocked": [],
+  "sourceRequired": [],
+  "stacking": {
+    "clearStackOnOverflow": false,
+    "denyOverflowApplication": false,
+    "durationRefresh": "refreshOnSuccessfulApplication",
+    "expiration": "clearEntireStack",
+    "factorInStackCount": true,
+    "limit": 0,
+    "maxDuration": 0.0,
+    "periodReset": "resetOnSuccessfulApplication",
+    "type": "none"
+  },
+  "targetBlocked": [],
+  "targetRequired": [],
+  "type": "crimson-gameplay-effect",
+  "version": 1
+}
