@@ -53,8 +53,7 @@ void reimportIdentityHistoryAndAtomicFailure() {
     require(imported&&visual&&collision&&oldLight&&document.scene().find(imported)->parent==owner&&
         document.scene().find(visual)->parent==imported&&document.scene().find(collision)->parent==visual,"Import lost generated hierarchy or source identities.");
     require(document.scene().find(manual)->parent==owner&&document.scene().find(manual)->local==manualRecord.local,"Import changed a manual sibling.");
-    require(!document.scene().find(visual)->fadeWhenOccluding,"New Quader models must not participate in fading automatically.");
-    auto wall=*document.scene().find(visual);wall.fadeWhenOccluding=true;wall.outlinerStyle.emplace();wall.outlinerStyle->color=Vec4{.2f,.5f,.7f,1};
+    auto wall=*document.scene().find(visual);wall.outlinerStyle.emplace();wall.outlinerStyle->color=Vec4{.2f,.5f,.7f,1};
     require(document.updateEntity(visual,wall),document.status());
     auto custom=*document.scene().find(collision);custom.collider->shape=ColliderShape::Capsule;
     custom.collider->radius=.7f;custom.collider->height=3.2f;custom.collider->size={2,3,4};
@@ -75,7 +74,6 @@ void reimportIdentityHistoryAndAtomicFailure() {
     require(document.scene().find(collision)->collider==expected,"Quader sync reset an authored collider shape, dimensions, or display instead of updating its source.");
     require(document.scene().find(collision)->local==custom.local&&document.scene().find(visual)->local==next[0].local,
         "Quader sync lost a resized primitive's center offset or stopped syncing its visual parent's source transform.");
-    require(document.scene().find(visual)->fadeWhenOccluding,"Quader refresh lost authored fade participation when its model package changed.");
     require(!document.scene().contains(oldLight)&&document.scene().find(environment)->environment->sun==NoEntity&&
         document.scene().properties().activeEnvironment==environment,"Removed generated light left an invalid external reference.");
     require(document.scene().find(manual)->name=="Manual child"&&document.scene().find(manual)->local==manualRecord.local&&
@@ -391,12 +389,14 @@ void directionalCompatibilityAndMeshDefaults() {
     for(auto& entity:serialized["entities"])if(entity.contains("directional")) {
         entity["directional"].erase("castShadows");entity["directional"].erase("shadowDistance");
         entity["directional"].erase("shadowDepthBias");entity["directional"].erase("shadowNormalBias");
+        entity["directional"].erase("shadowAngularDiameter");
     }
     const auto id="assets/scenes/legacy.crimson-scene";fs::create_directories(project.root/"assets/scenes");
     {std::ofstream output(project.root/id,std::ios::binary);output<<serialized.dump();}
     const auto legacy=readSceneSnapshot(project.root,id);
     require(legacy.records.size()==1&&legacy.records[0].directional&&!legacy.records[0].directional->castShadows&&
-        legacy.records[0].directional->shadowDistance==100,"Old directional lights gained shadows or invalid shadow defaults.");
+        legacy.records[0].directional->shadowDistance==100&&legacy.records[0].directional->shadowAngularDiameter==.53f,
+        "Old directional lights gained shadows or invalid shadow defaults.");
     EntityRecord marker;marker.id=1;marker.name="Cleared mesh collision";marker.collider.emplace();marker.collider->shape=ColliderShape::Trimesh;
     Scene scene;scene.apply({marker},{});require(scene.find(1)->collider->source.empty(),"Cleared mesh collision marker was rejected.");
 }
@@ -431,7 +431,8 @@ void crimsonLightingRolesSurviveSourceSync() {
     lamp.point->intensity=99;lamp.point->radius=99;lamp.point->castShadows=true;lamp.point->indirectEnergy=2.5f;lamp.local=math::translation({99,99,99});
     require(document.updateEntity(point,lamp),document.status());
     auto directional=*document.scene().find(sun);directional.directional->roles={lighting_scope::World,lighting_scope::Character};
-    directional.directional->castShadows=false;directional.directional->indirectEnergy=0;require(document.updateEntity(sun,directional),document.status());
+    directional.directional->castShadows=false;directional.directional->indirectEnergy=0;directional.directional->shadowAngularDiameter=1.5f;
+    require(document.updateEntity(sun,directional),document.status());
     const auto before=snapshot(document);
     auto replacement=lightSyncFixture("lighting-b");replacement.lights[1].intensity=11;replacement.lights[1].radius=17;
     replacement.lights[0].intensity=5;replacement.lights[0].color={.25f,.5f,.75f};replacement.lights[1].color={1,.25f,.1f};
@@ -447,6 +448,7 @@ void crimsonLightingRolesSurviveSourceSync() {
         document.scene().find(point)->point->radius==17 && !document.scene().find(point)->point->castShadows &&
         document.scene().find(point)->local==replacement.lights[1].local,"Point role/GI preservation blocked source light/transform synchronization.");
     require(document.scene().find(sun)->directional->roles==directional.directional->roles && document.scene().find(sun)->directional->indirectEnergy==0 &&
+        document.scene().find(sun)->directional->shadowAngularDiameter==1.5f &&
         document.scene().find(sun)->directional->intensity==5 && document.scene().find(sun)->directional->color==replacement.lights[0].color &&
         document.scene().find(sun)->directional->castShadows,"Directional role/GI preservation lost authored values or blocked source lighting/shadow synchronization.");
     const auto fresh=generatedId(document.scene(),owner,"light/new-point");
@@ -460,6 +462,7 @@ void crimsonLightingRolesSurviveSourceSync() {
     require(applyQuaderSceneImport(document,owner,link,replacement),document.status());
     require(document.scene().find(point)->directional && !document.scene().find(point)->point &&
         document.scene().find(point)->directional->roles==SceneDirectionalLight{}.roles && document.scene().find(point)->directional->indirectEnergy==1 &&
+        document.scene().find(point)->directional->shadowAngularDiameter==.53f &&
         document.scene().find(sun)->point && !document.scene().find(sun)->directional && document.scene().find(sun)->point->roles==ScenePointLight{}.roles &&
         document.scene().find(sun)->point->indirectEnergy==1,"Changing a source light kind retained incompatible previous-kind roles or GI energy.");
     const auto afterKinds=snapshot(document);require(document.undo()&&snapshot(document)==beforeKinds,"Light-kind sync undo lost previous GI energy.");

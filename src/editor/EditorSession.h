@@ -19,7 +19,6 @@
 #include "AttributeDebug.h"
 #include "CollisionResources.h"
 #include "CollisionOverlays.h"
-#include "PlayerOcclusion.h"
 #include "quader/QuaderBridge.h"
 #include <filesystem>
 #include <unordered_map>
@@ -83,7 +82,6 @@ private:
     CollisionResources collisions_;
     NavigationPreview navigationPreview_;
     CollisionOverlays collisionOverlays_;
-    PlayerOcclusion playerOcclusion_;
     QuaderBridge quader_;
     double materialGameSeconds_{},materialRealSeconds_{};
     std::chrono::steady_clock::time_point materialClockStart_{std::chrono::steady_clock::now()};

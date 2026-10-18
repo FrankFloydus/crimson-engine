@@ -2,7 +2,6 @@
 
 #include "crimson-renderer/RenderTypes.h"
 #include "crimson-renderer/GraphicsBackend.h"
-#include "PlayerOcclusionSettings.h"
 #include <array>
 #include <filesystem>
 #include <string>
@@ -14,8 +13,6 @@ struct EditorPreferenceValues {
     ViewportAppearance appearance{};
     int browserPreviewSize{128};
     int pointShadowResolution{1024};
-    bool playerOcclusionFade{false};
-    PlayerOcclusionSettings playerOcclusionSettings{};
     GraphicsBackend graphicsBackend{GraphicsBackend::Direct3D12};
 };
 // Application preferences are independent from authored scenes and dock state.

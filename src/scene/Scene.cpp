@@ -118,7 +118,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
-        a.modelAnimation==b.modelAnimation && a.fadeWhenOccluding==b.fadeWhenOccluding && a.visible==b.visible &&
+        a.modelAnimation==b.modelAnimation && a.visible==b.visible &&
         a.outlinerStyle==b.outlinerStyle;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
@@ -149,7 +149,6 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
-        record.fadeWhenOccluding=model->fadeWhenOccluding;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
@@ -263,8 +262,6 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
-        if(!record.model&&record.fadeWhenOccluding)
-            throw std::runtime_error("Player occlusion fading requires a model entity.");
         const auto& animation=record.modelAnimation;
         if(animation.clip<-1 || !std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
             !std::isfinite(animation.startTime) || animation.startTime<0 || animation.startTime>1e9f)
@@ -304,8 +301,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Surface lighting scopes require a model entity.");
         if (record.directional && (!std::isfinite(record.directional->shadowDistance) || record.directional->shadowDistance<=0 ||
             !std::isfinite(record.directional->shadowDepthBias) || record.directional->shadowDepthBias<0 ||
-            !std::isfinite(record.directional->shadowNormalBias) || record.directional->shadowNormalBias<0))
-            throw std::runtime_error("Directional shadow distance must be positive and biases finite and nonnegative.");
+            !std::isfinite(record.directional->shadowNormalBias) || record.directional->shadowNormalBias<0 ||
+            !std::isfinite(record.directional->shadowAngularDiameter) || record.directional->shadowAngularDiameter<0 || record.directional->shadowAngularDiameter>2))
+            throw std::runtime_error("Directional shadow distance must be positive, biases finite and nonnegative, and angular diameter from 0 to 2 degrees.");
         if (record.point && (!std::isfinite(record.point->radius) || record.point->radius<.01f || record.point->radius>100000.f))
             throw std::runtime_error("Point light radius must be finite and between 0.01 and 100000 meters.");
         if (record.point && !validPointLightResponse(record.point->nearFalloffRadius,record.point->specularStrength,
@@ -506,7 +504,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.fadeWhenOccluding);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);

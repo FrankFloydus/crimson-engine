@@ -1,7 +1,6 @@
 #pragma once
 
 #include "EditorResources.h"
-#include "PlayerOcclusion.h"
 #include "crimson-renderer/RenderFrame.h"
 #include "scene/SceneExtraction.h"
 #include "scene/MaterialSlotAssignment.h"
@@ -30,17 +29,15 @@ inline std::shared_ptr<const RenderWorldSnapshot> freezeEditorRenderWorld(
     ExtractedScene& extracted,std::vector<RenderParticle> particles,
     std::vector<RenderParticleMaterial> materials,std::shared_ptr<const EditorRenderWorldPins> pins,
     std::uint64_t worldId,std::uint16_t shadowResolution,MaterialEvaluationContext context,
-    std::vector<EntityId> focusEntities={},Aabb focusBounds={},std::optional<Vec3> priorityOrigin={}) {
+    std::optional<Vec3> priorityOrigin={}) {
     auto world=std::make_shared<RenderWorldSnapshot>();
     world->directional=std::move(extracted.directional);world->points=std::move(extracted.points);
     world->particles=std::move(particles);world->particleMaterials=std::move(materials);
     if(pins && pins->shadows) {
         world->shadowInstances=pins->shadows->instances;
-        world->shadowReceiverBounds=pins->shadows->receiverBounds;
     }
     world->pinned=std::move(pins);world->shadowWorldId=worldId;
     world->shadowResolution=shadowResolution;world->materialContext=context;
-    world->shadowFocusEntities=std::move(focusEntities);world->shadowFocusBounds=focusBounds;
     world->shadowPriorityOrigin=priorityOrigin;
     return world;
 }
@@ -61,7 +58,6 @@ struct EditorRenderFrameInput {
     std::vector<RenderParticle> particles;
     std::vector<RenderParticleMaterial> particleMaterials;
     std::vector<std::shared_ptr<const PreparedParticleMaterial>> particlePins;
-    std::vector<EntityId> shadowFocusEntities;
     std::uint64_t worldId{};
     std::uint64_t giWorldId{},gameCameraId{},environmentId{};
     std::uint16_t shadowResolution{1024};
@@ -70,7 +66,9 @@ struct EditorRenderFrameInput {
     bool gridVisible{};
     std::optional<MaterialSlotAssignment> materialPreview;
     std::vector<RenderCollisionOverlay> sceneCollisionOverlays,gameCollisionOverlays;
-    PlayerOcclusionOpacities gameModelOpacities;
+    Vec3 shadowPriorityOrigin() const {
+        return gameVisible && gameWidth && gameHeight && gameCamera ? gameCamera->eye() : sceneCamera.eye();
+    }
 };
 
 // A hover may replace the authored packet only after every pass and source is

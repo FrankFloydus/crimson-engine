@@ -7,7 +7,7 @@ establish directional shadow quality on broad, brightly lit surfaces. The
 reported floor and pillar acne was a renderer defect at the default light
 biases.
 
-This document preserves the correction's original measurements and artifact identities. For today's character rig, point-source softness, ambient composition and controls, read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md), [Shadows diagnostics](SHADOW_DIAGNOSTICS.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md). No timings or image metrics below were rerun for this documentation update.
+This document preserves the correction's original measurements and artifact identities. For today's ordinary scene lighting, first-person cascades, point-source softness and controls, read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md), [Shadows diagnostics](SHADOW_DIAGNOSTICS.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md). No timings or image metrics below were rerun for this documentation update.
 
 ## Reproduction and retained baseline
 

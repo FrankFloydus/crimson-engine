@@ -28,7 +28,6 @@ SAMPLERCUBE(s_prefiltered, 6);
 SAMPLER2D(s_brdfLut, 7);
 #include "fog_environment.sh"
 #include "clustered_lighting.sh"
-#include "occluder_partition.sh"
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
 #include "material_mapping.sh"
@@ -118,7 +117,6 @@ void main()
         vec3 color = debugViewColor(base, base, roughness, metallic, N, vec3_splat(0.0), vec3_splat(0.0));
         if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
         float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
-        occluderPartition(gl_FragCoord.xyz);
         gl_FragData[0] = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
         ssgiWriteSources(sourceWorld, sourceCharacter, sourceResponse, v_worldPosition, shadowPlaneNormal, gl_FragCoord.z, captureSsgi,
             gl_FragData[1], gl_FragData[2], gl_FragData[3]);
@@ -195,7 +193,6 @@ void main()
     color = debugViewColor(color, base, roughness, metallic, N, directLighting, indirectLighting);
     if (!debugViewActive()) color = applySurfaceFog(color, v_worldPosition, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
     float coverage = (u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0) * u_instanceOpacity.x;
-    occluderPartition(gl_FragCoord.xyz);
     gl_FragData[0] = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
     ssgiWriteSources(sourceWorld, sourceCharacter, sourceResponse, v_worldPosition, shadowPlaneNormal, gl_FragCoord.z, captureSsgi,
         gl_FragData[1], gl_FragData[2], gl_FragData[3]);

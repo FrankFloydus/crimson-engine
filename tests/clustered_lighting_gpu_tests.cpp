@@ -278,14 +278,13 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
     constexpr std::uint16_t screenWidth=321,screenHeight=243;
     const auto withScreenEffects=[&](bool gi,bool ao) {
         return lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,
-            screenWidth,screenHeight,
             gi?screenWidth:0,gi?screenHeight:0,ao?screenWidth:0,ao?screenHeight:0);
     };
     check(withScreenEffects(true,true),lighting.status());
     const auto packed=(std::size_t(screenWidth)*screenHeight+3)/4;
     const auto pixels=std::size_t(screenWidth)*screenHeight;
-    check(lighting.ssgiBaseTexel()>=lighting.occluderBaseTexel()+packed,
-        "SSGI overlaps packed nearest-layer depth.");
+    check(lighting.ssgiBaseTexel()>=lighting.maskBaseTexel(),
+        "SSGI overlaps the light-mask region.");
     check(lighting.ssaoBaseTexel()==lighting.ssgiBaseTexel()+pixels&&
         lighting.ssaoBaseTexel()+packed<=std::size_t(lighting.atlasWidth())*lighting.atlasHeight(),
         "Odd-size SSGI and SSAO regions overlap or escape the atlas.");
@@ -294,13 +293,13 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
     for(unsigned i=0;i<4;++i)tick();
     const auto combinedBytes=lighting.residentBytes();
     check(withScreenEffects(false,true),lighting.status());
-    check(lighting.ssgiBaseTexel()==0&&lighting.ssaoBaseTexel()>=lighting.occluderBaseTexel()+packed,
+    check(lighting.ssgiBaseTexel()==0&&lighting.ssaoBaseTexel()>=lighting.maskBaseTexel(),
         "Disabling SSGI left stale metadata or invalidated independent SSAO.");
     check(withScreenEffects(false,false),lighting.status());
     for(unsigned i=0;i<4;++i)tick();
     check(!lighting.ssaoWidth()&&!lighting.ssaoHeight()&&!lighting.ssaoBaseTexel()&&
         lighting.residentBytes()<combinedBytes,"Disabled screen effects retained their atlas allocation.");
-    check(!lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,0,0,0,0,screenWidth,0),
+    check(!lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,0,0,screenWidth,0),
         "An incomplete SSAO target extent was accepted.");
 
 }

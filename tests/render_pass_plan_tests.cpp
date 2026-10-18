@@ -28,7 +28,7 @@ void error(const RenderPassPlan& plan,Error expected,const char* message) { chec
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool occluders:{false,true})for(bool gi:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true}) {
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game || purpose==RenderViewPurpose::Thumbnail;
 
@@ -36,7 +36,6 @@ void profiles() {
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
-            config.occluderLayer=occluders&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
             config.ssgi=gi&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported view profile has an invalid plan.");
             check(plan.has(Kind::SceneColor) && plan.has(Kind::ModelDeformation) && plan.has(Kind::LightAssignment) && plan.has(Kind::ToneMap) && plan.has(Kind::Encode),"View lost a mandatory rendering stage.");
@@ -44,8 +43,6 @@ void profiles() {
             check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::Picking)==config.picking && plan.has(Kind::PickReadback)==config.picking,"Grid or picking did not follow the view profile.");
             check(plan.has(Kind::ThumbnailReadback)==config.thumbnailReadback,"Thumbnail readback escaped its isolated profile.");
             check(plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Collision overlays escaped their active view profile.");
-            check(plan.has(Kind::OccluderLayer)==config.occluderLayer,"Occluder layer escaped its active view profile.");
-            check(plan.has(Kind::OccluderDepthPublish)==config.occluderLayer,"Packed occluder depth escaped its active view profile.");
             check(plan.has(Kind::DepthPrepass)==config.ssgi,"GI depth prepass does not match its enabled state.");
             for(const auto kind:{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish})
                 check(plan.has(kind)==config.ssgi,"GI feature did not add exactly its complete chain.");
@@ -113,38 +110,6 @@ void collisionComposition() {
     }
 }
 
-void occluderDependencies() {
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool shadows:{false,true}) {
-        RenderPassPlanConfig config;config.view.purpose=purpose;config.worldShadows=shadows;
-        config.occluderLayer=true;config.glow=true;config.grid=purpose==RenderViewPurpose::Scene;
-        config.picking=config.grid;config.collisionOverlays=true;config.prepareEnvironment=true;
-        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Nearest occluder layer has invalid dependencies.");
-        const auto& layer=*correct.find(Kind::OccluderLayer);
-        const auto& depthPublish=*correct.find(Kind::OccluderDepthPublish);
-        check(layer.physicalView==renderViewPassSlots(purpose).lightingEffects && layer.physicalView<correct.find(Kind::SceneColor)->physicalView,
-            "Occluder layer must use its camera's pre-color ambient slot without consuming native window slots.");
-        check(depthPublish.physicalView==correct.find(Kind::SceneColor)->physicalView && layer.physicalView<depthPublish.physicalView,
-            "Packed depth must publish after detached layer depth and before graphics in the existing color slot.");
-        auto missingLayer=correct;erase(missingLayer,Kind::OccluderLayer);
-        error(missingLayer,Error::MissingProducer,"Scene composition read an unproduced occluder layer.");
-        auto missingPublish=correct;erase(missingPublish,Kind::OccluderDepthPublish);
-        error(missingPublish,Error::MissingProducer,"Transparent phases sampled an unpublished packed depth region.");
-        auto reversedPublish=correct;std::swap(pass(reversedPublish,Kind::OccluderDepthPublish),pass(reversedPublish,Kind::SceneColor));
-        error(reversedPublish,Error::MissingProducer,"Scene graphics ran before same-view packed depth compute.");
-        auto destructivePublish=correct;pass(destructivePublish,Kind::OccluderDepthPublish).resources[1].access=Access::Write;
-        error(destructivePublish,Error::InvalidAccess,"Packed depth publication may overwrite the BRDF/light/ambient atlas contents.");
-        auto feedback=correct;auto& color=pass(feedback,Kind::SceneColor);
-        for(auto& use:color.resources)if(use.resource==Resource::OccluderDepth)use.access=Access::DepthWrite;
-        error(feedback,Error::InvalidAccess,"Occluder composition may overwrite the layer depth it samples.");
-        auto falseLayer=correct;falseLayer.bindings[static_cast<std::size_t>(Resource::OccluderHdr)].initiallyAvailable=true;
-        error(falseLayer,Error::InvalidExternalState,"Retained layer allocation was treated as current-frame content.");
-    }
-    for(const auto purpose:{RenderViewPurpose::Thumbnail,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview}) {
-        RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.occluderLayer=true;
-        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"Occluder layer escaped into an isolated preview.");
-    }
-}
-
 void ssgiDependencies() {
     constexpr std::array chain{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish};
     const auto uses=[](const RenderPass& entry,Resource resource,Access access) {
@@ -154,9 +119,9 @@ void ssgiDependencies() {
         for(std::size_t i=0;i<plan.count;++i)if(plan.entries[i].kind==kind)return i;
         throw std::runtime_error("GI test requested a missing pass position.");
     };
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool shadows:{false,true})for(bool occluders:{false,true}) {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool shadows:{false,true}) {
         RenderPassPlanConfig config;config.view={purpose,901};config.ssgi=true;
-        config.worldShadows=shadows;config.occluderLayer=occluders;config.glow=true;config.prepareEnvironment=true;config.collisionOverlays=true;
+        config.worldShadows=shadows;config.glow=true;config.prepareEnvironment=true;config.collisionOverlays=true;
         config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"A supported GI combination has an invalid plan.");
         const auto& depth=*correct.find(Kind::DepthPrepass);const auto& trace=*correct.find(Kind::SsgiTrace);const auto& temporal=*correct.find(Kind::SsgiTemporal);
@@ -166,7 +131,6 @@ void ssgiDependencies() {
             check(correct.find(chain[i])->physicalView==renderViewPassSlots(purpose).lightingEffects,"GI consumed an extra native-window view slot.");
             if(i)check(position(correct,chain[i])==position(correct,chain[i-1])+1,"Same-view GI compute dispatches are not consecutive.");
         }
-        if(occluders)check(position(correct,Kind::OccluderLayer)==position(correct,Kind::SsgiPublish)+1,"Occluder graphics preceded same-view GI compute.");
         check(uses(trace,Resource::ReadableSceneDepth,Access::Read)&&uses(trace,Resource::ReceiverScopes,Access::Read)&&
             uses(trace,Resource::SsgiSources,Access::Read)&&uses(trace,Resource::SsgiTraceScratch,Access::Write),"GI trace lost current geometry or coherent previous radiance.");
         check(uses(temporal,Resource::SsgiHistory,Access::ReadWrite)&&uses(temporal,Resource::SsgiTraceScratch,Access::Read)&&
@@ -192,10 +156,6 @@ void ssgiDependencies() {
             auto reversed=correct;std::swap(pass(reversed,chain[i-1]),pass(reversed,chain[i]));
             check(!bool(validateRenderPassPlan(reversed)),"A reversed same-view GI compute dependency was accepted.");
         }
-        if(occluders) {
-            auto reversed=correct;std::swap(pass(reversed,Kind::SsgiPublish),pass(reversed,Kind::OccluderLayer));
-            error(reversed,Error::PhysicalOrder,"Occluder graphics may precede GI publication in the shared slot.");
-        }
         auto attachmentOnly=correct;pass(attachmentOnly,Kind::SsgiTrace).resources[0].access=Access::DepthRead;
         error(attachmentOnly,Error::InvalidAccess,"GI shader reads were mistaken for an attached depth test.");
         auto destructivePublish=correct;
@@ -220,9 +180,9 @@ void ssgiDependencies() {
 
 void ssaoDependencies() {
     constexpr std::array chain{Kind::SsaoEvaluate,Kind::SsaoPublish};
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ssgi:{false,true})for(bool occluders:{false,true}) {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ssgi:{false,true}) {
         RenderPassPlanConfig config;config.view={purpose,912};config.ssao=true;config.ssgi=ssgi;
-        config.worldShadows=true;config.occluderLayer=occluders;config.glow=true;config.prepareEnvironment=true;
+        config.worldShadows=true;config.glow=true;config.prepareEnvironment=true;
         config.collisionOverlays=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"SSAO has an invalid combined pass chain.");
         for(const auto kind:chain) {
@@ -276,7 +236,7 @@ void ownershipAndOrderFailures() {
 int main() {
     try {
         static_assert(std::is_trivially_copyable_v<RenderPassPlan>,"Pass plans must remain fixed-size CPU values.");
-        profiles();dependencyAndAccessFailures();collisionComposition();occluderDependencies();ssgiDependencies();ssaoDependencies();ownershipAndOrderFailures();
+        profiles();dependencyAndAccessFailures();collisionComposition();ssgiDependencies();ssaoDependencies();ownershipAndOrderFailures();
         std::cout<<"Renderer pass-plan checks passed.\n";return 0;
     } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
 }

@@ -19,7 +19,7 @@ void drawSceneDiagnostics(std::string_view generalStatus,std::string_view pickin
             ImGui::Text("Deferred: %u; awaiting a valid map: %u",shadows->pointDeferred,shadows->pointCriticalDeferred);
             ImGui::Text("Casters: %u; draws: %u",shadows->casters,shadows->drawCalls);
             ImGui::Text("Directional contexts: %u; rendered: %u; cached: %u",shadows->directionalLights,shadows->directionalRendered,shadows->directionalCacheHits);
-            ImGui::Text("World projections: %u; character projections: %u",shadows->directionalWorldProjections,shadows->characterProjections);
+            ImGui::Text("Directional cascades written: %u",shadows->directionalWorldProjections);
             ImGui::Text("Atlas allocations: %.1f MiB",static_cast<double>(shadows->allocatedBytes)/(1024*1024));
         }
     }

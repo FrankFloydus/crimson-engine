@@ -74,21 +74,11 @@ RenderPass makePass(Kind kind,const RenderPassPlanConfig& config) noexcept {
     case Kind::SsaoPublish:
         pass.physicalView=slots.lightingEffects;use(Resource::SsaoScratch,Access::Read);use(Resource::ReadableSceneDepth,Access::Read);
         use(Resource::ReceiverScopes,Access::Read);use(Resource::ClusteredLighting,Access::ReadWrite);use(Resource::SsaoVisibility,Access::Write);break;
-    case Kind::OccluderLayer:
-        pass.physicalView=slots.occluderLayer;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);
-        use(Resource::EnvironmentLighting,Access::Read);if(config.worldShadows)use(Resource::ShadowAtlas,Access::Read);
-        use(Resource::ClusteredLighting,Access::Read);
-        use(Resource::OccluderHdr,Access::Write);use(Resource::OccluderDepth,Access::DepthWrite);break;
-    case Kind::OccluderDepthPublish:
-        pass.physicalView=slots.scene;use(Resource::OccluderDepth,Access::Read);
-        use(Resource::ClusteredLighting,Access::ReadWrite);use(Resource::OccluderDepthAtlas,Access::Write);break;
     case Kind::SceneColor:
-        // Background/opaque work precedes the sorted blended queue. An active
-        // faded layer partitions that same queue behind/composite/in front.
+        // Background/opaque work precedes the sorted blended queue.
         pass.physicalView=slots.scene;use(Resource::PreparedScene,Access::Read);use(Resource::DeformedGeometry,Access::Read);use(Resource::EnvironmentLighting,Access::Read);
         if(config.worldShadows)use(Resource::ShadowAtlas,Access::Read);
         use(Resource::ClusteredLighting,Access::Read);
-        if(config.occluderLayer){use(Resource::OccluderHdr,Access::Read);use(Resource::OccluderDepth,Access::Read);use(Resource::OccluderDepthAtlas,Access::Read);}
         if(config.ssgi){use(Resource::SsgiIrradiance,Access::Read);use(Resource::SsgiSources,Access::Write);}
         if(config.ssao)use(Resource::SsaoVisibility,Access::Read);
         use(Resource::SceneHdr,Access::Write);use(Resource::SceneDepth,Access::DepthWrite);break;
@@ -126,7 +116,6 @@ bool expected(Kind kind,const RenderPassPlanConfig& config) noexcept {
     case Kind::GlowExtract: case Kind::GlowHorizontal: case Kind::GlowVertical: return config.glow;
     case Kind::Grid: return config.grid;
     case Kind::CollisionOverlays:return config.collisionOverlays;
-    case Kind::OccluderLayer:case Kind::OccluderDepthPublish:return config.occluderLayer;
     case Kind::Picking: case Kind::PickReadback: return config.picking;
     case Kind::ThumbnailReadback: return config.thumbnailReadback;
     case Kind::ModelDeformation: case Kind::LightAssignment: case Kind::SceneColor: case Kind::ToneMap: case Kind::Encode: return true;
@@ -142,9 +131,9 @@ RenderPassPlanValidation failure(RenderPassPlanError error,std::size_t pass=0,Re
 RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept {
     switch(purpose) {
     case RenderViewPurpose::Scene:
-        return {SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3,PointShadowView,DirectionalShadowView,SceneDepthPrepassView,SceneLightingEffectsView,GridView,SceneLightingEffectsView};
+        return {SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3,PointShadowView,DirectionalShadowView,SceneDepthPrepassView,SceneLightingEffectsView,GridView};
     case RenderViewPurpose::Game:
-        return {GameSceneView,GamePresentView,InvalidRenderView,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3,PointShadowView,GameDirectionalShadowView,GameDepthPrepassView,GameLightingEffectsView,GamePresentView,GameLightingEffectsView};
+        return {GameSceneView,GamePresentView,InvalidRenderView,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3,PointShadowView,GameDirectionalShadowView,GameDepthPrepassView,GameLightingEffectsView,GamePresentView};
     case RenderViewPurpose::MaterialPreview:
         return {MaterialPreviewView,MaterialPreviewView+4,MaterialPreviewView+5,MaterialPreviewView+6,MaterialPreviewView+1,MaterialPreviewView+2,MaterialPreviewView+3,InvalidRenderView,InvalidRenderView};
     case RenderViewPurpose::ParticlePreview:
@@ -194,7 +183,6 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
        (config.thumbnailReadback && purpose!=RenderViewPurpose::Thumbnail) ||
        (config.worldShadows && !isWorld(purpose)) ||
        (config.collisionOverlays && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
-       (config.occluderLayer && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
        (config.ssgi && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
        (config.ssao && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game))return failure(RenderPassPlanError::UnsupportedFeature);
     if(plan.count>plan.entries.size())return failure(RenderPassPlanError::CapacityExceeded);
@@ -221,9 +209,7 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
                 ((pass.kind==Kind::ModelDeformation && plan.entries[i-1].kind==Kind::EnvironmentPreparation) ||
                  (pass.kind==Kind::LightAssignment && (plan.entries[i-1].kind==Kind::ModelDeformation ||
                     plan.entries[i-1].kind==Kind::EnvironmentPreparation)));
-            // Pinned bgfx sorts compute before graphics within a view (the draw
-            // bit sorts after compute keys). The layer can borrow this slot
-            // after ambient publication without reducing native window slots.
+            // Screen-space effects share their camera's existing compute slot.
             const bool giCompute=pass.physicalView==plan.entries[i-1].physicalView &&
                 ((pass.kind==Kind::SsgiTemporal && plan.entries[i-1].kind==Kind::SsgiTrace) ||
                  (pass.kind==Kind::SsgiFilterHorizontal && plan.entries[i-1].kind==Kind::SsgiTemporal) ||
@@ -231,17 +217,11 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
                  (pass.kind==Kind::SsgiPublish && plan.entries[i-1].kind==Kind::SsgiFilterVertical) ||
                  (pass.kind==Kind::SsaoEvaluate && (plan.entries[i-1].kind==Kind::SsgiPublish)) ||
                  (pass.kind==Kind::SsaoPublish && plan.entries[i-1].kind==Kind::SsaoEvaluate));
-            const bool occluderAfterAmbient=pass.kind==Kind::OccluderLayer &&
-                (plan.entries[i-1].kind==Kind::SsgiPublish || plan.entries[i-1].kind==Kind::SsaoPublish) &&
-                pass.physicalView==plan.entries[i-1].physicalView;
-            const bool colorAfterOccluderPublish=pass.kind==Kind::SceneColor && plan.entries[i-1].kind==Kind::OccluderDepthPublish &&
-                pass.physicalView==plan.entries[i-1].physicalView;
-            // Game reuses its post-tone-map view; Scene reuses the grid view.
-            // Both submit sequentially into the same color/depth framebuffer.
+            // Post-tone-map collision overlays reuse their view's composite target.
             const bool postOverlay=pass.kind==Kind::CollisionOverlays &&
                 (plan.entries[i-1].kind==Kind::ToneMap || plan.entries[i-1].kind==Kind::Grid) &&
                 pass.physicalView==plan.entries[i-1].physicalView;
-            if(!sharedCompute&&!giCompute&&!occluderAfterAmbient&&!colorAfterOccluderPublish&&!postOverlay)return failure(RenderPassPlanError::PhysicalOrder,i);
+            if(!sharedCompute&&!giCompute&&!postOverlay)return failure(RenderPassPlanError::PhysicalOrder,i);
         }
         if(pass.resourceCount>pass.resources.size())return failure(RenderPassPlanError::CapacityExceeded,i);
         std::array<bool,RenderPassPlan::ResourceCount> used{};

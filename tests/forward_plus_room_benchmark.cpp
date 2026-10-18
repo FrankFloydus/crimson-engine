@@ -49,7 +49,7 @@ struct DeviceContext {ID3D11DeviceContext* value{};~DeviceContext(){if(value)val
 struct Sample {
     double update{},prepareShadows{},prepareReceivers{},submit{},frame{},gpu{},backend{},gpuPoints{},gpuDirectionals{},gpuScene{},gpuGame{},gpuPost{},gpuDepth{},gpuAmbient{};
     std::uint64_t draws{},shadowDraws{},faces{},cascades{},pointHits{},directionalHits{},preparedCasters{},sceneModels{},gameModels{};
-    std::uint64_t pointDeferred{},pointCriticalDeferred{},directionalWorldProjections{},characterProjections{},focusCasters{};
+    std::uint64_t pointDeferred{},pointCriticalDeferred{},directionalWorldProjections{},movingCasters{};
     std::uint32_t submittedFrame{},gpuFrame{};
 };
 struct Options {
@@ -74,13 +74,13 @@ Json summarize(const std::vector<Sample>& values) {
         {"point_cache_hits",mean(&Sample::pointHits)},{"directional_cache_hits",mean(&Sample::directionalHits)},
         {"point_deferred",mean(&Sample::pointDeferred)},{"point_critical_deferred",mean(&Sample::pointCriticalDeferred)},
         {"directional_world_projections",mean(&Sample::directionalWorldProjections)},
-        {"character_projections",mean(&Sample::characterProjections)},{"focus_casters",mean(&Sample::focusCasters)},
+        {"moving_casters",mean(&Sample::movingCasters)},
         {"prepared_casters",mean(&Sample::preparedCasters)},{"scene_models",mean(&Sample::sceneModels)},{"game_models",mean(&Sample::gameModels)}};
 }
 Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeProject,const std::string& nativeScene,const ShaderCompileConfig& config,const Options& parameters) {
     const auto [legacy,savedWorld,cold,captureImages,presentedPlayer,keyLight,warmupCount,sampleCount,output]=parameters;
     std::ofstream raw;if(!output.empty()){fs::create_directories(output);raw.open(output/"room-frames.csv");require(bool(raw),"Cannot open room benchmark raw output.");
-        raw<<"phase,index,submitted_frame,gpu_frame,update_ms,shadow_preparation_ms,receiver_preparation_ms,render_submission_ms,wall_frame_ms,gpu_ms,backend_ms,draws,shadow_draws,faces,cascades,point_hits,directional_hits,scene_models,game_models,point_deferred,point_critical_deferred,directional_world_projections,character_projections,focus_casters,gpu_depth_views_ms,gpu_ambient_views_ms,environment_bytes\n";}
+        raw<<"phase,index,submitted_frame,gpu_frame,update_ms,shadow_preparation_ms,receiver_preparation_ms,render_submission_ms,wall_frame_ms,gpu_ms,backend_ms,draws,shadow_draws,faces,cascades,point_hits,directional_hits,scene_models,game_models,point_deferred,point_critical_deferred,directional_world_projections,moving_casters,gpu_depth_views_ms,gpu_ambient_views_ms,environment_bytes\n";}
     std::cout<<"reading native source"<<std::endl;
     const auto source=readQuaderScene(nativeProject,nativeScene);
     QuaderPrepareOptions options;options.projectRoot=project;const auto imported=savedWorld?QuaderImportResult{}:prepareQuaderImport(*source,options);
@@ -176,7 +176,6 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
         input.sceneWidth=Width;input.sceneHeight=Height;input.gameWidth=Width;input.gameHeight=Height;
         input.sceneAspect=Aspect;input.sceneVisible=true;input.gameVisible=true;input.gridVisible=false;
         input.worldId=1;input.shadowResolution=1024;
-        input.shadowFocusEntities=movingEntities;
         // Preserve the retained room probe's fixed submitted material time.
         // The production producer also uses this captured context to prepare
         // resources. The frozen fixture has no Time/Panner material nodes.
@@ -189,7 +188,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
         require(legacy||casterPins->shadows->models.size()==casterPins->shadows->instances.size(),
             "A caster was prepared separately for each overlapping light.");
         for(const auto& caster:casterPins->shadows->instances)
-            if(std::find(movingEntities.begin(),movingEntities.end(),caster.entityId)!=movingEntities.end())++sample.focusCasters;
+            if(std::find(movingEntities.begin(),movingEntities.end(),caster.entityId)!=movingEntities.end())++sample.movingCasters;
         require(preparedFrame->views.size()==2,"Room frame did not prepare both camera requests.");
         sample.sceneModels=preparedFrame->views[0].instances.size();sample.gameModels=preparedFrame->views[1].instances.size();
         const auto start=Clock::now();
@@ -198,7 +197,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
         const auto shadow=renderer.shadowStats();sample.shadowDraws=shadow.drawCalls;sample.faces=shadow.renderedFaces;sample.cascades=shadow.directionalCascades;
         sample.pointHits=shadow.cacheHits;sample.directionalHits=shadow.directionalCacheHits;
         sample.pointDeferred=shadow.pointDeferred;sample.pointCriticalDeferred=shadow.pointCriticalDeferred;
-        sample.directionalWorldProjections=shadow.directionalWorldProjections;sample.characterProjections=shadow.characterProjections;
+        sample.directionalWorldProjections=shadow.directionalWorldProjections;
         require(sample.faces<=24,"Scene/Game exceeded the shared twenty-four-face point-shadow update budget.");
         prepared.endFrame();const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes();
         assets.trimTextureCache(retained>=resources.config().gpuRetentionBytes?0:resources.config().gpuRetentionBytes-retained);
@@ -227,7 +226,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     Json result;result["world_origin"]=savedWorld?"saved_main":"native_import";result["legacy_shadow_preparation"]=legacy;result["adapter"]=bgfx::getCaps()->vendorId;result["device"]=bgfx::getCaps()->deviceId;result["viewport"]={Width,Height};
     result["native_meshes"]=source->meshes.size();result["native_points"]=std::count_if(source->lights.begin(),source->lights.end(),[](const auto& light){return light.type==1;});
     result["combined_models"]=combined.models.size();result["combined_points"]=combined.points.size();result["combined_directionals"]=combined.directional.size();
-    result["shadow_focus_entities"]=movingEntities;result["point_shadow_face_budget"]=24;
+    result["moving_entities"]=movingEntities;result["point_shadow_face_budget"]=24;
     result["presented_player_workload"]=presentedPlayer;result["diagnostic_world_key"]=keyLight;
     result["player_lighting"]=playerLightingMetadata(combined);
     for(unsigned phase=0;phase<4;++phase) {
@@ -248,7 +247,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
         require(ready,"Timed out preparing complete room materials: "+prepared.status()+assets.status());
         if(cold){std::cout<<"Cold cache phase "<<phase<<" fully prepared after "<<warm<<" frames; "<<prepared.status()<<assets.status()<<std::endl;continue;}
         std::vector<Sample> samples;for(unsigned i=0;i<sampleCount;++i){samples.push_back(runFrame(world,shadows,moving,i));const auto& value=samples.back();
-            if(raw)raw<<phase<<','<<i<<','<<value.submittedFrame<<','<<value.gpuFrame<<','<<value.update<<','<<value.prepareShadows<<','<<value.prepareReceivers<<','<<value.submit<<','<<value.frame<<','<<value.gpu<<','<<value.backend<<','<<value.draws<<','<<value.shadowDraws<<','<<value.faces<<','<<value.cascades<<','<<value.pointHits<<','<<value.directionalHits<<','<<value.sceneModels<<','<<value.gameModels<<','<<value.pointDeferred<<','<<value.pointCriticalDeferred<<','<<value.directionalWorldProjections<<','<<value.characterProjections<<','<<value.focusCasters<<','<<value.gpuDepth<<','<<value.gpuAmbient<<','<<renderer.environmentResidentBytes()<<'\n';}
+            if(raw)raw<<phase<<','<<i<<','<<value.submittedFrame<<','<<value.gpuFrame<<','<<value.update<<','<<value.prepareShadows<<','<<value.prepareReceivers<<','<<value.submit<<','<<value.frame<<','<<value.gpu<<','<<value.backend<<','<<value.draws<<','<<value.shadowDraws<<','<<value.faces<<','<<value.cascades<<','<<value.pointHits<<','<<value.directionalHits<<','<<value.sceneModels<<','<<value.gameModels<<','<<value.pointDeferred<<','<<value.pointCriticalDeferred<<','<<value.directionalWorldProjections<<','<<value.movingCasters<<','<<value.gpuDepth<<','<<value.gpuAmbient<<','<<renderer.environmentResidentBytes()<<'\n';}
         if(phase==2)require(std::all_of(samples.begin(),samples.end(),[](const auto& sample){return sample.faces==0&&sample.cascades==0;}),
             "A static, fully prepared room rewrote cached shadow maps.");
         const char* name=phase==0?"main":phase==1?"room_no_shadows":phase==2?"room_static_shadows":"room_moving_player";

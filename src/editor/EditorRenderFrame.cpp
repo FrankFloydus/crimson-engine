@@ -2,7 +2,6 @@
 
 #include "assets/AssetLibrary.h"
 #include "assets/ModelAnimation.h"
-#include "crimson-renderer/ShadowReceiverBounds.h"
 
 #include <algorithm>
 #include <array>
@@ -79,23 +78,14 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     frame->appearance=input.appearance;frame->gridVisible=input.gridVisible;
     frame->views.reserve(2);
     auto worldPins=std::make_shared<EditorRenderWorldPins>();worldPins->particles=std::move(input.particlePins);
-    Aabb focusBounds;
-    for(const auto& model:input.extracted.models)
-        if(model.castShadows && std::find(input.shadowFocusEntities.begin(),input.shadowFocusEntities.end(),model.id)!=input.shadowFocusEntities.end())
-            if(const auto asset=assets.findModel(model.assetId))math::include(focusBounds,math::transformBounds(resources.modelBounds(model,asset),model.world));
-    const auto priorityOrigin=focusBounds.valid?(focusBounds.minimum+focusBounds.maximum)*.5:input.sceneCamera.target;
+    const auto priorityOrigin=input.shadowPriorityOrigin();
     // Full-world caster preparation precedes receiver culling. Both cameras use
     // one caster snapshot and the same interpolation/material clock values.
     std::vector<ShadowCamera> cameras{{input.sceneCamera,input.sceneAspect}};
     const bool gameVisible=input.gameVisible && input.gameWidth && input.gameHeight && input.gameCamera;
-    if(gameVisible)cameras.push_back({*input.gameCamera,static_cast<float>(input.gameWidth)/input.gameHeight,true,focusBounds});
-    Aabb particleBounds;
-    if(gameVisible && std::any_of(input.extracted.directional.begin(),input.extracted.directional.end(),
-        [](const auto& light){return light.enabled && light.castShadows;}))
-        particleBounds=particleShadowReceiverBounds(input.particles,input.particleMaterials);
+    if(gameVisible)cameras.push_back({*input.gameCamera,static_cast<float>(input.gameWidth)/input.gameHeight});
     const auto shadowStarted=stats?Clock::now():Clock::time_point{};
-    worldPins->shadows=resources.prepareShadows(input.extracted,input.shadowResolution,ResourcePriority::Visible,cameras,input.shadowFocusEntities,priorityOrigin,
-        particleBounds.valid?std::span(&particleBounds,1):std::span<const Aabb>{});
+    worldPins->shadows=resources.prepareShadows(input.extracted,input.shadowResolution,ResourcePriority::Visible,cameras,priorityOrigin);
     if(stats) {
         stats->shadowPreparationMs=std::chrono::duration<double,std::milli>(Clock::now()-shadowStarted).count();
         stats->ready=worldPins->shadows->ready;
@@ -152,14 +142,13 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
             includePreparedModel(stats,prepared);
             if(prepared) {
                 appendModel(game,*gamePins,model,std::move(prepared),false,resources);
-                if(const auto fade=input.gameModelOpacities.find(model.id);fade!=input.gameModelOpacities.end())game.instances.back().opacity=fade->second;
             }
         }
         game.pinned=std::move(gamePins);frame->views.push_back(std::move(game));
     }
     if(stats)stats->receiverPreparationMs=std::chrono::duration<double,std::milli>(Clock::now()-receiverStarted).count();
     frame->world=freezeEditorRenderWorld(input.extracted,std::move(input.particles),std::move(input.particleMaterials),
-        std::move(worldPins),input.worldId,input.shadowResolution,input.materialContext,std::move(input.shadowFocusEntities),focusBounds,priorityOrigin);
+        std::move(worldPins),input.worldId,input.shadowResolution,input.materialContext,priorityOrigin);
     return frame;
 }
 } // namespace crimson

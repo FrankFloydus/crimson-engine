@@ -44,7 +44,6 @@ struct ModelReference {
     bool castShadows{true},receiveShadows{true};
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation animation{};
-    bool fadeWhenOccluding{false};
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -59,6 +58,7 @@ struct SceneDirectionalLight {
     float shadowNormalBias{1.f};
     LightRoles roles{};
     float indirectEnergy{1.f};
+    float shadowAngularDiameter{.53f}; // Apparent light diameter in degrees.
     bool operator==(const SceneDirectionalLight&) const = default;
 };
 struct ScenePointLight {
@@ -213,7 +213,6 @@ struct EntityRecord {
     std::optional<QuaderGenerated> quaderGenerated;
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation modelAnimation{};
-    bool fadeWhenOccluding{false}; // Per-model participation in Game player occlusion fading.
     bool visible{true}; // Authored rendering visibility, inherited by descendants.
     std::optional<SceneOutlinerStyle> outlinerStyle;
 };

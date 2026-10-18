@@ -33,19 +33,21 @@ PointShadowRenderer::PointShadowRenderer(bool budgeted):budgeted_(budgeted) {
     directionalRects_=bgfx::createUniform("u_directionalShadowRect",bgfx::UniformType::Vec4,16);
     directionalSplits_=bgfx::createUniform("u_directionalShadowSplits",bgfx::UniformType::Vec4,4);
     directionalParameters_=bgfx::createUniform("u_directionalShadowParameters",bgfx::UniformType::Vec4,4);
+    directionalSoftness_=bgfx::createUniform("u_directionalShadowSoftness",bgfx::UniformType::Vec4,4);
+    directionalDepthRanges_=bgfx::createUniform("u_directionalShadowDepthRange",bgfx::UniformType::Vec4,16);
     shadowCameraForward_=bgfx::createUniform("u_shadowCameraForward",bgfx::UniformType::Vec4);
     for(auto& value:parameters_)value={-1,0,0,0};
 }
 PointShadowRenderer::~PointShadowRenderer() {
     atlas_.reset();retired_.clear();destroyHandle(sampler_);destroyHandle(parametersUniform_);destroyHandle(atlasUniform_);destroyHandle(layoutUniform_);
-    destroyHandle(directionalMatrices_);destroyHandle(directionalRects_);destroyHandle(directionalSplits_);destroyHandle(directionalParameters_);destroyHandle(shadowCameraForward_);
+    destroyHandle(directionalMatrices_);destroyHandle(directionalRects_);destroyHandle(directionalSplits_);destroyHandle(directionalParameters_);destroyHandle(shadowCameraForward_);destroyHandle(directionalSoftness_);destroyHandle(directionalDepthRanges_);
 }
 void PointShadowRenderer::advance(std::uint64_t frame) {
     frame_=frame;
     std::erase_if(retired_,[&](const auto& retired){return retired.after<=frame;});
     stats_.renderedLights=stats_.renderedFaces=stats_.drawCalls=stats_.cacheHits=stats_.casters=0;
     stats_.directionalLights=stats_.directionalRendered=stats_.directionalCascades=stats_.directionalCacheHits=0;
-    stats_.pointDeferred=stats_.pointCriticalDeferred=stats_.directionalWorldProjections=stats_.characterProjections=0;
+    stats_.pointDeferred=stats_.pointCriticalDeferred=stats_.directionalWorldProjections=0;
     stats_.allocatedBytes=residentBytes();
 }
 void PointShadowRenderer::invalidate(){for(auto& slot:slots_)slot.valid=false;for(auto& context:directionalSlots_)for(auto& light:context)for(auto& slot:light)slot.valid=false;lastRenderedFrame_=UINT64_MAX;}
@@ -64,7 +66,7 @@ std::size_t PointShadowRenderer::residentBytes() const {
 bool PointShadowRenderer::ensureAtlas(std::uint16_t resolution,std::uint16_t capacity,std::uint16_t directionalCapacity,unsigned cameraCount) {
     if(atlas_ && atlas_->layout.resolution==resolution && atlas_->layout.points.capacity>=capacity && atlas_->layout.directionalCapacity>=directionalCapacity && atlas_->layout.cameraCount==cameraCount)return true;
     try {
-        const auto layout=directional_shadow::atlasLayout(resolution,capacity,directionalCapacity,cameraCount,cameraCount==2);
+        const auto layout=directional_shadow::atlasLayout(resolution,capacity,directionalCapacity,cameraCount);
         const auto* caps=bgfx::getCaps();
         if(!layout.width || !caps || caps->limits.maxTextureSamplers<9 ||
            !(caps->supported&BGFX_CAPS_TEXTURE_COMPARE_LEQUAL) ||
@@ -76,7 +78,7 @@ bool PointShadowRenderer::ensureAtlas(std::uint16_t resolution,std::uint16_t cap
         if(!bgfx::isValid(next->depth))throw std::runtime_error("Shadow depth allocation failed.");
         next->framebuffer=bgfx::createFrameBuffer(1,&next->depth,false);
         if(!bgfx::isValid(next->framebuffer))throw std::runtime_error("Shadow framebuffer allocation failed.");
-        bgfx::setName(next->depth,"World and character shadow depth atlas");
+        bgfx::setName(next->depth,"World shadow depth atlas");
         if(atlas_)retired_.push_back({std::move(atlas_),frame_+2});
         atlas_=std::move(next);invalidate();return true;
     } catch(const std::exception& error){status_=error.what();return false;}
@@ -192,9 +194,8 @@ void PointShadowRenderer::renderDirectional(std::span<const DirectionalLight> li
         const auto found=std::find(directionalIds_.begin(),directionalIds_.end(),id);if(found==directionalIds_.end())continue;
         const auto slotIndex=static_cast<unsigned>(found-directionalIds_.begin());
         const auto& fits=cascades[index];
-        const bool gameplay=fits.policy==directional_shadow::ProjectionPolicy::Gameplay;
-        output.parameters[index]={gameplay?(fits.characterProjection<fits.projectionCount?3.f:2.f):1.f,
-            light.shadowDepthBias,light.shadowNormalBias,fits.distance};output.splits[index]=fits.splits;
+        output.parameters[index]={1.f,light.shadowDepthBias,light.shadowNormalBias,fits.distance};output.splits[index]=fits.splits;
+        output.softness[index]={fits.tanHalfAngularDiameter,fits.maxPenumbra,0,0};
         ++stats_.directionalLights;
         const auto block=directional_shadow::blockRect(layout,slotIndex,context);
         const auto view=static_cast<bgfx::ViewId>(firstView+slotIndex);
@@ -205,10 +206,10 @@ void PointShadowRenderer::renderDirectional(std::span<const DirectionalLight> li
             auto signature=signatureIndex<casterSignatures.size()?casterSignatures[signatureIndex]:0;
             const auto& fit=fits.values[cascade];const auto row=index*4+cascade;
             output.matrices[row]=fit.receiverViewProjection;
+            output.depthRanges[row]={fit.nearDepth,fit.farDepth-fit.nearDepth,fit.texelWorld,0};
             const auto rect=directional_shadow::tileRect(layout,slotIndex,context,cascade);
             output.rectangles[row]={float(rect.x+2)/layout.width,float(rect.y+2)/layout.height,float(layout.resolution)/layout.width,float(layout.resolution)/layout.height};
             for(const float value:fit.receiverViewProjection)hash(signature,value);
-            hash(signature,static_cast<std::uint64_t>(gameplay));
             if(slot.valid&&slot.id==id&&slot.signature==signature)continue;
             if(!rendered) {
                 bgfx::setViewFrameBuffer(view,atlas_->framebuffer);bgfx::setViewMode(view,bgfx::ViewMode::Sequential);
@@ -216,8 +217,7 @@ void PointShadowRenderer::renderDirectional(std::span<const DirectionalLight> li
             }
             stats_.drawCalls+=draw(index,cascade,fits.values[cascade],directional_shadow::tileRect(layout,slotIndex,context,cascade),view);
             ++stats_.directionalCascades;
-            if(gameplay && cascade==fits.characterProjection)++stats_.characterProjections;
-            else ++stats_.directionalWorldProjections;
+            ++stats_.directionalWorldProjections;
             slot={id,signature,true};rendered=true;
         }
         if(rendered)++stats_.directionalRendered;else ++stats_.directionalCacheHits;
@@ -229,6 +229,7 @@ void PointShadowRenderer::bindDisabled(std::uint8_t samplerSlot) const {
     const Vec4 zero{};bgfx::setUniform(atlasUniform_,zero.data());bgfx::setUniform(layoutUniform_,zero.data());
     const DirectionalParameters disabledDirections{};
     bgfx::setUniform(directionalParameters_,disabledDirections.parameters.data(),4);
+    bgfx::setUniform(directionalSoftness_,disabledDirections.softness.data(),4);bgfx::setUniform(directionalDepthRanges_,disabledDirections.depthRanges.data(),16);
     bgfx::setUniform(directionalMatrices_,disabledDirections.matrices.data(),16);bgfx::setUniform(directionalRects_,disabledDirections.rectangles.data(),16);
     bgfx::setUniform(directionalSplits_,disabledDirections.splits.data(),4);bgfx::setUniform(shadowCameraForward_,zero.data());
     if(atlas_)bgfx::setTexture(samplerSlot,sampler_,atlas_->depth,static_cast<std::uint32_t>(Sampling));
@@ -244,6 +245,7 @@ void PointShadowRenderer::bind(bool receiving,std::uint8_t samplerSlot,unsigned 
     bgfx::setUniform(directionalParameters_,directions.parameters.data(),4);bgfx::setUniform(directionalMatrices_,directions.matrices.data(),16);
     bgfx::setUniform(directionalRects_,directions.rectangles.data(),16);bgfx::setUniform(directionalSplits_,directions.splits.data(),4);
     bgfx::setUniform(shadowCameraForward_,directions.cameraForward.data());
+    bgfx::setUniform(directionalSoftness_,directions.softness.data(),4);bgfx::setUniform(directionalDepthRanges_,directions.depthRanges.data(),16);
     bgfx::setTexture(samplerSlot,sampler_,atlas_->depth,static_cast<std::uint32_t>(Sampling));
 }
 }

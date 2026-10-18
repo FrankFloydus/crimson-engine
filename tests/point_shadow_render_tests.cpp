@@ -1,8 +1,10 @@
 #include "crimson-renderer/Renderer.h"
+#include "GpuTestBackend.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/PointShadowMath.h"
+#include "crimson-renderer/DirectionalShadowMath.h"
 #include "resources/ShaderCompiler.h"
 #include "resources/ShaderReloadSession.h"
 #include "ShaderSourceBaseline.h"
@@ -317,10 +319,139 @@ settings.environment.glow.enabled=false;
     }
 }
 #include "point_shadow_room_fixture.h"
+// Compare visibility at fixed WORLD positions, not the same framebuffer pixels.
+// Per-pose unshadowed references divide out view-dependent BRDF response and
+// image resampling, so a camera move cannot masquerade as a shadow-light edit.
+template<class Read> void directionalSplitContinuity(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,const Read& read) {
+    constexpr std::uint16_t Extent=384;
+    constexpr unsigned ProfileCount=71;
+    constexpr double ProfileStart=-.7,ProfileStep=.02;
+    constexpr float ShadowCenter=5.f,CasterHalfExtent=1.25f;
+    renderer.resizeViewport(Extent,Extent);renderer.resizeGameViewport(Extent,Extent);renderer.setGridVisible(false);
+    std::vector<ModelMaterial> materials=mesh->materials;
+    materials[0].baseColor={.7f,.7f,.7f,1};materials[0].roughness=1;materials[0].metallic=0;
+    materials[0].specular=0;materials[0].doubleSided=true;
+    RenderModelInstance receiver;receiver.entityId=9201;receiver.model.asset=mesh;receiver.materials=&materials;
+    receiver.model.transform=math::translation({ShadowCenter,0,0})*math::scaling({10,10,1});
+    receiver.castShadows=false;receiver.forceFullDetail=true;
+    auto caster=receiver;caster.entityId=9202;caster.castShadows=true;
+    // The caster stays outside the camera's visible receiver list and behind
+    // every near test pose. The sun projects its center to x=5 on z=0.
+    caster.model.transform=math::translation({0,0,20})*math::scaling({CasterHalfExtent,CasterHalfExtent,1});
+    const std::array casters{receiver,caster};
+    SceneSettings settings;settings.environment.enabled=false;
+    settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.glow.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    settings.camera.position={ShadowCenter,0,6};settings.camera.target={ShadowCenter,0,0};settings.camera.up={0,1,0};
+    settings.camera.fov=70;settings.camera.fovAxis=CameraFovAxis::Vertical;
+    settings.camera.nearPlane=.05f;settings.camera.farPlane=200;
+    DirectionalLight sun;sun.entityId=9203;sun.direction=math::normalized(Vec3{.25f,0,-1});
+    sun.intensity=1;sun.castShadows=true;sun.shadowDistance=80;sun.shadowAngularDiameter=.53f;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&receiver,1);scene.shadowInstances=casters;
+    scene.directionalLights=std::span(&sun,1);scene.shadowWorldId=9200;scene.shadowResolution=1024;
+    const auto fit=directional_shadow::build(sun,{settings.camera,1},scene.shadowResolution);
+    check(fit.valid&&fit.projectionCount==4,"Cross-split fixture did not build four cascades.");
+    const auto linear=[](std::uint8_t value) {
+        const double encoded=value/255.;return encoded<=.04045?encoded/12.92:std::pow((encoded+.055)/1.055,2.4);
+    };
+    const auto sample=[&](const DecodedImage& image,const Camera& camera,const Vec3& point) {
+        const auto projected=math::project(point,camera.projectionMatrix(1,ClipDepth::ZeroToOne)*camera.viewMatrix(),
+            {0,0,Extent,Extent},ClipDepth::ZeroToOne);
+        check(bool(projected),"Cross-split world sample could not be projected.");
+        // Readback pixels represent centers at n+.5; interpolate linear values
+        // there so tiny camera moves do not become integer pixel jumps.
+        const double x=(*projected)[0]-.5,y=(*projected)[1]-.5;
+        const int ix=static_cast<int>(std::floor(x)),iy=static_cast<int>(std::floor(y));
+        check(ix>=0&&iy>=0&&ix+1<Extent&&iy+1<Extent,"Cross-split receiver sample escaped the image.");
+        const auto pixel=[&](int px,int py) {
+            double value=0;for(unsigned channel=0;channel<3;++channel)
+                value+=linear(image.rgba[(std::size_t(py)*image.width+std::size_t(px))*4+channel]);
+            return value/3;
+        };
+        return std::lerp(std::lerp(pixel(ix,iy),pixel(ix+1,iy),x-ix),
+            std::lerp(pixel(ix,iy+1),pixel(ix+1,iy+1),x-ix),y-iy);
+    };
+    const auto capture=[&](bool shadows,bool requireCached=false) {
+        sun.castShadows=shadows;renderer.render(scene);renderer.renderGame(scene);
+        check(renderer.shadowStatus().empty(),renderer.shadowStatus());
+        if(requireCached)check(renderer.shadowStats().directionalRendered==0&&renderer.shadowStats().directionalCacheHits==2,
+            "Static cross-split Scene/Game maps did not remain cached.");
+        return std::array{read(renderer.viewportTexture(),Extent),read(renderer.gameViewportTexture(),Extent)};
+    };
+    struct Profile {std::array<double,ProfileCount> values{};double midpoint{},width{};};
+    const auto profile=[&](const DecodedImage& shadow,const DecodedImage& clear,const Camera& camera) {
+        const auto visibility=[&](Vec3 point) {
+            const double lit=sample(clear,camera,point);
+            check(lit>.03&&lit<.8,"Cross-split clear reference is dark or display-clipped.");
+            return std::clamp(sample(shadow,camera,point)/lit,0.,1.);
+        };
+        check(visibility({ShadowCenter,0,0})<.12,"Cross-split fixture lost its fixed shadow umbra.");
+        check(visibility({ShadowCenter+2.5f,0,0})>.95,"Cross-split fixture shadowed its fixed lit control.");
+        Profile result;bool crossing=false;
+        for(unsigned i=0;i<ProfileCount;++i) {
+            const double offset=ProfileStart+ProfileStep*i;
+            result.values[i]=visibility({ShadowCenter+CasterHalfExtent+offset,0,0});
+            if(result.values[i]>.1&&result.values[i]<.9)result.width+=ProfileStep;
+            if(i&&!crossing&&result.values[i]>=.5&&result.values[i-1]<.5) {
+                const double fraction=(.5-result.values[i-1])/(result.values[i]-result.values[i-1]);
+                result.midpoint=ProfileStart+ProfileStep*(i-1+fraction);crossing=true;
+            }
+        }
+        check(crossing&&result.values.front()<.2&&result.values.back()>.8,
+            "Cross-split profile does not bracket a real shadow edge.");
+        return result;
+    };
+    const auto difference=[](const Profile& a,const Profile& b) {
+        double mean=0,maximum=0;for(unsigned i=0;i<ProfileCount;++i) {
+            const double delta=std::abs(a.values[i]-b.values[i]);mean+=delta;maximum=std::max(maximum,delta);
+        }
+        return std::array{mean/ProfileCount,maximum};
+    };
+    // Sample the entire overlap, then straddle the exact selection boundary
+    // with a much smaller move. A coarse cascade may have a wider PCF floor;
+    // its resolution is not an excuse for a discontinuity at that boundary.
+    constexpr std::array offsets{-.105,-.075,-.05,-.025,-.0005,.0005,.005};
+    for(unsigned split=0;split<3;++split) {
+        const double begin=split?fit.splits[split-1]:settings.camera.nearPlane;
+        const double boundary=fit.splits[split],interval=boundary-begin;
+        std::optional<Profile> previous;
+        for(unsigned pose=0;pose<offsets.size();++pose) {
+            settings.camera.position={ShadowCenter,0,static_cast<float>(boundary+interval*offsets[pose])};
+            settings.camera.target={ShadowCenter,0,settings.camera.position[2]-1};
+            const auto clear=capture(false),shadow=capture(true);
+            const auto a=profile(shadow[0],clear[0],settings.camera),b=profile(shadow[1],clear[1],settings.camera);
+            const auto context="Directional split "+std::to_string(split)+", pose="+std::to_string(pose);
+            const auto parity=difference(a,b);
+            check(parity[0]<.015&&parity[1]<.06,context+" mixed Scene/Game cascade visibility.");
+            if(previous) {
+                const auto delta=difference(*previous,a);
+                const bool crossing=pose==5;
+                check(delta[0]<(crossing?.035:.12)&&delta[1]<(crossing?.12:.4),
+                    context+" popped across a cascade/overlap: mean="+std::to_string(delta[0])+", max="+std::to_string(delta[1]));
+                check(std::abs(a.midpoint-previous->midpoint)<(crossing?.06:.22),context+" moved the fixed world shadow edge.");
+                check(std::abs(a.width-previous->width)<(crossing?.10:.4),context+" abruptly changed the world penumbra width.");
+            }
+            previous=a;
+            if(pose+1==offsets.size()) {
+                const auto replay=capture(true,true);
+                check(replay[0].rgba==shadow[0].rgba&&replay[1].rgba==shadow[1].rgba,
+                    context+" changed a stationary cached shadow image.");
+                const float jitter=fit.values[split].texelWorld*.1f;
+                settings.camera.position[0]+=jitter;settings.camera.target[0]+=jitter;
+                const auto jitterClear=capture(false),jitterShadow=capture(true);
+                const auto moved=profile(jitterShadow[0],jitterClear[0],settings.camera);
+                const auto delta=difference(a,moved);
+                check(delta[0]<.035&&delta[1]<.14,context+" shimmered under subtexel lateral camera motion.");
+            }
+        }
+    }
+    renderer.resizeViewport(ImageSize,ImageSize);renderer.resizeGameViewport(ImageSize,ImageSize);
+}
+
 void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     // Destinations outlive Renderer even if a readback times out.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
-    ResourceManager resources;Renderer renderer(window);ImGuiOwner context;ImGuiBgfx tools;
+    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());ImGuiOwner context;ImGuiBgfx tools;
     renderer.resize(320,240);renderer.resizeViewport(ImageSize,ImageSize);renderer.resizeGameViewport(ImageSize,ImageSize);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=887;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.1f,.1f,.1f})},environment.settings);
@@ -328,12 +459,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(renderer.publishThumbnailEnvironment(environment),renderer.thumbnailStatus());
     std::uint32_t frame{};
     const auto tick=[&] {resources.pump();renderer.advanceStreaming();frame=bgfx::frame();tools.postFrame(frame);std::this_thread::sleep_for(std::chrono::milliseconds{1});};
-    const auto read=[&](bgfx::TextureHandle source) {
-        TextureOwner staging{bgfx::createTexture2D(ImageSize,ImageSize,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
+    const auto read=[&](bgfx::TextureHandle source,std::uint16_t extent=ImageSize) {
+        TextureOwner staging{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Shadow fixture readback allocation failed.");
-        auto image=std::make_shared<DecodedImage>(DecodedImage{ImageSize,ImageSize,std::vector<std::uint8_t>(ImageSize*ImageSize*4)});
+        auto image=std::make_shared<DecodedImage>(DecodedImage{extent,extent,std::vector<std::uint8_t>(std::size_t(extent)*extent*4)});
         destinations.push_back(image);bgfx::setViewMode(ReadbackView,bgfx::ViewMode::Sequential);
-        bgfx::blit(ReadbackView,staging.handle,0,0,source,0,0,ImageSize,ImageSize);
+        bgfx::blit(ReadbackView,staging.handle,0,0,source,0,0,extent,extent);
         const auto ready=bgfx::readTexture(staging.handle,image->rgba.data());check(ready!=UINT32_MAX,"Shadow fixture readback unsupported.");
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Shadow fixture readback timed out.");
@@ -697,23 +828,20 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     writeFileAtomically(source,original+"\nINVALID_POINT_SHADOW_SHADER\n");reload.changed(changed);pump();
     check(reload.revision()==1 && renderer.shaderSignature()==healthySignature,"Failed caster reload replaced part of the live program group.");
     check(capture().rgba==healthy.rgba,"Failed caster reload changed the rendered shadow.");
-    // The Game view uses one bounded world projection. A focused character map
-    // can add detail independently; the Scene view retains four inspection
-    // cascades in a separate camera block of the same comparison resource.
+    // Scene and Game use four stable cascades in independent blocks of the
+    // same comparison resource. Neither depends on a player body or focus map.
     scene.pointLights={};
     DirectionalLight sun;sun.entityId=900;sun.direction={0,0,-1};sun.color={1,1,1};sun.intensity=4;sun.castShadows=true;
-    // This is a six-metre gameplay fixture. Keep its bounded coverage tight
-    // enough to resolve the 1.5-metre caster with a single 256-pixel map;
-    // inherited 100-metre/FOV65 inspection coverage tests a different quality.
+    // Keep this six-metre fixture inside the authored shadow distance.
     sun.shadowDistance=15;
     scene.directionalLights=std::span(&sun,1);
     settings.camera.position={0,0,6};settings.camera.target={};settings.camera.fov=45;settings.camera.nearPlane=.01f;settings.camera.farPlane=2048;
     receiver.model.transform=plane(settings.camera,{},3);caster.model.transform=plane(settings.camera,{0,0,2},.75f);
     receiver.receiveShadows=true;caster.castShadows=true;casterMaterials[0].alphaMask=false;
     const auto sunShadow=capture();
-    check(submittedStats.directionalRendered==1&&submittedStats.directionalCascades==1&&
-        submittedStats.directionalWorldProjections==1&&submittedStats.characterProjections==0,
-        "Game directional shadows did not use one bounded world projection.");
+    check(submittedStats.directionalRendered==1&&submittedStats.directionalCascades==4&&
+        submittedStats.directionalWorldProjections==4,
+        "Game directional shadows did not publish four stable world cascades.");
     const auto sunCached=capture();check(submittedStats.directionalCacheHits==1&&submittedStats.directionalRendered==0,"Static Game directional projection did not remain cached.");
     check(sunCached.rgba==sunShadow.rgba,"Static directional cache changed pixels.");
     sun.castShadows=false;const auto sunClear=capture();sun.castShadows=true;
@@ -722,41 +850,23 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         ", shadow="+std::to_string(brightness(sunShadow,settings.camera,{})));
     receiver.receiveShadows=false;const auto sunUnreceived=capture();receiver.receiveShadows=true;
     check(std::abs(brightness(sunClear,settings.camera,{})-brightness(sunUnreceived,settings.camera,{}))<=1,"Directional receiving flag changed unshadowed direct light.");
-    const std::array<std::uint64_t,1> focusEntities{caster.entityId};scene.shadowFocusEntities=focusEntities;
-    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
-    const auto focused=capture();
-    check(submittedStats.characterProjections==1&&submittedStats.directionalCascades<=2&&
-        submittedStats.directionalWorldProjections<=1,
-        "Game character focus did not add exactly one focused projection.");
-    check(brightness(focused,settings.camera,{})<brightness(sunClear,settings.camera,{})*.5,
-        "Character focus lost the shadow under the selected caster.");
-    capture();check(submittedStats.directionalRendered==0&&submittedStats.characterProjections==0,
-        "Static world and character projections did not remain cached.");
     caster.model.transform=math::translation({.3f,0,0})*caster.model.transform;
-    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
-    const auto followedFocus=capture();
-    check(submittedStats.directionalWorldProjections==0&&submittedStats.characterProjections==1&&
-        submittedStats.directionalCascades==1,
-        "A character-only pose edit rewrote the stationary Game world projection.");
-    check(brightness(followedFocus,settings.camera,{.3f,0,0})<brightness(sunClear,settings.camera,{})*.5,
-        "The focused shadow did not follow the selected character's presented position.");
-    // Only the selected character contributes to its focus map. A second
-    // overlapping non-character caster draws in the world map once, while the
-    // focus map draws the selected caster once. Each changed projection also
-    // draws one explicit tile clear: four total depth submissions.
-    receiver.castShadows=false;caster.model.transform=math::translation({.05f,0,0})*caster.model.transform;
-    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
-    auto nonCharacter=caster;nonCharacter.entityId=3;
-    nonCharacter.model.transform=math::translation({.1f,0,0})*caster.model.transform;
-    std::array<RenderModelInstance,3> focusCasters{receiver,caster,nonCharacter};scene.shadowInstances=focusCasters;
-    renderer.renderGame(scene);const auto focusStats=renderer.shadowStats();
-    check(focusStats.directionalWorldProjections==1&&focusStats.characterProjections==1&&focusStats.drawCalls==4,
-        "The character focus pass included a non-character caster or lost its world projection.");
-    read(renderer.gameViewportTexture());receiver.castShadows=true;
+    const auto movedCaster=capture();
+    check(submittedStats.directionalWorldProjections>0 && submittedStats.directionalWorldProjections<=4,
+        "Moving a world caster did not invalidate its intersecting cascades.");
+    check(brightness(movedCaster,settings.camera,{.3f,0,0})<brightness(sunClear,settings.camera,{})*.5,
+        "The cascaded shadow did not follow the caster's presented position.");
+    capture();check(submittedStats.directionalRendered==0,"Unchanged world cascades did not remain cached.");
+    // A directional caster behind the camera must still shadow visible geometry.
+    caster.model.transform=plane(settings.camera,{0,0,8},.75f);
+    const auto sunOffscreen=capture();
+    check(brightness(sunOffscreen,settings.camera,{})<brightness(sunClear,settings.camera,{})*.5,
+        "An upstream directional caster outside the camera view lost its shadow.");
+    caster.model.transform=plane(settings.camera,{0,0,2},.75f);
     shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;
     renderer.render(scene);
-    check(renderer.shadowStats().directionalWorldProjections==4&&renderer.shadowStats().characterProjections==0,
-        "The free Scene camera did not retain four world cascades independently of Game focus.");
+    check(renderer.shadowStats().directionalWorldProjections==4,
+        "The Scene camera did not publish four world cascades independently of Game.");
     auto otherSettings=settings;otherSettings.camera.position={30,0,6};otherSettings.camera.target={30,0,0};
     RenderScene other{otherSettings,{}};other.sceneMode=true;other.instances=scene.instances;other.shadowInstances=shadowInstances;
     other.directionalLights=scene.directionalLights;other.shadowWorldId=scene.shadowWorldId;other.shadowResolution=scene.shadowResolution;
@@ -765,8 +875,9 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(brightness(isolated,settings.camera,{})<brightness(sunClear,settings.camera,{})*.5,"Game projection overwrote Scene directional depth.");
     sun.direction={.3f,0,-1};const auto movedSun=capture();check(submittedStats.directionalRendered==1,"Moving a sun failed to invalidate its projections.");
     check(movedSun.rgba!=sunShadow.rgba,"Moving a sun left its old shadow projection.");
+    directionalSplitContinuity(renderer,mesh,read);
     // GPU deformation must agree with the CPU reference through visible color,
-    // readable depth, picking, point shadows and the dedicated player silhouette.
+    // readable depth, picking, point shadows and directional shadows.
     renderer.setGridVisible(false);
     auto animated=quad();animated->id="animated-gpu-parity";animated->draws[0].node=0;
     animated->nodes.resize(3);animated->nodes[0].mesh=0;animated->nodes[0].skin=0;
@@ -918,6 +1029,6 @@ int main(int argc,char** argv) {
         std::filesystem::copy(std::filesystem::path(argv[3]),config.includeDirectory,std::filesystem::copy_options::recursive);
         SdlOwner sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson point-shadow checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());exercise(window.get(),config);
-        std::cout<<"Hidden D3D11 point-shadow faces, masks, flags, budgeted admission/fairness, stale-projection rejection, focused Game/Scene projections, shared views and reload checks passed.\n";return 0;
+        std::cout<<"Hidden D3D11 point-shadow faces, masks, flags, budgeted admission/fairness, stale-projection rejection, four-cascade Scene/Game continuity/stability, shared views and reload checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

@@ -27,7 +27,6 @@ struct PreparedEditorModel {
 struct PreparedEditorShadows {
     std::vector<RenderModelInstance> instances;
     std::vector<std::shared_ptr<const PreparedEditorModel>> models;
-    std::vector<Aabb> receiverBounds;
     bool ready{true};
     bool refined{true};
 };
@@ -45,7 +44,7 @@ public:
         uint32_t viewportHeight,bool selected,ResourcePriority priority=ResourcePriority::Visible,float viewportAspect=0,
         std::span<const AssetRef<MaterialAsset>> materialOverrides={},float shadowTexelWorld=0,const ExtractedModel* presentation=nullptr);
     std::shared_ptr<const PreparedEditorShadows> prepareShadows(const ExtractedScene&,std::uint16_t resolution,
-        ResourcePriority priority=ResourcePriority::Visible,std::span<const ShadowCamera> cameras={},std::span<const std::uint64_t> focusEntities={},std::optional<Vec3> priorityOrigin={},std::span<const Aabb> extraReceiverBounds={});
+        ResourcePriority priority=ResourcePriority::Visible,std::span<const ShadowCamera> cameras={},std::optional<Vec3> priorityOrigin={});
     void invalidate(const std::string& id);
     void clear();
     const std::string& status() const { return status_; }

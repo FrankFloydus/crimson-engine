@@ -18,10 +18,7 @@ struct RenderWorldSnapshot {
     std::uint64_t shadowWorldId{};
     std::uint16_t shadowResolution{1024};
     MaterialEvaluationContext materialContext{};
-    std::vector<std::uint64_t> shadowFocusEntities;
-    Aabb shadowFocusBounds{};
     std::optional<Vec3> shadowPriorityOrigin;
-    std::vector<Aabb> shadowReceiverBounds;
 };
 
 // Camera-local prepared receivers borrow only from immutable versions retained

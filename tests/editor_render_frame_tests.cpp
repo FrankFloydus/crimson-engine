@@ -1,5 +1,6 @@
 #include "editor/EditorRenderFrame.h"
 #include "assets/AssetLibrary.h"
+#include "crimson-renderer/ShadowLightSelection.h"
 
 #include <iostream>
 #include <limits>
@@ -14,6 +15,36 @@ int main() {
     try {
         using namespace crimson;
         static_assert(std::is_const_v<typename decltype(PreparedRenderFrame::world)::element_type>);
+        EditorRenderFrameInput admission;
+        admission.sceneCamera.position={3,4,5};admission.sceneCamera.target={20,30,40};
+        admission.gameCamera=Camera{};admission.gameCamera->position={11,12,13};
+        admission.gameWidth=960;admission.gameHeight=540;admission.gameVisible=true;
+        require(admission.shadowPriorityOrigin()==Vec3{11,12,13},"Visible Game admission did not use its presented eye.");
+        admission.gameVisible=false;
+        require(admission.shadowPriorityOrigin()==Vec3{3,4,5},"Hidden Game admission did not use the Scene eye.");
+        admission.gameVisible=true;admission.gameWidth=0;
+        require(admission.shadowPriorityOrigin()==Vec3{3,4,5},"Collapsed Game retained point-shadow priority.");
+        admission.gameWidth=960;admission.gameCamera.reset();
+        require(admission.shadowPriorityOrigin()==Vec3{3,4,5},"Missing Game camera retained point-shadow priority.");
+
+        // A first-person player can have no body mesh. A distant editor camera
+        // must not steal any of the sixteen resident maps from its Game view.
+        admission.sceneCamera.position={0,0,0};admission.gameCamera=Camera{};
+        admission.gameCamera->position={1000,0,0};
+        std::array<PointLight,32> admittedLights;
+        for(unsigned i=0;i<admittedLights.size();++i) {
+            auto& light=admittedLights[i];light.entityId=i+1;light.castShadows=true;
+            light.position={float(i%16)+(i>=16?1000.f:0.f),0,0};light.radius=20;
+        }
+        const auto nearGame=selectPointShadowLights(admittedLights,admission.shadowPriorityOrigin());
+        require(nearGame.count==16 && nearGame.unadmittedCount==16,"Point-shadow residency budget changed.");
+        for(const auto source:nearGame.selectedSources())require(source>=16,"Bodyless Game lost a nearby shadow to the Scene camera.");
+        admission.sceneCamera.position={-10000,1000,0};
+        const auto movedScene=selectPointShadowLights(admittedLights,admission.shadowPriorityOrigin());
+        require(nearGame.sourceIndices==movedScene.sourceIndices,"Moving only Scene changed visible Game shadow admission.");
+        admission.gameVisible=false;admission.sceneCamera.position={0,0,0};
+        const auto nearScene=selectPointShadowLights(admittedLights,admission.shadowPriorityOrigin());
+        for(const auto source:nearScene.selectedSources())require(source<16,"Closing Game did not restore Scene-oriented shadow admission.");
 
         auto hover=std::make_shared<PreparedEditorModel>();
         hover->materials.resize(2);hover->textures.resize(2);
@@ -36,10 +67,6 @@ int main() {
         extracted.points.push_back({});extracted.points.front().position={8,9,10};
         extracted.points.front().entityId=UINT64_C(0xfedcba9876543210);
         const auto* pointStorage=extracted.points.data();
-        std::vector<EntityId> focusEntities{71,UINT64_C(0xfedcba9876543210)};
-        const auto* focusStorage=focusEntities.data();
-        Aabb focusBounds{{-2,-3,-4},{5,6,7},true};
-
         std::vector<RenderParticle> particles{{{5,6,7},.75f,{2,3,4,.4f},1}};
         const auto* particleStorage=particles.data();
         auto particleMaterial=std::make_shared<PreparedParticleMaterial>();
@@ -54,7 +81,6 @@ int main() {
         std::weak_ptr<const PreparedEditorModel> weakModel=model;
         auto casters=std::make_shared<PreparedEditorShadows>();
         casters->models.push_back(model);
-        casters->receiverBounds.push_back({{-10,0,-10},{10,0,10},true});
         casters->instances.push_back({71,{model->asset,extracted.models.front().world},&model->textures,model->revision,
             false,true,&model->materials});
         casters->instances.back().lightingCategory=extracted.models.front().lightingCategory;
@@ -63,7 +89,7 @@ int main() {
 
         const MaterialEvaluationContext clock{12.5,91.75};
         auto frozen=freezeEditorRenderWorld(extracted,std::move(particles),std::move(materials),pins,903,512,clock,
-            std::move(focusEntities),focusBounds,Vec3{3,4,5});
+            Vec3{3,4,5});
         require(frozen->points.data()==pointStorage && frozen->particles.data()==particleStorage,
             "World publication copied packet arrays instead of transferring their storage.");
         require(extracted.models.size()==1 && extracted.models.front().materialOverrides==ModelMaterialOverrides{AssetRef<MaterialAsset>{"material-a"}},
@@ -72,14 +98,6 @@ int main() {
             "World identity or shadow quality was lost at the prepared-frame boundary.");
         require(frozen->materialContext.gameSeconds==12.5 && frozen->materialContext.realSeconds==91.75,
             "Frame publication changed material clocks.");
-        casters->receiverBounds.front().maximum={100,100,100};
-        require(frozen->shadowReceiverBounds.size()==1 && frozen->shadowReceiverBounds.front().maximum==Vec3{10,0,10},
-            "Receiver-bound replacement changed an already published directional fit.");
-        require(frozen->shadowFocusEntities.data()==focusStorage && frozen->shadowFocusEntities.size()==2 &&
-            frozen->shadowFocusEntities.front()==71 && frozen->shadowFocusEntities.back()==UINT64_C(0xfedcba9876543210),
-            "World publication copied or truncated persistent focus identities instead of transferring their storage.");
-        require(frozen->shadowFocusBounds.valid && frozen->shadowFocusBounds.minimum==Vec3{-2,-3,-4} &&
-            frozen->shadowFocusBounds.maximum==Vec3{5,6,7},"World publication lost the presented focus bounds.");
         require(frozen->particles.front().position==Vec3{5,6,7} && frozen->particles.front().materialIndex==1 &&
             !frozen->particleMaterials.at(1).receiveFog,"Particle presentation/material indexing changed during publication.");
         require(frozen->shadowInstances.front().entityId==71 && frozen->shadowInstances.front().resourceRevision==19 &&
@@ -91,16 +109,9 @@ int main() {
         extracted.points.push_back({});extracted.points.front().position={-1,-2,-3};
         extracted.directional.push_back({});extracted.directional.front().intensity=100;
         extracted.models.clear();
-        focusEntities.push_back(999);focusBounds.minimum={100,200,300};focusBounds.maximum={400,500,600};focusBounds.valid=false;
         require(frozen->points.front().position==Vec3{8,9,10} && frozen->points.front().entityId==UINT64_C(0xfedcba9876543210) &&
-            frozen->directional.front().intensity==2.25f &&
-            true,
+            frozen->directional.front().intensity==2.25f,
             "A later world mutation changed a published frame.");
-        require(frozen->shadowFocusEntities.size()==2 && frozen->shadowFocusEntities.front()==71 &&
-            frozen->shadowFocusEntities.back()==UINT64_C(0xfedcba9876543210) && frozen->shadowFocusBounds.valid &&
-            frozen->shadowFocusBounds.minimum==Vec3{-2,-3,-4} && frozen->shadowFocusBounds.maximum==Vec3{5,6,7},
-            "Later focus selection or simulation bounds rewrote an already published world.");
-
         auto frame=std::make_shared<PreparedRenderFrame>();frame->world=frozen;
         PreparedRenderView scene;scene.identity={RenderViewPurpose::Scene,0};scene.width=1280;scene.height=720;
         scene.settings.camera.position={4,5,6};scene.settings.environment.fog.enabled=true;
@@ -133,7 +144,7 @@ int main() {
                 "Execution adapters mixed receiver arrays between cameras.");
             require(sceneAdapter.instances.front().opacity==1 && gameAdapter.instances.front().opacity==.25f &&
                 sceneAdapter.shadowInstances.front().opacity==1 && gameAdapter.shadowInstances.front().opacity==1,
-                "A Game-camera fade changed Scene receivers or the shared full-opacity shadow snapshot.");
+                "Generic instance opacity changed another view or the full-opacity shadow snapshot.");
             require(sceneAdapter.directionalLights.data()==queued->world->directional.data() &&
                 gameAdapter.directionalLights.data()==sceneAdapter.directionalLights.data() &&
                 sceneAdapter.pointLights.data()==queued->world->points.data() &&
@@ -152,22 +163,9 @@ int main() {
                 sceneAdapter.shadowResolution==512 && gameAdapter.shadowResolution==512 &&
                 sceneAdapter.materialContext==clock && gameAdapter.materialContext==clock,
                 "Scene/Game adapters diverged in caster ownership, shadow policy or material clocks.");
-            require(sceneAdapter.shadowFocusEntities.data()==queued->world->shadowFocusEntities.data() &&
-                gameAdapter.shadowFocusEntities.data()==sceneAdapter.shadowFocusEntities.data() &&
-                sceneAdapter.shadowFocusEntities.size()==2 && gameAdapter.shadowFocusEntities.size()==2 &&
-                sceneAdapter.shadowFocusEntities.back()==UINT64_C(0xfedcba9876543210),
-                "Scene/Game adapters copied or mixed the frozen focus entity span.");
-            require(sceneAdapter.shadowFocusBounds.valid && gameAdapter.shadowFocusBounds.valid &&
-                sceneAdapter.shadowFocusBounds.minimum==Vec3{-2,-3,-4} && gameAdapter.shadowFocusBounds.minimum==Vec3{-2,-3,-4} &&
-                sceneAdapter.shadowFocusBounds.maximum==Vec3{5,6,7} && gameAdapter.shadowFocusBounds.maximum==Vec3{5,6,7},
-                "Scene/Game adapters lost the shared presented focus bounds.");
             require(sceneAdapter.shadowPriorityOrigin==std::optional<Vec3>{Vec3{3,4,5}} &&
                 gameAdapter.shadowPriorityOrigin==sceneAdapter.shadowPriorityOrigin,
                 "Scene/Game adapters diverged in the frozen shadow admission origin.");
-            require(sceneAdapter.shadowReceiverBounds.data()==queued->world->shadowReceiverBounds.data() &&
-                gameAdapter.shadowReceiverBounds.data()==sceneAdapter.shadowReceiverBounds.data() &&
-                gameAdapter.shadowReceiverBounds.front().maximum==Vec3{10,0,10},
-                "Execution diverged from the receiver bounds used for shadow resource preparation.");
         }
 
         // Reject malformed requests before any camera submits work; an empty
@@ -215,8 +213,7 @@ int main() {
 
         ExtractedScene empty;
         const auto emptyWorld=freezeEditorRenderWorld(empty,{},{},{},0,1024,{});
-        require(emptyWorld->points.empty() && emptyWorld->particles.empty() && emptyWorld->shadowInstances.empty() && !emptyWorld->pinned &&
-            emptyWorld->shadowFocusEntities.empty() && !emptyWorld->shadowFocusBounds.valid,
+        require(emptyWorld->points.empty() && emptyWorld->particles.empty() && emptyWorld->shadowInstances.empty() && !emptyWorld->pinned,
             "An empty world retained packets or phantom version owners.");
         std::cout<<"Editor render frame ownership checks passed.\n";
         return 0;

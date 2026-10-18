@@ -198,15 +198,19 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v24")!=std::string::npos,
-            "Generated material identity does not invalidate pre-sky-fog shader bundles.");
-        const auto has=[&](const char* name) {
+        check(variant.source.find("crimson-material-graph-generator-v25")!=std::string::npos,
+            "Generated material identity does not invalidate former fixed-camera shadow bundles.");
+        const auto has=[&](const char* name,std::uint16_t count=1) {
             return std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
-                return binding.name==name && binding.kind==ShaderUniformKind::Vec4 && binding.count==1;
+                return binding.name==name && binding.kind==ShaderUniformKind::Vec4 && binding.count==count;
             });
         };
         const bool surface=variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle;
         const bool readableDepth=variant.pass==MaterialGraphPass::PointShadow || variant.pass==MaterialGraphPass::DirectionalShadow;
+        check(has("u_directionalShadowSoftness",4)==surface && has("u_directionalShadowDepthRange",16)==surface,
+            "Directional PCSS arrays are missing or incompatible with the generated surface contract.");
+        for(const auto name:{"u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase"})
+            check(!has(name),"Removed player-fade partition uniforms remain in generated shaders.");
         check(has("u_ssgiAtlas")==surface && has("u_ssgiSettings")==surface && has("u_ssgiDraw")==bool(surface||readableDepth),
             "SSGI source, receiver or reactive-depth uniforms are absent from their engine pass contract.");
         check(has("u_fogSky")==surface,"Fog sky controls leaked into depth passes or are missing from surface passes.");

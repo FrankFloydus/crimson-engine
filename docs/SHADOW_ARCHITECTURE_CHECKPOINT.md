@@ -8,7 +8,7 @@ coverage policy. Ambient attenuation, player light rigs and lighting channels
 were separate steps at this checkpoint. New transparency composition and scene
 antialiasing remain outside that completed slice.
 
-This is a historical Step 2 record. Ambient Darkness, character lighting/scopes and the dedicated Key silhouette subsequently landed; read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md), [current Shadows diagnostics](SHADOW_DIAGNOSTICS.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md) for their contracts. The evidence below preserves its original fixture, tests and measurements.
+This is a historical Step 2 record. The fixed-camera Game/focused-player policy below has been replaced by shared first-person cascades. Actor rigs, Ambient Darkness and player-occluder fading were subsequently removed. Read [Renderer and character lighting](RENDERER_AND_CHARACTER_LIGHTING.md) and [the authoritative architecture](ENGINE_ARCHITECTURE.md) for current controls and contracts. The evidence below preserves its original fixture, tests and measurements.
 
 For the frame-input and pass-planning foundation, see
 [the frame architecture checkpoint](FRAME_ARCHITECTURE_CHECKPOINT.md).

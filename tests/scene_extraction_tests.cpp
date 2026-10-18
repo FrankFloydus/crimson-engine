@@ -36,7 +36,6 @@ void run() {
     auto parent=entity(1,"Parent",0,math::translation({10,2,3})*rotation);
     auto model=entity(2,"Nested model",1,math::translation({2,0,0})*math::scaling({-2,3,4}));
     model.model=AssetRef<ModelAsset>{"assets/models/first/manifest.json"};
-    model.fadeWhenOccluding=true;
     auto other=entity(3,"Repeated model",0,math::translation({-5,0,0}));
     other.model=model.model;
     auto missing=entity(4,"Missing model",0,math::translation({7,0,0}));
@@ -45,6 +44,7 @@ void run() {
     shear[4]=.8f; shear[8]=.2f; shear[9]=.7f;
     auto sun=entity(5,"Sun",1,shear*math::scaling({2,3,4}));
     sun.directional=SceneDirectionalLight{{.2f,.4f,.8f},7,false};
+    sun.directional->shadowAngularDiameter=1.25f;
     auto point=entity(6,"Point",1,math::translation({0,4,1})*math::scaling({10,20,30}));
     point.point=ScenePointLight{{.8f,.3f,.1f},23,true};
     scene.apply({point,sun,missing,other,model,parent},{});
@@ -53,8 +53,6 @@ void run() {
     require(extracted.models[0].id==2 && extracted.models[1].id==3 && extracted.models[2].id==4,
             "Extraction ordering must be deterministic across registry allocation order.");
     require(extracted.models[0].assetId==extracted.models[1].assetId,"Repeated models lost their shared asset identity.");
-    require(extracted.models[0].fadeWhenOccluding&&!extracted.models[1].fadeWhenOccluding&&!extracted.models[2].fadeWhenOccluding,
-        "Extraction lost per-model occlusion participation or applied it to another instance.");
     require(close(extracted.models[0].world,parent.local*model.local),"Nested model did not accumulate its parent transform.");
     require(extracted.models[2].assetId==missing.model->id,"An unresolved asset reference was discarded.");
     require(extracted.directional.size()==1 && extracted.points.size()==1,"Light components were not extracted.");
@@ -63,6 +61,7 @@ void run() {
     require(!extracted.directional[0].enabled && extracted.directional[0].intensity==7 && extracted.directional[0].color==sun.directional->color,
             "Directional light properties were altered during extraction.");
     require(close(extracted.points[0].position,math::transformPoint(parent.local*point.local,{0,0,0})),"Point light ignored its parent transform.");
+    require(extracted.directional[0].shadowAngularDiameter==1.25f,"Extraction lost directional angular diameter.");
     require(extracted.points[0].intensity==23 && extracted.points[0].enabled,"Point transform scale changed its physical properties.");
 
     const ModelBoundsQuery query=[&](const std::string& id)->std::optional<Aabb> {

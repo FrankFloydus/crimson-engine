@@ -21,9 +21,9 @@
 namespace crimson {
 struct ModelAsset; struct ModelGeometryLevel; struct DecodedImage; struct MaterialAsset;
 struct SceneSnapshot; struct PreparedEnvironment; struct ShaderBinary; struct ModelImportStage; struct ImageImportStage;struct PreviewDependencies;struct DeletionValidation;struct CollisionMesh;using StaticTriangleMesh=CollisionMesh;struct CollisionOverlayGeometry;
-struct PlayerOcclusionGeometry; struct NavigationTileData;
+struct NavigationTileData;
 namespace streaming { struct ModelStream; struct TextureMipCache; }
-enum class ResourceKind { Model, Geometry, Image, Material, Scene, Environment, Shader, ModelStream, TextureMips, ModelImport, ImageImport, PreviewMetadata, DeletionValidation, StaticCollision, CollisionOverlay, PlayerOcclusion, NavigationTile };
+enum class ResourceKind { Model, Geometry, Image, Material, Scene, Environment, Shader, ModelStream, TextureMips, ModelImport, ImageImport, PreviewMetadata, DeletionValidation, StaticCollision, CollisionOverlay, NavigationTile };
 enum class ResourceState { Unloaded, Queued, Loading, Preparing, Ready, Failed };
 enum class ResourcePriority : unsigned { Selected=0, Placement=1, Visible=2, Preview=3, Background=4 };
 enum class DependencyValidation { Content, FileState };
@@ -44,7 +44,6 @@ CRIMSON_RESOURCE_TRAIT(PreviewDependencies,PreviewMetadata)
 CRIMSON_RESOURCE_TRAIT(DeletionValidation,DeletionValidation)
 CRIMSON_RESOURCE_TRAIT(StaticTriangleMesh,StaticCollision)
 CRIMSON_RESOURCE_TRAIT(CollisionOverlayGeometry,CollisionOverlay)
-CRIMSON_RESOURCE_TRAIT(PlayerOcclusionGeometry,PlayerOcclusion)
 CRIMSON_RESOURCE_TRAIT(NavigationTileData,NavigationTile)
 #undef CRIMSON_RESOURCE_TRAIT
 
@@ -237,7 +236,7 @@ private:
         resource_detail::Store<DecodedImage>,resource_detail::Store<MaterialAsset>,resource_detail::Store<SceneSnapshot>,
         resource_detail::Store<PreparedEnvironment>,resource_detail::Store<ShaderBinary>,
         resource_detail::Store<streaming::ModelStream>,resource_detail::Store<streaming::TextureMipCache>,
-        resource_detail::Store<ModelImportStage>,resource_detail::Store<ImageImportStage>,resource_detail::Store<PreviewDependencies>,resource_detail::Store<DeletionValidation>,resource_detail::Store<StaticTriangleMesh>,resource_detail::Store<CollisionOverlayGeometry>,resource_detail::Store<PlayerOcclusionGeometry>,resource_detail::Store<NavigationTileData>>;
+        resource_detail::Store<ModelImportStage>,resource_detail::Store<ImageImportStage>,resource_detail::Store<PreviewDependencies>,resource_detail::Store<DeletionValidation>,resource_detail::Store<StaticTriangleMesh>,resource_detail::Store<CollisionOverlayGeometry>,resource_detail::Store<NavigationTileData>>;
     Stores stores_;
     mutable std::mutex storesMutex_,queueMutex_,completionMutex_;
     std::condition_variable_any condition_;

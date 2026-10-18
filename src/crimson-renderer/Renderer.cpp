@@ -14,7 +14,6 @@
 #include "ShaderPreflight.h"
 #include "PointShadowRenderer.h"
 #include "ShadowLightSelection.h"
-#include "ShadowReceiverBounds.h"
 #include "ClusteredLightingGpu.h"
 #include "SsgiGpu.h"
 #include "SsaoGpu.h"
@@ -35,7 +34,6 @@
 #include "cs_ssgi_publish.h"
 #include "cs_ssao_evaluate.h"
 #include "cs_ssao_publish.h"
-#include "cs_occluder_depth.h"
 #include "vs_pick.h"
 #include "fs_pick.h"
 #include "vs_present.h"
@@ -46,7 +44,6 @@
 #include "fs_grid.h"
 #include "vs_collision_overlay.h"
 #include "fs_collision_overlay.h"
-#include "fs_occluder_composite.h"
 #include "fs_encode.h"
 #include "vs_particle.h"
 #include "fs_particle.h"
@@ -75,7 +72,7 @@
 
 namespace crimson {
 namespace {
-struct TransparentMeshDraw { double depth{}; std::function<void(bool)> submit; };
+struct TransparentMeshDraw { double depth{}; std::function<void()> submit; };
 using RenderViews = RenderViewPassSlots;
 const auto MainViews=renderViewPassSlots(RenderViewPurpose::Scene);
 const auto ParticlePreviewViews=renderViewPassSlots(RenderViewPurpose::ParticlePreview);
@@ -208,26 +205,6 @@ struct GlowTargets {
     std::size_t bytes() const noexcept {return std::size_t(width)*height*16*textures.size();}
 };
 
-struct OccluderLayerTargets {
-    bgfx::TextureHandle color{BGFX_INVALID_HANDLE},depth{BGFX_INVALID_HANDLE};
-    bgfx::FrameBufferHandle framebuffer{BGFX_INVALID_HANDLE};
-    std::size_t bytes{};
-    ~OccluderLayerTargets(){destroyHandle(framebuffer);destroyHandle(color);destroyHandle(depth);}
-    void create(std::uint16_t width,std::uint16_t height) {
-        constexpr auto flags=BGFX_TEXTURE_RT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|
-            BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
-        if(!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA32F,flags)||
-           !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::D24S8,flags))
-            throw std::runtime_error("Player occluder fading requires HDR color and sampleable D24S8 depth.");
-        color=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA32F,flags);
-        depth=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::D24S8,flags);
-        if(!bgfx::isValid(color)||!bgfx::isValid(depth))throw std::runtime_error("Player occluder layer allocation failed.");
-        const bgfx::TextureHandle attachments[]{color,depth};framebuffer=bgfx::createFrameBuffer(2,attachments,false);
-        if(!bgfx::isValid(framebuffer))throw std::runtime_error("Player occluder framebuffer allocation failed.");
-        bytes=std::size_t(width)*height*20;
-        bgfx::setName(color,"Nearest faded occluder HDR");bgfx::setName(depth,"Nearest faded occluder depth");
-    }
-};
 // Framebuffers borrow textures: HDR and the grid composite share one depth target.
 struct ViewportTargets {
     std::unique_ptr<ClusteredLightingGpu> clustered;
@@ -254,13 +231,12 @@ struct ViewportTargets {
     bgfx::TextureHandle display{BGFX_INVALID_HANDLE}, depth{BGFX_INVALID_HANDLE};
     bgfx::FrameBufferHandle hdrBuffer{BGFX_INVALID_HANDLE}, compositeBuffer{BGFX_INVALID_HANDLE}, displayBuffer{BGFX_INVALID_HANDLE};
     std::unique_ptr<GlowTargets> glow;
-    std::shared_ptr<OccluderLayerTargets> occluderLayer;
     std::string glowFailure; // Retry only after target recreation, avoiding allocation churn every frame.
     ~ViewportTargets() {
         destroyHandle(ssgiFramebuffer);for(auto& item:retiredSsgiFramebuffers)destroyHandle(item.handle);ssgi.reset();ssao.reset();
         destroyHandle(depthPrepass);destroyHandle(readableDepth);destroyHandle(receiverScope);
         clustered.reset();
-        glow.reset();occluderLayer.reset();
+        glow.reset();
         destroyHandle(hdrBuffer); destroyHandle(compositeBuffer); destroyHandle(displayBuffer);
         destroyHandle(hdr); destroyHandle(composite); destroyHandle(display); destroyHandle(depth);
     }
@@ -411,8 +387,6 @@ struct Renderer::Impl {
     std::string shadowStatus;
     std::unique_ptr<PointShadowRenderer> shadows,thumbnailShadows;
     std::array<std::uint64_t,26> programHashes{};
-    struct RetiredOccluderLayer {std::shared_ptr<OccluderLayerTargets> target;std::uint64_t after{};};
-    std::deque<RetiredOccluderLayer> retiredOccluderLayers;
     std::unique_ptr<CollisionOverlayGpu> collisionOverlays;
     bgfx::ProgramHandle collisionOverlayProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle clusterComputeProgram{BGFX_INVALID_HANDLE};
@@ -438,10 +412,6 @@ struct Renderer::Impl {
     bgfx::TextureHandle white{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pbr{BGFX_INVALID_HANDLE}, present{BGFX_INVALID_HANDLE}, gridProgram{BGFX_INVALID_HANDLE}, encode{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle modelProgram{BGFX_INVALID_HANDLE};
-    bgfx::ProgramHandle occluderCompositeProgram{BGFX_INVALID_HANDLE};
-    bgfx::ProgramHandle occluderDepthProgram{BGFX_INVALID_HANDLE};
-    bgfx::UniformHandle occluderColor{BGFX_INVALID_HANDLE},occluderDepth{BGFX_INVALID_HANDLE},occluderComposite{BGFX_INVALID_HANDLE};
-    bgfx::UniformHandle occluderPhase{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pickProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle particleProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle skyProgram{BGFX_INVALID_HANDLE};
@@ -470,7 +440,7 @@ struct Renderer::Impl {
     bgfx::UniformHandle normalSampler{BGFX_INVALID_HANDLE}, irradianceSampler{BGFX_INVALID_HANDLE}, prefilteredSampler{BGFX_INVALID_HANDLE}, brdfSampler{BGFX_INVALID_HANDLE}, environmentParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle ambientLight{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
-    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*,std::span<const TransparentMeshDraw>,bool,const std::function<void()>&,MaterialEvaluationContext,bgfx::ViewId depthView=InvalidRenderView,const std::function<void()>& composite={});
+    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*,std::span<const TransparentMeshDraw>,bool,const std::function<void()>&,MaterialEvaluationContext,bgfx::ViewId depthView=InvalidRenderView);
     std::shared_ptr<const ModelPose> poseFor(const RenderModelInstance&);
     void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId,bgfx::ViewId,unsigned,unsigned,float);
     bool prepareGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViewPurpose);
@@ -497,9 +467,6 @@ struct Renderer::Impl {
         if (!initialized) return;
         shadows.reset();thumbnailShadows.reset();destroyHandle(shadowProgram);
         collisionOverlays.reset();destroyHandle(collisionOverlayProgram);
-        retiredOccluderLayers.clear();destroyHandle(occluderCompositeProgram);
-        destroyHandle(occluderDepthProgram);destroyHandle(occluderPhase);
-        destroyHandle(occluderColor);destroyHandle(occluderDepth);destroyHandle(occluderComposite);
         deformation.reset();bindPoses.clear();destroyHandle(deformationProgram);
         destroyHandle(directionalShadowProgram);destroyHandle(directionalCasterViewProjection);destroyHandle(directionalCasterTile);
         sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); gameTargets.reset(); pickTargets.reset(); thumbnails.clear();
@@ -643,11 +610,6 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback, GraphicsBacken
     impl_->glowColor=uniform("s_glowColor",bgfx::UniformType::Sampler);
     impl_->gridProgram = program(cc_vs_grid,cc_fs_grid,"Quader analytic construction grid");
     impl_->collisionOverlayProgram=program(cc_vs_collision_overlay,cc_fs_collision_overlay,"Depth-tested collision overlays");
-    impl_->occluderCompositeProgram=program(cc_vs_present,cc_fs_occluder_composite,"Nearest player occluder composite");
-    impl_->occluderColor=uniform("s_occluderColor",bgfx::UniformType::Sampler);
-    impl_->occluderDepth=uniform("s_occluderDepth",bgfx::UniformType::Sampler);
-    impl_->occluderComposite=uniform("u_occluderComposite");
-    impl_->occluderPhase=uniform("u_occluderPhase");
     impl_->collisionOverlays=std::make_unique<CollisionOverlayGpu>();
     impl_->encode = program(cc_vs_present,cc_fs_encode,"Viewport sRGB encoding");
     impl_->particleProgram = program(cc_vs_particle,cc_fs_particle,"Unified material sprite fallback");
@@ -670,13 +632,11 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback, GraphicsBacken
     impl_->deformationProgram=computeProgram(cc_cs_model_deform);
     if(!bgfx::isValid(impl_->deformationProgram))throw std::runtime_error("Model GPU deformation program creation failed.");
     impl_->deformation=std::make_unique<ModelDeformationGpu>(impl_->deformationProgram);
-    impl_->occluderDepthProgram=computeProgram(cc_cs_occluder_depth);
     impl_->ssgiPrograms={computeProgram(cc_cs_ssgi_trace),computeProgram(cc_cs_ssgi_temporal),computeProgram(cc_cs_ssgi_filter),computeProgram(cc_cs_ssgi_publish)};
     impl_->ssaoPrograms={computeProgram(cc_cs_ssao_evaluate),computeProgram(cc_cs_ssao_publish)};
     impl_->ssgiAtlas=uniform("u_ssgiAtlas");impl_->ssgiSettings=uniform("u_ssgiSettings");impl_->ssgiDraw=uniform("u_ssgiDraw");
     impl_->debugViewUniform=uniform("u_debugView");
     impl_->ssaoAtlas=uniform("u_ssaoAtlas");impl_->ssaoSettings=uniform("u_ssaoSettings");
-    if(!bgfx::isValid(impl_->occluderDepthProgram))throw std::runtime_error("Nearest occluder depth publication program creation failed.");
     impl_->skyRight=uniform("u_skyRight");impl_->skyUp=uniform("u_skyUp");impl_->skyForward=uniform("u_skyForward");
     impl_->skySampler=uniform("s_skyEnvironment",bgfx::UniformType::Sampler);
     impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
@@ -685,7 +645,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback, GraphicsBacken
         shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur),
         shaderContentHash(cc_vs_directional_shadow,cc_fs_directional_shadow),shaderContentHash({},cc_cs_cluster_lights),shaderContentHash({},cc_cs_procedural_filter),
         0,0,shaderContentHash({},cc_cs_model_deform),
-        shaderContentHash(cc_vs_collision_overlay,cc_fs_collision_overlay),shaderContentHash(cc_vs_present,cc_fs_occluder_composite),shaderContentHash({},cc_cs_occluder_depth),
+        shaderContentHash(cc_vs_collision_overlay,cc_fs_collision_overlay),0,0,
         shaderContentHash({},cc_cs_ssgi_trace),shaderContentHash({},cc_cs_ssgi_temporal),shaderContentHash({},cc_cs_ssgi_filter),shaderContentHash({},cc_cs_ssgi_publish),
         shaderContentHash({},cc_cs_ssao_evaluate),shaderContentHash({},cc_cs_ssao_publish)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
@@ -802,13 +762,6 @@ bool Renderer::publishThumbnailEnvironment(const PreparedEnvironment& data) {
 const std::string& Renderer::environmentStatus() const {
     return impl_->proceduralActive?impl_->proceduralEnvironment->status():impl_->environment->status();
 }
-std::size_t Renderer::occluderLayerResidentBytes() const {
-    std::size_t bytes{};
-    for(const auto* target:{impl_->targets.get(),impl_->gameTargets.get()})
-        if(target&&target->occluderLayer)bytes+=target->occluderLayer->bytes;
-    for(const auto& retired:impl_->retiredOccluderLayers)bytes+=retired.target->bytes;
-    return bytes;
-}
 std::size_t Renderer::environmentResidentBytes() const {
     auto bytes=impl_->environment->residentBytes()+impl_->thumbnailEnvironment->residentBytes()+impl_->materialPreviewEnvironment->residentBytes()+
         impl_->proceduralEnvironment->residentBytes()+impl_->thumbnailProceduralEnvironment->residentBytes();
@@ -817,11 +770,9 @@ std::size_t Renderer::environmentResidentBytes() const {
         if(target->ssgi)bytes+=target->ssgi->residentBytes();
         if(target->ssao)bytes+=target->ssao->residentBytes();
         bytes+=target->readableDepthBytes;
-        if(target->occluderLayer)bytes+=target->occluderLayer->bytes;
     }};
     add(impl_->targets);add(impl_->gameTargets);add(impl_->materialPreviewTargets);add(impl_->particlePreviewTargets);
     if(impl_->pendingThumbnail)add(impl_->pendingThumbnail->targets);
-    for(const auto& retired:impl_->retiredOccluderLayers)bytes+=retired.target->bytes;
     return bytes;
 }
 const ClusteredLightingStats& Renderer::clusteredLightingStats() const {return impl_->clusterStats;}
@@ -901,8 +852,6 @@ void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
     impl_->streamModels->beginMainView();
     ++impl_->renderFrame;
     for(auto* target:{impl_->targets.get(),impl_->gameTargets.get()})if(target)target->advanceSsgi(impl_->renderFrame);
-    while(!impl_->retiredOccluderLayers.empty()&&impl_->retiredOccluderLayers.front().after<=impl_->renderFrame)
-        impl_->retiredOccluderLayers.pop_front();
     impl_->collisionOverlays->trim(impl_->renderFrame);
     impl_->deformation->advance(impl_->renderFrame);
     std::erase_if(impl_->bindPoses,[](const auto& item){return item.second.asset.expired();});
@@ -1004,7 +953,7 @@ void Renderer::trimThumbnailCache(std::size_t target) {
 const std::string& Renderer::thumbnailStatus() const { return impl_->thumbnailStatus; }
 bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::span<const std::uint8_t> proceduralCompute,
     std::span<const std::uint8_t> clusterCompute,std::span<const std::uint8_t> deformationCompute,
-    std::span<const std::uint8_t> occluderDepthCompute,std::span<const std::uint8_t> ssgiTrace,
+    std::span<const std::uint8_t> ssgiTrace,
     std::span<const std::uint8_t> ssgiTemporal,std::span<const std::uint8_t> ssgiFilter,std::span<const std::uint8_t> ssgiPublish,
     std::span<const std::uint8_t> ssaoEvaluate,std::span<const std::uint8_t> ssaoPublish) {
     std::vector<std::pair<bgfx::ProgramHandle*,bgfx::ProgramHandle>> candidates;
@@ -1012,7 +961,6 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
     bgfx::ProgramHandle worldCompute{BGFX_INVALID_HANDLE},thumbnailCompute{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle nextClusterCompute{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle nextDeformation{BGFX_INVALID_HANDLE};
-    bgfx::ProgramHandle nextOccluderDepth{BGFX_INVALID_HANDLE};
     std::array<bgfx::ProgramHandle,4> nextSsgi{{BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE}};
     const std::array<std::span<const std::uint8_t>,4> giBytes{ssgiTrace,ssgiTemporal,ssgiFilter,ssgiPublish};
     std::array<bgfx::ProgramHandle,2> nextSsao{{BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE}};
@@ -1029,7 +977,6 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             if(!bgfx::isValid(target))throw std::runtime_error("Compute shader hot-reload allocation failed.");
         };
         prepareCompute(deformationCompute,cc_cs_model_deform,16,nextDeformation);
-        prepareCompute(occluderDepthCompute,cc_cs_occluder_depth,19,nextOccluderDepth);
         prepareCompute(ssgiTrace,cc_cs_ssgi_trace,20,nextSsgi[0]);prepareCompute(ssgiTemporal,cc_cs_ssgi_temporal,21,nextSsgi[1]);
         prepareCompute(ssgiFilter,cc_cs_ssgi_filter,22,nextSsgi[2]);prepareCompute(ssgiPublish,cc_cs_ssgi_publish,23,nextSsgi[3]);
         prepareCompute(ssaoEvaluate,cc_cs_ssao_evaluate,24,nextSsao[0]);
@@ -1069,7 +1016,6 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             case RendererProgram::GlowExtract: target=&impl_->glowExtractProgram; contractV=cc_vs_present; contractF=cc_fs_glow_extract; break;
             case RendererProgram::GlowBlur: target=&impl_->glowBlurProgram; contractV=cc_vs_present; contractF=cc_fs_glow_blur; break;
             case RendererProgram::CollisionOverlay:target=&impl_->collisionOverlayProgram;contractV=cc_vs_collision_overlay;contractF=cc_fs_collision_overlay;break;
-            case RendererProgram::OccluderComposite:target=&impl_->occluderCompositeProgram;contractV=cc_vs_present;contractF=cc_fs_occluder_composite;break;
             }
             if (!target || std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.first==target;})) throw std::runtime_error("Shader reload batch has an invalid or duplicated program.");
             std::string diagnostic;
@@ -1087,7 +1033,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
         // Nothing above changes a live owner or its bindings. Rejecting any
         // compute or graphics candidate leaves the entire prior group active.
         const bool programsChanged=!candidates.empty()||bgfx::isValid(nextClusterCompute)||bgfx::isValid(worldCompute)||
-            bgfx::isValid(nextDeformation)||bgfx::isValid(nextOccluderDepth)||
+            bgfx::isValid(nextDeformation)||
             std::any_of(nextSsgi.begin(),nextSsgi.end(),[](auto item){return bgfx::isValid(item);})||
             std::any_of(nextSsao.begin(),nextSsao.end(),[](auto item){return bgfx::isValid(item);});
         for (auto& [target,candidate]:candidates) { destroyHandle(*target); *target=candidate; }
@@ -1099,10 +1045,6 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             destroyHandle(impl_->deformationProgram);impl_->deformationProgram=nextDeformation;
             nextDeformation=BGFX_INVALID_HANDLE;impl_->programHashes[16]=shaderContentHash({},deformationCompute);
             impl_->deformation->setProgram(impl_->deformationProgram);
-        }
-        if(bgfx::isValid(nextOccluderDepth)) {
-            destroyHandle(impl_->occluderDepthProgram);impl_->occluderDepthProgram=nextOccluderDepth;
-            nextOccluderDepth=BGFX_INVALID_HANDLE;impl_->programHashes[19]=shaderContentHash({},occluderDepthCompute);
         }
         for(std::size_t i=0;i<nextSsgi.size();++i)if(bgfx::isValid(nextSsgi[i])) {
             destroyHandle(impl_->ssgiPrograms[i]);impl_->ssgiPrograms[i]=nextSsgi[i];nextSsgi[i]=BGFX_INVALID_HANDLE;
@@ -1134,7 +1076,6 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
         destroyHandle(worldCompute);destroyHandle(thumbnailCompute);
         destroyHandle(nextClusterCompute);
         destroyHandle(nextDeformation);
-        destroyHandle(nextOccluderDepth);
         for(auto& item:nextSsgi)destroyHandle(item);
         for(auto& item:nextSsao)destroyHandle(item);
         impl_->shaderStatus=error.what(); return false;
@@ -1211,7 +1152,6 @@ void Renderer::resizeViewport(std::uint32_t width, std::uint32_t height) {
     next->create(width,height); // Old targets survive allocation failure.
     cancelPicking();
     impl_->pickTargets.reset();
-    if(impl_->targets&&impl_->targets->occluderLayer)impl_->retiredOccluderLayers.push_back({std::move(impl_->targets->occluderLayer),impl_->renderFrame+3});
     impl_->targets = std::move(next);
     impl_->width = width; impl_->height = height; impl_->viewportDrawable = true;
 }
@@ -1222,7 +1162,6 @@ void Renderer::resizeGameViewport(std::uint32_t width,std::uint32_t height) {
         impl_->gameDrawable=true; return;
     }
     auto targets=std::make_unique<ViewportTargets>(); targets->create(width,height);
-    if(impl_->gameTargets&&impl_->gameTargets->occluderLayer)impl_->retiredOccluderLayers.push_back({std::move(impl_->gameTargets->occluderLayer),impl_->renderFrame+3});
     impl_->gameTargets=std::move(targets);
     impl_->gameWidth=width; impl_->gameHeight=height; impl_->gameDrawable=true;
 }
@@ -1383,7 +1322,7 @@ void Renderer::render(const RenderScene& scene) {
     impl_->displayedMaterialContext=scene.materialContext;
 }
 void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::span<const RenderParticleMaterial> materials,
-                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result,std::span<const TransparentMeshDraw> meshDraws,bool transparentPhase,const std::function<void()>& bindLighting,MaterialEvaluationContext context,bgfx::ViewId depthView,const std::function<void()>& composite) {
+                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result,std::span<const TransparentMeshDraw> meshDraws,bool transparentPhase,const std::function<void()>& bindLighting,MaterialEvaluationContext context,bgfx::ViewId depthView) {
     ParticleRenderStats stats=transparentPhase && result?*result:ParticleRenderStats{};
     stats.requested=input.size();
     const bool instancing=(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING)!=0;
@@ -1449,66 +1388,56 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
         particleBatches.push_back({instances,materialIndex,false});
         stats.submitted+=available;cursor+=available;++stats.drawCalls;
     }
-    // Record admission, sorting and transient instances once. Both clipped
-    // phases submit those same batches, so a shortage cannot drop just one
-    // half of a sprite and the renderer never advances particle presentation.
-    const unsigned phases=composite?2u:1u;
-    for(unsigned phase=0;phase<phases;++phase) {
-        if(phase)composite();
-        const Vec4 partition{composite?(phase?1.f:-1.f):0.f,0,0,0};
-        for(const auto& batch:particleBatches) {
-            bgfx::setUniform(occluderPhase,partition.data());
-            if(batch.mesh){meshDraws[batch.index].submit(phase!=0);continue;}
-            const auto materialIndex=batch.index;
-            const auto& material=materialAt(materialIndex);
-            if(!pinned[materialIndex] && material.pinned) {
-                submittedPins.push_back(material.pinned);pinned[materialIndex]=true;
-            }
-            const bool textured=bgfx::isValid(material.colorTexture);
-            const auto shading=material.graph?material.graph->shading:material.shading;
-            const auto mode=material.graph?material.graph->blend:material.blend;
-            const float options[]{textured?1.f:0.f,0,0,0};
-            const std::array<Vec4,5> parameters{{material.baseColor,{material.roughness,material.metallic,material.occlusion,1},
-                {material.emission[0],material.emission[1],material.emission[2],material.alphaCutoff},
-                {material.doubleSided?1.f:0.f,0,shading==MaterialShading::Unlit?1.f:0.f,static_cast<float>(mode)}, {material.specular,0,0,0}}};
-            const Mat4 identity;
-            const Vec4 modelSettings{0,mode==MaterialBlend::Mask?1.f:0.f,material.doubleSided?1.f:0.f,1};
-            const Vec4 emissiveSettings{0,shading==MaterialShading::Unlit?1.f:0.f,1,0},uvSettings{};
-            if(material.graph&&!phase)submittedPins.push_back(material.graph);
-            const auto bindBatch=[&](bool prepass) {
-                bgfx::setUniform(particleParameters,parameters.data(),static_cast<std::uint16_t>(parameters.size()));
-                bgfx::setUniform(particleParams,options);bindLighting();
-                // Sprites occlude the geometry query but never supply or
-                // receive indirect lighting in the model-only GI profile.
-                const Vec4 giDraw{!transparentPhase?1.f:0.f,1.f,0,0};bgfx::setUniform(ssgiDraw,giDraw.data());
-                const Vec4 scopes{float(lighting_scope::World),float(lighting_scope::World),prepass?1.f:0.f,1.f};
-                bgfx::setUniform(surfaceLighting,scopes.data());
-                const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
-                bindFog(fogValues,material.graph?material.graph->receiveFog:material.receiveFog);
-                bgfx::setUniform(modelNormalMatrix,identity.data());bgfx::setUniform(modelOptions,modelSettings.data());
-                bgfx::setUniform(modelUv,uvSettings.data());bgfx::setUniform(modelEmissiveMap,emissiveSettings.data());
-                bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
-                bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
-                if(material.graph)material.graph->bind(context);
-                particleQuad.bind();bgfx::setInstanceDataBuffer(&batch.instances);
-            };
-            const auto blend=mode==MaterialBlend::Alpha ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
-                mode==MaterialBlend::Additive ? BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
-            const bool doubleSided=material.graph?material.graph->uniforms[3][0]>.5f:material.doubleSided;
-            if(depthView!=InvalidRenderView && !transparentPhase) {
-                // Both passes reference this one allocation. A transient-buffer
-                // shortage drops the same batch from depth and visible color.
-                bindBatch(true);
-                bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|(doubleSided?0:BGFX_STATE_CULL_CW));
-                bgfx::submit(depthView,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
-            }
-            bindBatch(false);
-            bgfx::setState((BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) | (transparentPhase?0:BGFX_STATE_WRITE_Z) |
-                BGFX_STATE_DEPTH_TEST_LESS | (doubleSided?0:BGFX_STATE_CULL_CW) | blend);
-            bgfx::submit(view,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
+    for(const auto& batch:particleBatches) {
+        if(batch.mesh){meshDraws[batch.index].submit();continue;}
+        const auto materialIndex=batch.index;
+        const auto& material=materialAt(materialIndex);
+        if(!pinned[materialIndex] && material.pinned) {
+            submittedPins.push_back(material.pinned);pinned[materialIndex]=true;
         }
+        const bool textured=bgfx::isValid(material.colorTexture);
+        const auto shading=material.graph?material.graph->shading:material.shading;
+        const auto mode=material.graph?material.graph->blend:material.blend;
+        const float options[]{textured?1.f:0.f,0,0,0};
+        const std::array<Vec4,5> parameters{{material.baseColor,{material.roughness,material.metallic,material.occlusion,1},
+            {material.emission[0],material.emission[1],material.emission[2],material.alphaCutoff},
+            {material.doubleSided?1.f:0.f,0,shading==MaterialShading::Unlit?1.f:0.f,static_cast<float>(mode)}, {material.specular,0,0,0}}};
+        const Mat4 identity;
+        const Vec4 modelSettings{0,mode==MaterialBlend::Mask?1.f:0.f,material.doubleSided?1.f:0.f,1};
+        const Vec4 emissiveSettings{0,shading==MaterialShading::Unlit?1.f:0.f,1,0},uvSettings{};
+        if(material.graph)submittedPins.push_back(material.graph);
+        const auto bindBatch=[&](bool prepass) {
+            bgfx::setUniform(particleParameters,parameters.data(),static_cast<std::uint16_t>(parameters.size()));
+            bgfx::setUniform(particleParams,options);bindLighting();
+            // Sprites occlude the geometry query but never supply or
+            // receive indirect lighting in the model-only GI profile.
+            const Vec4 giDraw{!transparentPhase?1.f:0.f,1.f,0,0};bgfx::setUniform(ssgiDraw,giDraw.data());
+            const Vec4 scopes{float(lighting_scope::World),float(lighting_scope::World),prepass?1.f:0.f,1.f};
+            bgfx::setUniform(surfaceLighting,scopes.data());
+            const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+            bindFog(fogValues,material.graph?material.graph->receiveFog:material.receiveFog);
+            bgfx::setUniform(modelNormalMatrix,identity.data());bgfx::setUniform(modelOptions,modelSettings.data());
+            bgfx::setUniform(modelUv,uvSettings.data());bgfx::setUniform(modelEmissiveMap,emissiveSettings.data());
+            bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
+            bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
+            if(material.graph)material.graph->bind(context);
+            particleQuad.bind();bgfx::setInstanceDataBuffer(&batch.instances);
+        };
+        const auto blend=mode==MaterialBlend::Alpha ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
+            mode==MaterialBlend::Additive ? BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
+        const bool doubleSided=material.graph?material.graph->uniforms[3][0]>.5f:material.doubleSided;
+        if(depthView!=InvalidRenderView && !transparentPhase) {
+            // Both passes reference this one allocation. A transient-buffer
+            // shortage drops the same batch from depth and visible color.
+            bindBatch(true);
+            bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|(doubleSided?0:BGFX_STATE_CULL_CW));
+            bgfx::submit(depthView,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
+        }
+        bindBatch(false);
+        bgfx::setState((BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) | (transparentPhase?0:BGFX_STATE_WRITE_Z) |
+            BGFX_STATE_DEPTH_TEST_LESS | (doubleSided?0:BGFX_STATE_CULL_CW) | blend);
+        bgfx::submit(view,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
     }
-    const Vec4 noPartition{};bgfx::setUniform(occluderPhase,noPartition.data());
     if (result) *result=stats;
 }
 std::shared_ptr<const ModelPose> Renderer::Impl::poseFor(const RenderModelInstance& instance) {
@@ -1553,52 +1482,29 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
     const auto pointLights=std::span(selectedPoints).first(shadowSelection.count);
     const auto count=pointLights.size();
     const auto directionalCount=std::min(scene.directionalLights.size(),MaxDirectionalLights);
-    const auto focused=[&](std::uint64_t id) {
-        return std::find(scene.shadowFocusEntities.begin(),scene.shadowFocusEntities.end(),id)!=scene.shadowFocusEntities.end();
-    };
-    struct CasterInstance {const RenderModelInstance* instance;Aabb bounds;bool focused;};
+    struct CasterInstance {const RenderModelInstance* instance;Aabb bounds;};
     std::vector<CasterInstance> instances;
-    std::vector<Aabb> allBounds,worldCasterBounds;
-    // The ordinary directional focus envelope may include opted-out meshes.
+    std::vector<Aabb> allBounds;
     const bool directionalShadows=std::any_of(scene.directionalLights.begin(),scene.directionalLights.begin()+directionalCount,
         [](const auto& light){return light.enabled&&light.castShadows;});
     if(scene.shadowWorldId && (count || directionalShadows)) {
         instances.reserve(scene.shadowInstances.size());
-        if(directionalShadows){allBounds.reserve(scene.shadowInstances.size());worldCasterBounds.reserve(scene.shadowInstances.size());}
+        if(directionalShadows)allBounds.reserve(scene.shadowInstances.size());
         for(const auto& instance:scene.shadowInstances)if(instance.castShadows&&instance.model.asset) {
             const auto pose=poseFor(instance);
             const auto bounds=math::transformBounds(pose?pose->bounds:instance.model.asset->bounds,instance.model.transform);
-            const bool isFocus=focused(instance.entityId);
-            instances.push_back({&instance,bounds,isFocus});
-            if(directionalShadows){allBounds.push_back(bounds);if(!isFocus)worldCasterBounds.push_back(bounds);}
+            instances.push_back({&instance,bounds});
+            if(directionalShadows)allBounds.push_back(bounds);
         }
     }
     const ShadowCamera shadowCamera{scene.settings.camera,aspect};
-    std::vector<Aabb> receiverStorage;
-    auto receiverBounds=scene.shadowReceiverBounds;
-    if(cameraContext==1 && directionalShadows && receiverBounds.empty()) {
-        receiverStorage.reserve(scene.instances.size());
-        for(const auto& instance:scene.instances)if(instance.receiveShadows) {
-            const auto pose=poseFor(instance);
-            receiverStorage.push_back(instance.model.asset?math::transformBounds(pose?pose->bounds:instance.model.asset->bounds,instance.model.transform):Aabb{});
-        }
-        const auto particleBounds=particleShadowReceiverBounds(scene.particles,scene.particleMaterials);
-        if(particleBounds.valid)receiverStorage.push_back(particleBounds);
-        receiverBounds=receiverStorage;
-    }
     std::array<directional_shadow::Cascades,MaxDirectionalLights> cascadeFits;
     for(std::size_t index=0;index<directionalCount;++index)if(scene.directionalLights[index].enabled&&scene.directionalLights[index].castShadows) {
-        if(cameraContext==1) {
-            auto& fits=cascadeFits[index];
-            fits=directional_shadow::buildGame(scene.directionalLights[index],shadowCamera,scene.shadowResolution,worldCasterBounds,scene.shadowFocusBounds,receiverBounds);
-            if(fits.characterProjection>=fits.projectionCount)
-                fits=directional_shadow::buildGame(scene.directionalLights[index],shadowCamera,scene.shadowResolution,allBounds,{},receiverBounds);
-        } else cascadeFits[index]=directional_shadow::build(scene.directionalLights[index],shadowCamera,scene.shadowResolution,allBounds);
+        cascadeFits[index]=directional_shadow::build(scene.directionalLights[index],shadowCamera,scene.shadowResolution,allBounds);
     }
     struct ShadowTarget {
         const PointLight* point{};
         const directional_shadow::Cascade* projection{};
-        bool partitionFocus{},focusedOnly{};
         std::uint32_t casterMask{lighting_scope::All};
     };
     std::array<ShadowTarget,MaximumShadowTargets> shadowTargets{};
@@ -1613,8 +1519,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
         const auto& light=scene.directionalLights[directionIndex];const auto& fits=cascadeFits[directionIndex];
         target.casterMask=light.roles.shadowCasterMask;
         if(!light.enabled || !light.castShadows || !fits.valid || projectionIndex>=fits.projectionCount)continue;
-        target.projection=&fits.values[projectionIndex];target.partitionFocus=fits.characterProjection<fits.projectionCount;
-        target.focusedOnly=projectionIndex==fits.characterProjection;
+        target.projection=&fits.values[projectionIndex];
     }
     const auto visible=[](const ShadowTarget& target,const Aabb& bounds) {
         return target.point?point_shadow::intersectsLight(bounds,target.point->position,target.point->radius):
@@ -1622,8 +1527,8 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
     };
     const auto includes=[](std::uint64_t mask,std::size_t index) {return (mask&(std::uint64_t{1}<<index))!=0;};
     // Prepare geometry/material metadata once per relevant instance/primitive.
-    // Projection membership, LOD and signatures remain independent: a focused
-    // character edit must not invalidate the stationary world projection.
+    // Projection membership, LOD and signatures remain independent so each
+    // cached cascade is invalidated only by its own relevant casters.
     for(const auto& entry:instances) {
         const auto& instance=*entry.instance;
         if(instance.blend==MaterialBlend::Alpha || instance.blend==MaterialBlend::Additive)continue;
@@ -1631,7 +1536,6 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
         for(std::size_t index=0;index<targetCount;++index) {
             const auto& target=shadowTargets[index];
             if(!(target.casterMask & instance.lightingScopes.shadowCasterMask))continue;
-            if(target.partitionFocus && entry.focused!=target.focusedOnly)continue;
             if(visible(target,entry.bounds))instanceTargets|=std::uint64_t{1}<<index;
         }
         if(!instanceTargets)continue;
@@ -1745,7 +1649,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 if(graph)graph->bind(scene.materialContext);
                 if(cascade) {
                     const auto projection=cascade->projection*cascade->view;
-                    const auto tile=directional_shadow::casterTile(cascadeIndex,cameraCount==2?(cameraContext==1?2:4):2,cameraCount==2?1:2);
+                    const auto tile=directional_shadow::casterTile(cascadeIndex);
                     bgfx::setUniform(directionalCasterViewProjection,projection.data());bgfx::setUniform(directionalCasterTile,tile.data());
                     bgfx::setScissor(rectangle->x,rectangle->y,rectangle->width,rectangle->height);
                 }
@@ -1755,8 +1659,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 bgfx::setState(BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|cull);
                 bgfx::submit(view,graph?graph->program(pass):cascade?directionalShadowProgram:shadowProgram);
     };
-    const auto focus=scene.shadowPriorityOrigin.value_or(scene.shadowFocusBounds.valid?
-        (scene.shadowFocusBounds.minimum+scene.shadowFocusBounds.maximum)*.5:scene.settings.camera.eye());
+    const auto focus=scene.shadowPriorityOrigin.value_or(scene.settings.camera.eye());
     owner.render(pointLights,scene.directionalLights,std::span(signatures).first(count),scene.shadowWorldId,scene.shadowResolution,renderFrame,firstView,cameraCount,focus,
         [&](std::size_t lightIndex,const Camera& camera,bgfx::ViewId view) {
             std::uint32_t draws=0;
@@ -1772,7 +1675,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
             // Sibling projections keep their cached depth in the same view.
             const Mat4 identity;
             const auto clearProjection=math::translation({0,0,1});
-            const auto tile=directional_shadow::casterTile(cascadeIndex,cameraCount==2?(cameraContext==1?2:4):2,cameraCount==2?1:2);
+            const auto tile=directional_shadow::casterTile(cascadeIndex);
             const Vec4 one{1,1,1,1},zero{};
             bgfx::setUniform(surfaceLighting,zero.data());
             const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
@@ -1818,9 +1721,9 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     const auto debugMode=sceneView?debugViews[gameView?1:0]:RenderDebugView::Lit;
     const Vec4 debugValues{static_cast<float>(debugMode),0,0,0};
     bgfx::setUniform(debugViewUniform,debugValues.data());
-    const Vec4 noPartition{};bgfx::setUniform(occluderPhase,noPartition.data());
-    bgfx::setUniform(ssgiAtlas,noPartition.data());bgfx::setUniform(ssgiSettings,noPartition.data());bgfx::setUniform(ssgiDraw,noPartition.data());
-    bgfx::setUniform(ssaoAtlas,noPartition.data());bgfx::setUniform(ssaoSettings,noPartition.data());
+    const Vec4 disabledEffects{};
+    bgfx::setUniform(ssgiAtlas,disabledEffects.data());bgfx::setUniform(ssgiSettings,disabledEffects.data());bgfx::setUniform(ssgiDraw,disabledEffects.data());
+    bgfx::setUniform(ssaoAtlas,disabledEffects.data());bgfx::setUniform(ssaoSettings,disabledEffects.data());
     auto& viewLods=lodSelections[gameView ? 1 : 0];
     auto& giDraws=ssgiDrawHistory[gameView?1:0];
     if (scene.pinned) submittedPins.push_back(scene.pinned);
@@ -1864,26 +1767,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     }
     bool readableDepthEnabled=ssgiEnabled||ssaoEnabled;
     const bool scheduledPick=allowPicking && scene.sceneMode && requestedPick && !pendingPick && pickTargets;
-    bool occluderEnabled=false;
-    if(sceneView)for(const auto& instance:scene.instances) {
-        const auto opacity=bounded(instance.opacity,1,0,1);
-        if(opacity<=0||opacity>=1||!instance.model.asset)continue;
-        const auto& asset=*instance.model.asset;
-        if(!models.contains(asset.id)&&!streamModels->ready(asset.id,instance.resourceRevision))continue;
-        for(const auto& primitive:asset.primitives) {
-            const auto slot=primitive.material;
-            const auto& material=instance.materials&&slot<instance.materials->size()?(*instance.materials)[slot]:asset.materials[slot];
-            const ModelMaterialTextures empty;
-            const auto& bindings=instance.textures&&slot<instance.textures->size()?(*instance.textures)[slot]:empty;
-            const auto blend=authoredModelBlend(instance,material,bindings);
-            if(blend==MaterialBlend::Opaque||blend==MaterialBlend::Mask){occluderEnabled=true;break;}
-        }
-        if(occluderEnabled)break;
-    }
-    if(occluderEnabled&&!target.occluderLayer) {
-        auto layer=std::make_shared<OccluderLayerTargets>();layer->create(w,h);target.occluderLayer=std::move(layer);
-    }
-    auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,sceneView&&!scene.collisionOverlays.empty(),occluderEnabled,ssgiEnabled,ssaoEnabled});
+    auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,sceneView&&!scene.collisionOverlays.empty(),ssgiEnabled,ssaoEnabled});
     if(const auto validation=validateRenderPassPlan(plan);!validation)
         throw std::logic_error(renderPassPlanErrorText(validation.error));
     const auto passView=[&](RenderPassKind kind) {
@@ -1994,7 +1878,6 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     target.clustered->advance(renderFrame);
     bool clusterReady=target.clustered->prepare(settings.camera,w,h,points,shadowIndices,lighting.brdfCpu(),
         passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference,
-        occluderEnabled?w:0,occluderEnabled?h:0,
         ssgiEnabled?w:0,ssgiEnabled?h:0,ssaoEnabled?w:0,ssaoEnabled?h:0);
     if(!clusterReady&&(ssgiEnabled||ssaoEnabled)) {
         if(ssgiEnabled)target.ssgiFailure=target.clustered->status();
@@ -2006,8 +1889,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
         // validated fallback plan contains only producers actually consumed.
         auto fallback=plan.config;fallback.ssgi=false;fallback.ssao=false;plan=buildRenderPassPlan(fallback);
         clusterReady=target.clustered->prepare(settings.camera,w,h,points,shadowIndices,lighting.brdfCpu(),
-            passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference,
-            occluderEnabled?w:0,occluderEnabled?h:0);
+            passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference);
     }
     if(sceneView){clusterStats=target.clustered->stats();clusterStatus=target.clustered->status();}
     if(!clusterReady) {
@@ -2058,22 +1940,6 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     const Vec4 giSettingsValues{ssgiReady?1.f:0.f,settings.environment.ssgi.strength,0,0};
     const Vec4 aoAtlasValues{float(target.clustered->ssaoBaseTexel()),float(w),float(h),ssaoReady?1.f:0.f};
     const Vec4 aoSettingsValues{ssaoReady?1.f:0.f,settings.environment.ssao.strength,0,0};
-    if(occluderEnabled) {
-        const auto layerView=passView(RenderPassKind::OccluderLayer);
-        bgfx::setViewName(layerView,gameView?"Game lighting effects and nearest occluder":"Scene lighting effects and nearest occluder");
-        // Pinned bgfx executes compute before graphics in a physical view.
-        // GI/AO compute reads separate receiver targets, then graphics
-        // clear/write only this private layer before the main color pass.
-        bgfx::setViewFrameBuffer(layerView,target.occluderLayer->framebuffer);
-        bgfx::setViewRect(layerView,0,0,w,h);bgfx::setViewTransform(layerView,view.data(),projection.data());
-        bgfx::setViewClear(layerView,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,0u,1.f,0);bgfx::touch(layerView);
-        submittedPins.push_back(target.occluderLayer);
-    } else {
-        // This physical slot can retain the previous frame's fade framebuffer.
-        // Keep a later lighting dispatch independent of retired scratch.
-        const auto layerView=views.lightingEffects;
-        if(layerView!=InvalidRenderView){bgfx::setViewFrameBuffer(layerView,BGFX_INVALID_HANDLE);bgfx::setViewClear(layerView,BGFX_CLEAR_NONE);}
-    }
     const auto bindLighting = [&](std::uint8_t firstEnvironmentSlot) {
         bgfx::setUniform(debugViewUniform,debugValues.data());
         const std::uint8_t shadowSlot=firstEnvironmentSlot==12?15:8;
@@ -2110,7 +1976,6 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
         instances = legacy;
     }
     std::vector<TransparentMeshDraw> transparentMeshes;
-    bool occluderDrawn=false;
     std::size_t skipped = 0, collapsed = 0, missing = 0;
     for (const auto& instance : instances) {
         const float opacity=bounded(instance.opacity,1,0,1);
@@ -2177,7 +2042,6 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                 const auto shading=graph?graph->shading:material.graph?materialOutputNode(*material.graph).output.shading:instance.shading;
                 const auto authoredBlend=authoredModelBlend(instance,material,bindings);
                 const auto blend=opacity<1 && (authoredBlend==MaterialBlend::Opaque || authoredBlend==MaterialBlend::Mask)?MaterialBlend::Alpha:authoredBlend;
-                const bool nearestLayer=occluderEnabled&&opacity<1&&(authoredBlend==MaterialBlend::Opaque||authoredBlend==MaterialBlend::Mask);
                 bool giUnstable=false;
                 if(ssgiEnabled) {
                     std::uint64_t materialKey=graph?graph->signature:instance.resourceRevision;
@@ -2193,7 +2057,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                     giDraws[key]={world,materialKey,renderFrame};
                 }
                 if(graph)submittedPins.push_back(graph);
-                auto submitDraw=[&,world,normal,handedness,resident,legacyMesh,deformed,tangentUv,material,bindings,graph,shading,blend,authoredBlend,opacity,nearestLayer,samplers,instance,pickColor,giUnstable](bool replay) {
+                auto submitDraw=[&,world,normal,handedness,resident,legacyMesh,deformed,tangentUv,material,bindings,graph,shading,blend,authoredBlend,opacity,samplers,instance,pickColor,giUnstable]() {
                     const auto bindGeometry=[&] {if(resident)resident->bind();else legacyMesh->bind();if(deformed)deformed->bind();};
                     float mapFlags[4]{};
                     for(std::size_t slot=0;slot<4;++slot)mapFlags[slot]=bgfx::isValid(bindings.handles[slot])?1.f:0.f;
@@ -2221,7 +2085,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                             prepass?1.f:0.f,transparent?1.f:0.f};
                         bgfx::setUniform(surfaceLighting,scopes.data());
                         const Vec4 category{float(instance.lightingCategory),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
-                        const Vec4 giDraw{ssgiEnabled&&!transparent&&!nearestLayer&&opacity>=1.f?1.f:0.f,giUnstable?1.f:0.f,0,0};
+                        const Vec4 giDraw{ssgiEnabled&&!transparent&&opacity>=1.f?1.f:0.f,giUnstable?1.f:0.f,0,0};
                         bgfx::setUniform(ssgiDraw,giDraw.data());
                         if(!prepass) {bindLighting(graph?12:5);bindFog(fogValues,graph?graph->receiveFog:material.receiveFog);}
                         for(std::uint8_t slot=0;slot<samplers.size();++slot)
@@ -2237,9 +2101,9 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                     bindSurface(false);
                     const auto blending=blend==MaterialBlend::Alpha?BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
                         blend==MaterialBlend::Additive?BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
-                    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent&&!nearestLayer?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | (nearestLayer?0:blending));
-                    bgfx::submit(nearestLayer?passView(RenderPassKind::OccluderLayer):views.scene,graph?graph->program(MaterialGraphPass::Model):modelProgram);
-                    if (capturePick && !replay && instance.pickable && instance.entityId) {
+                    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | blending);
+                    bgfx::submit(views.scene,graph?graph->program(MaterialGraphPass::Model):modelProgram);
+                    if (capturePick && instance.pickable && instance.entityId) {
                         const bool geometryOnly=pendingPick->request.mode==PickMode::MaterialSlot;
                         if(graph&&!geometryOnly)pendingPick->graphMaterials.push_back(graph);
                         if (resident) pendingPick->resources.push_back(resident);
@@ -2266,17 +2130,16 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                         bgfx::submit(passView(RenderPassKind::Picking),graph&&!geometryOnly?graph->program(MaterialGraphPass::Picking):pickProgram);
                     }
                 };
-                if(nearestLayer||blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive) {
+                if(blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive) {
                     const auto localBounds=stream && draw.primitive<stream->primitives.size()?stream->primitives[draw.primitive].bounds:found->second->bounds[draw.primitive];
                     const auto bounds=pose?math::transformBounds(pose->bounds,instance.model.transform):math::transformBounds(localBounds,world);
                     const Vec3 center{(bounds.minimum[0]+bounds.maximum[0])*.5f,(bounds.minimum[1]+bounds.maximum[1])*.5f,(bounds.minimum[2]+bounds.maximum[2])*.5f};
                     const auto depth=particle_rendering::viewDepth(center,eye,settings.camera.forward());
                     if(std::isfinite(depth)) {
-                        if(nearestLayer){occluderDrawn=true;submitDraw(false);}
-                        else transparentMeshes.push_back({depth,std::move(submitDraw)});
+                        transparentMeshes.push_back({depth,std::move(submitDraw)});
                     }
                     else ++skipped;
-                } else submitDraw(false);
+                } else submitDraw();
             }
         }
     }
@@ -2319,24 +2182,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     auto* totals=particleStats?particleStats:&localParticleStats;
     const auto bindSpriteLighting=[&]{bindLighting(12);};
     renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,{},false,bindSpriteLighting,scene.materialContext,plan.has(RenderPassKind::DepthPrepass)?passView(RenderPassKind::DepthPrepass):InvalidRenderView);
-    std::function<void()> compositeOccluder;
-    if(occluderEnabled&&occluderDrawn) {
-        // Compute precedes graphics in this sequential color view. The prior
-        // layer view has already detached its depth, and this atlas region is
-        // disjoint from BRDF/light/GI/AO data read by the layer itself.
-        if(!target.clustered->publishOccluderDepth(target.occluderLayer->depth,occluderDepthProgram,passView(RenderPassKind::OccluderDepthPublish)))
-            throw std::runtime_error(target.clustered->status());
-        const auto layer=target.occluderLayer;const Vec4 parameters{caps->originBottomLeft?1.f:0.f,0,0,0};
-        compositeOccluder=[this,layer,parameters,sceneView=views.scene] {
-            bgfx::setUniform(occluderComposite,parameters.data());
-            bgfx::setTexture(0,occluderColor,layer->color);bgfx::setTexture(1,occluderDepth,layer->depth);
-            fullscreen.bind();
-            bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_DEPTH_TEST_LEQUAL|
-                BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA));
-            bgfx::submit(sceneView,occluderCompositeProgram);
-        };
-    }
-    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting,scene.materialContext,InvalidRenderView,compositeOccluder);
+    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting,scene.materialContext);
     if(ssgiEnabled&&ssgiReady)target.ssgi->finishCapture();
     if(ssgiEnabled)std::erase_if(giDraws,[&](const auto& item){return item.second.frame+2<renderFrame;});
 

@@ -281,34 +281,23 @@ Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_
     const auto value=pose(model,asset);return value?value->bounds:asset->bounds;
 }
 std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(const ExtractedScene& scene,std::uint16_t resolution,
-    ResourcePriority priority,std::span<const ShadowCamera> cameras,std::span<const std::uint64_t> focusEntities,std::optional<Vec3> priorityOrigin,std::span<const Aabb> extraReceiverBounds) {
+    ResourcePriority priority,std::span<const ShadowCamera> cameras,std::optional<Vec3> priorityOrigin) {
     auto result=std::make_shared<PreparedEditorShadows>();
     const auto shadowSelection=selectPointShadowLights(scene.points,priorityOrigin);
     const bool directional=std::any_of(scene.directional.begin(),scene.directional.end(),[](const auto& light){return light.enabled&&light.castShadows;});
     if(!directional && std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
     const std::array<ShadowCamera,1> fallback{{{Camera{},1.f}}};if(cameras.empty())cameras=fallback;
-    const auto focused=[&](std::uint64_t id){return std::find(focusEntities.begin(),focusEntities.end(),id)!=focusEntities.end();};
-    std::vector<Aabb> allBounds,worldCasterBounds;
-    if(directional){allBounds.reserve(scene.models.size());worldCasterBounds.reserve(scene.models.size());result->receiverBounds.reserve(scene.models.size()+extraReceiverBounds.size());
-        result->receiverBounds.insert(result->receiverBounds.end(),extraReceiverBounds.begin(),extraReceiverBounds.end());}
+    std::vector<Aabb> allBounds;
+    if(directional)allBounds.reserve(scene.models.size());
     if(directional)for(const auto& model:scene.models) {
         if(!model.visible)continue;
         const auto asset=assets_.findModel(model.assetId);
         const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
-        // Freeze receiver metadata before residency/camera preparation so both
-        // resource demand and execution use exactly the same projection fit.
-        if(model.receiveShadows)result->receiverBounds.push_back(bounds);
-        if(model.castShadows){allBounds.push_back(bounds);if(!focused(model.id))worldCasterBounds.push_back(bounds);}
+        if(model.castShadows)allBounds.push_back(bounds);
     }
     std::vector<directional_shadow::Cascades> fits;
     if(directional)for(const auto& light:scene.directional)if(light.enabled&&light.castShadows)
-        for(const auto& camera:cameras) {
-            if(camera.gameplay) {
-                auto fit=directional_shadow::buildGame(light,camera,resolution,worldCasterBounds,camera.focusBounds,result->receiverBounds);
-                if(fit.characterProjection>=fit.projectionCount)fit=directional_shadow::buildGame(light,camera,resolution,allBounds,{},result->receiverBounds);
-                fits.push_back(std::move(fit));
-            } else fits.push_back(directional_shadow::build(light,camera,resolution,allBounds));
-        }
+        for(const auto& camera:cameras)fits.push_back(directional_shadow::build(light,camera,resolution,allBounds));
     std::vector<Aabb> footprintBounds;
     for(const auto& model:scene.models) {
         if(!model.visible || !model.castShadows)continue;
@@ -322,10 +311,9 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
         }
         std::shared_ptr<const PreparedEditorModel> packet;
         float texel=std::numeric_limits<float>::max();
-        // Unknown bounds still request the player's original detail, so an
+        // Unknown bounds still request the model's original detail, so an
         // offscreen pending model can become a caster without a visible draw.
         for(const auto& fit:fits)if(fit.valid)for(unsigned projection=0;projection<fit.projectionCount;++projection) {
-            if(fit.characterProjection<fit.projectionCount && focused(model.id)!=(projection==fit.characterProjection))continue;
             if(directional_shadow::intersects(bounds,fit.values[projection]))texel=std::min(texel,fit.values[projection].texelWorld);
         }
         for(const auto source:shadowSelection.selectedSources()) {

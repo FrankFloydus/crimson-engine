@@ -108,6 +108,7 @@ struct DirectionalLight {
     float shadowNormalBias{1.f}; // Shadow-map texels.
     LightRoles roles{};
     float indirectEnergy{1.f}; // Scale diffuse source radiance supplied to SSGI.
+    float shadowAngularDiameter{.53f}; // Apparent directional emitter diameter in degrees.
 };
 
 struct PointLight {
@@ -169,8 +170,6 @@ struct ViewportRegion {
 
 struct ShadowCamera {
     Camera camera; float aspect{1.f};
-    bool gameplay{};
-    Aabb focusBounds{};
 };
 
 struct SceneSettings {
@@ -201,7 +200,7 @@ struct PointShadowStats {
     std::size_t allocatedBytes{};
     std::uint64_t worldId{};
     std::uint32_t directionalLights{},directionalRendered{},directionalCascades{},directionalCacheHits{};
-    std::uint32_t pointDeferred{},pointCriticalDeferred{},directionalWorldProjections{},characterProjections{};
+    std::uint32_t pointDeferred{},pointCriticalDeferred{},directionalWorldProjections{};
 };
 // Numeric order is execution order: the pinned D3D11 blit backend must not
 // receive a nonidentity view remapping. Both independent shadow worlds reserve

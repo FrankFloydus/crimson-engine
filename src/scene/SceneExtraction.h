@@ -18,7 +18,6 @@ struct ExtractedModel {
     std::uint32_t lightingCategory{lighting_scope::World};
     SceneModelAnimation animation{};
     double animationSeconds{}; // Transient sample time; never scene-authored.
-    bool fadeWhenOccluding{false};
     bool visible{true}; // Hidden models retain transient animation clocks.
     EntityId actorOwner{};
 };

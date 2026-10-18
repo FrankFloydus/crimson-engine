@@ -30,8 +30,6 @@ public:
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
-    bool playerOcclusionFade() const { return preferences_.values().playerOcclusionFade; }
-    const PlayerOcclusionSettings& playerOcclusionSettings() const { return preferences_.values().playerOcclusionSettings; }
     std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }

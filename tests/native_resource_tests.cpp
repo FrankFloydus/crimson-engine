@@ -1010,17 +1010,17 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     check(color.complete && normal.complete,"Native texture streaming did not publish complete resources.");
     if(shaderReloadOnly) {
         phase("focused shader reload");
-        // Only the disposable composite source changes. Its valid candidate
-        // must affect the published program signature, proving that this new
+        // Only the disposable final encoding source changes. Its valid candidate
+        // must affect the published program signature, proving that this
         // program belongs to the atomic renderer group rather than just the
         // compiler's list of stages.
-        const auto composite=shaderConfig.sourceDirectory/"fs_occluder_composite.sc";
+        const auto composite=shaderConfig.sourceDirectory/"fs_encode.sc";
         std::ifstream input(composite);check(bool(input),"Focused shader reload could not read its composite source.");
         const std::string original(std::istreambuf_iterator<char>{input},{});input.close();
-        auto candidate=original;const std::string assignment="gl_FragData[0] = color;";
+        auto candidate=original;const std::string assignment="gl_FragColor = vec4(encoded, 1.0);";
         const auto position=candidate.find(assignment);
         check(position!=std::string::npos,"Focused shader reload could not locate the composite output.");
-        candidate.replace(position,assignment.size(),"gl_FragData[0] = vec4(color.rgb * 0.75, color.a);");
+        candidate.replace(position,assignment.size(),"gl_FragColor = vec4(encoded * 0.75, 1.0);");
         const auto embedded=renderer.shaderSignature();
         try {
             writeFileAtomically(composite,candidate);
@@ -1034,15 +1034,15 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
             awaitReload();
             check(shaders.revision()==1,"Valid focused shader candidates did not publish: "+shaders.status());
             const auto healthy=renderer.shaderSignature();
-            check(healthy!=embedded,"The changed occluder composite did not enter the atomic renderer program group.");
+            check(healthy!=embedded,"The changed final encoding shader did not enter the atomic renderer program group.");
             writeFileAtomically(composite,candidate+"\nTHIS_IS_NOT_VALID_SHADER_CODE\n");
             const std::array<std::filesystem::path,1> changed{composite};shaders.changed(changed);
-            check(shaders.pending(),"Changing the occluder composite did not start shader reload.");
+            check(shaders.pending(),"Changing the final encoding shader did not start shader reload.");
             awaitReload();
             check(shaders.revision()==1&&renderer.shaderSignature()==healthy,
-                "A failed occluder composite compilation changed the last-good renderer program group.");
-            check(shaders.status().find("fs_occluder_composite")!=std::string::npos,
-                "Focused shader reload failed outside its deliberately invalid composite: "+shaders.status());
+                "A failed final encoding shader compilation changed the last-good renderer program group.");
+            check(shaders.status().find("fs_encode")!=std::string::npos,
+                "Focused shader reload failed outside its deliberately invalid encoding shader: "+shaders.status());
             check(screenshots.error.empty(),screenshots.error);
             resources.stop();
             writeFileAtomically(composite,original);

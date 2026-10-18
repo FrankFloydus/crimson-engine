@@ -22,7 +22,6 @@ struct RenderViewPassSlots {
     std::uint16_t pointShadow{},directionalShadow{};
     std::uint16_t depthPrepass{InvalidRenderView},lightingEffects{InvalidRenderView};
     std::uint16_t collisions{InvalidRenderView};
-    std::uint16_t occluderLayer{InvalidRenderView};
 };
 // The current backend requires identity view order. This is the one table of
 // existing slots; the plan does not introduce remapping or allocate view IDs.
@@ -34,14 +33,14 @@ enum class RenderPassKind : std::uint8_t {
     DepthPrepass,
     SsgiTrace, SsgiTemporal, SsgiFilterHorizontal, SsgiFilterVertical, SsgiPublish,
     SsaoEvaluate, SsaoPublish,
-    OccluderLayer, OccluderDepthPublish, SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
+    SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
     Picking, PickReadback, ThumbnailReadback, Count
 };
 enum class RenderResource : std::uint8_t {
     PreparedScene, EnvironmentLighting, ShadowAtlas, ClusteredLighting, SceneHdr,
     SceneDepth, GlowA, GlowB, Composite, Display, PickColor, PickDepth,
     PickReadback, ThumbnailReadback, ReadableSceneDepth, ReceiverScopes,
-    DeformedGeometry, OccluderHdr, OccluderDepth, OccluderDepthAtlas,
+    DeformedGeometry,
     SsgiSources, SsgiHistory, SsgiTraceScratch, SsgiTemporalScratch, SsgiFilterA, SsgiFilterB, SsgiIrradiance,
     SsaoScratch, SsaoVisibility, Count
 };
@@ -68,7 +67,6 @@ struct RenderPassPlanConfig {
     RenderViewIdentity view{};
     bool glow{},grid{},picking{},thumbnailReadback{},worldShadows{},prepareEnvironment{};
     bool collisionOverlays{};
-    bool occluderLayer{};
     bool ssgi{};
     bool ssao{};
 };

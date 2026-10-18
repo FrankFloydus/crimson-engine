@@ -43,12 +43,12 @@ namespace {
 constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName, Visible,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
-    DirectionEnabled, DirectionColor, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,
+    DirectionEnabled, DirectionColor, DirectionIntensity,DirectionIndirectEnergy,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,DirectionAngularDiameter,
     PointEnabled, PointColor, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
     DirectionReceivers,DirectionCasters,
     PointReceivers,PointCasters,
-    ModelCastShadows, ModelReceiveShadows,ModelFadeWhenOccluding,
+    ModelCastShadows, ModelReceiveShadows,
     ModelDirectReceivers,ModelCasterScope,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
     Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
@@ -344,6 +344,10 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
         const bool normal=ImGui::DragFloat("Normal Bias (texels)",&light.shadowNormalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
         propertyEdit(document,state,Edit::DirectionNormalBias,"Change directional shadow normal bias",normal,
             changeEntity(id,[v=light.shadowNormalBias](auto& entity){entity.directional->shadowNormalBias=v;}));
+        const bool angular=ImGui::DragFloat("Shadow Angular Diameter (\u00b0)",&light.shadowAngularDiameter,.01f,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::DirectionAngularDiameter,"Change directional shadow angular diameter",angular,
+            changeEntity(id,[v=light.shadowAngularDiameter](auto& entity){entity.directional->shadowAngularDiameter=v;}));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Apparent light size. Larger values soften shadows with distance from the caster; zero gives hard shadows.");
         ImGui::EndDisabled();
     } else {
         auto radius=record->point->radius;
@@ -1403,7 +1407,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             }
             if(section==SceneComponentKind::Directional && record.directional) {
                 if(componentHeader(state,record,SceneComponentKind::Directional))lightControls(document,state,record.id,true);
-                else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionNormalBias) ||
+                else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionAngularDiameter) ||
                         (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionCasters))finishEdit(document,state,state.active);
             }
             if(section==SceneComponentKind::Point && record.point) {
@@ -1419,10 +1423,6 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
                 propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
                     changeEntity(record.id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
-                auto fadeWhenOccluding=record.fadeWhenOccluding;
-                const bool fadeChanged=ImGui::Checkbox("Fade when blocking player",&fadeWhenOccluding);
-                propertyEdit(document,state,Edit::ModelFadeWhenOccluding,"Toggle player occlusion fading",fadeChanged,
-                    changeEntity(record.id,[fadeWhenOccluding](auto& entity){entity.fadeWhenOccluding=fadeWhenOccluding;}));
                 auto scopes=record.lightingScopes;
                 bool activeScopeDrawn=false;
                 const auto scopeEdit=[&](Edit property,const char* label,bool changed) {

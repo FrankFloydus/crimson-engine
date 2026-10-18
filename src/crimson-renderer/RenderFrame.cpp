@@ -34,9 +34,7 @@ RenderScene preparedRenderScene(const PreparedRenderFrame& frame,const PreparedR
     RenderScene scene{view.settings,{},nullptr,nullptr,view.instances,world.directional,world.points,true,{},
         world.particles,world.particleMaterials,world.shadowInstances,world.shadowWorldId,
         world.shadowResolution,world.materialContext};
-    scene.shadowFocusEntities=world.shadowFocusEntities;scene.shadowFocusBounds=world.shadowFocusBounds;
     scene.shadowPriorityOrigin=world.shadowPriorityOrigin;
-    scene.shadowReceiverBounds=world.shadowReceiverBounds;
     scene.collisionOverlays=view.collisionOverlays;
     scene.giWorldId=view.giWorldId;scene.giCameraId=view.giCameraId;scene.giEnvironmentId=view.giEnvironmentId;
     return scene;

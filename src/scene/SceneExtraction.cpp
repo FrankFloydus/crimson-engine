@@ -97,7 +97,6 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             const auto category=actorOwner(id)?lighting_scope::Character:lighting_scope::World;
             scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;
             result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
-            result.models.back().fadeWhenOccluding=model->fadeWhenOccluding;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
         }
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
@@ -106,7 +105,7 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             const auto direction=directionalLightDirection(*world);
             result.directional.push_back({direction,light->color,light->intensity,light->enabled,id,light->castShadows,
-                light->shadowDistance,light->shadowDepthBias,light->shadowNormalBias,light->roles,light->indirectEnergy});
+                light->shadowDistance,light->shadowDepthBias,light->shadowNormalBias,light->roles,light->indirectEnergy,light->shadowAngularDiameter});
             if (id==result.environment.sun)
                 result.proceduralSun={direction*-1.f,light->color,light->intensity,light->enabled};
         }

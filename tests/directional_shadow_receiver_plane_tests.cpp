@@ -1,5 +1,4 @@
 #include "crimson-renderer/DirectionalShadowMath.h"
-#include "crimson-renderer/ShadowReceiverBounds.h"
 
 #include <algorithm>
 #include <array>
@@ -184,100 +183,23 @@ void numericRegression() {
     check(std::abs(texelWorld(oldHlslColumns(matrix),1024)/texelWorld(portableRows(matrix),1024)-1)>.01,
         "The regression fixture does not expose the old world-texel normal-bias scale error.");
 }
-void particleReceiverChecks() {
-    context="particle receivers";
-    RenderParticle particle;particle.position={3,4,5};particle.size=2;
-    std::array<RenderParticle,1> particles{particle};
-    std::array<RenderParticleMaterial,1> materials;
-    check(!particleShadowReceiverBounds(particles,{}).valid,"The empty unlit material fallback created particle receiver bounds.");
-    check(!particleShadowReceiverBounds(particles,materials).valid,"An unlit particle created shadow receiver bounds.");
-    materials[0].shading=MaterialShading::StandardPbr;
-    auto bounds=particleShadowReceiverBounds(particles,materials);
-    check(bounds.valid && close(bounds.minimum[0],3-2*.708,1e-6,0) && close(bounds.maximum[2],5+2*.708,1e-6,0),
-        "A lit fallback particle lost its conservative aggregate receiver extent.");
-    const auto contains=[](const Aabb& box,const Vec3& p) {
-        return box.valid && p[0]>=box.minimum[0] && p[1]>=box.minimum[1] && p[2]>=box.minimum[2] &&
-            p[0]<=box.maximum[0] && p[1]<=box.maximum[1] && p[2]<=box.maximum[2];
-    };
-    auto graph=std::make_shared<PreparedGraphMaterial>();graph->shading=MaterialShading::StandardPbr;
-    materials[0].graph=graph;materials[0].shading=MaterialShading::Unlit;
-    check(particleShadowReceiverBounds(particles,materials).valid,"Graph-lit shading did not override an unlit fallback.");
-    graph->shading=MaterialShading::Unlit;materials[0].shading=MaterialShading::StandardPbr;
-    check(!particleShadowReceiverBounds(particles,materials).valid,"Graph-unlit shading did not override a lit fallback.");
-    materials[0].graph.reset();
-    const auto authoredRight=math::normalized(Vec3{1,.4f,.2f});
-    const auto authoredUp=math::normalized(math::cross(Vec3{.1f,1,.3f},authoredRight));
-    Camera camera;camera.position={6,8,4};camera.target={};
-    for(const auto mode:{ParticleBillboardMode::Disabled,ParticleBillboardMode::Enabled,ParticleBillboardMode::FixedY})
-        for(const auto rotation:{0.f,.4f,1.3f,3.14159f}) {
-        particles[0]=particle;particles[0].right=authoredRight;particles[0].up=authoredUp;
-        particles[0].billboardMode=mode;particles[0].rotation=rotation;
-        bounds=particleShadowReceiverBounds(particles,materials);check(bounds.valid,"A valid lit billboard did not contribute receivers.");
-        auto right=authoredRight,up=authoredUp;
-        if(mode==ParticleBillboardMode::Enabled) {right=camera.right();up=math::normalized(math::cross(right,camera.forward()));}
-        if(mode==ParticleBillboardMode::FixedY) {up={0,1,0};right=math::cross(up,math::normalized(Vec3{.6f,0,.8f}));}
-        for(unsigned corner=0;corner<4;++corner) {
-            const double x=(corner&1?.5:-.5)*particle.size,y=(corner&2?.5:-.5)*particle.size;
-            const auto rotatedX=std::cos(rotation)*x-std::sin(rotation)*y,rotatedY=std::sin(rotation)*x+std::cos(rotation)*y;
-            check(contains(bounds,particle.position+right*rotatedX+up*rotatedY),
-                "A rotated Disabled/Enabled/FixedY sprite corner escaped its aggregate receiver bounds.");
-        }
-    }
-    particles[0]=particle;
-    particles[0].right={std::sqrt(1.0009f),0,0};
-    particles[0].up[0]=.0009f/particles[0].right[0];
-    particles[0].up[1]=std::sqrt(1.0009f-particles[0].up[0]*particles[0].up[0]);particles[0].up[2]=0;
-    check(particle_rendering::valid(particles[0]),"The orientation-tolerance fixture exceeds the renderer's accepted bounds.");
-    bounds=particleShadowReceiverBounds(particles,materials);
-    for(unsigned corner=0;corner<4;++corner)
-        check(contains(bounds,particle.position+particles[0].right*((corner&1?.5:-.5)*particle.size)+particles[0].up*((corner&2?.5:-.5)*particle.size)),
-            "An accepted near-tolerance sprite basis escaped the conservative receiver extent.");
-
-    particles[0]=particle;particles[0].size=0;
-    check(!particleShadowReceiverBounds(particles,materials).valid,"A zero-size particle contributed receiver bounds.");
-    particles[0]=particle;particles[0].position[0]=std::numeric_limits<float>::infinity();
-    check(!particleShadowReceiverBounds(particles,materials).valid,"A nonfinite particle contributed receiver bounds.");
-    particles[0]=particle;particles[0].right={2,0,0};
-    check(!particleShadowReceiverBounds(particles,materials).valid,"An invalid orientation contributed receiver bounds.");
-    particles[0]=particle;particles[0].materialIndex=1;
-    check(!particleShadowReceiverBounds(particles,materials).valid,"An absent particle material contributed receiver bounds.");
-
-    std::vector<RenderParticleMaterial> cappedMaterials(MaxParticleMaterialCount+1);
-    cappedMaterials.back().shading=MaterialShading::StandardPbr;
-    particles[0]=particle;particles[0].materialIndex=static_cast<std::uint32_t>(MaxParticleMaterialCount);
-    check(!particleShadowReceiverBounds(particles,cappedMaterials).valid,"A material beyond the renderer cap contributed receivers.");
-    particles[0].materialIndex=static_cast<std::uint32_t>(MaxParticleMaterialCount-1);
-    cappedMaterials[MaxParticleMaterialCount-1].shading=MaterialShading::StandardPbr;
-    check(particleShadowReceiverBounds(particles,cappedMaterials).valid,"The last admitted particle material lost receiver bounds.");
-    std::vector<RenderParticle> cappedParticles(MaxParticleDrawCount+1);
-    for(auto& p:cappedParticles)p.size=0;
-    cappedParticles.front()=particle;cappedParticles.front().position={};
-    cappedParticles.back()=particle;cappedParticles.back().position={500,0,0};
-    bounds=particleShadowReceiverBounds(cappedParticles,materials);
-    check(bounds.valid && bounds.maximum[0]<2,"A particle beyond the renderer cap expanded shadow receivers.");
-    cappedParticles[MaxParticleDrawCount-1]=particle;cappedParticles[MaxParticleDrawCount-1].position={100,0,0};
-    check(particleShadowReceiverBounds(cappedParticles,materials).maximum[0]>100,"The last admitted particle lost receiver bounds.");
-    context.clear();
-}
 } // namespace
 
 int main() {
     try {
-        particleReceiverChecks();numericRegression();Counts counts;
+        numericRegression();Counts counts;
         ShadowCamera camera;camera.camera.position={12,15,12};camera.camera.target={0,1,0};camera.camera.nearPlane=.1f;
         camera.camera.farPlane=250;camera.camera.fovAxis=CameraFovAxis::Vertical;camera.aspect=16.f/9;
-        const Aabb character{{-.4f,0,-.4f},{.4f,1.8f,.4f},true};
         const std::array<Aabb,1> casters{{{{-12,-4,-12},{14,8,12},true}}};
-        const std::array<Aabb,2> receivers{Aabb{{-10000,0,-10000},{10000,0,10000},true},character};
         for(const auto resolution:{256u,512u,1024u})for(const auto fov:{15.f,65.f})
             for(const auto direction:{Vec3{-.5f,-.8f,-.6f},Vec3{.6f,-.7f,.3f},Vec3{.9f,-.02f,.4f},
                 Vec3{-.8f,-.035f,-.55f},Vec3{0,-1,0},Vec3{0,0,-1}}) {
             DirectionalLight light;light.direction=direction;light.shadowDistance=100;camera.camera.fov=fov;
             const auto scene=directional_shadow::build(light,camera,resolution,casters);
-            const auto game=directional_shadow::buildGame(light,camera,resolution,casters,character);
-            const auto cropped=directional_shadow::buildGame(light,camera,resolution,casters,character,receivers);
-            check(scene.valid && scene.projectionCount==4 && game.valid && game.projectionCount==2 && cropped.valid && cropped.projectionCount==2,
-                "Receiver-plane fixtures failed Scene/Game/character projection preparation.");
+            auto firstPerson=camera;firstPerson.camera.position={0,1.65f,4};firstPerson.camera.target={0,1.65f,-4};
+            const auto game=directional_shadow::build(light,firstPerson,resolution,casters);
+            check(scene.valid && scene.projectionCount==4 && game.valid && game.projectionCount==4,
+                "Receiver-plane fixtures failed shared Scene/FPS cascade preparation.");
             const bool footprints=resolution==512 && fov==15;
             const auto label="resolution="+std::to_string(resolution)+", fov="+std::to_string(fov)+", sun="+
                 std::to_string(direction[0])+","+std::to_string(direction[1])+","+std::to_string(direction[2]);
@@ -286,9 +208,6 @@ int main() {
             }
             for(unsigned projection=0;projection<game.projectionCount;++projection) {
                 context=label+", Game projection="+std::to_string(projection);checkProjection(game.values[projection],resolution,counts,footprints);
-            }
-            for(unsigned projection=0;projection<cropped.projectionCount;++projection) {
-                context=label+", cropped Game projection="+std::to_string(projection);checkProjection(cropped.values[projection],resolution,counts,footprints);
             }
         }
         context.clear();

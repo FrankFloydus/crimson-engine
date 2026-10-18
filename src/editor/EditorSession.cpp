@@ -23,7 +23,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),playerOcclusion_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -230,7 +230,6 @@ void EditorSession::cancelInteraction(Renderer& renderer) {
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
     attributeDebug_.reset();
     cameraPilot_.useEditorCamera(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    playerOcclusion_.clear();
     playAnimations_.clear();animationPlayTick_=0;
     waitingForCollision_=false;
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
@@ -506,12 +505,6 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.sceneCamera=sceneCamera;renderInput.gameCamera=gameCamera;
     renderInput.sceneWidth=renderer.width();renderInput.sceneHeight=renderer.height();
     renderInput.gameWidth=game.pixelWidth;renderInput.gameHeight=game.pixelHeight;
-    if(editor_.playerOcclusionFade()&&gameOpen&&game.pixelWidth&&game.pixelHeight&&gameCamera)
-        renderInput.gameModelOpacities=playerOcclusion_.update(renderScene,renderInput.extracted.models,*gameCamera,
-            (document.documentGeneration()<<1)|static_cast<std::uint64_t>(play_.playing()),ImGui::GetIO().DeltaTime,[&assets](const std::string& id)->std::optional<Aabb> {
-                if(const auto model=assets.peekModel(id))return model->bounds;return std::nullopt;
-            },[this](const std::string& id){return collisions_.query(id);},editor_.playerOcclusionSettings(),agentProfiles);
-    else playerOcclusion_.clear();
     renderInput.sceneAspect=std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height);
     renderInput.sceneVisible=frame.viewport.width>0 && frame.viewport.height>0;renderInput.gameVisible=gameOpen;
     renderInput.selection=document.selection().ids;renderInput.placementIds=frame.placementPreviewIds;
@@ -521,7 +514,6 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.particlePins=std::move(particlePins);renderInput.worldId=document.documentGeneration();
     renderInput.giWorldId=(document.documentGeneration()<<1)|static_cast<std::uint64_t>(play_.playing());
     renderInput.gameCameraId=renderScene.properties().activeCamera;renderInput.environmentId=renderScene.properties().activeEnvironment;
-    if(renderScene.properties().playerCharacter)renderInput.shadowFocusEntities=renderScene.subtree(renderScene.properties().playerCharacter);
     renderInput.shadowResolution=editor_.pointShadowResolution();renderInput.materialContext=materialContext;
     renderInput.appearance=editor_.appearance();renderInput.gridVisible=editor_.overlays().grid;
     auto collisionOverlays=collisionOverlays_.prepare(renderScene,document.selection().ids,editor_.overlays().collisions,

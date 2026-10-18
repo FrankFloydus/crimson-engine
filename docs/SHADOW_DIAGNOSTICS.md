@@ -8,21 +8,21 @@ New point lights start with **Cast Shadows off**. Eight point-light entities can
 
 ## Point source size and softness
 
-**Point light → Source Radius (m)** and **Character → Light Rig → Local World Light → Source Radius (m)** control emitter size independently of the light's influence Radius. Zero uses the original 3×3 point-shadow filter. Positive values add contact-hardening PCSS: a blocker search estimates occluder distance and widens the comparison filter as receiver/blocker separation increases. This works with Specular Scale zero. Source Radius also broadens reflective highlights when specular is enabled; diffuse attenuation remains independent.
+**Point light → Source Radius (m)** controls emitter size independently of the light's influence Radius. Zero uses the original 3×3 point-shadow filter. Positive values add contact-hardening PCSS: a blocker search estimates occluder distance and widens the comparison filter as receiver/blocker separation increases. This works with Specular Scale zero. Source Radius also broadens reflective highlights when specular is enabled; diffuse attenuation remains independent.
 
-Changing Source Radius updates receiver filtering without regenerating cached six-face depth. `Lights rendered` can stay zero and `cached` stay nonzero while the shadow visibly softens. The existing counters report depth submissions, not PCSS tap cost or GPU duration. Positive-radius points add bounded search/filter sampling work; source-zero points retain the original filter cost. This does not change the separate Key silhouette or directional-light filters.
+Changing Source Radius updates receiver filtering without regenerating cached six-face depth. `Lights rendered` can stay zero and `cached` stay nonzero while the shadow visibly softens. The existing counters report depth submissions, not PCSS tap cost or GPU duration. Positive-radius points add bounded search/filter sampling work; source-zero points retain the original filter cost. Directional lights have their separate Shadow Angular Diameter control and shared four-cascade filter described in the [lighting guide](RENDERER_AND_CHARACTER_LIGHTING.md#directional-shadows-for-first-person-cameras).
 
 ## What each row means
 
 ### `Lights: A / C allocated; R px per face`
 
-- **A** is the number of admitted, enabled, shadow-casting **point lights** in the active world, including the enabled player Local World Light when eligible. Directional lights and the dedicated Key silhouette are excluded. Ordinary lights with Cast Shadows off are excluded.
+- **A** is the number of admitted, enabled, shadow-casting **point lights** in the active world. Directional lights are excluded. Ordinary lights with Cast Shadows off are excluded.
 - **C** is the point-light capacity of the current GPU atlas. Each point-light slot contains six depth faces. It is a storage capacity, not a per-frame update budget or the number of faces.
 - **R** is the inner resolution of each point face and directional projection: 256, 512 or 1024 pixels. Each physical atlas tile also has two guard texels on each side, so its stored width and height are `R + 4`.
 
-**Edit → Preferences → Shadow resolution** changes R for both point and directional shadows. Higher resolution gives finer shadow texels and increases memory approximately with the square of resolution. Changing it replaces the atlas and requires the maps to be rebuilt.
+**Edit → Preferences → Rendering → Shadow resolution** changes R for both point and directional shadows. Higher resolution gives finer shadow texels and increases memory approximately with the square of resolution. Changing it replaces the atlas and requires the maps to be rebuilt.
 
-The active point-shadow limit is sixteen. Eligibility requires an enabled light, Cast Shadows on, finite position, and positive finite radius and intensity. With more than sixteen eligible lights, admission prioritizes squared distance to the frozen world focus divided by squared radius, with persistent light identity resolving ties. The focus is the Player Character's prepared bounds when available, otherwise the Scene camera's target. Lights that are not admitted continue to illuminate normally without a resident shadow map.
+The active point-shadow limit is sixteen. Eligibility requires an enabled light, Cast Shadows on, finite position, and positive finite radius and intensity. With more than sixteen eligible lights, admission prioritizes squared distance to the frozen world focus divided by squared radius, with persistent light identity resolving ties. The frozen focus is the visible Game camera's eye, otherwise the Scene camera's eye; Player mesh presence and the free editor camera target do not select Game shadows. Lights that are not admitted continue to illuminate normally without a resident shadow map.
 
 Atlas capacity grows in powers of two according to the highest occupied stable slot. It does not automatically shrink when lights are removed. Therefore `8 / 16 allocated` is possible and is not a failure to count the eight lights. Likewise, after disabling all point shadows while keeping the sun active, `0 / 8 allocated` can be legitimate retained storage. A fresh scene with only a shadow-casting sun normally reads `0 / 0 allocated`; the resolution can still read 1024 because the same atlas contains the sun's directional projections.
 
@@ -57,12 +57,12 @@ With eight continuously affected lights, some character shadows can temporarily 
 
 ### `Casters: N; draws: B`
 
-- **N** is the number of prepared **model instances** in the world's shadow-caster packet. It covers the caster set prepared for both camera views, all relevant point/directional lights and the dedicated Key silhouette. It is not the number of triangles, meshes actually visible in the Game image, actors, lights, or per-light caster relationships.
-- **B** is the total number of shadow depth draw submissions this frame across point, directional and dedicated Key work in the active world.
+- **N** is the number of prepared **model instances** in the world's shadow-caster packet. It covers the caster set prepared for both camera views, all relevant ordinary point/directional lights. It is not the number of triangles, meshes actually visible in the Game image, actors, lights, or per-light caster relationships.
+- **B** is the total number of shadow depth draw submissions this frame across ordinary point and directional work in the active world.
 
 One model instance can contain several primitives. The same primitive can draw into several point faces, several lights or several directional projections. A caster can also be outside the visible camera image while still casting a shadow into it. N therefore need not resemble B or the visible object count.
 
-Each updated directional projection, including the dedicated Key map, includes **one fullscreen depth-clear draw**, in addition to its caster draws. Point faces use a view depth clear instead, which does not add a draw to B. For example, a fresh empty ordinary directional projection can contribute one draw even when no caster primitive is drawn into it. The dedicated Key map remains inactive when it has no eligible drawable caster.
+Each updated directional cascade includes **one fullscreen depth-clear draw**, in addition to its caster draws. Point faces use a view depth clear instead, which does not add a draw to B. For example, a fresh empty ordinary directional projection can contribute one draw even when no caster primitive is drawn into it.
 
 Cached shadows submit no depth draws. A static scene can legitimately show many casters and zero draws. Candidate instances later rejected because of blend mode, unavailable geometry, collapsed transforms or per-projection visibility can also make N larger than the number that actually draws.
 
@@ -72,28 +72,15 @@ A **context** is one shadow-casting directional light evaluated for one camera. 
 
 For one sun, Scene submitted alone normally gives Q = 1; Game alone gives Q = 1; Scene and Game together give Q = 2.
 
-**Rendered** counts contexts with at least one directional projection refreshed this frame. **Cached** counts contexts where all required projections could be reused. A context that refreshes only the character projection still counts as rendered.
+**Rendered** counts contexts with at least one directional projection refreshed this frame. **Cached** counts contexts where all required projections could be reused. A context with one dirty cascade and three reusable cascades still counts as rendered.
 
-Scene keeps four cascades for free-camera inspection. Game uses one receiver-aware world projection and, when a valid visible Player Character model subtree is available, one independent character projection. These camera contexts have separate matrices, atlas regions and cache entries. Directional updates do not consume the four-point-map update budget.
+Scene and Game use the same four stable perspective-aware cascades per light/camera. Each has quantized sphere-fit extents, texel-snapped centers, blended split transitions and bounded Angular Diameter softness. Scene/Game camera poses and lenses remain independent; they share the immutable world caster snapshot and one shadow owner.
 
-Changing the sun direction, its shadow distance, relevant caster coverage, receiver fitting, camera projection or shadow resolution can refresh directional maps. Pure light color/intensity edits and receiver depth/normal-bias edits do not inherently require rewriting depth maps.
+### `Directional cascades written: W`
 
-### `World projections: W; character projections: K`
+W counts individual directional cascade maps refreshed this frame, summed across submitted cameras and lights. One sun with both views can initially write eight cascades: four for Scene and four for Game. After caching, W can be zero while every shadow remains visible. A moving actor invalidates every relevant cascade containing its changed caster content; there is no separate focused character projection. Camera movement, shadow range/angular size, geometry refinement or changed caster membership can also change the projection/signature.
 
-These are **projection refresh counts for this frame**, not the number of maps currently allocated or available.
-
-- **W** counts refreshed ordinary directional projections: Scene cascades plus Game's world projection.
-- **K** counts refreshed focused Game character projections.
-
-For one sun with both views submitted, a complete initial refresh can produce `World projections: 5; character projections: 1`: four Scene cascades, one Game world projection and one Game character projection. Without a valid character focus, K is zero.
-
-After caching, both counters can be zero while every shadow remains visible. A character-only change can refresh the Game character projection while retaining the Game world map, provided the world receiver envelope, camera and world casters remain unchanged. If Scene is also visible, its cascades containing that character can still refresh and increase W. If the Game camera follows the player or the visible receiver envelope changes, the Game world projection can refresh as well.
-
-### `Key silhouette updates: U; cached: H`
-
-The Character Inspector's Key silhouette is independent of ordinary directional and point maps. U counts complete dedicated map renders this frame; H counts unchanged-map reuse. Scene and Game share one map and count activity once per world frame. A moving eligible player or changed Key direction, coverage or projection updates it immediately. Static content normally reports one cache reuse and zero updates. This can be the only active shadow map in a scene with no ordinary shadow-casting lights. Disabling Key, its Cast Shadow, the rig, or setting Key intensity or Shadow Strength to zero suppresses it.
-
-Only eligible player-subtree models cast; World surfaces with Receive Shadows receive its attenuation of reflected lighting. Existing `character projections` above still counts Game's character projection for ordinary directional lights; it is not this new counter. The dedicated map shares the atlas sampler and resolution, and its actual allocation/padding is included in M.
+The former focused Game and dedicated Character Key counters are removed. Angular Diameter changes can alter the world halo and fitted projection, so they can redraw directional maps even though a point light's Source Radius changes only receiver filtering.
 
 ### `Atlas allocations: M MiB`
 
@@ -105,7 +92,7 @@ Replaced atlases remain explicitly owned for two renderer-frame boundaries befor
 
 ## What eight point lights and one sun should show
 
-These eight-light scheduling and allocation examples assume the player Local World Light and dedicated Key silhouette are disabled. Enabling a shadowed Local World Light adds an ordinary point-map request to the same sixteen-map/four-update budget; enabling the Key silhouette adds its separate map/counters and can change atlas padding.
+These examples use eight ordinary shadow-casting point lights and one sun. Removed private actor lights and Key silhouettes contribute no maps or counters.
 
 With all eight point lights' **Cast Shadows off**, they still illuminate the scene. On a fresh allocation expect `Lights: 0 / 0 allocated`, with the global resolution still visible. Point rendered/cached/faces and deferred/awaiting counts are all zero. The sun gives one directional context per submitted view, initially rendered and then cached. Casters, draws and memory can remain nonzero because the sun needs shadows. Enable Cast Shadows on the point lights before judging their shadow caching or update budget.
 
@@ -123,30 +110,30 @@ Assuming a fresh allocation, valid resident resources and unchanged light/caster
 
 These are expected scheduling states, not a promise about exact editor startup frame numbers. Asset refinement, shader publication, additional moving casters or a changed world can introduce further refreshes. Atlas growth also invalidates existing directional maps, so the sun can refresh during the transition.
 
-Once settled, N can remain nonzero while B, W and K are zero. With both views and one sun, Q normally stays at two and its cached count stays at two.
+Once settled, N can remain nonzero while B and W are zero. With both views and one sun, Q normally stays at two and its cached count stays at two.
 
 ### Expected memory for a fresh eight-point-light allocation
 
-Eight point lights require forty-eight faces. With one sun and the active world's two directional contexts, current packing uses twelve tile columns and five tile rows. The six required directional tiles occupy part of a twelve-tile row; the remaining packing space is still allocated.
+Eight point lights require forty-eight faces. One sun reserves two four-cascade camera contexts. The point region uses twelve tile columns and four rows; the directional 2×2 blocks add two rows across that atlas width. Unused packing space is allocated too.
 
 | Inner resolution | Point storage only | Eight points + one sun, Scene/Game allocation |
 | --- | ---: | ---: |
-| 256 | 12.4 MiB | 15.5 MiB |
-| 512 | 48.8 MiB | 60.9 MiB |
-| 1024 | 193.5 MiB | 241.9 MiB |
+| 256 | 12.4 MiB | 18.6 MiB |
+| 512 | 48.8 MiB | 73.1 MiB |
+| 1024 | 193.5 MiB | 290.3 MiB |
 
-At 1024: pitch = **1028**, width = **12,336**, height = **5,140**, and storage = **12,336 × 5,140 × 4 = 253,628,160 bytes = 241.8787 MiB**.
+At 1024: pitch = **1028**, width = **12,336**, height = **6,168**, and storage = **12,336 × 6,168 × 4 = 304,353,792 bytes = 290.2544 MiB**. These are layout-derived D32F allocation values, not device-memory measurements.
 
-This table assumes eight-slot point capacity, one-slot directional capacity, no Local World Light or Key silhouette, and no retired allocation. A previously larger atlas, more directional lights, atlas replacement or different retained slot placement changes the result. These depth targets are separate from the streamable asset-cache retention target.
+This table assumes eight-slot point capacity, one-slot directional capacity and no retired allocation. A previously larger atlas, more directional lights, atlas replacement or different retained slot placement changes the result. Depth targets remain separate from the streamable asset-cache retention target.
 
 ## Practical checks
 
 1. **Establish the static state.** Enable shadows on the intended eight point lights, allow materials/geometry to finish preparing, then stop camera and character movement. Expect eight cached point maps, no point faces, no deferred maps and no shadow depth draws once the directional maps also settle.
-2. **Move the character through the light volumes.** Point maps whose caster data changes become dirty. If all eight need refreshes, expect up to four updates/twenty-four faces and some deferred caster-only work. Awaiting a valid map should normally stay zero because the stationary lights retain coherent projections. The Game character map can refresh separately; Scene cascades and a following Game camera can add world-projection work.
+2. **Move the character through the light volumes.** Point maps whose caster data changes become dirty. If all eight need refreshes, expect up to four updates/twenty-four faces and some deferred caster-only work. Awaiting a valid map should normally stay zero because the stationary lights retain coherent projections. Relevant Scene/Game cascades can refresh, and a following Game camera can change their projections.
 3. **Stop moving.** Pending point work should drain and return to eight cached maps. A stable nonzero deferred count after resources and the scene settle warrants investigation. Stopping Play may switch the presented world and cause a one-time cache warmup; it is different from merely stopping character movement.
 4. **Move one point light.** Its position/radius projection changes. Expect one whole-map update/six faces when scheduled. If it is deferred, awaiting a valid map increases and that light temporarily renders without shadows. It must not sample the map from its previous position. Moving only a light's color or positive intensity should not require a depth refresh.
-5. **Adjust Depth Bias or Normal Bias.** The receiver comparison changes immediately, while the existing depth map can stay cached. This is expected. Bias controls are not a general substitute for correct projection coverage or receiver-plane calculations.
-6. **Move only the camera.** With static lights/casters and eight admitted point lights, point maps normally stay cached. Directional camera fits may refresh. New resource detail arriving because of the changed view can also trigger legitimate map updates.
+5. **Adjust Depth Bias or Normal Bias.** The receiver comparison changes immediately. Point depth can stay cached; directional projection padding can change and trigger a redraw. Bias controls are not a general substitute for correct projection coverage or receiver-plane calculations.
+6. **Move only the camera.** With static lights/casters and eight admitted point lights, point maps normally stay cached. With more than sixteen eligible lights, camera-based admission can legitimately change the resident set. Directional camera fits may refresh. New resource detail arriving because of the changed view can also trigger legitimate map updates.
 7. **Adjust Attenuation, Range Falloff, Edge Softness or Specular Scale.** These change receiver lighting rather than stored depth. A positive-intensity, unchanged-position/radius light can retain its cached map. Source Radius behaves the same way for map reuse while changing PCSS filtering, as described above.
 8. **Disable one point light's Cast Shadows.** Active point count decreases, while direct lighting remains. Capacity and atlas memory can remain at their prior high-water mark. Turning the light itself off or setting intensity to zero also removes it from point-shadow eligibility.
 

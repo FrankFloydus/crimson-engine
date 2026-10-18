@@ -662,49 +662,70 @@ void importedMaterialSlots() {
     bool rejected=false;try{setModelMaterialOverride(edited.modelMaterials,MaximumModelMaterialSlots,AssetRef<MaterialAsset>{red});}catch(const std::exception&){rejected=true;}
     require(rejected,"Out-of-range slot assignment was accepted.");
 }
-void modelFadeParticipationStorageAndRuntime() {
+void obsoleteModelFadeSettingsAreIgnored() {
     TempProject project;SceneDocument document(project.root);
-    const auto wall=document.createBox("Wall"),pillar=document.createBox("Pillar"),empty=document.createEmpty("Empty");
-    require(wall&&pillar&&empty&&!document.scene().find(wall)->fadeWhenOccluding&&!document.scene().find(pillar)->fadeWhenOccluding,
-        "New model instances must default to no player-occlusion participation.");
-    require(document.save("Fade participation"),document.status());
-    const auto originalFingerprint=sceneFileFingerprint(project.root,document.assetId());
-    const auto before=*document.scene().find(wall);auto edited=before;edited.fadeWhenOccluding=true;
-    require(!sameEntity(before,edited)&&document.updateEntity(wall,edited)&&document.dirty(),"Fade participation was omitted from model equality or document edits.");
-    require(document.undo()&&!document.scene().find(wall)->fadeWhenOccluding&&!document.dirty(),"Undo did not restore disabled participation and clean state.");
-    require(document.redo()&&document.scene().find(wall)->fadeWhenOccluding,"Redo lost authored fade participation.");
-    const auto extracted=extractScene(document.scene());
-    for(const auto& model:extracted.models)require(model.fadeWhenOccluding==(model.id==wall),"Participation was shared by another instance of the same asset.");
-    document.select({wall});require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
-    require(document.scene().find(duplicate)->fadeWhenOccluding&&!document.scene().find(pillar)->fadeWhenOccluding,
-        "Duplication lost participation or changed an unrelated model.");
-    require(document.save(),document.status());
-    require(sceneFileFingerprint(project.root,document.assetId())!=originalFingerprint,"Participation save did not invalidate the scene preview fingerprint.");
-    const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==23,"Fade participation did not use the current scene schema.");
-    for(const auto& entity:serialized.at("entities")) {
-        if(entity.contains("model"))require(entity.at("fadeWhenOccluding").is_boolean(),"A model did not write its explicit boolean participation.");
-        else require(!entity.contains("fadeWhenOccluding"),"A nonmodel wrote model-only fade settings.");
-    }
-    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
-    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&runtime.scene().find(wall)->fadeWhenOccluding,
-        "Play copy lost authored participation.");
-    auto live=*runtime.scene().find(wall);live.fadeWhenOccluding=false;require(runtime.updateEntity(wall,live),runtime.status());
-    pose(runtime,wall,{3,4,5});require(runtime.undo()&&runtime.scene().find(wall)->fadeWhenOccluding,"Live participation undo did not restore its authored value.");
-    near(position(runtime.scene(),wall),{3,4,5});
-    require(runtime.redo()&&!runtime.scene().find(wall)->fadeWhenOccluding,"Live participation redo failed.");near(position(runtime.scene(),wall),{3,4,5});
-    require(document.scene().find(wall)->fadeWhenOccluding&&!document.dirty(),"Play changes modified the authored document.");
-    for(const auto version:{9,12}) {
-        auto legacy=legacyComposition(serialized);legacy["version"]=version;for(auto& entity:legacy["entities"])entity.erase("fadeWhenOccluding");
-        const auto id="assets/scenes/legacy-fade-"+std::to_string(version)+".crimson-scene";const auto bytes=legacy.dump();
-        std::filesystem::create_directories((project.root/id).parent_path());{std::ofstream file(project.root/id);file<<bytes;}
-        require(reopened.load(id),reopened.status());
-        for(const auto& record:reopened.scene().records())require(!record.fadeWhenOccluding,"An older scene acquired opt-in fading.");
+    require(document.createBox("Wall")&&document.createEmpty("Marker"),document.status());
+    require(document.save("Obsolete fading"),document.status());
+    const auto authored=document.scene().records();
+    const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    for(const auto version:{12,13,23}) {
+        auto legacy=legacyComposition(serialized);legacy["version"]=version;
+        for(auto& entity:legacy["entities"])entity["fadeWhenOccluding"]=entity.contains("model")?Json(true):Json::object();
+        const auto id="assets/scenes/obsolete-fade-"+std::to_string(version)+".crimson-scene";
+        std::filesystem::create_directories((project.root/id).parent_path());const auto bytes=legacy.dump();
+        {std::ofstream file(project.root/id);file<<bytes;}
+        SceneDocument reopened(project.root);require(reopened.load(id),reopened.status());same(authored,reopened.scene().records());
+        require(!reopened.dirty(),"Ignoring removed model fading marked a scene dirty.");
         std::ifstream file(project.root/id);const std::string retained{std::istreambuf_iterator<char>(file),{}};
-        require(retained==bytes&&!reopened.dirty(),"Reading an older scene rewrote authored bytes or marked migration dirty.");
+        require(retained==bytes,"Loading obsolete fading rewrote authored scene bytes.");
+        const auto current=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,id)));
+        require(current.at("version")==23,"Removed fading changed the current scene schema.");
+        for(const auto& entity:current.at("entities"))require(!entity.contains("fadeWhenOccluding"),"Scene writer retained removed model fading.");
     }
-    const auto badRecord=*document.scene().find(empty);auto invalid=badRecord;invalid.fadeWhenOccluding=true;
-    require(!document.updateEntity(empty,invalid)&&sameEntity(*document.scene().find(empty),badRecord),"A nonmodel accepted fade participation.");
+}
+void directionalAngularDiameterStorageHistoryAndRuntime() {
+    TempProject project;SceneDocument document(project.root);const auto sun=document.createDirectionalLight();
+    require(sun&&document.scene().find(sun)->directional->shadowAngularDiameter==.53f,
+        "New directional lights lost the solar angular diameter default.");
+    const auto defaults=*document.scene().find(sun);auto authored=defaults;authored.directional->shadowAngularDiameter=1.25f;
+    require(document.updateEntity(sun,authored,"Change angular diameter")&&
+        extractScene(document.scene()).directional.front().shadowAngularDiameter==1.25f,
+        "Directional angular diameter did not reach scene history or render extraction.");
+    require(document.undo()&&document.scene().find(sun)->directional->shadowAngularDiameter==.53f&&
+        document.redo()&&document.scene().find(sun)->directional->shadowAngularDiameter==1.25f,
+        "Directional angular diameter undo/redo lost its exact authored value.");
+    require(document.save("Angular directional light"),document.status());
+    const auto saved=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    require(saved.at("version")==23&&saved.at("entities").front().at("directional").at("shadowAngularDiameter")==1.25f,
+        "Directional angular diameter did not use the optional v23 light representation.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
+    for(const auto angle:{0.f,2.f}) {
+        auto endpoint=authored;endpoint.directional->shadowAngularDiameter=angle;
+        require(document.updateEntity(sun,endpoint),"Supported directional angular diameter endpoint was rejected.");
+    }
+    require(document.updateEntity(sun,authored),document.status());
+    const auto original=document.scene().records();const auto history=document.history().size();
+    for(const auto angle:{-.01f,2.01f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        auto invalid=authored;invalid.directional->shadowAngularDiameter=angle;
+        require(!document.updateEntity(sun,invalid)&&document.history().size()==history,"Invalid angular diameter added an authored edit.");same(original,document.scene().records());
+    }
+    auto legacy=saved;legacy["entities"].front()["directional"].erase("shadowAngularDiameter");
+    const auto id="assets/scenes/legacy-angular.crimson-scene";std::filesystem::create_directories((project.root/id).parent_path());
+    const auto bytes=legacy.dump();{std::ofstream file(project.root/id);file<<bytes;}
+    require(reopened.load(id)&&reopened.scene().find(sun)->directional->shadowAngularDiameter==.53f&&!reopened.dirty(),
+        "Missing optional angular diameter did not default without dirtying the scene.");
+    {std::ifstream file(project.root/id);const std::string retained{std::istreambuf_iterator<char>(file),{}};require(retained==bytes,"Loading an older light rewrote scene bytes.");}
+    for(const auto& angle:std::array<Json,5>{Json(-.01f),Json(2.01f),Json(nullptr),Json("large"),Json(true)}) {
+        auto invalid=saved;invalid["entities"].front()["directional"]["shadowAngularDiameter"]=angle;
+        const auto invalidId="assets/scenes/invalid-angular.crimson-scene";{std::ofstream file(project.root/invalidId);file<<invalid.dump();}
+        const auto before=reopened.scene().records();require(!reopened.load(invalidId),"Invalid saved angular diameter was accepted.");same(before,reopened.scene().records());
+    }
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    auto live=*runtime.scene().find(sun);live.directional->shadowAngularDiameter=.25f;
+    require(runtime.updateEntity(sun,live),runtime.status());pose(runtime,sun,{3,4,5});
+    require(runtime.undo()&&runtime.scene().find(sun)->directional->shadowAngularDiameter==1.25f,"Live angular diameter undo lost authored light settings.");near(position(runtime.scene(),sun),{3,4,5});
+    require(runtime.redo()&&runtime.scene().find(sun)->directional->shadowAngularDiameter==.25f,"Live angular diameter redo failed.");
+    same(original,document.scene().records());
 }
 void entityVisibilityStorageAndRuntime() {
     TempProject project;SceneDocument document(project.root);
@@ -1168,4 +1189,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();modelFadeParticipationStorageAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

@@ -157,7 +157,6 @@ function(cc_shader NAME TYPE VARYING)
                 "${CC_SHADER_DIR}/point_light.sh"
                 "${CC_SHADER_DIR}/point_light_record.sh"
                 "${CC_SHADER_DIR}/clustered_lighting.sh"
-                "${CC_SHADER_DIR}/occluder_partition.sh"
                 "${CC_SHADER_DIR}/prepass_receiver.sh"
                 "${CC_SHADER_DIR}/point_shadow.sh"
                 "${CC_SHADER_DIR}/directional_shadow.sh"
@@ -198,13 +197,11 @@ cc_shader(vs_directional_shadow vertex model.varying.def.sc)
 cc_shader(fs_directional_shadow fragment model.varying.def.sc)
 cc_shader(vs_present vertex varying.def.sc)
 cc_shader(fs_present fragment varying.def.sc)
-cc_shader(fs_occluder_composite fragment varying.def.sc)
 cc_shader(fs_glow_extract fragment varying.def.sc)
 cc_shader(fs_glow_blur fragment varying.def.sc)
 cc_shader(fs_sky fragment varying.def.sc)
 cc_shader(cs_procedural_filter compute varying.def.sc)
 cc_shader(cs_cluster_lights compute varying.def.sc)
-cc_shader(cs_occluder_depth compute varying.def.sc)
 cc_shader(cs_ssgi_trace compute varying.def.sc)
 cc_shader(cs_ssgi_temporal compute varying.def.sc)
 cc_shader(cs_ssgi_filter compute varying.def.sc)
@@ -272,7 +269,7 @@ add_executable(crimson-renderer WIN32
     src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp
     src/editor/CommandConsole.cpp src/editor/AttributeDebug.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
-    src/editor/CollisionResources.cpp src/editor/PlayerOcclusion.cpp src/editor/QuaderSceneIntegration.cpp
+    src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
     src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp src/editor/PlayShortcuts.cpp
     src/resources/ShaderReloadSession.cpp src/resources/TextureStreamer.cpp
     src/platform/WindowIcon.cpp src/platform/WindowIcon.h
@@ -1034,6 +1031,11 @@ if(BUILD_TESTING)
         ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11" RUN_SERIAL TRUE TIMEOUT 600)
     add_test(NAME native_resource_dx11_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --backend dx11)
     set_tests_properties(native_resource_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
+    add_test(NAME directional_shadow_quality_dx11_core COMMAND directional_shadow_quality_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    add_test(NAME point_shadow_render_dx11_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    add_test(NAME material_mapping_render_dx11_core COMMAND material_mapping_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    set_tests_properties(directional_shadow_quality_dx11_core point_shadow_render_dx11_core material_mapping_render_dx11_core
+        PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11" RUN_SERIAL TRUE TIMEOUT 240)
 
     # Explicit benchmark command; it reads only a disposable frozen project.
     add_executable(forward_plus_room_benchmark tests/forward_plus_room_benchmark.cpp
@@ -1069,10 +1071,6 @@ if(BUILD_TESTING)
     target_link_libraries(collision_overlay_preparation_tests PRIVATE crimson-resources crimson-scene)
     target_compile_options(collision_overlay_preparation_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME collision_overlay_preparation_core COMMAND collision_overlay_preparation_tests)
-    add_executable(player_occlusion_tests tests/player_occlusion_tests.cpp src/editor/PlayerOcclusion.cpp)
-    target_link_libraries(player_occlusion_tests PRIVATE crimson-resources crimson-scene)
-    target_compile_options(player_occlusion_tests PRIVATE /W4 /permissive- /utf-8)
-    add_test(NAME player_occlusion_core COMMAND player_occlusion_tests)
     # Explicit performance fixture: the real editor runs hidden against a frozen
     # disposable project, including browser previews, workers, UI and GPU frames.
     get_target_property(CC_EDITOR_PERF_SOURCES crimson-renderer SOURCES)

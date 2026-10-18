@@ -75,14 +75,13 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,14> definitions{{
+    constexpr std::array<Pair,13> definitions{{
         {RendererProgram::Sphere,"vs_pbr","fs_pbr"},{RendererProgram::Model,"vs_model","fs_model"},
         {RendererProgram::Picking,"vs_pick","fs_pick"},{RendererProgram::Present,"vs_present","fs_present"},
         {RendererProgram::Grid,"vs_grid","fs_grid"},{RendererProgram::Encode,"vs_present","fs_encode"},
         {RendererProgram::Particle,"vs_particle","fs_particle"},{RendererProgram::Sky,"vs_present","fs_sky"},
         {RendererProgram::PointShadow,"vs_point_shadow","fs_point_shadow"},
         {RendererProgram::CollisionOverlay,"vs_collision_overlay","fs_collision_overlay"},
-        {RendererProgram::OccluderComposite,"vs_present","fs_occluder_composite"},
         {RendererProgram::DirectionalShadow,"vs_directional_shadow","fs_directional_shadow"},
         {RendererProgram::GlowExtract,"vs_present","fs_glow_extract"},{RendererProgram::GlowBlur,"vs_present","fs_glow_blur"}}};
     std::vector<RendererShaderPair> pairs; pairs.reserve(definitions.size());
@@ -92,7 +91,7 @@ void ShaderReloadSession::pump() {
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }
     if (!renderer_.reloadPrograms(pairs,ready.at("cs_procedural_filter")->bytes,ready.at("cs_cluster_lights")->bytes,
         ready.at("cs_model_deform")->bytes,
-        ready.at("cs_occluder_depth")->bytes,ready.at("cs_ssgi_trace")->bytes,ready.at("cs_ssgi_temporal")->bytes,
+        ready.at("cs_ssgi_trace")->bytes,ready.at("cs_ssgi_temporal")->bytes,
         ready.at("cs_ssgi_filter")->bytes,ready.at("cs_ssgi_publish")->bytes,
         ready.at("cs_ssao_evaluate")->bytes,ready.at("cs_ssao_publish")->bytes)) {
         bgfx::destroy(ui); pending_=false; status_="Shader reload: "+renderer_.shaderStatus(); return;

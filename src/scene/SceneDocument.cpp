@@ -148,6 +148,15 @@ float readIndirectEnergy(const Json& source,float fallback=1.f) {
     if(!validIndirectEnergy(value))throw std::runtime_error("Light GI energy must be finite and between zero and sixteen.");
     return value;
 }
+float readShadowAngularDiameter(const Json& source) {
+    if(!source.contains("shadowAngularDiameter"))return .53f;
+    const auto& encoded=source.at("shadowAngularDiameter");
+    if(!encoded.is_number())throw std::runtime_error("Directional shadow angular diameter must be a number.");
+    const auto value=encoded.get<float>();
+    if(!std::isfinite(value)||value<0||value>2)
+        throw std::runtime_error("Directional shadow angular diameter must be finite and between zero and two degrees.");
+    return value;
+}
 template<class Light> Json lightJson(const Light& light) {
     Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled},{"indirectEnergy",light.indirectEnergy}};
     if constexpr(requires { light.radius; })result["radius"]=light.radius;
@@ -158,6 +167,7 @@ template<class Light> Json lightJson(const Light& light) {
         result["attenuation"]=light.attenuation;
     }
     if constexpr(requires { light.shadowDistance; })result["shadowDistance"]=light.shadowDistance;
+    if constexpr(requires { light.shadowAngularDiameter; })result["shadowAngularDiameter"]=light.shadowAngularDiameter;
     result["roles"]=rolesJson(light.roles);
     if constexpr(requires { light.castShadows; }) {
         result["castShadows"]=light.castShadows;
@@ -179,6 +189,7 @@ template<class Light> Light readLight(const Json& json) {
         result.attenuation=json.value("attenuation",2.f);
     }
     if constexpr(requires { result.shadowDistance; })result.shadowDistance=json.value("shadowDistance",100.f);
+    if constexpr(requires { result.shadowAngularDiameter; })result.shadowAngularDiameter=readShadowAngularDiameter(json);
     if(json.contains("roles"))result.roles=readRoles(json.at("roles"),result.roles);
     if constexpr(requires { result.castShadows; }) {
         result.castShadows=json.value("castShadows",false);
@@ -290,7 +301,6 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         } else if(entity.contains("modelMaterial"))
             setModelMaterialOverride(record.modelMaterials,0,entity.at("modelMaterial").get<AssetRef<MaterialAsset>>());
         record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
-        if(version>=13)record.fadeWhenOccluding=entity.value("fadeWhenOccluding",false);
         if(entity.contains("lightingScopes")) {
             const auto& scopes=entity.at("lightingScopes");
             if(!scopes.is_object())throw std::runtime_error("Surface lighting scopes must be an object.");
@@ -652,7 +662,6 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.model) {
             entity["model"] = *record.model;
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
-            entity["fadeWhenOccluding"]=record.fadeWhenOccluding;
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
                 {"shadowCasterMask",record.lightingScopes.shadowCasterMask}};
             const auto& animation=record.modelAnimation;
@@ -715,7 +724,7 @@ enum EntityField : uint64_t {
     Directional=1ull<<6, Point=1ull<<7, Environment=1ull<<8, ActorField=1ull<<9, Collider=1ull<<10, CameraField=1ull<<11,
     ModelMaterialField=1ull<<12, CastShadows=1ull<<13, ReceiveShadows=1ull<<14,
     QuaderField=1ull<<15,QuaderGeneratedField=1ull<<16,LightingScopesField=1ull<<17,
-    ModelAnimationField=1ull<<18,FadeWhenOccludingField=1ull<<19,VisibleField=1ull<<20,MotorField=1ull<<21,ControllerField=1ull<<22,NavigationField=1ull<<23,
+    ModelAnimationField=1ull<<18,VisibleField=1ull<<20,MotorField=1ull<<21,ControllerField=1ull<<22,NavigationField=1ull<<23,
     PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
@@ -738,7 +747,6 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
-    if(a.fadeWhenOccluding!=b.fadeWhenOccluding)fields|=FadeWhenOccludingField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
@@ -764,7 +772,6 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
-    if(fields&FadeWhenOccludingField)target.fadeWhenOccluding=source.fadeWhenOccluding;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
     if(fields&ControllerField)target.controller=source.controller;
@@ -1407,7 +1414,6 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 preserveAuthoredActorComponents(record,*previous);
                 if(record.model && previous->model) {
                     record.lightingScopes=previous->lightingScopes;
-                    record.fadeWhenOccluding=previous->fadeWhenOccluding;
                     if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);
                     else if(record.model==previous->model)record.modelMaterials=previous->modelMaterials;
                     else if(!previous->modelMaterials.empty())
@@ -1420,6 +1426,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 if(record.directional && previous->directional) {
                     record.directional->roles=previous->directional->roles;
                     record.directional->indirectEnergy=previous->directional->indirectEnergy;
+                    record.directional->shadowAngularDiameter=previous->directional->shadowAngularDiameter;
                 }
                 if(record.collider && previous->collider) {
                     const auto source=record.collider->source;

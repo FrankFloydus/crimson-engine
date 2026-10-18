@@ -53,13 +53,13 @@ private:
     std::array<Vec4,16> parameters_{};
     struct DirectionalParameters {
         std::array<Mat4,16> matrices;
-        std::array<Vec4,16> rectangles;
-        std::array<Vec4,4> splits,parameters;
+        std::array<Vec4,16> rectangles,depthRanges;
+        std::array<Vec4,4> splits,parameters,softness;
         Vec4 cameraForward;
     };
     std::array<DirectionalParameters,2> directional_{};
     bgfx::UniformHandle sampler_{BGFX_INVALID_HANDLE},parametersUniform_{BGFX_INVALID_HANDLE},atlasUniform_{BGFX_INVALID_HANDLE},layoutUniform_{BGFX_INVALID_HANDLE};
-    bgfx::UniformHandle directionalMatrices_{BGFX_INVALID_HANDLE},directionalRects_{BGFX_INVALID_HANDLE},directionalSplits_{BGFX_INVALID_HANDLE},directionalParameters_{BGFX_INVALID_HANDLE},shadowCameraForward_{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle directionalMatrices_{BGFX_INVALID_HANDLE},directionalRects_{BGFX_INVALID_HANDLE},directionalSplits_{BGFX_INVALID_HANDLE},directionalParameters_{BGFX_INVALID_HANDLE},shadowCameraForward_{BGFX_INVALID_HANDLE},directionalSoftness_{BGFX_INVALID_HANDLE},directionalDepthRanges_{BGFX_INVALID_HANDLE};
     PointShadowStats stats_;
     std::string status_;
     std::uint64_t frame_{},world_{},lastRenderedFrame_{UINT64_MAX};

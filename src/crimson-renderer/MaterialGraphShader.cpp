@@ -96,7 +96,7 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         addBinding(result,"u_direction",ShaderUniformKind::Vec4,4);addBinding(result,"u_directionColor",ShaderUniformKind::Vec4,4);
         for(auto name:{"u_clusterGrid","u_clusterDepth","u_clusterViewport","u_clusterAtlas","u_clusterOptions","u_clusterRecordLayoutV6",
             "u_surfaceLighting","u_surfaceCategory",
-            "u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase","u_ssgiAtlas","u_ssgiSettings","u_ssgiDraw","u_ssaoAtlas","u_ssaoSettings","u_debugView"})addBinding(result,name);
+            "u_ssgiAtlas","u_ssgiSettings","u_ssgiDraw","u_ssaoAtlas","u_ssaoSettings","u_debugView"})addBinding(result,name);
         addBinding(result,"u_directionLightingRoles",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_clusterView",ShaderUniformKind::Mat4);
         addBinding(result,"u_pointShadow",ShaderUniformKind::Vec4,16);
@@ -104,6 +104,8 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
         addBinding(result,"u_directionalShadowSplits",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_directionalShadowParameters",ShaderUniformKind::Vec4,4);
         addBinding(result,"u_directionalShadowRect",ShaderUniformKind::Vec4,16);
+        addBinding(result,"u_directionalShadowSoftness",ShaderUniformKind::Vec4,4);
+        addBinding(result,"u_directionalShadowDepthRange",ShaderUniformKind::Vec4,16);
         addBinding(result,"u_shadowCameraForward");
         addBinding(result,"s_irradiance",ShaderUniformKind::Sampler,1,12,ShaderTextureDimension::Cube);
         addBinding(result,"s_prefiltered",ShaderUniformKind::Sampler,1,13,ShaderTextureDimension::Cube);
@@ -313,7 +315,7 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         source<<((model || particle)?
             "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal\n":
             "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal\n");
-        source<<"// crimson-material-graph-generator-v24\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
+        source<<"// crimson-material-graph-generator-v25\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
             <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<(surface&&lit)<<"\n";
         source<<"#include <bgfx_shader.sh>\nuniform vec4 u_graphParams[208];\n";
         if(model || particle)source<<"uniform mat4 u_modelNormalMatrix;\nuniform vec4 u_modelUv;\n";
@@ -373,7 +375,6 @@ ShaderCompileRecipe materialGraphShaderRecipe(const ShaderCompileConfig& config,
     result.includeDirectories={config.sourceDirectory,config.includeDirectory};
     result.contract="crimson-material-graph-v7;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";
     if(variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Picking)result.contract+=";model-instance-opacity-v1";
-    if(variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle)result.contract+=";occluder-depth-partition-v1";
     return result;
 }
 }
