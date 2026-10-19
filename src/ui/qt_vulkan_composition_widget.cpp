@@ -19,12 +19,13 @@
 #include <QScopedValueRollback>
 #include <QSurfaceFormat>
 #include <QVulkanInstance>
+#include <QVersionNumber>
 #include <QWindow>
 #include <QtWidgets/private/qrhiwidget_p.h>
 #include <QtGui/private/qrhi_p.h>
 #include <QtGui/private/qrhivulkan_p.h>
 
-#include "render/render_system.hpp"
+#include "render/render_host.hpp"
 
 #include <utility>
 
@@ -57,6 +58,47 @@ QRhiVulkan *vulkan_implementation(QRhi *rhi) {
       QRhiResourceUpdateBatchPrivate::get(batch)->rhi);
   batch->release();
   return implementation;
+}
+
+std::shared_ptr<const RenderVulkanEnabledCapabilities>
+capture_enabled_capabilities(QRhi *rhi) {
+  const QRhiVulkan *implementation = vulkan_implementation(rhi);
+  if (implementation == nullptr || implementation->importedDevice) {
+    // Qt cannot recover the enabled features or extensions of an imported
+    // device. Retain the ordinary handles without inventing that contract.
+    return {};
+  }
+  auto capabilities = std::make_shared<RenderVulkanEnabledCapabilities>();
+  const QVersionNumber version = implementation->caps.apiVersion;
+  capabilities->api_version = VK_MAKE_API_VERSION(
+      0, static_cast<std::uint32_t>(version.majorVersion()),
+      static_cast<std::uint32_t>(version.minorVersion()), 0);
+  // Pinned Qt 6.10.3 QRhiVulkan::create enables its queried core features,
+  // except robustness. For >= 1.1, Qt disables this in its local Features2
+  // chain after copying physDevFeatures, so correct the retained copy here.
+  capabilities->features = implementation->physDevFeatures;
+  capabilities->features.robustBufferAccess = VK_FALSE;
+  for (const QByteArray &extension : implementation->inst->extensions()) {
+    capabilities->instance_extensions.emplace_back(
+        extension.constData(), static_cast<std::size_t>(extension.size()));
+  }
+  // Qt's final device-extension list is local to create(). These retained
+  // flags attest the following enabled subset for a Qt-created device. Do
+  // not substitute physical-device support or today's environment overrides.
+  capabilities->device_extensions.emplace_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+  if (implementation->caps.vertexAttribDivisor) {
+    capabilities->device_extensions.emplace_back(
+        VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+  }
+  if (implementation->caps.renderPass2KHR) {
+    capabilities->device_extensions.emplace_back(
+        VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+  }
+  if (implementation->caps.depthStencilResolveKHR) {
+    capabilities->device_extensions.emplace_back(
+        VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+  }
+  return capabilities;
 }
 
 VkPresentModeKHR swap_chain_present_mode(const QVkSwapChain &swap_chain) {
@@ -93,7 +135,7 @@ QtVulkanCompositionWidget::~QtVulkanCompositionWidget() {
   releaseResources();
 }
 
-void QtVulkanCompositionWidget::set_render_system(RenderSystem *render_system) {
+void QtVulkanCompositionWidget::set_render_system(RenderHost *render_system) {
   render_system_ = render_system;
   if (render_system_ != nullptr && vsync_request_configured_ &&
       !vsync_change_pending_) {
@@ -198,6 +240,9 @@ void QtVulkanCompositionWidget::initialize(QRhiCommandBuffer *) {
   if (shared_context_ && shared_context_->device != native->dev) {
     releaseResources();
   }
+  const auto capabilities = context_changed
+                                ? capture_enabled_capabilities(current_rhi)
+                                : shared_context_->enabled_capabilities;
   initialized_rhi_ = current_rhi;
   shared_context_ = RenderVulkanSharedContext{
       .instance = native->inst->vkInstance(),
@@ -205,7 +250,8 @@ void QtVulkanCompositionWidget::initialize(QRhiCommandBuffer *) {
       .device = native->dev,
       .graphics_queue = native->gfxQueue,
       .graphics_queue_family = native->gfxQueueFamilyIdx,
-      .graphics_queue_index = native->gfxQueueIdx};
+      .graphics_queue_index = native->gfxQueueIdx,
+      .enabled_capabilities = capabilities};
   reset_empty_render_target();
   if (context_changed && vsync_request_configured_) {
     vsync_change_pending_ = true;
@@ -263,10 +309,10 @@ void QtVulkanCompositionWidget::finish_external_submission() {
   if (render_system_->finish_external_queue_submission()) {
     return;
   }
-  LOG_ERROR("Unable to hand the Vulkan queue from Filament to Qt composition");
+  LOG_ERROR("Unable to hand the Vulkan queue from the renderer to Qt composition");
   // beginCompose has no cancellation result. Continuing would permit concurrent
   // host access to the shared Vulkan queue after an unrecoverable handoff error.
-  qFatal("Qt Vulkan composition stopped: Filament shared-queue CPU handoff failed");
+  qFatal("Qt Vulkan composition stopped: renderer shared-queue CPU handoff failed");
 }
 
 void QtVulkanCompositionWidget::begin_composition() {

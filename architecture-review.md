@@ -16,7 +16,7 @@ regression traps. Completed refactors are historical; this document is not an ex
 
 The native Windows editor is the shipping product. Its app-owned portable modeling core,
 `src/sdk/core/modeling`, owns modeling state. The native host adapts that state to scene entities,
-assets, project persistence, input, Qt presentation and Filament.
+assets, project persistence, input, Qt presentation and renderer-neutral snapshots.
 
 ```text
 Qt presentation / scripts / automation
@@ -43,7 +43,7 @@ Actual target dependencies live in [CMakeLists.txt](CMakeLists.txt) and
 | [src/assets](src/assets/AGENTS.md) | `AssetRegistry`, mesh/material/texture identity, validation and copy-on-write assets |
 | [src/io](src/io/AGENTS.md) | Native QDR projects/scenes, hydration, asset dependencies, durable filesystem writes and recovery |
 | [src/viewport](src/viewport/AGENTS.md) | Toolkit-neutral camera/workspace, semantic input routing and viewport host contracts |
-| [src/render](src/render/AGENTS.md) | Filament, scene sync/caches, materials, overlays, native surface rendering and render performance counters |
+| [src/render](src/render/AGENTS.md) | Neutral render facades, scene extraction, semantic overlays, backend adapters, GPU resources and render performance counters |
 | [src/ui](src/ui/AGENTS.md) | Qt widgets, retained presenters, localization, settings surfaces and raw-input translation |
 | [src/app](src/app/AGENTS.md) | Application composition, frame scheduling, active-screen signals and window/project lifecycle |
 | [src/platform](src/platform/AGENTS.md) | Win32 integration, dialogs, raw input, native support and fatal presentation |
@@ -101,19 +101,51 @@ Native tool lifecycles are registered once. Qt translates events and presents st
 [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md) names the authoritative catalogs and tests.
 
 The shell uses `QApplication`, `QMainWindow` and `QDockWidget` with Qt Fusion and the shared
-accessibility-aware Obsidian theme. `ViewportWorkspaceService` owns one to four panes; each
-has a native child `QWindow` Filament surface. Retained UI must abandon expired owners during
-project/scene replacement; see [UI lifetime rules](src/ui/AGENTS.md).
+accessibility-aware Obsidian theme. `ViewportWorkspaceService` owns one to four panes. Production
+Vulkan panes use [`QtVulkanCompositionWidget`](src/ui/qt_vulkan_composition_widget.hpp), a
+`QRhiWidget`, so scene textures and the ordinary Qt shell reach one window composition.
+`QtViewportSurface` remains the input adapter; its composed-mode `QWindow` has no native handle
+or window container. Qt owns the Vulkan device, graphics queue and window swapchain. One
+[`RenderHost`](src/render/render_host.hpp) borrows that context for the root generation and
+coordinates independent offscreen pane targets. Release every borrower before replacing the
+Qt root/device. Retained UI must abandon expired owners during project/scene replacement;
+see [UI lifetime rules](src/ui/AGENTS.md).
+
+Application, UI and editor APIs consume `RenderHost`, `RenderSceneSink` and `RenderView`.
+Each app executable links exactly one `create_app_render_host()` composition: Full uses
+`quader_render_full_host` and Filament; the Public 0.1 composition is
+`quader_render_crimson_host`, adapting to the canonical external `Crimson::Renderer`.
+The shared runtime does not select backends or own a second renderer implementation.
+Activation, dependency provenance and GPU gate status belong in the
+[Crimson integration contract](thirdparty/crimson/README.md).
+
+The Crimson host prepares the complete pane set before recording a shared frame. Scene,
+preview suppression and editor coverage carry the same generation; validation and resource
+preparation must succeed for every candidate before any pane records commands. Publish all
+target candidates together after native checks. Rejection retains accepted scene/overlay
+coverage and pixels, and a corrected candidate can retry. GPU completion separately protects
+render/copy resource retirement. Exact selection stays in the native query owners: until
+Crimson implements the optional selection-depth accelerator, it supplies no depth source and
+the existing exact CPU surface-query fallback remains authoritative. The
+[scene composition probe](tests/crimson_scene_composition_probe.cpp) protects shared-frame
+acceptance; [selection hit policy](src/editor/viewport/viewport_scene_hit_policy.cpp) owns fallback.
 
 [`RenderSourceStamp`](src/render/render_source_stamp.hpp) and dependency masks gate snapshots,
 hashing, copies and UI updates.
 [`ViewportOverlaySubmissionCoordinator`](src/render/overlay/viewport_overlay_submission_coordinator.hpp)
-owns overlay composition/submission;
+owns semantic overlay composition/submission;
 [`InstancedWireRenderBackend`](src/render/overlay/instanced_wire_render_backend.hpp)
-owns shared instanced wire resources.
+owns Full's shared instanced wire resources.
 [`MaterialPresentationService`](src/editor/material/material_presentation_service.hpp)
-projects editor material state. Render resources belong only to `src/render`; consumers never
-mutate modeling/scene/assets. Snapshot and GPU-upload payload lifetimes must be explicit.
+projects editor material state. Quader render adapters own backend translation and lifetime;
+Crimson owns its reusable GPU mechanisms in the pinned
+[`thirdparty/crimson-renderer`](thirdparty/crimson-renderer) submodule of
+`qvertexworks/crimson-renderer`, shared with Crimson Engine. Native configuration
+checks that checkout against the recorded gitlink and verifies the installed bgfx
+package against the canonical manifest and overlay hashes. Its dependency overlay
+is selected by the native preset; portable SDK builds do not consume renderer
+sources or native dependency features. Consumers never mutate
+modeling/scene/assets. Snapshot and GPU-upload payload lifetimes must be explicit.
 
 ## Diagnostics and verification
 

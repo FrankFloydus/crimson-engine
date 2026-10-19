@@ -83,16 +83,20 @@ QtMaterialPreviewSurface::QtMaterialPreviewSurface(QWindow *parent)
 
 QtMaterialPreviewSurface::~QtMaterialPreviewSurface() { shutdown(); }
 
-bool QtMaterialPreviewSurface::initialize(RenderSystem &render_system) {
+bool QtMaterialPreviewSurface::initialize(RenderHost &render_system) {
   if (initialized_) {
     return true;
   }
   render_system_ = &render_system;
-  if (!render_system_->initialize_material_preview_renderer(renderer_)) {
+  renderer_ = render_system_->create_material_preview_view();
+  if (!renderer_) {
     render_system_ = nullptr;
     return false;
   }
-  renderer_.set_preview_state(preview_state_);
+  renderer_->set_preview_state(preview_state_);
+  if (material_snapshot_) {
+    (void)renderer_->set_material(*material_snapshot_);
+  }
   initialized_ = true;
   mark_render_pending();
 
@@ -119,7 +123,8 @@ void QtMaterialPreviewSurface::shutdown() {
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
   mark_shared_commands_pending();
-  renderer_.shutdown();
+  renderer_->shutdown();
+  renderer_.reset();
   render_system_ = nullptr;
   initialized_ = false;
   native_surface_available_ = false;
@@ -128,7 +133,7 @@ void QtMaterialPreviewSurface::shutdown() {
 }
 
 bool QtMaterialPreviewSurface::render_frame() {
-  if (!render_pending_ && !swap_chain_.needs_initial_frame()) {
+  if (!render_pending_ && !(swap_chain_ && swap_chain_->needs_initial_frame())) {
     return false;
   }
   synchronize_render_size();
@@ -136,24 +141,24 @@ bool QtMaterialPreviewSurface::render_frame() {
       isExposed()) {
     recreate_swap_chain();
   }
-  if (!ready_to_render() || !render_system_->begin_frame(swap_chain_)) {
+  if (!ready_to_render() || !render_system_->begin_frame(*swap_chain_)) {
     return false;
   }
-  render_system_->render_material_preview(renderer_, swap_chain_);
-  render_system_->end_frame(swap_chain_);
+  render_system_->render_material_preview(*renderer_, *swap_chain_);
+  render_system_->end_frame(*swap_chain_);
   render_pending_ = false;
   return true;
 }
 
 bool QtMaterialPreviewSurface::ready_to_render() const {
   return initialized_ && render_system_ != nullptr &&
-         render_system_->initialized() && renderer_.initialized() &&
+         render_system_->initialized() && renderer_ && renderer_->initialized() &&
          static_cast<bool>(swap_chain_) && native_surface_available_ &&
          isExposed() && isVisible() && width() > 0 && height() > 0;
 }
 
 bool QtMaterialPreviewSurface::needs_rendering() const {
-  return (render_pending_ || swap_chain_.needs_initial_frame()) &&
+  return (render_pending_ || (swap_chain_ && swap_chain_->needs_initial_frame())) &&
          ready_to_render();
 }
 
@@ -170,16 +175,17 @@ void QtMaterialPreviewSurface::synchronize_render_size() {
       std::max<qreal>(1.0, std::round(width() * scale)));
   const std::uint32_t pixel_height = static_cast<std::uint32_t>(
       std::max<qreal>(1.0, std::round(height() * scale)));
-  if (renderer_.width() != pixel_width || renderer_.height() != pixel_height) {
+  if (renderer_->width() != pixel_width || renderer_->height() != pixel_height) {
     mark_shared_commands_pending();
-    renderer_.resize(pixel_width, pixel_height);
+    renderer_->resize(pixel_width, pixel_height);
     mark_render_pending();
   }
 }
 
 void QtMaterialPreviewSurface::set_material(
     StandardMaterialPreviewSnapshot snapshot) {
-  if (renderer_.set_material(std::move(snapshot))) {
+  material_snapshot_ = std::move(snapshot);
+  if (renderer_ && renderer_->set_material(*material_snapshot_)) {
     mark_shared_commands_pending();
   }
   mark_render_pending();
@@ -394,7 +400,9 @@ void QtMaterialPreviewSurface::apply_interaction(
 
 void QtMaterialPreviewSurface::publish_state_change() {
   mark_shared_commands_pending();
-  renderer_.set_preview_state(preview_state_);
+  if (renderer_) {
+    renderer_->set_preview_state(preview_state_);
+  }
   mark_render_pending();
   if (surface_changed_callback_) {
     surface_changed_callback_();
@@ -402,7 +410,7 @@ void QtMaterialPreviewSurface::publish_state_change() {
 }
 
 void QtMaterialPreviewSurface::mark_shared_commands_pending() {
-  if (render_system_ != nullptr && renderer_.initialized()) {
+  if (render_system_ != nullptr && renderer_ && renderer_->initialized()) {
     render_system_->mark_shared_commands_pending();
   }
 }
@@ -429,11 +437,11 @@ void QtMaterialPreviewSurface::recreate_swap_chain(bool force_retry) {
   }
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
-  swap_chain_ = render_system_->create_additional_swap_chain(
+  swap_chain_ = render_system_->create_native_surface(
       native, SwapChainPresentationColorSpace::Srgb);
   if (!swap_chain_) {
     if (!swap_chain_creation_failed_) {
-      LOG_ERROR("Unable to create Filament swapchain for material preview");
+      LOG_ERROR("Unable to create renderer surface for material preview");
     }
     swap_chain_creation_failed_ = true;
     return;

@@ -23,18 +23,18 @@ class QRhiTextureRenderTarget;
 
 namespace quader {
 
-class RenderSystem;
+class RenderHost;
 
 /**
  * Places an externally rendered Vulkan image in Qt's window composition.
- * Qt owns its device and output texture; render owns every Filament resource.
+ * Qt owns its device and output texture; the renderer owns its GPU resources.
  */
 class QtVulkanCompositionWidget final : public QRhiWidget {
 public:
   explicit QtVulkanCompositionWidget(QWidget *parent = nullptr);
   ~QtVulkanCompositionWidget() override;
 
-  void set_render_system(RenderSystem *render_system);
+  void set_render_system(RenderHost *render_system);
   /** Settles scene and camera state before Qt begins recording; false defers. */
   void set_prepare_callback(std::function<bool()> callback);
   /** True means the target was filled and transitioned to shader-read layout. */
@@ -63,7 +63,7 @@ private:
   bool ensure_empty_render_target();
   void reset_empty_render_target();
 
-  RenderSystem *render_system_ = nullptr;
+  RenderHost *render_system_ = nullptr;
   QRhi *initialized_rhi_ = nullptr;
   std::optional<RenderVulkanSharedContext> shared_context_;
   std::function<bool()> prepare_callback_;

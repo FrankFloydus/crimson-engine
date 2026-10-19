@@ -10,7 +10,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
-#include "render/overlay/overlay_face_fill_composition.hpp"
+#include "render/overlay/overlay_face_fill_policy.hpp"
 
 #include <array>
 #include <cstddef>

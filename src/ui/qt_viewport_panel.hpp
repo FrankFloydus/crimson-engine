@@ -15,7 +15,7 @@
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/transform_gizmo_interaction.hpp"
-#include "render/render_system.hpp"
+#include "render/render_host.hpp"
 #include "render/viewport_info_stats.hpp"
 #include "ui/qt_startup_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -68,7 +68,7 @@ class RenderOverlaySnapshotCache;
 class QtViewportEdgeLengthHud;
 class QtViewportFlyNavigationHud;
 class SceneDocument;
-class SceneRenderBridge;
+class RenderSceneSink;
 class ViewportPointPlacementService;
 
 /**
@@ -94,7 +94,7 @@ public:
   QtViewportPanel(const QtViewportPanel &) = delete;
   QtViewportPanel &operator=(const QtViewportPanel &) = delete;
 
-  bool initialize(RenderSystem &render_system);
+  bool initialize(RenderHost &render_system);
   void shutdown();
 
   void reset_interactions(QuaderEditorApi *editor,
@@ -157,7 +157,7 @@ public:
                      ViewportPointPlacementService *point_placement,
                      double delta_seconds);
   void prepare_viewports(QuaderEditorApi &editor,
-                         SceneRenderBridge &render_bridge,
+                         RenderSceneSink &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache,
                          SceneDocument &document, AssetRegistry &assets,
                          ModelingSessionService &modeling,
@@ -322,7 +322,7 @@ private:
   std::array<Pane, kViewportPaneCount> panes_;
   std::vector<QPointer<QWidget>> native_geometry_ancestors_;
   QtUiScaleMetrics ui_scale_metrics_;
-  RenderSystem *render_system_ = nullptr;
+  RenderHost *render_system_ = nullptr;
   ViewportWorkspaceService *workspace_ = nullptr;
   QPointer<QtToolSettingsPanel> settings_panel_;
   QtEnvironmentSettingsPopup *environment_popup_ = nullptr;

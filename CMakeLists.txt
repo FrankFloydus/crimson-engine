@@ -140,6 +140,7 @@ if(QUADER_BUILD_NATIVE_APP)
     find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets)
     # The composition boundary uses the private API of this pinned Qt release.
     find_package(Qt6 6.10.3 EXACT CONFIG REQUIRED COMPONENTS GuiPrivate WidgetsPrivate)
+    find_package(VulkanHeaders CONFIG REQUIRED)
     if(WIN32)
         set(QUADER_REQUIRED_QT_IMAGE_FORMAT_PLUGIN_TARGETS
             Qt6::QGifPlugin
@@ -855,19 +856,56 @@ if(WIN32)
             User32)
 endif()
 
+add_library(quader_render_common STATIC
+    src/render/curve_solid_geometry_cache.cpp
+    src/render/instance_batch_planner.cpp
+    src/render/instance_edit_style.cpp
+    src/render/material_preview_mesh_library.cpp
+    src/render/mesh_quad_uv_interpolation.cpp
+    src/render/mesh_surface_grid_projection.cpp
+    src/render/overlay/overlay_camera_projector.cpp
+    src/render/overlay/curve_tool_overlay_cache.cpp
+    src/render/overlay/overlay_face_fill_builder.cpp
+    src/render/overlay/overlay_face_fill_policy.cpp
+    src/render/overlay/collision_shape_overlay_planner.cpp
+    src/render/overlay/overlay_line_mesh_builder.cpp
+    src/render/overlay/overlay_edit_wire_retention.cpp
+    src/render/overlay/overlay_point_mesh_builder.cpp
+    src/render/overlay/render_overlay_snapshot.cpp
+    src/render/overlay/render_overlay_collision_snapshot.cpp
+    src/render/overlay/overlay_renderable_builder.cpp
+    src/render/overlay/viewport_box_overlay_builder.cpp
+    src/render/overlay/viewport_primitive_creation_overlay_builder.cpp
+    src/render/overlay/selected_mesh_outline_cache.cpp
+    src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
+    src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp
+    src/render/overlay/viewport_scene_overlay_builder.cpp
+    src/render/overlay/viewport_overlay_submission_coordinator.cpp
+    src/render/overlay/viewport_overlay_style_resolver.cpp
+    src/render/render_signature_builder.cpp
+    src/render/render_source_stamp.cpp
+    src/render/scene_render_extraction.cpp
+    src/render/viewport_info_stats.cpp
+    src/render/viewport_overlay_policy.cpp
+)
+
+quader_enable_common_pch(quader_render_common)
+target_include_directories(quader_render_common PUBLIC src
+    PRIVATE "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}")
+target_link_libraries(quader_render_common
+    PUBLIC quader_document quader_viewport_services Vulkan::Headers
+    PRIVATE quader_modeling_profile)
+target_compile_features(quader_render_common PUBLIC cxx_std_20)
+
 add_library(quader_render STATIC
     src/render/component_selection_renderer.cpp
-    src/render/curve_solid_geometry_cache.cpp
     src/render/filament_utils.cpp
     src/render/filament_buffer_descriptor_factory.cpp
     src/render/filament_environment_library.cpp
     src/render/filament_material_library.cpp
-    src/render/instance_batch_planner.cpp
-    src/render/instance_edit_style.cpp
     src/render/instance_renderable_cache.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp
-    src/render/material_preview_mesh_library.cpp
     src/render/material_preview_renderer.cpp
     src/render/material_thumbnail_renderer.cpp
     src/render/scene_tone_mapper.cpp
@@ -875,20 +913,9 @@ add_library(quader_render STATIC
     src/render/mesh_renderable_cache.cpp
     src/render/editable_mesh_surface_cache.cpp
     src/render/mesh_renderable_factory.cpp
-    src/render/mesh_quad_uv_interpolation.cpp
-    src/render/mesh_surface_grid_projection.cpp
     src/render/png_texture_loader.cpp
-    src/render/overlay/overlay_camera_projector.cpp
-    src/render/overlay/curve_tool_overlay_cache.cpp
     src/render/overlay/collision_shape_overlay_cache.cpp
-    src/render/overlay/overlay_face_fill_builder.cpp
-    src/render/overlay/overlay_line_mesh_builder.cpp
-    src/render/overlay/overlay_edit_wire_retention.cpp
-    src/render/overlay/overlay_point_mesh_builder.cpp
     src/render/overlay/overlay_proxy_factory.cpp
-    src/render/overlay/render_overlay_snapshot.cpp
-    src/render/overlay/render_overlay_collision_snapshot.cpp
-    src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/overlay_face_fill_composition.cpp
     src/render/overlay/overlay_stencil_reset.cpp
     src/render/overlay/overlay_renderable_cache.cpp
@@ -896,34 +923,20 @@ add_library(quader_render STATIC
     src/render/overlay/instance_selection_overlay_cache.cpp
     src/render/overlay/scene_wireframe_overlay_cache.cpp
     src/render/overlay/selected_object_overlay_cache.cpp
-    src/render/overlay/viewport_box_overlay_builder.cpp
-    src/render/overlay/viewport_primitive_creation_overlay_builder.cpp
-    src/render/overlay/selected_mesh_outline_cache.cpp
     src/render/overlay/selected_mesh_outline_mask_cache.cpp
     src/render/overlay/selected_mesh_outline_renderer.cpp
-    src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
-    src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp
-    src/render/overlay/viewport_scene_overlay_builder.cpp
-    src/render/overlay/viewport_overlay_submission_coordinator.cpp
-    src/render/overlay/viewport_overlay_style_resolver.cpp
     src/render/render_system.cpp
     src/render/render_vulkan_composition_platform.cpp
-    src/render/render_signature_builder.cpp
-    src/render/render_source_stamp.cpp
-    src/render/scene_render_extraction.cpp
     src/render/scene_render_bridge.cpp
     src/render/scene_render_sync_service.cpp
     src/render/texture_binding_service.cpp
     src/render/texture_registry.cpp
     src/render/tool_preview_renderable_cache.cpp
-    src/render/viewport_info_stats.cpp
     src/render/viewport_grid_renderer.cpp
-    src/render/viewport_overlay_policy.cpp
     src/render/viewport_render_pass_coordinator.cpp
     src/render/viewport_render_target.cpp
     src/render/viewport_renderer.cpp
 )
-
 quader_enable_common_pch(quader_render)
 target_include_directories(quader_render
     PUBLIC src
@@ -934,8 +947,7 @@ target_compile_definitions(quader_render
 )
 target_link_libraries(quader_render
     PUBLIC
-        quader_document
-        quader_viewport_services
+        quader_render_common
         filament_sdk
     PRIVATE
         lodepng
@@ -943,6 +955,11 @@ target_link_libraries(quader_render
 target_compile_features(quader_render PUBLIC cxx_std_20)
 add_dependencies(quader_render
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
+
+add_library(quader_render_full_host STATIC
+    src/app/filament_render_host_composition.cpp)
+target_link_libraries(quader_render_full_host PUBLIC quader_render)
+target_compile_features(quader_render_full_host PUBLIC cxx_std_20)
 
 if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     add_executable(qdr_phase8_performance_baseline
@@ -971,7 +988,7 @@ target_link_libraries(quader_editor_api
     PRIVATE
         quader_modeling_profile
         quader_project_session
-        quader_render
+        quader_render_common
         quader_viewport_services)
 target_compile_features(quader_editor_api PUBLIC cxx_std_20)
 
@@ -994,7 +1011,7 @@ target_include_directories(quader_editor_viewport PUBLIC src)
 target_link_libraries(quader_editor_viewport
     PUBLIC
         quader_editor_api
-        quader_render
+        quader_render_common
     PRIVATE
         quader_editor_services
         quader_modeling_profile
@@ -1168,7 +1185,7 @@ target_link_libraries(quader_ui
     PUBLIC
         quader_editor_api
         quader_editor_viewport
-        quader_render
+        quader_render_common
         Qt6::Widgets
     PRIVATE
         Qt6::GuiPrivate
@@ -1177,6 +1194,22 @@ target_link_libraries(quader_ui
         quader_platform
         quader_modeling_profile)
 target_compile_features(quader_ui PUBLIC cxx_std_20)
+
+include(cmake/QuaderCrimsonComposition.cmake)
+if(TARGET quader_crimson_composition_probe)
+    target_sources(quader_crimson_composition_probe PRIVATE
+        tests/crimson_vulkan_composition_probe.cpp)
+    target_sources(quader_crimson_scene_composition_probe PRIVATE
+        tests/crimson_scene_composition_probe.cpp)
+    target_sources(quader_crimson_editor_composition_probe PRIVATE
+        tests/crimson_editor_composition_probe.cpp)
+    target_sources(quader_filament_editor_composition_probe PRIVATE
+        tests/crimson_editor_composition_probe.cpp)
+    target_sources(quader_crimson_depth_composition_probe PRIVATE
+        tests/crimson_depth_composition_probe.cpp)
+    target_sources(quader_filament_depth_composition_probe PRIVATE
+        tests/crimson_depth_composition_probe.cpp)
+endif()
 
 add_library(quader_app STATIC
     src/app/app_frame_clock.cpp
@@ -1190,7 +1223,7 @@ target_link_libraries(quader_app
     PUBLIC
         quader_editor_api
         quader_platform
-        quader_render
+        quader_render_common
         quader_ui
     PRIVATE
         quader_modeling_profile)
@@ -1201,10 +1234,6 @@ target_include_directories(quader_runtime
     INTERFACE
         src
         "${QUADER_GENERATED_DIR}")
-target_compile_definitions(quader_runtime
-    INTERFACE
-        QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
-)
 if(QUADER_ENABLE_SENTRY)
     target_compile_definitions(quader_runtime INTERFACE QUADER_ENABLE_SENTRY=1)
 endif()
@@ -1213,7 +1242,7 @@ target_link_libraries(quader_runtime
     INTERFACE
         quader_app
         quader_platform
-        quader_render
+        quader_render_common
         quader_ui)
 
 if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
@@ -1221,7 +1250,7 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
         benchmarks/modeling/qdr_fixture_performance_baseline.cpp)
     quader_enable_common_pch(qdr_fixture_performance_baseline)
     target_compile_features(qdr_fixture_performance_baseline PRIVATE cxx_std_20)
-    target_link_libraries(qdr_fixture_performance_baseline PRIVATE quader_runtime quader_release_profile_full)
+    target_link_libraries(qdr_fixture_performance_baseline PRIVATE quader_runtime quader_render_full_host quader_release_profile_full)
 
     add_executable(qdr_scene_workspace_performance
         benchmarks/modeling/qdr_scene_workspace_performance.cpp)
@@ -1229,19 +1258,19 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     target_compile_features(qdr_scene_workspace_performance PRIVATE cxx_std_20)
     target_link_libraries(qdr_scene_workspace_performance
         PRIVATE
-            quader_runtime quader_release_profile_full)
+            quader_runtime quader_render_full_host quader_release_profile_full)
 
     add_executable(qdr_snap_to_floor_performance
         benchmarks/modeling/qdr_snap_to_floor_performance.cpp)
     quader_enable_common_pch(qdr_snap_to_floor_performance)
     target_compile_features(qdr_snap_to_floor_performance PRIVATE cxx_std_20)
-    target_link_libraries(qdr_snap_to_floor_performance PRIVATE quader_runtime quader_release_profile_full)
+    target_link_libraries(qdr_snap_to_floor_performance PRIVATE quader_runtime quader_render_full_host quader_release_profile_full)
 
     add_executable(qdr_curve_viewport_performance
         benchmarks/modeling/qdr_curve_viewport_performance.cpp)
     quader_enable_common_pch(qdr_curve_viewport_performance)
     target_compile_features(qdr_curve_viewport_performance PRIVATE cxx_std_20)
-    target_link_libraries(qdr_curve_viewport_performance PRIVATE quader_runtime quader_release_profile_full)
+    target_link_libraries(qdr_curve_viewport_performance PRIVATE quader_runtime quader_render_full_host quader_release_profile_full)
 endif()
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
@@ -1391,13 +1420,13 @@ qt_add_resources(quader "quader_layer_panel_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_LAYER_PANEL_ICON_FILES})
-target_link_libraries(quader PRIVATE quader_runtime quader_release_profile_full)
+target_link_libraries(quader PRIVATE quader_runtime quader_render_full_host quader_release_profile_full)
 add_dependencies(quader
     quader_fatal_diagnostics
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
 
 # Reuse the host's main, Windows resources, and generated Qt icon sources.
-# Only the tiny linked release profile differs between these executables.
+# Each host selects its immutable release policy and renderer composition.
 get_target_property(QUADER_NATIVE_HOST_SOURCES quader SOURCES)
 set(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS "${VCPKG_APPLOCAL_DEPS}")
 set(VCPKG_APPLOCAL_DEPS OFF)
@@ -1405,7 +1434,7 @@ add_executable(quader_public_app WIN32 ${QUADER_NATIVE_HOST_SOURCES})
 set(VCPKG_APPLOCAL_DEPS "${_QUADER_SAVED_VCPKG_APPLOCAL_DEPS}")
 unset(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS)
 set_target_properties(quader_public_app PROPERTIES OUTPUT_NAME "quader-0.1")
-target_link_libraries(quader_public_app PRIVATE quader_runtime quader_release_profile_public)
+target_link_libraries(quader_public_app PRIVATE quader_runtime quader_render_crimson_host quader_release_profile_public)
 # Both post-build deployment steps clean and refill the same DLL directories.
 # A target dependency serializes them even during a parallel aggregate build.
 add_dependencies(quader_public_app quader quader_fatal_diagnostics
@@ -1521,6 +1550,16 @@ if(WIN32)
 
     quader_deploy_windows_qt_runtime(quader)
     quader_deploy_windows_qt_runtime(quader_public_app)
+    if(TARGET quader_crimson_composition_probe)
+        # The probe deploys into its own directory so its smaller DLL closure
+        # cannot remove dependencies needed by either shipping host.
+        quader_deploy_windows_qt_runtime(quader_crimson_composition_probe)
+        quader_deploy_windows_qt_runtime(quader_crimson_scene_composition_probe)
+        quader_deploy_windows_qt_runtime(quader_crimson_editor_composition_probe)
+        quader_deploy_windows_qt_runtime(quader_filament_editor_composition_probe)
+        quader_deploy_windows_qt_runtime(quader_crimson_depth_composition_probe)
+        quader_deploy_windows_qt_runtime(quader_filament_depth_composition_probe)
+    endif()
 
     # The read-only bridge is consumed outside Quader. Resolve its own Release
     # dependency closure without adding Qt or renderer deployment to the DLL.
@@ -1548,7 +1587,7 @@ foreach(_quader_public_example IN LISTS QUADER_PUBLIC_CPP_EXAMPLES)
     get_filename_component(_quader_public_example_name "${_quader_public_example}" NAME_WE)
     add_executable("quader_example_${_quader_public_example_name}" "${_quader_public_example}")
     target_compile_features("quader_example_${_quader_public_example_name}" PRIVATE cxx_std_20)
-    target_link_libraries("quader_example_${_quader_public_example_name}" PRIVATE quader_runtime quader_release_profile_full)
+    target_link_libraries("quader_example_${_quader_public_example_name}" PRIVATE quader_runtime quader_render_full_host quader_release_profile_full)
 endforeach()
 
 file(GLOB_RECURSE QUADER_RUNTIME_IBL_INPUTS
@@ -1945,10 +1984,16 @@ if(QUADER_BUILD_TESTS)
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest quader_release_profile_full)
+    target_link_libraries(quader_tests PRIVATE quader_runtime quader_render_full_host GTest::gtest quader_release_profile_full)
     target_link_libraries(quader_tests PRIVATE Qt6::GuiPrivate)
     target_link_libraries(quader_tests PRIVATE quader_bridge_reader)
     target_link_libraries(quader_tests PRIVATE quader_modeling_sdk_qdr_document)
+    if(TARGET quader_render_crimson)
+        target_sources(quader_tests PRIVATE
+            tests/crimson_scene_projection_tests.cpp
+            tests/crimson_editor_projection_tests.cpp)
+        target_link_libraries(quader_tests PRIVATE quader_render_crimson)
+    endif()
     quader_deploy_test_runtime_dlls(quader_tests)
     if(WIN32)
         quader_deploy_windows_qt_runtime(quader_tests)
@@ -2012,7 +2057,7 @@ if(QUADER_BUILD_TESTS)
     target_compile_definitions(quader_public_release_tests PRIVATE
         QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_public_release_tests PRIVATE
-        quader_runtime quader_modeling_sdk_qdr_document GTest::gtest
+        quader_runtime quader_render_crimson_host quader_render quader_modeling_sdk_qdr_document GTest::gtest
         quader_release_profile_public)
     quader_deploy_test_runtime_dlls(quader_public_release_tests)
     if(WIN32)
@@ -2028,7 +2073,7 @@ if(QUADER_BUILD_TESTS)
     target_compile_features(quader_modeling_sdk_parity_tests PRIVATE cxx_std_20)
     target_link_libraries(quader_modeling_sdk_parity_tests
         PRIVATE
-            quader_runtime
+            quader_runtime quader_render_full_host
             quader_modeling_sdk
             quader_release_profile_full
             GTest::gtest

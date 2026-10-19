@@ -91,8 +91,8 @@ file except through prior written authorization from Francesco Di Blasi.
 - `QtViewportPanel` hosts one to four panes. Production Vulkan panes use
   `QtVulkanCompositionWidget` (`QRhiWidget`) so scene textures, dock layout and ordinary overlays
   reach one Qt window composition. Workspace state/cameras remain in `ViewportWorkspaceService`;
-  Filament resources and retained offscreen backing belong to render. Each pane retains its fixed
-  control strip above the visible render area.
+  Backend GPU resources and retained offscreen backing belong to the selected `RenderHost`.
+  Each pane retains its fixed control strip above the visible render area.
   `QtViewportSurface` remains the single input adapter and renderer owner. In composed mode its
   QWindow object has no native handle or window container: widget events feed the same input
   accumulator, and focus, grabs, cursor, picking, popup and HUD coordinates use the visible widget.

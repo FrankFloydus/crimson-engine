@@ -2435,7 +2435,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     EveryQtViewportPaneOwnsOneFilamentSurfaceForItsPresentationBackend) {
+     EveryQtViewportPaneOwnsOneRendererSurfaceForItsPresentationBackend) {
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string surface_header =
@@ -2445,7 +2445,7 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(surface_header,
                   "class QtViewportSurface final : public QWindow");
-  expect_contains(surface_header, "RenderAdditionalSwapChain swap_chain_");
+  expect_contains(surface_header, "std::unique_ptr<RenderSurface> swap_chain_");
   const std::string create_pane = source_slice(
       panel, "void QtViewportPanel::create_pane(",
       "void QtViewportPanel::refresh_keybinding_presentation(");
@@ -2482,10 +2482,10 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(composed_initialize, "native_window_handle()");
   expect_contains(surface, "(void)winId()");
   expect_contains(surface, "native_window_handle()");
-  expect_contains(surface, "create_additional_swap_chain(");
-  expect_contains(surface, "begin_frame(swap_chain_)");
-  expect_contains(surface, "render_viewport(renderer_, swap_chain_)");
-  expect_contains(surface, "end_frame(swap_chain_)");
+  expect_contains(surface, "create_native_surface(");
+  expect_contains(surface, "begin_frame(*swap_chain_)");
+  expect_contains(surface, "render_viewport(*renderer_, *swap_chain_)");
+  expect_contains(surface, "end_frame(*swap_chain_)");
   expect_contains(surface, "QEvent::PlatformSurface");
   expect_contains(surface, "QPlatformSurfaceEvent::SurfaceCreated");
   expect_contains(surface,
@@ -2493,7 +2493,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface, "QEvent::DevicePixelRatioChange");
   expect_contains(surface, "swap_chain_.reset()");
   expect_contains(surface,
-                  "render_system_->render_composited_viewport(renderer_, swap_chain_, target)");
+                  "render_system_->render_composited_viewport(*renderer_, *swap_chain_, target)");
   const std::string native_swap_chain = source_slice(
       surface, "void QtViewportSurface::recreate_swap_chain(",
       "void QtViewportSurface::synchronize_render_size()");
@@ -2618,8 +2618,8 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(readiness, begin_frame);
 
   expect_contains(surface_header, "void synchronize_render_size()");
-  expect_contains(surface, "renderer_.width() != width");
-  expect_contains(surface, "renderer_.height() != height");
+  expect_contains(surface, "renderer_->width() != width");
+  expect_contains(surface, "renderer_->height() != height");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -2753,7 +2753,7 @@ TEST(UiLayoutGuardrailTests,
   const std::size_t prepare =
       app.find("ui_.prepare_viewports(", scene_sync);
   const std::size_t prepare_with_cache =
-      app.find("ui_.prepare_viewports(render_bridge_, "
+      app.find("ui_.prepare_viewports(*render_bridge_, "
                "render_overlay_snapshot_cache_)",
                scene_sync);
   ASSERT_NE(render_frame, std::string::npos);
@@ -3417,11 +3417,11 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_FALSE(retire_shell.empty());
   const std::size_t detach_borrowers =
       retire_shell.find("ui_.detach_render_resources()");
-  const std::size_t shutdown_bridge = retire_shell.find("render_bridge_.shutdown()");
+  const std::size_t shutdown_bridge = retire_shell.find("render_bridge_->shutdown()");
   const std::size_t destroy_resolver =
       retire_shell.find("project_material_resolver_.reset()");
   const std::size_t shutdown_renderer =
-      retire_shell.find("render_system_.shutdown()");
+      retire_shell.find("render_system_->shutdown()");
   const std::size_t destroy_shell = retire_shell.find("ui_.shutdown()");
   ASSERT_NE(detach_borrowers, std::string::npos);
   ASSERT_NE(shutdown_bridge, std::string::npos);
@@ -4135,7 +4135,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_system, "->isMinimized()");
   expect_contains(ui_system, "material_preview_surface_->needs_rendering()");
   expect_contains(surface,
-                  "if (!render_pending_ && !swap_chain_.needs_initial_frame())");
+                  "if (!render_pending_ && !(swap_chain_ && swap_chain_->needs_initial_frame()))");
   expect_contains(surface, "render_pending_ = false");
   expect_contains(surface, "mark_render_pending()");
 

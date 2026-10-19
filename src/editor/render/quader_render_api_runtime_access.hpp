@@ -18,8 +18,8 @@
 
 namespace quader {
 
-class SceneRenderBridge;
-class ViewportRenderer;
+class RenderSceneSink;
+class RenderView;
 class ViewportCameraController;
 enum class ToolPreviewSubmissionResult : std::uint8_t;
 
@@ -55,16 +55,16 @@ public:
       RenderToolPreviewSceneSnapshot)>;
 
   static QuaderApiVoidResult sync_scene(QuaderRenderApi &api,
-                                        SceneRenderBridge &bridge);
+                                        RenderSceneSink &bridge);
   /// Warms a derived GPU selection certificate only after this camera settles.
-  static void prepare_selection_depth(QuaderRenderApi &api, ViewportRenderer &renderer,
+  static void prepare_selection_depth(QuaderRenderApi &api, RenderView &renderer,
                                       const ViewportCameraController &camera, bool eligible);
   static QuaderApiVoidResult sync_tool_previews(
-      QuaderRenderApi &api, SceneRenderBridge &bridge,
+      QuaderRenderApi &api, RenderSceneSink &bridge,
       const ToolPreviewPublisher &publish = {},
       const ToolPreviewScenePublisher &publish_scene = {});
   static QuaderApiVoidResult sync_scene_asset_overlays(
-      QuaderRenderApi &api, SceneRenderBridge &bridge,
+      QuaderRenderApi &api, RenderSceneSink &bridge,
       RenderOverlaySnapshotCache &snapshot_cache,
       const QuaderRenderSceneOverlaySyncRequest &request);
   [[nodiscard]] static const RenderOverlaySelectionSnapshot &

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/instance_edit_style.hpp"
+#include "render/render_view.hpp"
 #include "render/component_selection_renderer.hpp"
 #include "render/overlay/overlay_stencil_reset.hpp"
 #include "render/overlay/selected_mesh_outline_renderer.hpp"
@@ -36,32 +37,9 @@ struct RenderOverlaySelectedObjectSnapshot;
 struct RenderOverlaySelectionSnapshot;
 
 /**
- * Selects a viewport's target and whether its swapchain performs sRGB encoding.
- */
-enum class ViewportRenderSurface {
-    Texture,
-    Swapchain,
-    SrgbSwapchain,
-};
-
-/**
- * Selects a renderer-owned material diagnostic for one Filament view.
- */
-enum class ViewportMaterialDebugMode : std::uint8_t {
-    None = 0,
-    DiffuseOnly = 1,
-    SpecularOnly = 2,
-    Albedo = 3,
-    Roughness = 4,
-    Metalness = 5,
-    Normal = 6,
-    Uv = 7,
-};
-
-/**
  * Owns Viewport Renderer behavior within the render extraction and Filament resource layer.
  */
-class ViewportRenderer {
+class ViewportRenderer : public RenderView {
 public:
     ViewportRenderer() = default;
     ViewportRenderer(const ViewportRenderer&) = delete;

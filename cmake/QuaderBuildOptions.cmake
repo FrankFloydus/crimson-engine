@@ -14,6 +14,12 @@ option(QUADER_TRACY_ON_DEMAND "Enable Tracy on-demand capture mode for Debug Qua
 option(QUADER_BUILD_PERFORMANCE_BENCHMARKS "Build opt-in Quader performance baseline executables." OFF)
 option(QUADER_BUILD_QDR_TOOLS "Build opt-in native QDR validation and inspection tools." OFF)
 option(QUADER_ENABLE_PCH "Enable Quader target-local precompiled headers for faster incremental C++ builds." ON)
+option(QUADER_BUILD_CRIMSON_COMPOSITION_PROBE "Build the opt-in shared Crimson/Qt Vulkan composition gate." OFF)
+set(_QUADER_DEFAULT_CRIMSON_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/crimson-renderer")
+set(QUADER_CRIMSON_SOURCE_DIR "${_QUADER_DEFAULT_CRIMSON_SOURCE_DIR}" CACHE PATH
+    "Canonical Crimson Renderer submodule root; an explicit checkout must match its recorded commit.")
+set(QUADER_CRIMSON_DEPENDENCY_PREFIX "" CACHE PATH
+    "Optional matching bgfx installation; empty selects this native build's vcpkg target prefix.")
 
 set(_QUADER_OPENMESH_COMMIT "5f016723f9f183770cffe5787a6f9f628e2914d8")
 set(QUADER_OPENMESH_COMMIT "${_QUADER_OPENMESH_COMMIT}")

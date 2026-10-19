@@ -283,7 +283,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
       {"io_bridge",
        {"src/io/bridge/"},
        {"assets", "core", "editor_projection", "io_bridge", "io_project",
-        "io_qdr", "math", "scene"}},
+        "io_qdr", "math", "mesh_geometry", "scene"}},
       {"io_qdr",
        {"src/io/qdr/"},
        {"assets", "core", "diagnostics", "io_project", "io_qdr",
@@ -443,7 +443,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
        {"quader_project_qdr_io", "quader_modeling_sdk_qdr_document",
         "quader_release_profile_full"}},
       {"qdr_fixture_performance_baseline",
-       {"quader_runtime", "quader_release_profile_full"}},
+       {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"qdr_performance_baseline",
        {"quader_assets", "quader_modeling", "quader_modeling_polygon",
         "quader_modeling_profile", "quader_modeling_runtime",
@@ -452,17 +452,17 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
        {"quader_modeling", "quader_modeling_sdk", "quader_render",
         "quader_release_profile_full"}},
       {"qdr_scene_workspace_performance",
-       {"quader_runtime", "quader_release_profile_full"}},
+       {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"qdr_snap_to_floor_performance",
-       {"quader_runtime", "quader_release_profile_full"}},
+       {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"qdr_curve_viewport_performance",
-       {"quader_runtime", "quader_release_profile_full"}},
+       {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"qdr_validate", {"quader_project_qdr_io", "quader_release_profile_full"}},
-      {"quader", {"quader_runtime", "quader_release_profile_full"}},
+      {"quader", {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"quader_api", {"quader_core", "quader_modeling_profile"}},
       {"quader_app",
        {"quader_editor_api", "quader_modeling_profile", "quader_platform",
-        "quader_render", "quader_ui"}},
+        "quader_render_common", "quader_ui"}},
       {"quader_assets", {"quader_core_utilities", "quader_modeling_sdk_curves"}},
       {"quader_bridge_reader",
        {"quader_modeling", "quader_project_qdr_io", "quader_release_profile_full"}},
@@ -473,6 +473,18 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
         "quader_viewport_services"}},
       {"quader_core_ui_support", {"quader_core_utilities"}},
       {"quader_core_utilities", {"quader_release_features"}},
+      {"quader_crimson_composition_probe",
+       {"quader_ui", "quader_release_profile_public"}},
+      {"quader_crimson_scene_composition_probe",
+       {"quader_ui", "quader_release_profile_public"}},
+      {"quader_crimson_editor_composition_probe",
+       {"quader_render_crimson", "quader_ui", "quader_release_profile_public"}},
+      {"quader_filament_editor_composition_probe",
+       {"quader_render_full_host", "quader_ui", "quader_release_profile_public"}},
+      {"quader_crimson_depth_composition_probe",
+       {"quader_render_crimson", "quader_ui", "quader_release_profile_public"}},
+      {"quader_filament_depth_composition_probe",
+       {"quader_render_full_host", "quader_ui", "quader_release_profile_public"}},
       {"quader_document", {"quader_assets"}},
       {"quader_edit_wire_line_material", {}},
       {"quader_editor_metadata",
@@ -480,18 +492,18 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_editor_release_policy", {"quader_release_features"}},
       {"quader_editor_api",
        {"quader_api", "quader_modeling_profile", "quader_project_session",
-        "quader_render", "quader_viewport_services"}},
+        "quader_render_common", "quader_viewport_services"}},
       {"quader_editor_services",
        {"quader_document", "quader_modeling", "quader_modeling_profile",
         "quader_viewport_services"}},
       {"quader_editor_viewport",
        {"quader_editor_api", "quader_editor_services",
-        "quader_modeling_profile", "quader_render",
+        "quader_modeling_profile", "quader_render_common",
         "quader_viewport_services"}},
       {"quader_example_create_box",
-       {"quader_runtime", "quader_release_profile_full"}},
+       {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"quader_example_script_modeling_workflow",
-       {"quader_runtime", "quader_release_profile_full"}},
+       {"quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"quader_geometry", {}},
       {"quader_guardrail_tests", {}},
       {"quader_component_selection_material", {}},
@@ -530,7 +542,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_modeling_sdk_consumer_tests", {"quader_modeling_sdk"}},
       {"quader_modeling_sdk_geometry", {}},
       {"quader_modeling_sdk_parity_tests",
-       {"quader_modeling_sdk", "quader_runtime", "quader_release_profile_full"}},
+       {"quader_modeling_sdk", "quader_runtime", "quader_render_full_host", "quader_release_profile_full"}},
       {"quader_modeling_sdk_curves", {}},
       {"quader_modeling_sdk_polygon", {"quader_modeling_sdk_geometry"}},
       {"quader_modeling_sdk_qdr_document", {"quader_modeling_sdk_polygon"}},
@@ -549,18 +561,22 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_project_session",
        {"quader_editor_services", "quader_project_qdr_io"}},
       {"quader_qdr_flatbuffers_generated", {}},
-      {"quader_public_app", {"quader_runtime", "quader_release_profile_public"}},
+      {"quader_public_app", {"quader_runtime", "quader_render_crimson_host", "quader_release_profile_public"}},
       {"quader_public_release_tests",
-       {"quader_runtime", "quader_modeling_sdk_qdr_document",
+       {"quader_runtime", "quader_render_crimson_host", "quader_render", "quader_modeling_sdk_qdr_document",
         "quader_release_profile_public"}},
       {"quader_release_features", {}},
       {"quader_release_profile_full", {}},
       {"quader_release_profile_public", {}},
       {"quader_render",
-       {"filament_sdk", "quader_document", "quader_modeling_profile",
-        "quader_viewport_services"}},
+       {"filament_sdk", "quader_render_common", "quader_modeling_profile"}},
+      {"quader_render_common",
+       {"quader_document", "quader_viewport_services", "quader_modeling_profile"}},
+      {"quader_render_full_host", {"quader_render"}},
+      {"quader_render_crimson_host", {"quader_render_crimson"}},
+      {"quader_render_crimson", {"quader_render_common", "quader_modeling_profile"}},
       {"quader_runtime",
-       {"quader_app", "quader_platform", "quader_render", "quader_ui"}},
+       {"quader_app", "quader_platform", "quader_render_common", "quader_ui"}},
       {"quader_runtime_resources", {}},
       {"quader_sdk_example_mesh_operation", {"quader_modeling_sdk"}},
       {"quader_sdk_example_qdr_roundtrip", {"quader_modeling_sdk"}},
@@ -569,11 +585,12 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_selection_mask_material", {}},
       {"quader_selection_outline_material", {}},
       {"quader_tests",
-       {"quader_bridge_reader", "quader_runtime", "quader_modeling_sdk_qdr_document",
+       {"quader_bridge_reader", "quader_runtime", "quader_render_full_host",
+        "quader_render_crimson", "quader_modeling_sdk_qdr_document",
         "quader_release_profile_full"}},
       {"quader_ui",
        {"quader_editor_api", "quader_editor_metadata", "quader_editor_viewport",
-        "quader_modeling_profile", "quader_platform", "quader_render"}},
+        "quader_modeling_profile", "quader_platform", "quader_render_common"}},
       {"quader_viewport_services",
        {"quader_core_utilities", "quader_editor_metadata", "quader_modeling",
         "quader_modeling_profile", "quader_modeling_runtime",
@@ -873,6 +890,8 @@ void add_derived_example_targets(CMakeProjectGraph &graph,
         {target, std::string(dependency), call.source_file});
     if (target_prefix == "quader_example_") {
       graph.links.push_back(
+          {target, "quader_render_full_host", call.source_file});
+      graph.links.push_back(
           {target, "quader_release_profile_full", call.source_file});
     }
   }
@@ -1106,6 +1125,8 @@ CMakeProjectGraph project_cmake_graph() {
       {"CMakeLists.txt", read_source_file("CMakeLists.txt")},
       {"cmake/QuaderModeling.cmake",
        read_source_file("cmake/QuaderModeling.cmake")},
+      {"cmake/QuaderCrimsonComposition.cmake",
+       read_source_file("cmake/QuaderCrimsonComposition.cmake")},
   });
 }
 
@@ -1182,6 +1203,45 @@ TEST(DependencyMatrixGuardrailTests,
   for (const std::string &issue : issues) {
     ADD_FAILURE() << issue;
   }
+}
+
+TEST(DependencyMatrixGuardrailTests,
+     PublicExecutableLinkClosureSelectsCrimsonWithoutFullRenderer) {
+  const CMakeProjectGraph graph = project_cmake_graph();
+  const auto linked_targets = [&graph](std::string_view root) {
+    std::set<std::string> reached;
+    std::vector<std::string> pending{std::string(root)};
+    while (!pending.empty()) {
+      const std::string target = std::move(pending.back());
+      pending.pop_back();
+      if (!reached.insert(target).second) {
+        continue;
+      }
+      for (const CMakeLinkEdge &edge : graph.links) {
+        if (edge.target == target) {
+          pending.push_back(edge.dependency);
+        }
+      }
+    }
+    return reached;
+  };
+  ASSERT_TRUE(graph.targets.contains("quader_public_app"));
+  ASSERT_TRUE(graph.targets.contains("quader_public_release_tests"));
+  const auto application = linked_targets("quader_public_app");
+  for (const auto required : {"quader_render_crimson_host", "quader_render_crimson",
+                              "quader_render_common"}) {
+    EXPECT_TRUE(application.contains(required)) << "Public executable must link " << required;
+  }
+  for (const auto forbidden : {"quader_render_full_host", "quader_render", "filament_sdk"}) {
+    EXPECT_FALSE(application.contains(forbidden)) << "Public executable reaches " << forbidden;
+  }
+  // Tests retain concrete Full helpers, while their executable composition
+  // still supplies exactly the Crimson factory. Build-order dependencies on
+  // the Full app/test binaries are deliberately outside this link graph.
+  const auto public_tests = linked_targets("quader_public_release_tests");
+  EXPECT_TRUE(public_tests.contains("quader_render_crimson_host"));
+  EXPECT_TRUE(public_tests.contains("quader_render_crimson"));
+  EXPECT_FALSE(public_tests.contains("quader_render_full_host"));
 }
 
 TEST(DependencyMatrixGuardrailParserTests, RejectsStalePolicyRows) {

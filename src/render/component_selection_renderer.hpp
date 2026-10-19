@@ -7,6 +7,7 @@
 #pragma once
 
 #include "viewport/viewport_selection_depth.hpp"
+#include "render/render_view.hpp"
 
 #include <memory>
 
@@ -19,16 +20,8 @@ class Texture;
 
 namespace quader {
 
-/// Reports bounded GPU selection work separately from ordinary viewport frames.
-struct ComponentSelectionRendererStats final {
-  std::uint64_t submission_count = 0u;
-  std::uint64_t completed_readbacks = 0u;
-  std::uint64_t readback_bytes = 0u;
-  double readback_latency_ms = 0.0;
-};
-
 /// Owns retained conservative ID layers and asynchronous immutable readbacks.
-class ComponentSelectionRenderer final {
+class ComponentSelectionRenderer final : public RenderSelectionDepth {
 public:
   ComponentSelectionRenderer();
   ~ComponentSelectionRenderer();

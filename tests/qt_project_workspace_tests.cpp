@@ -8162,6 +8162,82 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(renders, 0);
 }
 
+TEST(QtProjectWorkspaceTests,
+     ComposedVulkanCapabilitiesRemainPinnedAcrossResizeAndRelease) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_COMPOSITION_CAPABILITY_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_COMPOSITION_CAPABILITY_TESTS=1 for the Qt device contract";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-composition-capability-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  std::optional<quader::RenderVulkanSharedContext> pinned_context;
+  QEventLoop frame_loop;
+  QTimer timeout;
+  timeout.setSingleShot(true);
+  QObject::connect(&timeout, &QTimer::timeout, &frame_loop, &QEventLoop::quit);
+  {
+    QWidget root;
+    QVBoxLayout layout(&root);
+    quader::QtVulkanCompositionWidget widget(&root);
+    layout.addWidget(&widget);
+    root.resize(240, 180);
+    bool submitted = false;
+    bool failed = false;
+    QObject::connect(&widget, &QRhiWidget::frameSubmitted, &frame_loop, [&] {
+      submitted = true;
+      frame_loop.quit();
+    });
+    QObject::connect(&widget, &QRhiWidget::renderFailed, &frame_loop, [&] {
+      failed = true;
+      frame_loop.quit();
+    });
+    const auto wait_for_frame = [&] {
+      timeout.start(10000);
+      if (!submitted && !failed) {
+        frame_loop.exec();
+      }
+      timeout.stop();
+    };
+    root.show();
+    wait_for_frame();
+    ASSERT_FALSE(failed);
+    ASSERT_TRUE(submitted);
+    ASSERT_NE(widget.shared_context(), nullptr);
+    pinned_context = *widget.shared_context();
+    ASSERT_NE(pinned_context->enabled_capabilities, nullptr);
+    const auto &capabilities = *pinned_context->enabled_capabilities;
+    EXPECT_GE(capabilities.api_version, VK_API_VERSION_1_0);
+    EXPECT_EQ(capabilities.features.robustBufferAccess, VK_FALSE);
+    EXPECT_NE(std::find(capabilities.device_extensions.begin(),
+                        capabilities.device_extensions.end(),
+                        VK_KHR_SWAPCHAIN_EXTENSION_NAME),
+              capabilities.device_extensions.end());
+    EXPECT_NE(std::find(capabilities.instance_extensions.begin(),
+                        capabilities.instance_extensions.end(),
+                        VK_KHR_SURFACE_EXTENSION_NAME),
+              capabilities.instance_extensions.end());
+    submitted = false;
+    root.resize(320, 220);
+    wait_for_frame();
+    ASSERT_FALSE(failed);
+    ASSERT_TRUE(submitted);
+    ASSERT_NE(widget.shared_context(), nullptr);
+    EXPECT_EQ(widget.shared_context()->device, pinned_context->device);
+    EXPECT_EQ(widget.shared_context()->enabled_capabilities,
+              pinned_context->enabled_capabilities);
+  }
+  // The descriptor and its strings remain usable after Qt retires the device;
+  // retaining the capability pin never grants continued access to its handles.
+  ASSERT_TRUE(pinned_context.has_value());
+  const auto &capabilities = *pinned_context->enabled_capabilities;
+  EXPECT_EQ(capabilities.features.robustBufferAccess, VK_FALSE);
+  EXPECT_FALSE(capabilities.instance_extensions.empty());
+  EXPECT_FALSE(capabilities.device_extensions.empty());
+}
+
 #if defined(_WIN32)
 namespace {
 

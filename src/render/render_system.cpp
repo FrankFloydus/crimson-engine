@@ -204,6 +204,70 @@ RenderVulkanCompositionCapacity RenderAdditionalSwapChain::capacity() const {
 
 RenderSystem::RenderSystem() = default;
 
+std::unique_ptr<RenderSceneSink> RenderSystem::create_scene_sink(
+    const std::filesystem::path &resources) {
+  auto sink = std::make_unique<SceneRenderBridge>();
+  initialize_scene_render_bridge(*sink, resources);
+  return sink;
+}
+
+std::unique_ptr<RenderView> RenderSystem::create_view(
+    std::uint8_t layer_mask, ViewportRenderSurface surface) {
+  auto view = std::make_unique<ViewportRenderer>();
+  initialize_viewport_renderer(*view, layer_mask, surface);
+  return view;
+}
+
+std::unique_ptr<RenderMaterialPreviewView>
+RenderSystem::create_material_preview_view() {
+  auto view = std::make_unique<MaterialPreviewRenderer>();
+  if (!initialize_material_preview_renderer(*view)) {
+    return {};
+  }
+  return view;
+}
+
+std::unique_ptr<RenderSurface> RenderSystem::create_composited_surface(
+    std::uint32_t width, std::uint32_t height) {
+  auto surface = create_composited_swap_chain(width, height);
+  return surface ? std::make_unique<RenderAdditionalSwapChain>(std::move(surface))
+                 : nullptr;
+}
+
+std::unique_ptr<RenderSurface> RenderSystem::create_native_surface(
+    void *native_window, SwapChainPresentationColorSpace color_space) {
+  auto surface = create_additional_swap_chain(native_window, color_space);
+  return surface ? std::make_unique<RenderAdditionalSwapChain>(std::move(surface))
+                 : nullptr;
+}
+
+bool RenderSystem::begin_frame(RenderSurface &surface) {
+  return begin_frame(static_cast<RenderAdditionalSwapChain &>(surface));
+}
+
+void RenderSystem::end_frame(RenderSurface &surface) {
+  end_frame(static_cast<RenderAdditionalSwapChain &>(surface));
+}
+
+void RenderSystem::render_viewport(RenderView &view, RenderSurface &surface) {
+  render_viewport(static_cast<ViewportRenderer &>(view),
+                  static_cast<RenderAdditionalSwapChain &>(surface));
+}
+
+bool RenderSystem::render_composited_viewport(
+    RenderView &view, RenderSurface &surface,
+    const RenderVulkanCompositionTarget &target) {
+  return render_composited_viewport(static_cast<ViewportRenderer &>(view),
+                                    static_cast<RenderAdditionalSwapChain &>(surface),
+                                    target);
+}
+
+void RenderSystem::render_material_preview(RenderMaterialPreviewView &view,
+                                           RenderSurface &surface) {
+  render_material_preview(static_cast<MaterialPreviewRenderer &>(view),
+                           static_cast<RenderAdditionalSwapChain &>(surface));
+}
+
 RenderSystem::~RenderSystem() {
     shutdown();
 }

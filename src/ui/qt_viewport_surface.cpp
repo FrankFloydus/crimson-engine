@@ -320,7 +320,7 @@ QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id, bool composed)
 
 QtViewportSurface::~QtViewportSurface() { shutdown(); }
 
-bool QtViewportSurface::initialize(RenderSystem &render_system,
+bool QtViewportSurface::initialize(RenderHost &render_system,
                                    std::uint8_t grid_layer_mask) {
   if (!render_system.initialized()) {
     return false;
@@ -343,8 +343,12 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
   }
 
   render_system_ = &render_system;
-  render_system_->initialize_viewport_renderer(
-      renderer_, grid_layer_mask, ViewportRenderSurface::SrgbSwapchain);
+  renderer_ = render_system_->create_view(
+      grid_layer_mask, ViewportRenderSurface::SrgbSwapchain);
+  if (!renderer_) {
+    render_system_ = nullptr;
+    return false;
+  }
   initialized_ = true;
 
   if (composed_) {
@@ -379,7 +383,8 @@ void QtViewportSurface::shutdown() {
   set_pointer_capture(false);
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
-  renderer_.shutdown();
+  renderer_->shutdown();
+  renderer_.reset();
   render_system_ = nullptr;
   initialized_ = false;
   native_surface_available_ = false;
@@ -407,17 +412,17 @@ bool QtViewportSurface::render_frame() {
   const ViewportSurfaceProbeClock::time_point begin_start =
       diagnostics_enabled ? ViewportSurfaceProbeClock::now()
                           : ViewportSurfaceProbeClock::time_point{};
-  if (!render_system_->begin_frame(swap_chain_)) {
+  if (!render_system_->begin_frame(*swap_chain_)) {
     return false;
   }
   const ViewportSurfaceProbeClock::time_point render_start =
       diagnostics_enabled ? ViewportSurfaceProbeClock::now()
                           : ViewportSurfaceProbeClock::time_point{};
-  render_system_->render_viewport(renderer_, swap_chain_);
+  render_system_->render_viewport(*renderer_, *swap_chain_);
   const ViewportSurfaceProbeClock::time_point end_start =
       diagnostics_enabled ? ViewportSurfaceProbeClock::now()
                           : ViewportSurfaceProbeClock::time_point{};
-  render_system_->end_frame(swap_chain_);
+  render_system_->end_frame(*swap_chain_);
   if (diagnostics_enabled) {
     const ViewportSurfaceProbeClock::time_point now =
         ViewportSurfaceProbeClock::now();
@@ -451,7 +456,7 @@ bool QtViewportSurface::render_composed_frame(
   }
   // Geometry and camera preparation precede the Qt paint callback. Changing
   // the backing extent here would invalidate that accepted projection.
-  return render_system_->render_composited_viewport(renderer_, swap_chain_, target);
+  return render_system_->render_composited_viewport(*renderer_, *swap_chain_, target);
 }
 
 void QtViewportSurface::release_composed_surface() {
@@ -471,7 +476,7 @@ void QtViewportSurface::create_composed_surface() {
   if (const QScreen *screen = visible_host_->screen()) {
     extent = extent.expandedTo(screen->geometry().size());
   }
-  const auto capacity = swap_chain_.capacity();
+  const auto capacity = (swap_chain_ ? swap_chain_->capacity() : RenderVulkanCompositionCapacity{});
   const auto width = static_cast<std::uint32_t>(
       std::max(1, qRound(extent.width() * scale)));
   const auto height = static_cast<std::uint32_t>(
@@ -479,8 +484,11 @@ void QtViewportSurface::create_composed_surface() {
   if (swap_chain_ && capacity.width >= width && capacity.height >= height) {
     return;
   }
-  swap_chain_ = render_system_->create_composited_swap_chain(
+  swap_chain_ = render_system_->create_composited_surface(
       std::max(width, capacity.width), std::max(height, capacity.height));
+  if (swap_chain_) {
+    render_system_->bind_view_surface(*renderer_, *swap_chain_);
+  }
   presentation_geometry_->valid = false;
 }
 
@@ -554,7 +562,7 @@ QtViewportSurface::presentation_geometry() const {
     const QSize visible_pixels{
         std::max(1, qRound(visible_size.width() * scale)),
         std::max(1, qRound(visible_size.height() * scale))};
-    const auto capacity = swap_chain_.capacity();
+    const auto capacity = (swap_chain_ ? swap_chain_->capacity() : RenderVulkanCompositionCapacity{});
     presentation.visible_pixel_bounds = QRect(QPoint{}, visible_pixels);
     presentation.backing_pixel_size = {
         std::max(visible_pixels.width(), static_cast<int>(capacity.width)),
@@ -1789,11 +1797,11 @@ void QtViewportSurface::recreate_swap_chain(bool force_retry) {
   }
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
-  swap_chain_ = render_system_->create_additional_swap_chain(
+  swap_chain_ = render_system_->create_native_surface(
       native, SwapChainPresentationColorSpace::Srgb);
   if (!swap_chain_) {
     if (!swap_chain_creation_failed_) {
-      LOG_ERROR("Unable to create Filament swapchain for Qt viewport pane {}",
+      LOG_ERROR("Unable to create renderer surface for Qt viewport pane {}",
                 viewport_pane_stable_id(pane_id_));
     }
     swap_chain_creation_failed_ = true;
@@ -1813,14 +1821,14 @@ void QtViewportSurface::synchronize_render_size() {
       static_cast<std::uint32_t>(std::max(1.0f, size.x));
   const std::uint32_t height =
       static_cast<std::uint32_t>(std::max(1.0f, size.y));
-  if (renderer_.width() != width || renderer_.height() != height) {
+  if (renderer_->width() != width || renderer_->height() != height) {
     if (composed_) {
       render_system_->mark_shared_commands_pending();
     }
-    renderer_.resize(width, height);
+    renderer_->resize(width, height);
   }
   const auto &presentation = presentation_geometry();
-  renderer_.set_presentation_bounds(
+  renderer_->set_presentation_bounds(
       static_cast<std::uint32_t>(presentation.backing_pixel_size.width()),
       static_cast<std::uint32_t>(presentation.backing_pixel_size.height()),
       static_cast<std::uint32_t>(std::max(0, presentation.visible_pixel_bounds.x())),

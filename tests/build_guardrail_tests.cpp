@@ -541,7 +541,11 @@ third_party_license_expectations() {
   static const std::vector<ThirdPartyLicenseExpectation> kExpectations = {
       {"", "OpenMesh", "licenses/openmesh-BSD-3-Clause.txt", false},
       {"", "earcut.hpp", "licenses/earcut-hpp-ISC.txt", false},
-      {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
+      {"nlohmann-json", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", true},
+      {"bgfx", "bgfx", "licenses/bgfx-BSD-2-Clause.txt", true},
+      {"meshoptimizer", "meshoptimizer", "licenses/meshoptimizer-MIT.txt", true},
+      {"vulkan-headers", "Vulkan Headers",
+       "licenses/vulkan-headers-Apache-2.0-OR-MIT.txt", true},
       {"flatbuffers", "FlatBuffers", "licenses/flatbuffers-Apache-2.0.txt",
        true},
       {"", "Google Material Icons",
@@ -973,6 +977,51 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
 }
 
 TEST(BuildGuardrailTests,
+     CrimsonRendererUsesPinnedSubmoduleAndNativeOnlyDependencies) {
+  const std::string options =
+      read_source_file("cmake/QuaderBuildOptions.cmake");
+  const std::string composition =
+      read_source_file("cmake/QuaderCrimsonComposition.cmake");
+  const std::string submodules = read_source_file(".gitmodules");
+  const std::string presets = read_source_file("CMakePresets.json");
+  const std::string integration = read_source_file("thirdparty/crimson/README.md");
+  const std::string manifest = read_source_file("vcpkg.json");
+  const std::string native_dependencies =
+      source_slice(manifest, "\"native-app\": {", "\"tests\": {");
+  const std::string portable_dependencies =
+      source_slice(manifest, "\"dependencies\":", "\"default-features\":");
+
+  expect_contains(submodules, "path = thirdparty/crimson-renderer");
+  expect_contains(submodules,
+                  "url = https://github.com/qvertexworks/crimson-renderer.git");
+  expect_contains(options,
+                  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/crimson-renderer");
+  expect_missing(options + composition, "_CRIMSON_ENGINE");
+  expect_missing(composition, "src/crimson-renderer/shared");
+  expect_contains(composition,
+                  "include(\"${QUADER_CRIMSON_SOURCE_DIR}/cmake/CrimsonProvenance.cmake\")");
+  expect_contains(composition,
+                  "crimson_validate_consumer_provenance(\"${CMAKE_CURRENT_SOURCE_DIR}\"");
+  expect_contains(composition,
+                  "\"thirdparty/crimson-renderer\" \"${QUADER_CRIMSON_SOURCE_DIR}\"");
+  expect_contains(composition, "\"${_quader_crimson_dependency_prefix}\")");
+  expect_contains(integration, "renderer-manifest.json");
+  expect_contains(integration, "SPDX");
+  expect_contains(composition, "target_link_libraries(quader_render_crimson");
+  expect_contains(composition, "PUBLIC quader_render_common Crimson::Renderer");
+  expect_missing(composition, "FetchContent");
+  expect_missing(composition, "git clone");
+  expect_contains(presets,
+                  "\"VCPKG_OVERLAY_PORTS\": \"${sourceDir}/thirdparty/crimson-renderer/cmake/vcpkg-ports\"");
+  for (const std::string &dependency :
+       {"bgfx", "meshoptimizer", "vulkan-headers", "nlohmann-json"}) {
+    expect_contains(native_dependencies, dependency);
+    expect_missing(portable_dependencies, dependency);
+  }
+  expect_contains(native_dependencies, "\"tools\"");
+}
+
+TEST(BuildGuardrailTests,
      CanonicalBuildTreeSeparatesDebugTracyFromRelease) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string options =
@@ -1159,10 +1208,13 @@ TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string modeling_c_make =
       read_source_file("cmake/QuaderModeling.cmake");
+  const std::string crimson_composition_c_make =
+      read_source_file("cmake/QuaderCrimsonComposition.cmake");
   const std::string sdk_consumer_c_make =
       read_source_file("tests/sdk_consumer/CMakeLists.txt");
   const std::string test_build_files =
-      root_c_make + "\n" + modeling_c_make + "\n" + sdk_consumer_c_make;
+      root_c_make + "\n" + modeling_c_make + "\n" + crimson_composition_c_make +
+      "\n" + sdk_consumer_c_make;
 
   for (const std::filesystem::path &file :
        files_with_extension(source_root() / "tests", ".cpp")) {
@@ -1507,7 +1559,8 @@ TEST(BuildGuardrailTests, QuaderTestsSandboxPerUserStorage) {
   expect_contains(app_target, "tests/quader_tests_main.cpp");
   expect_contains(app_target,
                   "target_link_libraries(quader_tests PRIVATE quader_runtime "
-                  "GTest::gtest quader_release_profile_full)");
+                  "quader_render_full_host GTest::gtest "
+                  "quader_release_profile_full)");
   expect_missing(app_target, "GTest::gtest_main");
   expect_contains(test_main, "quader-tests-local-app-data-");
   expect_contains(test_main, "_putenv_s(\"LOCALAPPDATA\"");
@@ -3223,7 +3276,7 @@ TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
   expect_contains(sentry_source, "sentry_close");
 }
 
-TEST(BuildGuardrailTests, QtViewportSwapchainsStayBehindRenderSystemAdapters) {
+TEST(BuildGuardrailTests, QtViewportSurfacesStayBehindRenderHostAdapters) {
   const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string viewport_panel_source =
@@ -3232,6 +3285,8 @@ TEST(BuildGuardrailTests, QtViewportSwapchainsStayBehindRenderSystemAdapters) {
       read_source_file("src/ui/qt_viewport_surface.hpp");
   const std::string viewport_surface_source =
       read_source_file("src/ui/qt_viewport_surface.cpp");
+  const std::string render_host_header =
+      read_source_file("src/render/render_host.hpp");
   const std::string render_system_header =
       read_source_file("src/render/render_system.hpp");
   const std::string render_system_source =
@@ -3256,17 +3311,36 @@ TEST(BuildGuardrailTests, QtViewportSwapchainsStayBehindRenderSystemAdapters) {
   expect_contains(viewport_surface_header,
                   "class QtViewportSurface final : public QWindow");
   expect_contains(viewport_surface_header,
-                  "RenderAdditionalSwapChain swap_chain_");
+                  "RenderHost *render_system_");
+  expect_contains(viewport_surface_header,
+                  "std::unique_ptr<RenderSurface> swap_chain_");
   expect_contains(viewport_panel_source, "QWidget::createWindowContainer");
   expect_contains(viewport_surface_source, "native_window_handle()");
   expect_contains(viewport_surface_source,
-                  "render_system_->create_additional_swap_chain(");
+                  "render_system_->create_native_surface(");
   expect_contains(viewport_surface_source,
-                  "render_system_->begin_frame(swap_chain_)");
+                  "render_system_->create_composited_surface(");
+  expect_contains(viewport_surface_source,
+                  "render_system_->begin_frame(*swap_chain_)");
+  expect_contains(viewport_surface_source,
+                  "render_system_->end_frame(*swap_chain_)");
+  expect_contains(viewport_surface_source,
+                  "render_system_->render_composited_viewport(");
   expect_contains(viewport_surface_source, "swap_chain_.reset()");
   expect_missing(viewport_surface_source, "filament::Engine");
   expect_missing(viewport_surface_source, "filament::SwapChain");
 
+  expect_contains(render_host_header, "class RenderSurface");
+  expect_contains(render_host_header, "virtual ~RenderSurface() = default");
+  expect_contains(render_host_header,
+                  "virtual std::unique_ptr<RenderSurface> create_native_surface(");
+  expect_contains(render_host_header,
+                  "virtual std::unique_ptr<RenderSurface> create_composited_surface(");
+  expect_contains(render_system_header, "class RenderSystem : public RenderHost");
+  expect_contains(render_system_source,
+                  "RenderSystem::create_native_surface(");
+  expect_contains(render_system_source,
+                  "RenderSystem::create_composited_surface(");
   expect_contains(render_system_header, "class RenderAdditionalSwapChain");
   expect_contains(render_system_header,
                   "std::shared_ptr<RenderSurfaceState> state_");
@@ -4219,9 +4293,11 @@ TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
                   "class QtViewportSurface final : public QWindow");
   expect_contains(viewport_surface_source, "(void)winId()");
   expect_contains(viewport_surface_source,
-                  "render_system_->create_additional_swap_chain(");
+                  "render_system_->create_native_surface(");
   expect_contains(viewport_surface_source,
-                  "render_system_->begin_frame(swap_chain_)");
+                  "render_system_->create_composited_surface(");
+  expect_contains(viewport_surface_source,
+                  "render_system_->begin_frame(*swap_chain_)");
 }
 
 TEST(BuildGuardrailTests,

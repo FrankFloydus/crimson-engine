@@ -15,6 +15,7 @@
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
+#include "render/render_system.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"

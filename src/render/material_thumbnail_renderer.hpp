@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/material_evaluation_snapshot.hpp"
+#include "render/render_view.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -23,23 +24,11 @@ class Texture;
 
 namespace quader {
 
-/// GPU-owned bytes become immutable after the acquire/release completion fence.
-struct MaterialThumbnailReadback final {
-  std::uint32_t size = 0u;
-  /// Top-down RGBA8 with premultiplied alpha for native UI composition.
-  std::vector<std::byte> rgba8;
-  std::atomic<bool> complete{false};
-
-  [[nodiscard]] bool ready() const noexcept {
-    return complete.load(std::memory_order_acquire);
-  }
-};
-
 /// One retained offscreen sphere and at most one asynchronous GPU readback.
 class MaterialThumbnailRenderer final {
 public:
-  static constexpr std::uint32_t kMaximumSize = 1024u;
-  static constexpr std::uint32_t kPresetRevision = 2u;
+  static constexpr std::uint32_t kMaximumSize = kMaterialThumbnailMaximumSize;
+  static constexpr std::uint32_t kPresetRevision = kMaterialThumbnailPresetRevision;
 
   MaterialThumbnailRenderer();
   ~MaterialThumbnailRenderer();

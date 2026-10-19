@@ -11,6 +11,12 @@
     "native-app": {
       "description": "Dependencies used only by the native Quader editor host.",
       "dependencies": [
+        {
+          "name": "bgfx",
+          "features": [
+            "tools"
+          ]
+        },
         "entt",
         "flatbuffers",
         "glm",
@@ -33,6 +39,8 @@
           ]
         },
         "lodepng",
+        "meshoptimizer",
+        "nlohmann-json",
         "sentry-native",
         "spdlog",
         "stduuid",
@@ -40,6 +48,7 @@
           "name": "tiff",
           "default-features": false
         },
+        "vulkan-headers",
         "zstd",
         "zlib"
       ]

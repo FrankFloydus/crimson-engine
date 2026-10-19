@@ -533,6 +533,10 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
             std::string::npos);
   EXPECT_NE(app_header.find("ProjectSession project_session_"),
             std::string::npos);
+  EXPECT_NE(app_header.find("std::unique_ptr<RenderHost> render_system_"),
+            std::string::npos);
+  EXPECT_NE(app_header.find("std::unique_ptr<RenderSceneSink> render_bridge_"),
+            std::string::npos);
   EXPECT_EQ(app_header.find("SceneSession scene_session_"), std::string::npos);
   EXPECT_NE(app_source.find("ProjectAssetBootstrapService{}."
                             "bootstrap_default_assets(scene)"),
@@ -549,7 +553,7 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
       "ui_.install_runtime_hooks(*editor_, scene.scene(), scene.assets(), "
       "scene.modeling(), scene.selection(), scene.native_tools(), "
       "scene.point_placement(), default_material_)"));
-  EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
+  EXPECT_NE(app_source.find("ui_.prepare_viewports(*render_bridge_, "
                             "render_overlay_snapshot_cache_)"),
             std::string::npos);
   EXPECT_EQ(app_header.find("create_startup_scene"), std::string::npos);
@@ -598,7 +602,7 @@ TEST(AppLoopTests, QtEventLoopUsesEffectivePresentationCadenceAndGpuReadiness) {
   EXPECT_NE(app_source.find("&QWindow::screenChanged"), std::string::npos);
   EXPECT_NE(app_source.find("&QScreen::refreshRateChanged"),
             std::string::npos);
-  EXPECT_NE(app_source.find("render_system_.set_display_refresh_rate_hz("),
+  EXPECT_NE(app_source.find("render_system_->set_display_refresh_rate_hz("),
             std::string::npos);
   EXPECT_NE(app_source.find("ui_.needs_continuous_rendering()"),
             std::string::npos);

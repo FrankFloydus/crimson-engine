@@ -13,8 +13,8 @@
 #include "core/types.hpp"
 #include "editor/session/project_session.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
-#include "render/render_system.hpp"
-#include "render/scene_render_bridge.hpp"
+#include "render/render_host.hpp"
+#include "render/render_scene_sink.hpp"
 #include "ui/ui_system.hpp"
 
 #include <QMetaObject>
@@ -79,8 +79,8 @@ private:
   AppFrameClock frame_clock_;
   AppFrameSchedule frame_schedule_;
   AppFramePresentationRequest viewport_presentation_request_;
-  RenderSystem render_system_;
-  SceneRenderBridge render_bridge_;
+  std::unique_ptr<RenderHost> render_system_;
+  std::unique_ptr<RenderSceneSink> render_bridge_;
   std::unique_ptr<ProjectSessionRenderMaterialResolver> project_material_resolver_;
   UISystem ui_;
   ProjectSession project_session_;

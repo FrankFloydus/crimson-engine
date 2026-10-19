@@ -80,7 +80,11 @@ CommandLineOptions parse_command_line(int argc, char **argv) {
       options.render_backend = quader::RendererBackend::Vulkan;
     } else if (argument == "--opengl" ||
                argument == "--render-backend=opengl") {
-      options.render_backend = quader::RendererBackend::OpenGL;
+      // The public host composes through Qt's Vulkan device. Retain the
+      // legacy backend selector for the Full host that implements it.
+      if (quader::current_product_release() == quader::kInternalFullRelease) {
+        options.render_backend = quader::RendererBackend::OpenGL;
+      }
     } else if (argument == "--sentry-verify" ||
                argument == "--sentry-test-event") {
       options.sentry_verify = true;

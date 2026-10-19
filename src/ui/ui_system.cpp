@@ -630,7 +630,7 @@ void UISystem::clear_editor_runtime_hooks() {
   editor_->preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{});
 }
 
-bool UISystem::initialize(RenderSystem &render_system,
+bool UISystem::initialize(RenderHost &render_system,
                           const std::filesystem::path &executable_dir,
                           bool composed_viewports) {
   if (initialized_) {
@@ -3905,7 +3905,7 @@ void UISystem::process_viewport_input() {
 }
 
 void UISystem::prepare_viewports(
-    SceneRenderBridge &render_bridge,
+    RenderSceneSink &render_bridge,
     RenderOverlaySnapshotCache &snapshot_cache) {
   if (home_visible_ || !initialized_ || editor_ == nullptr || document_ == nullptr ||
       assets_ == nullptr || modeling_ == nullptr || native_tools_ == nullptr) {

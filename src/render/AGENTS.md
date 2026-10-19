@@ -8,8 +8,27 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Render Package Guide
 
-- Render extraction, Filament resources, material/texture binding, overlays, and viewport drawing
+- Render extraction, backend adapters, material/texture binding, overlays, and viewport drawing
   belong here. Scene, assets, and modeling remain authoritative; render caches never mutate them.
+- App/UI consume `RenderHost`, `RenderSceneSink`, `RenderView` and opaque surface lifetimes.
+  `quader_render_common` owns CPU extraction and semantic overlay builders. Full's
+  `quader_render_full_host` composes Filament `RenderSystem`; the Public 0.1 composition
+  is `quader_render_crimson_host`. Keep exactly one `create_app_render_host()` implementation
+  in each editor executable. Backend choice belongs to final target composition, outside the shared
+  runtime and product interaction paths. See the [Crimson integration contract](../../thirdparty/crimson/README.md)
+  for dependency identity and the canonical `Crimson::Renderer` supplied by the
+  pinned `thirdparty/crimson-renderer` Git submodule, shared with Crimson Engine.
+  Quader's `crimson/` adapter translates immutable snapshots; reusable device/resource/pass
+  mechanisms belong to that shared Crimson implementation, without application/profile types.
+- One host coordinates all panes for a Qt root/device generation. Crimson preflights the complete
+  pane set, including scene/editor generation agreement, resource validation, pass reservations
+  and palette capacity, before recording any pane. Publish all target candidates, accepted scene,
+  preview suppression and editor coverage together after the shared submission's native checks.
+  Rejection keeps the accepted pixels and coverage available for copy; abandon only unrecorded
+  reservations and retry corrected input. Retain immutable stream pins independently by revision,
+  and retire GPU owners after rendering and external-copy completion. See
+  [scene translation tests](../../tests/crimson_scene_projection_tests.cpp) and the
+  [atomic GPU composition fixture](../../tests/crimson_scene_composition_probe.cpp).
 - The shared default-material image preference arrives through the narrow
   `RenderProjectMaterialResolver::default_material_override()` snapshot. Apply it to
   meshes, instances and previews without changing scene asset references or consulting
@@ -22,16 +41,17 @@ file except through prior written authorization from Francesco Di Blasi.
   preserved legacy `MeshComponent::double_sided` values. Refresh retained bindings and depth
   identity when it changes; unchanged frames reuse them. Generated previews republish their
   immutable prepared candidate under the existing source/material/visibility stamps, without
-  recompiling SDK geometry for a culling change. CPU rendered occlusion includes Filament's
-  reflected-entity front-face correction. Backface Selection remains independent.
+  recompiling SDK geometry for a culling change. CPU rendered occlusion must agree with the
+  backend's reflected-entity front-face correction. Backface Selection remains independent.
   Coverage: `tests/scene_surface_query_tests.cpp`, `tests/render_extraction_tests.cpp` and the
   global-culling pixel test in `tests/render_normal_mapping_runtime_tests.cpp`.
-- Disabling mesh culling also enables Filament's two-sided lighting in both mesh materials.
+- Disabling mesh culling also enables two-sided lighting in the applicable mesh materials.
   Keep that shader capability explicit and bind it with raster culling. Opposing coplanar faces
   with the same flat material must agree on visible-side lighting; disabling raster culling
   alone leaves opposing normals and exposes bright/dark depth-tie patches. Preserve tangent-frame
   orientation through both packed and derivative normal mapping, without moving surface depth.
-- `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `SceneRenderBridge` and caches.
+- `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `RenderSceneSink` implementations
+  and caches (`SceneRenderBridge` for Full, `crimson/` projection for Crimson).
   Put dirty/revision checks before topology hashes, geometry compilation, snapshots, or uploads.
   Snapshot-owned material bindings use exact authored keys and material catalog/project revisions.
   Geometry edits can reuse bindings across ordinary/instance regrouping, but texture/material edits
@@ -128,6 +148,9 @@ file except through prior written authorization from Francesco Di Blasi.
   alone do not prove valid pixel contents. Keep asynchronous storage alive through shutdown and
   avoid warming during active navigation or editing. CPU-oracle and actual readback coverage live
   in `tests/component_selection_depth_tests.cpp` and `tests/component_selection_runtime_tests.cpp`.
+  Crimson currently supplies no native selection-depth accelerator. Keep the existing exact CPU
+  `SceneSurfaceQuery`/`ViewportSceneHitPolicy` fallback active for those queries; do not construct
+  unused depth geometry or treat unavailable acceleration as visible/unoccluded selection.
 - Vulkan object/group silhouettes use retained ordinary/active geometry batches in a separate
   selection scene and per-pane occupancy/depth targets. Camera movement updates projection, never
   CPU triangle unions or geometry uploads. Keep the two class boundaries independent, with active
@@ -169,21 +192,29 @@ file except through prior written authorization from Francesco Di Blasi.
 - Collision display has an independent retained snapshot/cache; it follows mesh collision metadata,
   visibility, and precise tool-preview suppression. Selection and camera changes must not derive
   or upload collision geometry; tint changes update uniforms only.
+  The renderer-neutral [CollisionShapeOverlayPlanner](overlay/collision_shape_overlay_planner.hpp)
+  owns retained geometry and placements for Full's cache and Crimson's projection.
   Godot editor parity uses deduplicated triangle wires, selected/unselected opacity factors
   of 1.6/0.4, and a backface-culled fill at 0.0625 times the configured opacity.
-- `RenderSystem` owns surface records, Filament swapchains and per-surface renderers. Production
-  Vulkan scene panes borrow Qt's device/graphics queue through `RenderVulkanSharedContext`;
-  `RenderVulkanCompositionPlatform` owns their retained offscreen color/depth images and GPU copy.
-  Qt owns the window swapchain and lends only its current-frame destination image. Copy the current
-  visible crop in that Qt frame, returning the destination in shader-read layout. No CPU pixel
-  readback or independently presented scene HWND belongs in this path.
-- Shared-queue handoff has two obligations: drain Filament's CPU command producer before Qt or the
+- Production Vulkan panes use Qt `QRhiWidget` composition. The selected `RenderHost` borrows Qt's
+  device/graphics queue through `RenderVulkanSharedContext`; Qt owns the window swapchain and lends
+  its current-frame destination image. Copy the current visible crop in that Qt frame and return
+  the destination in shader-read layout. Full's `RenderSystem` and
+  `RenderVulkanCompositionPlatform` own its retained offscreen images/copy; Crimson's shared
+  renderer owns its corresponding independent targets and queue submissions. No CPU pixel
+  readback or independently presented scene HWND belongs in production composition.
+- Full's shared-queue handoff has two obligations: drain Filament's CPU command producer before Qt or the
   copy submits to the same queue, and consume Filament's finished-drawing semaphore before copying.
   `RenderSharedQueueSubmissionState` tracks pending work and nested producer batches; ending an
   outer batch must mark pending again after a nested paint. Unchanged, closed batches add no drain.
   Retire images only after both Filament and external-copy GPU use completes. The borrowed Qt device
   must outlive all these resources and the Engine; ordinary handoff is not a GPU-idle wait.
-- Native preview/standalone surfaces retain their platform swapchains, requested VSync and
+- Crimson uses explicit submission serials for render/copy completion. A successful CPU frame
+  publication does not release GPU owners. Shutdown must drain work before Qt releases its device;
+  unresolved completion quarantines native owners and requires the host to preserve the borrowed
+  context until process exit. If Qt's release callback cannot preserve it, terminate before that
+  callback returns. Keep this exceptional path out of ordinary per-frame submission.
+- Full's native preview/standalone surfaces retain their platform swapchains, requested VSync and
   backend-confirmed modes. Qt's composition adapter reports the composed window's resolved mode
   to render. Retire pending GPU work before replacement; backend callback publication stays
   thread-safe. Previews honor `needs_initial_frame()` after recreation even when content is unchanged.
@@ -224,7 +255,7 @@ file except through prior written authorization from Francesco Di Blasi.
   excess chunks from earlier splits. Rebuild through the existing planner when the current exact
   keys require fewer chunks; keep compatible full-capacity layouts retained. Planner regressions
   in `tests/render_extraction_tests.cpp` cover repeated split/restore cycles.
-- Native-surface VSync requires the maintained Filament patch and matching headers/libraries.
+- Full native-surface VSync requires the maintained Filament patch and matching headers/libraries.
   Composed-window VSync belongs to Qt. Dependency upgrades must preserve provenance checks and
   test actual presentation modes for both routes, not only timer intervals.
 

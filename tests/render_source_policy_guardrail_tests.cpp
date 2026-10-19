@@ -2794,7 +2794,7 @@ TEST(RenderSystemTests, VsyncUsesBackendModeAndNonblockingGpuReadiness) {
       preview, "bool QtMaterialPreviewSurface::render_frame()",
       "void QtMaterialPreviewSurface::synchronize_render_size()");
   EXPECT_NE(preview_render.find("needs_initial_frame()"), std::string::npos);
-  EXPECT_NE(preview_render.find("render_pending_ || swap_chain_.needs_initial_frame()"),
+  EXPECT_NE(preview_render.find("render_pending_ || (swap_chain_ && swap_chain_->needs_initial_frame())"),
             std::string::npos);
 }
 
@@ -2892,12 +2892,12 @@ TEST(RenderSystemTests,
             std::string::npos);
   EXPECT_NE(source.find("end_frame_with_renderer(surface.state_->renderer)"),
             std::string::npos);
-  EXPECT_NE(surface.find("render_system_->begin_frame(swap_chain_)"),
+  EXPECT_NE(surface.find("render_system_->begin_frame(*swap_chain_)"),
             std::string::npos);
   EXPECT_NE(surface.find(
-                "render_system_->render_viewport(renderer_, swap_chain_)"),
+                "render_system_->render_viewport(*renderer_, *swap_chain_)"),
             std::string::npos);
-  EXPECT_NE(surface.find("render_system_->end_frame(swap_chain_)"),
+  EXPECT_NE(surface.find("render_system_->end_frame(*swap_chain_)"),
             std::string::npos);
   EXPECT_EQ(surface.find("begin_frame(swap_chain_.get())"), std::string::npos);
 }
@@ -2952,6 +2952,12 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
       read_source_file("src/render/filament_material_library.cpp");
   const std::string scene_bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string render_system_source =
+      read_source_file("src/render/render_system.cpp");
+  const std::string create_scene_sink_source = source_slice(
+      render_system_source,
+      "std::unique_ptr<RenderSceneSink> RenderSystem::create_scene_sink(",
+      "std::unique_ptr<RenderView> RenderSystem::create_view(");
 
   EXPECT_NE(
       texture_source.find(
@@ -3007,12 +3013,16 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
   EXPECT_EQ(app_source.find("set_material_texture_slot("), std::string::npos);
   EXPECT_EQ(app_source.find("make_default_quader_material("),
             std::string::npos);
-  EXPECT_NE(app_source.find(
-                "render_system_.initialize_scene_render_bridge(render_bridge_"),
+  EXPECT_TRUE(source_contains_compact(
+      app_source,
+      "render_bridge_ = render_system_->create_scene_sink(executable_dir_);"));
+  EXPECT_TRUE(source_contains_compact(
+      create_scene_sink_source,
+      "auto sink = std::make_unique<SceneRenderBridge>(); "
+      "initialize_scene_render_bridge(*sink, resources); return sink;"));
+  EXPECT_EQ(app_source.find("render_system_->quader_mesh_material()"),
             std::string::npos);
-  EXPECT_EQ(app_source.find("render_system_.quader_mesh_material()"),
-            std::string::npos);
-  EXPECT_EQ(app_source.find("render_system_.quader_mesh_lit_material()"),
+  EXPECT_EQ(app_source.find("render_system_->quader_mesh_lit_material()"),
             std::string::npos);
   EXPECT_NE(material_library_source.find("filament_material_catalog.hpp"),
             std::string::npos);
@@ -3535,13 +3545,13 @@ TEST(ViewportRendererTests,
                                     "!overlay_uses_separate_target"),
             std::string::npos);
   EXPECT_NE(viewport_surface_source.find(
-                "render_system_->begin_frame(swap_chain_)"),
+                "render_system_->begin_frame(*swap_chain_)"),
             std::string::npos);
   EXPECT_NE(viewport_surface_source.find(
-                "render_system_->render_viewport(renderer_, swap_chain_)"),
+                "render_system_->render_viewport(*renderer_, *swap_chain_)"),
             std::string::npos);
   EXPECT_NE(viewport_surface_source.find(
-                "render_system_->end_frame(swap_chain_)"),
+                "render_system_->end_frame(*swap_chain_)"),
             std::string::npos);
   const std::size_t aggregate_begin = viewport_panel_source.find(
       "render_system_->begin_presentation_frame()");
@@ -3597,7 +3607,7 @@ TEST(ViewportRendererTests,
   const std::string viewport_info_source = viewport_panel_source.substr(
       viewport_info_begin, viewport_info_end - viewport_info_begin);
 
-  EXPECT_NE(app_source.find("ui_.refresh(frame_timing, render_system_."
+  EXPECT_NE(app_source.find("ui_.refresh(frame_timing, render_system_->"
                             "frame_performance_stats())"),
             std::string::npos);
   EXPECT_NE(ui_system_header.find(
@@ -3861,7 +3871,7 @@ TEST(ViewportRendererTests,
   const std::size_t sync_scene =
       app_frame.find("QuaderRenderApiRuntimeAccess::sync_scene(");
   const std::size_t prepare_viewports =
-      app_frame.find("ui_.prepare_viewports(render_bridge_, "
+      app_frame.find("ui_.prepare_viewports(*render_bridge_, "
                       "render_overlay_snapshot_cache_)");
   const std::size_t render_viewports =
       app_frame.find("ui_.render_surfaces(render_scene_viewports)");
@@ -3892,6 +3902,8 @@ TEST(ViewportRendererTests,
       viewport_panel_source, "pane_workspace.camera.set_clip_planes( "
                              "scene_settings.camera.near_plane, "
                              "scene_settings.camera.far_plane); "
+                             "if (render_view != nullptr) { "
+                             "RenderView &renderer = *render_view; "
                              "renderer.apply_scene_settings("));
   EXPECT_NE(
       viewport_panel_source.find("renderer.set_scene_layer_mask"),

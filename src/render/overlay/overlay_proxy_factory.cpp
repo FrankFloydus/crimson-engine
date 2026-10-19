@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_face_fill_composition.hpp"
 
 #include "diagnostics/profile.hpp"
 #include "core/color_space.hpp"

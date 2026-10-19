@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "render/material_preview_renderer.hpp"
-#include "render/render_system.hpp"
+#include "render/render_view.hpp"
+#include "render/render_host.hpp"
 #include "viewport/material_preview_state.hpp"
 
 #include <QPointF>
@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -38,7 +39,7 @@ public:
   QtMaterialPreviewSurface &
   operator=(const QtMaterialPreviewSurface &) = delete;
 
-  [[nodiscard]] bool initialize(RenderSystem &render_system);
+  [[nodiscard]] bool initialize(RenderHost &render_system);
   void shutdown();
 
   [[nodiscard]] bool render_frame();
@@ -87,9 +88,10 @@ private:
   [[nodiscard]] void *native_window_handle() const;
   [[nodiscard]] bool input_hints_available() const noexcept;
 
-  RenderSystem *render_system_ = nullptr;
-  RenderAdditionalSwapChain swap_chain_;
-  MaterialPreviewRenderer renderer_;
+  RenderHost *render_system_ = nullptr;
+  std::unique_ptr<RenderSurface> swap_chain_;
+  std::unique_ptr<RenderMaterialPreviewView> renderer_;
+  std::optional<StandardMaterialPreviewSnapshot> material_snapshot_;
   MaterialPreviewState preview_state_;
   MaterialPreviewInputRouter input_router_;
   std::function<void()> surface_changed_callback_;

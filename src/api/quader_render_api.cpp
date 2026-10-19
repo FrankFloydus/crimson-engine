@@ -24,8 +24,8 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
-#include "render/scene_render_bridge.hpp"
-#include "render/viewport_renderer.hpp"
+#include "render/render_scene_sink.hpp"
+#include "render/render_view.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/viewport/viewport_scene_hit_policy.hpp"
 #include "editor/session/scene_session.hpp"
@@ -36,7 +36,7 @@
 namespace quader {
 
 void QuaderRenderApiRuntimeAccess::prepare_selection_depth(
-    QuaderRenderApi &api, ViewportRenderer &renderer,
+    QuaderRenderApi &api, RenderView &renderer,
     const ViewportCameraController &camera, bool eligible) {
   auto *session = QuaderApiSessionInternalAccess::active_scene_session(api.session_);
   if (!session) return;
@@ -192,7 +192,7 @@ RenderSceneBindingKey QuaderRenderApiRuntimeAccess::scene_binding(
 
 QuaderApiVoidResult
 QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
-                                         SceneRenderBridge &bridge) {
+                                         RenderSceneSink &bridge) {
   const SceneSession &scene_session = read_scene_session(api.session_);
   bridge.set_backface_culling_enabled(scene_session.viewport_workspace()
       .effective_settings(scene_session.viewport_workspace().focused_pane())
@@ -208,7 +208,7 @@ QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
 
 QuaderApiVoidResult
 QuaderRenderApiRuntimeAccess::sync_tool_previews(
-    QuaderRenderApi &api, SceneRenderBridge &bridge,
+    QuaderRenderApi &api, RenderSceneSink &bridge,
     const ToolPreviewPublisher &publish,
     const ToolPreviewScenePublisher &publish_scene) {
   bridge.bind_scene(scene_binding(api));
@@ -583,7 +583,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
 }
 
 QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
-    QuaderRenderApi &api, SceneRenderBridge &bridge,
+    QuaderRenderApi &api, RenderSceneSink &bridge,
     RenderOverlaySnapshotCache &snapshot_cache,
     const QuaderRenderSceneOverlaySyncRequest &request) {
   const SceneSession &scene_session = read_scene_session(api.session_);

@@ -259,10 +259,10 @@ obj_export_file_dialog_options(void *owner_window_handle,
   return options;
 }
 
-/// Bounds application-owned Filament writes, including nested Qt paint turns.
+/// Bounds renderer command producers, including nested Qt paint turns.
 class SharedRenderCommandBatch final {
 public:
-  explicit SharedRenderCommandBatch(RenderSystem &render_system)
+  explicit SharedRenderCommandBatch(RenderHost &render_system)
       : render_system_(render_system) {
     render_system_.begin_shared_command_batch();
   }
@@ -274,7 +274,7 @@ public:
   }
 
 private:
-  RenderSystem &render_system_;
+  RenderHost &render_system_;
 };
 
 } // namespace
@@ -298,6 +298,14 @@ bool App::initialize(QApplication &application,
   placement_screen_.clear();
 
   options_ = options;
+  if (!render_system_) {
+    render_system_ = create_app_render_host();
+  }
+  if (!render_system_) {
+    LOG_ERROR("The executable did not provide a renderer host");
+    shutdown();
+    return false;
+  }
   shell_replacement_pending_ = false;
   shell_replacement_started_ = false;
   if (!initialize_shell()) {
@@ -390,9 +398,9 @@ bool App::initialize(QApplication &application,
                          schedule_next_frame();
                          return;
                        }
-                       if (!render_system_.presentation_is_synchronized() &&
+                       if (!render_system_->presentation_is_synchronized() &&
                            ui_.needs_continuous_rendering() &&
-                           !render_system_.ready_for_next_frame()) {
+                           !render_system_->ready_for_next_frame()) {
                          schedule_next_frame(false);
                          return;
                        }
@@ -413,7 +421,7 @@ bool App::initialize(QApplication &application,
 }
 
 bool App::prepare_composed_shell() {
-  if (!ui_.initialize(render_system_, executable_dir_, true)) {
+  if (!ui_.initialize(*render_system_, executable_dir_, true)) {
     LOG_ERROR("Qt composition shell initialization failed");
     return false;
   }
@@ -443,7 +451,7 @@ bool App::initialize_shell() {
     }
   }
 
-  if (!render_system_.initialize(
+  if (!render_system_->initialize(
           nullptr, executable_dir_,
           RenderConfig{.backend = options_.render_backend},
           ui_.composition_context())) {
@@ -451,15 +459,18 @@ bool App::initialize_shell() {
     return false;
   }
 
-  render_system_.initialize_scene_render_bridge(render_bridge_,
-                                                executable_dir_);
+  render_bridge_ = render_system_->create_scene_sink(executable_dir_);
+  if (!render_bridge_) {
+    LOG_ERROR("Unable to initialize scene render publication");
+    return false;
+  }
   project_material_resolver_ =
       std::make_unique<ProjectSessionRenderMaterialResolver>(project_session_);
-  render_bridge_.set_project_material_resolver(
+  render_bridge_->set_project_material_resolver(
       project_material_resolver_.get());
 
   if ((!composed_viewports &&
-       !ui_.initialize(render_system_, executable_dir_)) ||
+       !ui_.initialize(*render_system_, executable_dir_)) ||
       (composed_viewports && !ui_.initialize_render_resources())) {
     LOG_ERROR("Qt Widgets UI initialization failed");
     return false;
@@ -564,9 +575,14 @@ void App::retire_shell() {
   ui_.detach_render_resources();
   render_overlay_snapshot_cache_.reset();
   scene_settings_binding_.reset();
-  render_bridge_.shutdown();
+  if (render_bridge_) {
+    render_bridge_->shutdown();
+    render_bridge_.reset();
+  }
   project_material_resolver_.reset();
-  render_system_.shutdown();
+  if (render_system_) {
+    render_system_->shutdown();
+  }
   ui_.shutdown();
 }
 
@@ -738,7 +754,7 @@ void App::bind_display_refresh_rate_screen(QScreen *screen) {
 }
 
 void App::synchronize_display_refresh_rate(QScreen *screen) {
-  render_system_.set_display_refresh_rate_hz(
+  render_system_->set_display_refresh_rate_hz(
       display_refresh_rate_hz(screen != nullptr ? screen
                                                 : active_display_screen(
                                                       ui_.main_window())));
@@ -903,9 +919,9 @@ void App::prepare_composed_frame() {
   // current scene/camera to that same composed frame, without consuming input
   // again or recursively refreshing the retained UI.
   preparing_composition_ = true;
-  const SharedRenderCommandBatch command_batch(render_system_);
-  (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(), render_bridge_);
-  ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
+  const SharedRenderCommandBatch command_batch(*render_system_);
+  (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(), *render_bridge_);
+  ui_.prepare_viewports(*render_bridge_, render_overlay_snapshot_cache_);
   preparing_composition_ = false;
 }
 
@@ -916,11 +932,11 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   }
   const auto frame_begin = std::chrono::steady_clock::now();
   rendering_frame_ = true;
-  const SharedRenderCommandBatch command_batch(render_system_);
+  const SharedRenderCommandBatch command_batch(*render_system_);
 
   {
     QDR_PROFILE_SCOPE("UI retained refresh");
-    ui_.refresh(frame_timing, render_system_.frame_performance_stats());
+    ui_.refresh(frame_timing, render_system_->frame_performance_stats());
   }
   const auto ui_refresh_end = std::chrono::steady_clock::now();
   if (project_session_.active_scene() != nullptr) {
@@ -937,7 +953,7 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   if (project_session_.active_scene() != nullptr) {
     QDR_PROFILE_SCOPE("Render sync scene");
     (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(),
-                                                   render_bridge_);
+                                                   *render_bridge_);
   }
   const auto scene_sync_end = std::chrono::steady_clock::now();
   if (const OpenSceneSession *active_scene = project_session_.active_scene();
@@ -948,14 +964,14 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     const std::uint64_t revision = session_view.scene.scene_settings_revision();
     if (scene_settings_binding_ != binding ||
         scene_settings_revision_ != revision) {
-      render_system_.apply_scene_settings(session_view.scene.scene_settings());
+      render_system_->apply_scene_settings(session_view.scene.scene_settings());
       scene_settings_binding_ = binding;
       scene_settings_revision_ = revision;
     }
   }
   const auto scene_settings_end = std::chrono::steady_clock::now();
   if (project_session_.active_scene() != nullptr) {
-    ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
+    ui_.prepare_viewports(*render_bridge_, render_overlay_snapshot_cache_);
   }
   const auto viewport_prepare_end = std::chrono::steady_clock::now();
   const bool render_scene_viewports =
@@ -1014,7 +1030,7 @@ bool App::render_frame(const FrameTiming &frame_timing) {
         std::chrono::duration<double>(now - diagnostics.sample_begin).count();
     if (sample_seconds >= 1.0) {
       const RenderFramePerformanceStats render_stats =
-          render_system_.frame_performance_stats();
+          render_system_->frame_performance_stats();
       LOG_INFO(
           "Frame diagnostics: {:.1f} app fps, {:.2f} ms average, {:.2f} ms "
           "maximum, {} submissions, stages ui={:.2f} input={:.2f} sync={:.2f} "
@@ -1043,7 +1059,7 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   // Composed panes submit during Qt painting. Keep scheduling their requested
   // work here; their accepted-frame accounting happens after root composition.
   return submitted > 0u ||
-         (render_scene_viewports && render_system_.uses_composited_vulkan());
+         (render_scene_viewports && render_system_->uses_composited_vulkan());
 }
 
 void App::request_viewport_presentation() {
@@ -1082,7 +1098,7 @@ void App::schedule_next_frame(bool submitted) {
     return;
   }
   const bool continuous = ui_.needs_continuous_rendering();
-  const bool synchronized = render_system_.presentation_is_synchronized();
+  const bool synchronized = render_system_->presentation_is_synchronized();
   const int display_interval = continuous && synchronized
                                    ? presentation_frame_interval_ms(ui_.main_window())
                                    : 0;

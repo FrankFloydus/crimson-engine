@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/material_evaluation_snapshot.hpp"
+#include "render/render_view.hpp"
 #include "viewport/material_preview_state.hpp"
 
 #include <cstdint>
@@ -23,11 +24,6 @@ class Texture;
 
 namespace quader {
 
-using MaterialPreviewTextureSlot = RenderStandardMaterialTextureSlot;
-using MaterialPreviewTextureSnapshot =
-    RenderMaterialTextureEvaluationSnapshot;
-using StandardMaterialPreviewSnapshot = RenderMaterialEvaluationSnapshot;
-
 /// Keeps the asset sphere's fixed lighting separate from interactive previews.
 enum class MaterialPreviewLightingPreset : std::uint8_t {
   Interactive,
@@ -37,7 +33,7 @@ enum class MaterialPreviewLightingPreset : std::uint8_t {
 /**
  * Owns the Filament scene and GPU resources for one isolated material preview.
  */
-class MaterialPreviewRenderer final {
+class MaterialPreviewRenderer final : public RenderMaterialPreviewView {
 public:
   MaterialPreviewRenderer();
   ~MaterialPreviewRenderer();

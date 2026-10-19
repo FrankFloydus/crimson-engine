@@ -38,7 +38,7 @@ foreach ($profileName in ($Profile | Select-Object -Unique)) {
     $targetName = if ($profileName -eq 'Public') { 'quader_public_app' } else { 'quader' }
     $executableName = if ($profileName -eq 'Public') { 'quader-0.1.exe' } else { 'quader.exe' }
     $projectPath = Join-Path $buildDirectory "$targetName.vcxproj"
-    Assert-NativeExecutableLinkContract -ProjectPath $projectPath
+    Assert-NativeExecutableLinkContract -ProjectPath $projectPath -RendererProfile $profileName
     Assert-ReleaseBuildProject -ProjectPath $projectPath
     foreach ($configurationName in $Configuration) {
         $executable = Resolve-RequiredFile (Join-Path $buildDirectory "$configurationName/$executableName") "$profileName $configurationName executable"

@@ -6,7 +6,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | --- | --- | --- | --- | --- |
 | OpenMesh | https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git | `5f016723f9f183770cffe5787a6f9f628e2914d8` | BSD 3-Clause, see `licenses/openmesh-BSD-3-Clause.txt` | Topology-backed polygon edit operations when `QUADER_USE_OPENMESH_TOPOLOGY=ON`. |
 | earcut.hpp | https://github.com/mapbox/earcut.hpp | vendored header | ISC, see `licenses/earcut-hpp-ISC.txt` | Polygon triangulation. |
-| nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header | MIT, see `licenses/nlohmann-json-MIT.txt` | Human-readable `.qproj` manifests, recovery metadata, and the per-user recent-project index. |
+| nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header and native vcpkg package | MIT, see `licenses/nlohmann-json-MIT.txt` | Human-readable `.qproj` manifests, recovery metadata, the per-user recent-project index and private canonical-renderer material IR serialization. |
 | FlatBuffers | https://github.com/google/flatbuffers | vcpkg `25.12.19` | Apache-2.0, see `licenses/flatbuffers-Apache-2.0.txt` | Typed binary `.qdr` chunk payloads, schema verification, and build-time private-header generation with `flatc`. |
 | Google Material Icons | https://github.com/google/material-design-icons | commit `abd7f5c0e179c83f068c770650bd14ebac5d5a09` | Apache-2.0, see `licenses/google-material-icons-Apache-2.0.txt` and `google-material-icons-PROVENANCE.md` | Layer visibility and lock-state UI icon artwork. |
 | Home Video font | https://ggbot.itch.io/home-video-font | Regular v0.80, SHA-256 `E73D67F92457BD05D24C42F43156BC422E98982E9E62D267AD6D1A3CC595BB01` | CC0 1.0 Universal, see `licenses/home-video-CC0-1.0.txt` and `home-video-font-PROVENANCE.md` | Pixel-style viewport dimension labels. |
@@ -15,8 +15,14 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
 | Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `aab101b4c038da83f71a16accb8279516a0247b9` (upstream version label `1.76.1`), source SHA-256 `7c464ef115a048ab77eb8e1898f1f79721a21b8364a4fda3e44a7e0e5f447c68`, Quader patch `quader-vsync9` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, retained swapchain presentation lifetimes, optional Windows presentation scaling, unclipped presentable images, shifted AO reconstruction, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
+| Crimson Renderer | https://github.com/qvertexworks/crimson-renderer | Recorded Git submodule commit at `thirdparty/crimson-renderer`, with `renderer-manifest.json` | Proprietary first-party renderer, used under the author's authorization; bundled dependency notices remain separate. | Canonical renderer shared with Crimson Engine; Public uses its borrowed Vulkan modeling recipe. |
+| bgfx | https://github.com/bkaradzic/bgfx.cmake | Pinned `1.129.8940-496` archive and maintained overlay port revision `8` in the renderer submodule, see `crimson/README.md` | BSD-2-Clause, see `licenses/bgfx-BSD-2-Clause.txt` | Canonical renderer device, resource, pass and Vulkan composition mechanisms. |
+| meshoptimizer | https://github.com/zeux/meshoptimizer | Native vcpkg `1.1`, upstream tag `v1.1`, at the existing manifest baseline | MIT, exact installed notice in `licenses/meshoptimizer-MIT.txt` | Canonical renderer support for mesh detail preparation and content identity. |
+| bx and bimg | https://github.com/bkaradzic/bgfx.cmake | Bundled in the same pinned bgfx archive | BSD-2-Clause, see `licenses/bx-BSD-2-Clause.txt` and `licenses/bimg-BSD-2-Clause.txt` | bgfx platform utilities and image support. |
+| TinySTL | https://github.com/mendsley/tinystl | Bundled bx headers in the same pinned bgfx archive | BSD-2-Clause, see `licenses/tinystl-BSD-2-Clause.txt` | bgfx internal containers. |
+| miniz | https://github.com/richgel999/miniz | Crimson dependency prefix, vcpkg `3.1.1` | MIT, see `licenses/miniz-MIT.txt` | bimg's compression dependency. |
 | Qt Base | https://code.qt.io/cgit/qt/qtbase.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically linked distribution path, see `licenses/qtbase-LGPL-3.0-only.txt` | Qt Core, GUI, and Widgets support for the retained-mode editor shell, including Vulkan composition support. |
-| Vulkan Headers | https://github.com/KhronosGroup/Vulkan-Headers | vcpkg `1.4.341.0`, upstream tag `vulkan-sdk-1.4.341.0` | Apache-2.0 OR MIT, with the MIT-only `parse_dependency.py` exception; see `licenses/vulkan-headers-Apache-2.0-OR-MIT.txt` | Vulkan API declarations required by Qt Base's Vulkan feature. |
+| Vulkan Headers | https://github.com/KhronosGroup/Vulkan-Headers | vcpkg `1.4.341.0`, upstream tag `vulkan-sdk-1.4.341.0` | Apache-2.0 OR MIT, with the MIT-only `parse_dependency.py` exception; see `licenses/vulkan-headers-Apache-2.0-OR-MIT.txt` | Vulkan API declarations required by Qt Base and the canonical renderer's borrowed-context API. |
 | Vulkan Loader | https://github.com/KhronosGroup/Vulkan-Loader | vcpkg `1.4.341.0`, upstream tag `vulkan-sdk-1.4.341.0` | Apache-2.0 with MIT-licensed JSON components; see `licenses/vulkan-loader-Apache-2.0.txt` and `licenses/vulkan-loader-MIT-notices.txt` | Vulkan loader required by Qt Base's Vulkan feature on Windows. |
 | Qt Image Formats | https://code.qt.io/cgit/qt/qtimageformats.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically loaded plugin distribution path, see `licenses/qtimageformats-LGPL-3.0-only.txt` | TGA, TIFF, and WebP image plugins used by project texture import; Jasper/JP2 support is deliberately disabled. |
 | libjpeg-turbo | https://github.com/libjpeg-turbo/libjpeg-turbo | vcpkg `3.1.4.1` | IJG and BSD-3-Clause, see `licenses/libjpeg-turbo-BSD-3-Clause-IJG.txt` | JPEG decoding through Qt's dynamically loaded `qjpeg` image plugin. |
@@ -32,6 +38,13 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Tracy Profiler | https://github.com/wolfpld/tracy | `0.13.1`, commit `05cceee0df3b8d7c6fa87e9638af311dbabc63cb`; pin in `tracy-0.13.1.json` | BSD 3-Clause, exact upstream text in `licenses/tracy-BSD-3-Clause.txt` | Required Debug/Profile on-demand instrumentation; absent from Release. |
 
 ## Qt Vulkan Source Policy
+
+The Public editor consumes the pinned canonical Crimson Renderer submodule;
+the Full editor retains Filament. The native preset selects the renderer's
+maintained bgfx overlay, with package/source provenance checked at configure time.
+The portable SDK does not consume these native feature dependencies. See
+[the integration and dependency contract](crimson/README.md) for source identity,
+overlay ownership, license evidence and explicit CMake configuration.
 
 The native manifest enables `qtbase[vulkan]` at the existing vcpkg baseline
 `d0c191d142b7bc048141ddfb618aa9ae5dba0233`. Its Windows dependency chain is the

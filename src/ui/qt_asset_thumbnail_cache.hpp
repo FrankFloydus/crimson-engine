@@ -7,7 +7,7 @@
 #pragma once
 
 #include "render/material_evaluation_snapshot.hpp"
-#include "render/material_thumbnail_renderer.hpp"
+#include "render/render_view.hpp"
 
 #include <QImage>
 #include <QSize>
@@ -22,7 +22,7 @@
 
 namespace quader {
 
-class RenderSystem;
+class RenderHost;
 struct QuaderProjectMaterialThumbnailInfo;
 
 /// Converts saved catalog values only, without consulting a material edit draft.
@@ -47,7 +47,7 @@ public:
   QtAssetThumbnailCache(const QtAssetThumbnailCache &) = delete;
   QtAssetThumbnailCache &operator=(const QtAssetThumbnailCache &) = delete;
 
-  void initialize(RenderSystem &renderer, SnapshotLoader loader);
+  void initialize(RenderHost &renderer, SnapshotLoader loader);
   /// Injectable render port allows deterministic lifetime and retained-work tests.
   void initialize(SnapshotLoader loader, Submit submit, Pump pump = {});
   void shutdown();

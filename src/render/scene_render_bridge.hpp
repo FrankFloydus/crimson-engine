@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "render/render_scene_sink.hpp"
 #include "render/curve_solid_geometry_cache.hpp"
 #include "render/editable_mesh_surface_cache.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
@@ -66,7 +67,7 @@ struct SceneRenderResourceDiagnostics final {
 /**
  * Owns Scene Render Bridge behavior within the render extraction and Filament resource layer.
  */
-class SceneRenderBridge : private ViewportOverlaySubmissionTarget {
+class SceneRenderBridge : public RenderSceneSink, private ViewportOverlaySubmissionTarget {
 public:
     SceneRenderBridge() = default;
     SceneRenderBridge(const SceneRenderBridge&) = delete;

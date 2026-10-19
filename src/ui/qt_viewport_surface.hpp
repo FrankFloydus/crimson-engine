@@ -8,8 +8,8 @@
 
 #include "api/quader_viewport_layout_types.hpp"
 #include "math/types.hpp"
-#include "render/render_system.hpp"
-#include "render/viewport_renderer.hpp"
+#include "render/render_host.hpp"
+#include "render/render_view.hpp"
 #include "ui/qt_relative_pointer_input.hpp"
 #include "viewport/viewport_input_types.hpp"
 
@@ -91,7 +91,7 @@ struct QtViewportInputFrame {
 };
 
 /**
- * Owns one pane's semantic input and Filament presentation resources. Native
+ * Owns one pane's semantic input and renderer presentation resources. Native
  * hosts use this QWindow; composed hosts retain it without creating a window.
  */
 class QtViewportSurface final : public QWindow {
@@ -102,7 +102,7 @@ public:
   QtViewportSurface(const QtViewportSurface &) = delete;
   QtViewportSurface &operator=(const QtViewportSurface &) = delete;
 
-  bool initialize(RenderSystem &render_system, std::uint8_t grid_layer_mask);
+  bool initialize(RenderHost &render_system, std::uint8_t grid_layer_mask);
   void shutdown();
 
   [[nodiscard]] bool render_frame();
@@ -111,8 +111,9 @@ public:
   void release_composed_surface();
   [[nodiscard]] bool ready_to_render() const;
   [[nodiscard]] ViewportPaneId pane_id() const { return pane_id_; }
-  [[nodiscard]] ViewportRenderer &renderer() { return renderer_; }
-  [[nodiscard]] const ViewportRenderer &renderer() const { return renderer_; }
+  [[nodiscard]] RenderView *renderer_if_initialized() { return renderer_.get(); }
+  [[nodiscard]] RenderView &renderer() { return *renderer_; }
+  [[nodiscard]] const RenderView &renderer() const { return *renderer_; }
   /// Uses the visible QWidget host for camera and input dimensions.
   void set_visible_host(QWidget &host);
   [[nodiscard]] QPoint visible_local_to_global(QPoint local) const;
@@ -204,9 +205,9 @@ private:
   [[nodiscard]] const PresentationGeometry &presentation_geometry() const;
 
   ViewportPaneId pane_id_ = ViewportPaneId::Perspective;
-  RenderSystem *render_system_ = nullptr;
-  RenderAdditionalSwapChain swap_chain_;
-  ViewportRenderer renderer_;
+  RenderHost *render_system_ = nullptr;
+  std::unique_ptr<RenderSurface> swap_chain_;
+  std::unique_ptr<RenderView> renderer_;
   std::unique_ptr<InputAccumulator> input_;
   QPointer<QWidget> visible_host_;
   std::unique_ptr<PresentationGeometry> presentation_geometry_;

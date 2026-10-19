@@ -103,10 +103,10 @@ enum class QtStandardMaterialTextureTransformComponent : std::uint8_t;
 class QuaderEditorApi;
 struct QuaderApiStatus;
 class RenderOverlaySnapshotCache;
-class RenderSystem;
+class RenderHost;
 struct RenderVulkanSharedContext;
 class SceneDocument;
-class SceneRenderBridge;
+class RenderSceneSink;
 enum class QuaderDirtyProjectDecision;
 enum class QuaderDirtySceneDecision;
 struct QuaderSceneDocumentInfo;
@@ -124,7 +124,7 @@ public:
   UISystem(const UISystem &) = delete;
   UISystem &operator=(const UISystem &) = delete;
 
-  bool initialize(RenderSystem &render_system,
+  bool initialize(RenderHost &render_system,
                   const std::filesystem::path &executable_dir,
                   bool composed_viewports = false);
   /// Returns the real top-level Qt device after the shell has been shown.
@@ -177,7 +177,7 @@ public:
   void refresh(const FrameTiming &frame_timing,
                RenderFramePerformanceStats render_performance);
   void process_viewport_input();
-  void prepare_viewports(SceneRenderBridge &render_bridge,
+  void prepare_viewports(RenderSceneSink &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache);
   [[nodiscard]] std::size_t render_viewports();
   [[nodiscard]] std::size_t render_surfaces(bool render_scene_viewports);
@@ -388,7 +388,7 @@ private:
   UISettingsPaths settings_paths_;
   QtAuxiliaryWindowState auxiliary_window_state_;
   ViewportSettings viewport_settings_;
-  RenderSystem *render_system_ = nullptr;
+  RenderHost *render_system_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   SceneDocument *document_ = nullptr;
   AssetRegistry *assets_ = nullptr;

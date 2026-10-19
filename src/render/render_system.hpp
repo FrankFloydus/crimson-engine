@@ -7,6 +7,7 @@
 #pragma once
 
 #include "render/backend.hpp"
+#include "render/render_host.hpp"
 #include "render/filament_environment_library.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/render_performance_stats.hpp"
@@ -32,14 +33,6 @@ class Texture;
 
 namespace quader {
 
-/**
- * Enumerates SwapChainPresentationColorSpace values used by the render extraction and Filament resource layer.
- */
-enum class SwapChainPresentationColorSpace {
-    Native,
-    Srgb,
-};
-
 class RenderSystem;
 class MaterialPreviewRenderer;
 class MaterialThumbnailRenderer;
@@ -56,7 +49,7 @@ enum class ViewportRenderSurface;
  * Filament renderer frame-pacing state is per OS window, so a Renderer must
  * never be shared by multiple native viewport swapchains.
  */
-class RenderAdditionalSwapChain {
+class RenderAdditionalSwapChain : public RenderSurface {
 public:
     RenderAdditionalSwapChain() = default;
     RenderAdditionalSwapChain(const RenderAdditionalSwapChain&) = delete;
@@ -67,6 +60,7 @@ public:
 
     [[nodiscard]] filament::SwapChain *get() const;
     [[nodiscard]] explicit operator bool() const;
+    [[nodiscard]] bool valid() const override { return static_cast<bool>(*this); }
     // Recreated swapchains have no retained pixels, even if their view is clean.
     [[nodiscard]] bool needs_initial_frame() const;
     [[nodiscard]] RenderVulkanCompositionCapacity capacity() const;
@@ -83,7 +77,7 @@ private:
 /**
  * Owns Render System behavior within the render extraction and Filament resource layer.
  */
-class RenderSystem {
+class RenderSystem : public RenderHost {
 public:
     RenderSystem();
     RenderSystem(const RenderSystem&) = delete;
@@ -91,6 +85,23 @@ public:
     RenderSystem(RenderSystem&&) = delete;
     RenderSystem& operator=(RenderSystem&&) = delete;
     ~RenderSystem();
+
+    [[nodiscard]] std::unique_ptr<RenderSceneSink> create_scene_sink(
+        const std::filesystem::path &resources) override;
+    [[nodiscard]] std::unique_ptr<RenderView> create_view(
+        std::uint8_t layer_mask, ViewportRenderSurface surface) override;
+    [[nodiscard]] std::unique_ptr<RenderMaterialPreviewView> create_material_preview_view() override;
+    [[nodiscard]] std::unique_ptr<RenderSurface> create_composited_surface(
+        std::uint32_t width, std::uint32_t height) override;
+    [[nodiscard]] std::unique_ptr<RenderSurface> create_native_surface(
+        void *native_window, SwapChainPresentationColorSpace color_space) override;
+    bool begin_frame(RenderSurface &surface) override;
+    void end_frame(RenderSurface &surface) override;
+    void render_viewport(RenderView &view, RenderSurface &surface) override;
+    bool render_composited_viewport(RenderView &view, RenderSurface &surface,
+        const RenderVulkanCompositionTarget &target) override;
+    void render_material_preview(RenderMaterialPreviewView &view,
+        RenderSurface &surface) override;
 
     bool initialize(void *native_window,
                     const std::filesystem::path &executable_dir,

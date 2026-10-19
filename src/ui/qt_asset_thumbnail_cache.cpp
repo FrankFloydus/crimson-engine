@@ -7,7 +7,7 @@
 #include "ui/qt_asset_thumbnail_cache.hpp"
 
 #include "api/quader_project_assets_api.hpp"
-#include "render/render_system.hpp"
+#include "render/render_host.hpp"
 #include "ui/standard_material_preview_render_snapshot_adapter.hpp"
 
 #include <algorithm>
@@ -61,7 +61,7 @@ struct QtAssetThumbnailCache::Impl final {
     std::uint64_t content_revision = 0u;
     std::uint32_t pixels = 0u;
     qreal device_pixel_ratio = 1.0;
-    std::uint32_t preset_revision = MaterialThumbnailRenderer::kPresetRevision;
+    std::uint32_t preset_revision = kMaterialThumbnailPresetRevision;
     friend bool operator==(const RequestKey &, const RequestKey &) = default;
   };
 
@@ -146,7 +146,7 @@ QtAssetThumbnailCache::QtAssetThumbnailCache(std::size_t byte_budget)
 
 QtAssetThumbnailCache::~QtAssetThumbnailCache() = default;
 
-void QtAssetThumbnailCache::initialize(RenderSystem &renderer,
+void QtAssetThumbnailCache::initialize(RenderHost &renderer,
                                        SnapshotLoader loader) {
   initialize(std::move(loader),
              [&renderer](RenderMaterialEvaluationSnapshot snapshot,
@@ -202,7 +202,7 @@ QImage QtAssetThumbnailCache::request(ProjectAssetId id,
   const auto pixels = static_cast<std::uint32_t>(std::clamp(
       std::round(std::min(logical_size.width(), logical_size.height()) *
                  device_pixel_ratio),
-      1.0, static_cast<double>(MaterialThumbnailRenderer::kMaximumSize)));
+      1.0, static_cast<double>(kMaterialThumbnailMaximumSize)));
   const Impl::RequestKey key{id, impl_->generation, impl_->catalog_revision,
                              content_revision, pixels, device_pixel_ratio};
   if (impl_->active.has_value() && impl_->active->key.id == id &&

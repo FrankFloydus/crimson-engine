@@ -25,6 +25,45 @@ $runtimeExecutable = Join-Path $runtimeFixtureDirectory 'quader.exe'
 $runtimeCompanion = Join-Path $runtimeFixtureDirectory 'quader_fatal_diagnostics.exe'
 try {
     [void][IO.Directory]::CreateDirectory($runtimeFixtureDirectory)
+    $nativeProject = @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile><RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><PreprocessorDefinitions>NDEBUG;QT_NO_DEBUG;_ITERATOR_DEBUG_LEVEL=0</PreprocessorDefinitions></ClCompile>
+    <Link><AdditionalDependencies>TracyClient.lib;RENDERER_LIBS;C:/dependencies/lib/Qt6Widgets.lib;C:/dependencies/lib/Qt6Gui.lib;C:/dependencies/lib/Qt6Core.lib;DEBUG_EXTRA</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile><RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><PreprocessorDefinitions>NDEBUG;QT_NO_DEBUG;_ITERATOR_DEBUG_LEVEL=0</PreprocessorDefinitions></ClCompile>
+    <Link><AdditionalDependencies>RENDERER_LIBS;C:/dependencies/lib/Qt6Widgets.lib;C:/dependencies/lib/Qt6Gui.lib;C:/dependencies/lib/Qt6Core.lib;RELEASE_EXTRA</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+</Project>
+'@
+    $fullProject = $nativeProject.Replace('RENDERER_LIBS',
+        'quader_render_full_host.lib;quader_render.lib;C:/filament/lib/x86_64/md/filament.lib')
+    [IO.File]::WriteAllText($projectPath, $fullProject)
+    Assert-NativeExecutableLinkContract -ProjectPath $projectPath -RendererProfile Full
+    $publicProject = $nativeProject.Replace('RENDERER_LIBS',
+        'quader_render_crimson_host.lib;quader_render_crimson.lib;crimson-renderer-shared.lib;crimson-renderer-forward.lib;crimson-gpu-resources.lib;bgfx.lib')
+    [IO.File]::WriteAllText($projectPath, $publicProject)
+    Assert-NativeExecutableLinkContract -ProjectPath $projectPath -RendererProfile Public
+    foreach ($configurationMarker in @('DEBUG_EXTRA', 'RELEASE_EXTRA')) {
+        foreach ($fullLibrary in @('quader_render_full_host.lib', 'quader_render.lib',
+                'C:/filament/lib/x86_64/md/filament.lib')) {
+            [IO.File]::WriteAllText($projectPath,
+                $publicProject.Replace($configurationMarker, $fullLibrary))
+            Assert-Rejected {
+                Assert-NativeExecutableLinkContract -ProjectPath $projectPath -RendererProfile Public
+            } 'unexpectedly links the Full renderer'
+        }
+    }
+    foreach ($requiredLibrary in @('quader_render_crimson_host.lib',
+            'quader_render_crimson.lib', 'crimson-renderer-shared.lib',
+            'crimson-renderer-forward.lib', 'crimson-gpu-resources.lib', 'bgfx.lib')) {
+        [IO.File]::WriteAllText($projectPath, $publicProject.Replace($requiredLibrary, ''))
+        Assert-Rejected {
+            Assert-NativeExecutableLinkContract -ProjectPath $projectPath -RendererProfile Public
+        } 'missing renderer library'
+    }
+
     $project = @'
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

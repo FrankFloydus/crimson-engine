@@ -11,6 +11,7 @@
 #include "render/mesh_renderable_factory.hpp"
 #include "render/mesh_renderable_proxy.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "render/render_scene_sink.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,13 +24,6 @@ namespace quader {
 class MaterialBindingService;
 class ToolPreviewRenderableCacheTestPeer;
 class ViewportSettings;
-
-/// Describes whether a preview submission changed the retained render state.
-enum class ToolPreviewSubmissionResult : std::uint8_t {
-  Unchanged,
-  Published,
-  Failed,
-};
 
 /// Records candidate and retirement work for deterministic scale tests.
 struct ToolPreviewCacheWorkCounters final {

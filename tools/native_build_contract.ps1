@@ -105,7 +105,10 @@ function Assert-ProfilingBuildProject {
 function Assert-NativeExecutableLinkContract {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ProjectPath
+        [string]$ProjectPath,
+
+        [ValidateSet('Full', 'Public')]
+        [string]$RendererProfile = 'Full'
     )
 
     $debugBlock = Get-ProjectConfigurationBlock -ProjectPath $ProjectPath -Configuration 'Debug'
@@ -119,7 +122,6 @@ function Assert-NativeExecutableLinkContract {
             'NDEBUG',
             'QT_NO_DEBUG',
             '_ITERATOR_DEBUG_LEVEL=0',
-            '/lib/x86_64/md/filament.lib',
             '/lib/Qt6Widgets.lib',
             '/lib/Qt6Gui.lib',
             '/lib/Qt6Core.lib')) {
@@ -146,6 +148,30 @@ function Assert-NativeExecutableLinkContract {
     foreach ($forbidden in @('TracyClient', 'sentry.lib')) {
         if ($normalizedReleaseBlock.Contains($forbidden)) {
             throw "Release unexpectedly links '$forbidden' in: $ProjectPath"
+        }
+    }
+
+    foreach ($configurationBlock in @($normalizedDebugBlock, $normalizedReleaseBlock)) {
+        $rendererLibraries = if ($RendererProfile -eq 'Public') {
+            @('quader_render_crimson_host.lib', 'quader_render_crimson.lib',
+                'crimson-renderer-shared.lib', 'crimson-renderer-forward.lib',
+                'crimson-gpu-resources.lib', 'bgfx.lib')
+        } else {
+            @('quader_render_full_host.lib', 'quader_render.lib',
+                '/lib/x86_64/md/filament.lib')
+        }
+        foreach ($required in $rendererLibraries) {
+            if (-not $configurationBlock.Contains($required)) {
+                throw "The $RendererProfile executable is missing renderer library '$required' in: $ProjectPath"
+            }
+        }
+        if ($RendererProfile -eq 'Public') {
+            foreach ($forbidden in @('quader_render_full_host.lib', 'quader_render.lib',
+                    'filament.lib', '/lib/x86_64/md/')) {
+                if ($configurationBlock.Contains($forbidden)) {
+                    throw "The Public executable unexpectedly links the Full renderer '$forbidden' in: $ProjectPath"
+                }
+            }
         }
     }
 }

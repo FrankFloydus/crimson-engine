@@ -33,7 +33,7 @@
 #include "platform/native_window_input.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/render_layers.hpp"
-#include "render/scene_render_bridge.hpp"
+#include "render/render_scene_sink.hpp"
 #include "render/viewport_info_stats.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
@@ -796,7 +796,7 @@ QtViewportPanel::~QtViewportPanel() {
   }
 }
 
-bool QtViewportPanel::initialize(RenderSystem &render_system) {
+bool QtViewportPanel::initialize(RenderHost &render_system) {
   if (initialized_) {
     return true;
   }
@@ -1626,7 +1626,7 @@ void QtViewportPanel::present_primitive_feedback(
 }
 
 void QtViewportPanel::prepare_viewports(
-    QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
+    QuaderEditorApi &editor, RenderSceneSink &render_bridge,
     RenderOverlaySnapshotCache &snapshot_cache,
     SceneDocument &document, AssetRegistry &assets,
     ModelingSessionService &modeling,
@@ -1649,6 +1649,18 @@ void QtViewportPanel::prepare_viewports(
   update_focused_pane_indicator();
   const std::vector<ViewportPanePlacement> active_placements =
       workspace_->active_pane_placements();
+  if (render_system_ != nullptr) {
+    render_system_->begin_view_preparation();
+  }
+  for (Pane &pane_state : panes_) {
+    if (RenderView *view = pane_state.surface->renderer_if_initialized()) {
+      const bool active = pane_state.frame->isVisible() &&
+          std::ranges::any_of(active_placements, [&](const ViewportPanePlacement &placement) {
+            return placement.pane_id == pane_state.id;
+          });
+      view->set_active(active);
+    }
+  }
 
   std::uint8_t active_overlay_viewport_mask = 0u;
   for (const ViewportPanePlacement &placement : active_placements) {
@@ -1916,36 +1928,42 @@ void QtViewportPanel::prepare_viewports(
     const bool gizmos_visible = pane_settings.bool_value(ViewportBoolSettingId::ShowGizmos);
     const ViewportShadingMode shading =
         workspace_->shading_mode(pane_state.id);
-    ViewportRenderer &renderer = pane_state.surface->renderer();
-    renderer.set_instance_edit_context_active(
-        instance_edit_context_active, pane_settings);
-    renderer.set_material_presentation(
-        viewport_material_debug_mode(shading),
-        shading == ViewportShadingMode::Solid,
-        pane_settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
+    RenderView *const render_view = pane_state.surface->renderer_if_initialized();
+    if (render_view != nullptr) {
+      RenderView &renderer = *render_view;
+      renderer.set_instance_edit_context_active(
+          instance_edit_context_active, pane_settings);
+      renderer.set_material_presentation(
+          viewport_material_debug_mode(shading),
+          shading == ViewportShadingMode::Solid,
+          pane_settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
+    }
 
     const SceneSettings &scene_settings = document.scene_settings();
     pane_workspace.camera.set_clip_planes(scene_settings.camera.near_plane,
                                           scene_settings.camera.far_plane);
-    renderer.apply_scene_settings(
-        scene_settings, viewport_shading_uses_scene_lighting(shading), pane_settings);
-    renderer.update_camera(pane_workspace.camera);
-    if (pane_state.id == focused_pane) {
-      const bool selection_depth_eligible = !viewport_interaction_active &&
-          (cached_overlay_mode == ModelingSelectionMode::Vertex || cached_overlay_mode == ModelingSelectionMode::Face) &&
-          !pane_settings.bool_value(ViewportBoolSettingId::BackfaceSelection);
-      QuaderRenderApiRuntimeAccess::prepare_selection_depth(editor.render(), renderer,
-          pane_workspace.camera, selection_depth_eligible);
+    if (render_view != nullptr) {
+      RenderView &renderer = *render_view;
+      renderer.apply_scene_settings(
+          scene_settings, viewport_shading_uses_scene_lighting(shading), pane_settings);
+      renderer.update_camera(pane_workspace.camera);
+      if (pane_state.id == focused_pane) {
+        const bool selection_depth_eligible = !viewport_interaction_active &&
+            (cached_overlay_mode == ModelingSelectionMode::Vertex || cached_overlay_mode == ModelingSelectionMode::Face) &&
+            !pane_settings.bool_value(ViewportBoolSettingId::BackfaceSelection);
+        QuaderRenderApiRuntimeAccess::prepare_selection_depth(editor.render(), renderer,
+            pane_workspace.camera, selection_depth_eligible);
+      }
+      renderer.update_ground_grid(pane_workspace.camera, grid_world_size,
+                                  pane_settings, grid_visible);
+      renderer.set_scene_layer_mask(
+          viewport_shading_uses_rendered_materials(shading)
+              ? kViewportRenderedSceneLayerMask
+              : kViewportShadedSceneLayerMask);
+      renderer.set_shadowing_enabled(
+          viewport_shading_uses_scene_lighting(shading));
+      renderer.set_scene_visible(shading != ViewportShadingMode::Wireframe);
     }
-    renderer.update_ground_grid(pane_workspace.camera, grid_world_size,
-                                pane_settings, grid_visible);
-    renderer.set_scene_layer_mask(
-        viewport_shading_uses_rendered_materials(shading)
-            ? kViewportRenderedSceneLayerMask
-            : kViewportShadedSceneLayerMask);
-    renderer.set_shadowing_enabled(
-        viewport_shading_uses_scene_lighting(shading));
-    renderer.set_scene_visible(shading != ViewportShadingMode::Wireframe);
     const bool tool_overlay_visible =
         active_box_preview_.ok &&
         active_box_preview_.footprint_count >= 2U &&
@@ -1955,20 +1973,23 @@ void QtViewportPanel::prepare_viewports(
             radial_array_center.visible, radial_array_center.locked,
             true);
     const bool primitive_creation_visible = gizmos_visible && live_primitive_creation.has_value();
-    renderer.set_overlay_visible(should_enable_viewport_overlay_pass({
-        .overlays_visible = overlays_visible,
-        .gizmos_visible = gizmos_visible,
-        .wireframe_pane = shading == ViewportShadingMode::Wireframe,
-        .pivot_handle_visible = pivot_handle.visible,
-        .native_tool_overlay_visible =
-            linear_array_handle.visible || radial_array_center_visible ||
-            extrusion_handle.active ||
-            (gizmos_visible && native_presentation.bridge_handle.has_value()) ||
-            (native_presentation.curve_preview != nullptr &&
-             native_presentation.curve_preview->active) ||
-            assets.curve_count() != 0u,
-        .tool_overlay_visible = tool_overlay_visible || primitive_creation_visible,
-    }));
+    if (render_view != nullptr) {
+      RenderView &renderer = *render_view;
+      renderer.set_overlay_visible(should_enable_viewport_overlay_pass({
+          .overlays_visible = overlays_visible,
+          .gizmos_visible = gizmos_visible,
+          .wireframe_pane = shading == ViewportShadingMode::Wireframe,
+          .pivot_handle_visible = pivot_handle.visible,
+          .native_tool_overlay_visible =
+              linear_array_handle.visible || radial_array_center_visible ||
+              extrusion_handle.active ||
+              (gizmos_visible && native_presentation.bridge_handle.has_value()) ||
+              (native_presentation.curve_preview != nullptr &&
+               native_presentation.curve_preview->active) ||
+              assets.curve_count() != 0u,
+          .tool_overlay_visible = tool_overlay_visible || primitive_creation_visible,
+      }));
+    }
 
     const ViewportOverlayCamera overlay_camera =
         ViewportCameraAdapter::overlay_camera(pane_workspace.camera,
@@ -2055,12 +2076,13 @@ void QtViewportPanel::prepare_viewports(
         scene_overlay_requests[viewport_index];
     const bool retained_mesh_outlines =
         render_bridge.tool_preview_suppression().empty();
-    const bool gpu_mesh_outlines = renderer.update_selected_mesh_outlines(
-        selected_mesh_outline_only ? snapshot_cache.selected_object_snapshot() : nullptr,
-        selected_mesh_outline_only ? scene_overlay_snapshot : nullptr,
-        ViewportOverlayStyleResolver::persistent_style_snapshot(
-            pane_settings, pane_viewport_pixel_scale),
-        selected_mesh_outline_only && overlays_visible && retained_mesh_outlines) &&
+    const bool gpu_mesh_outlines = render_view != nullptr &&
+        render_view->update_selected_mesh_outlines(
+            selected_mesh_outline_only ? snapshot_cache.selected_object_snapshot() : nullptr,
+            selected_mesh_outline_only ? scene_overlay_snapshot : nullptr,
+            ViewportOverlayStyleResolver::persistent_style_snapshot(
+                pane_settings, pane_viewport_pixel_scale),
+            selected_mesh_outline_only && overlays_visible && retained_mesh_outlines) &&
         retained_mesh_outlines;
     ViewportOverlaySubmissionResult overlay_submission =
         render_bridge.submit_viewport_overlay(
@@ -2128,6 +2150,9 @@ void QtViewportPanel::prepare_viewports(
         pane_dimensions_visible && overlays_visible,
         knife_dimensions_visible && overlays_visible);
     sync_pane_control_selection(pane_state);
+  }
+  if (render_system_ != nullptr) {
+    render_system_->complete_view_preparation();
   }
   composed_prepared_geometry_revision_ = composed_geometry_revision_;
   if (diagnostics_enabled) {

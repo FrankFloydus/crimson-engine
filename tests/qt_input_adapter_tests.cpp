@@ -36,6 +36,7 @@
 #include "ui/qt_face_texture_panel.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "ui/qt_operation_input_hints.hpp"
+#include "render/render_system.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"

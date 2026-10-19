@@ -14,6 +14,7 @@
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
+#include "render/crimson/crimson_render_host.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
@@ -93,6 +94,15 @@ public:
   mutable int resolve_count = 0;
   const RenderMaterialAssetSnapshot *default_override = nullptr;
 };
+
+TEST(PublicReleaseRenderTests, ExecutableCompositionCreatesCrimsonHostWithoutGpuInitialization) {
+  ASSERT_EQ(current_product_release(), kPublicRelease01);
+  const auto host = create_app_render_host();
+  ASSERT_NE(host, nullptr);
+  EXPECT_FALSE(host->initialized());
+  CrimsonRenderDiagnostics diagnostics;
+  EXPECT_TRUE(crimson_render_diagnostics(*host, diagnostics));
+}
 
 TEST(PublicReleaseRenderTests, DefaultImagePreferenceDoesNotResolveAuthoredMaterials) {
   ProjectSession project;
