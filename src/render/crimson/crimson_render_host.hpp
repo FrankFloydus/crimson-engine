@@ -38,6 +38,12 @@ struct CrimsonRenderDiagnostics final {
   bool editor_overlays_pending = true;
   bool selection_depth_accelerator_pending = true;
   CrimsonSceneProjectionStats translation;
+  /** Canonical renderer counters, including actual mesh instance submissions. */
+  crimson::shared::RetentionStats scene_gpu;
+  std::size_t scene_meshes = 0u;
+  std::size_t scene_instances = 0u;
+  std::uint64_t scene_instance_identity_hash = 0u;
+  std::uint32_t bgfx_draws = 0u;
   CrimsonEditorProjectionCounters editor_projection;
   crimson::shared::EditorRetentionStats editor_gpu;
   std::vector<CrimsonEditorViewDiagnostics> editor_views;
@@ -47,5 +53,9 @@ struct CrimsonRenderDiagnostics final {
 [[nodiscard]] std::unique_ptr<RenderHost> create_crimson_render_host();
 [[nodiscard]] bool crimson_render_diagnostics(const RenderHost &host,
                                               CrimsonRenderDiagnostics &diagnostics);
+/** Internal acceptance control; does not change product display preferences. */
+[[nodiscard]] bool crimson_set_gpu_instancing_enabled(RenderHost &host, bool enabled);
+/** Cheap submission observation; does not walk accepted geometry or instance IDs. */
+[[nodiscard]] bool crimson_render_frame_submissions(const RenderHost &host, std::uint64_t &submissions);
 
 } // namespace quader

@@ -20,6 +20,8 @@
 #include <crimson/renderer/ShaderFamily.hpp>
 #include <crimson/renderer/BuildIdentity.hpp>
 
+#include <bgfx/bgfx.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -73,6 +75,7 @@ struct CrimsonHostState final {
   RenderPresentationFrameTracker presentation;
   std::size_t copy_count = 0u;
   bool presentation_open = false;
+  bool gpu_instancing_enabled = true;
 
   bool accept(crimson::shared::Status status) {
     if (status.ok()) return true;
@@ -582,6 +585,7 @@ public:
   std::unique_ptr<RenderSceneSink> create_scene_sink(const std::filesystem::path &) override { return std::make_unique<CrimsonSceneSink>(state_); }
   std::unique_ptr<RenderView> create_view(std::uint8_t mask, ViewportRenderSurface) override {
     auto view = std::make_unique<CrimsonRenderView>(mask,state_);
+    view->state()->frame.enable_gpu_instancing = state_->gpu_instancing_enabled;
     state_->views.push_back(view->state());
     return view;
   }
@@ -674,6 +678,17 @@ public:
   std::shared_ptr<const MaterialThumbnailReadback> submit_material_thumbnail(RenderMaterialEvaluationSnapshot, std::uint32_t) override { return {}; }
   void poll_material_thumbnails() override {}
 
+  std::uint64_t frame_submissions() const noexcept { return state_->frame_submissions; }
+
+  void set_gpu_instancing_enabled(bool enabled) {
+    if (state_->gpu_instancing_enabled == enabled) return;
+    state_->gpu_instancing_enabled = enabled;
+    for (const auto &entry : state_->views) if (const auto view = entry.lock()) {
+      view->frame.enable_gpu_instancing = enabled;
+      view->dirty = true;
+    }
+  }
+
   CrimsonRenderDiagnostics diagnostics() const {
     CrimsonRenderDiagnostics value;
     value.frame_submissions = state_->frame_submissions;
@@ -681,6 +696,19 @@ public:
     value.pending_scene_generation = state_->pending ? state_->pending->generation : 0u;
     value.accepted_editor_scene_generation = state_->accepted_editor_scene_generation;
     value.translation = state_->projection_cache ? state_->projection_cache->stats() : CrimsonSceneProjectionStats{};
+    value.scene_gpu = state_->renderer.retention_stats();
+    value.scene_meshes = state_->accepted ? state_->accepted->meshes.size() : 0u;
+    value.scene_instances = state_->accepted ? state_->accepted->instances.size() : 0u;
+    if (state_->accepted) {
+      value.scene_instance_identity_hash = 14695981039346656037u;
+      for (const auto &instance : state_->accepted->instances) {
+        value.scene_instance_identity_hash ^= instance.id;
+        value.scene_instance_identity_hash *= 1099511628211u;
+      }
+    }
+    if (state_->initialized) {
+      if (const auto *stats = bgfx::getStats()) value.bgfx_draws = stats->numDraw;
+    }
     value.editor_projection = state_->editor.counters();
     value.editor_gpu = state_->renderer.editor_retention_stats();
     value.error = state_->error;
@@ -778,6 +806,20 @@ bool crimson_render_diagnostics(const RenderHost &host, CrimsonRenderDiagnostics
   const auto *crimson_host = dynamic_cast<const CrimsonRenderHost *>(&host);
   if (crimson_host == nullptr) return false;
   diagnostics = crimson_host->diagnostics();
+  return true;
+}
+
+bool crimson_set_gpu_instancing_enabled(RenderHost &host, bool enabled) {
+  auto *crimson_host = dynamic_cast<CrimsonRenderHost *>(&host);
+  if (!crimson_host) return false;
+  crimson_host->set_gpu_instancing_enabled(enabled);
+  return true;
+}
+
+bool crimson_render_frame_submissions(const RenderHost &host, std::uint64_t &submissions) {
+  const auto *crimson_host = dynamic_cast<const CrimsonRenderHost *>(&host);
+  if (!crimson_host) return false;
+  submissions = crimson_host->frame_submissions();
   return true;
 }
 

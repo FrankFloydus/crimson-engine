@@ -5,6 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app.hpp"
+#if defined(QUADER_HAS_CRIMSON_DIAGNOSTICS)
+#include "ui/qt_crimson_instancing_probe.hpp"
+#endif
 #include "core/logger.hpp"
 #include "core/release_features.hpp"
 #include "core/user_config_paths.hpp"
@@ -67,6 +70,7 @@ std::filesystem::path executable_path(int argc, char **argv) {
 struct CommandLineOptions {
   quader::RendererBackend render_backend = quader::RendererBackend::Vulkan;
   bool sentry_verify = false;
+  std::filesystem::path crimson_instancing_output;
 };
 
 CommandLineOptions parse_command_line(int argc, char **argv) {
@@ -88,6 +92,9 @@ CommandLineOptions parse_command_line(int argc, char **argv) {
     } else if (argument == "--sentry-verify" ||
                argument == "--sentry-test-event") {
       options.sentry_verify = true;
+    } else if (argument.starts_with("--crimson-instancing-test-output=")) {
+      options.crimson_instancing_output = std::filesystem::path(
+          std::string(argument.substr(std::string_view("--crimson-instancing-test-output=").size())));
     }
   }
   return options;
@@ -166,6 +173,15 @@ int main(int argc, char** argv) {
     return 1;
   }
   qt_application.setWindowIcon(application_icon);
+
+#if defined(QUADER_HAS_CRIMSON_DIAGNOSTICS)
+  if (!command_line.crimson_instancing_output.empty()) {
+    const int result = quader::run_qt_crimson_instancing_probe(
+        qt_application, command_line.crimson_instancing_output, executable_dir);
+    quader::Logger::shutdown();
+    return result;
+  }
+#endif
 
 #if defined(QUADER_ENABLE_SENTRY) && QUADER_ENABLE_SENTRY
   (void)quader::initialize_sentry_client({

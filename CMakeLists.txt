@@ -1434,6 +1434,8 @@ add_executable(quader_public_app WIN32 ${QUADER_NATIVE_HOST_SOURCES})
 set(VCPKG_APPLOCAL_DEPS "${_QUADER_SAVED_VCPKG_APPLOCAL_DEPS}")
 unset(_QUADER_SAVED_VCPKG_APPLOCAL_DEPS)
 set_target_properties(quader_public_app PROPERTIES OUTPUT_NAME "quader-0.1")
+target_sources(quader_public_app PRIVATE src/ui/qt_crimson_instancing_probe.cpp)
+target_compile_definitions(quader_public_app PRIVATE QUADER_HAS_CRIMSON_DIAGNOSTICS=1)
 target_link_libraries(quader_public_app PRIVATE quader_runtime quader_render_crimson_host quader_release_profile_public)
 # Both post-build deployment steps clean and refill the same DLL directories.
 # A target dependency serializes them even during a parallel aggregate build.

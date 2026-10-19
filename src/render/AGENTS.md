@@ -20,6 +20,15 @@ file except through prior written authorization from Francesco Di Blasi.
   pinned `thirdparty/crimson-renderer` Git submodule, shared with Crimson Engine.
   Quader's `crimson/` adapter translates immutable snapshots; reusable device/resource/pass
   mechanisms belong to that shared Crimson implementation, without application/profile types.
+- Crimson batches compatible opaque mesh occurrences through retained GPU instance records and
+  indexed instanced draws, with a 65,535-instance draw bound. Preserve per-instance affine,
+  normal, sampling/chart transforms and identity; material/raster incompatibility and transparent
+  ordering retain their explicit paths. Camera culling reuses the retained population. An unchanged
+  scene uploads no instance records; placement edits update dirty records without rebuilding meshes.
+  Product scene-instancing availability remains owned by the release catalog. The actual Public
+  executable's `--crimson-instancing-test-output=<absolute-directory>` diagnostic exercises the
+  production host with 100,000 shared cubes, upload/draw counters and pixel comparisons through
+  [the Qt composition probe](../ui/qt_crimson_instancing_probe.cpp).
 - One host coordinates all panes for a Qt root/device generation. Crimson preflights the complete
   pane set, including scene/editor generation agreement, resource validation, pass reservations
   and palette capacity, before recording any pane. Publish all target candidates, accepted scene,
@@ -129,7 +138,7 @@ file except through prior written authorization from Francesco Di Blasi.
   workers must join before any Filament resource creation or publication. Pixel, malformed-candidate and handoff
   coverage lives in `tests/render_normal_mapping_runtime_tests.cpp`; exclusion restoration,
   occurrence filtering and light-only changes live in `tests/render_texture_lifetime_tests.cpp`.
-- Exact equivalent dynamic previews share one buffer-only GPU geometry owner with instanced
+- Full/Filament exact equivalent dynamic previews share one buffer-only GPU geometry owner with instanced
   rendered/shaded/depth chunks. Keep logical records for object identity, suppression and overlays.
   Stage geometry and exact-count instance updates before live publication; incompatible populations
   grow hidden candidates. Retire borrowers before their owner, bound inactive material-bearing
