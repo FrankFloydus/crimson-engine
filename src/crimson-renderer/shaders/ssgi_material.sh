@@ -16,12 +16,10 @@ bool ssgiCaptureSurface(float blendMode, float instanceOpacity)
     return giReceiverSurface(blendMode, instanceOpacity);
 }
 
-vec3 ssgiDiffuseResponse(vec3 N, vec3 V, vec3 base, float metallic, float specularLevel, float occlusion)
+vec3 ssgiDiffuseResponse(vec3 N, vec3 V, vec3 base, float metallic, float roughness, float specularLevel, float occlusion)
 {
-    float NoV = clamp(dot(N, V), 0.00001, 1.0);
-    vec3 F0 = mix(vec3_splat(0.08 * clamp(specularLevel, 0.0, 1.0)), base, metallic);
-    vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - NoV, 5.0);
-    return (vec3_splat(1.0) - F) * (1.0 - metallic) * base * occlusion;
+    vec3 specularResponse = integratedSpecularResponse(N, V, base, metallic, roughness, specularLevel);
+    return integratedDiffuseResponse(base, metallic, specularResponse) * occlusion;
 }
 
 vec3 ssgiDiffuse(vec3 worldPosition, vec3 diffuseResponse)

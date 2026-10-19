@@ -39,6 +39,12 @@ void main()
     context.particleColor = vec4_splat(1.0);
 #endif
     context.uv = vec4(v_texcoord0, v_texcoord1);
+#if !CC_GRAPH_PARTICLE
+    context.uv.xy = ccModelUv0(context.uv.xy, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode);
+    context.interpolatedUv = ccModelUvActive(v_uvInterpolationMode) ? 1.0 : 0.0;
+#else
+    context.interpolatedUv = 0.0;
+#endif
     context.worldPosition = v_worldPosition;
     context.localPosition = v_localPosition;
     context.normal = v_normal;
@@ -143,7 +149,7 @@ void main()
     }
     if (giReceiverSurface(u_graphParams[3].w, u_instanceOpacity.x))
     {
-        sourceResponse = ssgiDiffuseResponse(N, V, base, metallic, material.specular, indirectOcclusion);
+        sourceResponse = ssgiDiffuseResponse(N, V, base, metallic, roughness, material.specular, indirectOcclusion);
         vec3 bounceLighting = ssgiDiffuse(v_worldPosition, sourceResponse) * screenOcclusion;
         color += bounceLighting;
         indirectLighting += bounceLighting;

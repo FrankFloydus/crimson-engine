@@ -1,5 +1,8 @@
 #include "material_mapping_functions.sh"
 #include "material_graph_adjustments.sh"
+#if !CC_GRAPH_PARTICLE
+#include "model_uv.sh"
+#endif
 struct GraphContext
 {
     vec4 uv;
@@ -9,6 +12,7 @@ struct GraphContext
     vec3 normal;
     vec3 localNormal;
     vec4 tangent;
+    float interpolatedUv;
 };
 struct GraphMaterial
 {
@@ -59,9 +63,14 @@ vec3 ccGraphNormal(sampler2D image, GraphContext context, vec4 scale, vec4 offse
     vec3 fallbackT = normalize(cross(axis, N));
     vec3 T = ccMappingNormalize(context.tangent.xyz - N * dot(N, context.tangent.xyz), fallbackT);
     vec3 B = cross(N, T) * (context.tangent.w < 0.0 ? -1.0 : 1.0);
-    // The authored tangent basis may belong to the other mesh UV set. Derive a
-    // basis from the selected raw UVs before applying the mapping correction.
-    if (abs(u_modelUv.x - rotation.w) > 0.1)
+    vec2 finalUv = ccMaterialUv(uv, scale, offset, rotation);
+    bool interpolatedChart = false;
+#if !CC_GRAPH_PARTICLE
+    interpolatedChart = rotation.w < 0.5 && context.interpolatedUv > 0.5;
+    if (interpolatedChart) ccModelUvFrame(N, context.worldPosition, finalUv, T, B);
+#endif
+    // Ordinary charts retain their authored frame and mapping conventions.
+    if (!interpolatedChart && abs(u_modelUv.x - rotation.w) > 0.1)
     {
         vec3 dx = dFdx(context.worldPosition), dy = dFdy(context.worldPosition);
         vec2 ux = dFdx(uv), uy = dFdy(uv);
@@ -69,12 +78,13 @@ vec3 ccGraphNormal(sampler2D image, GraphContext context, vec4 scale, vec4 offse
         if (abs(determinant) > 0.00000001)
         {
             vec3 rawT = (dx * uy.y - dy * ux.y) / determinant;
-            vec3 rawB = (dy * ux.x - dx * uy.x) / determinant;
+            vec3 rawB = (dy * ux.x - dx *uy.x) / determinant;
             T = ccMappingNormalize(rawT - N * dot(N, rawT), fallbackT);
             B = cross(N, T) * (dot(cross(N, T), rawB) < 0.0 ? -1.0 : 1.0);
         }
     }
-    vec3 tangentNormal = ccUvNormal(ccDecodeNormal(texture2D(image, ccMaterialUv(uv, scale, offset, rotation)).xyz, settings.x), scale, rotation);
+    vec3 tangentNormal = ccDecodeNormal(texture2D(image, finalUv).xyz, settings.x);
+    if (!interpolatedChart) tangentNormal = ccUvNormal(tangentNormal, scale, rotation);
     return ccMappingNormalize(T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z, N);
 }
 #endif

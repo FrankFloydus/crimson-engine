@@ -1,4 +1,5 @@
 #include "crimson-renderer/Renderer.h"
+#include "crimson-renderer/RenderPassPlan.h"
 #include "GpuTestBackend.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/Picking.h"
@@ -7,18 +8,25 @@
 #include "resources/TextureStreamer.h"
 #include "assets/GrungeGenerator.h"
 #include "editor/MaterialPreview.h"
+#include "quader/QuaderImport.h"
+#include <lodepng.h>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <numbers>
 #include <stdexcept>
+#include <sstream>
+#include <cstdlib>
+#include <iomanip>
 
 namespace {
 using namespace crimson;
@@ -26,6 +34,105 @@ constexpr std::uint16_t Size=128,ReadView=254;
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+using BrdfReadback=std::array<Vec4,4>;
+// Compile the actual production BRDF functions, rather than a second shader
+// implementation of their equations. RGBA32F readback keeps both sides of
+// N.V=0 distinguishable without tone mapping or 8-bit rounding.
+template<class Tick>
+void exerciseGrazingBrdf(const ShaderCompileConfig& config,Tick&& tick,std::vector<std::shared_ptr<BrdfReadback>>& destinations) {
+    constexpr std::uint16_t ProbeView=252,ProbeSize=2;
+    struct Program {bgfx::ProgramHandle handle{BGFX_INVALID_HANDLE};~Program(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+    struct Uniform {bgfx::UniformHandle handle{BGFX_INVALID_HANDLE};~Uniform(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+    struct Target {bgfx::FrameBufferHandle handle{BGFX_INVALID_HANDLE};~Target(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+    const auto fileText=[](const std::filesystem::path& path){std::ifstream input(path,std::ios::binary);check(bool(input),"Cannot read BRDF production shader: "+path.string());std::ostringstream text;text<<input.rdbuf();return text.str();};
+    const auto varying=config.sourceDirectory/"varying.def.sc";
+    ShaderCompileRecipe vertexRecipe;vertexRecipe.name="vs_grazing_brdf_probe";vertexRecipe.stage=ShaderStage::Vertex;
+    vertexRecipe.varyingDefinition=varying;vertexRecipe.includeDirectories={config.sourceDirectory};vertexRecipe.contract="grazing-brdf-probe-v1";
+    vertexRecipe.source="$input a_position\n#include <bgfx_shader.sh>\nvoid main(){gl_Position=vec4(a_position,1.0);}\n";
+    const auto vertex=compileShader(config,vertexRecipe);
+    Uniform probe{bgfx::createUniform("u_brdfProbe",bgfx::UniformType::Vec4)};
+    check(bgfx::isValid(probe.handle),"BRDF probe uniform allocation failed.");
+    Texture color{bgfx::createTexture2D(ProbeSize,ProbeSize,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_RT)};
+    Texture staging{bgfx::createTexture2D(ProbeSize,ProbeSize,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
+    check(bgfx::isValid(color.handle)&&bgfx::isValid(staging.handle),"BRDF floating-point target allocation failed.");
+    Target target{bgfx::createFrameBuffer(1,&color.handle,false)};check(bgfx::isValid(target.handle),"BRDF probe framebuffer allocation failed.");
+    bgfx::VertexLayout layout;layout.begin().add(bgfx::Attrib::Position,3,bgfx::AttribType::Float).end();
+    constexpr std::array<Vec3,6> corners{{{-1,-1,0},{1,-1,0},{1,1,0},{-1,-1,0},{1,1,0},{-1,1,0}}};
+    // The caller owns destinations until after Renderer shutdown, including
+    // the exceptional path if a bounded read cannot be drained.
+    for(bool sphere:{false,true}) {
+        const auto source=fileText(config.sourceDirectory/(sphere?"fs_pbr.sc":"model_lighting.sh"));
+        const auto begin=source.find("vec3 integratedSpecularResponse(");
+        const auto end=sphere?source.find("void main()",begin):source.size();
+        check(begin!=std::string::npos&&end!=std::string::npos&&end>begin,"BRDF production helper range is missing.");
+        ShaderCompileRecipe fragmentRecipe;fragmentRecipe.name=sphere?"fs_sphere_grazing_brdf_probe":"fs_model_grazing_brdf_probe";
+        fragmentRecipe.varyingDefinition=varying;fragmentRecipe.includeDirectories={config.sourceDirectory};fragmentRecipe.contract="grazing-brdf-probe-v1";
+        std::string giResponse;
+        if(!sphere) {
+            const auto giSource=fileText(config.sourceDirectory/"ssgi_material.sh");
+            const auto giBegin=giSource.find("vec3 ssgiDiffuseResponse("),giEnd=giSource.find("vec3 ssgiDiffuse(",giBegin);
+            check(giBegin!=std::string::npos&&giEnd!=std::string::npos&&giEnd>giBegin,"SSGI production response helper is missing.");
+            giResponse=giSource.substr(giBegin,giEnd-giBegin);
+        }
+        // Fix external IBL inputs to a known LUT and unit diffuse irradiance;
+        // evaluateEnvironment itself and its energy split remain production code.
+        fragmentRecipe.source="#include <bgfx_shader.sh>\n#include \"point_light.sh\"\nCONST(float PI=3.141592653589793);\nuniform vec4 u_brdfProbe;\n"
+            "#define u_environment vec4_splat(0.0)\n#define u_ambientLight vec4_splat(1.0)\n#define u_roughness vec4(1.0,0.0,0.5,0.0)\n"
+            "#undef textureCube\n#define textureCube(s,uv) vec4_splat(1.0)\n#undef textureCubeLod\n#define textureCubeLod(s,uv,lod) vec4_splat(0.0)\n"
+            "vec2 forwardPlusBrdf(vec2 uv){return vec2(0.4,0.2);}\nvec3 environmentDirection(vec3 d){return d;}\nvec3 environmentAmbientIrradiance(vec3 value){return value;}\n"+
+            source.substr(begin,end-begin)+giResponse+
+            "\nvoid main(){vec3 N=vec3(0.0,0.0,1.0);vec3 V=vec3(sqrt(max(1.0-u_brdfProbe.x*u_brdfProbe.x,0.0)),0.0,u_brdfProbe.x);"
+            "if(u_brdfProbe.z>0.5){vec3 base=vec3(0.2,0.5,0.8);float metallic=u_brdfProbe.w;"+
+            (sphere?std::string("vec3 ambient=evaluateEnvironment(N,V,base,metallic,1.0);float gi=ambient.y*0.6;"):
+                std::string("vec3 ambient=evaluateEnvironment(N,V,base,metallic,1.0,0.5);float gi=ssgiDiffuseResponse(N,V,base,metallic,1.0,0.5,0.6).y;"))+
+            "gl_FragColor=vec4(ambient,gi);return;}"
+            "vec3 L=vec3(sqrt(max(1.0-u_brdfProbe.y*u_brdfProbe.y,0.0)),0.0,u_brdfProbe.y);"
+            "vec3 result=evaluateLightResponse(N,V,L,vec3_splat(1.0),vec3_splat(0.5),0.0,1.0,0.0,1.0,0.0);"+
+            (sphere?std::string("float donor=result.x;"):std::string("float donor=evaluateLightDiffuse(N,V,L,vec3_splat(1.0),vec3_splat(0.5),0.0,0.0).x;"))+
+            "gl_FragColor=vec4(result.x,donor,result.y,result.z);}\n";
+        const auto fragment=compileShader(config,fragmentRecipe);
+        const auto vs=bgfx::createShader(bgfx::copy(vertex.bytes.data(),static_cast<std::uint32_t>(vertex.bytes.size())));
+        const auto fs=bgfx::createShader(bgfx::copy(fragment.bytes.data(),static_cast<std::uint32_t>(fragment.bytes.size())));
+        check(bgfx::isValid(vs)&&bgfx::isValid(fs),"BRDF probe shader publication failed.");
+        Program program{bgfx::createProgram(vs,fs,true)};check(bgfx::isValid(program.handle),"BRDF probe program publication failed.");
+        const auto capture=[&](const Vec4& parameters) {
+            bgfx::setViewFrameBuffer(ProbeView,target.handle);bgfx::setViewRect(ProbeView,0,0,ProbeSize,ProbeSize);
+            bgfx::setViewClear(ProbeView,BGFX_CLEAR_COLOR,0u,1.f,0);
+            bgfx::TransientVertexBuffer vertices;check(bgfx::getAvailTransientVertexBuffer(6,layout)==6,"BRDF probe transient geometry unavailable.");
+            bgfx::allocTransientVertexBuffer(&vertices,6,layout);std::memcpy(vertices.data,corners.data(),sizeof corners);
+            bgfx::setVertexBuffer(0,&vertices);bgfx::setUniform(probe.handle,parameters.data());bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
+            bgfx::submit(ProbeView,program.handle);
+            auto pixels=std::make_shared<BrdfReadback>();destinations.push_back(pixels);
+            bgfx::blit(ReadView,staging.handle,0,0,color.handle,0,0,ProbeSize,ProbeSize);
+            const auto ready=bgfx::readTexture(staging.handle,pixels->data());check(ready!=UINT32_MAX,"BRDF probe readback is unsupported.");
+            bool complete=false;for(unsigned attempt=0;attempt<120&&!complete;++attempt){const auto frame=tick();complete=picking::frameReady(frame,ready);}
+            check(complete,"BRDF probe readback timed out.");
+            return pixels;
+        };
+        for(float noL:{1.f,0.f,-1.f})for(float noV:{-.2f,-.000001f,0.f,.000001f,.2f}) {
+            const auto pixels=capture({noV,noL,0,0});
+            const double expected=noL<=0?0:.5/std::numbers::pi*(1-std::pow(1-std::sqrt((1+double(noV))*.5),5));
+            for(const auto& pixel:*pixels)for(unsigned channel=0;channel<4;++channel)
+                check(std::isfinite(pixel[channel])&&std::abs(double(pixel[channel])-expected)<.000002,
+                    std::string(sphere?"Sphere":"Model/GI donor")+" BRDF lost continuous illumination across N.V=0: NoV="+std::to_string(noV)+
+                    ", NoL="+std::to_string(noL)+", channel="+std::to_string(channel)+", actual="+std::to_string(pixel[channel])+", expected="+std::to_string(expected));
+        }
+        for(float metallic:{0.f,.6f,1.f})for(float noV:{-.2f,-.000001f,0.f,.000001f,.2f}) {
+            const auto pixels=capture({noV,0,1,metallic});
+            constexpr std::array<double,3> base{.2,.5,.8};std::array<double,4> expected{};
+            for(unsigned channel=0;channel<3;++channel) {
+                const double f0=.04*(1-double(metallic))+base[channel]*double(metallic);
+                expected[channel]=(1-(f0*.4+.2))*(1-double(metallic))*base[channel];
+            }
+            expected[3]=expected[1]*.6;
+            for(const auto& pixel:*pixels)for(unsigned channel=0;channel<4;++channel)
+                check(std::isfinite(pixel[channel])&&std::abs(double(pixel[channel])-expected[channel])<.000002,
+                    std::string(sphere?"Sphere":"Model/SSGI receiver")+" IBL diffuse lost integrated energy at grazing view: NoV="+std::to_string(noV)+
+                    ", metallic="+std::to_string(metallic)+", channel="+std::to_string(channel)+", actual="+std::to_string(pixel[channel])+", expected="+std::to_string(expected[channel]));
+        }
+    }
+    bgfx::setViewFrameBuffer(ProbeView,BGFX_INVALID_HANDLE);
+}
 std::shared_ptr<ModelAsset> quad(){
     auto asset=std::make_shared<ModelAsset>();asset->id="material-mapping-quad";
     ModelPrimitive primitive;primitive.uvMask=3;primitive.tangentUv=0;
@@ -44,6 +151,357 @@ std::array<int,3> sample(const DecodedImage& image,const Camera& camera,Vec3 wor
 }
 void disconnectMaterialInput(MaterialGraph& graph,MaterialNodeId node,MaterialPin pin){if(const auto* link=materialInputLink(graph,node,pin))removeMaterialLink(graph,link->id);}
 int difference(std::array<int,3> a,std::array<int,3> b){return std::abs(a[0]-b[0])+std::abs(a[1]-b[1])+std::abs(a[2]-b[2]);}
+template<class Read,class Prepare,class Pick>
+void exerciseInterpolatedUv(Renderer& renderer,Read&& read,Prepare&& prepare,Pick&& pick,unsigned interpolationMode) {
+    constexpr float Inner=.6f,Outer=1.6f,Angle=.65f,Center=.9f;
+    const std::string kind=interpolationMode==1?"Circular":"Quad";
+    std::array<std::shared_ptr<ModelAsset>,2> wedges;
+    for(unsigned diagonal=0;diagonal<wedges.size();++diagonal) {
+        auto asset=quad();asset->id=kind+"-uv-diagonal-"+std::to_string(diagonal);asset->bounds={};
+        auto& primitive=asset->primitives.front();primitive.vertices.clear();
+        for(const auto polar:std::array<Vec2,4>{{{Inner,-Angle},{Outer,-Angle},{Outer,Angle},{Inner,Angle}}}) {
+            const float radius=polar[0],theta=polar[1],x=radius*std::cos(theta),y=radius*std::sin(theta);
+            ModelVertex vertex;vertex.position={x-Center,y,0};vertex.normal={0,0,1};
+            vertex.uv0={radius-Inner,(theta+Angle)/(2*Angle)};vertex.uv1={.2f,.8f};
+            // A deliberately constant authored frame cannot describe this
+            // radial UV chart; the normal-map path must use corrected UVs.
+            vertex.tangent={1,0,0,1};vertex.uvInterpolationCoordinates={x,y,radius,theta};
+            vertex.uvInterpolationCorrection={1,0,0,1/(2*Angle)};vertex.uvInterpolationMode=1;
+            if(interpolationMode==2) {
+                const float u=radius==Inner?0.f:1.f,v=theta<0?0.f:1.f;
+                vertex.position={2*u-1,2*v-1,0};vertex.uv0={u+.5f*u*v,v};
+                vertex.uvInterpolationCoordinates={u,v,u*v,1};vertex.uvInterpolationCorrection={0,0,.5f,0};vertex.uvInterpolationMode=2;
+            }
+            primitive.vertices.push_back(vertex);math::include(asset->bounds,vertex.position);
+        }
+        primitive.indices=diagonal?std::vector<std::uint32_t>{0,1,3,1,2,3}:std::vector<std::uint32_t>{0,1,2,0,2,3};
+        check(renderer.prepareModel(*asset),renderer.modelStatus());wedges[diagonal]=std::move(asset);
+    }
+    // RG stores continuous polar coordinates; B and alpha contain matching
+    // checker cells. Linear data avoids texture-decoding ambiguity in the CPU
+    // reference. Both color and coverage must be independent of the diagonal.
+    constexpr unsigned Edge=256;
+    std::vector<std::uint8_t> texels(Edge*Edge*4);
+    for(unsigned y=0;y<Edge;++y)for(unsigned x=0;x<Edge;++x) {
+        const auto offset=(y*Edge+x)*4;const auto cell=std::uint8_t(((x/64+y/64)%2)*255);
+        texels[offset]=std::uint8_t(x);texels[offset+1]=std::uint8_t(y);texels[offset+2]=texels[offset+3]=cell;
+    }
+    Texture color{bgfx::createTexture2D(Edge,Edge,false,1,bgfx::TextureFormat::RGBA8,0,
+        bgfx::copy(texels.data(),static_cast<std::uint32_t>(texels.size())))};
+    constexpr std::array<std::uint8_t,4> tiltedPixel{{218,128,218,255}};
+    Texture tilted{bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(tiltedPixel.data(),4))};
+    constexpr std::array<std::uint8_t,4> tiltedYPixel{{128,218,218,255}};
+    Texture tiltedY{bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(tiltedYPixel.data(),4))};
+    check(bgfx::isValid(color.handle)&&bgfx::isValid(tilted.handle)&&bgfx::isValid(tiltedY.handle),"Circular UV fixture texture allocation failed.");
+    const std::uint32_t point=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.background.show=false;
+    std::vector<ModelMaterial> materials(1);auto& material=materials.front();material.metallic=0;material.roughness=1;
+    std::vector<ModelMaterialTextures> bindings(1);bindings[0].flags.fill(point);
+    RenderModelInstance instance;instance.entityId=73;instance.model.asset=wedges[0];instance.materials=&materials;instance.textures=&bindings;
+    instance.shading=MaterialShading::Unlit;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);
+    const auto capture=[&]{renderer.renderGame(scene);return read(renderer.gameViewportTexture());};
+    const auto pixelPoint=[&](int x,int y) {
+        const auto ray=settings.camera.screenRay(float(x)+.5f,float(y)+.5f,{0,0,Size,Size});
+        check(bool(ray)&&std::abs(ray->direction[2])>1e-6f,"Circular UV fixture pixel has no surface ray.");
+        return ray->origin+ray->direction*(-ray->origin[2]/ray->direction[2]);
+    };
+    const auto polarUv=[&](Vec3 p) {
+        if(interpolationMode==2){const float u=(p[0]+1)*.5f,v=(p[1]+1)*.5f;return Vec2{u+.5f*u*v,v};}
+        const float x=p[0]+Center;return Vec2{std::hypot(x,p[1])-Inner,(std::atan2(p[1],x)+Angle)/(2*Angle)};
+    };
+    const auto encoded=[](float value){value=std::clamp(value,0.f,1.f);return int(std::lround(255*(value<=.0031308f?12.92f*value:1.055f*std::pow(value,1/2.4f)-.055f)));};
+    const auto texel=[&](Vec3 p) {
+        const auto uv=polarUv(p);return std::array<unsigned,2>{std::min(255u,unsigned(std::clamp(uv[0],0.f,1.f)*Edge)),
+            std::min(255u,unsigned(std::clamp(uv[1],0.f,1.f)*Edge))};
+    };
+    struct Probe {int x,y;Vec3 point;bool opaque;};std::vector<Probe> probes;
+    for(int y=22;y<Size-22;y+=5)for(int x=35;x<Size-35;x+=4) {
+        const auto p=pixelPoint(x,y);const auto uv=polarUv(p);const float localX=p[0]+Center;
+        if(interpolationMode==1&&(localX<Inner*std::cos(Angle)+.08f||localX>Outer*std::cos(Angle)-.08f||std::abs(std::atan2(p[1],localX))>Angle-.12f))continue;
+        if(interpolationMode==2&&(std::abs(p[0])>.85f||std::abs(p[1])>.85f))continue;
+        bool awayFromEdge=true;
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+            const auto q=polarUv(pixelPoint(x+dx,y+dy));
+            if(q[0]<.05f||q[0]>.95f||q[1]<.05f||q[1]>.95f)awayFromEdge=false;
+            for(unsigned c=0;c<2;++c)if(std::floor(q[c]*4)!=std::floor(uv[c]*4))awayFromEdge=false;
+        }
+        if(awayFromEdge){const auto t=texel(p);probes.push_back({x,y,p,bool((t[0]/64+t[1]/64)%2)});}
+    }
+    check(probes.size()>=16,"Circular UV fixture has too few interior reference pixels.");
+    check(std::any_of(probes.begin(),probes.end(),[](const auto& p){return p.opaque;})&&
+        std::any_of(probes.begin(),probes.end(),[](const auto& p){return !p.opaque;}),"Circular UV fixture lost its checker coverage boundary.");
+    const auto actualAt=[](const DecodedImage& image,const Probe& p) {
+        std::array<int,3> rgb{};
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)for(unsigned c=0;c<3;++c)
+            rgb[c]+=image.rgba[(std::size_t(p.y+dy)*Size+p.x+dx)*4+c];
+        for(auto& value:rgb)value/=9;return rgb;
+    };
+    Vec3 normalMapping{1,1,0};unsigned normalAxis{};
+    const auto expectedAt=[&](const Probe& p,bool normal) {
+        std::array<int,3> rgb{};
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+            const auto q=pixelPoint(p.x+dx,p.y+dy);
+            if(normal) {
+                const float radius=std::hypot(q[0]+Center,q[1]),theta=std::atan2(q[1],q[0]+Center);
+                const float rotation=normalMapping[2]*std::numbers::pi_v<float>/180,tilt=std::sqrt(.5f);
+                Vec3 baseU{std::cos(theta),std::sin(theta),0},baseV=Vec3{-std::sin(theta),std::cos(theta),0}*(2*Angle*radius);
+                if(interpolationMode==2) {
+                    const float u=(q[0]+1)*.5f,v=(q[1]+1)*.5f,a=1+.5f*v,b=.5f*u;
+                    baseU={2/a,0,0};baseV={-2*b/a,2,0};
+                }
+                // Invert the final UV Jacobian: dP/dU contains the chart's
+                // radius-dependent angular metric, then Quader orthogonalizes
+                // B against N/T while retaining the final chart's handedness.
+                const auto tangent=math::normalized(baseU*(std::cos(rotation)/normalMapping[0])-
+                    baseV*(std::sin(rotation)/normalMapping[1]));
+                const float sign=normalMapping[0]*normalMapping[1]<0?-1.f:1.f;
+                const auto bitangent=math::cross(Vec3{0,0,1},tangent)*sign;
+                const Vec3 n=(normalAxis?bitangent:tangent)*tilt+Vec3{0,0,tilt};
+                for(unsigned c=0;c<3;++c)rgb[c]+=encoded(n[c]*.5f+.5f);
+            } else {
+                const auto t=texel(q);rgb[0]+=encoded(t[0]/255.f);rgb[1]+=encoded(t[1]/255.f);rgb[2]+=((t[0]/64+t[1]/64)%2)*255;
+            }
+        }
+        for(auto& value:rgb)value/=9;return rgb;
+    };
+    MaterialAsset authored;const auto output=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+    materialOutputNode(authored.graph).output.shading=MaterialShading::Unlit;
+    const auto image=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(authored.graph,image)->texture.image.id="assets/textures/circular-uv-fixture.png";
+    connectMaterialNodes(authored.graph,image,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    const auto graphColor=prepare(authored,color.handle);
+    materialOutputNode(authored.graph).output.blend=MaterialBlend::Mask;
+    connectMaterialNodes(authored.graph,image,MaterialPin::A,output,MaterialPin::OpacityMask);
+    const auto graphMask=prepare(authored,color.handle);
+    MaterialAsset normalAuthored;const auto normalOutput=addMaterialNode(normalAuthored.graph,MaterialNodeKind::Output).id;
+    const auto normalImage=addMaterialNode(normalAuthored.graph,MaterialNodeKind::Texture2D).id;
+    auto* normalDefinition=findMaterialNode(normalAuthored.graph,normalImage);
+    normalDefinition->texture.image.id="assets/textures/circular-uv-normal.png";normalDefinition->texture.role=MaterialTextureRole::Normal;
+    connectMaterialNodes(normalAuthored.graph,normalImage,MaterialPin::Normal,normalOutput,MaterialPin::Normal);
+    const auto normalUv=addMaterialNode(normalAuthored.graph,MaterialNodeKind::UV).id;
+    connectMaterialNodes(normalAuthored.graph,normalUv,MaterialPin::UV,normalImage,MaterialPin::UV);
+    constexpr std::array<Vec3,3> normalMappings{{{1,1,0},{2,.45f,45},{-2,.45f,45}}};
+    std::array<std::array<std::shared_ptr<const PreparedGraphMaterial>,2>,normalMappings.size()> graphNormals;
+    for(unsigned mapping=0;mapping<normalMappings.size();++mapping) {
+        auto& uv=findMaterialNode(normalAuthored.graph,normalUv)->uv;
+        uv.scale={normalMappings[mapping][0],normalMappings[mapping][1],1};uv.rotation={0,0,normalMappings[mapping][2]};
+        graphNormals[mapping][0]=prepare(normalAuthored,tilted.handle);graphNormals[mapping][1]=prepare(normalAuthored,tiltedY.handle);
+    }
+    std::array<DecodedImage,2> fixedDiagonals;
+    for(bool generated:{false,true}) {
+        const std::string mode=kind+(generated?" generated":" fixed");
+        std::array<DecodedImage,2> diagonals;
+        for(unsigned diagonal=0;diagonal<wedges.size();++diagonal) {
+            instance.model.asset=wedges[diagonal];material.alphaMask=false;instance.shading=MaterialShading::Unlit;
+            bindings[0].handles.fill(BGFX_INVALID_HANDLE);bindings[0].handles[0]=color.handle;bindings[0].graph=generated?graphColor:nullptr;
+            renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Albedo);diagonals[diagonal]=capture();
+            if(!generated)fixedDiagonals[diagonal]=diagonals[diagonal];
+            for(const auto& probe:probes) {
+                const auto actual=actualAt(diagonals[diagonal],probe),expected=expectedAt(probe,false);
+                if(difference(actual,expected)<=10)continue;
+                const auto rgb=[](const auto& values){return std::to_string(values[0])+","+std::to_string(values[1])+","+std::to_string(values[2]);};
+                char* directory{};std::size_t length{};_dupenv_s(&directory,&length,"CRIMSON_TEST_CIRCULAR_OUTPUT");
+                if(directory&&*directory) {
+                    const auto output=std::filesystem::path(directory);std::filesystem::create_directories(output);
+                    const auto save=[&](const char* name,const DecodedImage& pixels) {
+                        std::vector<std::uint8_t> png;check(lodepng::encode(png,pixels.rgba,pixels.width,pixels.height)==0,"Cannot encode circular failure PNG.");
+                        std::ofstream file(output/name,std::ios::binary);file.write(reinterpret_cast<const char*>(png.data()),static_cast<std::streamsize>(png.size()));
+                        check(bool(file),"Cannot write circular failure PNG.");
+                    };
+                    save("circular-color-failure.png",diagonals[diagonal]);save("circular-color-fixed-control.png",fixedDiagonals[diagonal]);
+                    std::ofstream detail(output/"circular-color-failure.txt");
+                    detail<<mode<<", diagonal="<<diagonal<<", pixel="<<probe.x<<','<<probe.y
+                        <<", actual="<<rgb(actual)<<", expected="<<rgb(expected)<<", fixed="<<rgb(actualAt(fixedDiagonals[diagonal],probe))<<'\n';
+                    for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                        const auto q=pixelPoint(probe.x+dx,probe.y+dy);const auto uv=polarUv(q);const auto t=texel(q);
+                        const auto offset=(std::size_t(probe.y+dy)*Size+probe.x+dx)*4;
+                        detail<<probe.x+dx<<','<<probe.y+dy<<": UV="<<uv[0]<<','<<uv[1]<<", texel="<<t[0]<<','<<t[1]<<", RGB="
+                            <<unsigned(diagonals[diagonal].rgba[offset])<<','<<unsigned(diagonals[diagonal].rgba[offset+1])<<','<<unsigned(diagonals[diagonal].rgba[offset+2])<<'\n';
+                    }
+                }
+                std::free(directory);
+                check(false,mode+" circular UV color disagrees with analytic polar coordinates, diagonal="+std::to_string(diagonal)+
+                    ", pixel="+std::to_string(probe.x)+","+std::to_string(probe.y)+", actual="+rgb(actual)+", expected="+rgb(expected)+
+                    ", fixed="+rgb(actualAt(fixedDiagonals[diagonal],probe)));
+            }
+            bindings[0].handles[0]=BGFX_INVALID_HANDLE;
+            instance.shading=MaterialShading::StandardPbr;renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Normal);
+            for(unsigned mapping=0;mapping<normalMappings.size();++mapping)for(normalAxis=0;normalAxis<2;++normalAxis) {
+                normalMapping=normalMappings[mapping];material.uvScale={normalMapping[0],normalMapping[1],1};material.uvRotation={0,0,normalMapping[2]};
+                bindings[0].handles[2]=normalAxis?tiltedY.handle:tilted.handle;bindings[0].graph=generated?graphNormals[mapping][normalAxis]:nullptr;
+                const auto normals=capture();
+                for(const auto& probe:probes)
+                    check(difference(actualAt(normals,probe),expectedAt(probe,true))<=8,
+                        mode+" circular UV normal map lost the final material UV frame, diagonal="+std::to_string(diagonal)+
+                        ", mapping="+std::to_string(mapping)+", axis="+std::to_string(normalAxis)+
+                        ", pixel="+std::to_string(probe.x)+","+std::to_string(probe.y));
+            }
+            material.uvScale={1,1,1};material.uvRotation={};
+            bindings[0].handles[2]=BGFX_INVALID_HANDLE;bindings[0].handles[0]=color.handle;bindings[0].graph=generated?graphMask:nullptr;
+            instance.shading=MaterialShading::Unlit;material.alphaMask=true;
+            renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Albedo);const auto coverage=capture();
+            unsigned covered{},holes{};
+            for(const auto& probe:probes) {
+                check(difference(actualAt(coverage,probe),probe.opaque?expectedAt(probe,false):std::array<int,3>{})<=10,
+                    mode+" circular checker color mask lost its analytic boundary.");
+                // A small representative set exercises production Scene ID
+                // picking without turning the material suite into a pick sweep.
+                auto& count=probe.opaque?covered:holes;if(count>=2)continue;++count;
+                check(pick(scene,probe.point,PickMode::Selection)==(probe.opaque?instance.entityId:0),
+                    mode+" circular checker color and picking masks disagree.");
+            }
+        }
+        for(const auto& probe:probes)check(difference(actualAt(diagonals[0],probe),actualAt(diagonals[1],probe))<=3,
+            mode+" circular UV interpolation changed with the quad triangulation.");
+    }
+    renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+    std::cerr<<"[material mapping] "<<kind<<" UV analytic color, final-UV normal frames (both axes, rotated/anisotropic/mirrored) and picking: "
+        <<probes.size()<<" reference pixels, both diagonals and material paths.\n"<<std::flush;
+}
+template<class Read>
+void captureQuaderCircularUv(Renderer& renderer,Read&& read) {
+    const auto setting=[](const char* name) {
+        char* value{};std::size_t length{};
+        check(_dupenv_s(&value,&length,name)==0,"Cannot read circular UV diagnostic environment.");
+        const std::string text=value?value:"";std::free(value);return text;
+    };
+    auto project=std::filesystem::path(setting("CRIMSON_TEST_QUADER_PROJECT"));if(project.empty())return;
+    const auto outputRoot=std::filesystem::path(setting("CRIMSON_TEST_CIRCULAR_OUTPUT"));
+    check(!outputRoot.empty(),"CRIMSON_TEST_CIRCULAR_OUTPUT is required for the opt-in Quader capture.");
+    auto meshList=setting("CRIMSON_TEST_CIRCULAR_MESH");if(meshList.empty())meshList="Stairs_2";
+    std::vector<std::string> meshNames;std::istringstream names(meshList);std::string meshName;
+    while(std::getline(names,meshName,',')) {
+        const auto first=meshName.find_first_not_of(" \t"),last=meshName.find_last_not_of(" \t");
+        check(first!=std::string::npos,"The UV diagnostic mesh list contains an empty name.");
+        meshNames.push_back(meshName.substr(first,last-first+1));
+        check(meshNames.back().find_first_of("/\\:")==std::string::npos&&meshNames.back()!="."&&meshNames.back()!="..",
+            "A UV diagnostic mesh name cannot contain a path.");
+    }
+    check(!meshNames.empty(),"The UV diagnostic mesh list is empty.");
+    if(std::filesystem::is_directory(project)) {
+        std::filesystem::path manifest;
+        for(const auto& entry:std::filesystem::directory_iterator(project))if(entry.is_regular_file()&&entry.path().extension()==".qproj") {
+            check(manifest.empty(),"The diagnostic project directory contains multiple .qproj files.");manifest=entry.path();
+        }
+        check(!manifest.empty(),"The diagnostic project directory has no .qproj file.");project=std::move(manifest);
+    }
+    constexpr const char* SceneId="a445c956-38bf-4b04-bb2e-72e2d628c6c4";
+    const auto source=readQuaderScene(project,SceneId);
+    auto engine=std::filesystem::path(setting("CRIMSON_TEST_CIRCULAR_ENGINE"));
+    if(engine.empty())engine=std::filesystem::temp_directory_path().root_path()/
+        ("ccuv-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(engine);
+    QuaderPrepareOptions options;options.projectRoot=engine;options.syncLights=false;
+    const auto prepared=prepareQuaderImport(*source,options);
+    for(const auto& meshName:meshNames) {
+    const auto output=meshNames.size()>1?outputRoot/meshName:outputRoot;
+    std::filesystem::create_directories(output);
+    const auto native=std::find_if(source->meshes.begin(),source->meshes.end(),[&](const auto& mesh){return mesh.name==meshName;});
+    check(native!=source->meshes.end(),"The diagnostic scene has no mesh named "+meshName+".");
+    const auto sourceCircular=std::count_if(native->vertices.begin(),native->vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode==1;});
+    const auto sourceQuad=std::count_if(native->vertices.begin(),native->vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode==2;});
+    check(sourceCircular+sourceQuad>0,meshName+" has no native analytic UV interpolation payload.");
+    const auto occurrence=std::find_if(prepared.meshes.begin(),prepared.meshes.end(),[&](const auto& mesh){return mesh.name==meshName;});
+    check(occurrence!=prepared.meshes.end(),"Preparing the diagnostic scene lost "+meshName+".");
+    const auto found=std::find_if(prepared.preparedModels.begin(),prepared.preparedModels.end(),[&](const auto& model){return model->id==occurrence->modelId;});
+    check(found!=prepared.preparedModels.end(),meshName+" has no prepared model package.");
+    auto after=std::make_shared<ModelAsset>(**found);after->id+="-circular-gpu-after";after->stream.reset();
+    auto before=std::make_shared<ModelAsset>(*after);before->id+="-disabled";
+    std::size_t vertices{},triangles{},active{},circular{},quadVertices{};Vec2 uvMin{},uvMax{};bool first=true;
+    for(std::size_t p=0;p<after->primitives.size();++p) {
+        const auto& corrected=after->primitives[p];auto& disabled=before->primitives[p];
+        check(corrected.indices==disabled.indices,"The comparison changed "+meshName+" indices.");
+        triangles+=corrected.indices.size()/3;vertices+=corrected.vertices.size();
+        for(std::size_t i=0;i<corrected.vertices.size();++i) {
+            const auto& vertex=corrected.vertices[i];active+=vertex.uvInterpolationMode!=0;
+            circular+=vertex.uvInterpolationMode==1;quadVertices+=vertex.uvInterpolationMode==2;
+            disabled.vertices[i].uvInterpolationCorrection={};disabled.vertices[i].uvInterpolationCoordinates={};disabled.vertices[i].uvInterpolationMode=0;
+            check(disabled.vertices[i].position==vertex.position&&disabled.vertices[i].normal==vertex.normal&&
+                disabled.vertices[i].uv0==vertex.uv0,"Disabling the UV correction changed source geometry or corner UVs.");
+            if(first){uvMin=uvMax=vertex.uv0;first=false;}
+            for(unsigned c=0;c<2;++c){uvMin[c]=std::min(uvMin[c],vertex.uv0[c]);uvMax[c]=std::max(uvMax[c],vertex.uv0[c]);}
+        }
+    }
+    check(active>0&&triangles==native->indices.size()/3,"The prepared "+meshName+" lost analytic payload or triangles.");
+    check(renderer.prepareModel(*before)&&renderer.prepareModel(*after),renderer.modelStatus());
+    constexpr std::uint16_t CaptureSize=512,TextureSize=256;
+    std::vector<std::uint8_t> texels(TextureSize*TextureSize*4);
+    for(unsigned y=0;y<TextureSize;++y)for(unsigned x=0;x<TextureSize;++x) {
+        const auto offset=(y*TextureSize+x)*4;const bool cell=(x/32+y/32)%2;
+        texels[offset]=cell?230:35;texels[offset+1]=cell?185:70;texels[offset+2]=cell?60:210;texels[offset+3]=255;
+    }
+    Texture checker{bgfx::createTexture2D(TextureSize,TextureSize,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,
+        bgfx::copy(texels.data(),static_cast<std::uint32_t>(texels.size())))};
+    constexpr std::array<std::uint8_t,4> tiltedPixel{{218,128,218,255}};
+    Texture tilted{bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(tiltedPixel.data(),4))};
+    check(bgfx::isValid(checker.handle)&&bgfx::isValid(tilted.handle),meshName+" diagnostic texture allocation failed.");
+    std::vector<ModelMaterial> materials(after->materials.size());std::vector<ModelMaterialTextures> bindings(materials.size());
+    const float uvScale=8/std::max({uvMax[0]-uvMin[0],uvMax[1]-uvMin[1],.001f});
+    for(std::size_t i=0;i<materials.size();++i) {
+        materials[i].metallic=0;materials[i].roughness=1;materials[i].uvScale={uvScale,uvScale,1};
+        bindings[i].handles[0]=checker.handle;bindings[i].handles[2]=tilted.handle;
+        bindings[i].flags.fill(BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT);
+    }
+    RenderModelInstance instance;instance.entityId=91;instance.model.asset=after;instance.model.transform=native->transform;
+    instance.materials=&materials;instance.textures=&bindings;instance.shading=MaterialShading::StandardPbr;
+    const auto worldBounds=math::transformBounds(after->bounds,instance.model.transform);
+    check(worldBounds.valid,meshName+" diagnostic has invalid world bounds.");
+    const auto center=(worldBounds.minimum+worldBounds.maximum)*.5;
+    const auto radius=std::max(.1,math::length(worldBounds.maximum-worldBounds.minimum)*.5);
+    SceneSettings settings;settings.camera.target=center;
+    settings.camera.position=center+math::normalized(Vec3{1.1f,1.5f,1.2f})*(radius*2.1);
+    settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;
+    settings.camera.nearPlane=float(std::max(.005,radius*.001));settings.camera.farPlane=float(std::max(2048.,radius*10));
+    settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={.055f,.055f,.055f};settings.environment.background.show=false;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);
+    renderer.resizeGameViewport(CaptureSize,CaptureSize);
+    const auto save=[&](const char* name,const DecodedImage& pixels) {
+        std::vector<std::uint8_t> png;check(lodepng::encode(png,pixels.rgba,pixels.width,pixels.height)==0,"Cannot encode "+meshName+" PNG.");
+        std::ofstream file(output/name,std::ios::binary);file.write(reinterpret_cast<const char*>(png.data()),static_cast<std::streamsize>(png.size()));
+        check(bool(file),"Cannot save "+meshName+" PNG.");
+    };
+    std::array<std::size_t,2> changedPixels{};
+    for(unsigned mode=0;mode<2;++mode) {
+        renderer.setDebugView(RenderViewPurpose::Game,mode?RenderDebugView::Normal:RenderDebugView::Albedo);
+        std::array<DecodedImage,2> images;
+        for(unsigned corrected=0;corrected<2;++corrected) {
+            instance.model.asset=corrected?after:before;
+            // Readback drains each frame. Repeat once to make the captured
+            // frame independent of resize/resource publication latency.
+            for(unsigned warm=0;warm<2;++warm){renderer.renderGame(scene);images[corrected]=read(renderer.gameViewportTexture(),CaptureSize,CaptureSize);}
+            save(mode?(corrected?"stairs-normal-after.png":"stairs-normal-before.png"):
+                (corrected?"stairs-uv-after.png":"stairs-uv-before.png"),images[corrected]);
+        }
+        for(std::size_t pixel=0;pixel<images[0].rgba.size();pixel+=4) {
+            unsigned delta{};for(unsigned c=0;c<3;++c)delta+=unsigned(std::abs(int(images[0].rgba[pixel+c])-int(images[1].rgba[pixel+c])));
+            changedPixels[mode]+=delta>8;
+        }
+        check(changedPixels[mode]>20,meshName+(mode?" normal capture did not exercise circular UV derivatives.":
+            " color capture did not exercise circular UV interpolation."));
+    }
+    std::ofstream report(output/"stairs-capture.txt");report<<std::setprecision(9)
+        <<"Project: "<<project.generic_string()<<"\nScene: "<<SceneId<<"\nMesh: "<<meshName<<"\nViewport: 512 x 512\nBackend: "
+        <<(selectedTestGraphicsBackend()==GraphicsBackend::Direct3D11?"DX11":"DX12")<<"\n"
+        <<"Geometry vertices: "<<vertices<<"\nTriangles: "<<triangles<<"\nNative circular vertices: "<<sourceCircular<<"\nNative quad vertices: "<<sourceQuad
+        <<"\nPrepared circular vertices: "<<circular<<"\nPrepared quad vertices: "<<quadVertices
+        <<"\nUV diagnostic scale: "<<uvScale<<"\nChanged color pixels: "<<changedPixels[0]<<"\nChanged normal pixels: "<<changedPixels[1]
+        <<"\nCamera eye: "<<settings.camera.position[0]<<", "<<settings.camera.position[1]<<", "<<settings.camera.position[2]
+        <<"\nCamera target: "<<center[0]<<", "<<center[1]<<", "<<center[2]
+        <<"\nVertical FOV: 45\nNear: "<<settings.camera.nearPlane<<"\nFar: "<<settings.camera.farPlane
+        <<"\nWorld transform (column-major):";
+    for(const auto value:native->transform)report<<' '<<value;
+    report<<"\nEngine diagnostic root: "<<engine.generic_string()<<"\nBefore clears UV interpolation mode, coordinates and coefficients; positions, normals, indices and corner UVs remain identical.\n";
+    check(bool(report),"Cannot save "+meshName+" capture metadata.");
+    renderer.resizeGameViewport(Size,Size);renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+    std::cerr<<"[material mapping] Actual "<<meshName<<" capture: "<<circular<<" circular / "<<quadVertices<<" quad vertices, "<<triangles<<" triangles, "
+        <<changedPixels[0]<<" color / "<<changedPixels[1]<<" normal pixels changed.\n"<<std::flush;
+    }
+}
 template<class Read,class Prepare>
 void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
@@ -614,13 +1072,16 @@ void exerciseImageAdjustmentsAndGrunge(Renderer& renderer,const std::shared_ptr<
 }
 void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     // Outstanding readback destinations must outlive Renderer on failure.
-    std::vector<std::shared_ptr<DecodedImage>> destinations;ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
+    std::vector<std::shared_ptr<DecodedImage>> destinations;std::vector<std::shared_ptr<BrdfReadback>> brdfDestinations;
+    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
     TextureStreamer grungeTextures(resources,{});renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
     ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=902;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.5f,.5f,.5f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();};
+    std::cerr<<"[material mapping] Grazing shading-normal BRDF continuity.\n"<<std::flush;
+    exerciseGrazingBrdf(config,[&]{tick();return frame;},brdfDestinations);
     const auto read=[&](bgfx::TextureHandle target,std::uint16_t width=Size,std::uint16_t height=Size){
         Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Mapping readback allocation failed.");
@@ -877,6 +1338,10 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
         for(unsigned i=0;i<120 && !result;++i){tick();result=renderer.pollPick(frame);}
         check(bool(result),"Instance-opacity pick timed out.");return result->entityId;
     };
+    std::cerr<<"[material mapping] Analytic circular UV interpolation.\n"<<std::flush;
+    exerciseInterpolatedUv(renderer,read,prepare,pickScene,1);
+    exerciseInterpolatedUv(renderer,read,prepare,pickScene,2);
+    captureQuaderCircularUv(renderer,read);
     std::cerr<<"[material mapping] Per-view model instance opacity.\n"<<std::flush;
     exerciseInstanceOpacity(renderer,mesh,read,prepare,pickScene);
     std::cerr<<"[material mapping] Image adjustments and generated Grunge.\n"<<std::flush;

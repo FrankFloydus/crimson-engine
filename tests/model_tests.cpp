@@ -72,6 +72,90 @@ struct Triangle {
     }
 };
 
+void uvInterpolationAttributes(const fs::path& base) {
+    using crimson::Vec4;
+    const std::vector<Vec4> coordinates{{1,0,1,0},{0,2,2,1.57079637f},{1,1,1.41421356f,.78539816f},{},{},{}};
+    const Vec4 coefficient{2,.3f,-.5f,1.25f};const std::vector<Vec4> coefficients{coefficient,coefficient,coefficient,{},{},{}};
+    const std::vector<float> modes{1,1,1,0,0,0};
+    Triangle interleaved(true,6);interleaved.addAttribute("TEXCOORD_0",std::vector<std::array<float,2>>(6,{.25f,.75f}),"VEC2");
+    Bytes packed;for(std::size_t vertex=0;vertex<coordinates.size();++vertex){append(packed,coordinates[vertex]);append(packed,coefficients[vertex]);}
+    const auto view=interleaved.view(packed,8*sizeof(float));
+    interleaved.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_COORD"]=interleaved.accessor(view,6,"VEC4");
+    interleaved.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_COEFF"]=interleaved.accessor(view,6,"VEC4",5126,4*sizeof(float));
+    interleaved.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",modes,"SCALAR");
+    const auto source=interleaved.save(base/"interleaved");const auto asset=crimson::importModelPackage(source,base/"project");
+    const auto verify=[&](const ModelAsset& value){const auto& vertices=value.primitives.at(0).vertices;require(vertices.size()==6,"Circular attributes changed source correspondence");
+        for(std::size_t vertex=0;vertex<vertices.size();++vertex){require(vertices[vertex].uvInterpolationCoordinates==coordinates[vertex]&&vertices[vertex].uvInterpolationCorrection==coefficients[vertex]&&vertices[vertex].uvInterpolationMode==modes[vertex],
+            "Circular attributes were dropped, flipped or reordered");near(vertices[vertex].uv0[1],.75f);}};
+    verify(*asset);verify(*crimson::loadModelPackage(asset->id,base/"project"));
+    auto deformed=*asset;deformed.primitives[0]=crimson::deformModelPrimitive(*asset,0,0,crimson::evaluateModelPose(*asset));verify(deformed);
+
+    Triangle sparse(false,6);const std::array<std::array<float,3>,3> secondTriangle{{{2,0,0},{3,0,0},{2,1,0}}};
+    std::memcpy(sparse.bytes.data()+3*3*sizeof(float),secondTriangle.data(),sizeof(secondTriangle));
+    sparse.addAttribute("TEXCOORD_0",std::vector<std::array<float,2>>(6,{.25f,.75f}),"VEC2");
+    const auto indices=sparse.view(Bytes{0,1,2});
+    const auto sparseAttribute=[&]<class T>(const char* semantic,const std::vector<T>& values,const char* type){
+        Bytes encoded;for(std::size_t vertex=0;vertex<3;++vertex)append(encoded,values[vertex]);
+        const auto valueView=sparse.view(encoded),accessor=sparse.json["accessors"].size();
+        sparse.json["accessors"].push_back({{"count",6},{"type",type},{"componentType",5126},
+            {"sparse",{{"count",3},{"indices",{{"bufferView",indices},{"componentType",5121}}},{"values",{{"bufferView",valueView}}}}}});
+        sparse.primitive()["attributes"][semantic]=accessor;
+    };
+    sparseAttribute("_CRIMSON_UV_INTERPOLATION_COORD",coordinates,"VEC4");sparseAttribute("_CRIMSON_UV_INTERPOLATION_COEFF",coefficients,"VEC4");sparseAttribute("_CRIMSON_UV_INTERPOLATION_MODE",modes,"SCALAR");
+    verify(*crimson::importModelPackage(sparse.save(base/"sparse"),base/"sparse-project"));
+
+    const auto reject=[&](Triangle fixture,const char* name,const char* error){rejects([&]{crimson::importModelPackage(fixture.save(base/name),base/"invalid-project");},error);};
+    auto unpaired=interleaved;unpaired.primitive()["attributes"].erase("_CRIMSON_UV_INTERPOLATION_COEFF");reject(unpaired,"unpaired","must be paired");
+    auto absentMode=interleaved;absentMode.primitive()["attributes"].erase("_CRIMSON_UV_INTERPOLATION_MODE");reject(absentMode,"missing-mode","paired with their mode");
+    auto absentUv=interleaved;absentUv.primitive()["attributes"].erase("TEXCOORD_0");reject(absentUv,"missing-uv","require UV0");
+    auto malformed=interleaved;malformed.json["accessors"][malformed.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_COORD"].get<std::size_t>()]["type"]="VEC3";
+    reject(malformed,"shape","matching FLOAT VEC4");
+    malformed=interleaved;malformed.json["accessors"][malformed.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_COORD"].get<std::size_t>()]["componentType"]=5123;
+    malformed.json["accessors"][malformed.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_COORD"].get<std::size_t>()]["normalized"]=true;
+    reject(malformed,"normalized","matching FLOAT VEC4");
+    auto mixed=coordinates;mixed[0]={};Triangle mixedTriangle; mixedTriangle.addAttribute("TEXCOORD_0",std::vector<std::array<float,2>>(3),"VEC2");
+    mixedTriangle.addAttribute("_CRIMSON_UV_INTERPOLATION_COORD",std::vector<Vec4>{mixed[0],mixed[1],mixed[2]},"VEC4");
+    mixedTriangle.addAttribute("_CRIMSON_UV_INTERPOLATION_COEFF",std::vector<Vec4>{{},coefficient,coefficient},"VEC4");
+    mixedTriangle.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{0,1,1},"SCALAR");
+    reject(mixedTriangle,"mixed","one interpolation field");
+    auto changed=coefficients;changed[0][0]+=1;auto different=interleaved;different.addAttribute("_CRIMSON_UV_INTERPOLATION_COEFF",changed,"VEC4");
+    reject(different,"different-coefficients","one interpolation field");
+    changed=coefficients;changed[0][0]=std::numeric_limits<float>::infinity();auto nonfinite=interleaved;nonfinite.addAttribute("_CRIMSON_UV_INTERPOLATION_COEFF",changed,"VEC4");
+    reject(nonfinite,"nonfinite","nonfinite vertex");
+
+    const std::vector<Vec4> quadCoordinates{{0,0,0,1},{1,0,-.2f,1},{0,1,0,1},{},{},{}};
+    auto quad=interleaved;quad.addAttribute("_CRIMSON_UV_INTERPOLATION_COORD",quadCoordinates,"VEC4");
+    quad.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{2,2,2,0,0,0},"SCALAR");
+    const auto quadAsset=crimson::importModelPackage(quad.save(base/"quad"),base/"quad-project");
+    for(std::size_t vertex=0;vertex<quadCoordinates.size();++vertex)require(quadAsset->primitives[0].vertices[vertex].uvInterpolationCoordinates==quadCoordinates[vertex]&&
+        quadAsset->primitives[0].vertices[vertex].uvInterpolationCorrection==coefficients[vertex]&&quadAsset->primitives[0].vertices[vertex].uvInterpolationMode==(vertex<3?2.f:0.f),
+        "Quad interpolation lost its mode or nonpositive coordinate Z.");
+    auto bothCoordinates=coordinates,bothCoefficients=coefficients;
+    for(std::size_t vertex=0;vertex<3;++vertex){bothCoordinates[vertex+3]=quadCoordinates[vertex];bothCoefficients[vertex+3]=coefficient;}
+    auto both=interleaved;both.addAttribute("_CRIMSON_UV_INTERPOLATION_COORD",bothCoordinates,"VEC4");both.addAttribute("_CRIMSON_UV_INTERPOLATION_COEFF",bothCoefficients,"VEC4");
+    both.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{1,1,1,2,2,2},"SCALAR");
+    const auto bothAsset=crimson::importModelPackage(both.save(base/"both-modes"),base/"both-project");
+    for(std::size_t vertex=0;vertex<6;++vertex)require(bothAsset->primitives[0].vertices[vertex].uvInterpolationMode==(vertex<3?1.f:2.f),"Separate circular/quad triangles could not share a primitive.");
+    auto mixedMode=interleaved;mixedMode.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{1,2,1,0,0,0},"SCALAR");
+    reject(mixedMode,"mixed-mode","one interpolation field");
+    auto invalidMode=interleaved;invalidMode.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{1.5f,1,1,0,0,0},"SCALAR");
+    reject(invalidMode,"fractional-mode","invalid UV interpolation corner");
+    invalidMode=interleaved;invalidMode.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{3,1,1,0,0,0},"SCALAR");
+    reject(invalidMode,"unknown-mode","invalid UV interpolation corner");
+    invalidMode=interleaved;invalidMode.addAttribute("_CRIMSON_UV_INTERPOLATION_MODE",std::vector<float>{0,0,0,0,0,0},"SCALAR");
+    reject(invalidMode,"inactive-attributes","invalid UV interpolation corner");
+    auto modeShape=interleaved;
+    modeShape.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_MODE"]=modeShape.primitive()["attributes"]["_CRIMSON_UV_INTERPOLATION_COORD"];
+    reject(modeShape,"mode-shape","matching FLOAT SCALAR");
+
+    auto legacy=interleaved;auto& attributes=legacy.primitive()["attributes"];
+    attributes["_CRIMSON_CIRCULAR_COORD"]=attributes["_CRIMSON_UV_INTERPOLATION_COORD"];
+    attributes["_CRIMSON_CIRCULAR_COEFF"]=attributes["_CRIMSON_UV_INTERPOLATION_COEFF"];
+    auto ambiguous=legacy;reject(ambiguous,"ambiguous","ambiguous legacy and current");
+    attributes.erase("_CRIMSON_UV_INTERPOLATION_COORD");attributes.erase("_CRIMSON_UV_INTERPOLATION_COEFF");attributes.erase("_CRIMSON_UV_INTERPOLATION_MODE");
+    verify(*crimson::importModelPackage(legacy.save(base/"legacy-circle"),base/"legacy-project"));
+}
+
 void hierarchyAndManagedReopening(const fs::path& base) {
     const auto sources=base/"source"; const auto project=base/"project"; auto fixtures=writeModelFixtures(sources);
     const auto asset=crimson::importModelPackage(fixtures.gltf,project);
@@ -155,6 +239,10 @@ void usedMaterialSlotPresentation(const fs::path& base) {
     Triangle sparse;
     sparse.json["materials"]=Json::array({{{"name","Unused first"}},{{"name","Same name"}},
         {{"name","Unused middle"}},{{"name","Same name"}}});
+    const std::array<std::array<float,4>,4> sourceColors{{{.1f,.2f,.3f,1},{.4f,.5f,.6f,1},{.7f,.8f,.9f,1},{.3f,.6f,.2f,1}}};
+    const std::array<float,4> sourceMetallic{.1f,.25f,.5f,.75f},sourceRoughness{.9f,.7f,.4f,.2f};
+    for(std::size_t slot=0;slot<4;++slot)sparse.json["materials"][slot]["pbrMetallicRoughness"]={
+        {"baseColorFactor",sourceColors[slot]},{"metallicFactor",sourceMetallic[slot]},{"roughnessFactor",sourceRoughness[slot]}};
     sparse.primitive()["material"]=3;
     const auto first=sparse.primitive();auto second=first;second["material"]=1;
     sparse.json["meshes"][0]["primitives"].push_back(second);
@@ -179,6 +267,14 @@ void usedMaterialSlotPresentation(const fs::path& base) {
         "Metadata-only streamed primitives lost their editable material slots.");
     require(multiple->materials.size()==4&&multiple->materialIds.size()==4,
         "Removing the unused loader fallback compacted authored material slots.");
+    const auto checkSourceFactors=[&](const ModelAsset& model) {
+        require(model.materials.size()==4,"Unused source material factors were discarded.");
+        for(std::size_t slot=0;slot<4;++slot){
+            for(std::size_t channel=0;channel<4;++channel)near(model.materials[slot].baseColor[channel],sourceColors[slot][channel]);
+            near(model.materials[slot].metallic,sourceMetallic[slot]);near(model.materials[slot].roughness,sourceRoughness[slot]);
+        }
+    };
+    checkSourceFactors(*multiple);checkSourceFactors(*loadModelPackage(multiple->id,project));
 }
 void materialSlotCompatibility(const fs::path& base) {
     using namespace crimson;
@@ -257,6 +353,30 @@ void sparseAndInterleaved(const fs::path& base) {
     t.bytes[t.json["bufferViews"][indexView]["byteOffset"].get<size_t>()]=3;
     rejects([&]{crimson::importModelPackage(t.save(base/"invalid"),base/"project");},"sparse indices");
     require(packages(base/"project")==count,"Invalid sparse import published a package");
+    Triangle shortTail;Bytes packed;
+    for(const auto& vertexPosition:std::array<std::array<float,3>,3>{{{0,0,0},{1,0,0},{0,1,0}}}) {
+        if(!packed.empty())append(packed,std::array<float,2>{999,888});
+        append(packed,vertexPosition);
+    }
+    const auto shortPosition=shortTail.primitive()["attributes"]["POSITION"].get<std::size_t>();
+    shortTail.json["accessors"][shortPosition]["bufferView"]=shortTail.view(packed,20);
+    const auto shortTailModel=crimson::importModelPackage(shortTail.save(base/"short-tail"),base/"short-tail-project");
+    near(shortTailModel->primitives[0].vertices[1].position[0],1);near(shortTailModel->primitives[0].vertices[2].position[1],1);
+    for(const int component:{5121,5123,5126}) {
+        Triangle rgb;Bytes encoded;
+        for(std::size_t vertex=0;vertex<3;++vertex) {
+            if(component==5121)append(encoded,std::array<std::uint8_t,3>{255,0,128});
+            else if(component==5123)append(encoded,std::array<std::uint16_t,3>{65535,0,32768});
+            else append(encoded,std::array<float,3>{1,0,.5f});
+        }
+        const auto colorAccessor=rgb.accessor(rgb.view(encoded),3,"VEC3",component);
+        rgb.primitive()["attributes"]["COLOR_0"]=colorAccessor;
+        if(component!=5126)rgb.json["accessors"][colorAccessor]["normalized"]=true;
+        const auto named="rgb-"+std::to_string(component);
+        const auto colored=crimson::importModelPackage(rgb.save(base/named),base/(named+"-project"));
+        for(const auto& vertex:colored->primitives[0].vertices){near(vertex.color[0],1);near(vertex.color[1],0);near(vertex.color[3],1);}
+        near(colored->primitives[0].vertices[0].color[2],component==5121?128.f/255:component==5123?32768.f/65535:.5f);
+    }
 }
 void embeddedDataAndSceneChoice(const fs::path& base) {
     Triangle t; t.json["nodes"]=Json::array({{{"mesh",0},{"translation",{4,0,0}}},{{"mesh",0},{"translation",{-4,0,0}}}});
@@ -290,6 +410,30 @@ void generatedTangentsAndOptionalExtensions(const fs::path& base) {
     require(crimson::loadModelPackage(asset->id,base/"project")->images.size()==3,"Optional image package not self-contained");
     json["extensionsRequired"]={"KHR_texture_basisu"}; writeJson(fixture.gltf,json);
     rejects([&]{crimson::importModelPackage(fixture.gltf,base/"project");},"required extension");
+}
+void uv1WithoutUv0(const fs::path& base) {
+    using namespace crimson;
+    Triangle triangle;
+    const std::vector<std::array<float,2>> coordinates{{.125f,.25f},{.875f,.25f},{.125f,.75f}};
+    triangle.addAttribute("TEXCOORD_1",coordinates,"VEC2");
+    triangle.json["images"]=Json::array({{{"uri","normal.png"}}});triangle.json["textures"]=Json::array({{{"source",0}}});
+    triangle.json["materials"]=Json::array({{{"name","UV1 only"},
+        {"pbrMetallicRoughness",{{"baseColorTexture",{{"index",0},{"texCoord",1}}}}},
+        {"normalTexture",{{"index",0},{"texCoord",1}}}}});
+    triangle.primitive()["material"]=0;
+    const auto source=triangle.save(base/"source"),project=base/"project";
+    writeBytes(source.parent_path()/"normal.png",png(1,1,Bytes{128,128,255,255}));
+    const auto imported=importModelPackage(source,project);
+    const auto checkUv1=[&](const ModelAsset& asset) {
+        require(asset.primitives.size()==1&&asset.primitives[0].vertices.size()==coordinates.size(),"UV1-only import changed source geometry.");
+        const auto& primitive=asset.primitives[0];
+        require(primitive.uvMask==2&&primitive.tangentUv==1,"Transient UV0 became authored metadata or changed the tangent basis.");
+        require(asset.materials[0].baseColorTexture.texCoord==1&&asset.materials[0].normalTexture.texCoord==1,
+            "UV1-only material texture selection changed.");
+        for(std::size_t vertex=0;vertex<coordinates.size();++vertex){near(primitive.vertices[vertex].uv1[0],coordinates[vertex][0]);near(primitive.vertices[vertex].uv1[1],coordinates[vertex][1]);}
+    };
+    checkUv1(*imported);require(warning(*imported,"MikkTSpace"),"UV1-only normal-map tangents were not generated.");
+    fs::rename(base/"source",base/"source-removed");checkUv1(*loadModelPackage(imported->id,project));
 }
 void animationSkinAndMorph(const fs::path& base) {
     using namespace crimson;
@@ -397,7 +541,7 @@ void animationSkinAndMorph(const fs::path& base) {
     remapped.addAttribute("WEIGHTS_1",std::vector<std::array<float,4>>(4,{.5f,0,0,0}),"VEC4");
     remapped.json["nodes"]=Json::array({{{"mesh",0},{"skin",0}},{{"translation",{0,0,0}}},{{"translation",{2,0,0}}}});
     remapped.json["scenes"][0]["nodes"]={0,1,2};remapped.json["skins"]=Json::array({{{"joints",{1,2}}}});
-    Bytes indices;for(std::uint16_t index:{0,1,2,3,1,2})append(indices,index);remapped.primitive()["indices"]=remapped.accessor(remapped.view(indices),6,"SCALAR",5123);
+    Bytes indices;for(const auto index:std::array<std::uint16_t,6>{0,1,2,3,1,2})append(indices,index);remapped.primitive()["indices"]=remapped.accessor(remapped.view(indices),6,"SCALAR",5123);
     Bytes morphs;for(const auto& delta:std::array<std::array<float,3>,4>{{{0,0,0},{0,0,0},{0,0,0},{0,0,1}}})append(morphs,delta);
     remapped.primitive()["targets"]=Json::array({{{"POSITION",remapped.accessor(remapped.view(morphs),4,"VEC3")}}});
     remapped.json["meshes"][0]["weights"]={1};
@@ -411,6 +555,179 @@ void animationSkinAndMorph(const fs::path& base) {
     Triangle zero;zero.addAttribute("JOINTS_0",std::vector<std::array<std::uint8_t,4>>(3,{0,0,0,0}),"VEC4",5121);
     zero.addAttribute("WEIGHTS_0",std::vector<std::array<float,4>>(3,{0,0,0,0}),"VEC4");
     rejects([&]{importModelPackage(zero.save(base/"zero-source"),base/"zero-project");},"zero total weight");
+}
+void sourceSemanticPreservation(const fs::path& base) {
+    using namespace crimson;
+    Triangle triangle;
+    triangle.addAttribute("TANGENT",std::vector<std::array<float,4>>(3,{1,0,0,1}),"VEC4");
+    triangle.addAttribute("JOINTS_0",std::vector<std::array<std::uint16_t,4>>(3,{0,1,2,3}),"VEC4",5123);
+    triangle.addAttribute("WEIGHTS_0",std::vector<std::array<float,4>>(3,{.05f,.1f,.15f,.2f}),"VEC4");
+    triangle.addAttribute("JOINTS_1",std::vector<std::array<std::uint16_t,4>>(3,{4,5,6,7}),"VEC4",5123);
+    triangle.addAttribute("WEIGHTS_1",std::vector<std::array<float,4>>(3,{.05f,.1f,.15f,.2f}),"VEC4");
+    const auto vec3=[&](std::array<float,3> value) {
+        Bytes encoded;for(std::size_t vertex=0;vertex<3;++vertex)append(encoded,value);
+        return triangle.accessor(triangle.view(encoded),3,"VEC3");
+    };
+    triangle.primitive()["targets"]=Json::array({
+        {{"POSITION",vec3({0,0,1})},{"NORMAL",vec3({.1f,0,0})},{"TANGENT",vec3({0,.1f,0})}},
+        {{"POSITION",vec3({1,0,0})}}});
+    triangle.json["meshes"][0]["weights"]={.25,-.5};
+    const std::array<float,16> affine{1,.2f,0,0, .3f,1,0,0, 0,0,-1,0, 2,3,4,1};
+    triangle.json["nodes"]=Json::array({{{"name","Affine root"},{"matrix",affine},{"children",{1,2,3,4,5,6,7,8,9,10}}},
+        {{"name","Twin"},{"mesh",0},{"skin",0},{"weights",{.5,-.25}}},
+        {{"name","Twin"},{"mesh",0},{"skin",0},{"weights",{-.5,.75}}}});
+    for(std::size_t joint=0;joint<8;++joint)
+        triangle.json["nodes"].push_back({{"name","Joint "+std::to_string(joint)},{"translation",{float(joint),0,0}}});
+    triangle.json["skins"]=Json::array({{{"joints",{3,4,5,6,7,8,9,10}},{"skeleton",0}}});
+    const auto values=[&](const std::vector<float>& data,const char* type,std::size_t components) {
+        Bytes encoded;for(float value:data)append(encoded,value);
+        return triangle.accessor(triangle.view(encoded),data.size()/components,type);
+    };
+    const auto times=values({0,2},"SCALAR",1);
+    triangle.json["animations"]=Json::array({
+        {{"name","Distinct twins"},{"samplers",Json::array({
+            {{"input",times},{"output",values({0,0,0,2,0,0},"VEC3",3)}},
+            {{"input",times},{"output",values({0,0,0,0,4,0},"VEC3",3)}}})},
+            {"channels",Json::array({{{"sampler",0},{"target",{{"node",1},{"path","translation"}}}},
+                {{"sampler",1},{"target",{{"node",2},{"path","translation"}}}}})}},
+        {{"name","Signed cubic morph"},{"samplers",Json::array({{{"input",times},{"interpolation","CUBICSPLINE"},
+            {"output",values({0,0, -.5f,1, 1,0, 0,-1, .5f,-1, 0,0},"SCALAR",1)}}})},
+            {"channels",Json::array({{{"sampler",0},{"target",{{"node",1},{"path","weights"}}}}})}}});
+    const auto project=base/"project";
+    const auto asset=importModelPackage(triangle.save(base/"source"),project);
+    require(asset->nodes.size()==11&&asset->nodes[1].name=="Twin"&&asset->nodes[2].name=="Twin",
+        "Imported node identities were merged or renamed to disambiguate duplicate names.");
+    require(asset->nodes[0].matrixAuthored,"Authored affine hierarchy was converted to decomposed TRS.");
+    for(std::size_t component=0;component<affine.size();++component)near(asset->nodes[0].local[component],affine[component]);
+    require(asset->draws.size()==2&&asset->meshes.size()==1,"Shared mesh placement was flattened or duplicated.");
+    const auto twins=evaluateModelPose(*asset,0,1,false);
+    near(twins.localTransforms[1][12],1);near(twins.localTransforms[1][13],0);
+    near(twins.localTransforms[2][12],0);near(twins.localTransforms[2][13],2);
+    near(asset->meshes[0].weights[0],.25f);near(asset->meshes[0].weights[1],-.5f);
+    const auto bind=evaluateModelPose(*asset);
+    near(bind.nodeWeights[1][0],.5f);near(bind.nodeWeights[1][1],-.25f);
+    near(bind.nodeWeights[2][0],-.5f);near(bind.nodeWeights[2][1],.75f);
+    require(asset->animations[1].channels.size()==1&&asset->animations[1].channels[0].components==2&&
+        asset->animations[1].channels[0].interpolation==ModelAnimationInterpolation::CubicSpline,
+        "Multi-target cubic morph metadata lost its source interpolation or component count.");
+    const auto start=evaluateModelPose(*asset,1,0,false),middle=evaluateModelPose(*asset,1,1,false),end=evaluateModelPose(*asset,1,2,false);
+    near(start.nodeWeights[1][0],-.5f);near(start.nodeWeights[1][1],1);
+    // At t=1 over a two-second segment, the authored tangent terms each add .25.
+    near(middle.nodeWeights[1][0],.25f);near(middle.nodeWeights[1][1],.25f);
+    near(end.nodeWeights[1][0],.5f);near(end.nodeWeights[1][1],-1);
+    near(middle.nodeWeights[2][0],-.5f);near(middle.nodeWeights[2][1],.75f);
+    const auto& primitive=asset->primitives[0];
+    require(primitive.skinWeights.size()==3&&primitive.morphTargets.size()==2,
+        "Imported skin or morph vertex declarations were lost.");
+    for(const auto& vertex:primitive.skinWeights) {
+        std::array<float,8> jointWeights{};
+        for(std::size_t influence=0;influence<MaximumModelJointInfluences;++influence) {
+            require(vertex.joints[influence]<jointWeights.size(),"Imported influence references the wrong joint palette.");
+            jointWeights[vertex.joints[influence]]+=vertex.weights[influence];
+        }
+        for(std::size_t joint=0;joint<8;++joint)near(jointWeights[joint],.05f*float(joint%4+1));
+    }
+    require(primitive.morphTargets[0].normals.size()==3&&primitive.morphTargets[0].tangents.size()==3,
+        "Authored morph normal or tangent deltas were dropped.");
+    near(primitive.morphTargets[0].normals[0][0],.1f);near(primitive.morphTargets[0].tangents[0][1],.1f);
+    fs::rename(base/"source",base/"source-removed");
+    const auto reopened=loadModelPackage(asset->id,project);
+    require(evaluateModelPose(*reopened,1,1,false).signature==middle.signature,
+        "Managed reopening changed duplicate-node or signed cubic-morph semantics.");
+}
+void missingTripoBindTransforms(const fs::path& base) {
+    using namespace crimson;
+    // Tripo's static rig export can omit every node transform while retaining
+    // nonidentity inverse binds. Applying those binds to identity joints twists
+    // the mesh even though POSITION already contains its intended bind shape.
+    const std::array<Mat4,2> jointWorlds{{
+        {0,1,0,0, -2,0,0,0, 0,0,.5f,0, 3,-1,2,1},
+        {0,0,-.5f,0, 0,1.5f,0,0, 2,0,0,0, -2,4,1,1}}};
+    const std::array<Mat4,2> inverseBinds{*math::inverse(jointWorlds[0]),*math::inverse(jointWorlds[1])};
+    Triangle triangle;
+    triangle.json["asset"]["generator"]="Tripo";
+    triangle.addAttribute("JOINTS_0",std::vector<std::array<std::uint8_t,4>>(3,{0,1,0,0}),"VEC4",5121);
+    triangle.addAttribute("WEIGHTS_0",std::vector<std::array<float,4>>{{.8f,.2f,0,0},{.25f,.75f,0,0},{.6f,.4f,0,0}},"VEC4");
+    triangle.json["nodes"]=Json::array({
+        {{"name","Root"},{"children",{1,2}}},{{"name","Mesh"},{"mesh",0},{"skin",0}},
+        {{"name","Joint A"},{"children",{3}}},{{"name","Joint helper"},{"children",{4}}},{{"name","Joint B"}}});
+    triangle.json["skins"]=Json::array({{{"name","Tripo rig"},{"joints",{2,4}},{"skeleton",2}}});
+    const auto setInverseBinds=[](Triangle& fixture,std::size_t skin,const std::array<Mat4,2>& matrices) {
+        Bytes encoded;for(const auto& matrix:matrices)append(encoded,matrix);
+        fixture.json["skins"][skin]["inverseBindMatrices"]=fixture.accessor(fixture.view(encoded),matrices.size(),"MAT4");
+    };
+    setInverseBinds(triangle,0,inverseBinds);
+    const auto checkRecovered=[&](const ModelAsset& asset) {
+        require(asset.nodes.size()==5&&asset.nodes[3].parent==2&&asset.nodes[4].parent==3&&
+            asset.skins.size()==1&&asset.skins[0].joints==std::vector<std::uint32_t>{2,4},
+            "Tripo bind recovery flattened the hierarchy or removed the rig.");
+        require(asset.nodes[2].matrixAuthored&&asset.nodes[4].matrixAuthored&&asset.animations.empty(),
+            "Tripo bind recovery did not retain inferred joint matrices as a static rig.");
+        require(warning(asset,"Recovered missing Tripo skeleton bind transforms"),"Recovered Tripo bind pose has no diagnostic.");
+        const auto pose=evaluateModelPose(asset);
+        const auto geometry=deformModelPrimitive(asset,0,1,pose);
+        const std::array<Vec3,3> expectedPositions{{{0,0,0},{1,0,0},{0,1,0}}};
+        const std::array<std::array<float,2>,3> expectedWeights{{{.8f,.2f},{.25f,.75f},{.6f,.4f}}};
+        require(geometry.vertices.size()==expectedPositions.size()&&asset.primitives[0].skinWeights.size()==expectedPositions.size(),
+            "Tripo bind recovery lost mesh vertices or skin influences.");
+        for(std::size_t joint=0;joint<2;++joint)for(std::size_t component=0;component<16;++component) {
+            near(pose.worldTransforms[joint?4:2][component],jointWorlds[joint][component],2e-5f);
+            near(asset.skins[0].inverseBindMatrices[joint][component],inverseBinds[joint][component],2e-5f);
+            near(pose.skinPalettes[1][joint][component],ModelIdentity[component],2e-5f);
+        }
+        for(std::size_t vertex=0;vertex<expectedPositions.size();++vertex) {
+            const auto world=math::transformPoint(pose.drawTransforms[0],geometry.vertices[vertex].position);
+            for(std::size_t axis=0;axis<3;++axis)near(world[axis],expectedPositions[vertex][axis],2e-5f);
+            near(geometry.vertices[vertex].normal[2],1,2e-5f);
+            std::array<float,2> weightsByJoint{};const auto& weights=asset.primitives[0].skinWeights[vertex];
+            for(std::size_t influence=0;influence<MaximumModelJointInfluences;++influence) {
+                require(weights.joints[influence]<weightsByJoint.size(),"Tripo bind recovery changed a source joint slot.");
+                weightsByJoint[weights.joints[influence]]+=weights.weights[influence];
+            }
+            for(std::size_t joint=0;joint<2;++joint)near(weightsByJoint[joint],expectedWeights[vertex][joint]);
+        }
+        return pose.signature;
+    };
+    const auto source=base/"source"/"tripo.glb",project=base/"project";
+    writeGlb(source,triangle.json,triangle.bytes);const auto original=readBytes(source);
+    const auto imported=importModelPackage(source,project);const auto signature=checkRecovered(*imported);
+    const auto manifestFile=resolveAssetPath(project,imported->id);const auto manifest=readJson(manifestFile);
+    const auto storedOriginal=manifestFile.parent_path()/manifest.at("original").get<std::string>();
+    const auto storedDocument=manifestFile.parent_path()/manifest.at("document").get<std::string>();
+    const auto documentBefore=readBytes(storedDocument);
+    require(readBytes(storedOriginal)==original&&readJson(storedDocument)["nodes"]==triangle.json["nodes"],
+        "Tripo bind recovery rewrote the original source or authored node JSON.");
+    fs::rename(source.parent_path(),base/"source-removed");
+    const auto reopened=loadModelPackage(imported->id,project);
+    require(checkRecovered(*reopened)==signature&&readBytes(storedDocument)==documentBefore&&readBytes(storedOriginal)==original,
+        "Managed reopening changed the recovered Tripo pose or rewrote source data.");
+
+    const auto checkUnchanged=[&](Triangle fixture,const char* name) {
+        const auto asset=importModelPackage(fixture.save(base/name/"source"),base/name/"project");
+        require(!warning(*asset,"Recovered missing Tripo skeleton bind transforms"),
+            "Tripo compatibility recovery changed a rig outside its narrowly recognized export case.");
+        for(const auto& node:asset->nodes)for(std::size_t component=0;component<16;++component)
+            near(node.local[component],ModelIdentity[component]);
+        const auto pose=evaluateModelPose(*asset);
+        for(std::size_t joint=0;joint<2;++joint)for(std::size_t component=0;component<16;++component)
+            near(pose.skinPalettes[1][joint][component],asset->skins[0].inverseBindMatrices[joint][component],2e-5f);
+    };
+    auto other=triangle;other.json["asset"]["generator"]="Another exporter";checkUnchanged(other,"other-generator");
+    auto explicitMesh=triangle;explicitMesh.json["nodes"][1]["matrix"]=ModelIdentity.values;checkUnchanged(explicitMesh,"explicit-mesh-identity");
+    auto explicitJoint=triangle;explicitJoint.json["nodes"][2]["translation"]={0,0,0};checkUnchanged(explicitJoint,"explicit-joint-identity");
+    auto animated=triangle;Bytes times,translations;
+    for(float time:{0.f,1.f})append(times,time);
+    for(const auto& value:std::array<Vec3,2>{{{0,0,0},{1,0,0}}})append(translations,value);
+    const auto input=animated.accessor(animated.view(times),2,"SCALAR"),output=animated.accessor(animated.view(translations),2,"VEC3");
+    animated.json["animations"]=Json::array({{{"samplers",Json::array({{{"input",input},{"output",output}}})},
+        {"channels",Json::array({{{"sampler",0},{"target",{{"node",2},{"path","translation"}}}}})}}});
+    checkUnchanged(animated,"animated");
+    auto missing=triangle;missing.json["skins"][0].erase("inverseBindMatrices");checkUnchanged(missing,"missing-inverse-bind");
+    auto singular=triangle;auto singularBinds=inverseBinds;singularBinds[0]=ModelIdentity;singularBinds[0][0]=0;
+    setInverseBinds(singular,0,singularBinds);checkUnchanged(singular,"singular-inverse-bind");
+    auto conflict=triangle;conflict.json["skins"].push_back(conflict.json["skins"][0]);auto conflictBinds=inverseBinds;conflictBinds[1][12]+=2;
+    setInverseBinds(conflict,1,conflictBinds);conflict.json["nodes"].push_back({{"name","Second mesh"},{"mesh",0},{"skin",1}});
+    conflict.json["nodes"][0]["children"].push_back(5);checkUnchanged(conflict,"conflicting-shared-joint");
 }
 void blendedMaterials(const fs::path& base) {
     using namespace crimson;
@@ -462,6 +779,13 @@ void invalidInputsAndRollback(const fs::path& base) {
     Triangle count; count.json["accessors"][0]["count"]=99999; invalid(count,"count","accessor exceeds");
     Triangle overflow; overflow.json["bufferViews"][0]["byteOffset"]=std::numeric_limits<uint64_t>::max(); invalid(overflow,"overflow","buffer view");
     Triangle nan; const auto quiet=std::numeric_limits<float>::quiet_NaN(); std::memcpy(nan.bytes.data(),&quiet,sizeof(float)); invalid(nan,"nan","nonfinite vertex");
+    Triangle tangent; tangent.addAttribute("TANGENT",std::vector<std::array<float,4>>(3,{1,0,0,.5f}),"VEC4"); invalid(tangent,"tangent-handedness","tangent handedness");
+    Triangle normalCount; normalCount.json["accessors"][normalCount.primitive()["attributes"]["NORMAL"].get<std::size_t>()]["count"]=2;
+    invalid(normalCount,"normal-count","vertex attribute count or shape mismatch");
+    Triangle tangentShape; tangentShape.addAttribute("TANGENT",std::vector<std::array<float,3>>(3,{1,0,0}),"VEC3");
+    invalid(tangentShape,"tangent-shape","vertex attribute count or shape mismatch");
+    Triangle uvShape; uvShape.addAttribute("TEXCOORD_0",std::vector<std::array<float,3>>(3,{0,0,0}),"VEC3");
+    invalid(uvShape,"uv-shape","vertex attribute count or shape mismatch");
     Triangle shortIndices; Bytes shortData{0,1}; shortIndices.primitive()["indices"]=shortIndices.accessor(shortIndices.view(shortData),2,"SCALAR",5121); invalid(shortIndices,"indices","incomplete");
     Triangle badIndices; Bytes badData{0,1,255}; badIndices.primitive()["indices"]=badIndices.accessor(badIndices.view(badData),3,"SCALAR",5121); invalid(badIndices,"out-of-bounds","out of bounds");
     Triangle missing; auto file=missing.save(base/"missing"); fs::remove(file.parent_path()/"triangle.bin");
@@ -490,7 +814,10 @@ int main() {
         hierarchyAndManagedReopening(root/"managed"); trianglesAndIndices(root/"triangles"); usedMaterialSlotPresentation(root/"material-slots");
         materialSlotCompatibility(root/"material-compatibility");
         sparseAndInterleaved(root/"sparse"); embeddedDataAndSceneChoice(root/"data");
-        generatedTangentsAndOptionalExtensions(root/"tangents"); animationSkinAndMorph(root/"animation"); blendedMaterials(root/"transparent");invalidInputsAndRollback(root/"invalid"); uvAndPackageSafety(root/"safety");
+        generatedTangentsAndOptionalExtensions(root/"tangents"); uv1WithoutUv0(root/"uv1-only");
+        uvInterpolationAttributes(root/"circular-uv");
+        animationSkinAndMorph(root/"animation"); sourceSemanticPreservation(root/"semantics"); missingTripoBindTransforms(root/"tripo-bind");
+        blendedMaterials(root/"transparent");invalidInputsAndRollback(root/"invalid"); uvAndPackageSafety(root/"safety");
         fs::remove_all(root); std::cout<<"Model importer checks passed\n"; return 0;
     } catch (const std::exception& error) {
         std::cerr<<"Model importer checks failed: "<<error.what()<<"\nFixtures retained at: "<<root<<'\n'; return 1;

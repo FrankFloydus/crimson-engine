@@ -408,12 +408,32 @@ struct Preparation {
         const auto position=accessor(positions.data(),positions.size()*sizeof(Vec3),positions.size(),"VEC3",5126,34962);accessors[position]["min"]={minimum[0],minimum[1],minimum[2]};accessors[position]["max"]={maximum[0],maximum[1],maximum[2]};
         const auto normal=accessor(normals.data(),normals.size()*sizeof(Vec3),normals.size(),"VEC3",5126,34962);
         const auto uv=accessor(uvs.data(),uvs.size()*sizeof(Vec2),uvs.size(),"VEC2",5126,34962);
+        bool interpolated{};
+        for(const auto& vertex:vertices){
+            require(math::finite(vertex.uvInterpolationCoordinates)&&math::finite(vertex.uvInterpolationCorrection)&&vertex.uvInterpolationMode<=2,
+                "Invalid Quader UV interpolation attributes.");
+            if(vertex.uvInterpolationMode){
+                require(vertex.uvInterpolationMode!=1||vertex.uvInterpolationCoordinates[2]>0,"Quader circular UV coordinates require a positive radius.");
+                interpolated=true;
+            }else require(vertex.uvInterpolationCoordinates==Vec4{}&&vertex.uvInterpolationCorrection==Vec4{},"Inactive Quader UV interpolation carries attributes.");
+        }
+        std::optional<std::size_t> interpolationCoordinate,interpolationCoefficient,interpolationMode;
+        if(interpolated){
+            // Retain native interpolation coordinates independently of Import
+            // Scale. Ordinary meshes keep their established bytes and identity.
+            std::vector<Vec4> coordinates,coefficients;std::vector<float> modes;coordinates.reserve(vertices.size());coefficients.reserve(vertices.size());modes.reserve(vertices.size());
+            for(const auto& vertex:vertices){coordinates.push_back(vertex.uvInterpolationCoordinates);coefficients.push_back(vertex.uvInterpolationCorrection);modes.push_back(float(vertex.uvInterpolationMode));}
+            interpolationCoordinate=accessor(coordinates.data(),coordinates.size()*sizeof(Vec4),coordinates.size(),"VEC4",5126,34962);
+            interpolationCoefficient=accessor(coefficients.data(),coefficients.size()*sizeof(Vec4),coefficients.size(),"VEC4",5126,34962);
+            interpolationMode=accessor(modes.data(),modes.size()*sizeof(float),modes.size(),"SCALAR",5126,34962);
+        }
         Json primitives=Json::array(),gltfMaterials=Json::array(),nativeMaterials=Json::array();
         for(const auto& surface:surfaces){if(!surface.count)continue;require(surface.count%3==0&&std::uint64_t(surface.offset)+surface.count<=indices.size(),"Invalid Quader primitive range.");
             const auto slot=gltfMaterials.size();std::string id=surface.material==UINT32_MAX?DefaultMaterialId:materialIds.at(surface.material);nativeMaterials.push_back(id);
             gltfMaterials.push_back({{"name",id},{"pbrMetallicRoughness",{{"baseColorFactor",{1,1,1,1}},{"metallicFactor",0},{"roughnessFactor",1}}}});
             const auto index=accessor(indices.data()+surface.offset,surface.count*sizeof(std::uint32_t),surface.count,"SCALAR",5125,34963);
             Json attributes{{"POSITION",position},{"NORMAL",normal},{"TEXCOORD_0",uv}};
+            if(interpolated){attributes["_CRIMSON_UV_INTERPOLATION_COORD"]=*interpolationCoordinate;attributes["_CRIMSON_UV_INTERPOLATION_COEFF"]=*interpolationCoefficient;attributes["_CRIMSON_UV_INTERPOLATION_MODE"]=*interpolationMode;}
             primitives.push_back({{"attributes",std::move(attributes)},{"indices",index},{"material",slot},{"mode",4}});}
         if(primitives.empty())return {};
         // The ABI 6 provenance token participates in the established geometry

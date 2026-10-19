@@ -39,7 +39,13 @@ struct QuaderSourceMaterial {
     float uvRotation{};
     std::array<QuaderSourceTexture,4> textures;
 };
-struct QuaderSourceVertex { Vec3 position,normal; Vec2 uv; };
+struct QuaderSourceVertex {
+    Vec3 position,normal; Vec2 uv;
+    // Mode 0 uses ordinary UVs; 1 carries polar interpolation; 2 carries
+    // inverse-bilinear quad interpolation. Coefficients agree per triangle.
+    Vec4 uvInterpolationCoordinates{},uvInterpolationCorrection{};
+    std::uint32_t uvInterpolationMode{};
+};
 struct QuaderSourceSurface { std::uint32_t material{UINT32_MAX},offset{},count{}; };
 enum class QuaderCollision { Disabled,StaticTriangles,Unsupported };
 struct QuaderSourceMesh {

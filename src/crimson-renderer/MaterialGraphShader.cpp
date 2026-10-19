@@ -313,9 +313,10 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         variant.varyingName=particle?"particle.varying.def.sc":"model.varying.def.sc";
         std::ostringstream source;
         source<<((model || particle)?
-            "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal\n":
-            "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal\n");
-        source<<"// crimson-material-graph-generator-v25\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
+            "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal":
+            "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal");
+        if(!particle)source<<", v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode";
+        source<<"\n// crimson-material-graph-generator-v27\n#define CC_GRAPH_SURFACE "<<surface<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
             <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<(surface&&lit)<<"\n";
         source<<"#include <bgfx_shader.sh>\nuniform vec4 u_graphParams[208];\n";
         if(model || particle)source<<"uniform mat4 u_modelNormalMatrix;\nuniform vec4 u_modelUv;\n";

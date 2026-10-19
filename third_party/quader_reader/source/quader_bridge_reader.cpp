@@ -23,6 +23,9 @@
 #include "scene/scene_texture_mapping.hpp"
 #include "scene/scene_transform.hpp"
 
+#include <quader/modeling/neutral/geometry/circular_uv_interpolation.hpp>
+#include <quader/modeling/neutral/geometry/quad_uv_interpolation.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -31,6 +34,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,6 +57,7 @@ struct MeshStorage final {
   std::string name;
   SceneMeshOccurrenceProjectionRecord placement;
   std::vector<QuaderBridgeVertex> vertices;
+  std::vector<QuaderBridgeUvInterpolationVertex> uv_interpolation;
   std::vector<uint32_t> indices;
   std::vector<QuaderBridgeSurface> surfaces;
   uint32_t collision_status = QUADER_BRIDGE_COLLISION_DISABLED;
@@ -161,6 +166,7 @@ int guarded(QuaderBridgeError *error, Callback &&callback) noexcept {
   return static_cast<uint32_t>(value);
 }
 
+
 } // namespace
 
 /** Validated immutable project catalog owned entirely by the reader DLL. */
@@ -216,6 +222,165 @@ namespace {
   scene.materials.push_back({.reference = reference, .id = id});
   scene.material_indices.emplace(key, index);
   return index;
+}
+
+std::vector<QuaderBridgeUvInterpolationVertex>
+build_circular_mesh_uv_interpolation(const MeshGeometryPayload &geometry) {
+  if (geometry.circular_uv_interpolations.empty() || geometry.indices.empty() ||
+      geometry.indices.size() % 3u != 0u ||
+      std::ranges::any_of(geometry.indices, [&](auto index) {
+        return index >= geometry.vertices.size();
+      })) return {};
+  std::vector<bool> valid_charts;
+  valid_charts.reserve(geometry.circular_uv_interpolations.size());
+  for (const auto &chart : geometry.circular_uv_interpolations) {
+    valid_charts.push_back(quader_geometry::valid_circular_uv_frame(
+        quader_geometry::QVec3f(chart.center),
+        quader_geometry::QVec3f(chart.axis_u),
+        quader_geometry::QVec3f(chart.axis_v), chart.uv_from_polar));
+  }
+  for (std::size_t triangle = 0u; triangle < geometry.indices.size(); triangle += 3u) {
+    const std::array descriptors{
+        geometry.vertices[geometry.indices[triangle]].circular_uv_index,
+        geometry.vertices[geometry.indices[triangle + 1u]].circular_uv_index,
+        geometry.vertices[geometry.indices[triangle + 2u]].circular_uv_index};
+    if (descriptors[0] == descriptors[1] && descriptors[1] == descriptors[2]) continue;
+    for (const auto descriptor : descriptors) {
+      if (descriptor != 0u && descriptor <= valid_charts.size()) {
+        valid_charts[descriptor - 1u] = false;
+      }
+    }
+  }
+  if (std::ranges::none_of(valid_charts, [](bool valid) { return valid; })) return {};
+  std::vector<QuaderBridgeUvInterpolationVertex> result(geometry.vertices.size());
+  for (std::size_t index = 0u; index < geometry.vertices.size(); ++index) {
+    const auto &vertex = geometry.vertices[index];
+    const auto descriptor = vertex.circular_uv_index;
+    if (descriptor == 0u || descriptor > valid_charts.size() ||
+        !valid_charts[descriptor - 1u]) continue;
+    const auto &chart = geometry.circular_uv_interpolations[descriptor - 1u];
+    const auto coordinates = quader_geometry::circular_uv_coordinates(
+        quader_geometry::QVec3f(vertex.position),
+        quader_geometry::QVec3f(chart.center),
+        quader_geometry::QVec3f(chart.axis_u),
+        quader_geometry::QVec3f(chart.axis_v));
+    if (!coordinates) {
+      valid_charts[descriptor - 1u] = false;
+      continue;
+    }
+    result[index].mode = QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR;
+    std::ranges::copy(*coordinates, result[index].coordinates);
+    std::ranges::copy(chart.uv_from_polar, result[index].correction);
+  }
+  for (std::size_t index = 0u; index < result.size(); ++index) {
+    if (result[index].mode != QUADER_BRIDGE_UV_INTERPOLATION_NONE &&
+        !valid_charts[geometry.vertices[index].circular_uv_index - 1u]) {
+      result[index] = {};
+    }
+  }
+  if (std::ranges::none_of(result, [](const auto &vertex) {
+        return vertex.mode == QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR;
+      })) return {};
+  return result;
+}
+
+std::optional<std::array<uint32_t, 4>>
+quad_interpolation_corners(std::span<const uint32_t, 6> triangles) {
+  const auto first = triangles.first<3>();
+  const auto second = triangles.last<3>();
+  for (const auto triangle : {first, second}) {
+    if (triangle[0] == triangle[1] || triangle[0] == triangle[2] ||
+        triangle[1] == triangle[2]) return {};
+  }
+  const auto unique_first = std::ranges::find_if(first, [&](auto index) {
+    return std::ranges::find(second, index) == second.end();
+  });
+  const auto unique_second = std::ranges::find_if(second, [&](auto index) {
+    return std::ranges::find(first, index) == first.end();
+  });
+  if (unique_first == first.end() || unique_second == second.end() ||
+      std::ranges::count_if(first, [&](auto index) {
+        return std::ranges::find(second, index) != second.end();
+      }) != 2) return {};
+  const auto first_corner = static_cast<std::size_t>(unique_first - first.begin());
+  const auto second_corner = static_cast<std::size_t>(unique_second - second.begin());
+  const std::array corners{*unique_first, first[(first_corner + 1u) % 3u],
+                           *unique_second, first[(first_corner + 2u) % 3u]};
+  if (second[(second_corner + 1u) % 3u] != corners[3] ||
+      second[(second_corner + 2u) % 3u] != corners[1]) return {};
+  return corners;
+}
+
+std::vector<QuaderBridgeUvInterpolationVertex>
+build_mesh_uv_interpolation(const MeshGeometryPayload &geometry) {
+  auto result = build_circular_mesh_uv_interpolation(geometry);
+  if (std::ranges::none_of(geometry.primitives, [](const auto &primitive) {
+        return primitive.index_count == 6u;
+      })) return result;
+  std::vector<std::size_t> owners(geometry.vertices.size(),
+                                  std::numeric_limits<std::size_t>::max());
+  std::vector<bool> shared(geometry.vertices.size(), false);
+  for (std::size_t primitive_index = 0u; primitive_index < geometry.primitives.size();
+       ++primitive_index) {
+    const auto &primitive = geometry.primitives[primitive_index];
+    const auto end = static_cast<std::uint64_t>(primitive.index_offset) + primitive.index_count;
+    if (end > geometry.indices.size()) return result;
+    for (std::uint64_t offset = primitive.index_offset; offset < end; ++offset) {
+      const auto index = geometry.indices[static_cast<std::size_t>(offset)];
+      if (index >= geometry.vertices.size()) return result;
+      if (owners[index] == std::numeric_limits<std::size_t>::max()) {
+        owners[index] = primitive_index;
+      } else if (owners[index] != primitive_index) {
+        shared[index] = true;
+      }
+    }
+  }
+  for (const auto &primitive : geometry.primitives) {
+    if (primitive.index_count != 6u) continue;
+    const auto corners = quad_interpolation_corners(
+        std::span(geometry.indices).subspan(primitive.index_offset, 6u).first<6>());
+    if (!corners) continue;
+    std::array<quader_geometry::QVec3f, 4> positions{};
+    std::array<quader_geometry::QVec2f, 4> uvs{};
+    const auto &chart = geometry.vertices[corners->front()];
+    bool eligible = true;
+    for (std::size_t corner = 0u; corner < corners->size(); ++corner) {
+      const auto index = (*corners)[corner];
+      const auto &vertex = geometry.vertices[index];
+      if (shared[index] || vertex.circular_uv_index != 0u || vertex.source_vertex_id == 0u ||
+          vertex.uv_carrier != chart.uv_carrier ||
+          vertex.uv_geometric_normal.x != chart.uv_geometric_normal.x ||
+          vertex.uv_geometric_normal.y != chart.uv_geometric_normal.y ||
+          vertex.uv_geometric_normal.z != chart.uv_geometric_normal.z ||
+          !std::isfinite(vertex.uv_geometric_normal.x) ||
+          !std::isfinite(vertex.uv_geometric_normal.y) ||
+          !std::isfinite(vertex.uv_geometric_normal.z) ||
+          !std::ranges::all_of(vertex.uv_carrier, [](float value) { return std::isfinite(value); })) {
+        eligible = false;
+        break;
+      }
+      for (std::size_t previous = 0u; previous < corner; ++previous) {
+        if (vertex.source_vertex_id == geometry.vertices[(*corners)[previous]].source_vertex_id) {
+          eligible = false;
+        }
+      }
+      positions[corner] = quader_geometry::QVec3f(vertex.position);
+      uvs[corner] = quader_geometry::QVec2f(vertex.uv);
+    }
+    if (!eligible) continue;
+    const auto interpolation = quader_geometry::build_quad_uv_interpolation(positions, uvs);
+    if (!interpolation) continue;
+    if (result.empty()) result.resize(geometry.vertices.size());
+    for (std::size_t corner = 0u; corner < corners->size(); ++corner) {
+      const auto coordinates = interpolation->coordinates[corner];
+      result[(*corners)[corner]] = {
+          .mode = QUADER_BRIDGE_UV_INTERPOLATION_QUAD,
+          .coordinates = {coordinates.x, coordinates.y, coordinates.z, 1.0f},
+          .correction = {interpolation->geometry_warp.x, interpolation->geometry_warp.y,
+                         interpolation->uv_correction.x, interpolation->uv_correction.y}};
+    }
+  }
+  return result;
 }
 
 void build_mesh_snapshot(QuaderBridgeScene &target) {
@@ -282,6 +447,7 @@ void build_mesh_snapshot(QuaderBridgeScene &target) {
         mesh.collision_points = found->second;
       }
     }
+    mesh.uv_interpolation = build_mesh_uv_interpolation(source->geometry());
     mesh.vertices.reserve(geometry.vertices.size());
     for (const MeshVertex &vertex : geometry.vertices) {
       QuaderBridgeVertex output{
@@ -712,6 +878,19 @@ int mesh_view(const QuaderBridgeScene *scene, uint32_t index,
   });
 }
 
+int mesh_uv_interpolation_view(const QuaderBridgeScene *scene, uint32_t mesh_index,
+                               QuaderBridgeMeshUvInterpolationView *out,
+                               QuaderBridgeError *error) noexcept {
+  return guarded(error, [&] {
+    require(scene != nullptr && out != nullptr,
+            "Scene and UV interpolation output are required.");
+    require(mesh_index < scene->meshes.size(), "Mesh index is out of bounds.");
+    const auto &vertices = scene->meshes[mesh_index].uv_interpolation;
+    *out = {.vertices = vertices.empty() ? nullptr : vertices.data(),
+            .vertex_count = count32(vertices.size())};
+  });
+}
+
 int light_view(const QuaderBridgeScene *scene, uint32_t index,
                QuaderBridgeLightView *out, QuaderBridgeError *error) noexcept {
   return guarded(error, [&] {
@@ -896,9 +1075,20 @@ constexpr QuaderBridgeApi kApi{
     .light_view = light_view,
     .node_view = node_view};
 
+constexpr QuaderBridgeUvInterpolationApi kUvInterpolationApi{
+    .abi_version = QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION,
+    .struct_size = sizeof(QuaderBridgeUvInterpolationApi),
+    .mesh_uv_interpolation_view = mesh_uv_interpolation_view};
+
 } // namespace
 
 extern "C" QUADER_BRIDGE_EXPORT const QuaderBridgeApi *
 quader_bridge_get_api(uint32_t requested_version) {
   return requested_version == QUADER_BRIDGE_ABI_VERSION ? &kApi : nullptr;
+}
+
+extern "C" QUADER_BRIDGE_EXPORT const QuaderBridgeUvInterpolationApi *
+quader_bridge_get_uv_interpolation_api(uint32_t requested_abi_version) {
+  return requested_abi_version == QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION
+             ? &kUvInterpolationApi : nullptr;
 }

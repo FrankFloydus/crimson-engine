@@ -31,7 +31,7 @@ void same(const Vec3& a, const Vec3& b, double tolerance=1e-5) { for (std::size_
 void same(const Mat4& a, const Mat4& b, double tolerance=1e-5) { for (std::size_t i=0;i<16;++i) near(a[i],b[i],tolerance); }
 void layoutAndSerialization() {
     static_assert(sizeof(Vec2)==8 && sizeof(Vec3)==12 && sizeof(Vec4)==16 && sizeof(Quat)==16);
-    static_assert(sizeof(Mat3)==36 && sizeof(Mat4)==64 && sizeof(ModelVertex)==72);
+    static_assert(sizeof(Mat3)==36 && sizeof(Mat4)==64 && sizeof(ModelVertex)==108);
     static_assert(offsetof(ModelVertex,normal)==12 && offsetof(ModelVertex,uv0)==24 && offsetof(ModelVertex,uv1)==32);
     static_assert(offsetof(ModelVertex,tangent)==40 && offsetof(ModelVertex,color)==56);
     static_assert(std::is_standard_layout_v<ModelVertex> && std::is_trivially_copyable_v<ModelVertex>);

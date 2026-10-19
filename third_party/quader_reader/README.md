@@ -9,12 +9,24 @@ It never locates a developer's Quader checkout at runtime.
 The staged header and DLL must be replaced together. The current reader handles
 project manifest versions 1 through 5, including the persistent texture catalog,
 release requirements and deletion metadata written by Quader 0.1.67. It also handles
-native scene schema 17 and older supported formats. ABI compatibility describes
+native scene schemas 1 through 20, including affine parenting, mesh wireframe
+participation/colors and compiled circular-UV metadata. ABI compatibility describes
 the C function table, not saved-format compatibility: updating Quader's saved
 formats can require a freshly built reader even when the ABI remains unchanged.
 ABI 7 adds the authored hierarchy, names, sibling order, local visibility and
 expanded instance-member parenting. The Crimson-owned reader implementation in
 `source/` extends the authorized native reader without modifying Quader's checkout.
+
+Circular and ordinary quad texture flow use the independent optional extension getter
+`quader_bridge_get_uv_interpolation_api(1)`. Its version and function table are
+validated separately; core ABI 7 and extension version 1 are unchanged. Per-vertex
+modes are None=0, Circular=1 and Quad=2. Circular mode carries analytic radial/angular
+flow, while Quad mode carries ordinary inverse-bilinear interpolation. Crimson
+retains two vec4 values and the mode through managed glTF attributes
+`_CRIMSON_UV_INTERPOLATION_COORD`, `_CRIMSON_UV_INTERPOLATION_COEFF` and
+`_CRIMSON_UV_INTERPOLATION_MODE`, so reopened bundles preserve both modes without
+the source project or a loaded reader. The former `_CRIMSON_CIRCULAR_COORD` and
+`_CRIMSON_CIRCULAR_COEFF` pair remains read compatibility only.
 
 To refresh from the authorized Quader workspace, configure its existing CMake source
 with a separate binary directory under Crimson's `build/quader-reader-current`,
@@ -24,7 +36,8 @@ The wrapper configures the deferred `scripts/QuaderReaderOverride.cmake` source
 override, builds only `quader_bridge_reader` in Release and stages the paired
 payload. Keeping this binary directory separate preserves the external source
 checkout and its build outputs.
-The script collects the recursive Release dependency closure, paired header,
+The script records the supported project manifest and scene schema versions from
+their native source constants. It collects the recursive Release dependency closure, paired header,
 licenses, native commit, dirty-worktree diff, source-input fingerprints and the
 Crimson-owned implementation/header hashes.
 Its default build directory is the isolated directory above; `-BuildRoot` selects
@@ -42,6 +55,9 @@ when authoring completed-save records.
 QDR persistence owners by `scripts/quader_reader_hierarchy_fixture.cpp`. It covers
 nested and empty groups, sibling order, a hidden group with locally visible
 children, a nested direct light and two occurrences of a multi-mesh definition.
+The original schema-17 fixture remains unchanged. Its schema-20 counterpart at
+`tests/fixtures/quader/schema20/hierarchy` runs the same hierarchy, publication,
+repeat-import and source-preservation checks against the current native format.
 To reproduce it, build the isolated `crimson_quader_reader_fixture` Release target
 and run it with a fresh output directory named `hierarchy`. The generator verifies
 its saved scene through the current reader and prints the concrete hierarchy.

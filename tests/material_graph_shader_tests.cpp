@@ -198,8 +198,11 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v25")!=std::string::npos,
-            "Generated material identity does not invalidate former fixed-camera shadow bundles.");
+        check(variant.source.find("crimson-material-graph-generator-v27")!=std::string::npos,
+            "Generated material identity does not invalidate former corner-only UV bundles.");
+        const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
+        check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
+            "Generated mesh/particle inputs disagree with the circular UV vertex interface.");
         const auto has=[&](const char* name,std::uint16_t count=1) {
             return std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
                 return binding.name==name && binding.kind==ShaderUniformKind::Vec4 && binding.count==count;

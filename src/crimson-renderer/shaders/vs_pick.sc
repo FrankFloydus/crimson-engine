@@ -1,11 +1,14 @@
-$input a_position, a_normal, a_texcoord0, a_texcoord1, a_color0
-$output v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal
+$input a_position, a_normal, a_texcoord0, a_texcoord1, a_color0, a_texcoord2, a_texcoord3, a_texcoord4
+$output v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode
 
 #include <bgfx_shader.sh>
 uniform mat4 u_modelNormalMatrix;
 
 void main()
 {
+    v_uvInterpolationMode = a_texcoord4;
+    v_uvInterpolationCoordinates = a_texcoord2;
+    v_uvInterpolationCorrection = a_texcoord3;
     v_texcoord0 = a_texcoord0;
     v_texcoord1 = a_texcoord1;
     v_color0 = a_color0;

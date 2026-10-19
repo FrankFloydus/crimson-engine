@@ -56,6 +56,10 @@ struct ModelVertex {
     Vec3 position{}, normal{0,1,0};
     Vec2 uv0{}, uv1{};
     Vec4 tangent{1,0,0,1}, color{1,1,1,1};
+    // Optional analytic UV0 correction: mode 0 ordinary, 1 polar, 2 quad.
+    // The mode and coefficients agree across each triangle.
+    Vec4 uvInterpolationCoordinates{}, uvInterpolationCorrection{};
+    float uvInterpolationMode{};
 };
 inline constexpr std::size_t MaximumModelJointInfluences=8;
 struct ModelSkinWeights {

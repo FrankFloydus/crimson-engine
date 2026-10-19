@@ -461,7 +461,7 @@ Three tiny example textures are included from the earlier smoke check: checker a
 
 ## Import and place models
 
-1. Use the same **Import** action and select a `.gltf` or `.glb` file. The importer copies the model and required buffers/images into a managed model package directory beneath `Content`. Its newly created model, image and material cards appear together in the active Content folder captured when the dialog opened. Reused asset cards keep their existing placement and aliases.
+1. Use the same **Import** action and select a `.gltf` or `.glb` file. The Assimp importer copies the model and required buffers/images into a managed model package directory beneath `Content`. Its newly created model, image and material cards appear together in the active Content folder captured when the dialog opened. Reused asset cards keep their existing placement and aliases.
 2. Drag the model's card onto the viewport. A temporary model previews placement on the `y=0` grid; releasing queues creation when its resources are prepared. The model keeps its authored scale, orientation and internal node transforms. Failed models report a cause without removing existing scene content.
 3. Drop additional models to add more entities. Select a placed model, use T/R/E to transform it and F to focus it. Save the scene to retain placements across restarts.
 

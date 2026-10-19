@@ -296,6 +296,50 @@ typedef struct QuaderBridgeApi {
 QUADER_BRIDGE_EXPORT const QuaderBridgeApi *
 quader_bridge_get_api(uint32_t requested_version);
 
+/* Optional sampling extension, independent of the core bridge ABI version. */
+#define QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION 1u
+
+/* Preserve published uppercase C ABI names for bridge source compatibility. */
+// NOLINTBEGIN(readability-identifier-naming)
+typedef enum QuaderBridgeUvInterpolationMode {
+  QUADER_BRIDGE_UV_INTERPOLATION_NONE = 0,
+  QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR = 1,
+  QUADER_BRIDGE_UV_INTERPOLATION_QUAD = 2
+} QuaderBridgeUvInterpolationMode;
+// NOLINTEND(readability-identifier-naming)
+
+typedef struct QuaderBridgeUvInterpolationVertex {
+  uint32_t mode;
+  /* CIRCULAR: local planar x/y, radius, atan2(y,x).
+   * QUAD: linear s, linear t, linear s*t, 1. Interpolate with the core UV. */
+  float coordinates[4];
+  /* CIRCULAR: U_radius, U_angle, V_radius, V_angle.
+   * QUAD: geometry warp hx/hy, UV correction U/V. Face mapping is applied. */
+  float correction[4];
+} QuaderBridgeUvInterpolationVertex;
+
+typedef struct QuaderBridgeMeshUvInterpolationView {
+  /* Borrowed until scene release. Empty means null/zero. Otherwise the count
+   * equals mesh_view.vertex_count, in the same order; NONE entries are zero. */
+  const QuaderBridgeUvInterpolationVertex *vertices;
+  uint32_t vertex_count;
+} QuaderBridgeMeshUvInterpolationView;
+
+typedef struct QuaderBridgeUvInterpolationApi {
+  uint32_t abi_version;
+  uint32_t struct_size;
+  int (*mesh_uv_interpolation_view)(const QuaderBridgeScene *scene,
+                                    uint32_t mesh_index,
+                                    QuaderBridgeMeshUvInterpolationView *out,
+                                    QuaderBridgeError *error);
+} QuaderBridgeUvInterpolationApi;
+
+/* Resolve separately from quader_bridge_get_api; older DLLs omit this symbol.
+ * Returns null for unsupported extension versions. See the reader contract for
+ * perspective-correct interpolation and material-transform ordering. */
+QUADER_BRIDGE_EXPORT const QuaderBridgeUvInterpolationApi *
+quader_bridge_get_uv_interpolation_api(uint32_t requested_abi_version);
+
 #ifdef __cplusplus
 }
 #endif

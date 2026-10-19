@@ -13,7 +13,7 @@ struct ModelGeometryLevel {
     bool wideIndices{false},validated{false};
 };
 namespace streaming {
-inline constexpr std::uint32_t ModelCacheVersion = 4;
+inline constexpr std::uint32_t ModelCacheVersion = 8;
 struct ModelLod {
     std::filesystem::path file;
     std::uint64_t key{};

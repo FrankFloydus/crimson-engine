@@ -11,11 +11,12 @@ namespace crimson {
 namespace {
 std::string resourceKey(const std::string& id,std::uint64_t revision) { return id+'\x1f'+std::to_string(revision); }
 bgfx::VertexLayout modelLayout() {
-    static_assert(sizeof(ModelVertex)==18*sizeof(float));
+    static_assert(sizeof(ModelVertex)==27*sizeof(float));
     bgfx::VertexLayout layout;
     layout.begin().add(bgfx::Attrib::Position,3,bgfx::AttribType::Float).add(bgfx::Attrib::Normal,3,bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0,2,bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord1,2,bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Tangent,4,bgfx::AttribType::Float).add(bgfx::Attrib::Color0,4,bgfx::AttribType::Float).end();
+        .add(bgfx::Attrib::Tangent,4,bgfx::AttribType::Float).add(bgfx::Attrib::Color0,4,bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord2,4,bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord3,4,bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord4,1,bgfx::AttribType::Float).end();
     return layout;
 }
 struct Bundle {

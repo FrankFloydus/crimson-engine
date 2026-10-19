@@ -43,9 +43,20 @@ if ($dumpbin) { $dumpbinPath = $dumpbin.Source } else {
 $headerText = [IO.File]::ReadAllText($sourceHeader)
 if ($headerText -notmatch '#define QUADER_BRIDGE_ABI_VERSION ([0-9]+)u') { throw 'Cannot identify the native reader ABI.' }
 $abi = [int]$Matches[1]
+if ($headerText -notmatch '#define QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION ([0-9]+)u') { throw 'Cannot identify the reader UV interpolation extension version.' }
+$uvInterpolationAbi = [int]$Matches[1]
+$readerExports = & $dumpbinPath /NOLOGO /EXPORTS $sourceReader
+if ($LASTEXITCODE -ne 0 -or -not ($readerExports -match '\bquader_bridge_get_uv_interpolation_api\b')) {
+    throw 'The reader DLL is missing its declared UV interpolation extension export.'
+}
 $manifestText = [IO.File]::ReadAllText((Join-Path $nativeRoot 'src/io/project/project_manifest.hpp'))
 if ($manifestText -notmatch 'kQuaderProjectManifestVersion = ([0-9]+)u') { throw 'Cannot identify the supported project manifest version.' }
 $manifestVersion = [int]$Matches[1]
+$sceneCodecText = [IO.File]::ReadAllText((Join-Path $nativeRoot 'src/io/qdr/qdr_scene_binary_codec.cpp'))
+$sceneSchemaMatches = [regex]::Matches($sceneCodecText, '(?m)^\s*constexpr\s+std::uint16_t\s+kSceneChunkSchemaVersion\s*=\s*([0-9]+)u\s*;')
+if ($sceneSchemaMatches.Count -ne 1) { throw 'Cannot identify a unique supported scene schema version.' }
+$sceneSchemaVersion = [int]$sceneSchemaMatches[0].Groups[1].Value
+if ($sceneSchemaVersion -lt 1 -or $sceneSchemaVersion -gt [uint16]::MaxValue) { throw 'The supported scene schema version is invalid.' }
 $previousFiles = @()
 $previousProvenance = Join-Path $payloadRoot 'reader-provenance.json'
 if (Test-Path -LiteralPath $previousProvenance -PathType Leaf) {
@@ -151,7 +162,9 @@ $diffPath = Join-Path $binaryRoot 'native-source-changes.patch'
 if ($LASTEXITCODE -ne 0) { throw 'Cannot fingerprint the native worktree changes.' }
 $provenance = [ordered]@{
     reader_abi = $abi
+    uv_interpolation_abi = $uvInterpolationAbi
     supported_project_manifest_version = $manifestVersion
+    supported_scene_schema_version = $sceneSchemaVersion
     configuration = 'Release'
     native_commit = $commit.Trim()
     native_worktree_modified = ($changes.Count -gt 0)
@@ -165,4 +178,4 @@ $provenance = [ordered]@{
     files = $records
 }
 $provenance | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $payloadRoot 'reader-provenance.json') -Encoding utf8
-Write-Output "Staged Quader reader ABI $abi, project manifest v$manifestVersion, source $($commit.Trim())."
+Write-Output "Staged Quader reader ABI $abi, project manifest v$manifestVersion, scene schema $sceneSchemaVersion, source $($commit.Trim())."

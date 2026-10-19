@@ -6,9 +6,11 @@
 #include "resources/AssetId.h"
 #include "resources/StreamingModel.h"
 
-// cgltf is header-only. Keep its implementation in the CPU asset boundary.
-#define CGLTF_IMPLEMENTATION
-#include <cgltf.h>
+#include <assimp/Importer.hpp>
+#include <assimp/IOStream.hpp>
+#include <assimp/IOSystem.hpp>
+#include <assimp/material.h>
+#include <assimp/scene.h>
 #include <mikktspace.h>
 #include <bimg/decode.h>
 #include <bx/allocator.h>
@@ -227,75 +229,220 @@ Json stageDocument(const fs::path& source, const fs::path& stage, const Bytes& o
     return manifest;
 }
 
-uint32_t unsignedValue(const uint8_t* p, cgltf_component_type type) {
-    if (type==cgltf_component_type_r_8u) return *p;
-    if (type==cgltf_component_type_r_16u) return uint32_t(p[0]) | (uint32_t(p[1])<<8);
-    if (type==cgltf_component_type_r_32u) return u32(p);
+// aiScene deliberately does not retain glTF source table identities, original
+// index streams or interpolation tangents. This small semantic view validates
+// package bounds and retains those values while Assimp decodes the mesh streams.
+struct Accessor {
+    const Json* source{}; const Json* view{};
+    std::size_t count{},offset{},stride{},components{},componentSize{},elementSize{};
+    int componentType{}; std::string type; bool normalized{};
+};
+struct GltfSource {
+    Json json; std::vector<Bytes> buffers;
+    const Json& table(const char* name) const {
+        static const Json empty=Json::array(); const auto found=json.find(name);
+        if(found==json.end())return empty;
+        check(found->is_array(),std::string("invalid asset table: ")+name);return *found;
+    }
+    const Json& item(const char* name,std::size_t index) const {
+        const auto& values=table(name);check(index<values.size(),std::string("missing ")+name+" reference");return values[index];
+    }
+    static std::size_t componentBytes(int type) {
+        switch(type){case 5120:case 5121:return 1;case 5122:case 5123:return 2;case 5125:case 5126:return 4;default:fail("invalid accessor component type");}
+    }
+    Accessor accessor(std::size_t index) const {
+        const auto& value=item("accessors",index);Accessor a;a.source=&value;
+        a.count=number(value,"count");a.offset=number(value,"byteOffset");a.componentType=value.value("componentType",0);
+        a.componentSize=componentBytes(a.componentType);a.type=value.value("type",std::string{});a.normalized=value.value("normalized",false);
+        if(a.type=="SCALAR")a.components=1;else if(a.type=="VEC2")a.components=2;else if(a.type=="VEC3")a.components=3;
+        else if(a.type=="VEC4"||a.type=="MAT2")a.components=4;else if(a.type=="MAT3")a.components=9;else if(a.type=="MAT4")a.components=16;
+        else fail("invalid accessor type or count");
+        const auto width=a.type=="MAT2"?2u:a.type=="MAT3"?3u:a.type=="MAT4"?4u:0u;
+        a.elementSize=width?width*((width*a.componentSize+3)/4*4):a.components*a.componentSize;
+        check(a.count>0&&a.count<=MaxVertices*3,"invalid accessor type or count");
+        if(value.contains("bufferView"))a.view=&item("bufferViews",number(value,"bufferView"));
+        a.stride=a.view?number(*a.view,"byteStride",a.elementSize):a.elementSize;
+        check(a.offset%a.componentSize==0&&a.stride>=a.elementSize&&a.stride%a.componentSize==0,"invalid accessor stride or alignment");
+        check(!a.normalized||a.componentType!=5126,"float attributes cannot be normalized");
+        if(a.view){const auto viewOffset=number(*a.view,"byteOffset"),size=number(*a.view,"byteLength");
+            check((viewOffset+a.offset)%a.componentSize==0,"unaligned accessor");
+            check(a.offset<=size&&a.elementSize<=size-a.offset&&a.count-1<=(size-a.offset-a.elementSize)/a.stride,"accessor exceeds its buffer view");
+        }else check(a.offset==0,"accessor without a buffer view has a byte offset");
+        return a;
+    }
+    const uint8_t* viewData(const Json& view) const {
+        const auto buffer=number(view,"buffer");check(buffer<buffers.size(),"buffer view has no buffer");return buffers[buffer].data()+number(view,"byteOffset");
+    }
+};
+uint32_t unsignedValue(const uint8_t* p,int type) {
+    if(type==5121)return *p;if(type==5123)return uint32_t(p[0])|(uint32_t(p[1])<<8);if(type==5125)return u32(p);
     fail("indices must be unsigned 8, 16, or 32 bit values");
 }
-void validateAccessors(cgltf_data& data) {
-    for (size_t i=0; i<data.buffer_views_count; ++i) {
-        const auto& view=data.buffer_views[i]; check(view.buffer!=nullptr,"buffer view has no buffer");
-        range(view.offset,view.size,view.buffer->size,"buffer view");
-        check(!view.stride || (view.stride>=4 && view.stride<=252 && view.stride%4==0),"invalid buffer view stride");
+void validateAccessors(const GltfSource& data) {
+    for(const auto& view:data.table("bufferViews")) {
+        const auto buffer=number(view,"buffer");check(buffer<data.buffers.size(),"buffer view has no buffer");
+        range(number(view,"byteOffset"),number(view,"byteLength"),data.buffers[buffer].size(),"buffer view");
+        const auto stride=number(view,"byteStride");check(!stride||(stride>=4&&stride<=252&&stride%4==0),"invalid buffer view stride");
     }
-    for (size_t i=0; i<data.accessors_count; ++i) {
-        const auto& a=data.accessors[i]; const auto component=cgltf_component_size(a.component_type), element=cgltf_calc_size(a.type,a.component_type);
-        check(component>0 && element>0 && a.count>0 && a.count<=MaxVertices*3,"invalid accessor type or count");
-        check(a.offset%component==0 && a.stride>=element && a.stride%component==0,"invalid accessor stride or alignment");
-        check(!a.normalized || a.component_type!=cgltf_component_type_r_32f,"float attributes cannot be normalized");
-        if (a.buffer_view) {
-            check((a.buffer_view->offset+a.offset)%component==0,"unaligned accessor");
-            check(a.offset<=a.buffer_view->size && element<=a.buffer_view->size-a.offset &&
-                  a.count-1<=(a.buffer_view->size-a.offset-element)/a.stride,"accessor exceeds its buffer view");
-        } else check(a.offset==0,"accessor without a buffer view has a byte offset");
-        if (!a.is_sparse) continue;
-        const auto& s=a.sparse; const auto indexSize=cgltf_component_size(s.indices_component_type);
-        check(s.count>0 && s.count<=a.count && s.indices_buffer_view && s.values_buffer_view,"invalid sparse accessor");
-        check(s.indices_component_type==cgltf_component_type_r_8u || s.indices_component_type==cgltf_component_type_r_16u ||
-              s.indices_component_type==cgltf_component_type_r_32u,"invalid sparse index type");
-        check(!s.indices_buffer_view->stride && !s.values_buffer_view->stride,"sparse values and indices must be tightly packed");
-        range(s.indices_byte_offset,s.count*indexSize,s.indices_buffer_view->size,"sparse indices");
-        range(s.values_byte_offset,s.count*element,s.values_buffer_view->size,"sparse values");
-        check((s.indices_buffer_view->offset+s.indices_byte_offset)%indexSize==0 &&
-              (s.values_buffer_view->offset+s.values_byte_offset)%component==0,"unaligned sparse accessor");
-        const auto* values=cgltf_buffer_view_data(s.indices_buffer_view)+s.indices_byte_offset; uint32_t previous=0;
-        for (size_t j=0; j<s.count; ++j) {
-            const auto value=unsignedValue(values+j*indexSize,s.indices_component_type);
-            check(value<a.count && (j==0 || value>previous),"sparse indices must be increasing and within accessor bounds"); previous=value;
-        }
+    for(std::size_t index=0;index<data.table("accessors").size();++index) {
+        const auto a=data.accessor(index);const auto found=a.source->find("sparse");if(found==a.source->end())continue;
+        const auto& sparse=*found;const auto count=number(sparse,"count");
+        check(count>0&&count<=a.count&&sparse.contains("indices")&&sparse.contains("values"),"invalid sparse accessor");
+        const auto& indices=sparse.at("indices");const auto& values=sparse.at("values");const int type=indices.value("componentType",0);
+        check(type==5121||type==5123||type==5125,"invalid sparse index type");const auto size=GltfSource::componentBytes(type);
+        const auto& indexView=data.item("bufferViews",number(indices,"bufferView"));const auto& valueView=data.item("bufferViews",number(values,"bufferView"));
+        check(!number(indexView,"byteStride")&&!number(valueView,"byteStride"),"sparse values and indices must be tightly packed");
+        range(number(indices,"byteOffset"),count*size,number(indexView,"byteLength"),"sparse indices");
+        range(number(values,"byteOffset"),count*a.elementSize,number(valueView,"byteLength"),"sparse values");
+        check((number(indexView,"byteOffset")+number(indices,"byteOffset"))%size==0&&
+            (number(valueView,"byteOffset")+number(values,"byteOffset"))%a.componentSize==0,"unaligned sparse accessor");
+        const auto* encoded=data.viewData(indexView)+number(indices,"byteOffset");uint32_t previous{};
+        for(std::size_t i=0;i<count;++i){const auto value=unsignedValue(encoded+i*size,type);
+            check(value<a.count&&(!i||value>previous),"sparse indices must be increasing and within accessor bounds");previous=value;}
     }
 }
-std::vector<float> floats(const cgltf_accessor& accessor) {
-    const size_t components=cgltf_num_components(accessor.type); std::vector<float> result(accessor.count*components);
-    auto base=accessor; base.is_sparse=false;
-    check(cgltf_accessor_unpack_floats(&base,result.data(),result.size())==result.size(),"could not unpack vertex attribute");
-    if (accessor.is_sparse) {
-        // cgltf 1.15 uses the base stride for sparse values; glTF sparse values
-        // are tightly packed even when the base attribute is interleaved.
-        const auto& s=accessor.sparse; auto values=base; values.buffer_view=s.values_buffer_view;
-        values.offset=s.values_byte_offset; values.stride=cgltf_calc_size(base.type,base.component_type); values.count=s.count;
-        const auto* indices=cgltf_buffer_view_data(s.indices_buffer_view)+s.indices_byte_offset;
-        for (size_t j=0; j<s.count; ++j) {
-            const auto index=unsignedValue(indices+j*cgltf_component_size(s.indices_component_type),s.indices_component_type);
-            check(cgltf_accessor_read_float(&values,j,result.data()+index*components,components)!=0,"invalid sparse vertex value");
-        }
-    }
-    check(std::all_of(result.begin(),result.end(),[](float f){return std::isfinite(f);}),"nonfinite vertex attribute"); return result;
+float componentValue(const uint8_t* encoded,int type,bool normalized) {
+    switch(type) {
+    case 5120:{int8_t value{};std::memcpy(&value,encoded,1);return normalized?std::max(float(value)/127.f,-1.f):float(value);}
+    case 5121:return normalized?float(*encoded)/255.f:float(*encoded);
+    case 5122:{int16_t value{};std::memcpy(&value,encoded,2);return normalized?std::max(float(value)/32767.f,-1.f):float(value);}
+    case 5123:{uint16_t value{};std::memcpy(&value,encoded,2);return normalized?float(value)/65535.f:float(value);}
+    case 5125:return float(u32(encoded));
+    case 5126:{float value{};std::memcpy(&value,encoded,4);return value;}
+    default:fail("invalid accessor component type");}
 }
-std::vector<uint32_t> indices(const cgltf_accessor& accessor) {
-    check(accessor.type==cgltf_type_scalar && !accessor.normalized,"invalid triangle index accessor");
-    const size_t size=cgltf_component_size(accessor.component_type); std::vector<uint32_t> result(accessor.count);
-    if (accessor.buffer_view) {
-        const auto* source=cgltf_buffer_view_data(accessor.buffer_view)+accessor.offset;
-        for (size_t i=0;i<accessor.count;++i) result[i]=unsignedValue(source+i*accessor.stride,accessor.component_type);
-    } else { uint8_t zero[4]{}; unsignedValue(zero,accessor.component_type); }
-    if (accessor.is_sparse) {
-        const auto& s=accessor.sparse; const auto* source=cgltf_buffer_view_data(s.values_buffer_view)+s.values_byte_offset;
-        const auto* mapping=cgltf_buffer_view_data(s.indices_buffer_view)+s.indices_byte_offset;
-        for (size_t i=0;i<s.count;++i) result[unsignedValue(mapping+i*cgltf_component_size(s.indices_component_type),s.indices_component_type)]=unsignedValue(source+i*size,accessor.component_type);
+std::vector<float> floats(const GltfSource& data,const Accessor& a) {
+    std::vector<float> result(a.count*a.components);
+    const auto width=a.type=="MAT2"?2u:a.type=="MAT3"?3u:a.type=="MAT4"?4u:0u;
+    const auto unpack=[&](const uint8_t* encoded,float* output){for(std::size_t c=0;c<a.components;++c){
+        const auto offset=width?(c/width)*((width*a.componentSize+3)/4*4)+(c%width)*a.componentSize:c*a.componentSize;
+        output[c]=componentValue(encoded+offset,a.componentType,a.normalized);}};
+    if(a.view){const auto* encoded=data.viewData(*a.view)+a.offset;for(std::size_t i=0;i<a.count;++i)unpack(encoded+i*a.stride,result.data()+i*a.components);}
+    if(const auto found=a.source->find("sparse");found!=a.source->end()){
+        const auto& sparse=*found;const auto& index=sparse.at("indices");const auto& values=sparse.at("values");
+        const auto type=index.at("componentType").get<int>();const auto size=GltfSource::componentBytes(type);
+        const auto* mapping=data.viewData(data.item("bufferViews",number(index,"bufferView")))+number(index,"byteOffset");
+        const auto* encoded=data.viewData(data.item("bufferViews",number(values,"bufferView")))+number(values,"byteOffset");
+        for(std::size_t i=0;i<number(sparse,"count");++i)unpack(encoded+i*a.elementSize,result.data()+unsignedValue(mapping+i*size,type)*a.components);
     }
-    return result;
+    check(std::all_of(result.begin(),result.end(),[](float value){return std::isfinite(value);}),"nonfinite vertex attribute");return result;
+}
+std::vector<uint32_t> indices(const GltfSource& data,const Accessor& a) {
+    check(a.type=="SCALAR"&&!a.normalized,"invalid triangle index accessor");
+    uint8_t zero[4]{};unsignedValue(zero,a.componentType);std::vector<uint32_t> result(a.count);
+    if(a.view){const auto* encoded=data.viewData(*a.view)+a.offset;for(std::size_t i=0;i<a.count;++i)result[i]=unsignedValue(encoded+i*a.stride,a.componentType);}
+    if(const auto found=a.source->find("sparse");found!=a.source->end()){
+        const auto& sparse=*found;const auto& index=sparse.at("indices");const auto& values=sparse.at("values");const int type=index.at("componentType").get<int>();
+        const auto* mapping=data.viewData(data.item("bufferViews",number(index,"bufferView")))+number(index,"byteOffset");
+        const auto* encoded=data.viewData(data.item("bufferViews",number(values,"bufferView")))+number(values,"byteOffset");
+        for(std::size_t i=0;i<number(sparse,"count");++i)result[unsignedValue(mapping+i*GltfSource::componentBytes(type),type)]=unsignedValue(encoded+i*a.componentSize,a.componentType);
+    }return result;
+}
+
+// The importer can only open captured managed dependencies. Its transient input
+// keeps vertices in source order: Assimp otherwise compacts indexed glTF streams,
+// which would invalidate skin/morph streams and discard authored unused vertices.
+class AssimpMemoryStream final:public Assimp::IOStream {
+    const Bytes& bytes_;std::size_t position_{};
+public:
+    explicit AssimpMemoryStream(const Bytes& bytes):bytes_(bytes){}
+    std::size_t Read(void* output,std::size_t size,std::size_t count)override{
+        if(!size)return 0;count=std::min(count,(bytes_.size()-position_)/size);const auto length=size*count;
+        std::memcpy(output,bytes_.data()+position_,length);position_+=length;return count;
+    }
+    std::size_t Write(const void*,std::size_t,std::size_t)override{return 0;}
+    aiReturn Seek(std::size_t offset,aiOrigin origin)override{
+        std::size_t next{};
+        if(origin==aiOrigin_SET)next=offset;
+        else if(origin==aiOrigin_CUR){if(offset>bytes_.size()-position_)return aiReturn_FAILURE;next=position_+offset;}
+        else {if(offset>bytes_.size())return aiReturn_FAILURE;next=bytes_.size()-offset;}
+        if(next>bytes_.size())return aiReturn_FAILURE;position_=next;return aiReturn_SUCCESS;
+    }
+    std::size_t Tell()const override{return position_;}
+    std::size_t FileSize()const override{return bytes_.size();}
+    void Flush()override{}
+};
+class AssimpPackageIo final:public Assimp::IOSystem {
+    std::unordered_map<std::string,Bytes> files_;
+    static std::string key(const char* value){return utf8(path(value).lexically_normal());}
+public:
+    explicit AssimpPackageIo(std::unordered_map<std::string,Bytes> files):files_(std::move(files)){}
+    bool Exists(const char* value)const override{return files_.contains(key(value));}
+    char getOsSeparator()const override{return '/';}
+    Assimp::IOStream* Open(const char* value,const char* mode="rb")override{
+        if(std::strchr(mode,'w')||std::strchr(mode,'a'))return nullptr;const auto found=files_.find(key(value));
+        return found==files_.end()?nullptr:new AssimpMemoryStream(found->second);
+    }
+    void Close(Assimp::IOStream* stream)override{delete stream;}
+};
+std::unique_ptr<Assimp::Importer> importAssimp(const GltfSource& data) {
+    auto json=data.json;
+    // Unsupported extensions retain their documented core fallback. The exact
+    // animation/skin/morph representation is carried by the semantic adapter.
+    const auto stripExtensions=[&](auto&& self,Json& value)->void{
+        if(value.is_object()){value.erase("extensions");value.erase("extensionsUsed");for(auto& child:value.items())self(self,child.value());}
+        else if(value.is_array())for(auto& child:value)self(self,child);
+    };stripExtensions(stripExtensions,json);
+    json.erase("animations");json.erase("skins");json.erase("cameras");
+    json["nodes"]=Json::array();json["scenes"]=Json::array({{{"nodes",Json::array()}}});json["scene"]=0;
+    Bytes canonical;
+    const auto materialCount=data.table("materials").size();
+    if(materialCount){
+        // Assimp lazily loads material slots in first-use order. A tiny private
+        // carrier references every authored slot first, including unused slots.
+        canonical.resize(3*sizeof(float));const auto view=json["bufferViews"].size();
+        json["bufferViews"].push_back({{"buffer",data.buffers.size()},{"byteOffset",0},{"byteLength",canonical.size()}});
+        const auto accessor=json["accessors"].size();json["accessors"].push_back({{"bufferView",view},{"componentType",5126},{"count",1},{"type","VEC3"}});
+        Json primitives=Json::array();for(std::size_t material=0;material<materialCount;++material)primitives.push_back({{"mode",0},{"material",material},{"attributes",{{"POSITION",accessor}}}});
+        json["meshes"].push_back({{"primitives",std::move(primitives)}});
+        json["nodes"].push_back({{"mesh",data.table("meshes").size()}});json["scenes"][0]["nodes"].push_back(0);
+    }
+    // Source hierarchy is validated iteratively below; never let Assimp recurse
+    // into an untrusted cycle, and include every mesh even outside the active scene.
+    for(std::size_t index=0;index<data.table("meshes").size();++index){const auto node=json["nodes"].size();json["nodes"].push_back({{"mesh",index}});json["scenes"][0]["nodes"].push_back(node);}
+    for(std::size_t meshIndex=0;meshIndex<data.table("meshes").size();++meshIndex){auto& mesh=json["meshes"][meshIndex];mesh.erase("weights");for(auto& primitive:mesh["primitives"]){
+        primitive.erase("indices");primitive.erase("targets");primitive["mode"]=0;
+        auto& attributes=primitive.at("attributes");check(attributes.is_object()&&attributes.contains("POSITION"),"primitive needs FLOAT VEC3 positions");
+        const auto positions=data.accessor(attributes["POSITION"].get<std::size_t>());
+        check(positions.type=="VEC3"&&positions.componentType==5126&&positions.count<=MaxVertices,"primitive needs FLOAT VEC3 positions");
+        for(auto it=attributes.begin();it!=attributes.end();) {
+            const auto& semantic=it.key();
+            if((semantic!="POSITION"&&semantic!="NORMAL"&&semantic!="TANGENT"&&semantic!="TEXCOORD_0"&&semantic!="TEXCOORD_1"&&semantic!="COLOR_0")||
+                (semantic=="TANGENT"&&!attributes.contains("NORMAL"))){it=attributes.erase(it);continue;}
+            const auto accessor=data.accessor(it.value().get<std::size_t>());
+            const auto components=semantic=="POSITION"||semantic=="NORMAL"?3u:semantic=="TANGENT"?4u:semantic=="COLOR_0"?accessor.components:2u;
+            check(accessor.count==positions.count&&accessor.components==components,"vertex attribute count or shape mismatch");
+            check(semantic=="COLOR_0"?(accessor.type=="VEC3"||accessor.type=="VEC4"):accessor.type==(components==2?"VEC2":components==3?"VEC3":"VEC4"),"vertex attribute count or shape mismatch");
+            if(semantic=="COLOR_0")check(components==3||components==4,"COLOR_0 must have three or four components");
+            if(semantic=="NORMAL"||semantic=="TANGENT")check(accessor.componentType==5126,"NORMAL/TANGENT must use floating point components");
+            if(semantic.starts_with("TEXCOORD_")||semantic=="COLOR_0")check(accessor.componentType==5126||
+                (accessor.normalized&&(accessor.componentType==5121||accessor.componentType==5123)),"UV/color attributes must be floats or normalized unsigned bytes/shorts");
+            const auto validated=floats(data,accessor);
+            if(semantic=="TANGENT")for(std::size_t vertex=0;vertex<accessor.count;++vertex)check(validated[vertex*4+3]==1||validated[vertex*4+3]==-1,"tangent handedness must be +1 or -1");
+            // Assimp 6.0.4 glTF2Asset.inl applies sparse data with the wrong
+            // interleaved stride or a short final stride; glTF2Importer.cpp also
+            // memcpy-decodes integer UVs.
+            // Canonicalize only those affected streams in this transient view.
+            // https://github.com/assimp/assimp/blob/v6.0.4/code/AssetLib/glTF2/glTF2Asset.inl
+            const bool convert=!accessor.view||accessor.stride!=accessor.elementSize||accessor.source->contains("sparse")||(it.key().starts_with("TEXCOORD_")&&accessor.componentType!=5126);
+            if(convert){const auto& values=validated;const auto offset=canonical.size();const auto size=values.size()*sizeof(float);
+                canonical.resize(offset+size);std::memcpy(canonical.data()+offset,values.data(),size);
+                const auto view=json["bufferViews"].size();json["bufferViews"].push_back({{"buffer",data.buffers.size()},{"byteOffset",offset},{"byteLength",size}});
+                const auto replacement=json["accessors"].size();json["accessors"].push_back({{"bufferView",view},{"componentType",5126},{"count",accessor.count},{"type",accessor.type}});it.value()=replacement;
+            }++it;
+        }
+        // Assimp requires contiguous TEXCOORD sets. Keep a private UV0 alias
+        // for valid UV1-only sources; source availability and validation below
+        // still use the authored document, so missing UV0 remains missing.
+        if(!attributes.contains("TEXCOORD_0")&&attributes.contains("TEXCOORD_1"))attributes["TEXCOORD_0"]=attributes["TEXCOORD_1"];
+    }}
+    if(!canonical.empty())json["buffers"].push_back({{"uri","__crimson_assimp_streams.bin"},{"byteLength",canonical.size()}});
+    std::unordered_map<std::string,Bytes> files;const auto text=json.dump();files.emplace("model.gltf",Bytes(text.begin(),text.end()));
+    for(std::size_t index=0;index<data.buffers.size();++index)files.emplace(data.item("buffers",index).at("uri").get<std::string>(),data.buffers[index]);
+    if(!canonical.empty())files.emplace("__crimson_assimp_streams.bin",std::move(canonical));
+    auto importer=std::make_unique<Assimp::Importer>();importer->SetIOHandler(new AssimpPackageIo(std::move(files)));
+    const auto* scene=importer->ReadFile("model.gltf",0);
+    check(scene!=nullptr,"Assimp import failed: "+std::string(importer->GetErrorString()));return importer;
 }
 void warn(ModelAsset& asset, const std::string& message) {
     if (std::find(asset.warnings.begin(),asset.warnings.end(),message)==asset.warnings.end()) asset.warnings.push_back(message);
@@ -315,66 +462,63 @@ void include(ModelBounds& bounds,const Vec3& position,const ModelMatrix& m) {
     math::include(bounds,value);
 }
 
-ModelWrap wrap(cgltf_wrap_mode value) {
-    if (value==cgltf_wrap_mode_repeat) return ModelWrap::Repeat;
-    if (value==cgltf_wrap_mode_clamp_to_edge) return ModelWrap::Clamp;
-    if (value==cgltf_wrap_mode_mirrored_repeat) return ModelWrap::Mirror;
+ModelWrap wrap(int value) {
+    if(value==10497)return ModelWrap::Repeat;if(value==33071)return ModelWrap::Clamp;if(value==33648)return ModelWrap::Mirror;
     fail("unsupported sampler wrapping mode");
 }
-ModelFilter filter(cgltf_filter_type value,bool minification,ModelAsset& asset) {
-    (void)asset;
-    if (value==cgltf_filter_type_undefined || value==cgltf_filter_type_linear) return ModelFilter::Linear;
-    if (value==cgltf_filter_type_nearest) return ModelFilter::Nearest;
-    check(minification && value>=cgltf_filter_type_nearest_mipmap_nearest && value<=cgltf_filter_type_linear_mipmap_linear,"invalid texture filter");
-    switch(value) {
-    case cgltf_filter_type_nearest_mipmap_nearest:return ModelFilter::NearestMipmapNearest;
-    case cgltf_filter_type_linear_mipmap_nearest:return ModelFilter::LinearMipmapNearest;
-    case cgltf_filter_type_nearest_mipmap_linear:return ModelFilter::NearestMipmapLinear;
-    case cgltf_filter_type_linear_mipmap_linear:return ModelFilter::LinearMipmapLinear;
-    default:fail("invalid texture filter");
-    }
+ModelFilter filter(int value,bool minification) {
+    switch(value){case 0:case 9729:return ModelFilter::Linear;case 9728:return ModelFilter::Nearest;
+    case 9984:check(minification,"invalid texture filter");return ModelFilter::NearestMipmapNearest;
+    case 9985:check(minification,"invalid texture filter");return ModelFilter::LinearMipmapNearest;
+    case 9986:check(minification,"invalid texture filter");return ModelFilter::NearestMipmapLinear;
+    case 9987:check(minification,"invalid texture filter");return ModelFilter::LinearMipmapLinear;default:fail("invalid texture filter");}
 }
-ModelTexture texture(const cgltf_texture_view& view,const cgltf_data& data,const std::vector<std::string>& images,ModelAsset& asset) {
-    ModelTexture result; if (!view.texture) return result;
-    check(view.texture->image!=nullptr,"texture has no supported core image fallback");
-    check(view.texcoord>=0 && view.texcoord<=1,"material references a UV set beyond UV1");
-    result.image=AssetRef<DecodedImage>{images.at(static_cast<size_t>(view.texture->image-data.images))}; result.texCoord=static_cast<uint32_t>(view.texcoord);
+ModelTexture texture(const Json& view,const GltfSource& data,const std::vector<std::string>& images,ModelAsset& asset) {
+    ModelTexture result;if(view.is_null()||!view.contains("index"))return result;
+    const auto& source=data.item("textures",number(view,"index"));check(source.contains("source"),"texture has no supported core image fallback");
+    const auto uv=number(view,"texCoord");check(uv<=1,"material references a UV set beyond UV1");
+    result.image=AssetRef<DecodedImage>{images.at(number(source,"source"))};result.texCoord=uint32_t(uv);
     check(!result.image.empty(),"core material texture has no supported PNG/JPEG image");
-    if (view.has_transform) warn(asset,"Optional KHR_texture_transform ignored; core texture coordinates are used.");
-    if (const auto* sampler=view.texture->sampler) {
-        result.wrapU=wrap(sampler->wrap_s); result.wrapV=wrap(sampler->wrap_t);
-        result.minFilter=filter(sampler->min_filter,true,asset); result.magFilter=filter(sampler->mag_filter,false,asset);
-    }
+    if(view.contains("extensions")&&view["extensions"].contains("KHR_texture_transform"))warn(asset,"Optional KHR_texture_transform ignored; core texture coordinates are used.");
+    if(source.contains("sampler")){const auto& sampler=data.item("samplers",number(source,"sampler"));
+        result.wrapU=wrap(sampler.value("wrapS",10497));result.wrapV=wrap(sampler.value("wrapT",10497));
+        result.minFilter=filter(sampler.value("minFilter",0),true);result.magFilter=filter(sampler.value("magFilter",0),false);}
     return result;
 }
-void materials(const cgltf_data& data,const std::vector<std::string>& images,ModelAsset& asset) {
-    bool needsFallback=false;
-    for(size_t mesh=0;mesh<data.meshes_count;++mesh)
-        for(size_t primitive=0;primitive<data.meshes[mesh].primitives_count;++primitive)
-            needsFallback|=data.meshes[mesh].primitives[primitive].material==nullptr;
-    asset.materials.reserve(data.materials_count+(needsFallback?1:0));
-    for (size_t i=0;i<data.materials_count;++i) {
-        const auto& source=data.materials[i]; ModelMaterial m; m.name=source.name&&source.name[0]?source.name:"Material "+std::to_string(i+1);
-        if (source.has_pbr_metallic_roughness) {
-            const auto& p=source.pbr_metallic_roughness; std::copy_n(p.base_color_factor,4,m.baseColor.begin());
-            m.metallic=p.metallic_factor; m.roughness=p.roughness_factor;
-            m.baseColorTexture=texture(p.base_color_texture,data,images,asset);
-            m.metallicRoughnessTexture=texture(p.metallic_roughness_texture,data,images,asset);
+const Json& field(const Json& value,const char* name) {static const Json missing;const auto found=value.find(name);return found==value.end()?missing:*found;}
+template<class Value> void vectorValue(const Json& source,Value& target) {
+    if(source.is_null())return;check(source.is_array()&&source.size()==target.size(),"invalid vector shape");
+    for(std::size_t i=0;i<target.size();++i){check(source[i].is_number(),"invalid vector component");target[i]=source[i].get<float>();}
+}
+void materials(const GltfSource& data,const std::vector<std::string>& images,ModelAsset& asset,const aiScene* imported=nullptr) {
+    bool needsFallback=false;for(const auto& mesh:data.table("meshes"))for(const auto& primitive:mesh.at("primitives"))needsFallback|=!primitive.contains("material");
+    const auto& sources=data.table("materials");asset.materials.reserve(sources.size()+(needsFallback?1:0));
+    check(!imported||imported->mNumMaterials>=sources.size(),"Assimp lost source material slots");
+    for(std::size_t i=0;i<sources.size();++i) {
+        const auto& source=sources[i];ModelMaterial m;m.name=source.value("name",std::string{});if(m.name.empty())m.name="Material "+std::to_string(i+1);
+        const auto& pbr=field(source,"pbrMetallicRoughness");
+        if(!pbr.is_null()){
+            vectorValue(field(pbr,"baseColorFactor"),m.baseColor);m.metallic=pbr.value("metallicFactor",1.f);m.roughness=pbr.value("roughnessFactor",1.f);
+            m.baseColorTexture=texture(field(pbr,"baseColorTexture"),data,images,asset);
+            m.metallicRoughnessTexture=texture(field(pbr,"metallicRoughnessTexture"),data,images,asset);
         }
-        m.normalTexture=texture(source.normal_texture,data,images,asset); if (source.normal_texture.texture) m.normalScale=source.normal_texture.scale;
-        m.occlusionTexture=texture(source.occlusion_texture,data,images,asset); if (source.occlusion_texture.texture) m.occlusionStrength=source.occlusion_texture.scale;
-        m.emissiveTexture=texture(source.emissive_texture,data,images,asset); std::copy_n(source.emissive_factor,3,m.emissive.begin());
-        m.alphaMask=source.alpha_mode==cgltf_alpha_mode_mask; m.alphaCutoff=source.alpha_cutoff; m.doubleSided=source.double_sided!=0;
-        m.alphaBlend=source.alpha_mode==cgltf_alpha_mode_blend;
-        auto unit=[](float value){return std::isfinite(value) && value>=0 && value<=1;};
-        check(std::all_of(m.baseColor.begin(),m.baseColor.end(),unit) && unit(m.metallic) && unit(m.roughness) && unit(m.occlusionStrength),"material factors must be in [0, 1]: "+m.name);
-        check(std::isfinite(m.normalScale) && std::isfinite(m.alphaCutoff) && m.alphaCutoff>=0 &&
-              std::all_of(m.emissive.begin(),m.emissive.end(),unit),"invalid normal, alpha, or emissive factor: "+m.name);
+        m.normalTexture=texture(field(source,"normalTexture"),data,images,asset);if(!m.normalTexture.image.empty())m.normalScale=source["normalTexture"].value("scale",1.f);
+        m.occlusionTexture=texture(field(source,"occlusionTexture"),data,images,asset);if(!m.occlusionTexture.image.empty())m.occlusionStrength=source["occlusionTexture"].value("strength",1.f);
+        m.emissiveTexture=texture(field(source,"emissiveTexture"),data,images,asset);vectorValue(field(source,"emissiveFactor"),m.emissive);
+        const auto alpha=source.value("alphaMode",std::string{"OPAQUE"});check(alpha=="OPAQUE"||alpha=="MASK"||alpha=="BLEND","invalid material alpha mode");
+        m.alphaMask=alpha=="MASK";m.alphaBlend=alpha=="BLEND";m.alphaCutoff=source.value("alphaCutoff",.5f);m.doubleSided=source.value("doubleSided",false);
+        auto unit=[](float value){return std::isfinite(value)&&value>=0&&value<=1;};
+        check(std::all_of(m.baseColor.begin(),m.baseColor.end(),unit)&&unit(m.metallic)&&unit(m.roughness)&&unit(m.occlusionStrength),"material factors must be in [0, 1]: "+m.name);
+        check(std::isfinite(m.normalScale)&&std::isfinite(m.alphaCutoff)&&m.alphaCutoff>=0&&std::all_of(m.emissive.begin(),m.emissive.end(),unit),"invalid normal, alpha, or emissive factor: "+m.name);
+        if(imported) {
+            const auto& material=*imported->mMaterials[i];aiColor4D base;aiColor3D emissive;
+            if(material.Get(AI_MATKEY_BASE_COLOR,base)==AI_SUCCESS)m.baseColor={base.r,base.g,base.b,base.a};
+            material.Get(AI_MATKEY_METALLIC_FACTOR,m.metallic);material.Get(AI_MATKEY_ROUGHNESS_FACTOR,m.roughness);
+            if(material.Get(AI_MATKEY_COLOR_EMISSIVE,emissive)==AI_SUCCESS)m.emissive={emissive.r,emissive.g,emissive.b};
+        }
         asset.materials.push_back(std::move(m));
     }
-    if(needsFallback) {
-        ModelMaterial fallback; fallback.name="Default material"; asset.materials.push_back(std::move(fallback));
-    }
+    if(needsFallback){ModelMaterial fallback;fallback.name="Default material";asset.materials.push_back(std::move(fallback));}
 }
 
 struct TangentContext { std::vector<ModelVertex>* corners; uint32_t uv; };
@@ -395,130 +539,130 @@ void generateTangents(std::vector<ModelVertex>& corners,uint32_t uv) {
     };
     SMikkTSpaceContext context{&api,&user}; check(genTangSpaceDefault(&context)!=0,"MikkTSpace tangent generation failed");
 }
-const cgltf_accessor* attribute(const cgltf_primitive& primitive,cgltf_attribute_type type,int index=0) {
-    const cgltf_accessor* found=nullptr;
-    for (size_t i=0;i<primitive.attributes_count;++i) if (primitive.attributes[i].type==type && primitive.attributes[i].index==index) {
-        check(!found,"duplicate vertex attribute"); found=primitive.attributes[i].data;
-    }
-    return found;
+std::optional<Accessor> attribute(const GltfSource& data,const Json& primitive,const std::string& name) {
+    const auto& attrs=primitive.at("attributes");const auto found=attrs.find(name);if(found==attrs.end())return {};
+    check(found->is_number_unsigned()||(found->is_number_integer()&&found->get<int64_t>()>=0),"invalid vertex attribute reference");return data.accessor(found->get<std::size_t>());
 }
-void deformation(const cgltf_primitive& source,ModelPrimitive& primitive,bool hasNormals,bool hasTangents) {
-    for(std::size_t index=0;index<source.attributes_count;++index) {
-        const auto& attr=source.attributes[index];
-        if(attr.type==cgltf_attribute_type_joints||attr.type==cgltf_attribute_type_weights)
-            check(attr.index>=0&&attr.index<2,"more than eight joint influences are unsupported (JOINTS/WEIGHTS sets beyond 1)");
-    }
-    const bool skinned=attribute(source,cgltf_attribute_type_joints)||attribute(source,cgltf_attribute_type_weights);
+void deformation(const GltfSource& data,const Json& source,ModelPrimitive& primitive,bool hasNormals,bool hasTangents) {
+    for(const auto& attr:source.at("attributes").items())if(attr.key().starts_with("JOINTS_")||attr.key().starts_with("WEIGHTS_"))
+        check(attr.key()=="JOINTS_0"||attr.key()=="JOINTS_1"||attr.key()=="WEIGHTS_0"||attr.key()=="WEIGHTS_1","more than eight joint influences are unsupported (JOINTS/WEIGHTS sets beyond 1)");
+    const bool skinned=attribute(data,source,"JOINTS_0").has_value()||attribute(data,source,"WEIGHTS_0").has_value();
     if(skinned){primitive.skinWeights.resize(primitive.vertices.size());primitive.hasSkinning=true;}
     for(int set=0;set<2;++set) {
-        const auto* joints=attribute(source,cgltf_attribute_type_joints,set);const auto* weights=attribute(source,cgltf_attribute_type_weights,set);
-        check(bool(joints)==bool(weights),"JOINTS and WEIGHTS attributes must be paired");if(!joints)continue;
-        check(skinned,"JOINTS_1 requires JOINTS_0");
-        check(joints->type==cgltf_type_vec4&&joints->count==primitive.vertices.size()&&!joints->normalized&&
-            (joints->component_type==cgltf_component_type_r_8u||joints->component_type==cgltf_component_type_r_16u),"JOINTS must be unnormalized unsigned byte/short VEC4 attributes");
-        check(weights->type==cgltf_type_vec4&&weights->count==primitive.vertices.size()&&
-            (weights->component_type==cgltf_component_type_r_32f||
-             (weights->normalized&&(weights->component_type==cgltf_component_type_r_8u||weights->component_type==cgltf_component_type_r_16u))),
-            "WEIGHTS must be float or normalized unsigned byte/short VEC4 attributes");
-        const auto jointValues=floats(*joints),weightValues=floats(*weights);
-        for(std::size_t vertex=0;vertex<primitive.vertices.size();++vertex)for(std::size_t component=0;component<4;++component) {
-            const auto offset=vertex*4+component;auto& target=primitive.skinWeights[vertex];
-            check(weightValues[offset]>=0,"skin weights must be nonnegative");
-            target.joints[std::size_t(set)*4+component]=std::uint16_t(jointValues[offset]);target.weights[std::size_t(set)*4+component]=weightValues[offset];
-        }
+        const auto joints=attribute(data,source,"JOINTS_"+std::to_string(set)),weights=attribute(data,source,"WEIGHTS_"+std::to_string(set));
+        check(bool(joints)==bool(weights),"JOINTS and WEIGHTS attributes must be paired");if(!joints)continue;check(skinned,"JOINTS_1 requires JOINTS_0");
+        check(joints->type=="VEC4"&&joints->count==primitive.vertices.size()&&!joints->normalized&&(joints->componentType==5121||joints->componentType==5123),"JOINTS must be unnormalized unsigned byte/short VEC4 attributes");
+        check(weights->type=="VEC4"&&weights->count==primitive.vertices.size()&&(weights->componentType==5126||(weights->normalized&&(weights->componentType==5121||weights->componentType==5123))),"WEIGHTS must be float or normalized unsigned byte/short VEC4 attributes");
+        const auto jointValues=floats(data,*joints),weightValues=floats(data,*weights);
+        for(std::size_t vertex=0;vertex<primitive.vertices.size();++vertex)for(std::size_t component=0;component<4;++component){
+            const auto offset=vertex*4+component;auto& target=primitive.skinWeights[vertex];check(weightValues[offset]>=0,"skin weights must be nonnegative");
+            target.joints[std::size_t(set)*4+component]=std::uint16_t(jointValues[offset]);target.weights[std::size_t(set)*4+component]=weightValues[offset];}
     }
-    for(auto& vertex:primitive.skinWeights) {
-        double sum{};for(float value:vertex.weights)sum+=value;check(sum>1e-12&&std::isfinite(sum),"skin vertex has zero total weight");
-        for(float& weight:vertex.weights)weight=float(weight/sum);
-    }
-    check(source.targets_count<=256,"more than 256 morph targets per primitive are unsupported");
-    primitive.morphTargets.resize(source.targets_count);
-    for(std::size_t targetIndex=0;targetIndex<source.targets_count;++targetIndex) {
-        const auto& sourceTarget=source.targets[targetIndex];auto& target=primitive.morphTargets[targetIndex];
-        for(std::size_t index=0;index<sourceTarget.attributes_count;++index) {
-            const auto& attr=sourceTarget.attributes[index];const auto* accessor=attr.data;
-            check(attr.index==0&&accessor&&accessor->type==cgltf_type_vec3&&accessor->count==primitive.vertices.size()&&accessor->component_type==cgltf_component_type_r_32f,
-                "morph targets require matching FLOAT VEC3 POSITION/NORMAL/TANGENT deltas");
+    for(auto& vertex:primitive.skinWeights){double sum{};for(float value:vertex.weights)sum+=value;check(sum>1e-12&&std::isfinite(sum),"skin vertex has zero total weight");for(float& weight:vertex.weights)weight=float(weight/sum);}
+    const auto& targets=field(source,"targets");check(targets.is_null()||targets.is_array(),"invalid morph targets");
+    check(targets.size()<=256,"more than 256 morph targets per primitive are unsupported");primitive.morphTargets.resize(targets.size());
+    for(std::size_t targetIndex=0;targetIndex<targets.size();++targetIndex){
+        const auto& sourceTarget=targets[targetIndex];auto& target=primitive.morphTargets[targetIndex];check(sourceTarget.is_object()&&!sourceTarget.empty(),"morph targets cannot be empty");
+        for(const auto& attr:sourceTarget.items()){
+            check(attr.key()=="POSITION"||attr.key()=="NORMAL"||attr.key()=="TANGENT","unsupported morph target attribute");
+            const auto accessor=data.accessor(attr.value().get<std::size_t>());
+            check(accessor.type=="VEC3"&&accessor.count==primitive.vertices.size()&&accessor.componentType==5126,"morph targets require matching FLOAT VEC3 POSITION/NORMAL/TANGENT deltas");
             std::vector<Vec3>* output=nullptr;
-            if(attr.type==cgltf_attribute_type_position)output=&target.positions;
-            else if(attr.type==cgltf_attribute_type_normal){check(hasNormals,"morph NORMAL target requires a base NORMAL attribute");output=&target.normals;}
-            else if(attr.type==cgltf_attribute_type_tangent){if(!hasNormals)continue;check(hasTangents,"morph TANGENT target requires a base TANGENT attribute");output=&target.tangents;}
-            else fail("unsupported morph target attribute");
-            check(output->empty(),"duplicate morph target attribute");const auto values=floats(*accessor);output->resize(primitive.vertices.size());
-            for(std::size_t vertex=0;vertex<output->size();++vertex) {
-                std::copy_n(values.data()+vertex*3,3,(*output)[vertex].begin());
-                if(output==&target.positions)math::include(target.positionBounds,(*output)[vertex]);
-            }
+            if(attr.key()=="POSITION")output=&target.positions;
+            else if(attr.key()=="NORMAL"){check(hasNormals,"morph NORMAL target requires a base NORMAL attribute");output=&target.normals;}
+            else {if(!hasNormals)continue;check(hasTangents,"morph TANGENT target requires a base TANGENT attribute");output=&target.tangents;}
+            const auto values=floats(data,accessor);output->resize(primitive.vertices.size());
+            for(std::size_t vertex=0;vertex<output->size();++vertex){std::copy_n(values.data()+vertex*3,3,(*output)[vertex].begin());if(output==&target.positions)math::include(target.positionBounds,(*output)[vertex]);}
         }
-        check(sourceTarget.attributes_count>0,"morph targets cannot be empty");
     }
 }
-void geometry(const cgltf_data& data,ModelAsset& asset) {
-    for (size_t meshIndex=0;meshIndex<data.meshes_count;++meshIndex) {
-        const auto& mesh=data.meshes[meshIndex]; ModelMesh target; target.name=mesh.name?mesh.name:"Mesh "+std::to_string(meshIndex+1);
-        if(mesh.weights_count)target.weights.assign(mesh.weights,mesh.weights+mesh.weights_count);
-        check(std::all_of(target.weights.begin(),target.weights.end(),[](float value){return std::isfinite(value);}),"nonfinite mesh morph weight");
-        for (size_t primitiveIndex=0;primitiveIndex<mesh.primitives_count;++primitiveIndex) {
-            const auto& source=mesh.primitives[primitiveIndex];
-            check(!primitiveIndex||source.targets_count==mesh.primitives[0].targets_count,"mesh primitives must have matching morph target counts");
-            check(!mesh.weights_count||mesh.weights_count==source.targets_count,"mesh morph weights must match its targets");
-            check(source.type==cgltf_primitive_type_triangles || source.type==cgltf_primitive_type_triangle_strip || source.type==cgltf_primitive_type_triangle_fan,"point and line primitives are unsupported");
-            const auto* positions=attribute(source,cgltf_attribute_type_position);
-            check(positions && positions->type==cgltf_type_vec3 && positions->component_type==cgltf_component_type_r_32f && positions->count<=MaxVertices,"primitive needs FLOAT VEC3 positions");
-            const auto* normals=attribute(source,cgltf_attribute_type_normal); const auto* tangents=attribute(source,cgltf_attribute_type_tangent);
-            const bool authoredTangents=tangents!=nullptr;
-            // glTF requires ignoring authored tangents when normals are absent.
-            if (!normals) tangents=nullptr;
-            const auto* uv0=attribute(source,cgltf_attribute_type_texcoord,0); const auto* uv1=attribute(source,cgltf_attribute_type_texcoord,1);
-            const auto* colors=attribute(source,cgltf_attribute_type_color);
-            ModelPrimitive p; p.material=source.material?static_cast<uint32_t>(source.material-data.materials):static_cast<uint32_t>(data.materials_count);
-            const auto& material=asset.materials[p.material];
-            p.uvMask=static_cast<uint8_t>((uv0?1:0)|(uv1?2:0));
-            const auto authoredTangentUv=source.material&&source.material->normal_texture.texture?static_cast<uint32_t>(source.material->normal_texture.texcoord):0u;
-            if(!material.triplanar&&!material.normalTexture.image.empty()&&material.normalTexture.texCoord!=authoredTangentUv){
-                if(tangents)warn(asset,"Normal-map UV selection changed; authored tangents were regenerated.");tangents=nullptr;
-            }
-            p.tangentUv=tangents?static_cast<uint8_t>(authoredTangentUv):material.normalTexture.image.empty()||material.triplanar?0xff:static_cast<uint8_t>(material.normalTexture.texCoord);
-            for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
-                check(slot->texCoord<=1,"material references a UV set beyond UV1");
-                check(material.triplanar || slot->image.empty() || (slot->texCoord?uv1:uv0),"material references a missing UV set");
-            }
-            const auto positionValues=floats(*positions); p.vertices.resize(positions->count);
-            for (size_t v=0;v<positions->count;++v) std::copy_n(positionValues.data()+v*3,3,p.vertices[v].position.begin());
-            auto apply=[&](const cgltf_accessor* a,size_t components,auto assignment) {
-                if (!a) return; check(a->count==positions->count && cgltf_num_components(a->type)==components,"vertex attribute count or shape mismatch");
-                const auto values=floats(*a); for (size_t v=0;v<p.vertices.size();++v) assignment(p.vertices[v],values.data()+v*components);
-            };
-            if (normals) check(normals->component_type==cgltf_component_type_r_32f,"NORMAL must use floating point components");
-            if (tangents) check(tangents->component_type==cgltf_component_type_r_32f,"TANGENT must use floating point components");
-            for (const auto* uv:{uv0,uv1,colors}) if (uv) check(uv->component_type==cgltf_component_type_r_32f ||
-                (uv->normalized && (uv->component_type==cgltf_component_type_r_8u || uv->component_type==cgltf_component_type_r_16u)),"UV/color attributes must be floats or normalized unsigned bytes/shorts");
-            apply(normals,3,[&](ModelVertex& v,const float* f){v.normal=normalized({f[0],f[1],f[2]});});
-            apply(tangents,4,[&](ModelVertex& v,const float* f){
-                check(f[3]==1 || f[3]==-1,"tangent handedness must be +1 or -1"); const auto t=normalized({f[0],f[1],f[2]},{1,0,0}); v.tangent={t[0],t[1],t[2],f[3]};
-            });
-            apply(uv0,2,[](ModelVertex& v,const float* f){std::copy_n(f,2,v.uv0.begin());});
-            apply(uv1,2,[](ModelVertex& v,const float* f){std::copy_n(f,2,v.uv1.begin());});
-            if (colors) {
-                const auto count=cgltf_num_components(colors->type); check(count==3 || count==4,"COLOR_0 must have three or four components");
-                apply(colors,count,[count](ModelVertex& v,const float* f){std::copy_n(f,count,v.color.begin());
-                    check(std::all_of(v.color.begin(),v.color.end(),[](float x){return x>=0 && x<=1;}),"vertex color must be in [0, 1]");});
-            }
-            deformation(source,p,normals!=nullptr,authoredTangents);
-            std::vector<uint32_t> input;
-            if (source.indices) input=indices(*source.indices); else { input.resize(p.vertices.size()); std::iota(input.begin(),input.end(),0u); }
-            check(input.size()>=3 && std::all_of(input.begin(),input.end(),[&](uint32_t v){return v<p.vertices.size();}),"triangle indices are out of bounds or incomplete");
-            if (source.type==cgltf_primitive_type_triangles) { check(input.size()%3==0,"triangle index count must be divisible by three"); p.indices=std::move(input); }
-            else {
-                check(input.size()<=MaxVertices,"triangle strip/fan is too large"); p.indices.reserve((input.size()-2)*3);
-                for (size_t i=2;i<input.size();++i) {
-                    uint32_t a=source.type==cgltf_primitive_type_triangle_fan?input[0]:input[i-2], b=input[i-1], c=input[i];
-                    if (source.type==cgltf_primitive_type_triangle_strip && (i&1)) std::swap(a,b);
-                    if (a!=b && b!=c && a!=c) p.indices.insert(p.indices.end(),{a,b,c});
+void geometry(const GltfSource& data,const aiScene& imported,ModelAsset& asset) {
+    std::size_t importedMesh=data.table("materials").size(); // Skip the private material carrier.
+    const auto& meshes=data.table("meshes");
+    for(std::size_t meshIndex=0;meshIndex<meshes.size();++meshIndex){
+        const auto& mesh=meshes[meshIndex];ModelMesh modelMesh;modelMesh.name=mesh.value("name",std::string{});if(modelMesh.name.empty())modelMesh.name="Mesh "+std::to_string(meshIndex+1);
+        if(mesh.contains("weights"))modelMesh.weights=mesh["weights"].get<std::vector<float>>();
+        check(std::all_of(modelMesh.weights.begin(),modelMesh.weights.end(),[](float value){return std::isfinite(value);}),"nonfinite mesh morph weight");
+        const auto& primitives=mesh.at("primitives");
+        for(std::size_t primitiveIndex=0;primitiveIndex<primitives.size();++primitiveIndex){
+            const auto& source=primitives[primitiveIndex];const auto targetCount=field(source,"targets").size();
+            check(!primitiveIndex||targetCount==field(primitives[0],"targets").size(),"mesh primitives must have matching morph target counts");
+            check(modelMesh.weights.empty()||modelMesh.weights.size()==targetCount,"mesh morph weights must match its targets");
+            const int mode=source.value("mode",4);check(mode==4||mode==5||mode==6,"point and line primitives are unsupported");
+            const auto positions=attribute(data,source,"POSITION");check(positions&&positions->type=="VEC3"&&positions->componentType==5126&&positions->count<=MaxVertices,"primitive needs FLOAT VEC3 positions");
+            const auto normals=attribute(data,source,"NORMAL");auto tangents=attribute(data,source,"TANGENT");const bool authoredTangents=tangents.has_value();if(!normals)tangents.reset();
+            const auto uv0=attribute(data,source,"TEXCOORD_0"),uv1=attribute(data,source,"TEXCOORD_1"),colors=attribute(data,source,"COLOR_0");
+            auto uvInterpolationCoordinates=attribute(data,source,"_CRIMSON_UV_INTERPOLATION_COORD"),uvInterpolationCorrection=attribute(data,source,"_CRIMSON_UV_INTERPOLATION_COEFF");
+            const auto uvInterpolationMode=attribute(data,source,"_CRIMSON_UV_INTERPOLATION_MODE");
+            const auto legacyCoordinates=attribute(data,source,"_CRIMSON_CIRCULAR_COORD"),legacyCorrection=attribute(data,source,"_CRIMSON_CIRCULAR_COEFF");
+            check(bool(legacyCoordinates)==bool(legacyCorrection),"legacy circular UV attributes must be paired");
+            const bool legacy=legacyCoordinates.has_value();
+            check(!legacy||(!uvInterpolationCoordinates&&!uvInterpolationCorrection&&!uvInterpolationMode),"ambiguous legacy and current UV interpolation attributes");
+            if(legacy){uvInterpolationCoordinates=legacyCoordinates;uvInterpolationCorrection=legacyCorrection;}
+            check(bool(uvInterpolationCoordinates)==bool(uvInterpolationCorrection)&&
+                (legacy||bool(uvInterpolationCoordinates)==bool(uvInterpolationMode)),"UV interpolation attributes must be paired with their mode");
+            std::vector<float> interpolationCoordinateValues,interpolationCorrectionValues,interpolationModeValues;
+            if(uvInterpolationCoordinates){
+                check(uv0.has_value(),"UV interpolation attributes require UV0");
+                for(const auto* value:{&*uvInterpolationCoordinates,&*uvInterpolationCorrection})
+                    check(value->count==positions->count&&value->type=="VEC4"&&value->componentType==5126&&!value->normalized,
+                        "UV interpolation attributes require matching FLOAT VEC4 values");
+                interpolationCoordinateValues=floats(data,*uvInterpolationCoordinates);interpolationCorrectionValues=floats(data,*uvInterpolationCorrection);
+                if(uvInterpolationMode){
+                    check(uvInterpolationMode->count==positions->count&&uvInterpolationMode->type=="SCALAR"&&uvInterpolationMode->componentType==5126&&!uvInterpolationMode->normalized,
+                        "UV interpolation mode requires matching FLOAT SCALAR values");
+                    interpolationModeValues=floats(data,*uvInterpolationMode);
                 }
-                check(!p.indices.empty(),"primitive has no nondegenerate triangles");
             }
+            ModelPrimitive p;const auto materialIndex=number(source,"material",data.table("materials").size());check(materialIndex<asset.materials.size(),"primitive references missing material");p.material=uint32_t(materialIndex);
+            const auto& material=asset.materials[p.material];p.uvMask=uint8_t((uv0?1:0)|(uv1?2:0));
+            uint32_t authoredTangentUv=0;
+            if(source.contains("material")){const auto& normalTexture=field(data.item("materials",number(source,"material")),"normalTexture");if(!normalTexture.is_null())authoredTangentUv=uint32_t(number(normalTexture,"texCoord"));}
+            if(!material.triplanar&&!material.normalTexture.image.empty()&&material.normalTexture.texCoord!=authoredTangentUv){if(tangents)warn(asset,"Normal-map UV selection changed; authored tangents were regenerated.");tangents.reset();}
+            p.tangentUv=tangents?uint8_t(authoredTangentUv):material.normalTexture.image.empty()||material.triplanar?0xff:uint8_t(material.normalTexture.texCoord);
+            for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}){
+                check(slot->texCoord<=1,"material references a UV set beyond UV1");check(material.triplanar||slot->image.empty()||(slot->texCoord?uv1:uv0).has_value(),"material references a missing UV set");}
+            const auto validateAttribute=[&](const std::optional<Accessor>& value,std::size_t components){if(value){check(value->count==positions->count&&value->components==components,"vertex attribute count or shape mismatch");(void)floats(data,*value);}};
+            validateAttribute(positions,3);validateAttribute(normals,3);validateAttribute(tangents,4);validateAttribute(uv0,2);validateAttribute(uv1,2);
+            if(normals)check(normals->componentType==5126,"NORMAL must use floating point components");if(tangents)check(tangents->componentType==5126,"TANGENT must use floating point components");
+            for(const auto* value:{&uv0,&uv1,&colors})if(*value)check((*value)->componentType==5126||((*value)->normalized&&((*value)->componentType==5121||(*value)->componentType==5123)),"UV/color attributes must be floats or normalized unsigned bytes/shorts");
+            if(colors){check(colors->components==3||colors->components==4,"COLOR_0 must have three or four components");validateAttribute(colors,colors->components);}
+            check(importedMesh<imported.mNumMeshes,"Assimp lost a source primitive");const auto& decoded=*imported.mMeshes[importedMesh++];
+            check(decoded.mNumVertices==positions->count&&decoded.mVertices,"Assimp changed source vertex correspondence");
+            check(!normals||decoded.HasNormals(),"Assimp lost vertex normals");check(!tangents||decoded.HasTangentsAndBitangents(),"Assimp lost vertex tangents");
+            check(!uv0||decoded.HasTextureCoords(0),"Assimp lost UV0");check(!uv1||decoded.HasTextureCoords(1),"Assimp lost UV1");check(!colors||decoded.HasVertexColors(0),"Assimp lost vertex colors");
+            std::vector<float> tangentValues;if(tangents){tangentValues=floats(data,*tangents);for(std::size_t v=0;v<tangents->count;++v)check(tangentValues[v*4+3]==1||tangentValues[v*4+3]==-1,"tangent handedness must be +1 or -1");}
+            p.vertices.resize(decoded.mNumVertices);
+            for(std::size_t v=0;v<p.vertices.size();++v){auto& vertex=p.vertices[v];const auto& position=decoded.mVertices[v];vertex.position={position.x,position.y,position.z};
+                if(normals){const auto& n=decoded.mNormals[v];vertex.normal=normalized({n.x,n.y,n.z});}
+                if(tangents){const auto& t=decoded.mTangents[v];const auto tangent=normalized({t.x,t.y,t.z},{1,0,0});
+                    vertex.tangent={tangent[0],tangent[1],tangent[2],tangentValues[v*4+3]};}
+                for(std::size_t uv=0;uv<2;++uv)if(uv?bool(uv1):bool(uv0)){const auto& value=decoded.mTextureCoords[uv][v];auto& targetUv=uv?vertex.uv1:vertex.uv0;targetUv={value.x,1.f-value.y};}
+                if(uvInterpolationCoordinates){
+                    std::copy_n(interpolationCoordinateValues.data()+v*4,4,vertex.uvInterpolationCoordinates.begin());
+                    std::copy_n(interpolationCorrectionValues.data()+v*4,4,vertex.uvInterpolationCorrection.begin());
+                    vertex.uvInterpolationMode=legacy?(vertex.uvInterpolationCoordinates[2]>0?1.f:0.f):interpolationModeValues[v];
+                    check((vertex.uvInterpolationMode==0||vertex.uvInterpolationMode==1||vertex.uvInterpolationMode==2)&&
+                        (vertex.uvInterpolationMode!=1||vertex.uvInterpolationCoordinates[2]>0)&&
+                        (vertex.uvInterpolationMode!=0||(vertex.uvInterpolationCoordinates==Vec4{}&&vertex.uvInterpolationCorrection==Vec4{})),
+                        "invalid UV interpolation corner attributes");
+                }
+                if(colors){const auto& color=decoded.mColors[0][v];vertex.color={color.r,color.g,color.b,colors->components==3?1.f:color.a};check(std::all_of(vertex.color.begin(),vertex.color.end(),[](float value){return value>=0&&value<=1;}),"vertex color must be in [0, 1]");}
+            }
+            deformation(data,source,p,normals.has_value(),authoredTangents);
+            std::vector<uint32_t> input;if(source.contains("indices"))input=indices(data,data.accessor(number(source,"indices")));else{input.resize(p.vertices.size());std::iota(input.begin(),input.end(),0u);}
+            check(input.size()>=3&&std::all_of(input.begin(),input.end(),[&](uint32_t vertex){return vertex<p.vertices.size();}),"triangle indices are out of bounds or incomplete");
+            if(mode==4){check(input.size()%3==0,"triangle index count must be divisible by three");p.indices=std::move(input);}
+            else{check(input.size()<=MaxVertices,"triangle strip/fan is too large");p.indices.reserve((input.size()-2)*3);
+                for(std::size_t i=2;i<input.size();++i){uint32_t a=mode==6?input[0]:input[i-2],b=input[i-1],c=input[i];if(mode==5&&(i&1))std::swap(a,b);if(a!=b&&b!=c&&a!=c)p.indices.insert(p.indices.end(),{a,b,c});}
+                check(!p.indices.empty(),"primitive has no nondegenerate triangles");}
             const bool needTangents=!material.triplanar && !material.normalTexture.image.empty() && !tangents;
+            if(uvInterpolationCoordinates)for(std::size_t triangle=0;triangle<p.indices.size();triangle+=3){
+                const auto& a=p.vertices[p.indices[triangle]];const auto& b=p.vertices[p.indices[triangle+1]];const auto& c=p.vertices[p.indices[triangle+2]];
+                check(a.uvInterpolationMode==b.uvInterpolationMode&&a.uvInterpolationMode==c.uvInterpolationMode&&
+                    a.uvInterpolationCorrection==b.uvInterpolationCorrection&&a.uvInterpolationCorrection==c.uvInterpolationCorrection,
+                    "UV interpolation triangle must retain one interpolation field");
+            }
             if (!normals || needTangents) {
                 std::vector<ModelVertex> corners; corners.reserve(p.indices.size());
                 for (auto index:p.indices) corners.push_back(p.vertices[index]);
@@ -565,7 +709,7 @@ void geometry(const cgltf_data& data,ModelAsset& asset) {
                 p.morphTargets.resize(morphTargets.size());
                 for(std::size_t targetIndex=0;targetIndex<morphTargets.size();++targetIndex)p.morphTargets[targetIndex].positionBounds=morphTargets[targetIndex].positionBounds;
                 std::unordered_map<std::string,uint32_t> unique; p.vertices.clear(); p.indices.clear(); p.indices.reserve(corners.size());
-                static_assert(sizeof(ModelVertex)==18*sizeof(float));
+                static_assert(sizeof(ModelVertex)==27*sizeof(float));
                 for (std::size_t cornerIndex=0;cornerIndex<corners.size();++cornerIndex) {
                     auto& v=corners[cornerIndex];const auto sourceIndex=sourceIndices[cornerIndex];
                     check(std::all_of(v.tangent.begin(),v.tangent.end(),[](float x){return std::isfinite(x);}),"nonfinite generated tangent");
@@ -599,141 +743,140 @@ void geometry(const cgltf_data& data,ModelAsset& asset) {
                 if(p.skinJointBounds.size()<=joint)p.skinJointBounds.resize(joint+1);math::include(p.skinJointBounds[joint],p.vertices[vertex].position);
             }
             p.sourceVertexCount=p.vertices.size();p.sourceIndexCount=p.indices.size();
-            target.primitives.push_back(static_cast<uint32_t>(asset.primitives.size())); asset.primitives.push_back(std::move(p));
+            modelMesh.primitives.push_back(static_cast<uint32_t>(asset.primitives.size())); asset.primitives.push_back(std::move(p));
         }
-        asset.meshes.push_back(std::move(target));
+        asset.meshes.push_back(std::move(modelMesh));
     }
 }
 
-void hierarchy(const cgltf_data& data,ModelAsset& asset) {
-    check(data.nodes_count<=MaxNodes,"too many hierarchy nodes"); asset.nodes.resize(data.nodes_count);
-    std::vector<uint32_t> parents(data.nodes_count);
-    for (size_t i=0;i<data.nodes_count;++i) {
-        const auto& source=data.nodes[i]; auto& node=asset.nodes[i]; node.name=source.name?source.name:"Node "+std::to_string(i+1);
-        node.matrixAuthored=source.has_matrix!=0;
-        if(source.skin)node.skin=static_cast<std::int32_t>(source.skin-data.skins);
-        if(source.has_translation)std::copy_n(source.translation,3,node.translation.begin());
-        if(source.has_scale)std::copy_n(source.scale,3,node.scale.begin());
-        if(source.has_rotation)std::copy_n(source.rotation,4,node.rotation.begin());
-        check(!source.has_matrix || (!source.has_translation && !source.has_rotation && !source.has_scale),"node cannot combine matrix and TRS transforms");
-        cgltf_node_transform_local(&source,node.local.data());
-        check(std::all_of(node.local.begin(),node.local.end(),[](float x){return std::isfinite(x);}),"nonfinite node transform");
-        check(std::abs(node.local[3])<1e-6f && std::abs(node.local[7])<1e-6f && std::abs(node.local[11])<1e-6f && std::abs(node.local[15]-1)<1e-6f,"node transform must be affine");
-        if (source.mesh) {
-            node.mesh=static_cast<int32_t>(source.mesh-data.meshes);const auto& mesh=asset.meshes[std::size_t(node.mesh)];
+void hierarchy(const GltfSource& data,ModelAsset& asset) {
+    const auto& nodes=data.table("nodes");check(nodes.size()<=MaxNodes,"too many hierarchy nodes");asset.nodes.resize(nodes.size());std::vector<uint32_t> parents(nodes.size());
+    for(std::size_t i=0;i<nodes.size();++i){const auto& source=nodes[i];auto& node=asset.nodes[i];node.name=source.value("name",std::string{});if(node.name.empty())node.name="Node "+std::to_string(i+1);
+        node.matrixAuthored=source.contains("matrix");if(source.contains("skin")){const auto skin=number(source,"skin");check(skin<data.table("skins").size(),"invalid mesh skin reference");node.skin=int32_t(skin);}
+        vectorValue(field(source,"translation"),node.translation);vectorValue(field(source,"scale"),node.scale);vectorValue(field(source,"rotation"),node.rotation);
+        check(!node.matrixAuthored||(!source.contains("translation")&&!source.contains("rotation")&&!source.contains("scale")),"node cannot combine matrix and TRS transforms");
+        if(node.matrixAuthored)vectorValue(source["matrix"],node.local);else node.local=math::multiply(math::multiply(math::translation(node.translation),math::rotation(node.rotation)),math::scaling(node.scale));
+        check(std::all_of(node.local.begin(),node.local.end(),[](float value){return std::isfinite(value);}),"nonfinite node transform");check(math::isAffine(node.local,1e-6),"node transform must be affine");
+        if(source.contains("mesh")){const auto index=number(source,"mesh");check(index<asset.meshes.size(),"node references missing mesh");node.mesh=int32_t(index);const auto& mesh=asset.meshes[index];
             const auto morphCount=mesh.primitives.empty()?0:asset.primitives[mesh.primitives.front()].morphTargets.size();
-            check(!source.weights_count||source.weights_count==morphCount,"node morph weights must match its targets");
-            if(source.weights_count)node.weights.assign(source.weights,source.weights+source.weights_count);
+            if(source.contains("weights")){node.weights=source["weights"].get<std::vector<float>>();check(node.weights.size()==morphCount,"node morph weights must match its targets");}
             else if(!mesh.weights.empty())node.weights=mesh.weights;else node.weights.resize(morphCount);
-        } else check(!source.weights_count&&!source.skin,"skin and morph weights require a mesh node");
-        for (size_t j=0;j<source.children_count;++j) {
-            const auto child=static_cast<uint32_t>(source.children[j]-data.nodes);
-            check(child<data.nodes_count && ++parents[child]==1,"node hierarchy has multiple parents or duplicate children"); node.children.push_back(child);asset.nodes[child].parent=static_cast<std::int32_t>(i);
-        }
+        }else check(!source.contains("weights")&&!source.contains("skin"),"skin and morph weights require a mesh node");
+        if(source.contains("children"))for(const auto& value:source["children"]){const auto child=number(Json{{"index",value}},"index");check(child<nodes.size()&&++parents[child]==1,"node hierarchy has multiple parents or duplicate children");node.children.push_back(uint32_t(child));asset.nodes[child].parent=int32_t(i);}
     }
-    // Kahn traversal validates all nodes, including nodes outside the active scene,
-    // without recursive calls on adversarially deep source hierarchies.
-    std::vector<uint32_t> pending; auto remaining=parents;
-    for (uint32_t i=0;i<remaining.size();++i) if (!remaining[i]) pending.push_back(i);
-    for (size_t i=0;i<pending.size();++i) for (auto child:asset.nodes[pending[i]].children) if (--remaining[child]==0) pending.push_back(child);
-    check(pending.size()==asset.nodes.size(),"node hierarchy contains a cycle");
-    const auto* scene=data.scene?data.scene:data.scenes_count?&data.scenes[0]:nullptr;
-    if (scene) {
-        std::set<uint32_t> roots;
-        for (size_t i=0;i<scene->nodes_count;++i) {
-            const auto index=static_cast<uint32_t>(scene->nodes[i]-data.nodes);
-            check(!parents[index] && roots.insert(index).second,"scene root has a parent or is duplicated"); asset.roots.push_back(index);
-        }
-    } else for (uint32_t i=0;i<parents.size();++i) if (!parents[i]) asset.roots.push_back(i);
-    struct Entry { uint32_t node; ModelMatrix parent; }; std::vector<Entry> stack;
-    for (auto it=asset.roots.rbegin();it!=asset.roots.rend();++it) stack.push_back({*it,ModelIdentity});
-    while (!stack.empty()) {
-        auto entry=stack.back(); stack.pop_back(); const auto& node=asset.nodes[entry.node]; const auto world=multiply(entry.parent,node.local);
-        if (node.mesh>=0) {
-            const bool singular=math::handedness(world)==0;
-            if(singular)warn(asset,(node.skin>=0?"Skin joint transforms replace singular mesh placement on node: ":
-                data.animations_count?"Retained animated draw with singular bind transform on node: ":"Skipped singular transform on node: ")+node.name);
-            if(!singular||data.animations_count||node.skin>=0)for (auto primitive:asset.meshes[static_cast<size_t>(node.mesh)].primitives) {
-                asset.draws.push_back({primitive,world,static_cast<std::int32_t>(entry.node)}); const auto& mesh=asset.primitives[primitive];
-                for (auto index:mesh.indices) include(asset.bounds,mesh.vertices[index].position,world);
-            }
-        }
-        for (auto it=node.children.rbegin();it!=node.children.rend();++it) stack.push_back({*it,world});
+    // Validate all nodes, including nodes outside the selected scene.
+    std::vector<uint32_t> pending;auto remaining=parents;for(uint32_t i=0;i<remaining.size();++i)if(!remaining[i])pending.push_back(i);
+    for(std::size_t i=0;i<pending.size();++i)for(auto child:asset.nodes[pending[i]].children)if(--remaining[child]==0)pending.push_back(child);check(pending.size()==asset.nodes.size(),"node hierarchy contains a cycle");
+    const auto& scenes=data.table("scenes");
+    if(!scenes.empty()){const auto index=number(data.json,"scene");check(index<scenes.size(),"missing default scene");std::set<uint32_t> roots;
+        if(scenes[index].contains("nodes"))for(const auto& value:scenes[index]["nodes"]){const auto root=number(Json{{"index",value}},"index");check(root<parents.size()&&!parents[root]&&roots.insert(uint32_t(root)).second,"scene root has a parent or is duplicated");asset.roots.push_back(uint32_t(root));}}
+    else for(uint32_t i=0;i<parents.size();++i)if(!parents[i])asset.roots.push_back(i);
+    struct Entry{uint32_t node;ModelMatrix parent;};std::vector<Entry> stack;for(auto it=asset.roots.rbegin();it!=asset.roots.rend();++it)stack.push_back({*it,ModelIdentity});
+    while(!stack.empty()){const auto entry=stack.back();stack.pop_back();const auto& node=asset.nodes[entry.node];const auto world=multiply(entry.parent,node.local);
+        if(node.mesh>=0){const bool singular=math::handedness(world)==0;
+            if(singular)warn(asset,(node.skin>=0?"Skin joint transforms replace singular mesh placement on node: ":!data.table("animations").empty()?"Retained animated draw with singular bind transform on node: ":"Skipped singular transform on node: ")+node.name);
+            if(!singular||!data.table("animations").empty()||node.skin>=0)for(auto primitive:asset.meshes[std::size_t(node.mesh)].primitives){asset.draws.push_back({primitive,world,int32_t(entry.node)});const auto& geometry=asset.primitives[primitive];for(auto index:geometry.indices)include(asset.bounds,geometry.vertices[index].position,world);}}
+        for(auto it=node.children.rbegin();it!=node.children.rend();++it)stack.push_back({*it,world});
     }
-    check(!asset.primitives.empty(),"asset contains no supported triangle geometry");
-    if (asset.draws.empty()) warn(asset,"The selected scene has no drawable geometry.");
+    check(!asset.primitives.empty(),"asset contains no supported triangle geometry");if(asset.draws.empty())warn(asset,"The selected scene has no drawable geometry.");
 }
-
-void skins(const cgltf_data& data,ModelAsset& asset) {
-    check(data.skins_count<=MaxNodes,"too many skins");asset.skins.reserve(data.skins_count);
-    for(std::size_t skinIndex=0;skinIndex<data.skins_count;++skinIndex) {
-        const auto& source=data.skins[skinIndex];ModelSkin skin;skin.name=source.name?source.name:"Skin "+std::to_string(skinIndex+1);
-        check(source.joints_count>0&&source.joints_count<=65536,"skin must contain between 1 and 65536 joints");
-        for(std::size_t joint=0;joint<source.joints_count;++joint) {
-            check(source.joints[joint]!=nullptr,"skin has a missing joint");skin.joints.push_back(std::uint32_t(source.joints[joint]-data.nodes));
-        }
-        if(source.skeleton)skin.skeleton=std::int32_t(source.skeleton-data.nodes);
-        skin.inverseBindMatrices.resize(source.joints_count);
-        if(source.inverse_bind_matrices) {
-            const auto& accessor=*source.inverse_bind_matrices;
-            check(accessor.type==cgltf_type_mat4&&accessor.component_type==cgltf_component_type_r_32f&&accessor.count>=source.joints_count,
-                "inverse bind matrices must be FLOAT MAT4 and cover every joint");
-            const auto values=floats(accessor);for(std::size_t joint=0;joint<source.joints_count;++joint)
-                std::copy_n(values.data()+joint*16,16,skin.inverseBindMatrices[joint].begin());
-        }
+void skins(const GltfSource& data,ModelAsset& asset) {
+    const auto& sources=data.table("skins");check(sources.size()<=MaxNodes,"too many skins");asset.skins.reserve(sources.size());
+    for(std::size_t skinIndex=0;skinIndex<sources.size();++skinIndex){const auto& source=sources[skinIndex];ModelSkin skin;skin.name=source.value("name",std::string{});if(skin.name.empty())skin.name="Skin "+std::to_string(skinIndex+1);
+        check(source.contains("joints")&&source["joints"].is_array()&&!source["joints"].empty()&&source["joints"].size()<=65536,"skin must contain between 1 and 65536 joints");
+        for(const auto& joint:source["joints"]){const auto index=number(Json{{"index",joint}},"index");check(index<asset.nodes.size(),"skin has a missing joint");skin.joints.push_back(uint32_t(index));}
+        if(source.contains("skeleton")){const auto index=number(source,"skeleton");check(index<asset.nodes.size(),"skin has a missing skeleton");skin.skeleton=int32_t(index);}
+        skin.inverseBindMatrices.resize(skin.joints.size());
+        if(source.contains("inverseBindMatrices")){const auto accessor=data.accessor(number(source,"inverseBindMatrices"));check(accessor.type=="MAT4"&&accessor.componentType==5126&&accessor.count>=skin.joints.size(),"inverse bind matrices must be FLOAT MAT4 and cover every joint");
+            const auto values=floats(data,accessor);for(std::size_t joint=0;joint<skin.joints.size();++joint)std::copy_n(values.data()+joint*16,16,skin.inverseBindMatrices[joint].begin());}
         asset.skins.push_back(std::move(skin));
     }
-    for(const auto& node:asset.nodes)if(node.skin>=0) {
-        check(std::size_t(node.skin)<asset.skins.size()&&node.mesh>=0,"invalid mesh skin reference");const auto& skin=asset.skins[std::size_t(node.skin)];
-        for(auto primitive:asset.meshes[std::size_t(node.mesh)].primitives) {
-            const auto& geometry=asset.primitives[primitive];check(!geometry.skinWeights.empty(),"skinned mesh requires JOINTS_0 and WEIGHTS_0 attributes");
-            for(const auto& vertex:geometry.skinWeights)for(std::size_t influence=0;influence<MaximumModelJointInfluences;++influence)
-                check(vertex.joints[influence]<skin.joints.size(),"vertex joint index exceeds its skin joint count");
+    for(const auto& node:asset.nodes)if(node.skin>=0){check(std::size_t(node.skin)<asset.skins.size()&&node.mesh>=0,"invalid mesh skin reference");const auto& skin=asset.skins[std::size_t(node.skin)];
+        for(auto primitive:asset.meshes[std::size_t(node.mesh)].primitives){const auto& geometry=asset.primitives[primitive];check(!geometry.skinWeights.empty(),"skinned mesh requires JOINTS_0 and WEIGHTS_0 attributes");
+            for(const auto& vertex:geometry.skinWeights)for(std::size_t influence=0;influence<MaximumModelJointInfluences;++influence)check(vertex.joints[influence]<skin.joints.size(),"vertex joint index exceeds its skin joint count");}}
+}
+void recoverTripoBindPose(const GltfSource& data,ModelAsset& asset) {
+    // Some static Tripo exports retain inverse bind matrices but omit every
+    // node transform. Recover that exporter-specific bind pose in derived data;
+    // an authored identity transform or any animation remains authoritative.
+    const auto& header=field(data.json,"asset");
+    if(!header.is_object()||header.value("generator",std::string{})!="Tripo"||!data.table("animations").empty())return;
+    for(const auto& node:data.table("nodes"))
+        if(node.contains("matrix")||node.contains("translation")||node.contains("rotation")||node.contains("scale"))return;
+    std::vector<bool> usedSkins(asset.skins.size());
+    for(const auto& node:asset.nodes)if(node.skin>=0)usedSkins[std::size_t(node.skin)]=true;
+    std::vector<std::optional<ModelMatrix>> jointWorlds(asset.nodes.size());
+    const auto sameMatrix=[](const ModelMatrix& left,const ModelMatrix& right) {
+        for(std::size_t component=0;component<16;++component)
+            if(std::abs(double(left[component])-right[component])>1e-5*std::max({1.0,std::abs(double(left[component])),std::abs(double(right[component]))}))return false;
+        return true;
+    };
+    bool changed=false;
+    for(std::size_t skinIndex=0;skinIndex<asset.skins.size();++skinIndex)if(usedSkins[skinIndex]) {
+        const auto& skin=asset.skins[skinIndex];
+        if(!data.item("skins",skinIndex).contains("inverseBindMatrices"))return;
+        for(std::size_t joint=0;joint<skin.joints.size();++joint) {
+            const auto& inverseBind=skin.inverseBindMatrices[joint];
+            if(!math::isAffine(inverseBind))return;
+            const auto world=math::inverse(inverseBind);
+            if(!world||!math::isAffine(*world))return;
+            auto& existing=jointWorlds[skin.joints[joint]];
+            if(existing&&!sameMatrix(*existing,*world))return;
+            existing=*world;changed|=!sameMatrix(*world,ModelIdentity);
         }
     }
+    if(!changed)return;
+    // Resolve the complete hierarchy before mutating anything, including shared
+    // joints and non-joint intermediates. Conflicting or singular data is left
+    // on the normal validation path rather than partially repairing a skin.
+    std::vector<ModelMatrix> locals(asset.nodes.size()),worlds(asset.nodes.size());
+    std::vector<std::size_t> order;order.reserve(asset.nodes.size());
+    for(std::size_t index=0;index<asset.nodes.size();++index)if(asset.nodes[index].parent<0)order.push_back(index);
+    for(std::size_t current=0;current<order.size();++current) {
+        const auto index=order[current];const auto& node=asset.nodes[index];
+        const auto parent=node.parent<0?ModelIdentity:worlds[std::size_t(node.parent)];
+        locals[index]=node.local;
+        if(jointWorlds[index]) {
+            const auto inverseParent=math::inverse(parent);if(!inverseParent)return;
+            locals[index]=math::multiply(*inverseParent,*jointWorlds[index]);worlds[index]=*jointWorlds[index];
+        }else worlds[index]=math::multiply(parent,locals[index]);
+        if(!math::isAffine(locals[index])||!math::isAffine(worlds[index]))return;
+        for(const auto child:node.children)order.push_back(child);
+    }
+    if(order.size()!=asset.nodes.size())return;
+    for(std::size_t index=0;index<asset.nodes.size();++index)if(jointWorlds[index]) {
+        asset.nodes[index].local=locals[index];asset.nodes[index].matrixAuthored=true;
+    }
+    for(auto& draw:asset.draws)if(draw.node>=0)draw.transform=worlds[std::size_t(draw.node)];
+    warn(asset,"Recovered missing Tripo skeleton bind transforms from inverse bind matrices.");
 }
-void animations(const cgltf_data& data,ModelAsset& asset) {
-    check(data.animations_count<=MaxNodes,"too many animation clips");asset.animations.reserve(data.animations_count);
-    for(std::size_t clipIndex=0;clipIndex<data.animations_count;++clipIndex) {
-        const auto& source=data.animations[clipIndex];ModelAnimationClip clip;clip.name=source.name?source.name:"Animation "+std::to_string(clipIndex+1);
-        check(source.channels_count>0&&source.channels_count<=MaxNodes,"animation must contain channels");
-        clip.start=std::numeric_limits<float>::max();clip.end=0;std::set<std::pair<std::uint32_t,ModelAnimationPath>> targets;
-        for(std::size_t channelIndex=0;channelIndex<source.channels_count;++channelIndex) {
-            const auto& sourceChannel=source.channels[channelIndex];ModelAnimationChannel channel;
-            check(sourceChannel.target_node&&sourceChannel.sampler,"animation channel requires a target node and sampler");
-            channel.node=std::uint32_t(sourceChannel.target_node-data.nodes);const auto& node=asset.nodes[channel.node];
-            switch(sourceChannel.target_path) {
-            case cgltf_animation_path_type_translation:channel.path=ModelAnimationPath::Translation;channel.components=3;break;
-            case cgltf_animation_path_type_rotation:channel.path=ModelAnimationPath::Rotation;channel.components=4;break;
-            case cgltf_animation_path_type_scale:channel.path=ModelAnimationPath::Scale;channel.components=3;break;
-            case cgltf_animation_path_type_weights:
-                channel.path=ModelAnimationPath::Weights;channel.components=std::uint32_t(node.weights.size());check(channel.components>0,"animated morph weights require mesh targets");break;
-            default:fail("unsupported animation channel path");
-            }
-            check(targets.emplace(channel.node,channel.path).second,"animation contains duplicate channels for one node property");
-            check(channel.path==ModelAnimationPath::Weights||!node.matrixAuthored,"TRS animation cannot target a matrix-authored node");
-            const auto& sampler=*sourceChannel.sampler;check(sampler.input&&sampler.output,"animation sampler requires input and output accessors");
-            const auto& input=*sampler.input;const auto& output=*sampler.output;
-            check(input.type==cgltf_type_scalar&&input.component_type==cgltf_component_type_r_32f&&!input.normalized,"animation times must be FLOAT SCALAR");
-            channel.times=floats(input);
+void animations(const GltfSource& data,ModelAsset& asset) {
+    const auto& sources=data.table("animations");check(sources.size()<=MaxNodes,"too many animation clips");asset.animations.reserve(sources.size());
+    for(std::size_t clipIndex=0;clipIndex<sources.size();++clipIndex){const auto& source=sources[clipIndex];ModelAnimationClip clip;clip.name=source.value("name",std::string{});if(clip.name.empty())clip.name="Animation "+std::to_string(clipIndex+1);
+        const auto& channels=source.at("channels");check(channels.is_array()&&!channels.empty()&&channels.size()<=MaxNodes,"animation must contain channels");
+        clip.start=std::numeric_limits<float>::max();clip.end=0;std::set<std::pair<uint32_t,ModelAnimationPath>> targets;
+        for(const auto& sourceChannel:channels){ModelAnimationChannel channel;check(sourceChannel.contains("target")&&sourceChannel["target"].contains("node")&&sourceChannel.contains("sampler"),"animation channel requires a target node and sampler");
+            const auto& target=sourceChannel["target"];const auto targetNode=number(target,"node");check(targetNode<asset.nodes.size(),"animation channel targets missing node");channel.node=uint32_t(targetNode);const auto& node=asset.nodes[channel.node];const auto property=target.value("path",std::string{});
+            if(property=="translation"){channel.path=ModelAnimationPath::Translation;channel.components=3;}
+            else if(property=="rotation"){channel.path=ModelAnimationPath::Rotation;channel.components=4;}
+            else if(property=="scale"){channel.path=ModelAnimationPath::Scale;channel.components=3;}
+            else if(property=="weights"){channel.path=ModelAnimationPath::Weights;channel.components=uint32_t(node.weights.size());check(channel.components>0,"animated morph weights require mesh targets");}
+            else fail("unsupported animation channel path");
+            check(targets.emplace(channel.node,channel.path).second,"animation contains duplicate channels for one node property");check(channel.path==ModelAnimationPath::Weights||!node.matrixAuthored,"TRS animation cannot target a matrix-authored node");
+            const auto& samplers=source.at("samplers");const auto samplerIndex=number(sourceChannel,"sampler");check(samplerIndex<samplers.size(),"animation channel references missing sampler");const auto& sampler=samplers[samplerIndex];
+            check(sampler.contains("input")&&sampler.contains("output"),"animation sampler requires input and output accessors");const auto input=data.accessor(number(sampler,"input")),output=data.accessor(number(sampler,"output"));
+            check(input.type=="SCALAR"&&input.componentType==5126&&!input.normalized,"animation times must be FLOAT SCALAR");channel.times=floats(data,input);
             for(std::size_t key=0;key<channel.times.size();++key)check(channel.times[key]>=0&&(!key||channel.times[key]>channel.times[key-1]),"animation times must be nonnegative and strictly increasing");
-            switch(sampler.interpolation) {
-            case cgltf_interpolation_type_step:channel.interpolation=ModelAnimationInterpolation::Step;break;
-            case cgltf_interpolation_type_linear:channel.interpolation=ModelAnimationInterpolation::Linear;break;
-            case cgltf_interpolation_type_cubic_spline:channel.interpolation=ModelAnimationInterpolation::CubicSpline;check(channel.times.size()>=2,"CUBICSPLINE animation requires at least two keys");break;
-            default:fail("unsupported animation interpolation");
-            }
+            const auto interpolation=sampler.value("interpolation",std::string{"LINEAR"});
+            if(interpolation=="STEP")channel.interpolation=ModelAnimationInterpolation::Step;else if(interpolation=="LINEAR")channel.interpolation=ModelAnimationInterpolation::Linear;
+            else if(interpolation=="CUBICSPLINE"){channel.interpolation=ModelAnimationInterpolation::CubicSpline;check(channel.times.size()>=2,"CUBICSPLINE animation requires at least two keys");}else fail("unsupported animation interpolation");
             const bool weights=channel.path==ModelAnimationPath::Weights;
-            const bool normalizedOutput=(weights||channel.path==ModelAnimationPath::Rotation)&&output.normalized&&
-                (output.component_type==cgltf_component_type_r_8||output.component_type==cgltf_component_type_r_16||
-                 output.component_type==cgltf_component_type_r_8u||output.component_type==cgltf_component_type_r_16u);
-            check(((output.component_type==cgltf_component_type_r_32f&&!output.normalized)||normalizedOutput)&&
-                (weights?output.type==cgltf_type_scalar:output.type==(channel.components==4?cgltf_type_vec4:cgltf_type_vec3)),"animation output accessor shape or component type is invalid");
-            channel.values=floats(output);const auto multiplier=channel.interpolation==ModelAnimationInterpolation::CubicSpline?3u:1u;
+            const bool normalizedOutput=(weights||channel.path==ModelAnimationPath::Rotation)&&output.normalized&&(output.componentType==5120||output.componentType==5121||output.componentType==5122||output.componentType==5123);
+            check(((output.componentType==5126&&!output.normalized)||normalizedOutput)&&(weights?output.type=="SCALAR":output.type==(channel.components==4?"VEC4":"VEC3")),"animation output accessor shape or component type is invalid");
+            channel.values=floats(data,output);const auto multiplier=channel.interpolation==ModelAnimationInterpolation::CubicSpline?3u:1u;
             check(channel.values.size()==channel.times.size()*channel.components*multiplier,"animation sampler output count differs from its input keys");
             clip.start=std::min(clip.start,channel.times.front());clip.end=std::max(clip.end,channel.times.back());clip.channels.push_back(std::move(channel));
-        }
-        asset.animations.push_back(std::move(clip));
+        }asset.animations.push_back(std::move(clip));
     }
 }
 
@@ -770,37 +913,33 @@ std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& ro
     const auto bytes=read(manifestFile); const auto manifest=Json::parse(bytes);
     check(manifest.value("version",0)==1,"unsupported model package version");
     const auto directory=manifestFile.parent_path(), documentPath=managedPath(directory,manifest.at("document").get<std::string>());
-    const auto encoded=read(documentPath); const std::string text(encoded.begin(),encoded.end()); cgltf_options options{}; cgltf_data* raw=nullptr;
-    const auto parsed=cgltf_parse(&options,text.data(),text.size(),&raw);
-    std::unique_ptr<cgltf_data,decltype(&cgltf_free)> data(raw,cgltf_free);
-    check(parsed==cgltf_result_success && data,"invalid glTF document (parser code "+std::to_string(parsed)+")");
-    check(data->asset.version && std::string(data->asset.version)=="2.0","unsupported glTF version");
-    check(data->extensions_required_count==0,"unsupported required extension");
-    check(data->nodes_count<=MaxNodes && data->meshes_count<=MaxNodes && data->materials_count<=MaxNodes,"asset table exceeds supported size");
+    GltfSource data;data.json=Json::parse(read(documentPath));
+    check(data.json.is_object()&&data.json.contains("asset")&&data.json["asset"].value("version",std::string{})=="2.0","unsupported glTF version");
+    check(!data.json.contains("extensionsRequired")||data.json["extensionsRequired"].empty(),"unsupported required extension");
+    check(data.table("nodes").size()<=MaxNodes&&data.table("meshes").size()<=MaxNodes&&data.table("materials").size()<=MaxNodes,"asset table exceeds supported size");
     std::set<std::string> dependencies;
     for (const auto& dependency:manifest.at("dependencies")) {
         const auto file=dependency.at("path").get<std::string>(); managedPath(directory,file); dependencies.insert(file);
     }
-    std::vector<Bytes> buffers(data->buffers_count);
-    for (size_t i=0;i<data->buffers_count;++i) {
-        auto& buffer=data->buffers[i]; check(buffer.uri && dependencies.contains(buffer.uri),"buffer is not a declared managed dependency");
-        const auto source=managedPath(directory,buffer.uri);check(fs::is_regular_file(source)&&buffer.size>0&&fs::file_size(source)==buffer.size,"managed buffer size mismatch");
-        if(metadataOnly)continue;
-        buffers[i]=read(source); check(buffers[i].size()==buffer.size,"managed buffer size mismatch");
-        buffer.data=buffers[i].data(); buffer.data_free_method=cgltf_data_free_method_none;
+    if(!metadataOnly)data.buffers.reserve(data.table("buffers").size());
+    for(const auto& buffer:data.table("buffers")){
+        const auto uri=buffer.value("uri",std::string{});check(!uri.empty()&&dependencies.contains(uri),"buffer is not a declared managed dependency");
+        const auto source=managedPath(directory,uri);const auto size=number(buffer,"byteLength");
+        check(fs::is_regular_file(source)&&size>0&&size<=MaxBytes&&fs::file_size(source)==size,"managed buffer size mismatch");
+        if(!metadataOnly)data.buffers.push_back(read(source));
     }
-    if(!metadataOnly)validateAccessors(*data);
+    if(!metadataOnly)validateAccessors(data);
     auto asset=std::make_shared<ModelAsset>(); asset->name=manifest.at("name").get<std::string>(); asset->format=manifest.at("format").get<std::string>();
     asset->id=modelIdentity(root,identityDirectory);
-    for (size_t i=0;i<data->extensions_used_count;++i) warn(*asset,"Optional extension ignored: "+std::string(data->extensions_used[i]));
-    if (data->cameras_count || data->lights_count) warn(*asset,"Imported cameras and lights are ignored; preview lighting and camera remain active.");
-    std::vector<std::string> images; images.reserve(data->images_count);
-    for (size_t i=0;i<data->images_count;++i) {
-        const auto& image=data->images[i]; check(image.uri && dependencies.contains(image.uri),"image is not a declared managed dependency");
-        const auto id=derivedAssetId(asset->id,"image:"+std::string(image.uri));
+    if(data.json.contains("extensionsUsed"))for(const auto& extension:data.json["extensionsUsed"])warn(*asset,"Optional extension ignored: "+extension.get<std::string>());
+    if(!data.table("cameras").empty()||(data.json.contains("extensions")&&data.json["extensions"].contains("KHR_lights_punctual")))warn(*asset,"Imported cameras and lights are ignored; preview lighting and camera remain active.");
+    std::vector<std::string> images;images.reserve(data.table("images").size());
+    for(const auto& image:data.table("images")){
+        const auto uri=image.value("uri",std::string{});check(!uri.empty()&&dependencies.contains(uri),"image is not a declared managed dependency");
+        const auto id=derivedAssetId(asset->id,"image:"+uri);
         const auto replacement=resolvers.image?resolvers.image(id):id;
         if(replacement.empty() || isEngineAssetId(replacement)) { images.push_back(id);asset->images.push_back(id);continue; }
-        auto source=managedPath(directory,image.uri);
+        auto source=managedPath(directory,uri);
         if(directory==identityDirectory&&contentStorageReady(root))source=resolveAssetPath(root,id);
         if(replacement!=id)source=resolveAssetPath(root,replacement);
         if(metadataOnly){check(fs::is_regular_file(source),"managed material image is missing");const auto ext=lower(utf8(source.extension()));
@@ -814,9 +953,11 @@ std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& ro
             images.push_back(id); asset->images.push_back(id);
         }
     }
-    materials(*data,images,*asset);
+    std::unique_ptr<Assimp::Importer> importer;
+    if(!metadataOnly)importer=importAssimp(data);
+    materials(data,images,*asset,importer?importer->GetScene():nullptr);
     const auto explicitMaterials=manifest.find("materialAssets");
-    const bool needsFallback=asset->materials.size()>data->materials_count;
+    const bool needsFallback=asset->materials.size()>data.table("materials").size();
     if(explicitMaterials!=manifest.end()) {
         check(explicitMaterials->is_array() && std::all_of(explicitMaterials->begin(),explicitMaterials->end(),[](const Json& value){return value.is_string();}),
             "materialAssets must be an array of material identities");
@@ -840,7 +981,7 @@ std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& ro
         if(resolvers.material)if(auto replacement=resolvers.material(id))asset->materials[i]=std::move(*replacement);
     }
     if(!metadataOnly) {
-        geometry(*data,*asset);hierarchy(*data,*asset);skins(*data,*asset);animations(*data,*asset);validateModelAnimationData(*asset);
+        geometry(data,*importer->GetScene(),*asset);hierarchy(data,*asset);skins(data,*asset);recoverTripoBindPose(data,*asset);animations(data,*asset);validateModelAnimationData(*asset);
         const bool deformed=!asset->skins.empty()||std::any_of(asset->primitives.begin(),asset->primitives.end(),[](const auto& primitive){return !primitive.morphTargets.empty();});
         if(deformed)asset->bounds=evaluateModelPose(*asset).bounds;
     }return asset;

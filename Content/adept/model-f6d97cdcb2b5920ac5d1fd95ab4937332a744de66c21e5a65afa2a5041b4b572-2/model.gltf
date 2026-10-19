@@ -1,0 +1,1072 @@
+{
+  "accessors": [
+    {
+      "bufferView": 1,
+      "byteOffset": 0,
+      "componentType": 5126,
+      "count": 2128,
+      "max": [
+        0.468017578125,
+        0.99951171875,
+        0.142822265625
+      ],
+      "min": [
+        -0.468017578125,
+        0.0,
+        -0.142822265625
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "byteOffset": 0,
+      "componentType": 5126,
+      "count": 2128,
+      "max": [
+        1.0,
+        1.0,
+        0.9997061491012573
+      ],
+      "min": [
+        -0.9995765089988708,
+        -1.0,
+        -0.9998806118965149
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 3,
+      "byteOffset": 0,
+      "componentType": 5126,
+      "count": 2128,
+      "max": [
+        0.9985509514808655,
+        0.9988399744033813
+      ],
+      "min": [
+        2.2250738585072014e-308,
+        2.2250738585072014e-308
+      ],
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 4,
+      "byteOffset": 0,
+      "componentType": 5125,
+      "count": 9180,
+      "max": [
+        2127
+      ],
+      "min": [
+        0
+      ],
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 5,
+      "byteOffset": 0,
+      "componentType": 5126,
+      "count": 2128,
+      "max": [
+        1.0,
+        0.4998970031738281,
+        0.3174349367618561,
+        0.2224959135055542
+      ],
+      "min": [
+        2.2250738585072014e-308,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 6,
+      "byteOffset": 0,
+      "componentType": 5123,
+      "count": 2128,
+      "max": [
+        60,
+        60,
+        60,
+        60
+      ],
+      "min": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "type": "VEC4"
+    },
+    {
+      "bufferView": 7,
+      "byteOffset": 0,
+      "componentType": 5126,
+      "count": 61,
+      "max": [
+        0.99951171875,
+        0.8576957583427429,
+        0.8395422101020813,
+        0.0,
+        0.11678413301706314,
+        0.99951171875,
+        0.9945582747459412,
+        0.0,
+        0.8395419716835022,
+        0.99951171875,
+        0.99951171875,
+        0.0,
+        0.2527136206626892,
+        0.026480644941329956,
+        0.499755859375,
+        1.0000001192092896
+      ],
+      "min": [
+        -0.5655763745307922,
+        -0.1167842373251915,
+        -0.8537481427192688,
+        0.0,
+        -0.8577156662940979,
+        -0.9936354160308838,
+        -0.99951171875,
+        0.0,
+        -0.8537477850914001,
+        -0.9945785999298096,
+        -0.9848697185516357,
+        0.0,
+        -0.35388684272766113,
+        -0.37827447056770325,
+        -0.3199124038219452,
+        2.2250738585072014e-308
+      ],
+      "type": "MAT4"
+    }
+  ],
+  "asset": {
+    "generator": "Tripo",
+    "version": "2.0"
+  },
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 906892,
+      "byteOffset": 0
+    },
+    {
+      "buffer": 0,
+      "byteLength": 25536,
+      "byteOffset": 906892,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 25536,
+      "byteOffset": 932428,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 17024,
+      "byteOffset": 957964,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 36720,
+      "byteOffset": 974988,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 34048,
+      "byteOffset": 1011708
+    },
+    {
+      "buffer": 0,
+      "byteLength": 17024,
+      "byteOffset": 1045756
+    },
+    {
+      "buffer": 0,
+      "byteLength": 3904,
+      "byteOffset": 1062780
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 1066684,
+      "uri": "buffers/0.bin"
+    }
+  ],
+  "extensionsUsed": [
+    "KHR_materials_specular",
+    "KHR_materials_volume",
+    "FB_ngon_encoding"
+  ],
+  "images": [
+    {
+      "mimeType": "image/jpeg",
+      "name": "medieval+knight+3d+model_basecolor.jpg",
+      "uri": "images/0.jpg"
+    }
+  ],
+  "materials": [
+    {
+      "extensions": {
+        "KHR_materials_specular": {
+          "specularColorFactor": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "specularFactor": 1.0
+        }
+      },
+      "name": "Material_tripo_50ca3bca_a03f_4122_beff_cdf2c4a57236",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.800000011920929,
+          0.800000011920929,
+          0.800000011920929,
+          1.0
+        ],
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "tripo_50ca3bca_a03f_4122_beff_cdf2c4a57236",
+      "primitives": [
+        {
+          "attributes": {
+            "JOINTS_0": 5,
+            "NORMAL": 1,
+            "POSITION": 0,
+            "TEXCOORD_0": 2,
+            "WEIGHTS_0": 4
+          },
+          "extensions": {
+            "FB_ngon_encoding": {}
+          },
+          "indices": 3,
+          "material": 0,
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "children": [
+        1,
+        63
+      ],
+      "name": "RootNode"
+    },
+    {
+      "children": [
+        2
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": true,
+        "UserProperties": ""
+      },
+      "name": "Armature"
+    },
+    {
+      "children": [
+        3
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "root"
+    },
+    {
+      "children": [
+        4,
+        51,
+        57
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pelvis"
+    },
+    {
+      "children": [
+        5
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "spine_01"
+    },
+    {
+      "children": [
+        6
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "spine_02"
+    },
+    {
+      "children": [
+        7,
+        28,
+        49
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "spine_03"
+    },
+    {
+      "children": [
+        8
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "clavicle_l"
+    },
+    {
+      "children": [
+        9,
+        27
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "upperarm_l"
+    },
+    {
+      "children": [
+        10,
+        26
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "lowerarm_l"
+    },
+    {
+      "children": [
+        11,
+        14,
+        17,
+        20,
+        23
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "hand_l"
+    },
+    {
+      "children": [
+        12
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "index_01_l"
+    },
+    {
+      "children": [
+        13
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "index_02_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "index_03_l"
+    },
+    {
+      "children": [
+        15
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "middle_01_l"
+    },
+    {
+      "children": [
+        16
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "middle_02_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "middle_03_l"
+    },
+    {
+      "children": [
+        18
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pinky_01_l"
+    },
+    {
+      "children": [
+        19
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pinky_02_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pinky_03_l"
+    },
+    {
+      "children": [
+        21
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ring_01_l"
+    },
+    {
+      "children": [
+        22
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ring_02_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ring_03_l"
+    },
+    {
+      "children": [
+        24
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thumb_01_l"
+    },
+    {
+      "children": [
+        25
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thumb_02_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thumb_03_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "lowerarm_twist_01_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "upperarm_twist_01_l"
+    },
+    {
+      "children": [
+        29
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "clavicle_r"
+    },
+    {
+      "children": [
+        30,
+        48
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "upperarm_r"
+    },
+    {
+      "children": [
+        31,
+        47
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "lowerarm_r"
+    },
+    {
+      "children": [
+        32,
+        35,
+        38,
+        41,
+        44
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "hand_r"
+    },
+    {
+      "children": [
+        33
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "index_01_r"
+    },
+    {
+      "children": [
+        34
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "index_02_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "index_03_r"
+    },
+    {
+      "children": [
+        36
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "middle_01_r"
+    },
+    {
+      "children": [
+        37
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "middle_02_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "middle_03_r"
+    },
+    {
+      "children": [
+        39
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pinky_01_r"
+    },
+    {
+      "children": [
+        40
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pinky_02_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "pinky_03_r"
+    },
+    {
+      "children": [
+        42
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ring_01_r"
+    },
+    {
+      "children": [
+        43
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ring_02_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ring_03_r"
+    },
+    {
+      "children": [
+        45
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thumb_01_r"
+    },
+    {
+      "children": [
+        46
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thumb_02_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thumb_03_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "lowerarm_twist_01_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "upperarm_twist_01_r"
+    },
+    {
+      "children": [
+        50
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "neck_01"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "head"
+    },
+    {
+      "children": [
+        52,
+        56
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thigh_l"
+    },
+    {
+      "children": [
+        53,
+        54
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "calf_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "calf_twist_01_l"
+    },
+    {
+      "children": [
+        55
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "foot_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ball_l"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thigh_twist_01_l"
+    },
+    {
+      "children": [
+        58,
+        62
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thigh_r"
+    },
+    {
+      "children": [
+        59,
+        60
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "calf_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "calf_twist_01_r"
+    },
+    {
+      "children": [
+        61
+      ],
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "foot_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "ball_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "name": "thigh_twist_01_r"
+    },
+    {
+      "extras": {
+        "DefaultAttributeIndex": 0,
+        "InheritType": 1,
+        "IsNull": false,
+        "UserProperties": ""
+      },
+      "mesh": 0,
+      "name": "tripo_50ca3bca_a03f_4122_beff_cdf2c4a57236",
+      "skin": 0
+    }
+  ],
+  "samplers": [
+    {}
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "skins": [
+    {
+      "inverseBindMatrices": 6,
+      "joints": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62
+      ],
+      "name": "skin"
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "source": 0
+    }
+  ]
+}

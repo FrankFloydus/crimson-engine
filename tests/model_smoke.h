@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/AssetLibrary.h"
+#include "assets/ContentStorage.h"
 #include "model_fixtures.h"
 #include <fstream>
 #include <iterator>
@@ -70,11 +71,8 @@ inline std::vector<std::string> verifyModelAssets(AssetLibrary& assets, SceneSet
     const auto relative = std::filesystem::weakly_canonical(sourceFolder).lexically_relative(std::filesystem::weakly_canonical(root));
     require(relative == std::filesystem::path("model_smoke_sources"),"fixture cleanup escaped the disposable project");
     std::filesystem::remove_all(sourceFolder);
-    const auto managedFile = [&root](const std::string& id) {
-        return root / std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));
-    };
-    const auto restoredGltf = loadModelPackage(managedFile(gltfId),root);
-    const auto restoredGlb = loadModelPackage(managedFile(glbId),root);
+    const auto restoredGltf = loadModelPackage(resolveAssetPath(root,gltfId),root);
+    const auto restoredGlb = loadModelPackage(resolveAssetPath(root,glbId),root);
     require(restoredGltf->draws.size() == model->draws.size() && restoredGlb->bounds.valid,"managed reopen required original sources");
     // Finish with the multi-node hierarchy visible in the native capture.
     return {glbId,gltfId};

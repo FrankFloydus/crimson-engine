@@ -13,7 +13,8 @@ void main()
 #endif
     GraphContext context;
     context.particleColor = vec4_splat(1.0);
-    context.uv = vec4(v_texcoord0, v_texcoord1);
+    context.uv = vec4(ccModelUv0(v_texcoord0, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode), v_texcoord1);
+    context.interpolatedUv = ccModelUvActive(v_uvInterpolationMode) ? 1.0 : 0.0;
     context.worldPosition = v_worldPosition;
     context.localPosition = v_localPosition;
     context.normal = v_normal;

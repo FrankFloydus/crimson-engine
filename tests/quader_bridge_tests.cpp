@@ -156,6 +156,44 @@ void sourceHierarchyPlacement(){
     source.groups[0].parentKey="missing";rejects([&]{prepareQuaderImport(source,options);});
     source.groups[0].parentKey="";source.groups[0].transform=math::scaling({0,1,1});rejects([&]{prepareQuaderImport(source,options);});
 }
+void uvInterpolationPublication(){
+    Temporary temporary;auto source=synthetic();source.lights.clear();QuaderPrepareOptions options;options.projectRoot=temporary.root;options.scale=3;
+    const auto ordinary=prepareQuaderImport(source,options);const auto ordinaryModel=ordinary.meshes.front().modelId;const auto ordinaryBundle=preparedBundle(ordinary);
+    const auto ordinaryDocument=Json::parse(ordinaryBundle.models.front().gltf);
+    require(!ordinaryDocument["meshes"][0]["primitives"][0]["attributes"].contains("_CRIMSON_UV_INTERPOLATION_COORD")&&
+        !ordinaryDocument["meshes"][0]["primitives"][0]["attributes"].contains("_CRIMSON_CIRCULAR_COORD"),"Ordinary import gained UV interpolation attributes.");
+    commit(temporary.root,ordinary);
+    const std::array<Vec4,3> coordinates{{{1,0,1,0},{0,2,2,1.57079637f},{1,1,1.41421356f,.78539816f}}};const Vec4 coefficient{2,.3f,-.5f,1.25f};
+    for(std::size_t vertex=0;vertex<3;++vertex){source.meshes[0].vertices[vertex].uvInterpolationCoordinates=coordinates[vertex];source.meshes[0].vertices[vertex].uvInterpolationCorrection=coefficient;source.meshes[0].vertices[vertex].uvInterpolationMode=1;}
+    const auto circular=prepareQuaderImport(source,options);require(circular.meshes.front().modelId!=ordinaryModel,"Circular interpolation failed to create a distinct immutable geometry generation.");
+    const auto verify=[&](const ModelAsset& model){const auto& vertices=model.primitives.at(0).vertices;require(vertices.size()==3,"Circular import changed source topology.");
+        for(std::size_t vertex=0;vertex<3;++vertex){const auto& expected=source.meshes[0].vertices[vertex];require(vertices[vertex].uvInterpolationCoordinates==expected.uvInterpolationCoordinates&&
+            vertices[vertex].uvInterpolationCorrection==expected.uvInterpolationCorrection&&vertices[vertex].uvInterpolationMode==float(expected.uvInterpolationMode),
+            "Import changed the local interpolation payload with Import Scale.");}near(vertices[1].position[0],3);};
+    verify(*circular.preparedModels.at(0));require(circular.meshes[0].collision->positions==ordinary.meshes[0].collision->positions,"Circular UV interpolation altered collision geometry.");
+    commit(temporary.root,circular);ModelResolvers resolvers;resolvers.material=[](const std::string&)->std::optional<ModelMaterial>{return defaultMaterialAsset().surface;};
+    verify(*loadModelPackage(circular.meshes[0].modelId,temporary.root,resolvers));
+    const auto repeated=prepareQuaderImport(source,options);require(repeated.files.empty()&&repeated.meshes[0].modelId==circular.meshes[0].modelId,"Unchanged circular UV import rewrote or duplicated geometry.");
+    auto malformed=source;malformed.meshes[0].vertices[0].uvInterpolationCoordinates={};malformed.meshes[0].vertices[0].uvInterpolationCorrection={};
+    rejects([&]{prepareQuaderImport(malformed,options);});malformed=source;malformed.meshes[0].vertices[0].uvInterpolationCorrection[0]=std::numeric_limits<float>::quiet_NaN();
+    rejects([&]{prepareQuaderImport(malformed,options);});
+    malformed=source;malformed.meshes[0].vertices[0].uvInterpolationMode=2;rejects([&]{prepareQuaderImport(malformed,options);});
+    malformed=source;malformed.meshes[0].vertices[0].uvInterpolationMode=3;rejects([&]{prepareQuaderImport(malformed,options);});
+    const std::array<Vec4,3> quadCoordinates{{{0,0,0,1},{1,0,-.2f,1},{0,1,0,1}}};
+    for(std::size_t vertex=0;vertex<3;++vertex){source.meshes[0].vertices[vertex].uvInterpolationCoordinates=quadCoordinates[vertex];source.meshes[0].vertices[vertex].uvInterpolationMode=2;}
+    const auto quad=prepareQuaderImport(source,options);require(quad.meshes[0].modelId!=ordinaryModel&&quad.meshes[0].modelId!=circular.meshes[0].modelId,
+        "Quad interpolation reused an incompatible immutable geometry generation.");
+    verify(*quad.preparedModels.at(0));commit(temporary.root,quad);verify(*loadModelPackage(quad.meshes[0].modelId,temporary.root,resolvers));
+    const auto quadDocument=Json::parse(preparedBundle(quad).models.back().gltf);const auto& attributes=quadDocument["meshes"][0]["primitives"][0]["attributes"];
+    require(attributes.contains("_CRIMSON_UV_INTERPOLATION_MODE")&&!attributes.contains("_CRIMSON_CIRCULAR_COORD"),"Current writer retained the superseded circle-only representation.");
+    const auto repeatedQuad=prepareQuaderImport(source,options);require(repeatedQuad.files.empty()&&repeatedQuad.meshes[0].modelId==quad.meshes[0].modelId,"Unchanged quad UV import rewrote geometry.");
+    for(auto& vertex:source.meshes[0].vertices){vertex.uvInterpolationCoordinates={};vertex.uvInterpolationCorrection={};vertex.uvInterpolationMode=0;}
+    const auto restored=prepareQuaderImport(source,options);require(restored.meshes[0].modelId==ordinaryModel,"Disabling circular interpolation changed ordinary geometry identity.");
+    const auto restoredBundle=preparedBundle(restored);const auto original=std::find_if(restoredBundle.models.begin(),restoredBundle.models.end(),[&](const auto& model){return model.id==ordinaryModel;});
+    require(original!=restoredBundle.models.end()&&original->gltf==ordinaryBundle.models[0].gltf&&original->buffer==ordinaryBundle.models[0].buffer,
+        "Circular import modified the retained ordinary mesh generation.");
+}
+
 void currentSourceMeshSet(){
     Temporary temporary;auto source=synthetic();source.lights.clear();QuaderPrepareOptions options;options.projectRoot=temporary.root;
     for(std::uint64_t i=2;i<=3;++i){auto mesh=source.meshes.front();mesh.displayEntity=i;mesh.name="Wall "+std::to_string(i);mesh.vertices[1].position[0]=static_cast<float>(i);source.meshes.push_back(mesh);}
@@ -478,11 +516,12 @@ void completionRecords(){
     Temporary temporary;QuaderPrepareOptions options;options.projectRoot=temporary.root;options.completed=QuaderCompletedSave{};options.completed->scene=parsed;
     auto valid=prepareQuaderImport(source,options);require(!valid.sourceKey.empty(),"Sealed import did not preserve consumption identity.");options.completed->scene->fingerprint.hash^=1;rejects([&]{prepareQuaderImport(source,options);});
     auto save=QuaderCompletedSave{};save.scene=parsed;const auto first=quaderSaveKey(save,1,false);auto material=parsed;material.token="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";save.materials["material"]=material;
+    require(first.starts_with("quader:v3:"),"Complete UV interpolation support did not invalidate earlier save consumption keys.");
     require(quaderSaveKey(save,1,false)==first,"Preserved-material synchronization reacted to an unrelated material save.");require(quaderSaveKey(save,1,true)!=quaderSaveKey(QuaderCompletedSave{parsed,{},{}},1,true),"Explicit material refresh omitted material completion tokens.");
     require(quaderSaveKey(save,1,false,true)==first&&quaderSaveKey(save,1,false,false)!=first,"Light sync configuration did not retain the default consumption key or distinguish disabled imports.");
 }
-void nativeReaderHierarchy(){
-    const auto directory=fixture().parent_path()/"hierarchy",project=directory/"hierarchy.qproj",sceneFile=directory/"Scenes/hierarchy.qdr";
+void nativeReaderHierarchy(const fs::path& directory=fixture().parent_path()/"hierarchy"){
+    const auto project=directory/"hierarchy.qproj",sceneFile=directory/"Scenes/hierarchy.qdr";
     const auto manifestBytes=fileBytes(project),sceneBytes=fileBytes(sceneFile);
     const auto source=readQuaderScene(project,"88888888-8888-4888-8888-888888888888");
     require(source->groups.size()==7&&source->meshes.size()==6&&source->lights.size()==1,
@@ -844,7 +883,7 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
         require(source&&source->id==sceneId&&source->relativePath==selected->path,"Native reader returned a different source scene.");
         require(!source->meshes.empty(),"Selected source scene contains no exported mesh occurrences.");
         std::cout<<"Source project: "<<utf8(project)<<"\nSource scene: "<<utf8(scenePath)<<"\nScene ID: "<<sceneId<<'\n';
-        std::uint64_t sourceVertices{},sourceTriangles{},sourceSurfaces{};
+        std::uint64_t sourceVertices{},sourceTriangles{},sourceSurfaces{},sourceCircularVertices{},sourceQuadVertices{};
         for(const auto& mesh:source->meshes){
             require(!mesh.vertices.empty()&&!mesh.indices.empty()&&mesh.indices.size()%3==0,
                 "Source mesh has no complete triangles: "+mesh.name);
@@ -854,8 +893,11 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
             for(const auto& surface:mesh.surfaces)require(surface.count%3==0&&std::uint64_t(surface.offset)+surface.count<=mesh.indices.size(),
                 "Source mesh surface exceeds its triangle array: "+mesh.name);
             sourceVertices+=mesh.vertices.size();sourceTriangles+=mesh.indices.size()/3;sourceSurfaces+=mesh.surfaces.size();
+            const auto circular=std::count_if(mesh.vertices.begin(),mesh.vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode==1;});
+            const auto quad=std::count_if(mesh.vertices.begin(),mesh.vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode==2;});
+            sourceCircularVertices+=circular;sourceQuadVertices+=quad;
             std::cout<<"Mesh "<<std::quoted(mesh.name)<<": vertices="<<mesh.vertices.size()<<", triangles="<<mesh.indices.size()/3
-                <<", surfaces="<<mesh.surfaces.size()<<", visible="<<(mesh.visible?"yes":"no")<<'\n';
+                <<", surfaces="<<mesh.surfaces.size()<<", circular vertices="<<circular<<", quad vertices="<<quad<<", visible="<<(mesh.visible?"yes":"no")<<'\n';
         }
         QuaderPrepareOptions options;options.projectRoot=temporary.root;
         const auto imported=prepareQuaderImport(*source,options);
@@ -872,7 +914,7 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
                 "Published model references a missing managed texture: "+id);
             return id;
         };
-        std::size_t modelCount{},materialCount{},textureCount{};
+        std::size_t modelCount{},materialCount{},textureCount{},modelCircularVertices{},modelQuadVertices{};
         for(const auto& id:imported.assetIds){
             const auto file=resolveAssetPath(temporary.root,id);
             if(file.filename()=="manifest.json"){
@@ -886,6 +928,8 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
                     for(const auto& vertex:primitive.vertices)require(math::finite(vertex.position)&&math::finite(vertex.normal),
                         "Published model contains a nonfinite vertex: "+id);
                     vertices+=primitive.vertices.size();triangles+=primitive.indices.size()/3;
+                    modelCircularVertices+=std::count_if(primitive.vertices.begin(),primitive.vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode==1;});
+                    modelQuadVertices+=std::count_if(primitive.vertices.begin(),primitive.vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode==2;});
                 }
                 ++modelCount;
                 std::cout<<"Published model "<<std::quoted(model->name)<<": vertices="<<vertices<<", triangles="<<triangles
@@ -902,10 +946,13 @@ void verifyImport(const fs::path& project,const std::string& sceneId){
         }
         require(modelCount==preparedIds.size()&&modelCount==models(temporary.root),
             "Diagnostic failed to reload every published visual model package.");
+        require((sourceCircularVertices>0)==(modelCircularVertices>0),"Published packages lost native circular UV interpolation.");
+        require((sourceQuadVertices>0)==(modelQuadVertices>0),"Published packages lost native quad UV interpolation.");
         std::cout<<"Source totals: meshes="<<source->meshes.size()<<", vertices="<<sourceVertices<<", triangles="<<sourceTriangles
             <<", surfaces="<<sourceSurfaces<<"\nImported totals: models="<<modelCount<<", materials="<<materialCount
             <<", textures="<<textureCount<<", lights="<<imported.lights.size()<<", skipped lights="<<imported.skippedLights
-            <<", skipped spots="<<imported.skippedSpots<<"\n";
+            <<", skipped spots="<<imported.skippedSpots<<"\nCircular UV vertices: source="<<sourceCircularVertices<<", reloaded="<<modelCircularVertices
+            <<"\nQuad UV vertices: source="<<sourceQuadVertices<<", reloaded="<<modelQuadVertices<<"\n";
     }catch(...){failure=std::current_exception();}
     require(fileBytes(project)==manifestBytes,"Read/import diagnostic modified the authored project manifest.");
     require(fileBytes(scenePath)==sceneBytes,"Read/import diagnostic modified the authored scene.");
@@ -1041,5 +1088,5 @@ void materialSyncTransactions(){
 int main(int argc,char** argv){try{
     if(argc==4&&std::string(argv[1])=="--verify-import"){verifyImport(pathFromUtf8(argv[2]),argv[3]);return 0;}
     require(argc==1,"Usage: quader_bridge_tests [--verify-import <project.qproj> <scene-id>]");
-    geometryAndLights();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();materialSyncTransactions();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
+    geometryAndLights();uvInterpolationPublication();sourceHierarchyPlacement();currentSourceMeshSet();geometryReuseIgnoresNamesAndPlacement();authoredMeshOwnership();contentOnlyOwnershipMigration();legacyUnusedFallbackPackages();deletedGeometryReimport();reservedGeometryMembersAndCorruption();clusteredPointLightCapacity();completionRecords();nativeReaderHierarchy();nativeReaderHierarchy(fixture().parent_path()/"schema20/hierarchy");nativeReaderMaterials();sceneScopedContentLayout();genericSceneNameAdoption();renamedSceneContentFolders();deletedMaterialsAndTexturesReimport();modernProjectManifest();coordinatorTransactions();materialSyncTransactions();std::cout<<"Quader reader, import, hierarchy, source mesh ownership, current mesh set, collision, deletion/reimport, material, completed-save and publication checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

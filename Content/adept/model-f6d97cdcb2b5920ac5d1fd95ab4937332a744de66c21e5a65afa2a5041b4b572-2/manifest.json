@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "GLB binary chunk"
+    },
+    {
+      "index": 0,
+      "kind": "image",
+      "path": "images/0.jpg",
+      "source": "buffer view"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "GLB",
+  "importIdentity": {
+    "sha256": "f6d97cdcb2b5920ac5d1fd95ab4937332a744de66c21e5a65afa2a5041b4b572",
+    "version": 1
+  },
+  "name": "medieval knight 3d model",
+  "original": "source.glb",
+  "version": 1
+}

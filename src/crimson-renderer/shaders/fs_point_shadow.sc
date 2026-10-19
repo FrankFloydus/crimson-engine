@@ -1,4 +1,4 @@
-$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal
+$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode
 
 #include <bgfx_shader.sh>
 #include "prepass_receiver.sh"
@@ -11,6 +11,7 @@ uniform vec4 u_modelMaps;
 uniform vec4 u_surfaceLighting;
 SAMPLER2D(s_albedo, 0);
 #include "material_mapping.sh"
+#include "model_uv.sh"
 
 void main()
 {
@@ -21,7 +22,7 @@ void main()
     float alpha = u_modelBase.a * v_color0.a;
     if (u_modelMaps.x > 0.5)
     {
-        vec2 uv = u_modelUv.x > 0.5 ? v_texcoord1 : v_texcoord0;
+        vec2 uv = u_modelUv.x > 0.5 ? v_texcoord1 : ccModelUv0(v_texcoord0, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode);
         vec3 position = u_materialUvOffset.w > 0.5 ? v_worldPosition : v_localPosition;
         vec3 normal = u_materialUvOffset.w > 0.5 ? v_normal : v_localNormal;
         alpha *= materialSample(s_albedo, uv, position, normal).a;

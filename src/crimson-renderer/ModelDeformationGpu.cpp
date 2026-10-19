@@ -14,7 +14,8 @@ bgfx::VertexLayout scalarLayout(){bgfx::VertexLayout value;value.begin().add(bgf
 bgfx::VertexLayout modelLayout(){bgfx::VertexLayout value;value.begin().add(bgfx::Attrib::Position,3,bgfx::AttribType::Float)
     .add(bgfx::Attrib::Normal,3,bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord0,2,bgfx::AttribType::Float)
     .add(bgfx::Attrib::TexCoord1,2,bgfx::AttribType::Float).add(bgfx::Attrib::Tangent,4,bgfx::AttribType::Float)
-    .add(bgfx::Attrib::Color0,4,bgfx::AttribType::Float).end();return value;}
+    .add(bgfx::Attrib::Color0,4,bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord2,4,bgfx::AttribType::Float)
+    .add(bgfx::Attrib::TexCoord3,4,bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord4,1,bgfx::AttribType::Float).end();return value;}
 bgfx::VertexBufferHandle input(std::span<const float> values){
     if(values.empty() || values.size()>UINT32_MAX/sizeof(float))throw std::length_error("Model deformation input exceeds GPU buffer limits.");
     const auto result=bgfx::createVertexBuffer(bgfx::copy(values.data(),static_cast<std::uint32_t>(values.size_bytes())),scalarLayout(),ReadFlags);

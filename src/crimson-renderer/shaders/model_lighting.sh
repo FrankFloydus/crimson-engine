@@ -19,20 +19,31 @@ vec3 environmentDirection(vec3 direction)
 
 // Keep these BRDF and IBL equations in agreement with fs_pbr.sc. Imported
 // models and the preview sphere share the same lighting response.
+vec3 integratedSpecularResponse(vec3 N, vec3 V, vec3 base, float metallic, float roughness, float specularLevel)
+{
+    float NoV = clamp(dot(N, V), 0.00001, 1.0);
+    vec3 F0 = mix(vec3_splat(0.08 * clamp(specularLevel, 0.0, 1.0)), base, metallic);
+    vec2 lut = forwardPlusBrdf(vec2(NoV, roughness));
+    return F0 * lut.x + vec3_splat(lut.y);
+}
+
+vec3 integratedDiffuseResponse(vec3 base, float metallic, vec3 specularResponse)
+{
+    // Use hemispherical specular energy, not a single grazing-angle Fresnel.
+    return (vec3_splat(1.0) - clamp(specularResponse, vec3_splat(0.0), vec3_splat(1.0))) * (1.0 - metallic) * base;
+}
+
 vec3 evaluateEnvironment(vec3 N, vec3 V, vec3 base, float metallic, float roughness, float specularLevel, out vec3 diffuse)
 {
     diffuse = vec3_splat(0.0);
     if (u_environment.x <= 0.0 && dot(u_ambientLight.rgb, vec3_splat(1.0)) <= 0.0) return vec3_splat(0.0);
-    float NoV = clamp(dot(N, V), 0.00001, 1.0);
-    vec3 F0 = mix(vec3_splat(0.08 * clamp(specularLevel, 0.0, 1.0)), base, metallic);
-    vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - NoV, 5.0);
+    vec3 specularResponse = integratedSpecularResponse(N, V, base, metallic, roughness, specularLevel);
     diffuse = environmentAmbientIrradiance(textureCube(s_irradiance, environmentDirection(N)).rgb);
-    diffuse *= (vec3_splat(1.0) - F) * (1.0 - metallic) * base;
+    diffuse *= integratedDiffuseResponse(base, metallic, specularResponse);
     vec3 reflection = reflect(-V, N);
     float specularLod = (roughness - 0.045) / (1.0 - 0.045) * u_environment.z;
     vec3 prefiltered = textureCubeLod(s_prefiltered, environmentDirection(reflection), specularLod).rgb;
-    vec2 lut = forwardPlusBrdf(vec2(NoV, roughness));
-    vec3 specular = prefiltered * (F0 * lut.x + vec3_splat(lut.y));
+    vec3 specular = prefiltered * specularResponse;
     return diffuse + specular * u_environment.x;
 }
 
@@ -45,7 +56,7 @@ vec3 evaluateEnvironment(vec3 N, vec3 V, vec3 base, float metallic, float roughn
 vec3 evaluateLightDiffuse(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float specularLevel)
 {
     float NoL = clamp(dot(N, L), 0.0, 1.0);
-    if (NoL <= 0.0 || dot(N, V) <= 0.0) return vec3_splat(0.0);
+    if (NoL <= 0.0) return vec3_splat(0.0);
     vec3 halfSum = V + L;
     vec3 H = halfSum * inversesqrt(max(dot(halfSum, halfSum), 0.00000000000001));
     float VoH = clamp(dot(V, H), 0.0, 1.0);
@@ -58,9 +69,10 @@ vec3 evaluateLightResponse(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, flo
     float diffuseResponse, float specularResponse, float softSourceSinSquared)
 {
     float NoL = clamp(dot(N, L), 0.0, 1.0);
-    float rawNoV = dot(N, V);
-    if (NoL <= 0.0 || rawNoV <= 0.0) return vec3_splat(0.0);
-    float NoV = clamp(rawNoV, 0.00001, 1.0);
+    if (NoL <= 0.0) return vec3_splat(0.0);
+    // Smooth shading normals can face away from the eye on a visible triangle.
+    // Keep its illumination continuous and bound the GGX denominator.
+    float NoV = clamp(dot(N, V), 0.00001, 1.0);
     vec3 halfSum = V + L;
     vec3 H = halfSum * inversesqrt(max(dot(halfSum, halfSum), 0.00000001));
     float NoH = clamp(dot(N, H), 0.0, 1.0);

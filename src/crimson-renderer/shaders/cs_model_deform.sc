@@ -13,7 +13,7 @@ NUM_THREADS(64,1,1)
 void main(){
     uint vertex=gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*65535u*64u;
     if(vertex>=uint(u_modelDeformation.x))return;
-    int first=int(vertex)*18;vec3 position=base3(first),normal=base3(first+3),tangent=base3(first+10);float sign=s_deformBase[first+13];
+    int first=int(vertex)*27;vec3 position=base3(first),normal=base3(first+3),tangent=base3(first+10);float sign=s_deformBase[first+13];
     for(int target=0;target<int(u_modelDeformation.y);++target){
         float weight=s_deformPose[int(u_modelDeformation.z)*16+target];if(weight==0.0)continue;
         int offset=(target*int(u_modelDeformation.x)+int(vertex))*9;
@@ -34,7 +34,7 @@ void main(){
         }
     }
     normal=safeUnit(normal,vec3(0.0,1.0,0.0));tangent=safeUnit(tangent-normal*dot(normal,tangent),safeUnit(cross(vec3(0.0,0.0,1.0),normal),vec3(1.0,0.0,0.0)));
-    for(int index=0;index<18;++index)s_deformOutput[first+index]=s_deformBase[first+index];
+    for(int index=0;index<27;++index)s_deformOutput[first+index]=s_deformBase[first+index];
     s_deformOutput[first]=position.x;s_deformOutput[first+1]=position.y;s_deformOutput[first+2]=position.z;
     s_deformOutput[first+3]=normal.x;s_deformOutput[first+4]=normal.y;s_deformOutput[first+5]=normal.z;
     s_deformOutput[first+10]=tangent.x;s_deformOutput[first+11]=tangent.y;s_deformOutput[first+12]=tangent.z;s_deformOutput[first+13]=sign;

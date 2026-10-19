@@ -30,8 +30,18 @@ void validate(const ModelPrimitive& primitive) {
         throw std::runtime_error("Cannot stream malformed model geometry.");
     for (const auto& vertex : primitive.vertices)
         if (!math::finite(vertex.position) || !math::finite(vertex.normal) || !math::finite(vertex.uv0) || !math::finite(vertex.uv1) ||
-            !math::finite(vertex.tangent) || !math::finite(vertex.color)) throw std::runtime_error("Model geometry contains nonfinite attributes.");
+            !math::finite(vertex.tangent) || !math::finite(vertex.color) || !math::finite(vertex.uvInterpolationCoordinates) ||
+            !math::finite(vertex.uvInterpolationCorrection) || !std::isfinite(vertex.uvInterpolationMode)) throw std::runtime_error("Model geometry contains nonfinite attributes.");
     for (const auto index : primitive.indices) if (index>=primitive.vertices.size()) throw std::runtime_error("Model index is out of bounds.");
+    for(const auto& vertex:primitive.vertices)if((vertex.uvInterpolationMode!=0&&vertex.uvInterpolationMode!=1&&vertex.uvInterpolationMode!=2)||
+        (vertex.uvInterpolationMode==1&&vertex.uvInterpolationCoordinates[2]<=0)||(vertex.uvInterpolationMode==0&&
+        (vertex.uvInterpolationCoordinates!=Vec4{}||vertex.uvInterpolationCorrection!=Vec4{})))throw std::runtime_error("Invalid model UV interpolation corner attributes.");
+    for(std::size_t triangle=0;triangle<primitive.indices.size();triangle+=3){
+        const auto& a=primitive.vertices[primitive.indices[triangle]];const auto& b=primitive.vertices[primitive.indices[triangle+1]];const auto& c=primitive.vertices[primitive.indices[triangle+2]];
+        if(a.uvInterpolationMode!=b.uvInterpolationMode||a.uvInterpolationMode!=c.uvInterpolationMode||
+            a.uvInterpolationCorrection!=b.uvInterpolationCorrection||a.uvInterpolationCorrection!=c.uvInterpolationCorrection)
+            throw std::runtime_error("Model UV interpolation triangle spans different interpolation fields.");
+    }
     if(!primitive.skinWeights.empty() && primitive.skinWeights.size()!=primitive.vertices.size())throw std::runtime_error("Model skin weights do not match vertices.");
     for(const auto& influence:primitive.skinWeights) {
         double total{};for(const auto weight:influence.weights){if(!std::isfinite(weight)||weight<0)throw std::runtime_error("Model skin weight is invalid.");total+=weight;}
@@ -89,11 +99,14 @@ ModelStream buildModelCache(const ModelAsset& asset,const std::filesystem::path&
             descriptor.uvSpan[set]={maximum[0]-minimum[0],maximum[1]-minimum[1]};
         }
         auto current=original; float accumulated=0;
+        const bool interpolated=std::any_of(original.vertices.begin(),original.vertices.end(),[](const auto& vertex){return vertex.uvInterpolationMode>0;});
         const float maximumError=.01f*meshopt_simplifyScale(original.vertices.front().position.data(),original.vertices.size(),sizeof(ModelVertex));
         for (std::uint32_t level=0;level<4;++level) {
             const auto file=folder/(std::to_string(p)+"-"+std::to_string(level)+".lod");
             descriptor.levels.push_back(writeLevel(file,current,accumulated));
-            if (!original.skinWeights.empty() || !original.morphTargets.empty() || current.indices.size()<24 || level==3) break;
+            // Triangle simplification cannot preserve nonlinear interpolation
+            // residuals or chart boundaries.
+            if (interpolated || !original.skinWeights.empty() || !original.morphTargets.empty() || current.indices.size()<24 || level==3) break;
             const float currentScale=meshopt_simplifyScale(current.vertices.front().position.data(),current.vertices.size(),sizeof(ModelVertex));
             const float remainingError=maximumError-accumulated;
             if (!(remainingError>0) || !(currentScale>0)) break;

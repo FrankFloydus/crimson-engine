@@ -1,4 +1,4 @@
-$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal
+$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode
 
 #include <bgfx_shader.sh>
 #include "fog.sh"
@@ -31,6 +31,7 @@ SAMPLER2D(s_brdfLut, 7);
 #include "point_shadow.sh"
 #include "directional_shadow.sh"
 #include "material_mapping.sh"
+#include "model_uv.sh"
 uniform mat4 u_modelNormalMatrix;
 
 #include "model_lighting.sh"
@@ -43,7 +44,7 @@ vec2 slotUv(vec4 uv, float index)
     return index > 0.5 ? uv.zw : uv.xy;
 }
 
-vec3 materialNormal(vec3 normal, vec4 tangent, vec2 uv, float faceSign, vec3 mappingPosition, vec3 mappingNormal)
+vec3 materialNormal(vec3 normal, vec4 tangent, vec2 uv, float faceSign, vec3 mappingPosition, vec3 mappingNormal, vec3 worldPosition, bool interpolatedUv)
 {
     vec3 N = safeNormalize(normal, vec3(0.0, 1.0, 0.0));
     if (u_modelMaps.z > 0.5 && u_modelSurface.z != 0.0)
@@ -74,7 +75,16 @@ vec3 materialNormal(vec3 normal, vec4 tangent, vec2 uv, float faceSign, vec3 map
             vec3 fallbackT = normalize(cross(axis, N));
             vec3 T = safeNormalize(tangent.xyz - N * dot(N, tangent.xyz), fallbackT);
             vec3 B = cross(N, T) * (tangent.w < 0.0 ? -1.0 : 1.0);
-            vec3 tangentNormal = materialUvNormal(materialDecodeNormal(texture2D(s_normal, materialUv(uv)).xyz, u_modelSurface.z));
+            vec2 finalUv = materialUv(uv);
+            bool interpolatedChart = u_modelUv.z < 0.5 && interpolatedUv;
+            if (interpolatedChart)
+            {
+                // Polar axes have different metrics. Material rotation/scale
+                // must participate in the derivatives of the sampled chart.
+                ccModelUvFrame(N, worldPosition, finalUv, T, B);
+            }
+            vec3 tangentNormal = materialDecodeNormal(texture2D(s_normal, finalUv).xyz, u_modelSurface.z);
+            if (!interpolatedChart) tangentNormal = materialUvNormal(tangentNormal);
             N = safeNormalize(T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z, N);
         }
     }
@@ -96,7 +106,7 @@ void main()
     vec3 sourceResponse = vec3_splat(0.0);
     vec3 mappingPosition = u_materialUvOffset.w > 0.5 ? v_worldPosition : v_localPosition;
     vec3 mappingNormal = u_materialUvOffset.w > 0.5 ? v_normal : v_localNormal;
-    vec4 uv = vec4(v_texcoord0, v_texcoord1);
+    vec4 uv = vec4(ccModelUv0(v_texcoord0, v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode), v_texcoord1);
     vec4 baseColor = u_modelBase * v_color0;
     if (u_modelMaps.x > 0.5) baseColor *= materialSample(s_albedo, slotUv(uv, u_modelUv.x), mappingPosition, mappingNormal);
     if (u_modelOptions.y > 0.5 && baseColor.a < u_modelEmissive.w) discard;
@@ -111,7 +121,7 @@ void main()
     roughness = clamp(roughness, 0.045, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
     vec3 base = baseColor.rgb;
-    vec3 N = materialNormal(v_normal, v_tangent, slotUv(uv, u_modelUv.z), gl_FrontFacing ? -1.0 : 1.0, mappingPosition, mappingNormal);
+    vec3 N = materialNormal(v_normal, v_tangent, slotUv(uv, u_modelUv.z), gl_FrontFacing ? -1.0 : 1.0, mappingPosition, mappingNormal, v_worldPosition, ccModelUvActive(v_uvInterpolationMode));
     if (u_modelEmissiveMap.y > 0.5)
     {
         vec3 color = debugViewColor(base, base, roughness, metallic, N, vec3_splat(0.0), vec3_splat(0.0));
@@ -180,7 +190,7 @@ void main()
     }
     if (giReceiverSurface(u_modelEmissiveMap.w, u_instanceOpacity.x))
     {
-        sourceResponse = ssgiDiffuseResponse(N, V, base, metallic, u_modelSpecular.x, occlusion);
+        sourceResponse = ssgiDiffuseResponse(N, V, base, metallic, roughness, u_modelSpecular.x, occlusion);
         vec3 bounceLighting = ssgiDiffuse(v_worldPosition, sourceResponse) * screenOcclusion;
         color += bounceLighting;
         indirectLighting += bounceLighting;

@@ -43,7 +43,7 @@ void result(int success,const QuaderBridgeError& error) {
     throw std::runtime_error(end==std::begin(error.message)?"Quader reader failed.":std::string(std::begin(error.message),end));
 }
 struct Library {
-    HMODULE module{};const QuaderBridgeApi* api{};
+    HMODULE module{};const QuaderBridgeApi* api{};const QuaderBridgeUvInterpolationApi* uvApi{};
     Library() {
         std::wstring executable(32768,L'\0');const auto length=GetModuleFileNameW(nullptr,executable.data(),static_cast<DWORD>(executable.size()));
         require(length>0&&length<executable.size(),"Cannot locate Crimson's Quader reader payload.");executable.resize(length);
@@ -57,6 +57,13 @@ struct Library {
             !api->scene_view||!api->mesh_view||!api->material_identity||!api->material_view||!api->read_texture||!api->blob_view||
             !api->release_blob||!api->scene_source_fingerprint||!api->material_source_fingerprint||!api->light_view||!api->node_view) {
             FreeLibrary(module);module=nullptr;throw std::runtime_error("Crimson's bundled Quader reader requires its matching ABI 7 header and DLL.");
+        }
+        const auto getUv=reinterpret_cast<decltype(&quader_bridge_get_uv_interpolation_api)>(
+            GetProcAddress(module,"quader_bridge_get_uv_interpolation_api"));
+        uvApi=getUv?getUv(QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION):nullptr;
+        if(uvApi&&(uvApi->abi_version!=QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION||
+            uvApi->struct_size<sizeof(QuaderBridgeUvInterpolationApi)||!uvApi->mesh_uv_interpolation_view)) {
+            FreeLibrary(module);module=nullptr;throw std::runtime_error("Quader reader returned an incompatible UV interpolation extension.");
         }
     }
     ~Library(){if(module)FreeLibrary(module);}
@@ -140,6 +147,10 @@ std::shared_ptr<QuaderSourceScene> readQuaderScene(const std::filesystem::path& 
         require(value.kind==QUADER_BRIDGE_MATERIAL_PROJECT||value.kind==QUADER_BRIDGE_MATERIAL_EMBEDDED,"Unknown Quader material kind.");out->materials.push_back({string(value.id),value.kind==QUADER_BRIDGE_MATERIAL_EMBEDDED});}
     std::uint64_t totalVertices{},totalIndices{},totalCollision{};std::set<std::tuple<std::uint64_t,std::uint64_t,std::uint64_t>> entities;
     for(std::uint32_t i=0;i<view.mesh_count;++i){QuaderBridgeMeshView value{};result(api->mesh_view(source->handle,i,&value,&error),error);
+        QuaderBridgeMeshUvInterpolationView interpolation{};
+        if(source->library->uvApi)result(source->library->uvApi->mesh_uv_interpolation_view(source->handle,i,&interpolation,&error),error);
+        require((!interpolation.vertices&&!interpolation.vertex_count)||
+            (interpolation.vertices&&interpolation.vertex_count==value.vertex_count),"Quader circular UV data does not match its mesh vertices.");
         require((!value.vertex_count||value.vertices)&&(!value.index_count||value.indices)&&(!value.surface_count||value.surfaces)&&(!value.collision_point_count||value.collision_points),"Invalid Quader mesh buffers.");
         totalVertices+=value.vertex_count;totalIndices+=value.index_count;totalCollision+=value.collision_point_count;
         require(totalVertices<=16000000&&totalIndices<=48000000&&totalCollision<=48000000,"Quader scene exceeds bridge geometry limits.");
@@ -147,7 +158,18 @@ std::shared_ptr<QuaderSourceScene> readQuaderScene(const std::filesystem::path& 
         QuaderSourceMesh mesh;mesh.name=string(value.name);mesh.displayEntity=value.display_entity;mesh.geometryEntity=value.geometry_entity;mesh.definitionEntity=value.definition_entity;
         mesh.transform=matrix(value.transform);mesh.visible=value.visible!=0;require(value.collision_status<=2,"Unknown Quader collision status.");mesh.collision=static_cast<QuaderCollision>(value.collision_status);
         require(value.collision_point_count%3==0&&(mesh.collision==QuaderCollision::StaticTriangles||value.collision_point_count==0),"Invalid Quader collision triangles.");
-        mesh.vertices.reserve(value.vertex_count);for(std::uint32_t v=0;v<value.vertex_count;++v)mesh.vertices.push_back({vector(value.vertices[v].position),vector(value.vertices[v].normal),vector(value.vertices[v].uv)});
+        mesh.vertices.reserve(value.vertex_count);for(std::uint32_t v=0;v<value.vertex_count;++v){
+            QuaderSourceVertex vertex{vector(value.vertices[v].position),vector(value.vertices[v].normal),vector(value.vertices[v].uv)};
+            if(interpolation.vertices){const auto& chart=interpolation.vertices[v];
+                require(chart.mode==QUADER_BRIDGE_UV_INTERPOLATION_NONE||chart.mode==QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR||chart.mode==QUADER_BRIDGE_UV_INTERPOLATION_QUAD,"Unsupported Quader UV interpolation mode.");
+                vertex.uvInterpolationMode=chart.mode;
+                if(chart.mode!=QUADER_BRIDGE_UV_INTERPOLATION_NONE){
+                    vertex.uvInterpolationCoordinates=vector(chart.coordinates);vertex.uvInterpolationCorrection=vector(chart.correction);
+                    require(chart.mode!=QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR||vertex.uvInterpolationCoordinates[2]>0,"Quader circular UV coordinates have a nonpositive radius.");
+                }
+            }
+            mesh.vertices.push_back(vertex);
+        }
         if(value.index_count)mesh.indices.assign(value.indices,value.indices+value.index_count);
         for(const auto index:mesh.indices)require(index<mesh.vertices.size(),"Quader mesh contains an invalid vertex index.");
         for(std::uint32_t s=0;s<value.surface_count;++s){const auto& surface=value.surfaces[s];require(surface.index_count%3==0&&std::uint64_t(surface.index_offset)+surface.index_count<=mesh.indices.size()&&
@@ -226,9 +248,11 @@ std::string quaderMaterialAssetId(const std::string& projectId,const std::string
 }
 std::string quaderSaveKey(const QuaderCompletedSave& save,float scale,bool refreshMaterials,bool syncLights) {
     if(!save.scene)return {};const auto& scene=*save.scene;std::ostringstream out;out<<scene.projectId<<'|'<<scene.documentId<<'|'<<scene.relativePath<<'|'<<scene.token<<'|'<<std::hexfloat<<scale<<'|'<<refreshMaterials;
-    // Keep existing consumption keys valid for the backwards-compatible default.
+    // The default light policy does not need a separate key suffix.
     if(!syncLights)out<<"|lights:off";
     if(refreshMaterials){std::vector<std::string> ids;for(const auto& [id,record]:save.materials){(void)record;ids.push_back(id);}std::sort(ids.begin(),ids.end());for(const auto& id:ids)out<<'|'<<id<<':'<<save.materials.at(id).token;}
-    const auto canonical=out.str();return "quader:v1:"+modelImportDataDigest({reinterpret_cast<const std::uint8_t*>(canonical.data()),canonical.size()});
+    // Reconsume pre-extension saves once: their corner-only geometry omitted
+    // circular fields even when the native saved bytes already contained them.
+    const auto canonical=out.str();return "quader:v3:"+modelImportDataDigest({reinterpret_cast<const std::uint8_t*>(canonical.data()),canonical.size()});
 }
 } // namespace crimson

@@ -155,8 +155,23 @@ Workers compile/prepare CPU data only. Main-thread concrete GPU owners publish c
 
 Preserve linear HDR accumulation, the existing GGX/Smith/Schlick/Fresnel-Lambert response and roughness floor .045. Exposure and optional Glow precede the selected Linear/ACES/AgX/legacy Reinhard mapper; the solid editor matte/grid remain exposure independent. Apply the final sRGB encode once, then optional display-space Debanding and ImGui. Glow is a screen-space halo, not scene illumination.
 
+Smooth shading normals may point away from the eye on a visible triangle. Direct lighting keeps positive `N·L` contributions and clamps signed `N·V` for specular evaluation, avoiding a black cutoff as the camera crosses the shading normal's horizon. Environment diffuse and SSGI receiver weights use the integrated specular response from the existing BRDF LUT for their energy split; they do not use raw view Fresnel to extinguish rough diffuse light. Keep these equations shared across embedded and generated surfaces, including the preview sphere. The LUT data and preprocessing equations are unchanged.
+
 ## Persistence, materials and startup
 
+Quader UV interpolation is mesh data: None=0, Circular=1 and Quad=2. Circular mode
+preserves radial/angular texture flow; Quad mode preserves ordinary inverse-bilinear
+mapping. Coordinates, correction and the explicit mode survive managed packages
+and model cache revision 8. Embedded and generated mesh programs reconstruct UV0
+before the material UV transform. Nonlinear tangent-space normal mapping derives its
+frame from the final material UV after scale/rotation, with no second normal
+rotation/sign adjustment. Normalized derivatives keep frame conditioning stable
+with camera distance; the bitangent follows `B = cross(N, T) * sign`. Color,
+alpha coverage, depth, picking and shadow passes use the same coordinates;
+ordinary UV, UV1 and triplanar mappings keep their existing behavior.
+Material generation v27 carries this vertex/varying interface with no additional
+samplers, uniforms or mesh subdivision. Nonlinear primitives retain their original
+LOD geometry until a chart-aware simplifier is available.
 
 Imported glTF/GLB and Quader native material sidecars are editable under their shared assigned identities. Imported origin is provenance, not a read-only flag. Existing glTF sidecars are not overwritten by promotion; exact-content imports preserve their native graphs. Quader Sync Materials governs source overwrite, independently of its Sync Lights setting. Preserve model slot overrides, factors, texture roles/channels, UV/tangent compatibility and reference-aware deletion policy.
 

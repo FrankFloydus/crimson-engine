@@ -9,7 +9,7 @@
     "nlohmann-json",
     { "name": "stduuid", "features": ["system-gen"] },
     "lodepng",
-    "cgltf",
+    "assimp",
     "mikktspace",
     "meshoptimizer",
     "glm",

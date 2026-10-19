@@ -11,6 +11,7 @@
 #include <future>
 #include <iostream>
 #include <latch>
+#include <limits>
 #include <numbers>
 #include <stdexcept>
 
@@ -209,6 +210,35 @@ void geometry(const std::filesystem::path& root) {
     const auto repaired=streaming::buildModelCache(asset,root);
     check(streaming::loadModelLod(repaired.primitives[0].levels.back())->geometry.indices==coarse->geometry.indices,"Reusing valid immutable cache files prevented damaged LOD repair.");
 }
+void uvInterpolationCache(const std::filesystem::path& root) {
+    using namespace crimson;
+    auto asset=model();const auto ordinaryKey=streaming::modelContentKey(asset);auto& primitive=asset.primitives.front();
+    for(auto& vertex:primitive.vertices){const float x=vertex.position[0]+1,y=vertex.position[2];
+        vertex.uvInterpolationCoordinates={x,y,std::hypot(x,y),std::atan2(y,x)};vertex.uvInterpolationCorrection={2,.3f,-.5f,1.25f};vertex.uvInterpolationMode=1;}
+    const auto key=streaming::modelContentKey(asset);check(key!=ordinaryKey,"Circular UV fields failed to participate in model identity.");
+    const auto stream=streaming::buildModelCache(asset,root,false);
+    check(stream.primitives[0].levels.size()==1,"Circular interpolation was simplified across nonlinear corner/chart boundaries.");
+    const auto loaded=streaming::loadModelLod(stream.primitives[0].levels[0]);check(loaded->geometry.indices==primitive.indices,"Circular UV cache changed topology.");
+    for(std::size_t vertex=0;vertex<primitive.vertices.size();++vertex)
+        check(loaded->geometry.vertices[vertex].uvInterpolationCoordinates==primitive.vertices[vertex].uvInterpolationCoordinates&&
+            loaded->geometry.vertices[vertex].uvInterpolationCorrection==primitive.vertices[vertex].uvInterpolationCorrection&&loaded->geometry.vertices[vertex].uvInterpolationMode==1,"Circular UV attributes did not round trip through the LOD cache.");
+    auto malformed=asset;malformed.primitives[0].vertices[0].uvInterpolationCoordinates={};malformed.primitives[0].vertices[0].uvInterpolationCorrection={};
+    rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    malformed=asset;malformed.primitives[0].vertices[0].uvInterpolationCorrection[0]=std::numeric_limits<float>::infinity();
+    rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    malformed=asset;malformed.primitives[0].vertices[0].uvInterpolationMode=2;rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    malformed=asset;malformed.primitives[0].vertices[0].uvInterpolationMode=1.5f;rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    malformed=asset;malformed.primitives[0].vertices[0].uvInterpolationMode=std::numeric_limits<float>::quiet_NaN();rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    primitive.vertices[0].uvInterpolationCoordinates[0]+=.1f;check(streaming::modelContentKey(asset)!=key,"Circular coordinate changes reused stale geometry cache identity.");
+    for(auto& vertex:primitive.vertices){vertex.uvInterpolationCoordinates={vertex.position[0],vertex.position[2],-.2f,1};vertex.uvInterpolationMode=2;}
+    const auto quadKey=streaming::modelContentKey(asset);check(quadKey!=key&&quadKey!=ordinaryKey,"Quad UV mode failed to participate in model identity.");
+    const auto quadStream=streaming::buildModelCache(asset,root,false);check(quadStream.primitives[0].levels.size()==1,"Quad interpolation was simplified across chart boundaries.");
+    const auto quadLoaded=streaming::loadModelLod(quadStream.primitives[0].levels[0]);
+    for(std::size_t vertex=0;vertex<primitive.vertices.size();++vertex)check(quadLoaded->geometry.vertices[vertex].uvInterpolationMode==2&&
+        quadLoaded->geometry.vertices[vertex].uvInterpolationCoordinates==primitive.vertices[vertex].uvInterpolationCoordinates&&
+        quadLoaded->geometry.vertices[vertex].uvInterpolationCorrection==primitive.vertices[vertex].uvInterpolationCorrection,"Quad UV attributes did not round trip through the LOD cache.");
+}
+
 void deformationCache(const std::filesystem::path& root) {
     using namespace crimson;
     auto asset=model();asset.id="animated-stream-fixture";auto& primitive=asset.primitives.front();
@@ -244,6 +274,6 @@ void deformationCache(const std::filesystem::path& root) {
 }
 int main() {
     const auto root=std::filesystem::temp_directory_path()/("crimson-streaming-"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
-    try { std::filesystem::create_directories(root); textureMips(root); concurrentTextureMipPublication(root); generatedTextureMips(); geometry(root); deformationCache(root); materialSphere(); cleanup(root); std::cout<<"Streaming mip/LOD/cache/material-sphere checks passed.\n"; return 0; }
+    try { std::filesystem::create_directories(root); textureMips(root); concurrentTextureMipPublication(root); generatedTextureMips(); geometry(root); uvInterpolationCache(root); deformationCache(root); materialSphere(); cleanup(root); std::cout<<"Streaming mip/LOD/cache/material-sphere checks passed.\n"; return 0; }
     catch (const std::exception& error) { try { cleanup(root); } catch (...) {} std::cerr<<error.what()<<'\n'; return 1; }
 }

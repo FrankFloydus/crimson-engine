@@ -126,19 +126,24 @@ struct GpuMesh {
         const bool wide = largest > UINT16_MAX;
         if (wide && !(bgfx::getCaps()->supported & BGFX_CAPS_INDEX32))
             throw std::runtime_error("This GPU does not support the model's 32-bit indices.");
-        static_assert(sizeof(ModelVertex) == 18 * sizeof(float));
+        static_assert(sizeof(ModelVertex) == 27 * sizeof(float));
         static_assert(offsetof(ModelVertex, normal) == 3 * sizeof(float));
         static_assert(offsetof(ModelVertex, uv0) == 6 * sizeof(float));
         static_assert(offsetof(ModelVertex, uv1) == 8 * sizeof(float));
         static_assert(offsetof(ModelVertex, tangent) == 10 * sizeof(float));
         static_assert(offsetof(ModelVertex, color) == 14 * sizeof(float));
+        static_assert(offsetof(ModelVertex, uvInterpolationCoordinates) == 18 * sizeof(float));
+        static_assert(offsetof(ModelVertex, uvInterpolationCorrection) == 22 * sizeof(float));
+        static_assert(offsetof(ModelVertex, uvInterpolationMode) == 26 * sizeof(float));
         bgfx::VertexLayout layout;
         layout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float).end();
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord2, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord3, 4, bgfx::AttribType::Float).add(bgfx::Attrib::TexCoord4,1,bgfx::AttribType::Float).end();
         deformation=createModelDeformationSource(data);
         while(deformation && !deformation->ready())uploadModelDeformationSource(*deformation,data,SIZE_MAX);
         const auto flags=static_cast<std::uint16_t>(deformation ? BGFX_BUFFER_COMPUTE_READ|BGFX_BUFFER_COMPUTE_FORMAT_32X1|BGFX_BUFFER_COMPUTE_TYPE_FLOAT:BGFX_BUFFER_NONE);
