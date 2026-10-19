@@ -18,6 +18,11 @@ private:
     std::vector<ModelMaterialTextures> modelTextures_;
     std::string previewStatus_,preparedEnvironment_;
     bool framePreview_{};
+    bool meshInstancing_{};
+    std::uint32_t meshFrame_{};
+    Diagnostics* diagnostics_{};
+    std::vector<ModelMaterial> meshMaterials_;
+    std::vector<RenderModelInstance> meshInstances_;
     bool showModel(AssetLibrary&,Renderer&,const std::string&,bool);
     void showSphere(AssetLibrary&,Renderer&,bool);
 };

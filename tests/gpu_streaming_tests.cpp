@@ -244,10 +244,13 @@ void models(const std::filesystem::path& root) {
     auto coarse=streaming::loadModelLod(descriptor.primitives[0].levels[last],0,last);
     ModelGpuCache cache;cache.configure(asset.id,1,descriptor);check(cache.queue(asset.id,1,coarse),"Coarse mesh queue failed.");
     check(!cache.ready(asset.id,1),"Uninitialized model buffers must not become visible before upload completes.");
+    const auto initialResidency=cache.residencyRevision(),initialPicking=cache.signature();
     for(unsigned i=0;i<5;++i) {cache.advance(sizeof(ModelVertex)-1,2);bgfx::frame();}
     check(!cache.ready(asset.id,1),"Mesh upload must defer a vertex that exceeds the remaining byte budget.");
     for(unsigned i=0;i<1000 && !cache.ready(asset.id,1);++i) {cache.advance(1024,2);bgfx::frame();}
     check(cache.ready(asset.id,1),"Chunked coarse mesh upload did not complete.");
+    check(cache.residencyRevision()>initialResidency&&cache.signature()==initialPicking,
+        "A non-Scene geometry publication must invalidate retained GPU populations without invalidating Scene picking.");
     auto resident=cache.resident(asset.id,1,0,0);check(resident && resident->level==last,"Unavailable detail must use an initialized coarse LOD.");
     const auto bytes=resident->bytes;
     const auto configureAlias=[&](const std::string& id,std::uint64_t revision=1) {
@@ -293,7 +296,10 @@ void models(const std::filesystem::path& root) {
     const auto* exact=resident.get();
     cache.evict(alias);cache.evict(stale);cache.evict(asset.id);resident.reset();
     check(cache.bytes()==bytes && !cache.ready(retained,1),"A pending shared admission failed to retain its sole GPU allocation owner.");
+    const auto retainedResidency=cache.residencyRevision(),retainedPicking=cache.signature();
     cache.advance(0,2);resident=cache.resident(retained,1,0,0);
+    check(cache.residencyRevision()==retainedResidency+1&&cache.signature()==retainedPicking,
+        "A non-Scene shared admission must update the global residency generation alone.");
     check(cache.ready(retained,1) && resident.get()==exact,"Shared admission changed or lost the exact resident object after source eviction.");
     cache.evict(retained);check(cache.bytes()==bytes,"Pinned retired mesh buffers must remain accounted.");
     resident.reset();check(cache.bytes()==0,"Unleased retired mesh buffers should release their GPU allocation.");

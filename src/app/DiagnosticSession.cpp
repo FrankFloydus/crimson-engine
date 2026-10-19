@@ -4,6 +4,9 @@
 #include "tools/Tools.h"
 #include "ibl_smoke.h"
 #include "model_smoke.h"
+#include "scene/BuiltinModels.h"
+#include "crimson-renderer/RenderPassPlan.h"
+#include <chrono>
 #include <bgfx/bgfx.h>
 #include <imgui.h>
 #include <lodepng.h>
@@ -48,6 +51,8 @@ void importSmokeTextures(AssetLibrary& assets, Material& material, const std::fi
 }
 DiagnosticSession::DiagnosticSession(const AppOptions& options,const std::filesystem::path& root,AssetLibrary& assets,Renderer& renderer,Diagnostics& diagnostics) : root_(root) {
     settings_ = diagnosticSettings(options.scenario);
+    diagnostics_=&diagnostics;
+    meshInstancing_=options.scenario=="mesh-instancing";
     if (options.scenario == "default" || options.scenario == "ibl-reopen" || options.scenario.starts_with("model-")) assets.loadMaterial(settings_.material);
     if (options.scenario == "default" || options.scenario.starts_with("ibl-") || options.scenario.starts_with("model-")) assets.loadEnvironment(settings_.environment);
     if (options.editorSmoke) importSmokeTextures(assets, settings_.material, root);
@@ -117,6 +122,27 @@ DiagnosticSession::DiagnosticSession(const AppOptions& options,const std::filesy
     diagnostics.log("PASS: Mixed asset imports, model replacement, failed-drop retention and preview persistence.");
     }
     if (options.scenario == "model-reopen") diagnostics.log("PASS: Managed model preview reopened without original source files.");
+    if(meshInstancing_) {
+        const auto mesh=assets.findModel(BuiltinBoxModelId);
+        if(!mesh || !renderer.prepareModel(*mesh))throw std::runtime_error(renderer.modelStatus());
+        meshMaterials_=assets.resolvedModelMaterials(*mesh);
+        modelTextures_=assets.modelBindings(*mesh,meshMaterials_);
+        meshInstances_.reserve(100000);
+        for(unsigned y=0;y<10;++y)for(unsigned z=0;z<100;++z)for(unsigned x=0;x<100;++x) {
+            RenderModelInstance instance;
+            instance.entityId=meshInstances_.size()+1;
+            instance.model={mesh,math::translation({(float(x)-49.5f)*.8f,float(y)*.8f,(float(z)-49.5f)*.8f})*math::scaling({.35f,.35f,.35f})};
+            instance.materials=&meshMaterials_;instance.textures=&modelTextures_;instance.forceFullDetail=true;
+            meshInstances_.push_back(std::move(instance));
+        }
+        settings_.camera.position={65,60,85};settings_.camera.target={0,3,0};settings_.camera.fov=60;
+        settings_.camera.fovAxis=CameraFovAxis::Vertical;settings_.camera.farPlane=512;
+        settings_.environment.ambientLight.source=AmbientLightSource::Color;
+        settings_.environment.ambientLight.color={.3f,.35f,.4f};settings_.environment.ambientLight.energy=1;
+        settings_.directional.castShadows=false;
+        renderer.setGridVisible(false);
+        diagnostics.log("Mesh instancing workload: 100000 production built-in Box occurrences, one mesh, fixed PBR, retained instance palette, shadows disabled for population measurement.");
+    }
 }
 bool DiagnosticSession::showModel(AssetLibrary& assets,Renderer& renderer,const std::string& id,bool persist) {
 
@@ -150,6 +176,36 @@ void DiagnosticSession::showSphere(AssetLibrary& assets,Renderer& renderer,bool 
     if (persist && !assets.savePreview({})) previewStatus_ = assets.status();
     }
 void DiagnosticSession::frame(AssetLibrary& assets,Renderer& renderer,Navigation& navigation,SDL_Window* window) {
+    if(meshInstancing_) {
+        const auto editor=drawEditor(settings_,renderer,assets,window,nullptr,{});
+        navigation.update(settings_.camera,editor.viewport,ImGui::GetIO().DeltaTime,false);
+        ++meshFrame_;
+        if(meshFrame_==30)meshInstances_[50505].model.transform[12]+=.125f;
+        if(editor.viewport.width>0&&editor.viewport.height>0) {
+            RenderScene scene{settings_,{}};scene.sceneMode=true;scene.instances=meshInstances_;
+            scene.directionalLights=std::span(&settings_.directional,1);scene.pointLights=settings_.points;
+            scene.shadowWorldId=0x4d455348494e5354ull;scene.meshPopulationRevision=meshFrame_<30?1:2;
+            const auto started=std::chrono::steady_clock::now();renderer.render(scene);
+            const auto milliseconds=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+            const auto& stats=renderer.meshInstancingStats(RenderViewPurpose::Scene);
+            if(stats.instancedInstances!=100000||stats.instancedDraws!=2||stats.fallbackDraws)
+                throw std::runtime_error("100000 Box workload did not enter bounded GPU instanced draws.");
+            if(meshFrame_>1&&meshFrame_!=30&&stats.uploadBytes)
+                throw std::runtime_error("Unchanged mesh instance population was reuploaded.");
+            if(meshFrame_==30&&(stats.dirtyRecords!=1||stats.uploadBytes!=256))
+                throw std::runtime_error("Single mesh instance edit did not upload exactly one 256-byte record.");
+            if(meshFrame_<=3||meshFrame_==30||meshFrame_==31||meshFrame_%60==0) {
+                const auto* gpu=bgfx::getStats();
+                diagnostics_->log("Mesh instances frame="+std::to_string(meshFrame_)+" count="+std::to_string(stats.instancedInstances)+
+                    " color_draws="+std::to_string(stats.instancedDraws)+" fallback_draws="+std::to_string(stats.fallbackDraws)+
+                    " record_upload_bytes="+std::to_string(stats.uploadBytes)+" dirty_records="+std::to_string(stats.dirtyRecords)+
+                    " cpu_record_rebuilds="+std::to_string(stats.cpuRecordRebuilds)+
+                    " palette_bytes="+std::to_string(stats.residentBytes)+" bgfx_total_draws="+std::to_string(gpu?gpu->numDraw:0)+
+                    " submit_cpu_ms="+std::to_string(milliseconds));
+            }
+        }
+        return;
+    }
     const auto editor = drawEditor(settings_, renderer, assets, window, preview_ ? &*preview_ : nullptr, previewStatus_);
     if (editor.showSphere) showSphere(assets,renderer,true);
     if (!editor.modelDropId.empty()) showModel(assets,renderer,editor.modelDropId,true);

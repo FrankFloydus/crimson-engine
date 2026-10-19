@@ -16,7 +16,7 @@ The foundation is the native renderer and editor in this project. Work progresse
 
 This document governs current ownership and implementation status. The renderer companion maps that contract to controls, files and checks. Checkpoint documents preserve the implementation and measurements at their recorded revision; D2R screenshots and research are design evidence rather than proof of Blizzard's internal implementation. Do not restore a removed rig or reclassify a planned feature as implemented by following an older checkpoint. Documentation updates alone do not require building or closing the editor.
 
-Primary checkout: `C:\Users\Drako\Desktop\_CRIMSON_ENGINE\crimson-engine`. Each build embeds its own checkout as the default project root; isolated worktree executables therefore resolve project assets, layouts and caches within that worktree. Application-wide Preferences retain their shared behavior. The official renderer name, CMake target, and executable are `crimson-renderer`, `crimson-renderer`, and `crimson-renderer.exe`. Renderer implementation, shaders, the ImGui/bgfx adapter, and rendering diagnostics belong in `src/crimson-renderer/`. Editor orchestration belongs in `src/editor/`, docked views in `src/tools/`, CPU scene/history/storage in `src/scene/`, Play/input/controller orchestration in `src/runtime/`, Jolt adaptation in `src/physics/`, and managed imports in `src/assets/`. CPU commandlet entry points such as project material-cache preparation live in `src/commandlets/`; their shared compiler/cache logic stays in `src/resources/`. `src/math/` owns the public math boundary. Keep `App` focused on composition, native lifetime and the frame loop.
+Primary checkout: `C:\Users\Drako\Desktop\_CRIMSON_ENGINE\crimson-engine`. Each build embeds its own checkout as the default project root; isolated worktree executables therefore resolve project assets, layouts and caches within that worktree. Application-wide Preferences retain their shared behavior. The official renderer name, CMake target, and executable are `crimson-renderer`, `crimson-renderer`, and `crimson-renderer.exe`. Reusable renderer implementation, shaders and neutral support belong in the canonical `third_party/crimson-renderer` submodule. Engine host adapters, ImGui/bgfx presentation and rendering diagnostics belong in `src/crimson-renderer/`. Editor orchestration belongs in `src/editor/`, docked views in `src/tools/`, CPU scene/history/storage in `src/scene/`, Play/input/controller orchestration in `src/runtime/`, Jolt adaptation in `src/physics/`, and managed imports in `src/assets/`. CPU commandlet entry points such as project material-cache preparation live in `src/commandlets/`; their shared compiler/cache logic stays in `src/resources/`. `src/math/` forwards the canonical public Crimson math boundary; GLM remains private to renderer support. Keep `App` focused on composition, native lifetime and the frame loop.
 
 ## 1. Direction and implementation status
 
@@ -388,6 +388,26 @@ CMake target names forward to canonical support and compile no duplicate owners.
 The renderer's `Crimson::HostShaders` target supplies embedded headers; Engine
 runtime staging, tests and shader reload use that same canonical source/compiler
 family. GPU fixtures link the canonical renderer rather than private copies.
+
+Repeated compatible static mesh occurrences use the canonical retained mesh-instance
+owner. One geometry allocation and GPU instance records feed bounded indexed instanced
+draws in the modeling Vulkan and rich Direct3D recipes. Rich fixed-surface materials,
+including certified embedded native graphs, preserve their existing PBR uniforms and
+textures; generated programs, deformation and incompatible/transparent states retain
+ordinary submissions. Instanced depth, picking and shadow variants share the world/normal
+transform and identity record. The palette uses vertex texture stage 11 and TEXCOORD7;
+generated-material ABI 27 and its twelve material slots remain intact. Scene/Game and
+shadow populations retain separate owners where their records or ordering differ.
+Unchanged records upload nothing; dirty placements update bounded ranges. Entirely
+fixed, static opaque/masked view populations also retain their CPU records when
+SSGI is off. Engine hashes final visible instance transforms, identities, flags and
+prepared resources during extraction to supply the canonical population revision;
+camera, size, shader and residency guards independently invalidate that cache.
+Mixed/deformed/generated populations retain ordinary CPU preparation. Extraction,
+visibility and shadow-caster traversal remain CPU work. The common
+record is 256 bytes and each draw contains at most 65,535 occurrences. The actual
+application's `--scenario mesh-instancing` diagnostic and focused renderer fixture
+exercise the 100,000-cube workload, per-pass identity and upload behavior.
 
 The [renderer and character lighting guide](RENDERER_AND_CHARACTER_LIGHTING.md) provides the control reference, ownership/source map and focused checks. Use the following boundaries when planning a change; direct-light count, shadow residency and update rate are different budgets.
 

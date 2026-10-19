@@ -2,7 +2,7 @@
 
 Crimson Engine is a native Windows x64 editor and engine for a first-person action game. It uses C++20, SDL3, bgfx Direct3D 12 with an optional Direct3D 11 backend, EnTT, Jolt, Recast/Detour and Dear ImGui docking. The editor provides native scenes, static and animated glTF/GLB models, particles, lights, camera entities and a Play mode with a first-person WASD controller, mouse look, jumping and strafe camera tilt. A dockable Outliner, transform gizmos, Quader navigation and one shared asset library support scene authoring. Dear ImGui uses its default colors, font and sizing.
 
-Project folder: `C:\Users\Drako\Desktop\_CRIMSON_ENGINE\crimson-engine`. The renderer is named **crimson-renderer**. Its C++ sources, shader sources, ImGui/bgfx adapter, and rendering diagnostics live together in [`src/crimson-renderer`](src/crimson-renderer).
+Project folder: `C:\Users\Drako\Desktop\_CRIMSON_ENGINE\crimson-engine`. The renderer is named **crimson-renderer**. Its canonical implementation and shaders live in the [`third_party/crimson-renderer`](third_party/crimson-renderer) submodule. Engine host adapters, ImGui/bgfx presentation and diagnostics remain in [`src/crimson-renderer`](src/crimson-renderer).
 
 The current gameplay scope centers on direct first-person movement and an editor-adjustable camera, with DUSK and Quake as references for movement and camera feel. WASD movement, mouse look, jumping, lateral camera tilt and smooth stair traversal are implemented. Actors, enemy navigation, gameplay tags, Attributes and Gameplay Effects remain reusable engine systems; weapons and combat rules need their own agreed scope.
 

@@ -2,6 +2,7 @@
 
 #include "assets/AssetLibrary.h"
 #include "assets/ModelAnimation.h"
+#include "resources/CacheIO.h"
 
 #include <algorithm>
 #include <array>
@@ -27,6 +28,19 @@ struct ViewPins {
     std::vector<std::shared_ptr<const PreparedEditorModel>> models;
 };
 
+void includeMeshPopulation(PreparedRenderView& view,const PreparedEditorModel& prepared,const RenderModelInstance& instance) {
+    using streaming::detail::hash;
+    if(!view.meshPopulationRevision)view.meshPopulationRevision=streaming::detail::HashSeed;
+    auto& revision=view.meshPopulationRevision;
+    hash(revision,prepared.signature);hash(revision,instance.entityId);hash(revision,instance.model.transform);
+    hash(revision,instance.resourceRevision);hash(revision,instance.forceFullDetail);hash(revision,instance.pickable);
+    hash(revision,instance.shading);hash(revision,instance.blend);hash(revision,instance.castShadows);hash(revision,instance.receiveShadows);
+    hash(revision,instance.lightingScopes.directReceiverMask);hash(revision,instance.lightingScopes.shadowCasterMask);
+    hash(revision,instance.lightingCategory);hash(revision,instance.opacity);
+    if(instance.pose)hash(revision,instance.pose->signature);
+    if(!revision)revision=1;
+}
+
 void appendModel(PreparedRenderView& view,ViewPins& pins,const ExtractedModel& model,
                  std::shared_ptr<const PreparedEditorModel> prepared,bool selected,EditorResources& resources) {
     view.instances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,selected,true,&prepared->materials});
@@ -35,6 +49,7 @@ void appendModel(PreparedRenderView& view,ViewPins& pins,const ExtractedModel& m
     view.instances.back().lightingCategory=model.lightingCategory;
     view.instances.back().actorOwner=model.actorOwner;
     view.instances.back().pose=resources.pose(model,prepared->asset);
+    includeMeshPopulation(view,*prepared,view.instances.back());
     pins.models.push_back(std::move(prepared));
 }
 
@@ -120,7 +135,8 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
             input.sceneHeight,false,ResourcePriority::Placement,input.sceneAspect);
         includePreparedModel(stats,prepared);if(!prepared)continue;
         scene.instances.push_back({0,{prepared->asset,math::translation(input.placementPosition)},&prepared->textures,prepared->revision,false,false,&prepared->materials});
-        scene.instances.back().castShadows=false;scene.instances.back().receiveShadows=false;scenePins->models.push_back(std::move(prepared));
+        scene.instances.back().castShadows=false;scene.instances.back().receiveShadows=false;
+        includeMeshPopulation(scene,*prepared,scene.instances.back());scenePins->models.push_back(std::move(prepared));
     }
     scene.pinned=std::move(scenePins);
     if(input.sceneVisible && input.sceneWidth && input.sceneHeight)frame->views.push_back(std::move(scene));

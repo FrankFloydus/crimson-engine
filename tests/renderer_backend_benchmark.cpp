@@ -280,7 +280,14 @@ void exercise(SDL_Window* window,const Options& options) {
             checkStatus();
             const auto checkWorkload=[&] {
                 const auto* stats=bgfx::getStats();const auto views=dual?2u:1u;
-                check(stats->numDraw>=fixture->instances.size()*views,"Fixture model draw workload was not submitted: "+phase);
+                const auto& gameMeshes=renderer.meshInstancingStats(RenderViewPurpose::Game);
+                const auto& sceneMeshes=renderer.meshInstancingStats(RenderViewPurpose::Scene);
+                const auto submittedModels=gameMeshes.instancedInstances+gameMeshes.fallbackDraws+
+                    (dual?sceneMeshes.instancedInstances+sceneMeshes.fallbackDraws:0);
+                const auto modelDraws=gameMeshes.instancedDraws+gameMeshes.fallbackDraws+
+                    (dual?sceneMeshes.instancedDraws+sceneMeshes.fallbackDraws:0);
+                check(submittedModels>=fixture->instances.size()*views && stats->numDraw>=modelDraws,
+                    "Fixture model/instance workload was not submitted: "+phase);
                 check(renderer.modelResidentBytes()>0&&renderer.shadowResidentBytes()>0,"Fixture geometry/shadow resources are missing: "+phase);
                 check(renderer.shadowStats().directionalLights>0,"Fixture directional shadow was bypassed: "+phase);
                 if(effects) {

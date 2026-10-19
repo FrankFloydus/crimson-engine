@@ -26,7 +26,7 @@ inline std::uint64_t preparedModelSignature(const ModelAsset& asset,std::uint64_
         // These also describe the explicit fallback while a graph is compiling.
         hash(result,material.baseColor);hash(result,material.metallic);hash(result,material.roughness);hash(result,material.specular);
         hash(result,material.normalScale);hash(result,material.occlusionStrength);hash(result,material.emissive);
-        hash(result,material.alphaMask);hash(result,material.alphaCutoff);hash(result,material.doubleSided);hash(result,material.receiveFog);
+        hash(result,material.alphaBlend);hash(result,material.alphaMask);hash(result,material.alphaCutoff);hash(result,material.doubleSided);hash(result,material.receiveFog);
         hash(result,material.uvScale);hash(result,material.uvOffset);hash(result,material.uvRotation);hash(result,material.triplanar);hash(result,material.triplanarWorld);
         hash(result,material.sharedSampler.has_value());
         if(material.sharedSampler) {

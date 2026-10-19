@@ -1,5 +1,10 @@
 #include "crimson-renderer/ShaderPreflight.h"
 #include "vs_model.h"
+#include "vs_model_instanced.h"
+#include "vs_pick_instanced.h"
+#include "fs_pick_instanced.h"
+#include "vs_point_shadow_instanced.h"
+#include "vs_directional_shadow_instanced.h"
 #include "fs_model.h"
 #include "vs_pick.h"
 #include "fs_pick.h"
@@ -40,6 +45,10 @@ int main() {
         const auto pair=[&](auto& vertex,auto& fragment){check(crimson::preflightShaderPair(vertex,fragment,vertex,fragment,diagnostic),diagnostic);};
         pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_collision_overlay,cc_fs_collision_overlay); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
         pair(cc_vs_particle,cc_fs_particle);
+        pair(cc_vs_model_instanced,cc_fs_model);pair(cc_vs_pick_instanced,cc_fs_pick_instanced);
+        pair(cc_vs_point_shadow_instanced,cc_fs_point_shadow);pair(cc_vs_directional_shadow_instanced,cc_fs_directional_shadow);
+        check(!crimson::preflightShaderPair(cc_vs_model_instanced,cc_fs_model,cc_vs_model,cc_fs_model,diagnostic),"Instance-token vertex inputs must not replace the per-object model contract.");
+        check(!crimson::preflightShaderPair(cc_vs_pick_instanced,cc_fs_pick_instanced,cc_vs_pick,cc_fs_pick,diagnostic),"Per-instance identity must retain its own picking interface.");
         pair(cc_vs_present,cc_fs_sky);
         pair(cc_vs_point_shadow,cc_fs_point_shadow);
         pair(cc_vs_directional_shadow,cc_fs_directional_shadow);

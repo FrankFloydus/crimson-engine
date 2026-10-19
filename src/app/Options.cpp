@@ -27,7 +27,7 @@ void parseSize(std::string_view text, uint32_t& width, uint32_t& height) {
 }
 SceneSettings diagnosticSettings(const std::string& scenario) {
     SceneSettings scene;
-    if (scenario == "default" || scenario == "model-reopen" || scenario == "model-sphere") return scene;
+    if (scenario == "default" || scenario == "model-reopen" || scenario == "model-sphere" || scenario == "mesh-instancing") return scene;
     if (scenario == "rough") { scene.material.roughness = 1.0f; return scene; }
     if (scenario == "metal") { scene.material.metallic = 1.0f; scene.material.baseColor = {0.95f, 0.7f, 0.25f}; return scene; }
     if (scenario == "unlit") {
