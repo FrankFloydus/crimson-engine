@@ -83,7 +83,7 @@ int main(int argc,char** argv) {
             if(!window)throw std::runtime_error(SDL_GetError());
             ResourceManager resources;
             Diagnostics diagnostics;
-            Renderer renderer(window.get(),&diagnostics);
+            Renderer renderer(native_renderer_context(window.get(),&diagnostics));
             report["adapter_vendor"]=bgfx::getCaps()->vendorId;report["adapter_device"]=bgfx::getCaps()->deviceId;
             IMGUI_CHECKVERSION();ImGui::CreateContext();ImPlot::CreateContext();
             ImGui::GetIO().ConfigFlags|=ImGuiConfigFlags_DockingEnable;
@@ -91,7 +91,7 @@ int main(int argc,char** argv) {
             ImGui::LoadIniSettingsFromDisk((root/"crimson_ui.ini").string().c_str());
             if(!ImGui_ImplSDL3_InitForD3D(window.get()))throw std::runtime_error("ImGui SDL initialization failed.");
             {
-                ImGuiBgfx tools([&](const std::string& s){diagnostics.log(s);});
+                ImGuiBgfx tools(renderer,[&](const std::string& s){diagnostics.log(s);});
                 AssetLibrary assets(root,&resources);
                 Navigation navigation(window.get());
                 applyToolsStyle();
@@ -110,7 +110,7 @@ int main(int argc,char** argv) {
                         tools.newFrame(frame);ImGui_ImplSDL3_NewFrame();ImGui::NewFrame();
                         editor.frame(assets,renderer,navigation,window.get(),frame,false);const auto c=Clock::now();
                         ImGui::Render();bgfx::setViewClear(ToolsView,BGFX_CLEAR_COLOR,0x202020ff);tools.render(ImGui::GetDrawData());const auto d=Clock::now();
-                        frame=bgfx::frame();tools.postFrame(frame);const auto e=Clock::now();
+                        frame=renderer.advance_frame();tools.postFrame(frame);const auto e=Clock::now();
                         Sample s;s.runtime=ms(a,b);s.editor=ms(b,c);s.ui=ms(c,d);s.submit=ms(d,e);s.frame=ms(a,e);
                         if(const auto* stats=bgfx::getStats();stats&&stats->gpuTimerFreq>0)s.gpu=1000.0*static_cast<double>(stats->gpuTimeEnd-stats->gpuTimeBegin)/stats->gpuTimerFreq;
                         s.visible=EditorPerformanceProbe::visible(editor).size();
@@ -155,7 +155,7 @@ int main(int argc,char** argv) {
                     runtime.stop();renderer.drainPending(frame);
                 }
                 tools.shutdown();
-                for(unsigned i=0;i<8&&tools.hasPendingRetirements();++i){auto f=bgfx::frame();tools.postFrame(f);}
+                for(unsigned i=0;i<8&&tools.hasPendingRetirements();++i){auto f=renderer.advance_frame();tools.postFrame(f);}
             }
             ImGui_ImplSDL3_Shutdown();ImPlot::DestroyContext();ImGui::DestroyContext();
             report["render_error"]=diagnostics.hadRenderError();

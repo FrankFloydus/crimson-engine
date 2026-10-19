@@ -1,5 +1,6 @@
 {
   "overlay-ports": [
+    "./third_party/crimson-renderer/cmake/vcpkg-ports",
     "./cmake/vcpkg-ports"
   ]
 }

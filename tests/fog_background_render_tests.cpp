@@ -108,7 +108,7 @@ void centerColor(const DecodedImage& image,const Vec3& expected,const std::strin
 }
 void exercise(SDL_Window* window) {
     ResourceManager resources;
-    Renderer renderer(window,nullptr,selectedTestGraphicsBackend());
+    Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     TestGpuContext context;
     bgfx::reset(320,240,BGFX_RESET_NONE);
     renderer.setGridVisible(false);
@@ -132,7 +132,7 @@ void exercise(SDL_Window* window) {
     RenderScene scene{sceneSettings,{}};scene.sceneMode=true;
     RenderScene game{gameSettings,{}};game.sceneMode=true;
     std::uint32_t frame{};
-    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
+    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto draw=[&]{renderer.render(scene);renderer.renderGame(game);};
     const auto read=[&](bgfx::TextureHandle target) {
         Texture staging{bgfx::createTexture2D(Width,Height,false,1,bgfx::TextureFormat::RGBA8,

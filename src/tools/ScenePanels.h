@@ -8,7 +8,7 @@
 namespace crimson {
 class SceneDocument;
 class AssetLibrary;
-class Renderer;
+namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class QuaderBridge;
 struct NavigationInspectorContext {
     std::string* previewProfile{};

@@ -12,18 +12,7 @@
 namespace crimson::streaming {
 namespace {
 constexpr std::array<char,8> Magic{'C','R','L','O','D','0','0','1'};
-std::uint64_t primitiveKey(const ModelPrimitive& primitive) {
-    auto key=detail::HashSeed; detail::hash(key,ModelCacheVersion); detail::hash(key,MESHOPTIMIZER_VERSION);
-    detail::hash(key,primitive.material); detail::hash(key,primitive.uvMask); detail::hash(key,primitive.tangentUv);
-    detail::hash(key,primitive.vertices.data(),primitive.vertices.size()*sizeof(ModelVertex));
-    detail::hash(key,primitive.indices.data(),primitive.indices.size()*sizeof(std::uint32_t));
-    detail::hash(key,primitive.skinWeights.size());detail::hash(key,primitive.skinWeights.data(),primitive.skinWeights.size()*sizeof(ModelSkinWeights));
-    detail::hash(key,primitive.morphTargets.size());
-    for(const auto& target:primitive.morphTargets)for(const auto* values:{&target.positions,&target.normals,&target.tangents}) {
-        detail::hash(key,values->size());detail::hash(key,values->data(),values->size()*sizeof(Vec3));
-    }
-    return key;
-}
+
 void validate(const ModelPrimitive& primitive) {
     if (primitive.vertices.empty() || primitive.indices.empty() || primitive.indices.size()%3 ||
         primitive.vertices.size()>UINT32_MAX || primitive.indices.size()>UINT32_MAX)
@@ -54,7 +43,7 @@ void validate(const ModelPrimitive& primitive) {
     }
 }
 ModelLod writeLevel(const std::filesystem::path& file,const ModelPrimitive& primitive,float error) {
-    validate(primitive); const auto key=primitiveKey(primitive);
+    validate(primitive); const auto key=model_primitive_content_key(primitive);
     const auto vertices=static_cast<std::uint32_t>(primitive.vertices.size()),indices=static_cast<std::uint32_t>(primitive.indices.size());
     std::string bytes;
     detail::append(bytes,Magic); detail::append(bytes,ModelCacheVersion); detail::append(bytes,key);
@@ -78,11 +67,7 @@ Aabb primitiveBounds(const ModelPrimitive& primitive) {
     return result;
 }
 }
-std::uint64_t modelContentKey(const ModelAsset& asset) {
-    auto key=detail::HashSeed; detail::hash(key,ModelCacheVersion); detail::hash(key,MESHOPTIMIZER_VERSION);
-    for (const auto& primitive : asset.primitives) { const auto value=primitiveKey(primitive); detail::hash(key,value); }
-    return key;
-}
+
 ModelStream buildModelCache(const ModelAsset& asset,const std::filesystem::path& root,bool writeMetadata) {
     ModelStream result{asset.id,modelContentKey(asset),{}};
     const auto folder=resolveAssetPath(root,"assets/cache/mesh-lods")/detail::hex(result.key);
@@ -176,27 +161,12 @@ std::shared_ptr<const ModelGeometryLevel> loadModelLod(const ModelLod& info,std:
     if(bytesLeft())throw std::runtime_error("Model LOD cache has trailing deformation data.");
     input.close();
     validate(result->geometry);
-    if (primitiveKey(result->geometry)!=info.key) throw std::runtime_error("Model LOD cache checksum mismatch.");
+    if (model_primitive_content_key(result->geometry)!=info.key) throw std::runtime_error("Model LOD cache checksum mismatch.");
     result->wideIndices=*std::max_element(result->geometry.indices.begin(),result->geometry.indices.end())>UINT16_MAX;
     if (!result->wideIndices)
         result->indices16.assign(result->geometry.indices.begin(),result->geometry.indices.end());
     result->validated=true;
     return result;
 }
-std::uint32_t chooseModelLod(std::span<const ModelLod> levels,const Mat4& world,const Aabb& bounds,
-    const Vec3& camera,float fov,std::uint32_t height,float pixels) {
-    if (levels.empty() || !bounds.valid || !height || !std::isfinite(fov) || fov<=0 || pixels<=0) return 0;
-    const auto transformed=math::transformBounds(bounds,world);
-    if (!transformed.valid) return 0;
-    const auto center=(transformed.minimum+transformed.maximum)*.5f;
-    const auto radius=math::length(transformed.maximum-transformed.minimum)*.5f;
-    const double distance=std::max(0.0,math::length(camera-center)-radius);
-    if (distance<=0) return 0;
-    double scaleSquared=0;
-    for (std::size_t column=0;column<3;++column) for (std::size_t row=0;row<3;++row) scaleSquared+=static_cast<double>(world[column*4+row])*world[column*4+row];
-    const double scale=std::sqrt(scaleSquared);
-    const double maximumError=distance*(2*std::tan(fov*.5f)/height)*pixels;
-    for (std::size_t level=levels.size();level-->0;) if (levels[level].error*scale<=maximumError) return static_cast<std::uint32_t>(level);
-    return 0;
-}
+
 }

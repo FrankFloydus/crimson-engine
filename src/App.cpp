@@ -2,6 +2,7 @@
 #include "crimson-renderer/Diagnostics.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/Renderer.h"
+#include <crimson/renderer/BuildIdentity.hpp>
 #include "assets/AssetLibrary.h"
 #include "input/Navigation.h"
 #include "platform/WindowIcon.h"
@@ -123,9 +124,12 @@ int run(const AppOptions& options) {
 
     {
         ResourceManager resources;
-        Renderer renderer(window.get(), &diagnostics, graphicsBackend);
+        Renderer renderer(native_renderer_context(window.get(), &diagnostics, graphicsBackend));
+        diagnostics.log(std::string("Shared Crimson renderer source ")+shared::kRendererSourceCommit+
+            "; manifest "+shared::kRendererManifestSha256+
+            "; modified="+(shared::kRendererWorkingTreeDirty?"true":"false"));
         ImGuiLifetime imgui(window.get(), root);
-        ImGuiBgfx toolsRenderer([&diagnostics](const std::string& message){diagnostics.log(message);});
+        ImGuiBgfx toolsRenderer(renderer,[&diagnostics](const std::string& message){diagnostics.log(message);});
         AssetLibrary assets(root,diagnosticMode?nullptr:&resources);
         Navigation navigation(window.get());
         navigation.setDesktopCoordinates((ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable)!=0);
@@ -209,7 +213,7 @@ int run(const AppOptions& options) {
                 bgfx::requestScreenShot(BGFX_INVALID_HANDLE,options.capture.c_str()); captureRequested=true;
             }
             const auto cpuSubmitted=std::chrono::steady_clock::now();
-            bgfxFrame=bgfx::frame();
+            bgfxFrame=renderer.advance_frame();
             const bool nativeSynchronized=toolsRenderer.postFrame(bgfxFrame,!mainDrawable);
             if(!mainDrawable && !nativeSynchronized)SDL_Delay(16);
             const FrameTiming frameTiming{
@@ -226,11 +230,11 @@ int run(const AppOptions& options) {
         bgfxFrame=renderer.drainPending(bgfxFrame);
         // Let asynchronous screenshot requests and resource destruction finish before shutdown.
         if (captureRequested) {
-            for (int flush = 0; flush < 8 && !diagnostics.captureSucceeded() && !diagnostics.captureFailed(); ++flush) bgfx::frame();
+            for (int flush = 0; flush < 8 && !diagnostics.captureSucceeded() && !diagnostics.captureFailed(); ++flush) renderer.advance_frame();
         }
         toolsRenderer.shutdown();
         for (unsigned drain=0;drain<8 && toolsRenderer.hasPendingRetirements();++drain) {
-            bgfxFrame=bgfx::frame();
+            bgfxFrame=renderer.advance_frame();
             toolsRenderer.postFrame(bgfxFrame);
         }
         diagnostics.log("Rendered " + std::to_string(frame) + " frames at " + std::to_string(renderer.width()) +

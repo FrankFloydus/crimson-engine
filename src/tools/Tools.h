@@ -12,7 +12,7 @@ struct SDL_Window;
 
 namespace crimson {
 
-class Renderer;
+namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class AssetLibrary;
 struct ModelInstance;
 

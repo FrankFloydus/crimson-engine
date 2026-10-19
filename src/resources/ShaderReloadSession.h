@@ -6,7 +6,7 @@
 #include <unordered_map>
 
 namespace crimson {
-class Renderer;
+namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class ImGuiBgfx;
 // Coordinates CPU compilation and atomic publication to the existing GPU owners.
 // Call changed() and pump() before constructing ImGui/render frame snapshots.

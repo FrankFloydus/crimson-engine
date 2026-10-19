@@ -222,7 +222,7 @@ void exercise(SDL_Window* window,const Options& options) {
     // Destinations precede Renderer so an exceptional shutdown cannot invalidate
     // readback storage while bgfx still owns a queued write to it.
     std::vector<std::shared_ptr<DecodedImage>> readbacks;
-    ResourceManager resources;Renderer renderer(window,nullptr,options.backend);NativeAdapter adapter;
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,options.backend));NativeAdapter adapter;
     const unsigned measurementFrames=options.samples*2;
     Json report;report["schema"]=2;report["fixture_version"]=1;report["backend"]=renderer.backendName();report["adapter"]=adapter.describe();
     report["viewport"]={options.width,options.height};report["warmup_frames"]=options.warmup;
@@ -246,7 +246,7 @@ void exercise(SDL_Window* window,const Options& options) {
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.16f,.19f,.25f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     std::uint32_t frame{};
-    const auto tick=[&] {resources.pump();renderer.advanceStreaming();bgfx::touch(ToolsView);frame=bgfx::frame();};
+    const auto tick=[&] {resources.pump();renderer.advanceStreaming();bgfx::touch(ToolsView);frame=renderer.advance_frame();};
     const auto checkStatus=[&] {
         check(renderer.modelStatus().empty(),renderer.modelStatus());check(renderer.shadowStatus().empty(),renderer.shadowStatus());
         check(renderer.clusteredLightingStatus().empty(),renderer.clusteredLightingStatus());
@@ -269,7 +269,7 @@ void exercise(SDL_Window* window,const Options& options) {
                 // the DX11 primary too so its m_needPresent gate follows the
                 // same path; an offscreen-only benchmark would be asymmetric.
                 bgfx::touch(ToolsView);
-                const auto frameBegin=Clock::now();frame=bgfx::frame();sample.frame=ms(frameBegin);sample.wall=ms(begin);sample.submitted=frame;
+                const auto frameBegin=Clock::now();frame=renderer.advance_frame();sample.frame=ms(frameBegin);sample.wall=ms(begin);sample.submitted=frame;
                 const auto* stats=bgfx::getStats();sample.queryFrame=stats->gpuFrameNum;sample.draws=stats->numDraw;sample.computes=stats->numCompute;
                 sample.triangles=stats->numPrims[bgfx::Topology::TriList];sample.shadowDraws=renderer.shadowStats().drawCalls;
                 if(stats->cpuTimerFreq>0)sample.backend=double(stats->cpuTimeEnd-stats->cpuTimeBegin)*1000./double(stats->cpuTimerFreq);

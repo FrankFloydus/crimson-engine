@@ -3,6 +3,7 @@
 #include "assets/MaterialPreviewGeometry.h"
 #include "assets/MaterialAsset.h"
 #include "crimson-renderer/Renderer.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "resources/ResourceManager.h"
 #include "resources/TextureStreamer.h"
 namespace crimson {

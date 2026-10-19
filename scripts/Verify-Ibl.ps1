@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Force -Path $testRoot,$captureDirectory | Out-Null
 $layout = Join-Path $projectDirectory 'crimson_ui.ini'
 if (Test-Path -LiteralPath $layout) { Copy-Item -LiteralPath $layout -Destination $testRoot }
 $preserved = @{}
-foreach ($relative in @('assets\material.json','assets\environment.json','crimson_ui.ini')) {
+foreach ($relative in @('.crimson\material.json','.crimson\environment.json','assets\material.json','assets\environment.json','crimson_ui.ini')) {
     $file = Join-Path $projectDirectory $relative
     if (Test-Path -LiteralPath $file) { $preserved[$file] = (Get-FileHash -LiteralPath $file).Hash }
 }

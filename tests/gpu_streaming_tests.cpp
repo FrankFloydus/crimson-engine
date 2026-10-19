@@ -1,4 +1,5 @@
 #include "crimson-renderer/ModelGpuCache.h"
+#include "resources/StreamingModel.h"
 #include "crimson-renderer/ModelDeformationGpu.h"
 #include "crimson-renderer/ThumbnailCache.h"
 #include "editor/AssetPreviews.h"

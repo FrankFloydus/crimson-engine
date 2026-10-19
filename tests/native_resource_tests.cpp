@@ -5,6 +5,7 @@
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Picking.h"
 #include "resources/TextureStreamer.h"
+#include "resources/StreamingModel.h"
 #include "resources/ShaderReloadSession.h"
 #include "assets/AtomicFile.h"
 #include "assets/MaterialAsset.h"
@@ -985,14 +986,26 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
 void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shaderConfig,SDL_Window* window,bool shaderReloadOnly,bool platformOnly,GraphicsBackend backend,bool gpuValidation) {
     std::vector<std::shared_ptr<DecodedImage>> readbackDestinations;
     ScreenshotCallback screenshots;
-    ResourceManager resources;Renderer renderer(window,&screenshots,backend);D3D12Validation validation(gpuValidation);ImGuiOwner context(window);
-    ImGuiBgfx tools([&screenshots](const std::string& message){screenshots.error=message;});
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,&screenshots,backend));D3D12Validation validation(gpuValidation);ImGuiOwner context(window);
+    ImGuiBgfx tools(renderer,[&screenshots](const std::string& message){screenshots.error=message;});
     phase("resources initialized");
     renderer.resize(320,240);renderer.resizeViewport(128,128);
     const auto lighting=environment();check(renderer.publishEnvironment(lighting),renderer.environmentStatus());check(renderer.publishThumbnailEnvironment(lighting),renderer.thumbnailStatus());
+    const auto environment_bytes=renderer.environmentResidentBytes();
+    check(!renderer.prepareEnvironment(root,"assets/native-missing-environment.hdr"),
+        "Missing environment preparation unexpectedly succeeded.");
+    check(!renderer.environmentStatus().empty() && renderer.environmentStatus()!=lighting.status,
+        "Failed host environment preparation retained the last successful status.");
+    check(renderer.environmentResidentBytes()==environment_bytes,
+        "Failed host environment preparation changed accepted GPU environment resources.");
+    check(renderer.publishEnvironment(lighting),renderer.environmentStatus());
+    check(renderer.environmentStatus()==lighting.status,
+        "Publishing the accepted environment did not clear the preparation failure.");
+    check(renderer.environmentResidentBytes()==environment_bytes,
+        "Environment status recovery replaced or leaked the accepted GPU resources.");
     TextureStreamer textures(resources,root);const auto source=root/"source.png";createImage(source);
     std::uint32_t frame{};
-    const auto tick=[&] {resources.pump();textures.advance(8192,2);renderer.advanceStreaming(8192,2);frame=bgfx::frame();tools.postFrame(frame);std::this_thread::sleep_for(std::chrono::milliseconds{1});};
+    const auto tick=[&] {resources.pump();textures.advance(8192,2);renderer.advanceStreaming(8192,2);frame=renderer.advance_frame();tools.postFrame(frame);std::this_thread::sleep_for(std::chrono::milliseconds{1});};
     const auto copy=[&](bgfx::TextureHandle texture,std::uint16_t width,std::uint16_t height,bgfx::ViewId view) {
         return readTarget(texture,width,height,view,frame,tick,readbackDestinations);
     };
@@ -1176,7 +1189,7 @@ void exerciseShutdown() {
     for(unsigned iteration=0;iteration<2;++iteration) {
         phase(iteration?"repeat D3D11 initialization/shutdown":"D3D11 initialization/shutdown");
         {
-            Renderer renderer(window.get(),&callback,GraphicsBackend::Direct3D11);
+            Renderer renderer(native_renderer_context(window.get(),&callback,GraphicsBackend::Direct3D11));
             const auto current=loadedRuntime();
             if(runtime)check(current==runtime,"Repeated renderer initialization changed the pinned D3D11 mapping.");
             runtime=current;
@@ -1188,11 +1201,21 @@ void exerciseShutdown() {
             check(renderer.prepareModel(*asset),renderer.modelStatus());
             check(renderer.modelResidentBytes()>baseline,"Shutdown fixture did not allocate tracked model buffers.");
             std::uint32_t frame{};
-            for(unsigned i=0;i<4;++i) {renderer.advanceStreaming();renderer.render(scene);frame=bgfx::frame();}
+            for(unsigned i=0;i<4;++i) {renderer.advanceStreaming();renderer.render(scene);frame=renderer.advance_frame();}
             scene.instances={};renderer.evictModel(asset->id);
-            for(unsigned i=0;i<3;++i) {renderer.advanceStreaming();renderer.render(scene);frame=bgfx::frame();}
+            for(unsigned i=0;i<3;++i) {renderer.advanceStreaming();renderer.render(scene);frame=renderer.advance_frame();}
             check(renderer.modelResidentBytes()==baseline,"Shutdown fixture retained evicted model buffers.");
             frame=renderer.drainPending(frame);(void)frame;
+            check(callback.error.empty(),callback.error);
+            // Queue both CPU readback destinations and shut down before a frame
+            // advance can complete them. Device teardown must retain their data.
+            check(renderer.publishEnvironment(environment()),renderer.environmentStatus());
+            check(renderer.requestPick({1,1,100+iteration,48,32,renderer.streamingSignature()}),renderer.pickingStatus());
+            renderer.render(scene);
+            check(renderer.renderThumbnail("shutdown-pending",iteration+1,scene,32),renderer.thumbnailStatus());
+            check(renderer.thumbnailBusy(),"Shutdown fixture did not leave a queued thumbnail readback.");
+            const auto shutdown=renderer.shutdown();
+            check(shutdown.ok(),std::string(shutdown.error_message()));
             check(callback.error.empty(),callback.error);
         }
         check(bgfx::renderFrame(0)==bgfx::RenderFrame::NoContext,"Renderer destruction left a live bgfx context.");

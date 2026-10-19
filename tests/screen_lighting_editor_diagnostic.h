@@ -51,7 +51,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
         }
     }
     Sdl sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson saved-project screen lighting diagnostic",Width,Height,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);require(bool(window),SDL_GetError());
-    ResourceManager resources;Renderer renderer(window.get(),nullptr,selectedTestGraphicsBackend());
+    ResourceManager resources;Renderer renderer(native_renderer_context(window.get(),nullptr,selectedTestGraphicsBackend()));
     ShaderCompileConfig config{argv[3],argv[4],argv[5],resolveAssetPath(project,"assets/cache/shaders")};MaterialGraphPrograms programs(resources,config);
     AssetLibrary assets(project,&resources);assets.setMaterialGraphPrograms(&programs);EditorResources prepared(assets,renderer,resources,project);
     renderer.resizeViewport(Width,Height);renderer.resizeGameViewport(Width,Height);renderer.setGridVisible(false);bgfx::reset(Width,Height,BGFX_RESET_NONE);
@@ -172,7 +172,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
         input.worldId=input.giWorldId=input.environmentId=1;input.gameCameraId=2;input.shadowResolution=1024;
         EditorRenderFramePreparationStats preparation;last=prepareEditorRenderFrame(std::move(input),assets,prepared,&preparation);
         if(pointOnly)last=emissionless(last,preparation.ready);
-        renderer.renderFrame(last);prepared.endFrame();frame=bgfx::frame();context.flush();
+        renderer.renderFrame(last);prepared.endFrame();frame=renderer.advance_frame();context.flush();
         return preparation.ready&&last->views.size()==2;
     };
     std::vector<std::shared_ptr<std::vector<std::uint8_t>>> destinations;

@@ -59,7 +59,7 @@ void equivalent(const DecodedImage& actual,const DecodedImage& expected,const st
 }
 void exercise(SDL_Window* window) {
     ResourceManager resources;
-    Renderer renderer(window,nullptr,selectedTestGraphicsBackend());
+    Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     TestGpuContext context;
     bgfx::reset(320,240,BGFX_RESET_NONE);
     renderer.setGridVisible(false);
@@ -79,7 +79,7 @@ void exercise(SDL_Window* window) {
     settings.environment.ambientLight.source=AmbientLightSource::Disabled;
     settings.environment.toneMapping=ToneMapping::Linear;
     std::uint32_t frame{};
-    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
+    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle target) {
         Texture staging{bgfx::createTexture2D(Width,Height,false,1,bgfx::TextureFormat::RGBA8,
             BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};

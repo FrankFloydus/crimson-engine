@@ -1073,13 +1073,13 @@ void exerciseImageAdjustmentsAndGrunge(Renderer& renderer,const std::shared_ptr<
 void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     // Outstanding readback destinations must outlive Renderer on failure.
     std::vector<std::shared_ptr<DecodedImage>> destinations;std::vector<std::shared_ptr<BrdfReadback>> brdfDestinations;
-    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);
     TextureStreamer grungeTextures(resources,{});renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
     ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=902;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.5f,.5f,.5f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
-    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();};
+    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();};
     std::cerr<<"[material mapping] Grazing shading-normal BRDF continuity.\n"<<std::flush;
     exerciseGrazingBrdf(config,[&]{tick();return frame;},brdfDestinations);
     const auto read=[&](bgfx::TextureHandle target,std::uint16_t width=Size,std::uint16_t height=Size){

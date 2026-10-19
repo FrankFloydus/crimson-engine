@@ -1,4 +1,5 @@
 #include "AssetLibrary.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "scene/EnvironmentSerialization.h"
 #include "BuiltinGeometry.h"
 #include "scene/SceneDocument.h"

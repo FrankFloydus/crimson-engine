@@ -1,11 +1,11 @@
 #pragma once
+#include <crimson/renderer/forward/ImageData.h>
 #include <cstdint>
 #include <filesystem>
 #include <span>
 #include <vector>
 
 namespace crimson {
-struct DecodedImage { std::uint32_t width{}, height{}; std::vector<std::uint8_t> rgba; };
 namespace streaming {
 enum class TextureRole : std::uint32_t { Color, Data, Normal };
 using TextureMip = DecodedImage;

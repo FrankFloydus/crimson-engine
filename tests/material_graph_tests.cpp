@@ -82,6 +82,23 @@ void typesChainsAndTransactions() {
     invalid=graph;invalid.nextNodeId=1;rejects([&]{validateMaterialGraph(invalid);},"Identity reuse accepted.");
     invalid=graph;findMaterialNode(invalid,scale)->scalar=std::numeric_limits<float>::infinity();rejects([&]{validateMaterialGraph(invalid);},"Nonfinite scalar accepted.");
     invalid=graph;findMaterialNode(invalid,second)->texture.image.id="assets/../outside.png";rejects([&]{validateMaterialGraph(invalid);},"Escaping graph image path accepted.");
+    const auto before_rewrite=serializeMaterialGraph(graph);
+    for(const auto& image_id:{std::string("../outside.png"),canonicalAssetId("builtin:environment/studio")}) {
+        rejects([&]{rewriteMaterialGraphTextures(graph,[&](const auto&,MaterialTextureRole){return image_id;});},"Texture rewrite accepted an unmanaged or protected image reference.");
+        require(serializeMaterialGraph(graph)==before_rewrite,"Rejected texture rewrite changed the graph.");
+        auto invalid_conversion=graph;findMaterialNode(invalid_conversion,second)->texture.image.id=image_id;
+        rejects([&]{materialGraphLegacySurface(invalid_conversion);},"Legacy surface conversion accepted an unmanaged or protected image reference.");
+        rejects([&]{materialGraphFixedSurface(invalid_conversion);},"Fixed surface conversion accepted an unmanaged or protected image reference.");
+        ModelMaterial legacy;legacy.baseColorTexture.image.id=image_id;
+        rejects([&]{materialGraphFromLegacy(legacy,MaterialShading::StandardPbr,MaterialBlend::Opaque);},"Legacy graph conversion accepted an unmanaged or protected image reference.");
+        rejects([&]{materialGraphFromLegacy(legacy,MaterialShading::Unlit,MaterialBlend::Alpha);},"Legacy particle graph conversion accepted an unmanaged or protected image reference.");
+    }
+    const auto before_invalid_mutation=serializeMaterialGraphData(invalid);
+    rejects([&]{materialGraphOrder(invalid,MaterialShading::StandardPbr,MaterialBlend::Opaque);},"Graph ordering accepted an unmanaged image reference.");
+    rejects([&]{connectMaterialNodes(invalid,scale,MaterialPin::Value,out,MaterialPin::Roughness);},"Connection accepted a graph containing an unmanaged image reference.");
+    require(serializeMaterialGraphData(invalid)==before_invalid_mutation,"Rejected image-policy connection changed graph data or consumed an identity.");
+    rejects([&]{migrateLegacyParticleGraph(invalid,true);},"Legacy particle conversion accepted an unmanaged image reference.");
+    require(serializeMaterialGraphData(invalid)==before_invalid_mutation,"Rejected image-policy conversion changed graph data or consumed an identity.");
     auto bounded=blank();while(bounded.nodes.size()<MaterialGraph::MaximumNodes)addMaterialNode(bounded,MaterialNodeKind::Scalar);
     rejects([&]{addMaterialNode(bounded,MaterialNodeKind::Scalar);},"Node bound was ignored.");
 }

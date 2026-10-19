@@ -5,6 +5,7 @@
   "dependencies": [
     "sdl3",
     { "name": "bgfx", "features": ["tools"] },
+    "vulkan-headers",
     { "name": "imgui", "features": ["sdl3-binding", "docking-experimental"] },
     "nlohmann-json",
     { "name": "stduuid", "features": ["system-gen"] },

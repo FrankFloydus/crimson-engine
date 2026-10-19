@@ -26,7 +26,7 @@
 #include <numeric>
 #include <limits>
 #include <set>
-#include "crimson-renderer/shaders/point_light.sh"
+#include "point_light.sh"
 
 namespace {
 using namespace crimson;
@@ -451,14 +451,14 @@ template<class Read> void directionalSplitContinuity(Renderer& renderer,const st
 void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     // Destinations outlive Renderer even if a readback times out.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
-    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());ImGuiOwner context;ImGuiBgfx tools;
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));ImGuiOwner context;ImGuiBgfx tools(renderer);
     renderer.resize(320,240);renderer.resizeViewport(ImageSize,ImageSize);renderer.resizeGameViewport(ImageSize,ImageSize);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=887;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.1f,.1f,.1f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     check(renderer.publishThumbnailEnvironment(environment),renderer.thumbnailStatus());
     std::uint32_t frame{};
-    const auto tick=[&] {resources.pump();renderer.advanceStreaming();frame=bgfx::frame();tools.postFrame(frame);std::this_thread::sleep_for(std::chrono::milliseconds{1});};
+    const auto tick=[&] {resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();tools.postFrame(frame);std::this_thread::sleep_for(std::chrono::milliseconds{1});};
     const auto read=[&](bgfx::TextureHandle source,std::uint16_t extent=ImageSize) {
         TextureOwner staging{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Shadow fixture readback allocation failed.");

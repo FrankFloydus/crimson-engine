@@ -6,7 +6,7 @@
 #include <string>
 
 namespace crimson {
-class ResourceManager;class AssetLibrary;class Renderer;class ImGuiBgfx;class EditorSession;
+class ResourceManager;class AssetLibrary;namespace shared { class Renderer; } using Renderer=shared::Renderer;class ImGuiBgfx;class EditorSession;
 // Pre-frame publication/lifetime coordinator. App remains a frame-loop boundary.
 class ResourceRuntime final {
 public:

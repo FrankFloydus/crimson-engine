@@ -6,7 +6,7 @@
 #include "assets/GameplayEffectAsset.h"
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
-#include "crimson-renderer/shaders/point_light.sh"
+#include "point_light.sh"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>

@@ -6,6 +6,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
 #include "crimson-renderer/Environment.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "editor/EditorResources.h"
 #include "editor/EditorRenderFrame.h"
 #include "editor/QuaderSceneIntegration.h"
@@ -142,7 +143,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     }
     // Readback destinations outlive Renderer even if a capture throws.
     std::vector<std::shared_ptr<std::vector<std::uint8_t>>> captureDestinations;
-    ResourceManager resources;Renderer renderer(window,nullptr,GraphicsBackend::Direct3D11);MaterialGraphPrograms programs(resources,config);AssetLibrary assets(project,&resources);
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,GraphicsBackend::Direct3D11));MaterialGraphPrograms programs(resources,config);AssetLibrary assets(project,&resources);
     std::cout<<"GPU/resource owners initialized"<<std::endl;
     assets.setMaterialGraphPrograms(&programs);assets.publishManagedModels(imported.preparedModels);
     EditorResources prepared(assets,renderer,resources,project);
@@ -201,7 +202,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
         require(sample.faces<=24,"Scene/Game exceeded the shared twenty-four-face point-shadow update budget.");
         prepared.endFrame();const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes();
         assets.trimTextureCache(retained>=resources.config().gpuRetentionBytes?0:resources.config().gpuRetentionBytes-retained);
-        frame=bgfx::frame();sample.submittedFrame=frame;
+        frame=renderer.advance_frame();sample.submittedFrame=frame;
         // Offscreen views never call Present. Flush complete query pairs now,
         // so GPU timestamps cannot include idle time awaiting the next frame's
         // driver command-buffer submission. This queues work without waiting.
@@ -276,7 +277,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
                 require(readyFrame!=UINT32_MAX,"Room image readback is unsupported.");
                 // On timeout, drain outstanding writes before pixels is freed.
                 unsigned waited{};
-                while(static_cast<std::int32_t>(frame-readyFrame)<0&&waited++<120){frame=bgfx::frame();deviceContext.value->Flush();}
+                while(static_cast<std::int32_t>(frame-readyFrame)<0&&waited++<120){frame=renderer.advance_frame();deviceContext.value->Flush();}
                 if(static_cast<std::int32_t>(frame-readyFrame)<0){renderer.drainPending(frame);bgfx::destroy(staging);throw std::runtime_error("Room image readback timed out.");}
                 bgfx::destroy(staging);
                 std::vector<std::uint8_t> png;

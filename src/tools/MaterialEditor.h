@@ -7,7 +7,7 @@
 #include <span>
 namespace crimson {
 class AssetLibrary;
-class Renderer;
+namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class ResourceManager;
 // One independent material document and its replaceable property-editor view.
 class MaterialEditor {

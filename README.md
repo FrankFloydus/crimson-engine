@@ -26,7 +26,16 @@ Build.cmd Release test
 "Launch Renderer.cmd" Release
 ```
 
-The `test` suffix runs focused CPU checks. Use `Build.cmd Release configure` after changing dependency or preset settings. Building requires MSVC x64, CMake and vcpkg; the script finds Visual Studio and uses `%VCPKG_ROOT%` or `%USERPROFILE%\vcpkg`. Routine builds reuse the local dependency cache. The executable is `build\Release\bin\crimson-renderer.exe`, with its runtime DLLs beside it.
+The renderer is pinned as the `third_party/crimson-renderer` Git submodule from
+[`qvertexworks/crimson-renderer`](https://github.com/qvertexworks/crimson-renderer),
+at the same canonical commit consumed by Quader Public. Initialize submodules
+explicitly after cloning with `git submodule update --init --recursive`. Configure
+checks the recorded commit and matching bgfx package provenance without fetching
+replacement source. The canonical submodule owns the bgfx overlay; the Engine's
+local overlay continues to own Jolt. Use the pinned native presets and manifest
+rather than copying dependencies from a renderer build directory.
+
+The `test` suffix runs the registered checks, including hidden native GPU fixtures. Use `Build.cmd Release configure` after changing dependency or preset settings. Building requires MSVC x64, CMake and vcpkg; the script finds Visual Studio and uses `%VCPKG_ROOT%` or `%USERPROFILE%\vcpkg`. Routine builds reuse the local dependency cache. The executable is `build\Release\bin\crimson-renderer.exe`, with its runtime DLLs beside it.
 
 **Direct3D 12 is the default renderer.** Choose **Edit → Preferences → Rendering → Renderer (restart required)** to select Direct3D 12 or Direct3D 11, then save your documents and restart the application. The preference is application-wide; its tooltip identifies the active backend. Both backends use the same lighting features and SM5/DXBC shader family, so switching alone does not recompile materials or change authored scenes. Vulkan is not exposed in this version.
 

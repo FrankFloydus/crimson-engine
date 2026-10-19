@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MaterialGraph.h"
+#include <crimson/renderer/forward/MaterialData.h>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -13,20 +14,13 @@ inline constexpr const char* GrayTextureId = "fb217e2a-3d72-59b1-816e-2d3b8a2259
 inline constexpr const char* NeutralNormalTextureId = "7e7af03c-86e0-5f5a-b914-1cea7a1a0647";
 inline constexpr const char* StudioEnvironmentId = "c07faadb-115f-5f0b-907c-df09ba978206";
 
-struct MaterialAsset {
-    std::string id, name, originModel; // Origin is provenance; managed model sidecars remain editable.
-    ModelMaterial surface;
-    MaterialShading shading{MaterialShading::StandardPbr};
-    MaterialBlend blend{MaterialBlend::Opaque};
-    MaterialGraph graph; // Authored authority; empty only at the legacy/import boundary.
-};
-
 // Upgrade an empty legacy graph, then refresh read-only compatibility values and
 // the immutable graph transport attached to ModelMaterial. Never imports stale
 // .surface edits when a graph already exists.
 void canonicalizeMaterialAsset(MaterialAsset&);
 MaterialGraph materialGraphFromLegacy(const ModelMaterial&,MaterialShading,MaterialBlend);
 ModelMaterial materialGraphLegacySurface(const MaterialGraph&,const std::string& name={});
+
 // Exact fixed-program lowering for model rendering. Unlike the legacy
 // inspector transport this rejects unsupported expressions instead of dropping
 // them. The caller must also match a normal map's UV to the primitive tangent UV.

@@ -10,7 +10,7 @@
 #include "resources/AssetId.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
-#include "crimson-renderer/shaders/point_light.sh"
+#include "point_light.sh"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>

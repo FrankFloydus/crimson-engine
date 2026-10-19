@@ -12,7 +12,7 @@
 namespace crimson {
 class AssetLibrary;
 class ResourceManager;
-class Renderer;
+namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class EditorResources;
 struct CachedAssetPreview;
 struct PreviewDependencies {

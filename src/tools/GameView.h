@@ -14,7 +14,7 @@ struct ImFont;
 namespace crimson {
 class SceneDocument;
 class Scene;
-class Renderer;
+namespace shared { class Renderer; } using Renderer=shared::Renderer;
 struct GameViewFrame {
     ViewportRegion viewport;
     uint32_t pixelWidth{},pixelHeight{};

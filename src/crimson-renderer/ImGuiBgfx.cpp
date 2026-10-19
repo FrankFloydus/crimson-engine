@@ -1,4 +1,5 @@
 #include "ImGuiBgfx.h"
+#include "Renderer.h"
 
 #include "math/Math.h"
 #include "ShaderPreflight.h"
@@ -84,7 +85,8 @@ struct ImGuiBgfx::ViewportResource {
     std::unique_ptr<PlatformSurface> surface;
 };
 
-ImGuiBgfx::ImGuiBgfx(std::function<void(const std::string&)> diagnostic):diagnostic_(std::move(diagnostic)) {
+ImGuiBgfx::ImGuiBgfx(shared::Renderer& renderer,std::function<void(const std::string&)> diagnostic)
+    :frame_owner_(&renderer),diagnostic_(std::move(diagnostic)) {
     if (!ImGui::GetCurrentContext()) throw std::runtime_error("Create the ImGui context before its bgfx renderer.");
     ImGuiIO& io = ImGui::GetIO();
     if (io.BackendRendererUserData) throw std::runtime_error("An ImGui renderer backend is already installed.");
@@ -151,7 +153,7 @@ ImGuiBgfx::~ImGuiBgfx() {
     // App explicitly drains these before context teardown. The bounded fallback
     // also protects exception unwinding: imported COM pointers must survive the
     // queued framebuffer/wrapper commands. Ordinary frame callbacks never advance bgfx.
-    for(unsigned i=0;i<8 && hasPendingRetirements();++i)postFrame(bgfx::frame());
+    for(unsigned i=0;i<8 && hasPendingRetirements();++i)postFrame(frame_owner_->advance_frame());
 }
 
 bgfx::ProgramHandle ImGuiBgfx::prepareProgramReload(std::span<const std::uint8_t> vertexCode,std::span<const std::uint8_t> fragmentCode,std::string& diagnostic) {

@@ -16,8 +16,8 @@ The BRDF lookup, point-light records, and cluster masks share the existing BRDF 
 
 Implementation entry points:
 
-- [Renderer integration](../src/crimson-renderer/Renderer.cpp), [GPU owner](../src/crimson-renderer/ClusteredLightingGpu.cpp), [shared fragment access](../src/crimson-renderer/shaders/clustered_lighting.sh), and [compute culling](../src/crimson-renderer/shaders/cs_cluster_lights.sc).
-- [CPU geometry oracle](../src/crimson-renderer/ClusteredLighting.cpp) and [independent shadow selection](../src/crimson-renderer/ShadowLightSelection.h).
+- [Renderer integration](../third_party/crimson-renderer/src/forward/ForwardPipeline.cpp), [GPU owner](../third_party/crimson-renderer/src/forward/ClusteredLightingGpu.cpp), [shared fragment access](../third_party/crimson-renderer/src/shaders/clustered_lighting.sh), and [compute culling](../third_party/crimson-renderer/src/shaders/cs_cluster_lights.sc).
+- [CPU geometry oracle](../third_party/crimson-renderer/src/forward/ClusteredLighting.cpp) and [independent shadow selection](../third_party/crimson-renderer/include/crimson/renderer/forward/ShadowLightSelection.h).
 - [Hidden render checks and synthetic benchmarks](../tests/forward_plus_render_tests.cpp), [frozen-room benchmark](../tests/forward_plus_room_benchmark.cpp), and [direct GPU-owner checks](../tests/clustered_lighting_gpu_tests.cpp).
 
 ## Build and correctness evidence
@@ -125,7 +125,7 @@ Run from the repository root in PowerShell. Close the running renderer before re
 if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
 $shaderCompiler = Join-Path (Get-Location) 'build/vcpkg_installed/x64-windows/tools/bgfx/shaderc.exe'
-$shaderSources = Join-Path (Get-Location) 'src/crimson-renderer/shaders'
+$shaderSources = Join-Path (Get-Location) 'third_party/crimson-renderer/src/shaders'
 $shaderIncludes = Join-Path (Get-Location) 'build/vcpkg_installed/x64-windows/include/bgfx'
 $results = Join-Path (Get-Location) 'build/verification/forward-plus-results'
 

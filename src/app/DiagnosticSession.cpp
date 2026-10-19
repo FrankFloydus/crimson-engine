@@ -1,12 +1,16 @@
 #include "DiagnosticSession.h"
+#include "assets/AssetLibrary.h"
 #include "crimson-renderer/Diagnostics.h"
 #include "tools/Tools.h"
 #include "ibl_smoke.h"
 #include "model_smoke.h"
+#include <bgfx/bgfx.h>
 #include <imgui.h>
 #include <lodepng.h>
 #include <array>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 namespace crimson {
 namespace {
 void importSmokeTextures(AssetLibrary& assets, Material& material, const std::filesystem::path& root) {
@@ -51,9 +55,20 @@ DiagnosticSession::DiagnosticSession(const AppOptions& options,const std::filesy
     verifyIblAssets(assets, settings_, root);
     diagnostics.log("PASS: Normal/HDR import, material factors, assignments, legacy loading and persistence.");
     }
+    const auto assign_ibl_normal = [&](std::string_view name) {
+        const TextureAsset* normal = nullptr;
+        for (const auto& asset : assets.assets()) if (asset.name == name) {
+            if (normal) throw std::runtime_error("Ambiguous IBL normal fixture: " + std::string(name));
+            normal = &asset;
+        }
+        if (!normal || normal->hdr || !assets.assign(settings_.material, MaterialSlot::Normal, normal->id))
+            throw std::runtime_error("Could not assign the managed IBL normal fixture: " + std::string(name));
+        if (!bgfx::isValid(assets.bindings(settings_.material).normal))
+            throw std::runtime_error("IBL normal fixture has no valid GPU binding: " + std::string(name));
+    };
     if (options.scenario == "ibl-normal" || options.scenario == "ibl-zero-normal" || options.scenario == "ibl-extreme")
-    settings_.material.normalMap = "assets/textures/IBL Detail Normal.png";
-    if (options.scenario == "ibl-neutral") settings_.material.normalMap = "assets/textures/IBL Neutral Normal.png";
+        assign_ibl_normal("IBL Detail Normal.png");
+    if (options.scenario == "ibl-neutral") assign_ibl_normal("IBL Neutral Normal.png");
     if (options.scenario == "ibl-zero-normal") settings_.material.normalStrength = 0;
     if (options.scenario == "ibl-extreme") settings_.environment.intensity = 10;
     if (!renderer.prepareEnvironment(root, {})) throw std::runtime_error(renderer.environmentStatus());

@@ -11,6 +11,7 @@
 #include <memory>
 
 namespace crimson {
+namespace shared { class Renderer; }
 struct DecodedImage;
 class PlatformSurface;
 
@@ -18,7 +19,8 @@ class PlatformSurface;
 // this after bgfx/context initialization and shut it down before either owner.
 class ImGuiBgfx final {
 public:
-    explicit ImGuiBgfx(std::function<void(const std::string&)> diagnostic = {});
+    explicit ImGuiBgfx(shared::Renderer& renderer,
+        std::function<void(const std::string&)> diagnostic = {});
     ~ImGuiBgfx();
     ImGuiBgfx(const ImGuiBgfx&) = delete;
     ImGuiBgfx& operator=(const ImGuiBgfx&) = delete;
@@ -45,6 +47,7 @@ public:
     bool requestPlatformViewportCapture(ImGuiID,std::function<void(const DecodedImage&)>);
 
 private:
+    shared::Renderer* frame_owner_{};
     struct TextureResource;
     struct RenderState;
     struct ViewportResource;

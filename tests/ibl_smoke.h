@@ -66,8 +66,10 @@ inline void verifyIblAssets(AssetLibrary& assets, SceneSettings& settings, const
     Material legacy;
     legacy.baseColor = {.27f,.31f,.63f}; legacy.roughness=.67f; legacy.metallic=.42f;
     { // Exercise the existing unversioned material format before adding normal data.
-        std::ofstream output(root / "assets" / "material.json");
+        std::ofstream output(resolveAssetPath(root,"assets/material.json"));
         output << R"({"baseColor":[0.27,0.31,0.63],"roughness":0.67,"metallic":0.42,"albedoMap":"","roughnessMap":"","metallicMap":""})";
+        output.close();
+        require(bool(output),"Could not write the legacy material smoke fixture.");
     }
     Material restored;
     assets.loadMaterial(restored);

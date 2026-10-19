@@ -10,7 +10,7 @@ inline float min(float a,float b) {return std::min(a,b);}
 inline float max(float a,float b) {return std::max(a,b);}
 inline float floor(float value) {return std::floor(value);}
 #define CC_DEBANDING_CPU
-#include "crimson-renderer/shaders/debanding.sh"
+#include "debanding.sh"
 #undef CC_DEBANDING_CPU
 }
 

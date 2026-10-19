@@ -26,87 +26,15 @@ std::span<const std::uint8_t> vertex(MaterialGraphPass pass) {
     }
     throw std::runtime_error("Invalid material graph pass.");
 }
-bgfx::ProgramHandle createProgram(std::span<const std::uint8_t> vs,std::span<const std::uint8_t> fs) {
-    const auto v=bgfx::createShader(bgfx::copy(vs.data(),static_cast<std::uint32_t>(vs.size())));
-    if(!bgfx::isValid(v))throw std::runtime_error("Material graph vertex program allocation failed.");
-    const auto f=bgfx::createShader(bgfx::copy(fs.data(),static_cast<std::uint32_t>(fs.size())));
-    if(!bgfx::isValid(f)){bgfx::destroy(v);throw std::runtime_error("Material graph fragment program allocation failed.");}
-    const auto program=bgfx::createProgram(v,f,true);
-    if(!bgfx::isValid(program))throw std::runtime_error("Material graph program allocation failed.");
-    return program;
-}
-void preflightBundle(
-    std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {
-    if(binaries.size()!=variants.size()*2)throw std::runtime_error("Incomplete material graph shader bundle.");
-    for(std::size_t i=0;i<variants.size();++i) {
-        std::string error;
-        if(!preflightGeneratedShaderPair(binaries[2*i]->bytes,binaries[2*i+1]->bytes,vertex(variants[i].pass),variants[i].manifest,error))
-            throw std::runtime_error("Material shader validation: "+error);
-    }
-}
-std::shared_ptr<MaterialGraphProgramsVersion> createBundle(
-    std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {
-    auto candidate=std::make_shared<MaterialGraphProgramsVersion>();
-    candidate->signature=streaming::detail::HashSeed;
-    candidate->parameters=bgfx::createUniform(MaterialGraphParameterUniform,bgfx::UniformType::Vec4,MaterialGraphMaxParameterRows);
-    if(!bgfx::isValid(candidate->parameters))throw std::runtime_error("Material graph uniform allocation failed.");
-    for(std::uint16_t i=0;i<MaterialGraphMaxTextureBindings;++i) {
-        candidate->samplers[i]=bgfx::createUniform(materialGraphSamplerName(i).c_str(),bgfx::UniformType::Sampler);
-        if(!bgfx::isValid(candidate->samplers[i]))throw std::runtime_error("Material graph sampler allocation failed.");
-    }
-    for(std::size_t i=0;i<variants.size();++i) {
-        candidate->programs[static_cast<std::size_t>(variants[i].pass)]=createProgram(binaries[2*i]->bytes,binaries[2*i+1]->bytes);
-        candidate->bytes+=binaries[2*i]->bytes.size()+binaries[2*i+1]->bytes.size();
-        streaming::detail::hash(candidate->signature,binaries[2*i]->fingerprint);
-        streaming::detail::hash(candidate->signature,binaries[2*i+1]->fingerprint);
-    }
-    return candidate;
-}
-}
-MaterialGraphProgramsVersion::MaterialGraphProgramsVersion(){programs.fill(BGFX_INVALID_HANDLE);samplers.fill(BGFX_INVALID_HANDLE);}
-MaterialGraphProgramsVersion::~MaterialGraphProgramsVersion(){
-    for(auto handle:programs)if(bgfx::isValid(handle))bgfx::destroy(handle);
-    for(auto handle:samplers)if(bgfx::isValid(handle))bgfx::destroy(handle);
-    if(bgfx::isValid(parameters))bgfx::destroy(parameters);
-}
-PreparedGraphMaterial::PreparedGraphMaterial(){textures.fill(BGFX_INVALID_HANDLE);flags.fill(UINT32_MAX);}
-void PreparedGraphMaterial::bind(MaterialEvaluationContext context)const {
-    if(!programs)return;
-    if(!uniforms.empty()) {
-        if(runtimeGraph&&!runtimeParameters.empty()) {
-            std::array<Vec4,MaterialGraphMaxParameterRows> runtime;
-            std::copy(uniforms.begin(),uniforms.end(),runtime.begin());
-            try {
-                updateMaterialGraphRuntimeUniforms(*runtimeGraph,runtimeParameters,context,std::span{runtime}.first(uniforms.size()));
-                bgfx::setUniform(programs->parameters,runtime.data(),static_cast<std::uint16_t>(uniforms.size()));
-            } catch(const std::exception&) {
-                // Invalid runtime arithmetic retains the complete deterministic packet.
-                bgfx::setUniform(programs->parameters,uniforms.data(),static_cast<std::uint16_t>(uniforms.size()));
-            }
-        } else bgfx::setUniform(programs->parameters,uniforms.data(),static_cast<std::uint16_t>(uniforms.size()));
-    }
-    for(const auto& source:sources)if(bgfx::isValid(textures[source.slot]))
-        bgfx::setTexture(static_cast<std::uint8_t>(source.slot),programs->samplers[source.slot],textures[source.slot],flags[source.slot]);
-}
-std::uint64_t PreparedGraphMaterial::coverageSignature(MaterialEvaluationContext context)const {
-    auto result=signature;
-    if(!dynamicCoverage||!runtimeGraph)return result;
-    std::array<Vec4,MaterialGraphMaxParameterRows> runtime;
-    std::copy(uniforms.begin(),uniforms.end(),runtime.begin());
-    try {
-        updateMaterialGraphRuntimeUniforms(*runtimeGraph,runtimeParameters,context,std::span{runtime}.first(uniforms.size()));
-        for(const auto& parameter:runtimeParameters)if(parameter.coverage) {
-            streaming::detail::hash(result,runtime[parameter.row]);
-            if(parameter.mapping){streaming::detail::hash(result,runtime[parameter.row+1]);streaming::detail::hash(result,runtime[parameter.row+2]);}
-        }
-    } catch(const std::exception&) {return signature;}
+std::vector<GraphProgramBinary> graph_binaries(std::span<const ShaderBinary* const> binaries) {
+    if(binaries.size()%2)throw std::runtime_error("Incomplete material graph shader bundle.");
+    std::vector<GraphProgramBinary> result;result.reserve(binaries.size()/2);
+    for(std::size_t i=0;i<binaries.size();i+=2)result.push_back({binaries[i]->bytes,binaries[i+1]->bytes,binaries[i]->fingerprint,binaries[i+1]->fingerprint});
     return result;
 }
-bgfx::ProgramHandle PreparedGraphMaterial::program(MaterialGraphPass pass)const{
-    if(programs)return programs->programs[static_cast<std::size_t>(pass)];
-    return BGFX_INVALID_HANDLE;
+void preflightBundle(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {preflight_graph_programs(variants,graph_binaries(binaries));}
+std::shared_ptr<MaterialGraphProgramsVersion> createBundle(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {return create_graph_programs(variants,graph_binaries(binaries));}
 }
-
 struct MaterialGraphPrograms::Impl {
     struct ForegroundInterest {};
     struct OptimizationInterest {

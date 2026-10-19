@@ -64,12 +64,12 @@ void equivalent(const DecodedImage& a,const DecodedImage& b,const char* message,
 void save(const fs::path& directory,const char* name,const DecodedImage& image){if(directory.empty())return;fs::create_directories(directory);std::vector<std::uint8_t> encoded;
     check(lodepng::encode(encoded,image.rgba,image.width,image.height)==0,"SSAO PNG encoding failed.");std::ofstream file(directory/name,std::ios::binary);file.write(reinterpret_cast<const char*>(encoded.data()),std::streamsize(encoded.size()));check(bool(file),"SSAO image write failed.");}
 void exercise(SDL_Window* window,const fs::path& artifacts){
-    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());TestGpuContext context;
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));TestGpuContext context;
     bgfx::reset(320,240,BGFX_RESET_NONE);renderer.setGridVisible(false);ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x5353414f;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{})},environment.settings);check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     std::uint16_t width=321,height=241;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);std::uint32_t frame{};
-    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
+    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle target){Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.value),"SSAO readback allocation failed.");DecodedImage image{width,height,std::vector<std::uint8_t>(std::size_t(width)*height*4)};
         bgfx::blit(254,staging.value,0,0,target,0,0,width,height);const auto ready=bgfx::readTexture(staging.value,image.rgba.data());check(ready!=UINT32_MAX,"SSAO readback unsupported.");

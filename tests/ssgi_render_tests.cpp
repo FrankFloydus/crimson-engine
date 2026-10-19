@@ -3,6 +3,7 @@
 #include "crimson-renderer/RenderPassPlan.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/MaterialGraphShader.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
 
@@ -121,7 +122,7 @@ void equivalent(const DecodedImage& a,const DecodedImage& b,const char* reason,u
 
 void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options& options) {
     // Resource workers precede every GPU owner and are stopped before draining.
-    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);TestGpuContext context;
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);TestGpuContext context;
     if(auto* device=context.d3d11Device())printAdapter(device);
     else {
         const auto* caps=bgfx::getCaps();
@@ -135,7 +136,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
     std::uint16_t width=217,height=163;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);
     std::uint32_t frame{};
-    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
+    const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto prepare=[&](const MaterialAsset& material) {
         const auto shader=generateMaterialGraphShader(material);MaterialGraphProgramResult result;
         const auto deadline=Clock::now()+std::chrono::seconds{90};

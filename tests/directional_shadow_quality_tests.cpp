@@ -3,6 +3,7 @@
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/DirectionalShadowMath.h"
 #include "crimson-renderer/MaterialGraphShader.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Picking.h"
 #include "assets/BuiltinGeometry.h"
 #include "resources/ResourceManager.h"
@@ -163,13 +164,13 @@ template<class Read> void contactEdgeFiltering(Renderer& renderer,const std::sha
 void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture){
     // Readback storage survives exceptional renderer shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
-    ResourceManager resources;Renderer renderer(window,nullptr,selectedTestGraphicsBackend());MaterialGraphPrograms programs(resources,config);
+    ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);
     renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);renderer.setGridVisible(false);
     bgfx::reset(Size,Size,BGFX_RESET_NONE);TestGpuContext context;
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x4453485155;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.1f,.1f,.1f})},environment.settings);
     require(renderer.publishEnvironment(environment),renderer.environmentStatus());
-    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();context.flush();};
+    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle source){
         Texture staging{bgfx::createTexture2D(Size,Size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         require(bgfx::isValid(staging.handle),"Directional quality readback allocation failed.");

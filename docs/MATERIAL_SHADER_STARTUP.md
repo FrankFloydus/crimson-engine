@@ -50,6 +50,12 @@ The final Release executable built successfully. Twenty-six distinct focused CPU
 
 ## Embedded engine programs and build preparation
 
+The canonical renderer submodule owns shader sources, compilation commands and
+embedded headers. `Crimson::HostShaders` exports the generated interface to
+Engine adapters and tests; canonical headers precede the Engine's host-generated
+resource directory so stale local shader headers cannot satisfy these includes.
+Runtime shader tools stage the same canonical sources and compiler family.
+
 The executable already contains its engine shaders. `ShaderReloadSession` compares the selected runtime source/include/compiler family against a build-generated SHA256 baseline before requesting any engine jobs. Equal bytes reuse embedded programs even after timestamp-only staging or relocation. No engine shader compilation or duplicate program publication is queued. The file watcher retains its dependency baseline; actual edits use the existing coherent hot-reload path. Debug source edits made before launch also differ from the embedded baseline and therefore still reload. The baseline lives in the executable rather than in a mutable sidecar that could falsely certify different source bytes.
 
 `Build.cmd Release` runs the CPU-only `crimson-material-cache` utility after the executable and paired `shader-tools` payload have been staged. It scans native material assets and the two protected defaults, coalesces equal graph topologies, compiles each missing shared vertex only once, prepares complete five-pass material families and preflights them against the build's embedded vertex interface and current generated manifest. Files are written only below `.crimson/cache/shaders`; materials, textures, scenes and layout remain authored inputs. The normal build report is `build/Release/material-cache-preparation.json`.

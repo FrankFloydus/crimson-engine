@@ -2,14 +2,14 @@
 #include "crimson-renderer/RenderTypes.h"
 #include "crimson-renderer/ModelTransform.h"
 #include "crimson-renderer/ParticleRenderTypes.h"
-#include "crimson-renderer/shaders/point_light.sh"
-#include "crimson-renderer/shaders/grid_depth.sh"
-#include "crimson-renderer/shaders/collision_depth.sh"
+#include "point_light.sh"
+#include "grid_depth.sh"
+#include "collision_depth.sh"
 #include "input/Navigation.h"
 #include <SDL3/SDL_init.h>
 
 #include <cmath>
-#include "crimson-renderer/shaders/glow_kernel.sh"
+#include "glow_kernel.sh"
 #include <algorithm>
 #include <array>
 #include <cstddef>

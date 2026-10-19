@@ -117,8 +117,8 @@ void exercise(SDL_Window* window) {
     require(active.reparentSelection(owner),active.status());active.select({owner},owner);require(active.eraseSelection(),active.status());
 
     ResourceManager resources;
-    Renderer renderer(window,nullptr,selectedTestGraphicsBackend());
-    ImGuiOwner context;ImGuiBgfx tools;
+    Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
+    ImGuiOwner context;ImGuiBgfx tools(renderer);
     AssetLibrary assets(project.root,&resources);
     const auto bundleFile=resolveAssetPath(project.root,fixture.bundle.id);
     ResourceRuntime runtime(project.root,resources,assets,renderer,tools);
@@ -138,7 +138,7 @@ void exercise(SDL_Window* window) {
     std::uint32_t frame{};
     const auto tick=[&] {
         runtime.preFrame(nullptr,frame);prepared.beginFrame();renderer.advanceStreaming();
-        frame=bgfx::frame();gpu.flush();
+        frame=renderer.advance_frame();gpu.flush();
         require(runtime.status().empty(),"Resource coordinator: "+runtime.status());
     };
     const auto until=[&](const auto& action,const std::string& failure,std::chrono::seconds timeout=std::chrono::seconds{90}) {
