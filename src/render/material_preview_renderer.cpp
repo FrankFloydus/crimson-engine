@@ -73,7 +73,7 @@ struct PreviewGpuVertex final {
   filament::math::float2 uv;
   filament::math::float4 surface_grid_projection;
   filament::math::float4 uv_carrier{};
-  filament::math::float3 uv_geometric_normal;
+  filament::math::float4 uv_geometric_normal;
   filament::math::float4 quad_uv_coordinates{};
   filament::math::float4 quad_uv_correction{};
   float occurrence_index = 0.0f;
@@ -401,7 +401,7 @@ struct MaterialPreviewRenderer::Impl final {
           .uv = {vertex.uv.x, vertex.uv.y},
           .surface_grid_projection = {vertex.normal.x, vertex.normal.y,
                                       vertex.normal.z, 0.0f},
-          .uv_geometric_normal = {vertex.normal.x, vertex.normal.y, vertex.normal.z},
+          .uv_geometric_normal = {vertex.normal.x, vertex.normal.y, vertex.normal.z, 0.0F},
       });
     }
     const std::vector<std::uint32_t> lines = wire_indices(source);
@@ -431,7 +431,7 @@ struct MaterialPreviewRenderer::Impl final {
                        offsetof(PreviewGpuVertex, uv_carrier),
                        sizeof(PreviewGpuVertex))
             .attribute(filament::VertexAttribute::CUSTOM2, 0u,
-                       AttributeType::FLOAT3,
+                       AttributeType::FLOAT4,
                        offsetof(PreviewGpuVertex, uv_geometric_normal),
                        sizeof(PreviewGpuVertex))
             .attribute(filament::VertexAttribute::CUSTOM3, 0u,

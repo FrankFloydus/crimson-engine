@@ -49,6 +49,7 @@ enum class PolygonDocumentDiagnosticCode {
   UnreferencedVertex,
   TriangulationFailure,
   InvalidFaceTextureTransform,
+  InvalidCircularUvInterpolation,
 };
 
 /**

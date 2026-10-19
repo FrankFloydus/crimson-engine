@@ -15,6 +15,19 @@
 
 namespace quader_poly {
 
+/** Finite independent planar covectors and finite circular UV coefficients. */
+[[nodiscard]] bool valid_circular_uv_interpolation(
+    const CircularUvInterpolation &interpolation) noexcept;
+
+/** Project one corner into the face's branch-safe circular frame. */
+[[nodiscard]] std::optional<std::array<float, 4>> circular_uv_coordinates(
+    const CircularUvInterpolation &interpolation, quader::QVec3 position) noexcept;
+
+/** Correct perspective-interpolated triangle UVs without changing their corners. */
+[[nodiscard]] quader::QVec2 evaluate_circular_uv_interpolation(
+    quader::QVec2 triangle_uv, const std::array<float, 4> &coordinates,
+    const std::array<float, 4> &uv_from_polar) noexcept;
+
 /** Strict semantic equality uses chart span and stored precision, not tile offset. */
 [[nodiscard]] bool texture_uv_coordinate_close(
     double fitted, float stored, double span) noexcept;

@@ -104,6 +104,7 @@ struct RenderMeshAssetSnapshot {
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
   std::span<const MeshPrimitiveSpan> primitives;
+  std::span<const quader_poly::CircularUvInterpolation> circular_uv_interpolations;
   /// Overrides MeshVertex.position when a retained preview separates streams.
   std::span<const QVec3> positions;
   bool present = false;

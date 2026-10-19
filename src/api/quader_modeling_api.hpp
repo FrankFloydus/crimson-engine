@@ -75,6 +75,7 @@ struct QuaderUvPeelOptions final {
   double v_repeat = 1.0;
   double u_offset = 0.0;
   double v_offset = 0.0;
+  bool smooth_circular_flow = false;
 
   friend bool operator==(const QuaderUvPeelOptions &,
                          const QuaderUvPeelOptions &) = default;

@@ -9,6 +9,7 @@
 #include "polygon_document_native.hpp"
 #include "uv_peel_solver.hpp"
 #include "uv_peel_structured.hpp"
+#include "uv_peel_circular.hpp"
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
@@ -1167,6 +1168,14 @@ struct StoredFaceUvs {
     return fail(std::move(*error));
   }
   std::map<std::size_t, std::vector<QVec2>> updates;
+  std::map<std::size_t, std::optional<quader_poly::CircularUvInterpolation>> circular_updates;
+  const auto assign_circular = [&](std::size_t face_index,
+      std::optional<quader_poly::CircularUvInterpolation> interpolation) {
+    circular_updates.erase(face_index);
+    if (document.faces[face_index].circular_uv_interpolation != interpolation) {
+      circular_updates.emplace(face_index, std::move(interpolation));
+    }
+  };
   std::optional<StructuredPeelMesh> structured_mesh;
   std::size_t remaining_corner_writes = kUvPeelMaxCornerWrites;
   for (const auto &guide : selected.guides) {
@@ -1183,8 +1192,22 @@ struct StoredFaceUvs {
       if (!peel.success) {
         return fail(peel_error(peel.error_message));
       }
+      auto desired_faces = peel.faces;
+      for (std::size_t slot = 0U; slot < desired_faces.size(); ++slot) {
+        assign_circular(desired_faces[slot].face_index, std::nullopt);
+      }
+      if (options.smooth_circular_flow) {
+        std::map<std::size_t, std::size_t> face_slots;
+        for (std::size_t slot = 0U; slot < desired_faces.size(); ++slot) {
+          face_slots.emplace(desired_faces[slot].face_index, slot);
+        }
+        for (auto &fitted : detail::fit_circular_peel(document, guide.vertices, desired_faces)) {
+          desired_faces[face_slots.at(fitted.coordinates.face_index)] = fitted.coordinates;
+          assign_circular(fitted.coordinates.face_index, std::move(fitted.interpolation));
+        }
+      }
       if (auto error = prepare_structured_uvs(document, vertices, sampling,
-                                               peel.faces, updates)) {
+                                               desired_faces, updates)) {
         return fail(std::move(*error));
       }
       continue;
@@ -1212,18 +1235,25 @@ struct StoredFaceUvs {
                                          chart.value(), coordinates.value(), options, updates)) {
         return fail(std::move(*error));
       }
+      for (const auto face_index : patch.faces) {
+        assign_circular(face_index, std::nullopt);
+      }
     }
   }
   PreparedUvPeelDocument result{.key = target.key, .document = *target.document};
   result.receipt.message = "UV Peel unchanged.";
-  if (!updates.empty()) {
+  if (!updates.empty() || !circular_updates.empty()) {
     NativeDocument candidate = document;
     std::set<NativeId> modified_faces;
     for (auto &[face_index, uvs] : updates) {
       candidate.faces[face_index].uvs = std::move(uvs);
       modified_faces.insert(candidate.faces[face_index].id);
     }
-    PolygonDocumentNativeAccess::replace_document(result.document, std::move(candidate));
+    for (auto &[face_index, interpolation] : circular_updates) {
+      candidate.faces[face_index].circular_uv_interpolation = std::move(interpolation);
+      modified_faces.insert(candidate.faces[face_index].id);
+    }
+    PolygonDocumentNativeAccess::replace_document(result.document, std::move(candidate), true);
     ++PolygonDocumentNativeAccess::impl(result.document).content_revision;
     const auto validation =
         PolygonDocumentNativeAccess::validate_authored_topology(result.document);

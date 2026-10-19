@@ -60,6 +60,11 @@ std::span<const MeshPrimitiveSpan> MeshAsset::geometry_primitives() const noexce
   return geometry_projection_ ? geometry_projection_->primitives() : std::span<const MeshPrimitiveSpan>(geometry_->primitives);
 }
 
+std::span<const quader_poly::CircularUvInterpolation>
+MeshAsset::geometry_circular_uv_interpolations() const noexcept {
+  return geometry_->circular_uv_interpolations;
+}
+
 std::uintptr_t MeshAsset::geometry_token() const noexcept {
   return reinterpret_cast<std::uintptr_t>(geometry_projection_
       ? static_cast<const void *>(geometry_projection_.get()) : geometry_.get());
@@ -68,7 +73,8 @@ std::uintptr_t MeshAsset::geometry_token() const noexcept {
 std::size_t MeshAsset::geometry_byte_size() const noexcept {
   return geometry_vertices().size() * sizeof(MeshVertex) +
       geometry_indices().size() * sizeof(std::uint32_t) +
-      geometry_primitives().size() * sizeof(MeshPrimitiveSpan);
+      geometry_primitives().size() * sizeof(MeshPrimitiveSpan) +
+      geometry_circular_uv_interpolations().size() * sizeof(quader_poly::CircularUvInterpolation);
 }
 
 MeshGeometryContentId MeshAsset::geometry_content_id() const noexcept {
@@ -1105,12 +1111,19 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
   const auto vertices = mesh.geometry_vertices();
   const auto positions = mesh.geometry_positions();
   const auto indices = mesh.geometry_indices();
+  const auto circular_fields = mesh.geometry_circular_uv_interpolations();
+  if (std::ranges::any_of(circular_fields, [](const auto &field) {
+        return !quader_poly::valid_circular_uv_interpolation(field);
+      })) return {.ok = false, .message = "Mesh circular UV data is invalid"};
   if (!positions.empty() && positions.size() != vertices.size()) {
     return {.ok = false, .message = "Mesh position stream size is inconsistent"};
   }
   for (std::size_t vertex_index = 0u; vertex_index < vertices.size(); ++vertex_index) {
     const MeshVertex &vertex = vertices[vertex_index];
     const QVec3 position = positions.empty() ? vertex.position : positions[vertex_index];
+    if (vertex.circular_uv_index > circular_fields.size()) {
+      return {.ok = false, .message = "Mesh vertex references missing circular UV data"};
+    }
     if (!finite_vec3(position) || !finite_vec3(vertex.normal) ||
         !finite_vec2(vertex.uv) ||
         !finite_vec3(vertex.uv_geometric_normal) ||

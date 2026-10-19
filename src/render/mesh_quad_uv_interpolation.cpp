@@ -7,6 +7,7 @@
 #include "render/mesh_quad_uv_interpolation.hpp"
 
 #include <quader/modeling/neutral/geometry/quad_uv_interpolation.hpp>
+#include <quader/modeling/neutral/geometry/circular_uv_interpolation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -77,7 +78,7 @@ build_quad(std::span<const MeshVertex> vertices,
   std::array<quader_geometry::QVec2f, 4> uvs{};
   for (std::size_t index = 0u; index < 4u; ++index) {
     const MeshVertex &vertex = vertices[corners[index]];
-    if (vertex.source_vertex_id == 0u || !std::isfinite(vertex.uv.x) ||
+    if (vertex.circular_uv_index != 0u || vertex.source_vertex_id == 0u || !std::isfinite(vertex.uv.x) ||
         !std::isfinite(vertex.uv.y) ||
         (!std::isfinite(vertex.uv_geometric_normal.x) ||
          !std::isfinite(vertex.uv_geometric_normal.y) ||
@@ -135,10 +136,59 @@ MeshQuadUvInterpolationPlan prepare_mesh_quad_uv_interpolation(
 
 std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
     std::span<const MeshVertex> vertices, const MeshQuadUvInterpolationPlan &plan,
-    std::span<const QVec3> positions) {
+    std::span<const QVec3> positions,
+    std::span<const quader_poly::CircularUvInterpolation> circular,
+    std::span<const std::uint32_t> triangles) {
   std::vector<MeshQuadUvInterpolation> result(vertices.size());
   if (plan.vertex_count != vertices.size() ||
       (!positions.empty() && positions.size() != vertices.size())) return result;
+  std::vector<bool> valid_circular;
+  valid_circular.reserve(circular.size());
+  for (const auto &descriptor : circular) {
+    valid_circular.push_back(quader_geometry::valid_circular_uv_frame(
+        quader_geometry::QVec3f(descriptor.center), quader_geometry::QVec3f(descriptor.axis_u),
+        quader_geometry::QVec3f(descriptor.axis_v), descriptor.uv_from_polar));
+  }
+  if (!circular.empty()) {
+    if (triangles.empty() || triangles.size() % 3U != 0U ||
+        std::ranges::any_of(triangles, [&](auto index) { return index >= vertices.size(); })) {
+      std::fill(valid_circular.begin(), valid_circular.end(), false);
+    } else {
+      for (std::size_t triangle = 0; triangle < triangles.size(); triangle += 3U) {
+        const std::array descriptors{
+            vertices[triangles[triangle]].circular_uv_index,
+            vertices[triangles[triangle + 1U]].circular_uv_index,
+            vertices[triangles[triangle + 2U]].circular_uv_index};
+        if (descriptors[0] == descriptors[1] && descriptors[1] == descriptors[2]) continue;
+        for (const auto descriptor : descriptors) {
+          if (descriptor != 0U && descriptor <= valid_circular.size()) valid_circular[descriptor - 1U] = false;
+        }
+      }
+    }
+  }
+  for (std::size_t index = 0; !circular.empty() && index < vertices.size(); ++index) {
+    const auto descriptor_index = vertices[index].circular_uv_index;
+    if (descriptor_index == 0u || descriptor_index > circular.size()) continue;
+    const auto &descriptor = circular[descriptor_index - 1u];
+    if (!valid_circular[descriptor_index - 1u]) continue;
+    const auto coordinates = quader_geometry::circular_uv_coordinates(
+        quader_geometry::QVec3f(positions.empty() ? vertices[index].position : positions[index]),
+        quader_geometry::QVec3f(descriptor.center), quader_geometry::QVec3f(descriptor.axis_u),
+        quader_geometry::QVec3f(descriptor.axis_v));
+    if (!coordinates) {
+      valid_circular[descriptor_index - 1u] = false;
+      continue;
+    }
+    result[index].circular_coordinates = *coordinates;
+    result[index].uv_from_polar = descriptor.uv_from_polar;
+    result[index].circular = true;
+  }
+  // A malformed corner disables its complete face chart, never half a triangle.
+  for (std::size_t index = 0; !circular.empty() && index < vertices.size(); ++index) {
+    if (result[index].circular && !valid_circular[vertices[index].circular_uv_index - 1u]) {
+      result[index] = {};
+    }
+  }
   for (const auto &corners : plan.corners) {
     const auto quad = build_quad(vertices, positions, corners);
     if (!quad) continue;
@@ -154,14 +204,20 @@ std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
 
 std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
     std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices,
-    std::span<const MeshPrimitiveSpan> primitives, std::span<const QVec3> positions) {
+    std::span<const MeshPrimitiveSpan> primitives, std::span<const QVec3> positions,
+    std::span<const quader_poly::CircularUvInterpolation> circular) {
   return build_mesh_quad_uv_interpolations(vertices,
-      prepare_mesh_quad_uv_interpolation(vertices.size(), indices, primitives), positions);
+      prepare_mesh_quad_uv_interpolation(vertices.size(), indices, primitives), positions, circular, indices);
 }
 
 QVec2 evaluate_mesh_quad_uv_interpolation(
     QVec2 triangle_uv,
     const MeshQuadUvInterpolation &interpolated) noexcept {
+  if (interpolated.circular) {
+    const auto uv = quader_geometry::evaluate_circular_uv_interpolation(quader_geometry::QVec2f(triangle_uv),
+        interpolated.circular_coordinates, interpolated.uv_from_polar);
+    return {uv.x, uv.y};
+  }
   if (!interpolated.enabled) {
     return triangle_uv;
   }

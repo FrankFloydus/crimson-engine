@@ -11,6 +11,8 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 
+#include <quader/modeling/neutral/polygon/document_model.hpp>
+
 #include <array>
 #include <atomic>
 #include <bit>
@@ -48,6 +50,7 @@ struct MeshVertex {
     // placement corrections reuse these without duplicating mesh geometry.
     std::array<float, 4> uv_carrier{};
     QVec3 uv_geometric_normal{0.0f, 1.0f, 0.0f};
+    std::uint32_t circular_uv_index = 0u;
 };
 
 /**
@@ -78,11 +81,13 @@ struct MeshGeometryPayload final {
   MeshGeometryPayload(const MeshGeometryPayload &other)
       : vertices(other.vertices), indices(other.indices),
         primitives(other.primitives),
+        circular_uv_interpolations(other.circular_uv_interpolations),
         content_id_(other.content_id_.load(std::memory_order_relaxed)) {}
 
   MeshGeometryPayload(MeshGeometryPayload &&other) noexcept
       : vertices(std::move(other.vertices)), indices(std::move(other.indices)),
         primitives(std::move(other.primitives)),
+        circular_uv_interpolations(std::move(other.circular_uv_interpolations)),
         content_id_(other.content_id_.load(std::memory_order_relaxed)) {}
 
   MeshGeometryPayload &operator=(const MeshGeometryPayload &other) {
@@ -92,6 +97,7 @@ struct MeshGeometryPayload final {
     vertices = other.vertices;
     indices = other.indices;
     primitives = other.primitives;
+    circular_uv_interpolations = other.circular_uv_interpolations;
     wire_geometry_payload_.reset();
     std::atomic_store_explicit(
         &collision_geometry_payload_,
@@ -109,6 +115,7 @@ struct MeshGeometryPayload final {
     vertices = std::move(other.vertices);
     indices = std::move(other.indices);
     primitives = std::move(other.primitives);
+    circular_uv_interpolations = std::move(other.circular_uv_interpolations);
     wire_geometry_payload_.reset();
     std::atomic_store_explicit(
         &collision_geometry_payload_,
@@ -122,11 +129,13 @@ struct MeshGeometryPayload final {
   std::vector<MeshVertex> vertices;
   std::vector<std::uint32_t> indices;
   std::vector<MeshPrimitiveSpan> primitives;
+  std::vector<quader_poly::CircularUvInterpolation> circular_uv_interpolations;
 
   [[nodiscard]] std::size_t byte_size() const noexcept {
     return vertices.size() * sizeof(MeshVertex) +
            indices.size() * sizeof(std::uint32_t) +
-           primitives.size() * sizeof(MeshPrimitiveSpan);
+           primitives.size() * sizeof(MeshPrimitiveSpan) +
+           circular_uv_interpolations.size() * sizeof(quader_poly::CircularUvInterpolation);
   }
 
   /** Hashes effective immutable streams without assembling another payload. */
@@ -134,7 +143,8 @@ struct MeshGeometryPayload final {
       std::span<const MeshVertex> vertices,
       std::span<const std::uint32_t> indices,
       std::span<const MeshPrimitiveSpan> primitives,
-      std::span<const QVec3> positions = {}) noexcept {
+      std::span<const QVec3> positions = {},
+      std::span<const quader_poly::CircularUvInterpolation> circular_uv_interpolations = {}) noexcept {
     if (!positions.empty() && positions.size() != vertices.size()) return {};
     constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
     constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
@@ -178,6 +188,16 @@ struct MeshGeometryPayload final {
       hash_float(vertex.uv_geometric_normal.x);
       hash_float(vertex.uv_geometric_normal.y);
       hash_float(vertex.uv_geometric_normal.z);
+      hash_u32(vertex.circular_uv_index);
+    }
+    hash_size(circular_uv_interpolations.size());
+    for (const auto &field : circular_uv_interpolations) {
+      for (const QVec3 value : {field.center, field.axis_u, field.axis_v}) {
+        hash_float(value.x);
+        hash_float(value.y);
+        hash_float(value.z);
+      }
+      for (const float value : field.uv_from_polar) hash_float(value);
     }
     hash_size(indices.size());
     for (const std::uint32_t index : indices) {
@@ -200,7 +220,7 @@ struct MeshGeometryPayload final {
   [[nodiscard]] MeshGeometryContentId content_id() const noexcept {
     std::uint64_t hash = content_id_.load(std::memory_order_acquire);
     if (hash != 0) return MeshGeometryContentId{hash};
-    hash = content_id_for(vertices, indices, primitives).value;
+    hash = content_id_for(vertices, indices, primitives, {}, circular_uv_interpolations).value;
     std::uint64_t expected = 0;
     if (!content_id_.compare_exchange_strong(
             expected, hash, std::memory_order_release,
@@ -255,6 +275,8 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
   [[nodiscard]] std::span<const QVec3> geometry_positions() const noexcept;
   [[nodiscard]] std::span<const std::uint32_t> geometry_indices() const noexcept;
   [[nodiscard]] std::span<const MeshPrimitiveSpan> geometry_primitives() const noexcept;
+  [[nodiscard]] std::span<const quader_poly::CircularUvInterpolation>
+  geometry_circular_uv_interpolations() const noexcept;
   [[nodiscard]] std::uintptr_t geometry_token() const noexcept;
   [[nodiscard]] std::size_t geometry_byte_size() const noexcept;
   [[nodiscard]] MeshGeometryContentId geometry_content_id() const noexcept;

@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "assets/material_document.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/path_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
@@ -31,12 +32,14 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/viewport_renderer.hpp"
 #include "support/modeling_test_events.hpp"
+#include "scene/scene_texture_mapping.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "editor/viewport/viewport_scene_projection.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <gtest/gtest.h>
 
@@ -60,10 +63,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_set>
@@ -1805,6 +1811,28 @@ public:
   }
 
   QuaderEditorApi &workflow_editor() { return array_editor(); }
+
+  SceneSession *native_project_scene() { return captured_project_scene_; }
+
+  bool native_project_scene_is_active() const {
+    return captured_project_ != nullptr && captured_project_->active_scene() != nullptr &&
+           captured_project_->active_scene()->session.get() == captured_project_scene_;
+  }
+
+  bool refresh_native_project_scene() {
+    if (captured_project_ == nullptr || captured_project_->active_scene() == nullptr) return false;
+    captured_project_scene_ = captured_project_->active_scene()->session.get();
+    if (captured_project_scene_ == nullptr) return false;
+    camera_ = captured_project_scene_->viewport_workspace().camera(ViewportPaneId::Perspective);
+    camera_.set_viewport_size(kWidth, kHeight);
+    view_.update_camera(camera_);
+    return true;
+  }
+
+  void prepare_native_project_texture_comparison() {
+    view_.set_material_presentation(ViewportMaterialDebugMode::Albedo, false, false);
+    view_.update_ground_grid(camera_, 1.0F, ViewportSettings::defaults(), false);
+  }
 
   void set_workflow_material_debug_mode(ViewportMaterialDebugMode mode) {
     view_.set_material_debug_mode(mode);
@@ -9376,6 +9404,513 @@ TEST(SelectionOverlayRuntimeTests,
     const QImage checker = capture("checker");
     EXPECT_NE(wires, checker);
   }
+}
+
+struct StairsSmoothCaptureDomain {
+  std::vector<std::size_t> faces;
+  std::map<quader_poly::ElementId, QVec2> corners;
+};
+
+std::vector<StairsSmoothCaptureDomain> stairs_smooth_capture_domains(
+    const quader_poly::Document &document) {
+  std::map<quader_poly::ElementId, QVec3> positions;
+  for (const auto &vertex : document.vertices) positions.emplace(vertex.id, vertex.position);
+  std::map<float, StairsSmoothCaptureDomain> levels;
+  for (std::size_t index = 0U; index < document.faces.size(); ++index) {
+    const auto &face = document.faces[index];
+    if (face.vertices.size() != 4U || quader_poly::face_normal(document, face).y <= 0.99F) continue;
+    auto &domain = levels[positions.at(face.vertices.front()).y];
+    domain.faces.push_back(index);
+    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+      domain.corners.emplace(face.vertices[corner], face.uvs[corner]);
+    }
+  }
+  std::vector<StairsSmoothCaptureDomain> result;
+  for (auto &[height, domain] : levels) {
+    (void)height;
+    result.push_back(std::move(domain));
+  }
+  return result;
+}
+
+AssetId stairs_smooth_texture_material(QuaderEditorApi &editor, const QImage &image,
+                                       const std::filesystem::path &path,
+                                       QVec3 tint = {1.0F, 1.0F, 1.0F}) {
+  EXPECT_TRUE(image.save(QString::fromStdWString(path.wstring())));
+  const auto texture = editor.assets().add_texture({
+      .name = path.stem().string(), .usage = QuaderTextureUsage::BaseColor,
+      .color_space = QuaderTextureColorSpace::Srgb,
+      .width = static_cast<std::uint32_t>(image.width()),
+      .height = static_cast<std::uint32_t>(image.height()), .source_path = path.string()});
+  EXPECT_TRUE(texture.ok()) << texture.error_message();
+  if (!texture.ok()) return kInvalidAssetId;
+  const auto material = editor.assets().add_material(QuaderMaterialArgs{
+      .name = path.stem().string(), .base_color = tint});
+  EXPECT_TRUE(material.ok()) << material.error_message();
+  if (!material.ok()) return kInvalidAssetId;
+  const auto assigned = editor.assets().set_material_texture(
+      material.value().id, material_texture_slot::kBaseColor, texture.value().id);
+  EXPECT_TRUE(assigned.ok()) << assigned.error_message();
+  return assigned.ok() ? material.value().id : kInvalidAssetId;
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanSavedStairsOptInCircularUvPeel) {
+  const auto source_value = qEnvironmentVariable("QUADER_STAIRS_SMOOTH_UV_PROJECT");
+  if (qEnvironmentVariable("QUADER_RUN_STAIRS_SMOOTH_UV_EXPERIMENT") != QStringLiteral("1") ||
+      source_value.isEmpty()) {
+    GTEST_SKIP() << "Set QUADER_RUN_STAIRS_SMOOTH_UV_EXPERIMENT=1 and QUADER_STAIRS_SMOOTH_UV_PROJECT for the copied-project experiment.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-stairs-smooth-uv-experiment";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const std::filesystem::path source_manifest(source_value.toStdWString());
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_manifest));
+  const auto output_value = qEnvironmentVariable("QUADER_STAIRS_SMOOTH_UV_OUTPUT_DIR");
+  const auto output_parent = output_value.isEmpty()
+      ? std::filesystem::path(QUADER_SOURCE_DIR) / ".build/stairs2-peel-analysis"
+      : std::filesystem::path(output_value.toStdWString());
+  const auto tick = std::chrono::system_clock::now().time_since_epoch().count();
+  const auto output_root = std::filesystem::absolute(output_parent /
+      ("smooth-uv-try-" + std::to_string(tick))).lexically_normal();
+  const QString source_root_text = QDir::fromNativeSeparators(QString::fromStdWString(
+      std::filesystem::weakly_canonical(source_manifest.parent_path()).wstring()));
+  const QString output_root_text = QDir::fromNativeSeparators(QString::fromStdWString(
+      std::filesystem::weakly_canonical(output_root).wstring()));
+  ASSERT_FALSE(output_root_text.compare(source_root_text, Qt::CaseInsensitive) == 0 ||
+      output_root_text.startsWith(source_root_text + QLatin1Char('/'), Qt::CaseInsensitive));
+  std::error_code error;
+  const auto copy_root = output_root / source_manifest.stem();
+  ASSERT_TRUE(std::filesystem::create_directories(copy_root, error));
+  ASSERT_FALSE(error) << error.message();
+  for (const auto &entry : std::filesystem::directory_iterator(source_manifest.parent_path())) {
+    if (entry.path().filename() == ".quader" || entry.path().filename() == ".git") continue;
+    std::filesystem::copy(entry.path(), copy_root / entry.path().filename(),
+        std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_symlinks, error);
+    ASSERT_FALSE(error) << error.message();
+  }
+  ASSERT_TRUE(std::filesystem::create_directories(copy_root / "Textures/SmoothUvExperiment", error));
+  ASSERT_FALSE(error) << error.message();
+  std::cout << "STAIRS_SMOOTH_PROJECT " << (copy_root / source_manifest.filename()).string() << std::endl;
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0F, false, ViewportRenderSurface::SrgbSwapchain));
+  ASSERT_TRUE(harness.open_native_project_sample(copy_root / source_manifest.filename()));
+  auto &editor = harness.workflow_editor();
+  const auto scene_path = ProjectRelativePath::parse_portable("diablo_room.qdr");
+  ASSERT_TRUE(scene_path.ok());
+  ASSERT_TRUE(editor.scene_documents().open(scene_path.value()).ok());
+  auto *scene = harness.native_project_scene();
+  ASSERT_NE(scene, nullptr);
+  ASSERT_TRUE(harness.native_project_scene_is_active());
+  const auto records = editor.query().modeling_objects();
+  const auto found = std::ranges::find(records, std::string{"Stairs_2"}, &QuaderModelingObjectRecord::name);
+  ASSERT_NE(found, records.end());
+  const auto original = editor.query().modeling_object_for_id(found->modeling_object_id);
+  ASSERT_TRUE(original.has_value());
+  const auto original_entity = editor.query().entity(original->entity);
+  ASSERT_TRUE(original_entity.has_value());
+  ASSERT_EQ(original_entity->parent, kInvalidEntityId);
+  ASSERT_EQ(original_entity->parenting_offset.value_or(QMat4{}).values, QMat4{}.values);
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  for (const auto &entity : editor.query().entities()) {
+    if (entity.has_mesh && entity.id != original->entity) {
+      ASSERT_TRUE(editor.scene().set_visible(entity.id, false).ok());
+    }
+  }
+  const auto snapshot = scene->modeling().polygon_document_read_snapshot(original->modeling_object_id, false);
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  const auto view = snapshot.value().document.view();
+  quader_poly::Document source;
+  source.vertices.assign(view.vertices.begin(), view.vertices.end());
+  source.faces.assign(view.faces.begin(), view.faces.end());
+  source.hard_normal_edges.assign(view.hard_normal_edges.begin(), view.hard_normal_edges.end());
+  source.soft_normal_edges.assign(view.soft_normal_edges.begin(), view.soft_normal_edges.end());
+  source.next_vertex_id = view.next_vertex_id;
+  source.next_face_id = view.next_face_id;
+  const auto world = scene->scene().world_transform_matrix(original->entity);
+  const auto sampling = effective_texture_sampling_from_local(scene->scene(), original->entity);
+  ASSERT_TRUE(sampling.has_value());
+  const auto &matrix = sampling->values;
+  const quader_poly::Transform3 sampling_transform{
+      {matrix[0], matrix[1], matrix[2]}, {matrix[4], matrix[5], matrix[6]},
+      {matrix[8], matrix[9], matrix[10]}, {matrix[12], matrix[13], matrix[14]}};
+  std::map<quader_poly::ElementId, QVec3> positions;
+  for (const auto &vertex : source.vertices) positions.emplace(vertex.id, vertex.position);
+  auto effective = source;
+  for (auto &face : effective.faces) {
+    const auto normal = quader_poly::face_normal(source, face);
+    const auto carrier = quader_poly::face_texture_carrier(source, face, normal);
+    std::vector<QVec2> uvs;
+    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+      const auto point = positions.at(face.vertices[corner]);
+      const auto base = face.uvs.size() == face.vertices.size() ? face.uvs[corner]
+          : quader_poly::generated_texture_uv(point, normal);
+      uvs.push_back(quader_poly::evaluate_texture_mapping(
+          quader_poly::apply_face_texture_transform(base, face.texture_transform),
+          point, normal, carrier, sampling_transform));
+    }
+    face.uvs = std::move(uvs);
+    face.texture_transform = {};
+  }
+  auto domains = stairs_smooth_capture_domains(effective);
+  ASSERT_EQ(domains.size(), 12U);
+  std::map<std::size_t, std::size_t> face_domains;
+  for (std::size_t index = 0U; index < domains.size(); ++index) {
+    ASSERT_EQ(domains[index].faces.size(), 4U);
+    for (const auto face : domains[index].faces) face_domains.emplace(face, index);
+  }
+  const auto original_mesh = editor.query().compiled_object_mesh(*original);
+  ASSERT_TRUE(original_mesh);
+  QVec3 tread_center{};
+  QVec3 minimum = transform_point(world, source.vertices.front().position);
+  QVec3 maximum = minimum;
+  for (const auto &vertex : source.vertices) {
+    const auto point = transform_point(world, vertex.position);
+    minimum = {std::min(minimum.x,point.x),std::min(minimum.y,point.y),std::min(minimum.z,point.z)};
+    maximum = {std::max(maximum.x,point.x),std::max(maximum.y,point.y),std::max(maximum.z,point.z)};
+  }
+  for (const auto &[id, uv] : domains.front().corners) {
+    (void)uv;
+    tread_center += positions.at(id)/float(domains.front().corners.size());
+  }
+  const float radius = std::hypot(tread_center.x,tread_center.z);
+  const auto outward = transform_vector(world,{tread_center.x/radius,0,tread_center.z/radius});
+  tread_center = transform_point(world,tread_center);
+  const ViewportCameraPose closeup{.eye=tread_center+outward*0.3F+QVec3{0,1.15F,0},
+                                  .target=tread_center,.up={0,1,0}};
+  const auto center=(minimum+maximum)*0.5F;
+  const float extent=std::max({maximum.x-minimum.x,maximum.y-minimum.y,maximum.z-minimum.z});
+  const std::array<std::pair<const char*,ViewportCameraPose>,2> cameras{{
+      {"perspective",{.eye=center+QVec3{extent,extent*1.1F,extent},.target=center,.up={0,1,0}}},
+      {"first-tread",closeup}}};
+  harness.prepare_native_project_texture_comparison();
+  std::map<std::string,QImage> captures;
+  const auto capture=[&](const std::string &label) {
+    for (const auto &[name,pose] : cameras) {
+      ASSERT_TRUE(harness.set_native_project_camera_pose(pose));
+      ASSERT_TRUE(harness.present_native_project_sample(1.0F,false));
+      ASSERT_TRUE(harness.present_native_project_sample(1.0F,false));
+      const auto image=harness.capture();
+      ASSERT_FALSE(image.isNull());
+      captures[label+"-"+name]=image;
+      const auto path=output_root/(label+"-"+name+".png");
+      EXPECT_TRUE(image.save(QString::fromStdWString(path.wstring())));
+      std::cout<<"STAIRS_CIRCULAR_CAPTURE "<<path.string()<<std::endl;
+    }
+  };
+  ASSERT_NO_FATAL_FAILURE(capture("original"));
+  const auto assert_geometry=[&] {
+    const auto mesh=editor.query().compiled_object_mesh(*original);
+    ASSERT_TRUE(mesh);
+    EXPECT_EQ(mesh->indices,original_mesh->indices);
+    ASSERT_EQ(mesh->vertices.size(),original_mesh->vertices.size());
+    for (std::size_t index=0;index<mesh->vertices.size();++index) {
+      EXPECT_EQ(mesh->vertices[index].position.x,original_mesh->vertices[index].position.x);
+      EXPECT_EQ(mesh->vertices[index].position.y,original_mesh->vertices[index].position.y);
+      EXPECT_EQ(mesh->vertices[index].position.z,original_mesh->vertices[index].position.z);
+    }
+  };
+  std::set<std::pair<QuaderElementId,QuaderElementId>> guide_edges;
+  for (const auto &face:source.faces) {
+    if (face.vertices.size()!=4U || quader_poly::face_normal(source,face).y < -0.001F) continue;
+    for (std::size_t corner=0;corner<4U;++corner) {
+      const auto a=face.vertices[corner],b=face.vertices[(corner+1U)%4U];
+      const auto pa=positions.at(a),pb=positions.at(b);
+      if (std::abs(std::hypot(pa.x,pa.z)-1.3F)<0.0001F &&
+          std::abs(std::hypot(pb.x,pb.z)-1.3F)<0.0001F) {
+        guide_edges.emplace(std::min(a,b),std::max(a,b));
+      }
+    }
+  }
+  ASSERT_EQ(guide_edges.size(),35U);
+  ASSERT_TRUE(editor.selection().select_object(*original).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  const auto first=*guide_edges.begin();
+  ASSERT_TRUE(editor.selection().select_components({.object=*original,.kind=QuaderComponentKind::Edge,
+      .edges={guide_edges.begin(),guide_edges.end()},
+      .active={.object=*original,.kind=QuaderComponentKind::Edge,.edge_a=first.first,.edge_b=first.second}}).ok());
+  ASSERT_FALSE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  ASSERT_NO_FATAL_FAILURE(capture("off-preview"));
+  const auto ordinary_mesh=editor.query().compiled_object_mesh(*original);
+  ASSERT_TRUE(ordinary_mesh);
+  ASSERT_TRUE(editor.tools().set_setting("uv_peel","uv_peel.smooth_circular_flow",true).ok());
+  ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto smooth_mesh=editor.query().compiled_object_mesh(*original);
+  ASSERT_TRUE(smooth_mesh);
+  ASSERT_EQ(smooth_mesh->circular_uv_interpolations.size(),48U);
+  ASSERT_EQ(smooth_mesh->vertices.size(),ordinary_mesh->vertices.size());
+  for (std::size_t index=0;index<smooth_mesh->vertices.size();++index) {
+    if (smooth_mesh->vertices[index].circular_uv_index != 0U) continue;
+    EXPECT_EQ(smooth_mesh->vertices[index].uv.x,ordinary_mesh->vertices[index].uv.x);
+    EXPECT_EQ(smooth_mesh->vertices[index].uv.y,ordinary_mesh->vertices[index].uv.y);
+  }
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_NO_FATAL_FAILURE(capture("on-preview"));
+  EXPECT_NE(captures.at("on-preview-first-tread"),captures.at("off-preview-first-tread"));
+  ASSERT_TRUE(editor.tools().set_setting("uv_peel","uv_peel.smooth_circular_flow",false).ok());
+  ASSERT_NO_FATAL_FAILURE(capture("off-again"));
+  EXPECT_EQ(captures.at("off-preview-first-tread"),captures.at("off-again-first-tread"));
+  ASSERT_TRUE(editor.tools().set_setting("uv_peel","uv_peel.smooth_circular_flow",true).ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+  ASSERT_NO_FATAL_FAILURE(capture("cancelled"));
+  EXPECT_EQ(captures.at("original-first-tread"),captures.at("cancelled-first-tread"));
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+  ASSERT_NO_FATAL_FAILURE(capture("applied"));
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_NO_FATAL_FAILURE(capture("undone"));
+  EXPECT_EQ(captures.at("original-first-tread"),captures.at("undone-first-tread"));
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_NO_FATAL_FAILURE(capture("redone"));
+  EXPECT_EQ(captures.at("applied-first-tread"),captures.at("redone-first-tread"));
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_TRUE(scene->viewport_workspace().restore_persisted_perspective_camera_pose(closeup));
+  const auto saved=ProjectRelativePath::parse_portable("Scenes/StairsSmoothUv-live.qdr");
+  ASSERT_TRUE(saved.ok());
+  ASSERT_TRUE(editor.scene_documents().save_copy(*editor.scene_documents().active_scene_id(),saved.value()).ok());
+  ASSERT_TRUE(editor.scene_documents().open(saved.value()).ok());
+  ASSERT_TRUE(harness.refresh_native_project_scene());
+  harness.prepare_native_project_texture_comparison();
+  ASSERT_NO_FATAL_FAILURE(capture("reopened"));
+  EXPECT_EQ(captures.at("applied-first-tread"),captures.at("reopened-first-tread"));
+  const auto reopened_records=editor.query().modeling_objects();
+  const auto reopened_record=std::ranges::find(reopened_records,std::string{"Stairs_2"},&QuaderModelingObjectRecord::name);
+  ASSERT_NE(reopened_record,reopened_records.end());
+  const auto reopened=editor.query().modeling_object_for_id(reopened_record->modeling_object_id);
+  ASSERT_TRUE(reopened);
+  const auto reopened_mesh=editor.query().compiled_object_mesh(*reopened);
+  ASSERT_TRUE(reopened_mesh);
+  EXPECT_EQ(reopened_mesh->circular_uv_interpolations.size(),48U);
+  QImage checker(256,256,QImage::Format_RGBA8888);
+  for (int y=0;y<256;++y) for (int x=0;x<256;++x)
+    checker.setPixelColor(x,y,((x/32+y/32)%2)==0?QColor(225,225,225):QColor(35,35,35));
+  const auto material=stairs_smooth_texture_material(editor,checker,copy_root/"Textures/SmoothUvExperiment/checker.png");
+  ASSERT_NE(material,kInvalidAssetId);
+  ASSERT_TRUE(editor.modeling().apply_material_to_mesh(reopened->modeling_object_id,
+      static_cast<QuaderElementId>(source.faces.front().id),QuaderMaterialReference::embedded(material)).ok());
+  ASSERT_NO_FATAL_FAILURE(capture("live-checker"));
+  EXPECT_EQ(editor.query().compiled_object_mesh(*reopened)->circular_uv_interpolations.size(),48U);
+  std::cout<<"STAIRS_CIRCULAR_GEOMETRY vertices="<<source.vertices.size()<<" faces="<<source.faces.size()
+           <<" indices="<<original_mesh->indices.size()<<" (unchanged)"<<std::endl;
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanDetachedSpiralWalkingStripPeelRetainsBodyAndHistory) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1"))
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-detached-stairs-uv-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  auto directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (directory.isEmpty()) directory = QDir(QCoreApplication::applicationDirPath())
+      .absoluteFilePath(QStringLiteral("../stairs_detached_visual"));
+  ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0F, false));
+  ViewportCameraController camera;
+  camera.set_clip_planes(0.01F, 200.0F);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye={4.2F,4.8F,5.5F}, .target={0.0F,1.0F,0.0F}, .up={0,1,0}}));
+  harness.set_sample_camera(camera);
+  auto &editor = harness.workflow_editor();
+  ASSERT_TRUE(editor.viewports().set_shading_mode(ViewportPaneId::Perspective, QuaderShadingMode::Uv).ok());
+  harness.set_workflow_material_debug_mode(ViewportMaterialDebugMode::Uv);
+  const auto capture = [&](const char *phase) {
+    EXPECT_TRUE(harness.present_workflow_pane());
+    EXPECT_TRUE(harness.present_workflow_pane());
+    const auto image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    const auto path = QDir(directory).filePath(QStringLiteral("stairs-detached-%1.png")
+        .arg(QString::fromLatin1(phase)));
+    EXPECT_TRUE(image.save(path));
+    std::cout << "DETACHED_STAIRS_CAPTURE " << path.toStdString() << std::endl;
+    EXPECT_TRUE(harness.present_workflow_pane());
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    EXPECT_EQ(harness.capture(), image);
+    return image;
+  };
+  const auto baseline = capture("baseline");
+  ASSERT_TRUE(harness.create_stairs_sample());
+  for (const auto &[id,value] : std::array{
+           std::pair{"stairs.step_count",7.0}, std::pair{"stairs.curved_segments",29.0},
+           std::pair{"stairs.inner_radius",1.0}, std::pair{"stairs.flight_width",1.0},
+           std::pair{"stairs.turns",1.25}}) {
+    if (std::string_view(id) == "stairs.step_count")
+      ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.automatic_step_count", false).ok());
+    ASSERT_TRUE(editor.tools().set_setting("create_stairs", id, value).ok());
+  }
+  ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.construction", "slab").ok());
+  ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.layout", "spiral").ok());
+  ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.separate_walking_surface", true).ok());
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  EXPECT_NE(capture("creation-preview"), baseline);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_TRUE(editor.query().modeling_objects().empty());
+  EXPECT_EQ(capture("creation-cancelled"), baseline);
+  ASSERT_TRUE(harness.create_stairs_sample());
+  ASSERT_TRUE(editor.tools().stairs_creation_state()->separate_walking_surface);
+  const auto primary = editor.tools().live_primitive_creation()->object_id;
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  const auto created = capture("created");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(editor.query().modeling_objects().empty());
+  EXPECT_EQ(capture("creation-undone"), baseline);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(capture("creation-redone"), created);
+  const auto walking = editor.query().modeling_object_for_id(primary);
+  ASSERT_TRUE(walking);
+  const auto snapshot = harness.modeling().polygon_document_read_snapshot(primary, false);
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  const auto view = snapshot.value().document.view();
+  quader_poly::Document document;
+  document.vertices.assign(view.vertices.begin(),view.vertices.end());
+  document.faces.assign(view.faces.begin(),view.faces.end());
+  std::map<quader_poly::ElementId,QVec3> positions;
+  for (const auto &vertex : document.vertices) positions.emplace(vertex.id,vertex.position);
+  std::map<std::pair<QuaderElementId,QuaderElementId>,std::vector<quader_poly::ElementId>> incidents;
+  for (const auto &face : document.faces) {
+    for (std::size_t corner=0U;corner<face.vertices.size();++corner) {
+      const auto a=face.vertices[corner],b=face.vertices[(corner+1U)%face.vertices.size()];
+      incidents[{std::min(a,b),std::max(a,b)}].push_back(face.id);
+    }
+  }
+  const auto seed_face = std::ranges::find_if(document.faces, [&](const auto &face) {
+    return face.vertices.size()==4U && quader_poly::face_normal(document,face).y>0.99F;
+  });
+  ASSERT_NE(seed_face,document.faces.end());
+  std::map<quader_poly::ElementId,std::set<quader_poly::ElementId>> neighbors;
+  for (const auto &[edge,faces] : incidents) {
+    (void)edge;
+    if (faces.size()!=2U) continue;
+    neighbors[faces[0]].insert(faces[1]);
+    neighbors[faces[1]].insert(faces[0]);
+  }
+  std::set<quader_poly::ElementId> walking_faces{seed_face->id};
+  std::vector<quader_poly::ElementId> pending{seed_face->id};
+  while (!pending.empty()) {
+    const auto face=pending.back();
+    pending.pop_back();
+    for (const auto neighbor : neighbors[face]) {
+      if (walking_faces.insert(neighbor).second) pending.push_back(neighbor);
+    }
+  }
+  ASSERT_GT(walking_faces.size(),2U);
+  ASSERT_LT(walking_faces.size(),document.faces.size());
+  std::size_t riser_faces=0U;
+  for (const auto &face : document.faces) {
+    if (!walking_faces.contains(face.id)) continue;
+    EXPECT_EQ(face.vertices.size(),4U);
+    const auto normal=quader_poly::face_normal(document,face);
+    EXPECT_GE(normal.y,-0.0001F);
+    if (std::abs(normal.y)<0.0001F) ++riser_faces;
+  }
+  EXPECT_EQ(riser_faces,12U);
+  const auto original_mesh=editor.query().compiled_object_mesh(*walking);
+  ASSERT_TRUE(original_mesh);
+  const auto assert_geometry = [&] {
+    const auto mesh=editor.query().compiled_object_mesh(*walking);
+    ASSERT_TRUE(mesh);
+    EXPECT_EQ(mesh->indices,original_mesh->indices);
+    ASSERT_EQ(mesh->vertices.size(),original_mesh->vertices.size());
+    for (std::size_t index=0U;index<mesh->vertices.size();++index) {
+      EXPECT_EQ(mesh->vertices[index].position.x,original_mesh->vertices[index].position.x);
+      EXPECT_EQ(mesh->vertices[index].position.y,original_mesh->vertices[index].position.y);
+      EXPECT_EQ(mesh->vertices[index].position.z,original_mesh->vertices[index].position.z);
+    }
+  };
+  const auto body_signature = [&] {
+    std::map<quader_poly::ElementId,std::vector<float>> result;
+    const auto current=harness.modeling().polygon_document_read_snapshot(primary,true);
+    EXPECT_TRUE(current.ok()) << current.error_message();
+    if (!current.ok()) return result;
+    const auto current_view=current.value().document.view();
+    std::map<quader_poly::ElementId,QVec3> current_positions;
+    for (const auto &vertex : current_view.vertices) current_positions.emplace(vertex.id,vertex.position);
+    for (const auto &face : current_view.faces) {
+      if (walking_faces.contains(face.id)) continue;
+      auto &signature=result[face.id];
+      signature={face.texture_transform.scale.x,face.texture_transform.scale.y,
+          face.texture_transform.shift_uv.x,face.texture_transform.shift_uv.y,
+          face.texture_transform.rotation_degrees,float(face.uvs.size())};
+      for (const auto id : face.vertices) {
+        const auto point=current_positions.at(id);
+        signature.insert(signature.end(),{point.x,point.y,point.z});
+      }
+      for (const auto uv : face.uvs) signature.insert(signature.end(),{uv.x,uv.y});
+      EXPECT_FALSE(face.circular_uv_interpolation.has_value());
+    }
+    return result;
+  };
+  const auto original_body=body_signature();
+  ASSERT_FALSE(original_body.empty());
+  std::vector<std::pair<QuaderElementId,QuaderElementId>> guides;
+  std::size_t vertical_guides=0U;
+  for (const auto &[edge,faces] : incidents) {
+    const auto a=positions.at(edge.first),b=positions.at(edge.second);
+    if (faces.size()!=2U || !walking_faces.contains(faces[0]) || !walking_faces.contains(faces[1])) continue;
+    if (std::abs(std::hypot(a.x,a.z)-1.5F)<0.0001F &&
+        std::abs(std::hypot(b.x,b.z)-1.5F)<0.0001F) {
+      guides.push_back(edge);
+      if (std::hypot(a.x-b.x,a.z-b.z)<0.0001F && std::abs(a.y-b.y)>0.0001F)
+        ++vertical_guides;
+    }
+  }
+  ASSERT_GT(guides.size(),2U);
+  EXPECT_EQ(vertical_guides,6U);
+  ASSERT_TRUE(editor.selection().select_object(*walking).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(*walking,guides.front().first,guides.front().second).ok());
+  ASSERT_TRUE(editor.selection().select_edge_loops().ok());
+  EXPECT_EQ(editor.selection().summary().selected_edge_count,guides.size());
+  const auto selected=harness.modeling().polygon_document_read_snapshot(primary);
+  ASSERT_TRUE(selected.ok());
+  std::set<std::pair<QuaderElementId,QuaderElementId>> selected_guides;
+  for (const auto edge : selected.value().selection.edges)
+    selected_guides.emplace(std::min(edge.a.index,edge.b.index),std::max(edge.a.index,edge.b.index));
+  EXPECT_EQ(selected_guides,(std::set<std::pair<QuaderElementId,QuaderElementId>>{guides.begin(),guides.end()}));
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options({.world_space=false}).ok());
+  const auto before_peel=capture("before-peel");
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto ordinary=capture("peel-off");
+  EXPECT_EQ(body_signature(),original_body);
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_TRUE(editor.tools().set_setting("uv_peel","uv_peel.smooth_circular_flow",true).ok());
+  const auto smooth=editor.query().compiled_object_mesh(*walking);
+  ASSERT_TRUE(smooth);
+  EXPECT_FALSE(smooth->circular_uv_interpolations.empty());
+  EXPECT_NE(capture("peel-on"),ordinary);
+  EXPECT_EQ(body_signature(),original_body);
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(capture("peel-cancelled"),before_peel);
+  EXPECT_EQ(body_signature(),original_body);
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  const auto applied=capture("peel-applied");
+  EXPECT_EQ(body_signature(),original_body);
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(capture("peel-undone"),before_peel);
+  EXPECT_EQ(body_signature(),original_body);
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(capture("peel-redone"),applied);
+  EXPECT_EQ(body_signature(),original_body);
+  ASSERT_NO_FATAL_FAILURE(assert_geometry());
 }
 
 } // namespace

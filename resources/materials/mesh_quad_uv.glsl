@@ -12,6 +12,20 @@
 // interpolation to four-corner bilinear interpolation, and is zero on every
 // boundary because sl*tl=wl there. Affine placement corrections have R=0.
 highp vec2 applyQuadUvInterpolation(highp vec2 uv) {
+    if (variable_textureSamplingCorrection.y > 0.5) {
+        highp vec4 coordinate = variable_quadUvCoordinates;
+        highp float scale = max(abs(coordinate.x), abs(coordinate.y));
+        if (isnan(scale) || isinf(scale) || scale <= 0.0) {
+            return uv;
+        }
+        highp float radius = scale * length(coordinate.xy / scale);
+        highp vec2 delta = vec2(radius - coordinate.z,
+                atan(coordinate.y, coordinate.x) - coordinate.w);
+        highp vec2 corrected = uv + vec2(
+                dot(variable_quadUvCorrection.xy, delta),
+                dot(variable_quadUvCorrection.zw, delta));
+        return any(isnan(corrected)) || any(isinf(corrected)) ? uv : corrected;
+    }
     if (variable_quadUvCoordinates.w <= 0.5) {
         return uv;
     }

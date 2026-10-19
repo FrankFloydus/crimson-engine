@@ -450,6 +450,7 @@ RenderMeshAssetSnapshot render_mesh_asset_snapshot(AssetId mesh_id,
   snapshot.vertices = geometry->vertices;
   snapshot.indices = geometry->indices;
   snapshot.primitives = geometry->primitives;
+  snapshot.circular_uv_interpolations = geometry->circular_uv_interpolations;
   snapshot.present = true;
   snapshot.has_stable_cpu_topology = asset.has_stable_cpu_topology;
   return snapshot;
@@ -470,6 +471,7 @@ RenderMeshAssetSnapshot render_mesh_asset_snapshot(
       .vertices = projection->vertices(),
       .indices = projection->indices(),
       .primitives = projection->primitives(),
+      .circular_uv_interpolations = projection->circular_uv_interpolations(),
       .positions = projection->positions
                        ? std::span<const QVec3>(*projection->positions)
                        : std::span<const QVec3>{},

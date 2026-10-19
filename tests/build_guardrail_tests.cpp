@@ -1562,18 +1562,19 @@ TEST(BuildGuardrailTests,
       "src/sdk/core/modeling/neutral/include/quader/modeling/neutral");
   const std::filesystem::path implementation_mesh =
       source_path("src/sdk/core/modeling/internal/mesh");
-  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 36U);
+  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 37U);
   EXPECT_TRUE(files_with_extension(implementation_mesh, ".hpp").empty());
 
   const std::string retired_include = joined("#include <me", "sh/");
   const std::string retired_quoted_include = joined("#include \"me", "sh/");
   const std::string neutral_internal_include =
       joined("quader/modeling/neutral/polygon/", "internal/");
-  constexpr std::array<std::string_view, 10> kNeutralInternalConsumers = {
+  constexpr std::array<std::string_view, 11> kNeutralInternalConsumers = {
       "src/editor/interactions/knife_tool.cpp",
       "src/editor/modeling/runtime/session_picking.cpp",
       "src/editor/modeling/runtime/session_selection_overlay.cpp",
       "src/editor/projection/mesh_projection_service.cpp",
+      "tests/mesh_quad_uv_interpolation_tests.cpp",
       "tests/modeling_domain/"
       "qdr_document_openmesh_topology_query_tests.cpp",
       "tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp",

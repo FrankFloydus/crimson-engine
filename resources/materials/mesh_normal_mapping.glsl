@@ -17,7 +17,7 @@ vec3 safeTextureNormal(highp vec3 value, vec3 fallback) {
 
 vec3 normalForTextureUv(vec3 normalSample, highp vec2 uv) {
     // Keep the existing interpolated tangent frame for an unchanged chart,
-    // including pure texture translations. Bilinear quad correction marks
+    // including pure texture translations. Nonlinear UV interpolation marks
     // the chart changed so this path derives tangents from the final UV.
     if (variable_textureSamplingCorrection.x <= 0.5
             && materialParams.textureTransformRotationRadians == 0.0

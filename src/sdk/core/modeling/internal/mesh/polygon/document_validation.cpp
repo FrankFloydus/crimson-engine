@@ -81,6 +81,15 @@ void validate_face_ids(const Document& document, PolygonDocumentValidationReport
 {
     std::set<ElementId> face_ids;
     for (const Face& face : document.faces) {
+        if (face.circular_uv_interpolation.has_value() &&
+            !valid_circular_uv_interpolation(*face.circular_uv_interpolation)) {
+            add_diagnostic(report,
+                PolygonDocumentDiagnosticCode::InvalidCircularUvInterpolation,
+                PolygonDocumentDiagnosticSeverity::Error,
+                "Face " + std::to_string(face.id) +
+                    " has invalid circular UV interpolation.",
+                kInvalidElementId, face.id);
+        }
         if (!valid_face_texture_transform(face.texture_transform)) {
             add_diagnostic(
                 report,

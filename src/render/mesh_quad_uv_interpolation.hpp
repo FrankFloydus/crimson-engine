@@ -15,13 +15,16 @@
 
 namespace quader {
 
-/// Derived, face-constant coefficients and one corner's bilinear coordinates.
+/// Derived, face-constant coefficients and one corner's nonlinear coordinates.
 /// Only coordinates are interpolated; the remaining fields agree across a face.
 struct MeshQuadUvInterpolation final {
   QVec3 coordinates{};
   QVec2 geometry_warp{};
   QVec2 uv_correction{};
   bool enabled = false;
+  std::array<float, 4> circular_coordinates{};
+  std::array<float, 4> uv_from_polar{};
+  bool circular = false;
 };
 
 /// Retains exclusive authored quad corner bindings independently of coordinates.
@@ -36,7 +39,9 @@ struct MeshQuadUvInterpolationPlan final {
 
 [[nodiscard]] std::vector<MeshQuadUvInterpolation> build_mesh_quad_uv_interpolations(
     std::span<const MeshVertex> vertices, const MeshQuadUvInterpolationPlan &plan,
-    std::span<const QVec3> positions = {});
+    std::span<const QVec3> positions = {},
+    std::span<const quader_poly::CircularUvInterpolation> circular = {},
+    std::span<const std::uint32_t> triangles = {});
 
 /// Builds optional inverse-bilinear UV correction from original, uncoalesced
 /// compiler face spans. Nonzero distinct source vertex IDs and exclusive corner
@@ -44,12 +49,14 @@ struct MeshQuadUvInterpolationPlan final {
 /// Only well-conditioned planar convex quads with convex, non-affine authored
 /// UVs qualify. Unsupported faces retain their exact existing triangle mapping.
 /// Optional positions are the actual uploaded positions of a dynamic preview.
+/// Authored circular descriptors take precedence over inferred bilinear quads.
 [[nodiscard]] std::vector<MeshQuadUvInterpolation>
 build_mesh_quad_uv_interpolations(
     std::span<const MeshVertex> vertices,
     std::span<const std::uint32_t> indices,
     std::span<const MeshPrimitiveSpan> primitives,
-    std::span<const QVec3> positions = {});
+    std::span<const QVec3> positions = {},
+    std::span<const quader_poly::CircularUvInterpolation> circular = {});
 
 /// Numerical counterpart of resources/materials/mesh_quad_uv.glsl. Accepts the
 /// existing perspective-correct triangle UV and interpolated coordinate payload;

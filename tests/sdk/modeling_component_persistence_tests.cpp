@@ -189,7 +189,7 @@ TEST(ModelingComponentPersistenceTests,
   ASSERT_TRUE(document.ok()) << document.error_message();
   const auto encoded = serialize_qdr_authored_topology(document.value());
   ASSERT_TRUE(encoded.ok()) << encoded.error_message();
-  EXPECT_EQ(encoded.value()[6], std::byte{3});
+  EXPECT_EQ(encoded.value()[6], std::byte{4});
   const auto decoded = deserialize_qdr_authored_topology(encoded.value());
   ASSERT_TRUE(decoded.ok()) << decoded.error_message();
   expect_exact_topology(topology, decoded.value());
@@ -232,6 +232,9 @@ TEST(ModelingComponentPersistenceTests,
     const auto document = PolygonDocument::from_authored_topology(topology);
     ASSERT_TRUE(document.ok()) << document.error_message();
     auto encoded = serialize_qdr_authored_topology(document.value()).or_throw();
+    // These historical formats predate the sparse circular-field count.
+    encoded.resize(encoded.size() - 4U);
+    write_u32_le(encoded, 16U, static_cast<std::uint32_t>(encoded.size()));
     encoded[6] = static_cast<std::byte>(minor);
     if (minor == 0U) {
       encoded.resize(encoded.size() - topology.faces.size() * 20U);
@@ -246,7 +249,7 @@ TEST(ModelingComponentPersistenceTests,
     expect_exact_topology(expected, decoded.value());
     const auto canonical = serialize_qdr_authored_topology(decoded.value());
     ASSERT_TRUE(canonical.ok()) << canonical.error_message();
-    EXPECT_EQ(canonical.value()[6], std::byte{3});
+    EXPECT_EQ(canonical.value()[6], std::byte{4});
     const auto reloaded = deserialize_qdr_authored_topology(canonical.value());
     ASSERT_TRUE(reloaded.ok()) << reloaded.error_message();
     expect_exact_topology(expected, reloaded.value());

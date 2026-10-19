@@ -17,6 +17,7 @@
 #include <quader/modeling/io/qdr_document.hpp>
 #include <quader/modeling/curves/curve_document.hpp>
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 #include <quader/modeling/neutral/polygon/document_validation.hpp>
 
 #include <flatbuffers/flatbuffers.h>
@@ -55,7 +56,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 19u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 20u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 /**
@@ -562,9 +563,46 @@ legacy_authored_geometry_fields_are_empty(const fb::GeometryPayload &payload) {
          flatbuffer_vector_is_empty(payload.hard_normal_edges());
 }
 
+void validate_compiled_circular_uv_fields(const fb::GeometryPayload &payload,
+                                         std::uint16_t scene_schema_version) {
+  const auto *fields = payload.mesh_circular_uv_interpolations();
+  const auto *indices = payload.mesh_circular_uv_indices();
+  if (scene_schema_version < 20u &&
+      (!flatbuffer_vector_is_empty(fields) || !flatbuffer_vector_is_empty(indices))) {
+    throw std::runtime_error("QDR circular UV data is unsupported before schema 20.");
+  }
+  if (payload.kind() != fb::GeometryKind::CompiledMesh &&
+      (!flatbuffer_vector_is_empty(fields) || !flatbuffer_vector_is_empty(indices))) {
+    throw std::runtime_error("QDR circular UV compiled fields require compiled geometry.");
+  }
+  const std::size_t field_count = fields != nullptr ? fields->size() : 0U;
+  if (fields != nullptr) {
+    for (const auto *field : *fields) {
+      const quader_poly::CircularUvInterpolation interpolation{
+          from_fb(field->center()), from_fb(field->axis_u()), from_fb(field->axis_v()),
+          {field->u_radius(), field->u_angle(), field->v_radius(), field->v_angle()}};
+      if (!quader_poly::valid_circular_uv_interpolation(interpolation)) {
+        throw std::runtime_error("QDR compiled geometry has invalid circular UV data.");
+      }
+    }
+  }
+  if (!flatbuffer_vector_is_empty(indices)) {
+    const auto *vertices = payload.mesh_vertices();
+    if (indices->size() != (vertices != nullptr ? vertices->size() : 0U)) {
+      throw std::runtime_error("QDR compiled geometry has an invalid circular UV index count.");
+    }
+    for (const auto index : *indices) {
+      if (index > field_count) {
+        throw std::runtime_error("QDR compiled geometry references missing circular UV data.");
+      }
+    }
+  }
+}
+
 [[nodiscard]] EncodedGeometryWriteDisposition
 encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
                                    std::uint16_t scene_schema_version) {
+  validate_compiled_circular_uv_fields(payload, scene_schema_version);
   switch (payload.kind()) {
   case fb::GeometryKind::CompiledMesh:
     return EncodedGeometryWriteDisposition::Preserve;
@@ -704,6 +742,16 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
     }
   }
 
+  std::vector<std::uint32_t> circular_uv_indices;
+  std::vector<fb::CircularUvInterpolation> circular_uv_interpolations;
+  if (kind == fb::GeometryKind::CompiledMesh && !mesh.geometry->circular_uv_interpolations.empty()) {
+    for (const auto &vertex : mesh.geometry->vertices) circular_uv_indices.push_back(vertex.circular_uv_index);
+    for (const auto &field : mesh.geometry->circular_uv_interpolations) {
+      circular_uv_interpolations.emplace_back(to_fb(field.center), to_fb(field.axis_u), to_fb(field.axis_v),
+          field.uv_from_polar[0], field.uv_from_polar[1], field.uv_from_polar[2], field.uv_from_polar[3]);
+    }
+  }
+
   const auto root = fb::CreateGeometryPayload(
       builder, kind, next_vertex_id, next_face_id,
       builder.CreateVectorOfStructs(polygon_vertices),
@@ -716,7 +764,13 @@ encoded_geometry_write_disposition(const fb::GeometryPayload &payload,
       builder.CreateVectorOfStructs(mesh_vertices),
       builder.CreateVector(mesh_indices),
       builder.CreateVectorOfStructs(mesh_primitives), authored_payload,
-      builder.CreateVectorOfStructs(mesh_texture_mapping));
+      builder.CreateVectorOfStructs(mesh_texture_mapping),
+      circular_uv_indices.empty()
+          ? flatbuffers::Offset<flatbuffers::Vector<std::uint32_t>>{}
+          : builder.CreateVector(circular_uv_indices),
+      circular_uv_interpolations.empty()
+          ? flatbuffers::Offset<flatbuffers::Vector<const fb::CircularUvInterpolation *>>{}
+          : builder.CreateVectorOfStructs(circular_uv_interpolations));
   builder.Finish(root, "QDRG");
   return flatbuffer_bytes(builder);
 }
@@ -1476,6 +1530,18 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
       }
     }
   }
+  if (const auto *fields = payload.mesh_circular_uv_interpolations()) {
+    for (const auto *field : *fields) {
+      quader_poly::CircularUvInterpolation converted{from_fb(field->center()), from_fb(field->axis_u()),
+          from_fb(field->axis_v()), {field->u_radius(), field->u_angle(), field->v_radius(), field->v_angle()}};
+      geometry.circular_uv_interpolations.push_back(converted);
+    }
+  }
+  if (const auto *indices = payload.mesh_circular_uv_indices(); indices && indices->size() != 0u) {
+    for (std::size_t index = 0u; index < indices->size(); ++index) {
+      geometry.vertices[index].circular_uv_index = indices->Get(index);
+    }
+  }
   for (const std::uint32_t index : geometry.indices) {
     if (index >= geometry.vertices.size()) {
       throw std::runtime_error(
@@ -1524,6 +1590,7 @@ decode_geometry(const fb::GeometryPayload &payload,
                 std::uint16_t scene_schema_version,
                 QdrSceneBinaryDecodeStats &stats) {
   QDR_PROFILE_FUNCTION();
+  validate_compiled_circular_uv_fields(payload, scene_schema_version);
   switch (payload.kind()) {
   case fb::GeometryKind::CompiledMesh: {
     const auto decode_started = std::chrono::steady_clock::now();
@@ -2747,6 +2814,9 @@ template <typename GeometryPayload>
 [[nodiscard]] std::vector<std::uint32_t>
 geometry_material_slots(const GeometryPayload &payload,
                         std::uint16_t scene_schema_version) {
+  if constexpr (std::is_same_v<GeometryPayload, fb::GeometryPayload>) {
+    validate_compiled_circular_uv_fields(payload, scene_schema_version);
+  }
   std::set<std::uint32_t> slots;
   const auto kind = static_cast<fb::GeometryKind>(payload.kind());
   if (kind == fb::GeometryKind::AuthoredPolygon) {
@@ -3241,8 +3311,8 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
     }
   }
 
-  // Geometry remains opaque. Accessing the bytes verifies lazy checksums but
-  // never constructs topology or invokes the modeling compiler.
+  // Authored topology remains opaque. Only the compiled circular extension is
+  // validated here; neither topology decoding nor the modeling compiler runs.
   std::unordered_map<std::uint64_t, const quader_io::QdrBinaryChunk *>
       geometry_chunks;
   for (const quader_io::QdrBinaryChunk &chunk : container.chunks) {
@@ -3257,6 +3327,7 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
     }
   }
   std::set<AssetId> mesh_ids;
+  std::set<std::uint64_t> validated_geometry;
   if (const auto *meshes = payload->meshes()) {
     result.stats.logical_geometry_count = meshes->size();
     for (const fb::MeshAsset *mesh : *meshes) {
@@ -3265,7 +3336,11 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
         throw std::runtime_error(
             "QDR scene contains an invalid or duplicate mesh asset id.");
       }
-      (void)require_geometry_chunk(geometry_chunks, mesh->geometry_chunk_id());
+      const auto &chunk = require_geometry_chunk(geometry_chunks, mesh->geometry_chunk_id());
+      if (validated_geometry.insert(chunk.id).second) {
+        const auto *geometry = verify_geometry_payload(chunk.bytes());
+        validate_compiled_circular_uv_fields(*geometry, metadata.schema_version);
+      }
     }
   }
 

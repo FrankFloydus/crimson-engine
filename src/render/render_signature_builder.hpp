@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace quader {
@@ -50,6 +51,8 @@ public:
     RenderSignatureBuilder &add_vec2(QVec2 value);
     RenderSignatureBuilder &add_vec3(QVec3 value);
     RenderSignatureBuilder &add_mat4(const QMat4 &value);
+    RenderSignatureBuilder &add_circular_uv_interpolations(
+        std::span<const quader_poly::CircularUvInterpolation> interpolations);
 
     [[nodiscard]] std::uint64_t value() const {
         return hash_;

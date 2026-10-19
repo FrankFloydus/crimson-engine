@@ -748,6 +748,8 @@ QuaderToolSettingsTarget uv_peel_tool_settings_target(
       "Turn off to fit each guide and its transverse span to one tile; the "
       "guide stays at the offset and opposite sides use opposite signs.";
   result.controls.push_back(std::move(world_space));
+  result.controls.push_back(toggle_control("uv_peel.smooth_circular_flow",
+      "Smooth Circular Flow", options.smooth_circular_flow));
   const auto append_number = [&result](std::string id, std::string label,
                                        double value, std::string tooltip) {
     auto control = number_control(
@@ -1190,6 +1192,8 @@ QuaderToolSettingsTarget stairs_tool_settings_target(
       QuaderToolSettingChoicePresentation::Dropdown);
   construction.label_key = "stairs.construction.type";
   append(std::move(construction), "stairs.construction");
+  append(toggle_control("stairs.separate_walking_surface", "Separate Walking Surface",
+      primitive.separate_walking_surface()), "stairs.construction");
   if (spec.construction == modeling::StairsConstruction::Slab) {
     auto thickness = number_control("stairs.slab_thickness", "Thickness", spec.slab_thickness,
         modeling::kStairsMinimumDimension, 1000000.0, 0.01,
@@ -2032,6 +2036,7 @@ std::optional<QuaderStairsCreationState> QuaderToolsApi::stairs_creation_state()
       .preview_active = primitive.live_primitive_creation().has_value(),
       .revision = primitive.creation_revision() + session.scene().selection_revision() +
                   session.modeling().selection_revision(),
+      .separate_walking_surface = primitive.separate_walking_surface(),
   };
 }
 
@@ -2687,6 +2692,9 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
     } else if (name == "uv_peel.world_space" &&
                (value == 0.0 || value == 1.0)) {
       peel_options.world_space = value == 1.0;
+    } else if (name == "uv_peel.smooth_circular_flow" &&
+               (value == 0.0 || value == 1.0)) {
+      peel_options.smooth_circular_flow = value == 1.0;
     } else if (name == "uv_peel.u_repeat") {
       peel_options.u_repeat = value;
     } else if (name == "uv_peel.v_repeat") {

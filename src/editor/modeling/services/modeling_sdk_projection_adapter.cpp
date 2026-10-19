@@ -684,6 +684,7 @@ private:
     // Exact authored/layout/movable-set equivalence established at gesture start.
     std::size_t projection_group = 0U;
     std::shared_ptr<const quader_poly::Document> transform_source;
+    bool has_circular_uv_interpolation = false;
     std::optional<modeling::PreparedSelectionTransform> prepared_transform;
     PolygonDocument base_document;
     PolygonDocument preview_document;
@@ -8106,6 +8107,7 @@ public:
               object, base_mesh.geometry().vertices),
           .position_revision = transient_transform_payload_revision_,
           .preserve_preview_uv_layout = preserve_preview_uv_layout,
+          .has_circular_uv_interpolation = !base_mesh.geometry_circular_uv_interpolations().empty(),
           .base_document = document,
           .preview_document = document,
           .preview_mesh = std::move(base_mesh),
@@ -8407,7 +8409,8 @@ public:
         // Derive one neutral mesh per equivalent projection family without forcing
         // each logical object's lazy SDK document to materialize its topology.
         std::optional<quader_poly::Document> authored;
-        if (evaluated_positions && participant.transform_source) {
+        if (evaluated_positions && participant.transform_source &&
+            !participant.has_circular_uv_interpolation) {
           authored.emplace(*participant.transform_source);
         } else {
           authored =

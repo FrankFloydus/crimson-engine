@@ -349,6 +349,7 @@ void compile_document_into(const DocumentReadView &document, CompiledMesh &mesh,
     mesh.vertices.clear();
     mesh.indices.clear();
     mesh.primitives.clear();
+    mesh.circular_uv_interpolations.clear();
     const VertexLookupIndex vertex_lookup(document);
 
     // A compiled mesh owns one vertex per authored face corner and at most
@@ -422,6 +423,25 @@ void compile_document_into(const DocumentReadView &document, CompiledMesh &mesh,
             use_loop_uvs ? std::span<const quader::QVec2>(face.uvs)
                          : std::span<const quader::QVec2>{},
             normal, face.texture_transform);
+        std::uint32_t circular_uv_index = 0U;
+        if (face.circular_uv_interpolation.has_value() &&
+            valid_circular_uv_interpolation(*face.circular_uv_interpolation) &&
+            valid_face_texture_transform(face.texture_transform)) {
+          auto interpolation = *face.circular_uv_interpolation;
+          auto linear_transform = face.texture_transform;
+          linear_transform.shift_uv = {};
+          const auto radius = apply_face_texture_transform(
+              {interpolation.uv_from_polar[0], interpolation.uv_from_polar[2]},
+              linear_transform);
+          const auto angle = apply_face_texture_transform(
+              {interpolation.uv_from_polar[1], interpolation.uv_from_polar[3]},
+              linear_transform);
+          interpolation.uv_from_polar = {radius.x, angle.x, radius.y, angle.y};
+          if (valid_circular_uv_interpolation(interpolation)) {
+            mesh.circular_uv_interpolations.push_back(interpolation);
+            circular_uv_index = static_cast<std::uint32_t>(mesh.circular_uv_interpolations.size());
+          }
+        }
         for (std::size_t local_index = 0; local_index < face.vertices.size(); ++local_index) {
             const ElementId vertex_id = face.vertices[local_index];
             const Vertex* vertex = vertex_lookup.find(vertex_id);
@@ -460,6 +480,7 @@ void compile_document_into(const DocumentReadView &document, CompiledMesh &mesh,
                 vertex_id,
                 uv_carrier,
                 normal,
+                circular_uv_index,
             });
         }
 

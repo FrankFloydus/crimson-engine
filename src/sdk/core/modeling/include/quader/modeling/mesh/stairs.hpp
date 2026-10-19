@@ -66,6 +66,8 @@ struct StairsMesh final {
   double slope_degrees = 0.0;
   double footprint_width = 0.0;
   double footprint_depth = 0.0;
+  /// Generated treads, step risers, ramp decks and landing tops; excludes body caps.
+  std::vector<FaceId> walking_faces;
 };
 
 /**
@@ -80,5 +82,14 @@ struct StairsMesh final {
  * between nonadjacent route sections. This function retains no generator state.
  */
 [[nodiscard]] Result<StairsMesh> build_stairs_mesh(const StairsSpec &spec);
+
+/**
+ * Detaches the connected walking strip from the body within one document.
+ * Preserves all faces, face IDs, corner order, positions and attributes; only
+ * shared boundary vertices receive duplicates through the normal Detach Faces
+ * operation. Adds no faces or caps and leaves the input unchanged. Requires the
+ * generated walking-face provenance and retains the detached face selection.
+ */
+[[nodiscard]] Result<PolygonDocument> detach_stairs_walking_surface(const StairsMesh &mesh);
 
 } // namespace quader::modeling

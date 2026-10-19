@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/mesh_projection_service.hpp"
+#include "assets/modeling_mesh_payload_adapter.hpp"
 
 #include "assets/mesh_asset_payload.hpp"
 #include "diagnostics/profile.hpp"
@@ -142,7 +143,8 @@ MeshVertex from_compiled_vertex(const quader_poly::CompiledVertex &vertex) {
       .rgba = vertex.color,
       .source_vertex_id = vertex.source_vertex_id,
       .uv_carrier = vertex.uv_carrier,
-      .uv_geometric_normal = vertex.uv_geometric_normal};
+      .uv_geometric_normal = vertex.uv_geometric_normal,
+      .circular_uv_index = vertex.circular_uv_index};
 }
 
 void replace_geometry_from_compiled(
@@ -390,6 +392,7 @@ public:
         current.rgba == value.rgba &&
         current.source_vertex_id == value.source_vertex_id &&
         current.uv_carrier == value.uv_carrier &&
+        current.circular_uv_index == value.circular_uv_index &&
         same_position(current.uv_geometric_normal, value.uv_geometric_normal)) {
       return;
     }
@@ -436,6 +439,7 @@ bool update_retained_projection_face_ranges(
   for (std::size_t index = 0U; index < face_count; ++index) {
     const std::size_t face_index = affected_only ? affected_faces[index] : index;
     const auto &face = next.faces[face_index];
+    if (face.circular_uv_interpolation) return false;
     const auto offset = plan.face_vertex_offsets[face_index];
     const auto &primitive = plan.source_geometry->primitives[face_index];
     if (preserve_corner_normals &&
@@ -893,6 +897,9 @@ to_sdk_topology(const quader_poly::Document &document, bool preserve_storage = f
                      face.texture_transform.shift_uv.y},
         .rotation_degrees = face.texture_transform.rotation_degrees,
     };
+    if (face.circular_uv_interpolation) {
+      converted.circular_uv_interpolation = circular_uv_interpolation_to_modeling(*face.circular_uv_interpolation);
+    }
     converted.vertices.reserve(face.vertices.size());
     for (const quader_poly::ElementId vertex : face.vertices) {
       converted.vertices.push_back(
@@ -949,6 +956,9 @@ to_native_topology(const quader::modeling::AuthoredTopology &topology) {
                      face.texture_transform.shift_uv.y},
         .rotation_degrees = face.texture_transform.rotation_degrees,
     };
+    if (face.circular_uv_interpolation) {
+      converted.circular_uv_interpolation = circular_uv_interpolation_from_modeling(*face.circular_uv_interpolation);
+    }
     converted.vertices.reserve(face.vertices.size());
     for (const quader::modeling::VertexId vertex : face.vertices) {
       converted.vertices.push_back(vertex.index);
@@ -994,6 +1004,7 @@ bool same_topology_layout(const quader_poly::Document &left,
         a.uvs.size() != b.uvs.size() ||
         a.material_slot != b.material_slot ||
         a.normal_shading != b.normal_shading ||
+        a.circular_uv_interpolation != b.circular_uv_interpolation ||
         a.texture_transform.scale.x != b.texture_transform.scale.x ||
         a.texture_transform.scale.y != b.texture_transform.scale.y ||
         a.texture_transform.shift_uv.x != b.texture_transform.shift_uv.x ||
@@ -1034,6 +1045,7 @@ quader_poly::CompiledMesh &canonical_compilation_scratch() {
 void replace_geometry_from_compiled(
     const quader_poly::CompiledMesh &compiled,
     MeshGeometryPayload &geometry) {
+  geometry.circular_uv_interpolations = compiled.circular_uv_interpolations;
   geometry.vertices.resize(compiled.vertices.size());
   for (std::size_t index = 0; index < compiled.vertices.size(); ++index) {
     geometry.vertices[index] = from_compiled_vertex(compiled.vertices[index]);
@@ -1060,7 +1072,7 @@ MeshAsset project_document_mesh_positions(quader_poly::Document next_authored,
                                           bool topology_retained,
                                           const MeshProjectionPositionUpdatePlan *plan = nullptr) {
   MeshAsset projected = current;
-  if (topology_retained) {
+  if (topology_retained && current.geometry_circular_uv_interpolations().empty()) {
     // Smoothing depends on canonical face normals and authored connectivity.
     // Preserve it only for proven translations with exactly equal normals;
     // generated UVs and tessellation still use their usual owners.
@@ -1118,7 +1130,8 @@ MeshProjectionService::prepare_position_update_plan(
   QDR_PROFILE_SCOPE("Mesh projection prepare position update plan");
   partial_plan_build_count.fetch_add(1, std::memory_order_relaxed);
   if (!current.has_stable_cpu_topology || !current.has_authored_polygon_document ||
-      !current.authored_polygon_document || movable_vertex_ids.empty()) {
+      !current.authored_polygon_document || movable_vertex_ids.empty() ||
+      !current.geometry_circular_uv_interpolations().empty()) {
     return nullptr;
   }
   auto plan = std::make_shared<MeshProjectionPositionUpdatePlan>();
@@ -1211,7 +1224,8 @@ MeshProjectionService::prepare_retained_position_projection(
     const modeling::PolygonDocument &document, const MeshAsset &current,
     const MeshProjectionPositionUpdatePlan *partial_plan) {
   QDR_PROFILE_SCOPE("Mesh projection prepare retained coordinate mapping");
-  if (!current.has_stable_cpu_topology || !current.authored_polygon_document) return {};
+  if (!current.has_stable_cpu_topology || !current.authored_polygon_document ||
+      !current.geometry_circular_uv_interpolations().empty()) return {};
   auto plan = std::make_shared<MeshRetainedPositionProjectionPlan>(
       modeling::polygon_document_read_snapshot(document));
   const auto source = plan->source.view();
@@ -1818,6 +1832,9 @@ std::optional<MeshAsset> MeshProjectionService::mesh_asset_from_sdk_payload(
     const quader::modeling::PolygonDocument &authored_document) {
   MeshAsset mesh;
   MeshGeometryPayload &geometry = mesh.edit_geometry();
+  for (const auto &field : payload.circular_uv_interpolations) {
+    geometry.circular_uv_interpolations.push_back(circular_uv_interpolation_from_modeling(field));
+  }
   geometry.vertices.reserve(payload.vertices.size());
   for (const quader::modeling::MeshVertexPayload &vertex : payload.vertices) {
     geometry.vertices.push_back({
@@ -1830,6 +1847,7 @@ std::optional<MeshAsset> MeshProjectionService::mesh_asset_from_sdk_payload(
         .uv_geometric_normal = {vertex.uv_geometric_normal.x,
                                 vertex.uv_geometric_normal.y,
                                 vertex.uv_geometric_normal.z},
+        .circular_uv_index = vertex.circular_uv_index,
     });
   }
   geometry.indices = payload.indices;
@@ -2000,6 +2018,11 @@ MeshProjectionService::rebase_sdk_document_texture_mapping(
       }
       solved = std::move(retained);
     }
+    const bool chart_changed = face.uvs.size() != solved->size() ||
+        !std::equal(face.uvs.begin(), face.uvs.end(), solved->begin(), [](QVec2 left, QVec2 right) {
+          return left.x == right.x && left.y == right.y;
+        });
+    if (chart_changed) face.circular_uv_interpolation.reset();
     face.uvs = std::move(*solved);
   }
   return MeshProjectionService::sdk_document_from_polygon_document(*after);

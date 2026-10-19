@@ -15,6 +15,21 @@
 
 namespace quader {
 
+/// Transfers the portable analytic field without introducing a second owner.
+[[nodiscard]] inline quader_poly::CircularUvInterpolation
+circular_uv_interpolation_from_modeling(const modeling::CircularUvInterpolation &field) {
+  return {{field.center.x, field.center.y, field.center.z},
+          {field.axis_u.x, field.axis_u.y, field.axis_u.z},
+          {field.axis_v.x, field.axis_v.y, field.axis_v.z}, field.uv_from_polar};
+}
+
+[[nodiscard]] inline modeling::CircularUvInterpolation
+circular_uv_interpolation_to_modeling(const quader_poly::CircularUvInterpolation &field) {
+  return {{field.center.x, field.center.y, field.center.z},
+          {field.axis_u.x, field.axis_u.y, field.axis_u.z},
+          {field.axis_v.x, field.axis_v.y, field.axis_v.z}, field.uv_from_polar};
+}
+
 /**
  * Converts an SDK-authored mesh payload into native asset geometry.
  *

@@ -52,6 +52,18 @@ struct SelectionRemap {
 /**
  * Stores one renderer-neutral compiled mesh vertex.
  */
+/** Live polar sampling data, with local covectors and row-major (radius, angle)
+ * to UV coefficients. Authored records use base UV; compiled records include
+ * the face texture rotation and signed scale. */
+/// Defines live local polar sampling and its row-major UV coefficients.
+struct CircularUvInterpolation {
+  Vec3 center{};
+  Vec3 axis_u{1.0F, 0.0F, 0.0F};
+  Vec3 axis_v{0.0F, 0.0F, 1.0F};
+  std::array<float, 4> uv_from_polar{};
+};
+
+/// Stores one renderer-neutral vertex, including a sparse circular field index.
 struct MeshVertexPayload {
   Vec3 position{};
   Vec3 normal{0.0F, 1.0F, 0.0F};
@@ -60,6 +72,7 @@ struct MeshVertexPayload {
   VertexId source_vertex{};
   std::array<float, 4> uv_carrier{};
   Vec3 uv_geometric_normal{0.0F, 1.0F, 0.0F};
+  std::uint32_t circular_uv_index = 0U;
 };
 
 /**
@@ -90,6 +103,7 @@ struct MeshPayload {
   std::vector<std::uint32_t> indices;
   std::vector<MeshPrimitivePayload> primitives;
   std::uint64_t content_revision = 0;
+  std::vector<CircularUvInterpolation> circular_uv_interpolations;
 };
 
 /**
@@ -181,6 +195,7 @@ struct AuthoredTopologyFace {
   std::uint32_t material_slot = 0;
   AuthoredSurfaceShading shading = AuthoredSurfaceShading::Authored;
   FaceTextureTransform texture_transform{};
+  std::optional<CircularUvInterpolation> circular_uv_interpolation;
 };
 
 /**

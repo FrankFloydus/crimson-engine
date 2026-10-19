@@ -153,6 +153,16 @@ struct MeshTextureMappingVertex {
   geometric_normal:Vec3;
 }
 
+struct CircularUvInterpolation {
+  center:Vec3;
+  axis_u:Vec3;
+  axis_v:Vec3;
+  u_radius:float;
+  u_angle:float;
+  v_radius:float;
+  v_angle:float;
+}
+
 struct PolygonVertex {
   id:uint;
   position:Vec3;
@@ -194,6 +204,8 @@ table GeometryPayload {
   mesh_primitives:[MeshPrimitive];
   authored_payload:[ubyte];
   mesh_texture_mapping:[MeshTextureMappingVertex];
+  mesh_circular_uv_indices:[uint];
+  mesh_circular_uv_interpolations:[CircularUvInterpolation];
 }
 
 table MeshAsset {

@@ -408,7 +408,7 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
 
 - Stairs & Ramps uses the same creation transaction through a dedicated `create_stairs` tool.
   Keep the ordinary primitive preference independent. Parameters and fitted readouts are
-  creation-time state; accepted scenes contain an ordinary editable mesh. SDK generation owns
+  creation-time state; accepted scenes contain ordinary editable meshes. SDK generation owns
   topology and body-clearance validation. Solid fills to the placement base; repeated footprints
   need slabs with positive body clearance. Invalid options and publication failures retain the
   accepted draft and remembered settings. Readouts and unchanged frames must not regenerate it.
@@ -417,6 +417,12 @@ Viewport acceptance: [commit adapter](src/editor/viewport/viewport_modeling_tool
   constrain UV Peel. Ordinary wall quads remain traversable by the current Peel walk; explicit
   boundary controls are deferred. Landing top and underside dividers peel their own two
   non-quad faces independently.
+  Separate Walking Surface defaults off. Its generated provenance includes treads AND their
+  internal vertical step risers, ramp decks and landing tops. Run the existing Detach Faces
+  owner on that selection inside ONE mesh document; never extract another object or detach
+  treads individually. Duplicate only shared boundary vertices, retaining strip connectivity,
+  all faces, positions and attributes. Full body route caps stay outside the strip. Live
+  settings, resize, toggling, Cancel and history retain the ordinary single-object lifecycle.
   Preserve exact shared port vertices and canonical float-surface clearance when changing
   subdivisions. See the [surface topology contract](src/sdk/core/modeling/src/stairs.md).
   Contracts: [portable generator](src/sdk/core/modeling/include/quader/modeling/mesh/stairs.hpp),
@@ -1367,6 +1373,21 @@ Tests: [normal behavior](tests/modeling_domain/operation/qdr_document_operation_
   rejected candidates cannot replace accepted options. Returning the candidate to original UVs
   must preserve redo history.
   Contracts: [tool workflows](tests/uv_peel_tool_service_tests.cpp).
+- UV Peel's default-off Smooth Circular Flow option fits branch-safe circular guide sections on
+  connected coplanar quad domains. The analytic radius/angle field is sampled live by CPU surface
+  queries and GPU materials; it adds no geometry and retains ordinary Peel for unsupported sections.
+  Circular metadata participates in geometry identity, preview/history and QGEO persistence.
+  Explicit base-UV rewrites or geometric reshaping clear touched fields; face texture transforms and
+  material changes retain them. Keep CPU edge sampling nonlinear and normal maps based on final UV
+  derivatives. Owner: [circular Peel](src/sdk/core/modeling/src/uv_peel.md); native
+  [lifecycle](tests/uv_peel_tool_service_tests.cpp),
+  [saved-scene GPU](tests/selection_overlay_runtime_tests.cpp) and
+  [normal GPU](tests/render_normal_mapping_runtime_tests.cpp) contracts.
+  Bridge consumers must retain the optional [UV interpolation extension](src/io/bridge/README.md#optional-uv-interpolation-extension)
+  mode and sidecar through storage and vertex remapping: both circular and ordinary quad
+  interiors differ from corner-only triangle UVs. Evaluate the selected correction before
+  material transforms and derive normal directions from final UVs. Decoder refresh alone
+  cannot restore this sampling; [reader fixtures](tests/bridge_reader_tests.cpp) protect it.
 - Guided UV Peel orders selected connected edge guides and walks opposite edges through quads on
   both sides, including front/back bands and quad end caps. Stop at a boundary, non-quad or the
   starting directed edge. Never restrict structured Peel to incident faces or n-gon rim cases.

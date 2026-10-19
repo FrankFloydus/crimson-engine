@@ -223,6 +223,7 @@ struct PreparedSelectionTransformImpl {
   PolygonDocument source;
   std::shared_ptr<const quader_poly::Document> source_document;
   PolygonContentIdentity source_topology_identity;
+  bool has_circular_interpolation = false;
   std::shared_ptr<const std::vector<std::size_t>> vertex_indices;
   std::shared_ptr<const std::vector<VertexPositionUpdate>> source_positions;
   std::shared_ptr<PreparedSelectionTransformWorkState> work_state =
@@ -458,6 +459,22 @@ from_native(const quader_poly::FaceTextureTransform &value) {
   return {.scale = from_native(value.scale),
           .shift_uv = from_native(value.shift_uv),
           .rotation_degrees = value.rotation_degrees};
+}
+
+[[nodiscard]] quader_poly::CircularUvInterpolation
+to_native(const CircularUvInterpolation &value) {
+  return {.center = to_native(value.center),
+          .axis_u = to_native(value.axis_u),
+          .axis_v = to_native(value.axis_v),
+          .uv_from_polar = value.uv_from_polar};
+}
+
+[[nodiscard]] CircularUvInterpolation
+from_native(const quader_poly::CircularUvInterpolation &value) {
+  return {.center = from_native(value.center),
+          .axis_u = from_native(value.axis_u),
+          .axis_v = from_native(value.axis_v),
+          .uv_from_polar = value.uv_from_polar};
 }
 
 [[nodiscard]] bool native_active_selection_matches_snapshot(
@@ -1061,6 +1078,7 @@ apply_operation(PolygonDocumentImpl &impl, Operation operation,
     result.dirty.materials = true;
   }
   if (result.changed) {
+    PolygonDocumentNativeAccess::reconcile_circular_uv_interpolations(*impl.document, document);
     impl.document = std::make_shared<const quader_poly::Document>(
         std::move(document));
     impl.selection = std::make_shared<const quader_poly::Selection>(
@@ -1119,9 +1137,19 @@ evaluate_prepared_selection_transform(
     // a complete document; validation precedes any candidate publication.
     evaluation.positions = std::move(positions);
     auto &candidate = PolygonDocumentNativeAccess::impl(evaluation.document);
-    candidate.document = PolygonDocumentStorage::with_positions(
-        prepared.source_document, prepared.vertex_indices, evaluation.positions,
-        prepared.work_state, prepared.source_topology_identity);
+    if (prepared.has_circular_interpolation) {
+      auto document = source;
+      for (std::size_t i = 0U; i < prepared.vertex_indices->size(); ++i) {
+        document.vertices[(*prepared.vertex_indices)[i]].position =
+            to_native((*evaluation.positions)[i].position);
+      }
+      PolygonDocumentNativeAccess::reconcile_circular_uv_interpolations(source, document);
+      candidate.document = std::make_shared<const quader_poly::Document>(std::move(document));
+    } else {
+      candidate.document = PolygonDocumentStorage::with_positions(
+          prepared.source_document, prepared.vertex_indices, evaluation.positions,
+          prepared.work_state, prepared.source_topology_identity);
+    }
     bump_content(candidate, true);
     prepared.work_state->coordinate_publication_count.fetch_add(
         1U, std::memory_order_relaxed);
@@ -1132,6 +1160,38 @@ evaluate_prepared_selection_transform(
 }
 
 } // namespace
+
+void PolygonDocumentNativeAccess::reconcile_circular_uv_interpolations(
+    const quader_poly::Document &source, quader_poly::Document &replacement) {
+  if (std::none_of(replacement.faces.begin(), replacement.faces.end(),
+      [](const auto &face) { return face.circular_uv_interpolation.has_value(); })) {
+    return;
+  }
+  std::unordered_map<quader_poly::ElementId, const quader_poly::Face *> source_faces;
+  for (const auto &face : source.faces) { source_faces.emplace(face.id, &face); }
+  const quader_poly::document_internal::VertexLookupIndex before(source), after(replacement);
+  for (auto &face : replacement.faces) {
+    if (!face.circular_uv_interpolation.has_value()) { continue; }
+    const auto found = source_faces.find(face.id);
+    bool unchanged = found != source_faces.end();
+    if (unchanged) {
+      const auto &old = *found->second;
+      unchanged = old.vertices == face.vertices && old.uvs.size() == face.uvs.size() &&
+          old.circular_uv_interpolation == face.circular_uv_interpolation;
+      for (std::size_t i = 0U; unchanged && i < face.uvs.size(); ++i) {
+        unchanged = old.uvs[i].x == face.uvs[i].x && old.uvs[i].y == face.uvs[i].y;
+      }
+      for (auto id : face.vertices) {
+        if (!unchanged) { break; }
+        const auto *first = before.find(id), *second = after.find(id);
+        unchanged = first != nullptr && second != nullptr &&
+            first->position.x == second->position.x && first->position.y == second->position.y &&
+            first->position.z == second->position.z;
+      }
+    }
+    if (!unchanged) { face.circular_uv_interpolation.reset(); }
+  }
+}
 
 PolygonDocument::PolygonDocument()
     : impl_(std::make_unique<PolygonDocumentImpl>()) {}
@@ -1475,6 +1535,15 @@ Result<PolygonDocument> PolygonDocument::import_authored_topology(
         ? static_cast<quader_poly::SurfaceShading>(face.shading)
         : native_shading(face.shading);
     native_face.texture_transform = to_native(face.texture_transform);
+    if (face.circular_uv_interpolation.has_value()) {
+      native_face.circular_uv_interpolation = to_native(*face.circular_uv_interpolation);
+      if (!preserve_storage && !quader_poly::valid_circular_uv_interpolation(
+                                   *native_face.circular_uv_interpolation)) {
+        return Result<PolygonDocument>::failure(make_error(
+            ErrorCode::ValidationFailed,
+            "Authored topology contains invalid circular UV interpolation."));
+      }
+    }
     native_face.vertices.reserve(face.vertices.size());
     for (VertexId id : face.vertices) {
       if (id.generation != 1U || (!preserve_storage && !id.valid())) {
@@ -2233,6 +2302,9 @@ Result<AuthoredTopology> PolygonDocument::authored_topology() const {
     authored_face.material_slot = face.material_slot;
     authored_face.shading = static_cast<AuthoredSurfaceShading>(face.normal_shading);
     authored_face.texture_transform = from_native(face.texture_transform);
+    if (face.circular_uv_interpolation.has_value()) {
+      authored_face.circular_uv_interpolation = from_native(*face.circular_uv_interpolation);
+    }
     authored_face.vertices.reserve(face.vertices.size());
     for (quader_poly::ElementId id : face.vertices) {
       authored_face.vertices.push_back(vertex_id(id));
@@ -2290,9 +2362,14 @@ Result<MeshPayload> PolygonDocument::compile_mesh() const {
         .source_vertex = vertex_id(vertex.source_vertex_id),
         .uv_carrier = vertex.uv_carrier,
         .uv_geometric_normal = from_native(vertex.uv_geometric_normal),
+        .circular_uv_index = vertex.circular_uv_index,
     });
   }
   payload.indices = compiled.indices;
+  payload.circular_uv_interpolations.reserve(compiled.circular_uv_interpolations.size());
+  for (const auto &interpolation : compiled.circular_uv_interpolations) {
+    payload.circular_uv_interpolations.push_back(from_native(interpolation));
+  }
   payload.primitives.reserve(compiled.primitives.size());
   for (const quader_poly::CompiledPrimitive &primitive : compiled.primitives) {
     payload.primitives.push_back({
@@ -2719,6 +2796,8 @@ PolygonDocument::prepare_selection_transform() const {
   prepared->source_document = impl_->document.materialized_document();
   prepared->source_topology_identity = impl_->document.topology_identity();
   const auto &source = *prepared->source_document;
+  prepared->has_circular_interpolation = std::any_of(source.faces.begin(), source.faces.end(),
+      [](const auto &face) { return face.circular_uv_interpolation.has_value(); });
   auto selected_ids =
       quader_poly::selected_vertex_ids(source, *impl_->selection);
   std::ranges::sort(selected_ids);
@@ -2888,6 +2967,7 @@ Result<OperationResult> PolygonDocument::set_vertex_positions(
   result.dirty.geometry = true;
   // Position edits keep authored UVs attached to their corners. Faces without
   // authored corners continue to evaluate their procedural mapping.
+  PolygonDocumentNativeAccess::reconcile_circular_uv_interpolations(*impl_->document, document);
   impl_->document =
       std::make_shared<const quader_poly::Document>(std::move(document));
   bump_content(*impl_, true);

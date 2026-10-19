@@ -37,7 +37,7 @@ using ByteSpan = std::span<const std::byte>;
 
 constexpr std::uint16_t kFormatMajor = 1;
 constexpr std::uint16_t kFormatMinor = 0;
-constexpr std::uint16_t kQgeoFormatMinor = 3;
+constexpr std::uint16_t kQgeoFormatMinor = 4;
 constexpr std::uint32_t kNoFlags = 0;
 constexpr std::size_t kQgeoHeaderSize = 56;
 constexpr std::size_t kQpolHeaderSize = 88;
@@ -624,6 +624,10 @@ encode_authored_topology(const PolygonDocument &polygon) {
       require_u32(hard_edges.size(), "Polygon hard-edge count");
   const std::uint32_t soft_edge_count =
       require_u32(soft_edges.size(), "Polygon soft-edge count");
+  const std::uint32_t circular_count = require_u32(
+      static_cast<std::size_t>(std::count_if(document.faces.begin(), document.faces.end(),
+          [](const auto &face) { return face.circular_uv_interpolation.has_value(); })),
+      "Circular UV interpolation count");
 
   std::uint64_t corner_count = 0;
   std::uint64_t uv_count = 0;
@@ -678,6 +682,10 @@ encode_authored_topology(const PolygonDocument &polygon) {
       "Authored topology");
   total_size = require_add(
       total_size, require_multiply(face_count, 20, "Face texture transforms"),
+      "Authored topology");
+  total_size = require_add(total_size, 4U, "Circular UV interpolation count");
+  total_size = require_add(total_size,
+      require_multiply(circular_count, 56U, "Circular UV interpolations"),
       "Authored topology");
   if (total_size > kMaxPayloadSize) {
     invalid_document("Authored topology exceeds the binary size limit.");
@@ -751,6 +759,23 @@ encode_authored_topology(const PolygonDocument &polygon) {
     writer.write_f32(face.texture_transform.shift_uv.y);
     writer.write_f32(face.texture_transform.rotation_degrees);
   }
+  writer.write_u32(circular_count);
+  for (std::uint32_t index = 0U; index < face_count; ++index) {
+    const auto &interpolation = document.faces[index].circular_uv_interpolation;
+    if (!interpolation.has_value()) {
+      continue;
+    }
+    writer.write_u32(index);
+    for (const auto vector : {interpolation->center, interpolation->axis_u,
+                              interpolation->axis_v}) {
+      writer.write_f32(vector.x);
+      writer.write_f32(vector.y);
+      writer.write_f32(vector.z);
+    }
+    for (const float coefficient : interpolation->uv_from_polar) {
+      writer.write_f32(coefficient);
+    }
+  }
   if (writer.size() != total_size) {
     throw std::logic_error("Authored topology size calculation drifted.");
   }
@@ -823,6 +848,14 @@ encode_authored_topology(const PolygonDocument &polygon) {
                                            "face texture transforms"),
                           "face texture transforms")
       : ByteSpan{};
+  const std::uint32_t circular_count = minor >= 4U
+      ? reader.read_u32("circular UV interpolation count") : 0U;
+  if (circular_count > face_count) {
+    malformed("Circular UV interpolation count exceeds the face count.");
+  }
+  const ByteSpan circular_records = reader.read_bytes(
+      require_multiply(circular_count, 56U, "circular UV interpolations"),
+      "circular UV interpolations");
   reader.require_end("Authored topology");
 
   if (read_u32_at(face_offsets, 0, "first face offset") != 0 ||
@@ -904,6 +937,31 @@ encode_authored_topology(const PolygonDocument &polygon) {
     }
     previous_corner_offset = corner_end;
     previous_uv_offset = uv_end;
+  }
+
+  ByteReader circular_reader(circular_records);
+  std::unordered_set<std::uint32_t> circular_faces;
+  for (std::uint32_t index = 0U; index < circular_count; ++index) {
+    const auto face_index = circular_reader.read_u32("circular UV face index");
+    if (face_index >= face_count || !circular_faces.insert(face_index).second) {
+      malformed("Circular UV interpolation has an invalid or repeated face index.");
+    }
+    const auto vector = [&]() {
+      // Reads advance the cursor. Sequence them before invoking the vector
+      // constructor so optimized toolchains cannot reverse component order.
+      const float x = circular_reader.read_f32("circular UV vector x");
+      const float y = circular_reader.read_f32("circular UV vector y");
+      const float z = circular_reader.read_f32("circular UV vector z");
+      return quader::QVec3{x, y, z};
+    };
+    quader_poly::CircularUvInterpolation interpolation;
+    interpolation.center = vector();
+    interpolation.axis_u = vector();
+    interpolation.axis_v = vector();
+    for (auto &coefficient : interpolation.uv_from_polar) {
+      coefficient = circular_reader.read_f32("circular UV coefficient");
+    }
+    document.faces[face_index].circular_uv_interpolation = interpolation;
   }
 
   document.hard_normal_edges.reserve(hard_edge_count);

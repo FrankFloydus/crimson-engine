@@ -137,8 +137,15 @@ public:
   [[nodiscard]] static Result<OperationResult>
   validate_authored_topology(const PolygonDocument &document);
 
+  static void reconcile_circular_uv_interpolations(
+      const quader_poly::Document &source, quader_poly::Document &replacement);
+
   static void replace_document(PolygonDocument &document,
-                               quader_poly::Document replacement) {
+                               quader_poly::Document replacement,
+                               bool preserve_circular = false) {
+    if (!preserve_circular) {
+      reconcile_circular_uv_interpolations(*document.impl_->document, replacement);
+    }
     document.impl_->document =
         std::make_shared<const quader_poly::Document>(std::move(replacement));
   }

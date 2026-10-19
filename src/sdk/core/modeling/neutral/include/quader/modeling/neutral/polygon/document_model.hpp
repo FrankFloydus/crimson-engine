@@ -11,7 +11,9 @@
 #include "math/types/qvec2.hpp"
 #include "math/types/qvec3.hpp"
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -99,6 +101,31 @@ struct FaceTextureTransform {
 /**
  * Represents a Face value used by the polygon document and mesh editing core.
  */
+/**
+ * Adds a live polar correction to corner UV interpolation. The two independent
+ * local covectors project (position - center) into the polar plane. Row-major
+ * coefficients map (radius, angle in radians) to base UV. The correction uses
+ * exact features minus interpolated corner features, so authored corners stay
+ * unchanged and no extra geometry is required.
+ */
+struct CircularUvInterpolation {
+  quader::QVec3 center{};
+  quader::QVec3 axis_u{1.0F, 0.0F, 0.0F};
+  quader::QVec3 axis_v{0.0F, 0.0F, 1.0F};
+  std::array<float, 4> uv_from_polar{};
+
+  friend bool operator==(const CircularUvInterpolation &left,
+                         const CircularUvInterpolation &right) noexcept {
+    return left.center.x == right.center.x && left.center.y == right.center.y &&
+           left.center.z == right.center.z && left.axis_u.x == right.axis_u.x &&
+           left.axis_u.y == right.axis_u.y && left.axis_u.z == right.axis_u.z &&
+           left.axis_v.x == right.axis_v.x && left.axis_v.y == right.axis_v.y &&
+           left.axis_v.z == right.axis_v.z &&
+           left.uv_from_polar == right.uv_from_polar;
+  }
+};
+
+/// Retains one authored polygon loop, corner UVs and optional live polar sampling.
 struct Face {
   ElementId id = kInvalidElementId;
   std::vector<ElementId> vertices;
@@ -106,6 +133,7 @@ struct Face {
   std::uint32_t material_slot = 0;
   SurfaceShading normal_shading = SurfaceShading::Authored;
   FaceTextureTransform texture_transform{};
+  std::optional<CircularUvInterpolation> circular_uv_interpolation;
 };
 
 /**

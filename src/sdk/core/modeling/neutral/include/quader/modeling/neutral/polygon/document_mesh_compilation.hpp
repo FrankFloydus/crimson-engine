@@ -28,6 +28,8 @@ struct CompiledVertex {
     // Linear authored carrier after face rotation/scale, in row-major order.
     std::array<float, 4> uv_carrier{};
     quader::QVec3 uv_geometric_normal { 0.0F, 1.0F, 0.0F };
+    // One-based index into CompiledMesh::circular_uv_interpolations; zero is off.
+    std::uint32_t circular_uv_index = 0U;
 };
 
 /**
@@ -46,6 +48,7 @@ struct CompiledMesh {
     std::vector<CompiledVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<CompiledPrimitive> primitives;
+    std::vector<CircularUvInterpolation> circular_uv_interpolations;
 };
 
 /**

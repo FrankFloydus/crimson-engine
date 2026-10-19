@@ -19215,7 +19215,7 @@
         }
       },
       "before": "3d3e4703d1dd4095fc5b0132e978f576",
-      "after": "59953e2cd0dac31fdb71da28217c2ebe",
+      "after": "4f80f42641ae8224737b8e36922d4b8d",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "0841bd9c156df058e5903a2a1993aaa1",
@@ -19237,7 +19237,7 @@
         "overlay": "41730457b421df6a8b9c97e135b6797c",
         "assets": "0abc1708803e7a4defbbe03642722718",
         "history": "149456ac50c57b034878e2c8e60ec8de",
-        "tools": "2cf7bb7405140c3480f74b655babc95c",
+        "tools": "db402eefbf9ec68fb74d79f558ea0b7c",
         "viewports": "bb59fa31f85b844ec4d9366ddbddf244",
         "preferences": "93870a39a1b610fd90e1744bdcde7acd",
         "revisions": "4764de9c0ff82808e87db9909b470a50"
@@ -26453,7 +26453,7 @@
         }
       },
       "before": "eeb20de0ce5746bbad820cfcf623ab81",
-      "after": "a1221388864bfc7755115321c3cd9800",
+      "after": "5b3082b878cdad0a72a330bcc017b3c9",
       "before_domains": {
         "documents": "bf55a0979f4e8f42bf6db8dff9e504ac",
         "scene": "c73228a4ba86247653c14cb6d2cad553",
@@ -26475,7 +26475,7 @@
         "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "96e40f1f5d472496c9d99f83cdb2c9b3",
         "history": "0147e55dc7a5afa94125bb23b5c6bd24",
-        "tools": "12b820eb399674928e0b73519769e4f7",
+        "tools": "5e1526563ed41878847b7cd51c575945",
         "viewports": "c03d9cfce199b652ea91adfae375a4a9",
         "preferences": "93870a39a1b610fd90e1744bdcde7acd",
         "revisions": "5cc1a62a5c640188edb7c3dca2782f47"
@@ -27326,5 +27326,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Add the Full-only Stairs & Ramps creation tool"
+  "approved_change_reason": "Expose optional separate walking-surface output for Stairs & Ramps"
 }

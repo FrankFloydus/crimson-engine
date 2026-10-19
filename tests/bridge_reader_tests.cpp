@@ -8,6 +8,7 @@
 #include "assets/material_document.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/projection/mesh_projection_service.hpp"
 #include "io/bridge/quader_bridge_reader.hpp"
 #include "io/project/project_manifest.hpp"
 #include "io/project/qmat_codec.hpp"
@@ -21,13 +22,17 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
+#include <quader/modeling/neutral/geometry/quad_uv_interpolation.hpp>
+#include <quader/modeling/modeling.hpp>
 #include <QImage>
 #include <QColor>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -36,6 +41,7 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -182,6 +188,248 @@ SceneContentDocument make_document(bool mixed_materials = false,
   }
   EXPECT_TRUE(document.scene().set_material(entity, std::move(binding)));
   return document;
+}
+
+/// Couples the saved fixture with its independent signed radial UV expectation.
+struct CircularBridgeFixture {
+  SceneContentDocument document;
+  double v_radius{};
+};
+
+CircularBridgeFixture make_circular_bridge_fixture() {
+  namespace qm = quader::modeling;
+  qm::AuthoredTopology topology;
+  for (std::uint32_t station = 0u; station < 3u; ++station) {
+    const float angle = .2f * static_cast<float>(station);
+    for (std::uint32_t rail = 0u; rail < 3u; ++rail) {
+      const float radius = static_cast<float>(rail + 1u);
+      topology.vertices.push_back({qm::make_id<qm::VertexTag>(station * 3u + rail + 1u),
+          {radius * std::cos(angle), 0.0f, radius * std::sin(angle)}});
+    }
+  }
+  for (std::uint32_t station = 0u; station < 2u; ++station) {
+    for (std::uint32_t rail = 0u; rail < 2u; ++rail) {
+      const auto first = station * 3u + rail + 1u;
+      topology.faces.push_back({.id = qm::make_id<qm::FaceTag>(station * 2u + rail + 1u),
+          .vertices = {qm::make_id<qm::VertexTag>(first), qm::make_id<qm::VertexTag>(first + 3u),
+                       qm::make_id<qm::VertexTag>(first + 4u), qm::make_id<qm::VertexTag>(first + 1u)}});
+    }
+  }
+  topology.vertices.insert(topology.vertices.end(), {
+      {qm::make_id<qm::VertexTag>(10u), {4.0f, 0.0f, 0.0f}},
+      {qm::make_id<qm::VertexTag>(11u), {4.0f, 0.0f, 1.0f}},
+      {qm::make_id<qm::VertexTag>(12u), {5.0f, 0.0f, 0.0f}}});
+  topology.faces.push_back({.id = qm::make_id<qm::FaceTag>(5u),
+      .vertices = {qm::make_id<qm::VertexTag>(10u), qm::make_id<qm::VertexTag>(11u),
+                   qm::make_id<qm::VertexTag>(12u)}, .material_slot = 1u});
+  topology.next_vertex_id = 13u;
+  topology.next_face_id = 6u;
+  auto source = qm::PolygonDocument::from_authored_topology(topology).or_throw();
+  const qm::UvPeelTarget target{.key = 1u, .document = &source,
+      .edges = {qm::make_edge_key(qm::make_id<qm::VertexTag>(2u), qm::make_id<qm::VertexTag>(5u)),
+                qm::make_edge_key(qm::make_id<qm::VertexTag>(5u), qm::make_id<qm::VertexTag>(8u))}};
+  qm::UvPeelOptions options;
+  options.smooth_circular_flow = true;
+  auto peeled = qm::prepare_uv_peel(std::span(&target, 1u), options).or_throw()
+                    .documents.front().document;
+  const double v_radius = -peeled.authored_topology().or_throw().faces.front().uvs.front().y;
+  EXPECT_NEAR(std::abs(v_radius), .5, 1e-6);
+  std::vector<qm::FaceTextureTransformUpdate> transforms;
+  for (std::uint32_t id = 1u; id <= 4u; ++id) {
+    transforms.push_back({.face = qm::make_id<qm::FaceTag>(id), .scale_x = 2.0f,
+        .scale_y = .5f, .shift_x = .3f, .shift_y = -.2f, .rotation_degrees = 30.0f});
+  }
+  (void)peeled.set_face_texture_transforms(transforms).or_throw();
+  auto projected = MeshProjectionService::compile_sdk_document_mesh(peeled);
+  if (!projected.has_value()) throw std::runtime_error("Could not project circular bridge fixture.");
+  auto document = make_document();
+  EXPECT_TRUE(document.assets().replace_mesh(10u, std::move(*projected)));
+  EXPECT_EQ(document.assets().add_material(30u, make_default_quader_material("Ordinary triangle")), 30u);
+  MaterialComponent binding{.material = 20u};
+  binding.material_slots.emplace(1u, MaterialReference{30u});
+  EXPECT_TRUE(document.scene().set_material(100u, std::move(binding)));
+  return {std::move(document), v_radius};
+}
+
+/// Computes the intended curved field from physical radius/angle, not bridge metadata.
+std::array<double, 2> circular_bridge_expected_uv(double x, double z, double v_radius) {
+  const double u = (std::sin(.1) / .1) * std::atan2(z, x);
+  const double v = v_radius * (std::hypot(x, z) - 2.0);
+  const double sine = .5, cosine = std::sqrt(3.0) * .5;
+  return {.3 + (cosine * u - sine * v) / 2.0,
+          -.2 + (sine * u + cosine * v) / .5};
+}
+
+void expect_circular_bridge_samples(const QuaderBridgeMeshView &mesh,
+    const QuaderBridgeMeshUvInterpolationView &sampling, double v_radius,
+    bool translated_sampling = false) {
+  ASSERT_EQ(mesh.vertex_count, 19u);
+  ASSERT_EQ(mesh.index_count, 27u);
+  ASSERT_EQ(sampling.vertex_count, mesh.vertex_count);
+  ASSERT_NE(sampling.vertices, nullptr);
+  ASSERT_EQ(mesh.surface_count, 2u);
+  EXPECT_EQ(mesh.surfaces[0].index_count, 24u);
+  EXPECT_EQ(mesh.surfaces[1].index_count, 3u);
+  EXPECT_NE(mesh.surfaces[0].material_index, mesh.surfaces[1].material_index);
+  for (std::uint32_t vertex = 0u; vertex < mesh.vertex_count; ++vertex) {
+    const auto &entry = sampling.vertices[vertex];
+    if (vertex >= 16u) {
+      EXPECT_EQ(entry.mode, QUADER_BRIDGE_UV_INTERPOLATION_NONE);
+      for (std::size_t axis = 0u; axis < 4u; ++axis) {
+        EXPECT_FLOAT_EQ(entry.coordinates[axis], 0.0f);
+        EXPECT_FLOAT_EQ(entry.correction[axis], 0.0f);
+      }
+    } else {
+      EXPECT_EQ(entry.mode, QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR);
+      EXPECT_NEAR(entry.coordinates[2], std::hypot(mesh.vertices[vertex].position[0],
+                                                 mesh.vertices[vertex].position[2]), 2e-5);
+      EXPECT_NEAR(entry.coordinates[3], std::atan2(entry.coordinates[1], entry.coordinates[0]), 1e-6);
+      EXPECT_NEAR(entry.correction[0], -.25 * v_radius, 2e-5);
+      EXPECT_NEAR(entry.correction[2], std::sqrt(3.0) * v_radius, 2e-5);
+    }
+  }
+  constexpr std::array<double, 3> kWeights{.2, .35, .45};
+  double maximum_correction = 0.0;
+  for (std::uint32_t offset = 0u; offset < mesh.index_count; offset += 3u) {
+    std::array<double, 3> position{};
+    std::array<double, 2> uv{};
+    std::array<double, 4> coordinate{};
+    for (std::size_t corner = 0u; corner < 3u; ++corner) {
+      const auto index = mesh.indices[offset + corner];
+      ASSERT_LT(index, mesh.vertex_count);
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        position[axis] += kWeights[corner] * mesh.vertices[index].position[axis];
+      }
+      for (std::size_t axis = 0u; axis < 2u; ++axis) {
+        uv[axis] += kWeights[corner] * mesh.vertices[index].uv[axis];
+      }
+      for (std::size_t axis = 0u; axis < 4u; ++axis) {
+        coordinate[axis] += kWeights[corner] * sampling.vertices[index].coordinates[axis];
+      }
+    }
+    const auto &a = mesh.vertices[mesh.indices[offset]];
+    const auto &b = mesh.vertices[mesh.indices[offset + 1u]];
+    const auto &c = mesh.vertices[mesh.indices[offset + 2u]];
+    const double winding_y = (b.position[2] - a.position[2]) * (c.position[0] - a.position[0]) -
+                             (b.position[0] - a.position[0]) * (c.position[2] - a.position[2]);
+    EXPECT_GT(winding_y, 0.0);
+    if (offset >= 24u) continue;
+    const auto &field = sampling.vertices[mesh.indices[offset]];
+    const double radius_delta = std::hypot(coordinate[0], coordinate[1]) - coordinate[2];
+    const double angle_delta = std::atan2(coordinate[1], coordinate[0]) - coordinate[3];
+    const std::array<double, 2> correction{
+        field.correction[0] * radius_delta + field.correction[1] * angle_delta,
+        field.correction[2] * radius_delta + field.correction[3] * angle_delta};
+    auto expected = circular_bridge_expected_uv(position[0], position[2], v_radius);
+    const auto anchor = circular_bridge_expected_uv(a.position[0], a.position[2], v_radius);
+    if (translated_sampling) {
+      expected[0] += a.uv[0] - anchor[0];
+      expected[1] += a.uv[1] - anchor[1];
+      EXPECT_GT(std::hypot(a.uv[0] - anchor[0], a.uv[1] - anchor[1]), 1e-3);
+    }
+    EXPECT_NEAR(uv[0] + correction[0], expected[0], 3e-5);
+    EXPECT_NEAR(uv[1] + correction[1], expected[1], 3e-5);
+    maximum_correction = std::max(maximum_correction, std::hypot(correction[0], correction[1]));
+  }
+  EXPECT_GT(maximum_correction, 1e-4);
+}
+
+MeshAsset make_quad_bridge_mesh(bool affine_uv = false, bool nonplanar = false) {
+  quader_poly::Document document;
+  document.next_vertex_id = 5u;
+  document.next_face_id = 2u;
+  document.vertices = {
+      {.id = 1u, .position = {0.0f, 0.0f, 0.0f}},
+      {.id = 2u, .position = {2.0f, 0.0f, 0.0f}},
+      {.id = 3u, .position = {1.5f, 1.0f, nonplanar ? .2f : 0.0f}},
+      {.id = 4u, .position = {0.0f, 1.0f, 0.0f}}};
+  document.faces = {{.id = 1u, .vertices = {1u, 2u, 3u, 4u},
+      .uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {affine_uv ? .75f : 1.25f, 1.0f},
+              {0.0f, 1.0f}}}};
+  auto mesh = MeshProjectionService::compile_polygon_document_mesh(document);
+  mesh.replace_authored_polygon_document(std::move(document));
+  return mesh;
+}
+
+void expect_quad_bridge_samples(const QuaderBridgeMeshView &mesh,
+                                const QuaderBridgeMeshUvInterpolationView &sampling,
+                                const MeshGeometryPayload &source) {
+  ASSERT_EQ(mesh.vertex_count, 4u);
+  ASSERT_EQ(mesh.index_count, 6u);
+  ASSERT_EQ(mesh.surface_count, 1u);
+  EXPECT_EQ(mesh.collision_point_count, 6u);
+  ASSERT_EQ(sampling.vertex_count, mesh.vertex_count);
+  ASSERT_NE(sampling.vertices, nullptr);
+  ASSERT_EQ(source.vertices.size(), mesh.vertex_count);
+  ASSERT_EQ(source.indices.size(), mesh.index_count);
+  const std::array<double, 2> phase{
+      mesh.vertices[0].uv[0] - source.vertices[0].uv.x,
+      mesh.vertices[0].uv[1] - source.vertices[0].uv.y};
+  EXPECT_GT(std::hypot(phase[0], phase[1]), 1e-3);
+  for (std::uint32_t index = 0u; index < mesh.vertex_count; ++index) {
+    const auto &vertex = mesh.vertices[index];
+    EXPECT_EQ(sampling.vertices[index].mode, QUADER_BRIDGE_UV_INTERPOLATION_QUAD);
+    EXPECT_FLOAT_EQ(sampling.vertices[index].coordinates[3], 1.0f);
+    EXPECT_FLOAT_EQ(vertex.position[0], source.vertices[index].position.x);
+    EXPECT_FLOAT_EQ(vertex.position[1], source.vertices[index].position.y);
+    EXPECT_FLOAT_EQ(vertex.position[2], source.vertices[index].position.z);
+    EXPECT_NEAR(vertex.uv[0] - source.vertices[index].uv.x, phase[0], 1e-6);
+    EXPECT_NEAR(vertex.uv[1] - source.vertices[index].uv.y, phase[1], 1e-6);
+  }
+  for (std::uint32_t index = 0u; index < mesh.index_count; ++index) {
+    EXPECT_EQ(mesh.indices[index], source.indices[index]);
+  }
+  double maximum_correction = 0.0;
+  for (const double s : {.0, .17, .5, .83, 1.0}) {
+    for (const double t : {.0, .23, .5, .79, 1.0}) {
+      // Forward bilinear geometry is x=2s-.5st,y=t, and the authored UV
+      // field is U=s+.25st,V=t. This expectation uses neither packed warp
+      // coefficients nor the production inverse-coordinate preparation.
+      const double x = 2.0 * s - .5 * s * t;
+      const double y = t;
+      const std::array<double, 2> expected{s + .25 * s * t + phase[0], t + phase[1]};
+      bool sampled = false;
+      for (std::uint32_t offset = 0u; offset < mesh.index_count; offset += 3u) {
+        const auto &a = mesh.vertices[mesh.indices[offset]];
+        const auto &b = mesh.vertices[mesh.indices[offset + 1u]];
+        const auto &c = mesh.vertices[mesh.indices[offset + 2u]];
+        const double ab_x = b.position[0] - a.position[0];
+        const double ab_y = b.position[1] - a.position[1];
+        const double ac_x = c.position[0] - a.position[0];
+        const double ac_y = c.position[1] - a.position[1];
+        const double determinant = ab_x * ac_y - ab_y * ac_x;
+        ASSERT_GT(determinant, 0.0);
+        const double wb = ((x - a.position[0]) * ac_y - (y - a.position[1]) * ac_x) / determinant;
+        const double wc = (ab_x * (y - a.position[1]) - ab_y * (x - a.position[0])) / determinant;
+        const std::array<double, 3> weights{1.0 - wb - wc, wb, wc};
+        if (std::ranges::any_of(weights, [](double weight) { return weight < -1e-7; })) continue;
+        std::array<double, 2> uv{};
+        std::array<double, 3> coordinates{};
+        for (std::size_t corner = 0u; corner < weights.size(); ++corner) {
+          const auto index = mesh.indices[offset + corner];
+          for (std::size_t axis = 0u; axis < uv.size(); ++axis) {
+            uv[axis] += weights[corner] * mesh.vertices[index].uv[axis];
+          }
+          for (std::size_t axis = 0u; axis < coordinates.size(); ++axis) {
+            coordinates[axis] += weights[corner] * sampling.vertices[index].coordinates[axis];
+          }
+        }
+        const auto &field = sampling.vertices[mesh.indices[offset]];
+        const auto actual = quader_geometry::evaluate_quad_uv_interpolation(
+            {static_cast<float>(uv[0]), static_cast<float>(uv[1])},
+            {static_cast<float>(coordinates[0]), static_cast<float>(coordinates[1]),
+             static_cast<float>(coordinates[2])},
+            {field.correction[0], field.correction[1]},
+            {field.correction[2], field.correction[3]});
+        EXPECT_NEAR(actual.x, expected[0], 3e-6);
+        EXPECT_NEAR(actual.y, expected[1], 3e-6);
+        maximum_correction = std::max(maximum_correction, std::hypot(actual.x - uv[0], actual.y - uv[1]));
+        sampled = true;
+      }
+      EXPECT_TRUE(sampled);
+    }
+  }
+  EXPECT_GT(maximum_correction, .01);
 }
 
 /// Creates deterministic authored lights independently of any renderer mapping.
@@ -423,6 +671,167 @@ TEST_F(BridgeReaderTests, RejectsUnsupportedAbiAndInvalidArguments) {
   api_->release_project(nullptr);
   api_->release_scene(nullptr);
   api_->release_blob(nullptr);
+}
+
+TEST_F(BridgeReaderTests, OptionalUvInterpolationExtensionKeepsCoreAbiAndOrdinaryMeshesEmpty) {
+  EXPECT_EQ(QUADER_BRIDGE_ABI_VERSION, 6u);
+  EXPECT_EQ(quader_bridge_get_uv_interpolation_api(0u), nullptr);
+  EXPECT_EQ(quader_bridge_get_uv_interpolation_api(
+      QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION + 1u), nullptr);
+  const auto *extension = quader_bridge_get_uv_interpolation_api(
+      QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION);
+  ASSERT_NE(extension, nullptr);
+  EXPECT_EQ(extension->abi_version, 1u);
+  EXPECT_EQ(extension->struct_size, sizeof(QuaderBridgeUvInterpolationApi));
+  ASSERT_NE(extension->mesh_uv_interpolation_view, nullptr);
+  QuaderBridgeMeshUvInterpolationView view{};
+  EXPECT_EQ(extension->mesh_uv_interpolation_view(nullptr, 0u, &view, &error_), 0);
+  EXPECT_NE(error_.message[0], '\0');
+  add_scene(kFirstScene, "Scenes/first.qdr", make_document());
+  open_project();
+  open_scene();
+  ASSERT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, &view, &error_), 1)
+      << error_.message;
+  EXPECT_EQ(view.vertex_count, 0u);
+  EXPECT_EQ(view.vertices, nullptr);
+  EXPECT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, nullptr, &error_), 0);
+  EXPECT_EQ(extension->mesh_uv_interpolation_view(scene_, 1u, &view, &error_), 0);
+  EXPECT_EQ(extension->mesh_uv_interpolation_view(nullptr, 0u, nullptr, nullptr), 0);
+}
+
+TEST_F(BridgeReaderTests, QuadUvExtensionPreservesBilinearInteriorsThroughMappedMirroredOccurrences) {
+  auto document = make_document();
+  auto mesh_asset = make_quad_bridge_mesh();
+  ASSERT_TRUE(mesh_asset.has_authored_polygon_document);
+  ASSERT_EQ(mesh_asset.authored_polygon_document->faces.front().vertices.size(), 4u);
+  const MeshGeometryPayload expected = mesh_asset.geometry();
+  ASSERT_TRUE(document.assets().replace_mesh(10u, std::move(mesh_asset)));
+  auto &source = document.scene();
+  ASSERT_EQ(source.create_entity_with_id(200u, "Quad definition", EntityKind::Generic), 200u);
+  ASSERT_TRUE(source.set_parent(100u, 200u, false));
+  ASSERT_TRUE(source.set_instance_definition(200u));
+  ASSERT_EQ(source.create_entity_with_id(202u, "Quad occurrence", EntityKind::Instance), 202u);
+  ASSERT_TRUE(source.set_instance_occurrence(202u, InstanceOccurrenceComponent{.definition = 200u}));
+  ASSERT_TRUE(source.set_transform(202u, TransformComponent{
+      .location = {8.0f, 3.0f, 4.0f}, .scale = {-1.0f, 2.0f, 1.0f}}));
+  TextureMappingComponent member_mapping, occurrence_mapping;
+  member_mapping.sampling_from_local.values[12] = 1.0f;
+  occurrence_mapping.sampling_from_local.values[12] = 2.0f;
+  ASSERT_TRUE(source.set_texture_mapping(100u, member_mapping));
+  ASSERT_TRUE(source.set_texture_mapping(202u, occurrence_mapping));
+  add_scene(kFirstScene, "Scenes/quad.qdr", document);
+  open_project();
+  open_scene();
+  const auto *extension = quader_bridge_get_uv_interpolation_api(
+      QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION);
+  ASSERT_NE(extension, nullptr);
+  QuaderBridgeMeshView mesh{};
+  QuaderBridgeMeshUvInterpolationView sampling{};
+  ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh, &error_), 1) << error_.message;
+  ASSERT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, &sampling, &error_), 1)
+      << error_.message;
+  EXPECT_EQ(mesh.display_entity, 202u);
+  EXPECT_EQ(mesh.geometry_entity, 100u);
+  EXPECT_FLOAT_EQ(mesh.transform[0], -1.0f);
+  EXPECT_FLOAT_EQ(mesh.transform[5], 2.0f);
+  EXPECT_FLOAT_EQ(mesh.transform[12], 8.0f);
+  expect_quad_bridge_samples(mesh, sampling, expected);
+}
+
+TEST_F(BridgeReaderTests, QuadUvExtensionKeepsAffineAndNonplanarFacesOnTriangleSampling) {
+  auto document = make_document();
+  ASSERT_TRUE(document.assets().replace_mesh(10u, make_quad_bridge_mesh(true)));
+  ASSERT_EQ(document.assets().add_mesh(11u, make_quad_bridge_mesh(false, true)), 11u);
+  ASSERT_EQ(document.scene().create_entity_with_id(101u, "Nonplanar quad", EntityKind::Mesh), 101u);
+  ASSERT_TRUE(document.scene().set_mesh(101u, MeshComponent{.mesh = 11u}));
+  add_scene(kFirstScene, "Scenes/fallback.qdr", document);
+  open_project();
+  open_scene();
+  QuaderBridgeSceneView scene{};
+  ASSERT_EQ(api_->scene_view(scene_, &scene, &error_), 1) << error_.message;
+  ASSERT_EQ(scene.mesh_count, 2u);
+  const auto *extension = quader_bridge_get_uv_interpolation_api(
+      QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION);
+  ASSERT_NE(extension, nullptr);
+  for (std::uint32_t index = 0u; index < scene.mesh_count; ++index) {
+    QuaderBridgeMeshView mesh{};
+    QuaderBridgeMeshUvInterpolationView sampling{};
+    ASSERT_EQ(api_->mesh_view(scene_, index, &mesh, &error_), 1) << error_.message;
+    ASSERT_EQ(extension->mesh_uv_interpolation_view(scene_, index, &sampling, &error_), 1)
+        << error_.message;
+    EXPECT_EQ(mesh.vertex_count, 4u);
+    EXPECT_EQ(mesh.index_count, 6u);
+    EXPECT_EQ(sampling.vertex_count, 0u);
+    EXPECT_EQ(sampling.vertices, nullptr);
+  }
+}
+
+TEST_F(BridgeReaderTests, CircularUvExtensionPreservesAnalyticSamplingGeometryAndBorrowedLifetime) {
+  auto fixture = make_circular_bridge_fixture();
+  add_scene(kFirstScene, "Scenes/first.qdr", fixture.document);
+  open_project();
+  open_scene();
+  const auto *extension = quader_bridge_get_uv_interpolation_api(
+      QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION);
+  ASSERT_NE(extension, nullptr);
+  QuaderBridgeMeshView mesh{};
+  QuaderBridgeMeshUvInterpolationView sampling{};
+  ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh, &error_), 1) << error_.message;
+  ASSERT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, &sampling, &error_), 1)
+      << error_.message;
+  expect_circular_bridge_samples(mesh, sampling, fixture.v_radius);
+  EXPECT_EQ(mesh.collision_point_count, 27u);
+  const auto *borrowed = sampling.vertices;
+  const auto first = sampling.vertices[0];
+  api_->release_project(std::exchange(project_, nullptr));
+  QuaderBridgeSceneView scene_view{};
+  ASSERT_EQ(api_->scene_view(scene_, &scene_view, &error_), 1);
+  QuaderBridgeMeshUvInterpolationView retained{};
+  ASSERT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, &retained, &error_), 1);
+  EXPECT_EQ(retained.vertices, borrowed);
+  EXPECT_EQ(retained.vertex_count, mesh.vertex_count);
+  for (std::size_t axis = 0u; axis < 4u; ++axis) {
+    EXPECT_FLOAT_EQ(retained.vertices[0].coordinates[axis], first.coordinates[axis]);
+    EXPECT_FLOAT_EQ(retained.vertices[0].correction[axis], first.correction[axis]);
+  }
+  expect_circular_bridge_samples(mesh, retained, fixture.v_radius);
+}
+
+TEST_F(BridgeReaderTests, CircularUvExtensionRetainsLocalSamplingThroughMirroredMappedOccurrences) {
+  auto fixture = make_circular_bridge_fixture();
+  auto &source = fixture.document.scene();
+  ASSERT_EQ(source.create_entity_with_id(200u, "Circular definition", EntityKind::Generic), 200u);
+  ASSERT_TRUE(source.set_parent(100u, 200u, false));
+  ASSERT_TRUE(source.set_instance_definition(200u));
+  ASSERT_EQ(source.create_entity_with_id(202u, "Circular occurrence", EntityKind::Instance), 202u);
+  ASSERT_TRUE(source.set_instance_occurrence(202u, InstanceOccurrenceComponent{.definition = 200u}));
+  ASSERT_TRUE(source.set_transform(202u, TransformComponent{
+      .location = {8.0f, 3.0f, 4.0f}, .scale = {-1.0f, 2.0f, 1.0f}}));
+  TextureMappingComponent member_mapping, occurrence_mapping;
+  member_mapping.sampling_from_local.values[12] = 1.0f;
+  occurrence_mapping.sampling_from_local.values[12] = 2.0f;
+  ASSERT_TRUE(source.set_texture_mapping(100u, member_mapping));
+  ASSERT_TRUE(source.set_texture_mapping(202u, occurrence_mapping));
+  add_scene(kFirstScene, "Scenes/first.qdr", fixture.document);
+  open_project();
+  open_scene();
+  QuaderBridgeSceneView scene_view{};
+  ASSERT_EQ(api_->scene_view(scene_, &scene_view, &error_), 1);
+  ASSERT_EQ(scene_view.mesh_count, 1u);
+  QuaderBridgeMeshView mesh{};
+  QuaderBridgeMeshUvInterpolationView sampling{};
+  ASSERT_EQ(api_->mesh_view(scene_, 0u, &mesh, &error_), 1) << error_.message;
+  const auto *extension = quader_bridge_get_uv_interpolation_api(
+      QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION);
+  ASSERT_NE(extension, nullptr);
+  ASSERT_EQ(extension->mesh_uv_interpolation_view(scene_, 0u, &sampling, &error_), 1)
+      << error_.message;
+  EXPECT_EQ(mesh.display_entity, 202u);
+  EXPECT_EQ(mesh.geometry_entity, 100u);
+  EXPECT_FLOAT_EQ(mesh.transform[0], -1.0f);
+  EXPECT_FLOAT_EQ(mesh.transform[5], 2.0f);
+  EXPECT_FLOAT_EQ(mesh.transform[12], 8.0f);
+  expect_circular_bridge_samples(mesh, sampling, fixture.v_radius, true);
 }
 
 TEST_F(BridgeReaderTests, ParentingCompensationExportsCompleteAffineMeshAndLightTransforms) {

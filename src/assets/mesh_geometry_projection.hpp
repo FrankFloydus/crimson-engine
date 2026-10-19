@@ -44,11 +44,18 @@ struct MeshGeometryProjection final {
                            : std::span<const MeshPrimitiveSpan>{};
   }
 
+  [[nodiscard]] std::span<const quader_poly::CircularUvInterpolation>
+  circular_uv_interpolations() const noexcept {
+    return source_geometry ? std::span<const quader_poly::CircularUvInterpolation>(source_geometry->circular_uv_interpolations)
+                           : std::span<const quader_poly::CircularUvInterpolation>{};
+  }
+
   [[nodiscard]] MeshGeometryContentId content_id() const noexcept {
     std::uint64_t hash = content_id_.load(std::memory_order_acquire);
     if (hash != 0u) return {hash};
     hash = MeshGeometryPayload::content_id_for(vertices(), indices(), primitives(),
-        positions ? std::span<const QVec3>(*positions) : std::span<const QVec3>{}).value;
+        positions ? std::span<const QVec3>(*positions) : std::span<const QVec3>{},
+        circular_uv_interpolations()).value;
     std::uint64_t expected = 0u;
     if (!content_id_.compare_exchange_strong(expected, hash,
             std::memory_order_release, std::memory_order_acquire)) hash = expected;
@@ -71,6 +78,7 @@ struct MeshGeometryProjection final {
       const auto triangles = indices();
       geometry->indices.assign(triangles.begin(), triangles.end());
       geometry->primitives = source_geometry->primitives;
+      geometry->circular_uv_interpolations = source_geometry->circular_uv_interpolations;
       materialized_geometry_ = std::move(geometry);
     });
     return materialized_geometry_;

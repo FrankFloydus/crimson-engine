@@ -300,6 +300,7 @@ bool same_geometry_payload(
   }
   if (!left || !right || left->vertices.size() != right->vertices.size() ||
       left->indices != right->indices ||
+      left->circular_uv_interpolations != right->circular_uv_interpolations ||
       left->primitives != right->primitives) {
     return false;
   }
@@ -308,6 +309,7 @@ bool same_geometry_payload(
     const MeshVertex &b = right->vertices[index];
     if ((include_positions && !same_vec3(a.position, b.position)) ||
         a.source_vertex_id != b.source_vertex_id ||
+        a.circular_uv_index != b.circular_uv_index ||
         !same_vec3(a.normal, b.normal) ||
         !same_float_bits(a.uv.x, b.uv.x) ||
         !same_float_bits(a.uv.y, b.uv.y) || a.rgba != b.rgba ||
@@ -356,6 +358,11 @@ bool same_geometry_streams(
   const auto right_vertices = right_projection ? right_projection->vertices() : std::span<const MeshVertex>(right->vertices);
   const auto left_indices = left_projection ? left_projection->indices() : std::span<const std::uint32_t>(left->indices);
   const auto right_indices = right_projection ? right_projection->indices() : std::span<const std::uint32_t>(right->indices);
+  const auto left_circular = left_projection ? left_projection->circular_uv_interpolations()
+      : std::span<const quader_poly::CircularUvInterpolation>(left->circular_uv_interpolations);
+  const auto right_circular = right_projection ? right_projection->circular_uv_interpolations()
+      : std::span<const quader_poly::CircularUvInterpolation>(right->circular_uv_interpolations);
+  if (!layout_only && !std::ranges::equal(left_circular, right_circular)) return false;
   if (left_vertices.size() != right_vertices.size() || left_indices.size() != right_indices.size() ||
       left->primitives != right->primitives ||
       (!layout_only && !std::equal(left_indices.begin(), left_indices.end(), right_indices.begin()))) return false;
@@ -364,6 +371,7 @@ bool same_geometry_streams(
     const auto &b = right_vertices[index];
     if (a.source_vertex_id != b.source_vertex_id) return false;
     if (layout_only) continue;
+    if (a.circular_uv_index != b.circular_uv_index) return false;
     if (include_positions) {
       const QVec3 left_position = left_projection && left_projection->positions && index < left_projection->positions->size()
           ? (*left_projection->positions)[index] : a.position;
@@ -2299,12 +2307,16 @@ std::uint64_t ToolPreviewRenderableCache::preview_topology_signature(
   RenderSignatureBuilder signature;
   signature.add_size(geometry.vertices.size())
       .add_size(geometry.indices.size());
+  if (!preview_mesh.dynamic_positions) {
+    signature.add_circular_uv_interpolations(geometry.circular_uv_interpolations);
+  }
   for (const MeshVertex &vertex : geometry.vertices) {
     signature.add_value(vertex.source_vertex_id);
     if (!preview_mesh.dynamic_positions) {
       signature.add_vec3(vertex.normal)
           .add_vec2(vertex.uv)
           .add_vec3(vertex.uv_geometric_normal)
+          .add_value(vertex.circular_uv_index)
           .add_value(vertex.rgba);
       for (const float coefficient : vertex.uv_carrier) {
         signature.add_float(coefficient);

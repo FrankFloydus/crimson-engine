@@ -29,6 +29,7 @@ struct QuaderStairsCreationState {
   double slope_degrees = 0.0;
   bool preview_active = false;
   std::uint64_t revision = 0;
+  bool separate_walking_surface = false;
 };
 
 /// Selects the sphere's authored topology without changing its placement.

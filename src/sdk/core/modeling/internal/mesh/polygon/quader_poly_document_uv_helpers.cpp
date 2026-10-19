@@ -11,6 +11,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/circular_uv_interpolation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -168,7 +169,21 @@ FaceUvSampler::FaceUvSampler(const Document& document, const Face& face,
             : generated_texture_uv(vertex->position, normal));
     }
     triangles_ = triangulate_face_local_indices(document, face, vertex_lookup, normal);
-    if (positions_.size() == 4U && triangles_.size() == 2U) {
+    const bool circular_requested = face.circular_uv_interpolation &&
+        valid_circular_uv_interpolation(*face.circular_uv_interpolation);
+    if (circular_requested) {
+        circular_ = face.circular_uv_interpolation;
+        for (const auto position : positions_) {
+            const auto coordinate = circular_uv_coordinates(*circular_, position);
+            if (!coordinate) {
+                circular_.reset();
+                circular_coordinates_.clear();
+                break;
+            }
+            circular_coordinates_.push_back(*coordinate);
+        }
+    }
+    if (!circular_requested && positions_.size() == 4U && triangles_.size() == 2U) {
         std::array<quader_geometry::QVec3f, 4> points;
         std::array<quader_geometry::QVec2f, 4> effective_uvs;
         for (std::size_t index = 0; index < points.size(); ++index) {
@@ -201,7 +216,14 @@ std::optional<quader::QVec2> FaceUvSampler::sample(quader::QVec3 position) const
         const float factor = dot(position - first, edge) / edge_length_squared;
         if (factor >= 0.0F && factor <= 1.0F &&
             length_squared(position - (first + edge * factor)) <= tolerance_squared) {
-            return interpolate_corner_uv(base_uvs_[index], base_uvs_[next], factor);
+            const auto uv = interpolate_corner_uv(base_uvs_[index], base_uvs_[next], factor);
+            if (!circular_) return uv;
+            std::array<float, 4> coordinate{};
+            for (std::size_t axis = 0; axis < coordinate.size(); ++axis) {
+                coordinate[axis] = circular_coordinates_[index][axis] * (1.0F - factor) +
+                    circular_coordinates_[next][axis] * factor;
+            }
+            return evaluate_circular_uv_interpolation(uv, coordinate, circular_->uv_from_polar);
         }
     }
     for (const Triangle& triangle : triangles_) {
@@ -216,6 +238,15 @@ std::optional<quader::QVec2> FaceUvSampler::sample(quader::QVec3 position) const
         const quader::QVec2 triangle_uv {
             ua.x * weights->x + ub.x * weights->y + uc.x * weights->z,
             ua.y * weights->x + ub.y * weights->y + uc.y * weights->z };
+        if (circular_) {
+            std::array<float, 4> coordinate{};
+            for (std::size_t axis = 0; axis < coordinate.size(); ++axis) {
+                coordinate[axis] = circular_coordinates_[triangle.a][axis] * weights->x +
+                    circular_coordinates_[triangle.b][axis] * weights->y +
+                    circular_coordinates_[triangle.c][axis] * weights->z;
+            }
+            return evaluate_circular_uv_interpolation(triangle_uv, coordinate, circular_->uv_from_polar);
+        }
         if (!quad_.has_value()) {
             return triangle_uv;
         }
@@ -1062,6 +1093,28 @@ bool texture_uv_coordinate_close(double fitted, float stored, double span) noexc
                            texture_half_ulp(stored);
   return std::isfinite(fitted) && std::isfinite(stored) &&
          std::abs(fitted - stored) <= tolerance;
+}
+
+bool valid_circular_uv_interpolation(
+    const CircularUvInterpolation &interpolation) noexcept {
+  return quader_geometry::valid_circular_uv_frame(
+      quader_geometry::QVec3f(interpolation.center), quader_geometry::QVec3f(interpolation.axis_u),
+      quader_geometry::QVec3f(interpolation.axis_v), interpolation.uv_from_polar);
+}
+
+std::optional<std::array<float, 4>> circular_uv_coordinates(
+    const CircularUvInterpolation &interpolation, quader::QVec3 position) noexcept {
+  return quader_geometry::circular_uv_coordinates(quader_geometry::QVec3f(position),
+      quader_geometry::QVec3f(interpolation.center), quader_geometry::QVec3f(interpolation.axis_u),
+      quader_geometry::QVec3f(interpolation.axis_v));
+}
+
+quader::QVec2 evaluate_circular_uv_interpolation(
+    quader::QVec2 triangle_uv, const std::array<float, 4> &coordinates,
+    const std::array<float, 4> &uv_from_polar) noexcept {
+  const auto uv = quader_geometry::evaluate_circular_uv_interpolation(
+      quader_geometry::QVec2f(triangle_uv), coordinates, uv_from_polar);
+  return {uv.x, uv.y};
 }
 
 bool valid_face_texture_transform(

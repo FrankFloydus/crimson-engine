@@ -316,7 +316,7 @@ QdrProjectWriteSnapshot decode_retired_schema10(
             "Retired viewport camera is invalid.");
   }
 
-  // Ordinary schema-19 hydration is the final authority for all current
+  // Ordinary schema-20 hydration is the final authority for all current
   // geometry, component and cross-reference invariants.
   const auto encoded = QdrDocumentWriter::serialize_project_document_bytes(result, container.scene_uuid);
   const auto check = QdrDocumentReader::deserialize_project_document(encoded);

@@ -81,6 +81,88 @@ descriptor and requires no texture reads. Consumers map it to their equivalent
 diffuse model when importing or explicitly refreshing a material; their existing
 material-edit preservation policy continues to decide when to request it.
 
+## Optional UV interpolation extension
+
+Core ABI 6 and all its structures remain unchanged. Consumers may separately
+resolve `quader_bridge_get_uv_interpolation_api` and request
+`QUADER_BRIDGE_UV_INTERPOLATION_ABI_VERSION` (1). Check its returned pointer,
+`abi_version` and `struct_size` before calling `mesh_uv_interpolation_view` with
+the same scene handle and mesh index used for the core mesh view. Unsupported
+extension versions return null. Older reader DLLs omit this symbol; their core
+mesh UVs remain available, but do not reproduce nonlinear face interiors.
+This separate capability does not claim or replace consumer-specific core ABI
+extensions.
+
+The view borrows immutable storage until scene release. A mesh without an active
+nonlinear chart returns a null pointer and zero count. Otherwise its vertex count
+equals the core mesh view's count, with entries in exactly the same order.
+`QUADER_BRIDGE_UV_INTERPOLATION_NONE` (0) entries contain zero coordinates and
+corrections and keep ordinary triangle UV interpolation.
+`QUADER_BRIDGE_UV_INTERPOLATION_CIRCULAR` (1) entries contain
+`coordinates = {x, y, radius, angle}` in the geometry-local chart frame, where
+`radius = length(x, y)` and `angle = atan2(y, x)` at that vertex. The correction
+coefficients are `{U_radius, U_angle, V_radius, V_angle}`. Attributes are prepared
+while loading the detached reader snapshot; the view itself performs no geometry
+or texture work. Invalid circular frames, invalid
+coordinates and triangles mixing descriptor identities disable the entire
+affected chart, matching the native renderer's fallback.
+
+Interpolate the core UV and all four coordinates perspective-correctly across
+each triangle. For CIRCULAR mode, compute in the fragment shader:
+
+```text
+delta_radius = length(coordinates.xy) - coordinates.z
+delta_angle = atan2(coordinates.y, coordinates.x) - coordinates.w
+uv += {
+    correction[0] * delta_radius + correction[1] * delta_angle,
+    correction[2] * delta_radius + correction[3] * delta_angle
+}
+```
+
+Correction coefficients agree across every active triangle. If the reconstructed
+radius is zero or a computed value is non-finite, retain the ordinary triangle
+UV. Preserve the geometry-local frame when applying entity transforms or adapting
+triangle winding; do not regenerate the coordinates from world-space positions.
+The exported UV already includes face and occurrence texture mapping. Face scale
+and rotation are already included in the correction coefficients, while affine
+occurrence corrections remain in the core UV and require no sidecar change.
+
+`QUADER_BRIDGE_UV_INTERPOLATION_QUAD` (2) supplies inverse-bilinear interpolation
+for an eligible authored quad: `coordinates = {s_linear, t_linear, st_linear, 1}`
+and `correction = {hx, hy, U_correction, V_correction}`. Use the interpolated
+coordinates in the fragment shader:
+
+```text
+residual = coordinates.x * coordinates.y - coordinates.z
+linear = 1 + correction.y * coordinates.x + correction.x * coordinates.y
+discriminant = linear * linear - 4 * correction.x * correction.y * residual
+denominator = linear + sqrt(discriminant)
+weight_delta = 2 * residual / denominator
+uv += correction.zw * weight_delta
+```
+
+Retain the ordinary triangle UV if the discriminant or denominator is non-finite
+or nonpositive, or the corrected UV is non-finite. Quad preparation uses the
+neutral geometry helper used by Quader's renderer, before occurrence sampling
+and material grouping. It requires an original six-index face span representing
+two consistently wound triangles, four distinct authored corner IDs, exclusive
+compiled vertices and a common finite sampling chart. Nonplanar, concave,
+degenerate, poorly conditioned or affine UV charts retain NONE mode. Circular
+descriptors take precedence; an invalid circular descriptor does not become a
+quad chart. Affine occurrence mapping remains in the core UV, with the original
+quad coefficients retained. Consumers must dispatch by mode; unrecognized modes
+fall back to ordinary triangle UVs.
+
+Apply the shared material UV transform **after** the nonlinear correction, using
+the consumer's retained material transform when preserving edited materials. A
+consumer that bakes the material transform into corner UVs instead must apply
+its linear scale/rotation to the circular UV coefficient vectors or the quad's
+`correction.zw` vector too; quad geometry warp `correction.xy` remains unchanged.
+Offsets affect only the corner UV. Derive normal-map tangent directions from the final corrected UV
+derivatives, rather than the original triangle UV, to retain the same texture
+orientation. This extension adds no vertices, triangles, collision changes,
+material reads or source writes.
+
 ## Lifetime and threading
 
 Project handles own the validated manifest and scene catalog. Opening a scene

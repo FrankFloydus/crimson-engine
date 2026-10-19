@@ -199,6 +199,7 @@ struct PrimitiveCreationSessionDefaults {
   TorusPrimitiveCreationSettings torus;
   modeling::StairsSpec stairs;
   PrimitiveCreationKind preferred_regular_kind = PrimitiveCreationKind::Box;
+  bool separate_walking_surface = false;
 };
 
 /// Retained calculated results from the latest accepted stair geometry.
@@ -268,6 +269,9 @@ public:
   }
   [[nodiscard]] const StairsCreationMetrics &stairs_metrics() const {
     return stairs_metrics_;
+  }
+  [[nodiscard]] bool separate_walking_surface() const {
+    return separate_walking_surface_;
   }
 
   CommandResult activate();
@@ -385,6 +389,7 @@ private:
   SpherePrimitiveCreationSettings sphere_settings_;
   TorusPrimitiveCreationSettings torus_settings_;
   modeling::StairsSpec stairs_settings_;
+  bool separate_walking_surface_ = false;
   StairsCreationMetrics stairs_metrics_;
   PrimitiveCreationKind preferred_kind_ = PrimitiveCreationKind::Box;
   PrimitiveCreationKind preferred_regular_kind_ = PrimitiveCreationKind::Box;

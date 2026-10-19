@@ -1236,8 +1236,16 @@ struct QuaderMaterialArgs {
 };
 
 /**
- * Represents a Quader Mesh Vertex value used by the public Quader API surface.
+ * Describes a renderer-neutral analytic circular texture field.
  */
+struct QuaderMeshCircularUvInterpolation {
+    QVec3 center{};
+    QVec3 axis_u{1.0f, 0.0f, 0.0f};
+    QVec3 axis_v{0.0f, 0.0f, 1.0f};
+    std::array<float, 4> uv_from_polar{};
+};
+
+/// Carries one compiled vertex and its optional analytic interpolation index.
 struct QuaderMeshVertex {
     QVec3 position;
     QVec3 normal;
@@ -1245,6 +1253,7 @@ struct QuaderMeshVertex {
     std::uint32_t rgba = 0xffffffffu;
     std::array<float, 4> uv_carrier{};
     QVec3 uv_geometric_normal = {0.0f, 1.0f, 0.0f};
+    std::uint32_t circular_uv_index = 0u;
 };
 
 /**
@@ -1277,6 +1286,7 @@ struct QuaderMeshAsset {
   bool has_stable_cpu_topology = true;
   bool has_authored_polygon_document = false;
   std::vector<QuaderMeshFaceTexture> face_textures;
+  std::vector<QuaderMeshCircularUvInterpolation> circular_uv_interpolations;
 };
 
 /**

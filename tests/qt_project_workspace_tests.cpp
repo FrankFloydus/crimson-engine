@@ -619,7 +619,8 @@ TEST(QtProjectWorkspaceTests,
   for (QAction *action : toolbar.actions()) {
     const QString name = action->objectName();
     if (!name.startsWith(QStringLiteral("tool_")) || action == primitive ||
-        name == QStringLiteral("tool_curve")) {
+        name == QStringLiteral("tool_curve") ||
+        name == QStringLiteral("tool_create_stairs")) {
       continue;
     }
     const QString file_name =
@@ -804,7 +805,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 15);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
        selection_toolbar.findChildren<QToolButton *>()) {
@@ -824,7 +825,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 14);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 15);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin * 2);
@@ -835,7 +836,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 15);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin);

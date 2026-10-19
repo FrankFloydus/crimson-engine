@@ -871,6 +871,57 @@ std::optional<RenderMaterialBindingSnapshot> uv_checker_reference_material(
 }
 
 TEST(RenderNormalMappingRuntimeTests,
+     CircularUvInterpolationUsesAnalyticNormalDirectionsWithoutExtraGeometry) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";
+  }
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  MeshGeometryPayload geometry;
+  geometry.circular_uv_interpolations = {{
+      .center = {-2, 0, 0}, .axis_u = {1, 0, 0}, .axis_v = {0, 1, 0},
+      .uv_from_polar = {0, 1, 1, 0}}};
+  for (const auto position : {QVec3{-1, -1, 0}, QVec3{1, -1, 0},
+                              QVec3{1, 1, 0}, QVec3{-1, 1, 0}}) {
+    geometry.vertices.push_back({
+        .position = position, .normal = {0, 0, 1},
+        .uv = {std::atan2(position.y, position.x + 2), std::hypot(position.x + 2, position.y)},
+        .source_vertex_id = static_cast<std::uint32_t>(geometry.vertices.size() + 1U),
+        .uv_geometric_normal = {0, 0, 1}, .circular_uv_index = 1U});
+  }
+  geometry.indices = {0, 1, 2, 0, 2, 3};
+  geometry.primitives = {{0, 6, 0}};
+  MeshAsset mesh;
+  mesh.replace_geometry(geometry);
+  const auto snapshot = render_mesh_asset_snapshot(1U, mesh);
+  const QVec3 sampled = normalize(QVec3{
+      float(std::to_integer<unsigned>(kNormalTexel[0])) * (2.0F / 255.0F) - 1,
+      float(std::to_integer<unsigned>(kNormalTexel[1])) * (2.0F / 255.0F) - 1,
+      float(std::to_integer<unsigned>(kNormalTexel[2])) * (2.0F / 255.0F) - 1});
+  for (const bool dynamic : {false, true}) {
+    const auto image = harness.render_mesh_snapshot(snapshot, dynamic);
+    ASSERT_TRUE(image.has_value());
+    for (const float px : {-0.7F, 0.0F, 0.7F}) {
+      for (const float py : {-0.7F, 0.0F, 0.7F}) {
+        const auto projected = harness.project_grid_position({px, py, 0});
+        const int x = static_cast<int>(projected.x);
+        const int y = static_cast<int>(projected.y);
+        const float world_x = (float(x) + 0.5F) * 3.0F / kGridTargetSize - 1.5F;
+        const float world_y = 1.5F - (float(y) + 0.5F) * 3.0F / kGridTargetSize;
+        const auto radial = normalize(QVec3{world_x + 2, world_y, 0});
+        const QVec3 tangent{-radial.y, radial.x, 0};
+        const auto expected = tangent * sampled.x - radial * sampled.y + QVec3{0, 0, sampled.z};
+        const auto actual = normalize(image->pixel(x, y) * 2.0F - QVec3{1, 1, 1});
+        EXPECT_LT(length(actual - expected), 0.012F)
+            << "dynamic=" << dynamic << " pixel=" << x << ',' << y;
+      }
+    }
+  }
+  EXPECT_EQ(mesh.geometry().vertices.size(), 4U);
+  EXPECT_EQ(mesh.geometry().indices.size(), 6U);
+}
+
+TEST(RenderNormalMappingRuntimeTests,
      UvDebugUsesPackagedCheckerAndRetainsSurfaceResourcesAcrossViewSwitches) {
   if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
     GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";

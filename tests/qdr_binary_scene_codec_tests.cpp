@@ -114,6 +114,31 @@ namespace qdr_fb = ::quader::qdr::fb;
   return mesh;
 }
 
+[[nodiscard]] MeshAsset compiled_circular_uv_mesh() {
+  MeshAsset mesh = triangle_mesh("Sparse circular UV charts");
+  auto &geometry = mesh.edit_geometry();
+  const auto triangle = geometry.vertices;
+  geometry.vertices.clear();
+  geometry.indices.clear();
+  constexpr std::array<std::uint32_t, 3U> kCharts{2U,0U,1U};
+  for (std::size_t face = 0U; face < kCharts.size(); ++face) {
+    for (auto vertex : triangle) {
+      vertex.position.x += float(face)*3.0F;
+      vertex.circular_uv_index = kCharts[face];
+      geometry.indices.push_back(static_cast<std::uint32_t>(geometry.vertices.size()));
+      geometry.vertices.push_back(vertex);
+    }
+  }
+  geometry.primitives.front().index_count = 9U;
+  geometry.circular_uv_interpolations = {
+      {.center = {-1.0F,2.0F,-3.0F}, .axis_u = {2.0F,0.5F,0.0F},
+       .axis_v = {0.0F,1.0F,0.25F}, .uv_from_polar = {0.5F,1.25F,-0.75F,2.0F}},
+      {.center = {4.0F,5.0F,6.0F}, .axis_u = {0.0F,1.0F,0.0F},
+       .axis_v = {1.0F,0.0F,0.0F}, .uv_from_polar = {-1.0F,0.125F,3.0F,0.25F}},
+  };
+  return mesh;
+}
+
 [[nodiscard]] SceneContentDocument simple_scene() {
   SceneContentDocument document(SceneContentDocumentRecord{
       .id = 42u,
@@ -735,7 +760,7 @@ TEST(QdrBinarySceneCodecTests, EmptyScenePersistsDocumentSettingsAndExplicitEmpt
   ASSERT_TRUE(parsed.ok) << parsed.message;
   ASSERT_EQ(parsed.chunks.size(), 1u);
   const auto &metadata = parsed.chunks.front();
-  EXPECT_EQ(metadata.schema_version, 19u);
+  EXPECT_EQ(metadata.schema_version, 20u);
   const auto *payload = qdr_fb::GetScenePayload(metadata.bytes().data());
   ASSERT_NE(payload->root_entities(), nullptr);
   EXPECT_EQ(payload->root_entities()->size(), 0u);
@@ -955,7 +980,7 @@ TEST(QdrBinarySceneCodecTests, AbsentParentingOffsetsDefaultToIdentityForOldAndN
   ASSERT_TRUE(document.scene().set_transform(100u, transform));
   const auto parsed = parse_written_scene(document);
   ASSERT_TRUE(parsed.ok) << parsed.message;
-  for (const std::uint16_t version : {16u, 17u, 18u, 19u}) {
+  for (const std::uint16_t version : {16u, 17u, 18u, 19u, 20u}) {
     SCOPED_TRACE(version);
     auto chunks = copy_chunks(parsed);
     auto &metadata = chunks.front();
@@ -1270,7 +1295,7 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_TRUE(document.scene().set_mesh(100u, mesh));
   const auto parsed = parse_written_scene(document);
   ASSERT_TRUE(parsed.ok) << parsed.message;
-  for (std::uint16_t version = 1u; version <= 19u; ++version) {
+  for (std::uint16_t version = 1u; version <= 20u; ++version) {
     SCOPED_TRACE(version);
     auto chunks = copy_chunks(parsed);
     auto &metadata = chunks.front();
@@ -1738,12 +1763,32 @@ TEST(QdrBinarySceneCodecTests,
     const auto *geometry =
         flatbuffers::GetRoot<qdr_fb::GeometryPayload>(chunk.bytes.data());
     ASSERT_NE(geometry->authored_payload(), nullptr);
-    ASSERT_GE(geometry->authored_payload()->size(), 8u);
-    const auto *authored_begin = reinterpret_cast<const std::byte *>(
-        geometry->authored_payload()->data());
-    const auto authored_offset =
-        static_cast<std::size_t>(authored_begin - chunk.bytes.data());
-    chunk.bytes[authored_offset + 6u] = std::byte{2};
+    ASSERT_GE(geometry->authored_payload()->size(), 56u);
+    std::vector<std::uint8_t> legacy_payload(
+        geometry->authored_payload()->begin(),
+        geometry->authored_payload()->end());
+    ASSERT_EQ(legacy_payload[6u], 4u);
+    // QGEO 4 appends the circular interpolation count. QGEO 2 has no tail.
+    EXPECT_TRUE(std::all_of(legacy_payload.end() - 4, legacy_payload.end(),
+                            [](std::uint8_t value) { return value == 0u; }));
+    legacy_payload.resize(legacy_payload.size() - 4u);
+    legacy_payload[6u] = 2u;
+    const auto legacy_size = static_cast<std::uint64_t>(legacy_payload.size());
+    for (std::size_t index = 0u; index < sizeof(legacy_size); ++index) {
+      legacy_payload[16u + index] =
+          static_cast<std::uint8_t>((legacy_size >> (8u * index)) & 0xffu);
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    const auto authored_payload = builder.CreateVector(legacy_payload);
+    qdr_fb::GeometryPayloadBuilder geometry_builder(builder);
+    geometry_builder.add_kind(qdr_fb::GeometryKind::AuthoredPolygon);
+    geometry_builder.add_next_vertex_id(geometry->next_vertex_id());
+    geometry_builder.add_next_face_id(geometry->next_face_id());
+    geometry_builder.add_authored_payload(authored_payload);
+    builder.Finish(geometry_builder.Finish(), "QDRG");
+    const auto *begin =
+        reinterpret_cast<const std::byte *>(builder.GetBufferPointer());
+    chunk.bytes.assign(begin, begin + builder.GetSize());
     chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
     legacy_geometry =
         std::make_shared<const std::vector<std::byte>>(chunk.bytes);
@@ -1773,7 +1818,7 @@ TEST(QdrBinarySceneCodecTests,
     const auto *geometry =
         flatbuffers::GetRoot<qdr_fb::GeometryPayload>(chunk.bytes().data());
     ASSERT_NE(geometry->authored_payload(), nullptr);
-    EXPECT_EQ(geometry->authored_payload()->Get(6u), 3u);
+    EXPECT_EQ(geometry->authored_payload()->Get(6u), 4u);
   }
   auto reloaded =
       QdrDocumentReader::deserialize_project_document(canonical_bytes);
@@ -1939,7 +1984,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 19u);
+    EXPECT_EQ(chunk.schema_version, 20u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -2272,7 +2317,7 @@ TEST(QdrBinarySceneCodecTests, EmbeddedDiffuseModelsRoundTripWithBurleyWireDefau
       return chunk.type == static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::SceneMetadata);
     });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 19u);
+    EXPECT_EQ(metadata->schema_version, 20u);
     const auto *payload = qdr_fb::GetScenePayload(metadata->bytes().data());
     ASSERT_NE(payload->materials(), nullptr);
     ASSERT_EQ(payload->materials()->size(), 1u);
@@ -2364,7 +2409,7 @@ TEST(QdrBinarySceneCodecTests,
                                    quader_io::QdrBinaryChunkType::SceneMetadata);
         });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 19u);
+    EXPECT_EQ(metadata->schema_version, 20u);
 
     const auto read = QdrDocumentReader::deserialize_project_document(
         quader_io::build_qdr_binary_container(parsed.scene_uuid,
@@ -2571,7 +2616,7 @@ TEST(QdrBinarySceneCodecTests, FogSettingsRoundTripWithAuthoredValues) {
                                quader_io::QdrBinaryChunkType::SceneMetadata);
     });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 19u);
+    EXPECT_EQ(metadata->schema_version, 20u);
     const auto *stored = stored_scene_settings(metadata->bytes());
     ASSERT_NE(stored, nullptr);
     ASSERT_NE(stored->fog(), nullptr);
@@ -2588,7 +2633,7 @@ TEST(QdrBinarySceneCodecTests, FogSettingsRoundTripWithAuthoredValues) {
 TEST(QdrBinarySceneCodecTests, AbsentFogDefaultsDisabledInEverySupportedSchema) {
   const auto parsed = parse_written_scene(scene_with_fog(authored_fog_settings()));
   ASSERT_TRUE(parsed.ok) << parsed.message;
-  for (std::uint16_t version = 1u; version <= 19u; ++version) {
+  for (std::uint16_t version = 1u; version <= 20u; ++version) {
     SCOPED_TRACE(version);
     auto chunks = copy_chunks(parsed);
     const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
@@ -2760,7 +2805,7 @@ TEST(QdrBinarySceneCodecTests,
           return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
         });
     ASSERT_NE(metadata, chunks.end());
-    ASSERT_EQ(metadata->schema_version, 19u);
+    ASSERT_EQ(metadata->schema_version, 20u);
     make_legacy_scene_metadata(*metadata, 12u);
     const qdr_fb::ScenePayload *payload =
         qdr_fb::GetScenePayload(metadata->bytes.data());
@@ -2862,7 +2907,7 @@ TEST(QdrBinarySceneCodecTests,
         return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
       });
   ASSERT_NE(metadata, chunks.end());
-  ASSERT_EQ(metadata->schema_version, 19u);
+  ASSERT_EQ(metadata->schema_version, 20u);
   make_legacy_scene_metadata(*metadata, 10u);
 
   const QdrProjectReadResult read =
@@ -2930,7 +2975,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 19u);
+  EXPECT_EQ(metadata->schema_version, 20u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -3267,6 +3312,181 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesFaceSettingsAndCompiledCarriers
     EXPECT_EQ(vertex.uv_carrier, (std::array<float, 4>{2.0f, -1.0f, 0.25f, 3.0f}));
     EXPECT_FLOAT_EQ(vertex.uv_geometric_normal.z, 1.0f);
   }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledCircularUvSparseTableSurvivesSaveReopenAndApiConversion) {
+  SceneContentDocument document = simple_scene();
+  const auto expected = compiled_circular_uv_mesh();
+  ASSERT_TRUE(document.assets().replace_mesh(10U, expected));
+  const auto bytes = QdrDocumentWriter::serialize_project_document_bytes(
+      required_write_snapshot(document), test_uuid());
+  auto read = QdrDocumentReader::deserialize_project_document(bytes);
+  ASSERT_TRUE(read.ok) << read.message;
+  for (int generation = 0; generation < 2; ++generation) {
+    SCOPED_TRACE(generation);
+    const auto *loaded = read.document.assets().mesh(10U);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_FALSE(loaded->has_authored_polygon_document);
+    EXPECT_EQ(loaded->geometry().circular_uv_interpolations,
+              expected.geometry().circular_uv_interpolations);
+    EXPECT_EQ(loaded->geometry().indices, expected.geometry().indices);
+    ASSERT_EQ(loaded->geometry().vertices.size(), expected.geometry().vertices.size());
+    for (std::size_t index = 0U; index < loaded->geometry().vertices.size(); ++index) {
+      const auto &actual = loaded->geometry().vertices[index];
+      const auto &reference = expected.geometry().vertices[index];
+      EXPECT_EQ(actual.circular_uv_index, reference.circular_uv_index);
+      EXPECT_FLOAT_EQ(actual.position.x, reference.position.x);
+      EXPECT_FLOAT_EQ(actual.position.y, reference.position.y);
+      EXPECT_FLOAT_EQ(actual.position.z, reference.position.z);
+      EXPECT_FLOAT_EQ(actual.uv.x, reference.uv.x);
+      EXPECT_FLOAT_EQ(actual.uv.y, reference.uv.y);
+    }
+    const auto api_round_trip = to_mesh_asset(to_api_mesh_asset(*loaded));
+    EXPECT_EQ(api_round_trip.geometry().circular_uv_interpolations,
+              expected.geometry().circular_uv_interpolations);
+    for (std::size_t index = 0U; index < api_round_trip.geometry().vertices.size(); ++index) {
+      EXPECT_EQ(api_round_trip.geometry().vertices[index].circular_uv_index,
+                expected.geometry().vertices[index].circular_uv_index);
+    }
+    if (generation == 0) {
+      read = QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              required_write_snapshot(read.document), test_uuid()));
+      ASSERT_TRUE(read.ok) << read.message;
+    }
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledCircularUvAbsentOptionalTablesUseLegacyLinearInterpolation) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_TRUE(document.assets().replace_mesh(10U, compiled_circular_uv_mesh()));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  for (auto &chunk : chunks) {
+    if (chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata) {
+      chunk.schema_version = 19U;
+    }
+    if (chunk.type != quader_io::QdrBinaryChunkType::Geometry) continue;
+    // The appended optional streams follow mesh_texture_mapping (field 16).
+    erase_flatbuffer_root_field(chunk.bytes, 17U);
+    erase_flatbuffer_root_field(chunk.bytes, 18U);
+    chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+  }
+  const auto bytes = quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks));
+  const auto read = QdrDocumentReader::deserialize_project_document(bytes);
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_TRUE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
+  EXPECT_TRUE(QdrDocumentReader::deserialize_project_material_usage(bytes).ok);
+  const auto *loaded = read.document.assets().mesh(10U);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_TRUE(loaded->geometry().circular_uv_interpolations.empty());
+  ASSERT_EQ(loaded->geometry().vertices.size(), 9U);
+  for (const auto &vertex : loaded->geometry().vertices) {
+    EXPECT_EQ(vertex.circular_uv_index, 0U);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledCircularUvRejectsPreTwentySchemasInEveryReaderAndDeferredMesh) {
+  for (const bool referenced : {false, true}) {
+    SceneContentDocument document(SceneContentDocumentRecord{
+        .id = 42U, .name = "Circular schema fence"});
+    ASSERT_EQ(document.assets().add_mesh(10U, compiled_circular_uv_mesh()), 10U);
+    if (referenced) {
+      const auto entity = document.scene().create_entity_with_id(100U, "Circular mesh", EntityKind::Mesh);
+      ASSERT_TRUE(document.scene().set_mesh(entity, {.mesh = 10U}));
+    }
+    const auto parsed = parse_written_scene(document);
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    for (const std::uint16_t version : {7U,19U}) {
+      SCOPED_TRACE(referenced);
+      SCOPED_TRACE(version);
+      auto chunks = copy_chunks(parsed);
+      for (auto &chunk : chunks) {
+        if (chunk.type != quader_io::QdrBinaryChunkType::SceneMetadata) continue;
+        if (version < 16U) make_legacy_scene_metadata(chunk, version);
+        chunk.schema_version = version;
+      }
+      const auto bytes = quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks));
+      const auto full = QdrDocumentReader::deserialize_project_document(bytes);
+      const auto dependencies = QdrDocumentReader::deserialize_project_dependencies(bytes);
+      const auto usage = QdrDocumentReader::deserialize_project_material_usage(bytes);
+      EXPECT_FALSE(full.ok);
+      EXPECT_FALSE(dependencies.ok);
+      EXPECT_FALSE(usage.ok);
+      EXPECT_NE(full.message.find("before schema 20"), std::string::npos);
+      EXPECT_NE(dependencies.message.find("before schema 20"), std::string::npos);
+      EXPECT_NE(usage.message.find("before schema 20"), std::string::npos);
+    }
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledCircularUvMalformedFramesAndReferencesFailEveryReader) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_TRUE(document.assets().replace_mesh(10U, compiled_circular_uv_mesh()));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (int corruption = 0; corruption < 4; ++corruption) {
+    SCOPED_TRACE(corruption);
+    auto chunks = copy_chunks(parsed);
+    for (auto &chunk : chunks) {
+      if (chunk.type != quader_io::QdrBinaryChunkType::Geometry) continue;
+      const auto *payload = flatbuffers::GetRoot<qdr_fb::GeometryPayload>(chunk.bytes.data());
+      const auto *indices = payload->mesh_circular_uv_indices();
+      const auto *fields = payload->mesh_circular_uv_interpolations();
+      ASSERT_NE(indices, nullptr);
+      ASSERT_NE(fields, nullptr);
+      if (corruption == 0) {
+        const auto offset = reinterpret_cast<const std::byte *>(indices)-chunk.bytes.data();
+        const std::uint32_t truncated_count = 8U;
+        std::memcpy(chunk.bytes.data()+offset, &truncated_count, sizeof(truncated_count));
+      } else if (corruption == 1) {
+        const auto offset = reinterpret_cast<const std::byte *>(indices->Data())-chunk.bytes.data();
+        const std::uint32_t invalid_index = 3U;
+        std::memcpy(chunk.bytes.data()+offset, &invalid_index, sizeof(invalid_index));
+      } else {
+        const auto *field = fields->Get(0U);
+        const auto offset = reinterpret_cast<const std::byte *>(&field->axis_u())-chunk.bytes.data();
+        const std::array<float, 3U> invalid_axis = corruption == 2
+            ? std::array{std::numeric_limits<float>::quiet_NaN(),0.0F,0.0F}
+            : std::array{0.0F,0.0F,0.0F};
+        std::memcpy(chunk.bytes.data()+offset, invalid_axis.data(), sizeof(invalid_axis));
+      }
+      chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+    }
+    const auto bytes = quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks));
+    const auto full = QdrDocumentReader::deserialize_project_document(bytes);
+    const auto dependencies = QdrDocumentReader::deserialize_project_dependencies(bytes);
+    const auto usage = QdrDocumentReader::deserialize_project_material_usage(bytes);
+    EXPECT_FALSE(full.ok);
+    EXPECT_FALSE(dependencies.ok);
+    EXPECT_FALSE(usage.ok);
+    EXPECT_NE(full.message.find("circular UV"), std::string::npos);
+    EXPECT_NE(dependencies.message.find("circular UV"), std::string::npos);
+    EXPECT_NE(usage.message.find("circular UV"), std::string::npos);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     CompiledCircularUvReferencesRejectMissingDescriptorTable) {
+  SceneContentDocument document = simple_scene();
+  ASSERT_TRUE(document.assets().replace_mesh(10U, compiled_circular_uv_mesh()));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  auto chunks = copy_chunks(parsed);
+  for (auto &chunk : chunks) {
+    if (chunk.type != quader_io::QdrBinaryChunkType::Geometry) continue;
+    erase_flatbuffer_root_field(chunk.bytes, 18U);
+    chunk.content_hash = quader_io::qdr_binary_content_hash(chunk.bytes);
+  }
+  const auto read = QdrDocumentReader::deserialize_project_document(
+      quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks)));
+  EXPECT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("circular UV"), std::string::npos);
 }
 
 TEST(QdrBinarySceneCodecTests,
@@ -3933,14 +4153,14 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 20u;
+  chunks.front().schema_version = 21u;
 
-  const QdrProjectReadResult read =
-      QdrDocumentReader::deserialize_project_document(
-          quader_io::build_qdr_binary_container(test_uuid(),
-                                                std::move(chunks)));
+  const auto bytes = quader_io::build_qdr_binary_container(test_uuid(), std::move(chunks));
+  const QdrProjectReadResult read = QdrDocumentReader::deserialize_project_document(bytes);
   ASSERT_FALSE(read.ok);
   EXPECT_NE(read.message.find("unsupported schema"), std::string::npos);
+  EXPECT_FALSE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
+  EXPECT_FALSE(QdrDocumentReader::deserialize_project_material_usage(bytes).ok);
 }
 
 TEST(QdrBinarySceneCodecTests, RejectsMalformedMetadataFlatBuffer) {

@@ -98,7 +98,7 @@ Migration prepare_migration(const std::filesystem::path &path) {
   std::cout << path.string() << ": validated " << snapshot.entities.size() << " entities, "
             << snapshot.root_entities.size() << " roots, " << snapshot.meshes.size()
             << " mesh assets, " << snapshot.project_asset_dependencies.size()
-            << " dependencies; " << (retired ? "retired schema 10 -> 19" : "canonical schema 19")
+            << " dependencies; " << (retired ? "retired schema 10 -> 20" : "canonical schema 20")
             << "; original hash " << quader_io::qdr_binary_content_hash(result.original)
             << ", output hash " << quader_io::qdr_binary_content_hash(result.migrated) << '\n';
   return result;

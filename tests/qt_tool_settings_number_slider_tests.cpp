@@ -3248,6 +3248,8 @@ TEST(QtToolSettingsPanelTests,
       QStringLiteral("tool_settings.control.uv_peel.axis"));
   auto *world_space = panel->findChild<QCheckBox *>(
       QStringLiteral("tool_settings.control.uv_peel.world_space"));
+  auto *circular_flow = panel->findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.smooth_circular_flow"));
   auto *apply = panel->findChild<QPushButton *>(
       QStringLiteral("tool_settings.apply"));
   auto *cancel = panel->findChild<QPushButton *>(
@@ -3257,18 +3259,21 @@ TEST(QtToolSettingsPanelTests,
   ASSERT_NE(content, nullptr);
   ASSERT_NE(axis, nullptr);
   ASSERT_NE(world_space, nullptr);
+  ASSERT_NE(circular_flow, nullptr);
   ASSERT_NE(apply, nullptr);
   ASSERT_NE(cancel, nullptr);
   EXPECT_TRUE(panel->has_active_target());
   EXPECT_FALSE(section->isHidden());
   EXPECT_EQ(editor.tools().active_settings().tool_id, "uv_peel");
-  EXPECT_EQ(editor.tools().active_settings().controls.size(), 6u);
+  EXPECT_EQ(editor.tools().active_settings().controls.size(), 7u);
   EXPECT_EQ(axis->currentIndex(), 0);
   EXPECT_TRUE(world_space->isChecked());
+  EXPECT_FALSE(circular_flow->isChecked());
   EXPECT_TRUE(apply->isEnabled());
 
   axis->setCurrentIndex(1);
   world_space->click();
+  circular_flow->click();
   QCoreApplication::processEvents();
   constexpr std::array<const char *, 4> kFields{
       "u_repeat", "v_repeat", "u_offset", "v_offset"};
@@ -3288,7 +3293,8 @@ TEST(QtToolSettingsPanelTests,
   }
   const quader::QuaderUvPeelOptions expected{
       .axis = quader::QuaderUvPeelAxis::V, .world_space = false,
-      .u_repeat = 2.0, .v_repeat = 3.0, .u_offset = 0.25, .v_offset = -0.5};
+      .u_repeat = 2.0, .v_repeat = 3.0, .u_offset = 0.25, .v_offset = -0.5,
+      .smooth_circular_flow = true};
   ASSERT_TRUE(process_events_until([&] {
     return editor.modeling().uv_peel_settings().options == expected;
   }, 1000));
@@ -3326,10 +3332,13 @@ TEST(QtToolSettingsPanelTests,
       QStringLiteral("tool_settings.control.uv_peel.axis"));
   world_space = panel->findChild<QCheckBox *>(
       QStringLiteral("tool_settings.control.uv_peel.world_space"));
+  circular_flow = panel->findChild<QCheckBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.smooth_circular_flow"));
   auto *repeat = panel->findChild<QDoubleSpinBox *>(
       QStringLiteral("tool_settings.control.uv_peel.u_repeat"));
   ASSERT_NE(axis, nullptr);
   ASSERT_NE(world_space, nullptr);
+  ASSERT_NE(circular_flow, nullptr);
   ASSERT_NE(repeat, nullptr);
   EXPECT_EQ(axis->accessibleName(), QStringLiteral("Asse"));
   auto *world_space_label = panel->findChild<QLabel *>(QStringLiteral(
@@ -3338,6 +3347,8 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_TRUE(world_space->text().isEmpty());
   EXPECT_EQ(world_space_label->text(), QStringLiteral("Densit\u00E0 globale"));
   EXPECT_EQ(world_space->accessibleName(), world_space_label->text());
+  EXPECT_EQ(circular_flow->accessibleName(), QStringLiteral("Flusso circolare continuo"));
+  EXPECT_TRUE(circular_flow->isChecked());
   EXPECT_EQ(repeat->accessibleName(), QStringLiteral("Ripetizioni U"));
   EXPECT_DOUBLE_EQ(repeat->value(), expected.u_repeat);
   EXPECT_EQ(repeat->locale().decimalPoint(), QStringLiteral("."));
@@ -3367,6 +3378,111 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(editor.modeling().uv_peel_settings().options, expected);
   EXPECT_TRUE(panel->expanded());
   panel->unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     UvPeelCircularFlowCheckboxRetainsBindingAcrossLocalesScalesAndNarrowWidths) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-uv-peel-circular-flow-ui-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(QApplication::palette());
+  quader::QtUiScaleApplicationController scale_controller(application);
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto created = create_texture_action_surface(editor);
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_expanded(true);
+  panel.bind(editor);
+  panel.show();
+  const QString name = QStringLiteral("tool_settings.control.uv_peel.smooth_circular_flow");
+  auto *toggle = panel.findChild<QCheckBox *>(name);
+  ASSERT_NE(toggle, nullptr);
+  EXPECT_FALSE(toggle->isChecked());
+  toggle->click();
+  EXPECT_TRUE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+  struct CaptureLayout final {
+    float scale;
+    int width;
+    const char *name;
+  };
+  constexpr std::array<CaptureLayout, 4U> kLayouts{{
+      {1.0F,360,"100"}, {2.0F,360,"200"},
+      {1.0F,240,"100-narrow"}, {1.0F,360,"scale-down"}}};
+  for (const char *locale : {"en-US", "it-IT"}) {
+    ASSERT_TRUE(localization.select_locale(locale));
+    panel.set_localization(localization);
+    process_events_for(20);
+    const QPointer<QCheckBox> retained(panel.findChild<QCheckBox *>(name));
+    ASSERT_FALSE(retained.isNull());
+    for (const auto &layout : kLayouts) {
+      SCOPED_TRACE(locale);
+      SCOPED_TRACE(layout.name);
+      scale_controller.apply_factor(layout.scale);
+      panel.apply_ui_scale(scale_controller.metrics());
+      panel.refresh();
+      process_events_for(20);
+      panel.resize(std::max(scale_controller.metrics().px(layout.width),
+                             panel.minimumSizeHint().width()), panel.sizeHint().height());
+      process_events_for(20);
+      toggle = panel.findChild<QCheckBox *>(name);
+      auto *label = panel.findChild<QLabel *>(name+QStringLiteral(".label"));
+      auto *row = panel.findChild<QWidget *>(name+QStringLiteral(".row"));
+      ASSERT_EQ(toggle, retained.data());
+      ASSERT_NE(label, nullptr);
+      ASSERT_NE(row, nullptr);
+      EXPECT_TRUE(toggle->isVisible());
+      EXPECT_TRUE(toggle->isChecked());
+      EXPECT_TRUE(toggle->text().isEmpty());
+      EXPECT_EQ(toggle->accessibleName(), QString::fromStdString(
+          localization.text("tool_settings.uv_peel.smooth_circular_flow", "")));
+      EXPECT_EQ(label->text(), toggle->accessibleName());
+      EXPECT_GE(label->height(), label->heightForWidth(label->width()));
+      EXPECT_TRUE(row->rect().contains(toggle->geometry()));
+      EXPECT_TRUE(row->rect().contains(label->geometry()));
+      EXPECT_GE(toggle->height(), toggle->minimumSizeHint().height());
+      EXPECT_TRUE(panel.rect().contains(QRect(toggle->mapTo(&panel, QPoint{}), toggle->size())));
+      const auto revision = editor.tools().active_settings_revision();
+      const auto content_revision = editor.revisions().modeling_content_revision;
+      TexturePresentationEvents events;
+      for (auto *widget : panel.findChildren<QWidget *>()) widget->installEventFilter(&events);
+      for (int frame = 0; frame < 20; ++frame) panel.refresh();
+      EXPECT_EQ(events.changes, 0);
+      EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+      EXPECT_EQ(editor.revisions().modeling_content_revision, content_revision);
+      if (!directory.isEmpty()) {
+        QImage image(panel.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        panel.render(&image);
+        EXPECT_TRUE(image.save(QDir(directory).filePath(
+            QStringLiteral("uv-peel-circular-flow-%1-%2.png")
+                .arg(QString::fromLatin1(locale), QString::fromLatin1(layout.name)))));
+      }
+    }
+  }
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
+  panel.refresh();
+  toggle = panel.findChild<QCheckBox *>(name);
+  ASSERT_NE(toggle, nullptr);
+  EXPECT_TRUE(toggle->isChecked());
+  ASSERT_TRUE(editor.tools().reset_active_settings().ok());
+  panel.refresh();
+  EXPECT_FALSE(toggle->isChecked());
+  EXPECT_FALSE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+  panel.unbind();
 }
 
 TEST(QtToolSettingsPanelTests,
@@ -3409,12 +3525,15 @@ TEST(QtToolSettingsPanelTests,
           QStringLiteral("tool_settings.control.uv_peel.axis"));
       auto *world = panel.findChild<QCheckBox *>(
           QStringLiteral("tool_settings.control.uv_peel.world_space"));
+      auto *circular_flow = panel.findChild<QCheckBox *>(
+          QStringLiteral("tool_settings.control.uv_peel.smooth_circular_flow"));
       auto *apply = panel.findChild<QPushButton *>(
           QStringLiteral("tool_settings.apply"));
       auto *cancel = panel.findChild<QPushButton *>(
           QStringLiteral("tool_settings.cancel"));
       ASSERT_NE(axis, nullptr);
       ASSERT_NE(world, nullptr);
+      ASSERT_NE(circular_flow, nullptr);
       ASSERT_NE(apply, nullptr);
       ASSERT_NE(cancel, nullptr);
       EXPECT_FALSE(apply->isEnabled());
@@ -3426,6 +3545,7 @@ TEST(QtToolSettingsPanelTests,
       ASSERT_TRUE(apply->isEnabled());
       axis->setCurrentIndex(selected_axis == quader::QuaderUvPeelAxis::U ? 0 : 1);
       world->setChecked(world_space);
+      circular_flow->setChecked(true);
       QCoreApplication::processEvents();
       constexpr std::array<const char *, 4> kFields{
           "u_repeat", "v_repeat", "u_offset", "v_offset"};
@@ -3439,7 +3559,8 @@ TEST(QtToolSettingsPanelTests,
       }
       const quader::QuaderUvPeelOptions options{
           .axis = selected_axis, .world_space = world_space,
-          .u_repeat = 1.75, .v_repeat = 2.25, .u_offset = 0.3, .v_offset = -0.2};
+          .u_repeat = 1.75, .v_repeat = 2.25, .u_offset = 0.3, .v_offset = -0.2,
+          .smooth_circular_flow = true};
       const auto expected_result = expected_editor.modeling().peel_uv(
           {.options = options,
            .selection_token = expected_editor.modeling()

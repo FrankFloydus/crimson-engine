@@ -214,17 +214,29 @@ RenderSignatureBuilder::material_signature(const AssetRegistry &assets,
   return signature.value();
 }
 
+RenderSignatureBuilder &RenderSignatureBuilder::add_circular_uv_interpolations(
+    std::span<const quader_poly::CircularUvInterpolation> interpolations) {
+  add_size(interpolations.size());
+  for (const auto &interpolation : interpolations) {
+    add_vec3(interpolation.center).add_vec3(interpolation.axis_u).add_vec3(interpolation.axis_v);
+    for (const auto coefficient : interpolation.uv_from_polar) add_float(coefficient);
+  }
+  return *this;
+}
+
 std::uint64_t
 RenderSignatureBuilder::mesh_asset_signature(std::uint64_t seed,
                                              const MeshAsset &mesh) {
   const MeshGeometryPayload &geometry = mesh.geometry();
   RenderSignatureBuilder signature(seed);
+  signature.add_circular_uv_interpolations(geometry.circular_uv_interpolations);
   signature.add_size(geometry.vertices.size());
   for (const MeshVertex &vertex : geometry.vertices) {
     signature.add_vec3(vertex.position)
         .add_vec3(vertex.normal)
         .add_vec2(vertex.uv)
         .add_vec3(vertex.uv_geometric_normal)
+        .add_value(vertex.circular_uv_index)
         .add_value(vertex.rgba);
     for (const float coefficient : vertex.uv_carrier) {
       signature.add_float(coefficient);

@@ -19,8 +19,10 @@ See [README.md](README.md) for the format/owner map.
   checksums and container/scene references remain validated independently of topology quality.
 - Successful native read/write results carry the exact source byte count and FNV-1a fingerprint
   for save synchronization. Compute these from the bytes already being decoded/serialized.
-- Current scene metadata is schema 19; optional per-mesh wire colors inherit the viewport
-  default when absent or read from older schemas. Colors contain finite normalized sRGB.
+- Current scene metadata is schema 20; compiled circular UV fields use optional sparse
+  descriptors and one-based vertex references. Older schemas must not carry these fields.
+  Schema 19 optional per-mesh wire colors inherit the viewport default when absent or read
+  from older schemas. Colors contain finite normalized sRGB.
   Schema 18 mesh wireframe-on-shaded defaults to enabled
   for older schemas or absent fields. Schema 17 affine parenting offsets preserve editable TRS.
   Earlier schemas default offsets to identity. Validate finite affine matrices without requiring

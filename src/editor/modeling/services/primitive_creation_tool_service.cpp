@@ -123,7 +123,8 @@ StairsCreationMetrics calculated_stairs_metrics(const modeling::StairsMesh &mesh
 std::optional<quader_poly::Document> stairs_document(
     const modeling::StairsSpec &spec, QVec3 center, double base,
     StairsCreationMetrics &metrics, double &width, double &depth,
-    std::string &message, const modeling::StairsMesh *prepared = nullptr) {
+    std::string &message, const modeling::StairsMesh *prepared = nullptr,
+    bool separate_walking_surface = false) {
   std::optional<modeling::StairsMesh> generated;
   if (prepared == nullptr) {
     auto result = modeling::build_stairs_mesh(spec);
@@ -135,7 +136,17 @@ std::optional<quader_poly::Document> stairs_document(
     prepared = &*generated;
   }
   const auto &mesh = *prepared;
-  auto document = MeshProjectionService::polygon_document_from_sdk_document(mesh.document);
+  std::optional<modeling::PolygonDocument> detached;
+  if (separate_walking_surface) {
+    auto result = modeling::detach_stairs_walking_surface(mesh);
+    if (!result.ok()) {
+      message = result.error_message();
+      return std::nullopt;
+    }
+    detached = std::move(result.value());
+  }
+  auto document = MeshProjectionService::polygon_document_from_sdk_document(
+      detached ? *detached : mesh.document);
   if (!document) {
     message = "Stair geometry could not be projected into the editor.";
     return std::nullopt;
@@ -726,7 +737,8 @@ CommandResult PrimitiveCreationToolService::accept_volume(
     double depth = 0.0;
     std::string message;
     auto candidate = stairs_document(candidate_stairs, {}, local_min.y,
-                                    candidate_metrics, width, depth, message);
+                                    candidate_metrics, width, depth, message, nullptr,
+                                    separate_walking_surface_);
     if (!candidate) return command_invalid_result(std::move(message));
     document = std::move(*candidate);
     candidate_stairs.footprint_width = width;
@@ -1348,8 +1360,11 @@ CommandResult PrimitiveCreationToolService::set_stairs_setting(
     return command_invalid_result("Finish the stair footprint before changing settings.");
   }
   modeling::StairsSpec candidate = stairs_settings_;
+  bool candidate_separate = separate_walking_surface_;
   int integer = 0;
-  if (name == "stairs.layout" && integer_setting_value(value, 0, 5, integer)) {
+  if (name == "stairs.separate_walking_surface" && (value == 0.0 || value == 1.0)) {
+    candidate_separate = value != 0.0;
+  } else if (name == "stairs.layout" && integer_setting_value(value, 0, 5, integer)) {
     candidate.layout = static_cast<modeling::StairsLayout>(integer);
   } else if (name == "stairs.surface" && integer_setting_value(value, 0, 1, integer)) {
     candidate.surface = static_cast<modeling::StairsSurface>(integer);
@@ -1391,7 +1406,8 @@ CommandResult PrimitiveCreationToolService::set_stairs_setting(
       fit_stairs_dimensions(candidate, value, candidate.footprint_depth, candidate.height, false);
     }
   }
-  if (same_stairs_settings(candidate, stairs_settings_)) return command_unchanged_result();
+  if (same_stairs_settings(candidate, stairs_settings_) &&
+      candidate_separate == separate_walking_surface_) return command_unchanged_result();
 
   // Validate before settling a captured resize or freezing the selected draft.
   // Generation is triggered only by changed parameters, never by readers.
@@ -1404,7 +1420,9 @@ CommandResult PrimitiveCreationToolService::set_stairs_setting(
     if (!ended.ok) return ended;
   }
   const auto previous = stairs_settings_;
+  const bool previous_separate = separate_walking_surface_;
   stairs_settings_ = candidate;
+  separate_walking_surface_ = candidate_separate;
   if (!live_primitive_) {
     stairs_settings_.footprint_width = generated.value().footprint_width;
     stairs_settings_.footprint_depth = generated.value().footprint_depth;
@@ -1414,7 +1432,10 @@ CommandResult PrimitiveCreationToolService::set_stairs_setting(
     return command_changed_result();
   }
   const CommandResult updated = update_live_primitive(false, &generated.value());
-  if (!updated.ok) stairs_settings_ = previous;
+  if (!updated.ok) {
+    stairs_settings_ = previous;
+    separate_walking_surface_ = previous_separate;
+  }
   else ++tool_settings_revision_;
   return updated;
 }
@@ -1440,10 +1461,11 @@ CommandResult PrimitiveCreationToolService::reset_settings() {
     defaults.footprint_width = stairs_settings_.footprint_width;
     defaults.footprint_depth = stairs_settings_.footprint_depth;
     defaults.height = stairs_settings_.height;
-    if (same_stairs_settings(stairs_settings_, defaults)) return frozen;
+    if (same_stairs_settings(stairs_settings_, defaults) && !separate_walking_surface_) return frozen;
     auto generated = modeling::build_stairs_mesh(defaults);
     if (!generated.ok()) return command_invalid_result(generated.error_message());
     stairs_settings_ = defaults;
+    separate_walking_surface_ = false;
     if (!live_primitive_) {
       stairs_settings_.footprint_width = generated.value().footprint_width;
       stairs_settings_.footprint_depth = generated.value().footprint_depth;
@@ -1963,7 +1985,7 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
     const QVec3 center = (live_primitive_->local_min + live_primitive_->local_max) * 0.5f;
     auto candidate = stairs_document(stairs_settings_, center, live_primitive_->local_min.y,
                                     candidate_metrics, stairs_width, stairs_depth,
-                                    message, prepared_stairs);
+                                    message, prepared_stairs, separate_walking_surface_);
     if (!candidate) return reject_candidate(std::move(message));
     document = std::move(*candidate);
   } else {
@@ -2092,6 +2114,7 @@ void PrimitiveCreationToolService::load_settings(
   }
   torus_settings_ = settings.torus;
   stairs_settings_ = settings.stairs;
+  separate_walking_surface_ = settings.separate_walking_surface;
   preferred_regular_kind_ = settings.preferred_kind != PrimitiveCreationKind::Stairs
                                ? settings.preferred_kind : settings.preferred_regular_kind;
 }
@@ -2109,6 +2132,7 @@ void PrimitiveCreationToolService::remember_settings() {
       .torus = torus_settings_,
       .stairs = stairs_settings_,
       .preferred_regular_kind = preferred_regular_kind_,
+      .separate_walking_surface = separate_walking_surface_,
   };
   if (!session_defaults_) {
     return;
@@ -2137,6 +2161,7 @@ void PrimitiveCreationToolService::remember_settings() {
     break;
   case PrimitiveCreationKind::Stairs:
     session_defaults_->stairs = stairs_settings_;
+    session_defaults_->separate_walking_surface = separate_walking_surface_;
     break;
   }
 }

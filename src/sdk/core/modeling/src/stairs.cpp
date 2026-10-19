@@ -22,6 +22,7 @@
 #include <new>
 #include <numbers>
 #include <numeric>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -421,6 +422,7 @@ struct FlightRing final {
 /** Authors walking and underside rails with ordinary closed wall panels. */
 struct SurfaceBuilder final {
   AuthoredTopology topology;
+  std::vector<FaceId> walking_faces;
   std::map<std::array<float, 3>, VertexId> vertices;
   std::vector<VolumeCell> cells;
 
@@ -491,6 +493,7 @@ struct SurfaceBuilder final {
     for (std::size_t lane = 0U; lane < 2U; ++lane) {
       face({first.upper[lane], second.upper[lane], second.upper[lane + 1U],
             first.upper[lane + 1U]}, cell_index);
+      walking_faces.push_back(topology.faces.back().id);
       if (!terminal_tip) {
         face({first.lower[lane], first.lower[lane + 1U], second.lower[lane + 1U],
               second.lower[lane]}, cell_index);
@@ -859,6 +862,7 @@ void build_landing(const StairsSpec &spec, const Route &route,
       reject("The landing cannot retain its independent planar guide.");
     }
     builder.face(std::move(top), cell);
+    builder.walking_faces.push_back(builder.topology.faces.back().id);
     std::reverse(lower.begin(), lower.end());
     builder.face(std::move(lower), cell);
   };
@@ -1190,6 +1194,7 @@ Result<StairsMesh> build_stairs_mesh(const StairsSpec &spec) {
     }
     reject_collisions(document.value(), builder, route.width, route.depth, spec.height);
     result.document = std::move(document).value();
+    result.walking_faces = std::move(builder.walking_faces);
     return Result<StairsMesh>::success(std::move(result));
   } catch (const std::invalid_argument &error) {
     return Result<StairsMesh>::failure(make_error(
@@ -1201,6 +1206,29 @@ Result<StairsMesh> build_stairs_mesh(const StairsSpec &spec) {
     return Result<StairsMesh>::failure(make_error(
         ErrorCode::ValidationFailed, "The stairs mesh exceeds storage limits."));
   }
+}
+
+Result<PolygonDocument> detach_stairs_walking_surface(const StairsMesh &mesh) {
+  const auto fail = [](std::string message) {
+    return Result<PolygonDocument>::failure(
+        make_error(ErrorCode::InvalidArgument, std::move(message)));
+  };
+  const auto face_ids = mesh.document.face_ids();
+  const std::set<FaceId> walking_faces(mesh.walking_faces.begin(), mesh.walking_faces.end());
+  if (walking_faces.empty() || walking_faces.size() != mesh.walking_faces.size() ||
+      walking_faces.size() >= face_ids.size()) {
+    return fail("Stairs detachment requires distinct generated walking and body faces.");
+  }
+  PolygonDocument result = mesh.document;
+  const auto selected = result.select_faces(mesh.walking_faces);
+  if (!selected.ok()) {
+    return Result<PolygonDocument>::failure(selected.error());
+  }
+  const auto detached = result.detach_selected_faces();
+  if (!detached.ok()) {
+    return Result<PolygonDocument>::failure(detached.error());
+  }
+  return Result<PolygonDocument>::success(std::move(result));
 }
 
 } // namespace quader::modeling

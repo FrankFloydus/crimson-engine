@@ -23,6 +23,9 @@ std::optional<MeshGeometryPayload> mesh_geometry_payload_from_modeling_payload(
   }
 
   MeshGeometryPayload geometry;
+  for (const auto &field : source.circular_uv_interpolations) {
+    geometry.circular_uv_interpolations.push_back(circular_uv_interpolation_from_modeling(field));
+  }
   geometry.vertices.reserve(source.vertices.size());
   for (const modeling::MeshVertexPayload &vertex : source.vertices) {
     geometry.vertices.push_back({
@@ -35,8 +38,12 @@ std::optional<MeshGeometryPayload> mesh_geometry_payload_from_modeling_payload(
         .uv_geometric_normal = {vertex.uv_geometric_normal.x,
                                 vertex.uv_geometric_normal.y,
                                 vertex.uv_geometric_normal.z},
+        .circular_uv_index = vertex.circular_uv_index,
     });
   }
+  if (std::ranges::any_of(geometry.vertices, [&](const MeshVertex &vertex) {
+        return vertex.circular_uv_index > geometry.circular_uv_interpolations.size();
+      })) return std::nullopt;
   geometry.indices = source.indices;
   geometry.primitives.reserve(source.primitives.size());
   for (const modeling::MeshPrimitivePayload &primitive : source.primitives) {

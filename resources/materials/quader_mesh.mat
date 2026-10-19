@@ -256,9 +256,10 @@ vertex {
         applyTextureSampling(material);
         material.quadUvCoordinates = getCustom3();
         material.quadUvCorrection = getCustom4();
+        material.textureSamplingCorrection.y = getCustom2().w;
         material.textureSamplingCorrection.x = max(
                 material.textureSamplingCorrection.x,
-                material.quadUvCoordinates.w);
+                getCustom2().w > 0.5 ? 1.0 : material.quadUvCoordinates.w);
         if (requiresWorldTextureNormalCorrection()) {
             material.textureSamplingCorrection.x = 1.0;
         }

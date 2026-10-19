@@ -34,6 +34,9 @@ struct UvPeelOptions {
   double v_repeat = 1.0;
   double u_offset = 0.0;
   double v_offset = 0.0;
+  /// Fits compatible circular guide strips and retains a live polar UV field.
+  /// Unsupported guides keep ordinary Peel; false removes the field on touched faces.
+  bool smooth_circular_flow = false;
 
   friend bool operator==(const UvPeelOptions &, const UvPeelOptions &) = default;
 };

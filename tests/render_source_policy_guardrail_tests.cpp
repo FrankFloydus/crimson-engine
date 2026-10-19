@@ -398,13 +398,24 @@ TEST(QuaderMeshMaterialTests,
      SharedQuadCorrectionFeedsTheFinalMaterialUvAndNormalDerivativePath) {
   const std::string quad_source =
       read_source_file("resources/materials/mesh_quad_uv.glsl");
+  const std::size_t circular_gate =
+      quad_source.find("if (variable_textureSamplingCorrection.y > 0.5)");
   const std::size_t fallback_gate =
       quad_source.find("if (variable_quadUvCoordinates.w <= 0.5)");
   const std::size_t coordinate_read =
       quad_source.find("coordinate = variable_quadUvCoordinates.xyz");
+  ASSERT_NE(circular_gate, std::string::npos);
   ASSERT_NE(fallback_gate, std::string::npos);
   ASSERT_NE(coordinate_read, std::string::npos);
+  EXPECT_LT(circular_gate, fallback_gate);
   EXPECT_LT(fallback_gate, coordinate_read);
+  EXPECT_TRUE(source_contains_compact(
+      quad_source, "vec2 delta = vec2(radius - coordinate.z, "
+                   "atan(coordinate.y, coordinate.x) - coordinate.w)"));
+  EXPECT_TRUE(source_contains_compact(
+      quad_source, "vec2 corrected = uv + vec2("
+                   "dot(variable_quadUvCorrection.xy, delta), "
+                   "dot(variable_quadUvCorrection.zw, delta))"));
   EXPECT_NE(quad_source.find("highp vec2 applyQuadUvInterpolation"),
             std::string::npos);
   EXPECT_NE(quad_source.find("variable_quadUvCorrection.xy"),
@@ -427,9 +438,11 @@ TEST(QuaderMeshMaterialTests,
     EXPECT_TRUE(source_contains_compact(
         source, "material.quadUvCorrection = getCustom4()"));
     EXPECT_TRUE(source_contains_compact(
+        source, "material.textureSamplingCorrection.y = getCustom2().w"));
+    EXPECT_TRUE(source_contains_compact(
         source, "material.textureSamplingCorrection.x = max("
                 "material.textureSamplingCorrection.x,"
-                "material.quadUvCoordinates.w)"));
+                "getCustom2().w > 0.5 ? 1.0 : material.quadUvCoordinates.w)"));
     EXPECT_TRUE(source_contains_compact(
         source, "uv = applyTextureTransform(applyQuadUvInterpolation("
                 "vec2(getUV0().x, 1.0 - getUV0().y)))"));
@@ -1118,6 +1131,24 @@ TEST(QuaderMeshMaterialTests,
     }
     EXPECT_NE(preview_source.find(qualified), std::string::npos);
   }
+  for (const auto &upload : upload_paths) {
+    const std::string normal_attribute = source_slice(
+        upload, ".attribute(filament::VertexAttribute::CUSTOM2,",
+        ".attribute(filament::VertexAttribute::CUSTOM3,");
+    EXPECT_NE(normal_attribute.find("AttributeType::FLOAT4"),
+              std::string::npos);
+  }
+  EXPECT_TRUE(source_contains_compact(
+      preview_source, ".attribute(filament::VertexAttribute::CUSTOM2, 0u, "
+                      "AttributeType::FLOAT4, "
+                      "offsetof(PreviewGpuVertex, uv_geometric_normal)"));
+  EXPECT_TRUE(source_contains_compact(
+      preview_source, ".uv_geometric_normal = {vertex.normal.x, "
+                      "vertex.normal.y, vertex.normal.z, 0.0F}"));
+  EXPECT_TRUE(source_contains_compact(
+      factory_source, ".uv_geometric_normal = {vertex.uv_geometric_normal.x, "
+                      "vertex.uv_geometric_normal.y, vertex.uv_geometric_normal.z, "
+                      "quad.circular ? 1.0F : 0.0F}"));
   for (const std::string_view attribute :
        {"uv_carrier", "uv_geometric_normal", "quad_uv_coordinates",
         "quad_uv_correction"}) {
@@ -1127,7 +1158,12 @@ TEST(QuaderMeshMaterialTests,
   }
   EXPECT_TRUE(source_contains_compact(
       factory_source, "build_mesh_quad_uv_interpolations("
-                      "mesh.vertices, mesh.indices, mesh.primitives, positions)"));
+                      "mesh.vertices, mesh.indices, mesh.primitives, positions, "
+                      "mesh.circular_uv_interpolations)"));
+  EXPECT_TRUE(source_contains_compact(
+      factory_source, "build_mesh_quad_uv_interpolations("
+                      "mesh.vertices, *quad_plan, positions, "
+                      "mesh.circular_uv_interpolations, mesh.indices)"));
   EXPECT_EQ(count_occurrences(
                 factory_source,
                 "build_render_vertices<DynamicRenderVertexStatic>(mesh, dynamic_positions)"),

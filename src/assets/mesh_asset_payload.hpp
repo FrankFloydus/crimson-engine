@@ -34,6 +34,7 @@ inline bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
          left.rgba == right.rgba &&
          left.source_vertex_id == right.source_vertex_id &&
          left.uv_carrier == right.uv_carrier &&
+         left.circular_uv_index == right.circular_uv_index &&
          same_vec3(left.uv_geometric_normal, right.uv_geometric_normal);
 }
 
@@ -47,6 +48,7 @@ inline bool same_polygon_face(const quader_poly::Face &left,
   if (left.id != right.id || left.vertices != right.vertices ||
       left.material_slot != right.material_slot ||
       left.normal_shading != right.normal_shading ||
+      left.circular_uv_interpolation != right.circular_uv_interpolation ||
       !same_vec2(left.texture_transform.scale, right.texture_transform.scale) ||
       !same_vec2(left.texture_transform.shift_uv,
                  right.texture_transform.shift_uv) ||
@@ -116,6 +118,18 @@ polygon_document_hash(const quader_poly::Document &document) {
       hash = append_authored_hash(hash, authored_float_hash_value(uv.x));
       hash = append_authored_hash(hash, authored_float_hash_value(uv.y));
     }
+    hash = append_authored_hash(hash, face.circular_uv_interpolation.has_value());
+    if (face.circular_uv_interpolation) {
+      const auto &field = *face.circular_uv_interpolation;
+      for (const QVec3 value : {field.center, field.axis_u, field.axis_v}) {
+        hash = append_authored_hash(hash, authored_float_hash_value(value.x));
+        hash = append_authored_hash(hash, authored_float_hash_value(value.y));
+        hash = append_authored_hash(hash, authored_float_hash_value(value.z));
+      }
+      for (const float value : field.uv_from_polar) {
+        hash = append_authored_hash(hash, authored_float_hash_value(value));
+      }
+    }
     hash = append_authored_hash(hash, face.material_slot);
     hash = append_authored_hash(
         hash, static_cast<std::uint64_t>(face.normal_shading));
@@ -183,6 +197,7 @@ inline bool mesh_geometry_payload_equal(const MeshGeometryPayload &left,
   return left.vertices.size() == right.vertices.size() &&
          std::equal(left.vertices.begin(), left.vertices.end(),
                     right.vertices.begin(), same_vertex) &&
+         left.circular_uv_interpolations == right.circular_uv_interpolations &&
          left.indices == right.indices &&
          left.primitives == right.primitives;
 }

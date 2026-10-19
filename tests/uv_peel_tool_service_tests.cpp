@@ -7,12 +7,16 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "assets/asset_registry.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/session/tool_session_defaults.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
+#include "render/scene_render_bridge.hpp"
 #include "scene/scene_document.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -22,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
@@ -90,6 +95,90 @@ QuaderModelingObjectRef create_strip(QuaderEditorApi &editor,
       peel_strip_document(), {.name = std::move(name)});
   EXPECT_TRUE(created.ok()) << created.error_message();
   return created.ok() ? created.value() : QuaderModelingObjectRef{};
+}
+
+QuaderModelingObjectRef create_circular_strip(QuaderEditorApi &editor,
+                                             std::string name) {
+  quader_poly::Document document;
+  std::array<quader_poly::ElementId, 9U> vertices{};
+  for (std::size_t station = 0U; station < 3U; ++station) {
+    const double angle = 0.2 * double(station);
+    for (std::size_t lane = 0U; lane < 3U; ++lane) {
+      const double radius = 1.0 + double(lane);
+      vertices[station*3U+lane] = quader_poly::add_vertex(document,
+          {float(radius*std::cos(angle)), 0.0F, float(radius*std::sin(angle))});
+    }
+  }
+  for (std::size_t station = 0U; station < 2U; ++station) {
+    for (std::size_t lane = 0U; lane < 2U; ++lane) {
+      const std::size_t first = station*3U+lane;
+      (void)quader_poly::add_face(document,
+          std::array{vertices[first], vertices[first+3U],
+                     vertices[first+4U], vertices[first+1U]});
+      document.faces.back().uvs = {{0.0F,0.0F}, {1.0F,0.0F},
+                                   {1.0F,1.0F}, {0.0F,1.0F}};
+    }
+  }
+  const auto created = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = std::move(name)});
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.ok() ? created.value() : QuaderModelingObjectRef{};
+}
+
+quader_poly::Document peel_authored_document(UvPeelHarness &harness,
+                                            QuaderModelingObjectRef object) {
+  const auto snapshot = harness.session.modeling().polygon_document_read_snapshot(
+      object.modeling_object_id, true);
+  EXPECT_TRUE(snapshot.ok()) << snapshot.error_message();
+  if (!snapshot.ok()) return {};
+  const auto view = snapshot.value().document.view();
+  quader_poly::Document document;
+  document.vertices.assign(view.vertices.begin(), view.vertices.end());
+  document.faces.assign(view.faces.begin(), view.faces.end());
+  document.hard_normal_edges.assign(view.hard_normal_edges.begin(), view.hard_normal_edges.end());
+  document.soft_normal_edges.assign(view.soft_normal_edges.begin(), view.soft_normal_edges.end());
+  document.next_vertex_id = view.next_vertex_id;
+  document.next_face_id = view.next_face_id;
+  return document;
+}
+
+void expect_peel_authored_equal(const quader_poly::Document &actual,
+                                const quader_poly::Document &expected) {
+  EXPECT_TRUE(quader_poly::has_same_geometry(actual, expected));
+  ASSERT_EQ(actual.faces.size(), expected.faces.size());
+  for (std::size_t index = 0U; index < actual.faces.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &face = actual.faces[index];
+    const auto &reference = expected.faces[index];
+    EXPECT_EQ(face.id, reference.id);
+    EXPECT_EQ(face.vertices, reference.vertices);
+    EXPECT_EQ(face.material_slot, reference.material_slot);
+    EXPECT_EQ(face.texture_transform, reference.texture_transform);
+    EXPECT_EQ(face.circular_uv_interpolation, reference.circular_uv_interpolation);
+    ASSERT_EQ(face.uvs.size(), reference.uvs.size());
+    for (std::size_t corner = 0U; corner < face.uvs.size(); ++corner) {
+      EXPECT_FLOAT_EQ(face.uvs[corner].x, reference.uvs[corner].x);
+      EXPECT_FLOAT_EQ(face.uvs[corner].y, reference.uvs[corner].y);
+    }
+  }
+}
+
+void expect_circular_faces(const quader_poly::Document &document, bool expected) {
+  ASSERT_EQ(document.faces.size(), 4U);
+  for (const auto &face : document.faces) {
+    EXPECT_EQ(face.circular_uv_interpolation.has_value(), expected) << face.id;
+  }
+}
+
+void select_circular_guides(QuaderEditorApi &editor,
+                            QuaderModelingObjectRef object) {
+  ASSERT_TRUE(editor.selection().select_components({
+      .object = object, .kind = QuaderComponentKind::Edge,
+      .edges = {{2,5}, {5,8}},
+      .active = {.object = object, .kind = QuaderComponentKind::Edge,
+                 .edge_a = 2, .edge_b = 5},
+  }).ok());
 }
 
 void enter_peel_edit(QuaderEditorApi &editor,
@@ -183,6 +272,8 @@ void set_options(QuaderEditorApi &editor, const QuaderUvPeelOptions &options) {
                   .ok());
   ASSERT_TRUE(tools.set_setting("uv_peel", "uv_peel.world_space",
                                 options.world_space).ok());
+  ASSERT_TRUE(tools.set_setting("uv_peel", "uv_peel.smooth_circular_flow",
+                                options.smooth_circular_flow).ok());
   const std::array values{
       std::pair{"uv_peel.u_repeat", options.u_repeat},
       std::pair{"uv_peel.v_repeat", options.v_repeat},
@@ -360,6 +451,9 @@ TEST(UvPeelToolServiceTests, EverySettingAndResetRecalculateWithoutAccumulation)
   options.world_space = false;
   ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.world_space", false).ok());
   verify();
+  options.smooth_circular_flow = true;
+  ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.smooth_circular_flow", true).ok());
+  verify();
   options.u_repeat = 2.0;
   ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.u_repeat", 2.0).ok());
   verify();
@@ -375,6 +469,221 @@ TEST(UvPeelToolServiceTests, EverySettingAndResetRecalculateWithoutAccumulation)
   options = {};
   ASSERT_TRUE(editor.tools().reset_active_settings().ok());
   verify();
+}
+
+TEST(UvPeelToolServiceTests,
+     CircularFlowToggleRecomputesFromSourceAndSupportsCancelApplyUndoRedo) {
+  const auto defaults = std::make_shared<ToolSessionDefaults>();
+  UvPeelHarness harness(defaults);
+  auto &editor = harness.editor;
+  EXPECT_FALSE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+  const auto strip = create_circular_strip(editor, "Circular flow lifecycle");
+  enter_peel_edit(editor, {strip});
+  select_circular_guides(editor, strip);
+  const auto original = peel_authored_document(harness, strip);
+  harness.session.history().clear();
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  const auto ordinary = peel_authored_document(harness, strip);
+  expect_circular_faces(ordinary, false);
+  ASSERT_TRUE(editor.tools().active_settings().can_apply);
+
+  const auto toggle = editor.tools().set_setting(
+      "uv_peel", "uv_peel.smooth_circular_flow", true);
+  ASSERT_TRUE(toggle.ok()) << toggle.error_message();
+  const auto smooth = peel_authored_document(harness, strip);
+  expect_circular_faces(smooth, true);
+  EXPECT_TRUE(quader_poly::has_same_geometry(smooth, original));
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
+  const auto revision = editor.tools().active_settings_revision();
+  const auto content_revision = editor.revisions().modeling_content_revision;
+  const auto unchanged = editor.tools().set_setting(
+      "uv_peel", "uv_peel.smooth_circular_flow", true);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+  EXPECT_EQ(editor.revisions().modeling_content_revision, content_revision);
+  for (double invalid : {-1.0, 0.5, 2.0}) {
+    EXPECT_FALSE(editor.tools().set_setting(
+        "uv_peel", "uv_peel.smooth_circular_flow", invalid).ok());
+  }
+  expect_peel_authored_equal(peel_authored_document(harness, strip), smooth);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "uv_peel", "uv_peel.smooth_circular_flow", false).ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), ordinary);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "uv_peel", "uv_peel.smooth_circular_flow", true).ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), smooth);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), original);
+  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_TRUE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+  UvPeelHarness borrowed(defaults);
+  EXPECT_TRUE(borrowed.editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), smooth);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(editor.history().snapshot().undo_label, "UV Peel");
+  EXPECT_EQ(harness.session.history().undo_count(), 1U);
+  expect_peel_authored_equal(peel_authored_document(harness, strip), smooth);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), original);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), smooth);
+  EXPECT_TRUE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "uv_peel", "uv_peel.smooth_circular_flow", false).ok());
+  const auto cleared = peel_authored_document(harness, strip);
+  expect_circular_faces(cleared, false);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), smooth);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), cleared);
+  EXPECT_FALSE(editor.modeling().uv_peel_settings().options.smooth_circular_flow);
+}
+
+TEST(UvPeelToolServiceTests, CircularFlowRepeatKeepsCapturedOptionAndAuthoredMapping) {
+  UvPeelHarness harness;
+  auto &editor = harness.editor;
+  const auto first = create_circular_strip(editor, "Circular flow source");
+  const auto second = create_circular_strip(editor, "Circular flow repeat");
+  enter_peel_edit(editor, {first, second});
+  select_circular_guides(editor, first);
+  const QuaderUvPeelOptions captured{
+      .world_space = false, .u_repeat = 1.5, .v_repeat = 2.0,
+      .u_offset = 0.25, .v_offset = -0.5, .smooth_circular_flow = true};
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  set_options(editor, captured);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  const auto applied = peel_authored_document(harness, first);
+  expect_circular_faces(applied, true);
+  const QuaderUvPeelOptions displayed{.u_repeat = 7.0, .v_offset = 4.0};
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options(displayed).ok());
+  select_circular_guides(editor, second);
+  const auto original = peel_authored_document(harness, second);
+  const auto repeated = editor.history().repeat_last_action();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_TRUE(repeated.changed());
+  expect_peel_authored_equal(peel_authored_document(harness, second), applied);
+  EXPECT_EQ(editor.modeling().uv_peel_settings().options, displayed);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, second), original);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, second), applied);
+}
+
+TEST(UvPeelToolServiceTests,
+     CircularFlowComponentTransformPublishesReconciledPreviewAndHistory) {
+  UvPeelHarness harness;
+  auto &editor = harness.editor;
+  const auto strip = create_circular_strip(editor, "Circular component transform");
+  enter_peel_edit(editor, {strip});
+  select_circular_guides(editor, strip);
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "uv_peel", "uv_peel.smooth_circular_flow", true).ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  const auto original = peel_authored_document(harness, strip);
+  expect_circular_faces(original, true);
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(strip, 1).ok());
+  harness.session.history().clear();
+  SceneRenderBridge bridge;
+  std::vector<RenderToolPreviewMeshRecord> published;
+  const QuaderRenderApiRuntimeAccess::ToolPreviewScenePublisher publisher =
+      [&](RenderToolPreviewSceneSnapshot records) {
+        published = std::move(records.meshes);
+        return ToolPreviewSubmissionResult::Published;
+      };
+  const auto synchronize = [&] {
+    const auto result = QuaderRenderApiRuntimeAccess::sync_tool_previews(
+        editor.render(), bridge, {}, publisher);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+  };
+  const auto expect_transformed = [&](const quader_poly::Document &document,
+                                       const MeshGeometryPayload &geometry) {
+    ASSERT_EQ(document.vertices.size(), original.vertices.size());
+    ASSERT_EQ(document.faces.size(), original.faces.size());
+    ASSERT_EQ(geometry.primitives.size(), original.faces.size());
+    for (std::size_t index = 0U; index < document.vertices.size(); ++index) {
+      const auto &vertex = document.vertices[index];
+      const auto &before = original.vertices[index];
+      EXPECT_EQ(vertex.id, before.id);
+      EXPECT_FLOAT_EQ(vertex.position.x, before.position.x+(vertex.id == 1U ? 0.125F : 0.0F));
+      EXPECT_FLOAT_EQ(vertex.position.y, before.position.y);
+      EXPECT_FLOAT_EQ(vertex.position.z, before.position.z);
+    }
+    for (std::size_t index = 0U; index < document.faces.size(); ++index) {
+      const auto &face = document.faces[index];
+      const auto &before = original.faces[index];
+      const bool touched = std::ranges::find(face.vertices, 1U) != face.vertices.end();
+      EXPECT_EQ(face.vertices, before.vertices);
+      EXPECT_EQ(face.circular_uv_interpolation.has_value(), !touched);
+      ASSERT_EQ(face.uvs.size(), before.uvs.size());
+      for (std::size_t corner = 0U; corner < face.uvs.size(); ++corner) {
+        EXPECT_TRUE(std::isfinite(face.uvs[corner].x));
+        EXPECT_TRUE(std::isfinite(face.uvs[corner].y));
+        if (!touched) {
+          EXPECT_FLOAT_EQ(face.uvs[corner].x, before.uvs[corner].x);
+          EXPECT_FLOAT_EQ(face.uvs[corner].y, before.uvs[corner].y);
+        }
+      }
+      if (!touched) EXPECT_EQ(face.circular_uv_interpolation, before.circular_uv_interpolation);
+      const auto &primitive = geometry.primitives[index];
+      ASSERT_LE(std::size_t(primitive.index_offset)+primitive.index_count, geometry.indices.size());
+      for (std::size_t corner = primitive.index_offset;
+           corner < std::size_t(primitive.index_offset)+primitive.index_count; ++corner) {
+        ASSERT_LT(geometry.indices[corner], geometry.vertices.size());
+        const auto &vertex = geometry.vertices[geometry.indices[corner]];
+        EXPECT_TRUE(std::isfinite(vertex.uv.x));
+        EXPECT_TRUE(std::isfinite(vertex.uv.y));
+        if (touched) {
+          EXPECT_EQ(vertex.circular_uv_index, 0U);
+        } else {
+          ASSERT_GT(vertex.circular_uv_index, 0U);
+          ASSERT_LE(vertex.circular_uv_index, geometry.circular_uv_interpolations.size());
+          EXPECT_EQ(geometry.circular_uv_interpolations[vertex.circular_uv_index-1U],
+                    *before.circular_uv_interpolation);
+        }
+      }
+    }
+  };
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor.modeling().update_transform_translate({0.125F,0.0F,0.0F}).ok());
+  ASSERT_NO_FATAL_FAILURE(synchronize());
+  ASSERT_EQ(published.size(), 1U);
+  EXPECT_EQ(published.front().source_entity, strip.entity);
+  MeshAsset preview = published.front().mesh;
+  if (published.front().geometry_projection) {
+    preview.share_geometry(published.front().geometry_projection->materialized_geometry());
+  }
+  ASSERT_TRUE(preview.authored_polygon_document);
+  const quader_poly::Document expected = *preview.authored_polygon_document;
+  ASSERT_NO_FATAL_FAILURE(expect_transformed(expected, preview.geometry()));
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), original);
+  ASSERT_NO_FATAL_FAILURE(synchronize());
+  EXPECT_TRUE(published.empty());
+  EXPECT_FALSE(editor.history().can_undo());
+
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor.modeling().update_transform_translate({0.125F,0.0F,0.0F}).ok());
+  ASSERT_TRUE(editor.modeling().commit_transform_preview("Move circular component").ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), expected);
+  const auto accepted_mesh = editor.query().compiled_object_mesh(strip);
+  ASSERT_TRUE(accepted_mesh.has_value());
+  const auto *accepted = harness.session.assets().mesh(accepted_mesh->id);
+  ASSERT_NE(accepted, nullptr);
+  ASSERT_NO_FATAL_FAILURE(expect_transformed(peel_authored_document(harness, strip), accepted->geometry()));
+  EXPECT_EQ(harness.session.history().undo_count(), 1U);
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), original);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_peel_authored_equal(peel_authored_document(harness, strip), expected);
 }
 
 TEST(UvPeelToolServiceTests, EmptySpacePickClearsGuidesAndRestoresOriginalUvs) {

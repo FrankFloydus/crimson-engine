@@ -1145,6 +1145,7 @@ inline QuaderMeshVertex to_api_mesh_vertex(const MeshVertex &vertex) {
       .rgba = vertex.rgba,
       .uv_carrier = vertex.uv_carrier,
       .uv_geometric_normal = vertex.uv_geometric_normal,
+      .circular_uv_index = vertex.circular_uv_index,
   };
 }
 
@@ -1156,6 +1157,7 @@ inline MeshVertex to_mesh_vertex(const QuaderMeshVertex &vertex) {
       .rgba = vertex.rgba,
       .uv_carrier = vertex.uv_carrier,
       .uv_geometric_normal = vertex.uv_geometric_normal,
+      .circular_uv_index = vertex.circular_uv_index,
   };
 }
 
@@ -1187,6 +1189,9 @@ inline QuaderMeshAsset to_api_mesh_asset(const MeshAsset &mesh) {
   for (const MeshVertex &vertex : geometry.vertices) {
     result.vertices.push_back(to_api_mesh_vertex(vertex));
   }
+  for (const auto &field : geometry.circular_uv_interpolations) {
+    result.circular_uv_interpolations.push_back({field.center, field.axis_u, field.axis_v, field.uv_from_polar});
+  }
   result.indices = geometry.indices;
   result.primitives.reserve(geometry.primitives.size());
   for (const MeshPrimitiveSpan &primitive : geometry.primitives) {
@@ -1217,6 +1222,9 @@ inline MeshAsset to_mesh_asset(const QuaderMeshAsset &mesh) {
   geometry.vertices.reserve(mesh.vertices.size());
   for (const QuaderMeshVertex &vertex : mesh.vertices) {
     geometry.vertices.push_back(to_mesh_vertex(vertex));
+  }
+  for (const auto &field : mesh.circular_uv_interpolations) {
+    geometry.circular_uv_interpolations.push_back({field.center, field.axis_u, field.axis_v, field.uv_from_polar});
   }
   geometry.indices = mesh.indices;
   geometry.primitives.reserve(mesh.primitives.size());

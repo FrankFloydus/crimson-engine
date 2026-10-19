@@ -9810,7 +9810,7 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(document.set_face_texture_transforms(updates).ok());
   const auto encoded = serialize_qdr_authored_topology(document);
   ASSERT_TRUE(encoded.ok()) << encoded.error_message();
-  EXPECT_EQ(encoded.value()[6], std::byte{3});
+  EXPECT_EQ(encoded.value()[6], std::byte{4});
   const auto decoded = deserialize_qdr_authored_topology(encoded.value());
   ASSERT_TRUE(decoded.ok()) << decoded.error_message();
   const auto original = document.face_texture_settings(ids);
@@ -9827,6 +9827,8 @@ TEST(ModelingSdkConsumerTests,
 
   // Version 1.1 stored face transforms but reserved the soft-edge count.
   auto legacy11 = encoded.value();
+  legacy11.resize(legacy11.size() - 4U);
+  write_u32_le(legacy11, 16U, static_cast<std::uint32_t>(legacy11.size()));
   legacy11[6] = std::byte{1};
   write_u32_le(legacy11, 52U, 0U);
   const auto migrated11 = deserialize_qdr_authored_topology(legacy11);
@@ -9853,14 +9855,14 @@ TEST(ModelingSdkConsumerTests,
   }
 
   auto invalid = encoded.value();
-  write_u32_le(invalid, invalid.size() - ids.size() * 20U, 0U);
+  write_u32_le(invalid, invalid.size() - 4U - ids.size() * 20U, 0U);
   const auto stored_invalid = deserialize_qdr_authored_topology(invalid);
   ASSERT_TRUE(stored_invalid.ok()) << stored_invalid.error_message();
   EXPECT_FALSE(stored_invalid.value().validate().ok());
   EXPECT_EQ(serialize_qdr_authored_topology(stored_invalid.value()).or_throw(),
             invalid);
   auto unsupported = encoded.value();
-  unsupported[6] = std::byte{4};
+  unsupported[6] = std::byte{5};
   EXPECT_FALSE(deserialize_qdr_authored_topology(unsupported).ok());
 }
 
@@ -9977,7 +9979,7 @@ TEST(ModelingSdkConsumerTests,
 
   const auto encoded = serialize_qdr_authored_topology(imported.value());
   ASSERT_TRUE(encoded.ok()) << encoded.error_message();
-  EXPECT_EQ(encoded.value()[6], std::byte{3});
+  EXPECT_EQ(encoded.value()[6], std::byte{4});
   EXPECT_EQ(read_u32_le(encoded.value(), 52U), 2U);
   auto reordered_topology = topology;
   std::ranges::reverse(reordered_topology.hard_normal_edges);
@@ -10001,7 +10003,7 @@ TEST(ModelingSdkConsumerTests,
 
   auto conflicting_bytes = encoded.value();
   const std::size_t first_soft_offset =
-      conflicting_bytes.size() - topology.faces.size() * 20U - 2U * 8U;
+      conflicting_bytes.size() - 4U - topology.faces.size() * 20U - 2U * 8U;
   write_u32_le(conflicting_bytes, first_soft_offset,
                expected_hard.front().a.index);
   write_u32_le(conflicting_bytes, first_soft_offset + 4U,
@@ -10029,6 +10031,8 @@ TEST(ModelingSdkConsumerTests,
   ASSERT_TRUE(imported.ok());
   auto legacy11 = serialize_qdr_authored_topology(imported.value()).or_throw();
   ASSERT_EQ(read_u32_le(legacy11, 52U), 0U);
+  legacy11.resize(legacy11.size() - 4U);
+  write_u32_le(legacy11, 16U, static_cast<std::uint32_t>(legacy11.size()));
   legacy11[6] = std::byte{1};
   const auto migrated = deserialize_qdr_authored_topology(legacy11);
   ASSERT_TRUE(migrated.ok()) << migrated.error_message();

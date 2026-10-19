@@ -25,6 +25,9 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 - Authored polygon data uses SDK-owned packed/CSR `QGEO` inside the geometry wrapper; compiled mesh
   fallback data also lives in `QDRG`. Native code consumes the projection owner instead of duplicating
   topology conversion.
+- Opt-in circular UV Peel fields persist in authored `QGEO` minor 4. Compiled-only payloads
+  carry an optional sparse field table and per-vertex 1-based indices in `QDRG`; missing data
+  means ordinary interpolation. The field is renderer-neutral and adds no mesh vertices.
 - Save and Auto Save retain raw authored geometry independently of modeling diagnostics. Invalid
   loops, references, UV arrays and edge attributes round-trip without automatic cleanup. On load,
   safe display geometry is derived separately; it never replaces the stored authored records.
@@ -45,7 +48,7 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 ## Compatibility that must survive
 
-Current scene metadata schema is 19; schema versions and defaults are enforced in the codec.
+Current scene metadata schema is 20; schema versions and defaults are enforced in the codec.
 
 Native Location uses the existing `TransformComponent.position` wire slot. Native
 `SelectableComponent.selectable` is stored as the inverse of the existing
@@ -82,6 +85,7 @@ the session stamps the writer's release without lowering an existing requirement
 | 17 | Affine parenting offset before editable TRS; older or absent fields use identity |
 | 18 | Per-mesh Wireframe on Shaded participation; older or absent fields default to enabled |
 | 19 | Optional per-mesh shaded-wire RGB override; older or absent fields inherit the global viewport color |
+| 20 | Optional compiled circular UV interpolation descriptors and one-based per-vertex references; absent fields use ordinary interpolation |
 
 Schema 18 appends a mesh display flag. The pane-local master remains transient viewport state;
 only the object's participation is saved. Readers predating schema 18 reject new files so a later
@@ -91,6 +95,12 @@ Schema 19 adds optional normalized sRGB color data to each mesh. Absence means i
 explicit black remains a distinct authored override. All RGB channels must be finite and within
 [0, 1]. Full and dependency-only readers reject invalid overrides before publication. Override
 alpha is deliberately not stored; the shared viewport color owns opacity.
+
+Schema 20 protects compiled-only circular texture flow from older readers that would discard
+the added fields on save. Geometry chunks retain schema 1. Full hydration, dependency reads,
+and material-usage reads reject nonempty circular descriptor/index vectors labeled with an
+earlier scene schema, nonfinite or degenerate frames, mismatched index counts, and missing descriptors.
+These checks inspect compiled attributes without decoding authored topology or compiling a mesh.
 
 The FlatBuffers defaults remain intensity 1 and ACES tone mapping, even when new native
 objects use different creation defaults. Saved camera values also remain unchanged. Obsolete
@@ -128,7 +138,7 @@ so they cannot silently load compensated children in the wrong location or disca
 
 The native `qdr_migrate` tool validates a complete batch without writing by default:
 `qdr_migrate <scene.qdr> [...]`. Add `--apply --backup-directory <new-directory>`
-to retain verified originals and publish validated schema-19 files with per-file atomic writes
+to retain verified originals and publish validated schema-20 files with per-file atomic writes
 and rollback on ordinary failures. Its isolated converter also handles the retired
 metadata-10/geometry-2 dialect; that dialect is not accepted by the normal scene reader.
 Persistent backups provide recovery after interruption; the batch is not crash-atomic.

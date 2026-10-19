@@ -100,6 +100,7 @@ to_modeling_uv_peel_options(const QuaderUvPeelOptions &options) {
       .v_repeat = options.v_repeat,
       .u_offset = options.u_offset,
       .v_offset = options.v_offset,
+      .smooth_circular_flow = options.smooth_circular_flow,
   };
 }
 
@@ -112,6 +113,7 @@ QuaderUvPeelOptions to_api_uv_peel_options(const ModelingUvPeelOptions &options)
       .v_repeat = options.v_repeat,
       .u_offset = options.u_offset,
       .v_offset = options.v_offset,
+      .smooth_circular_flow = options.smooth_circular_flow,
   };
 }
 

@@ -60,7 +60,7 @@ struct RenderVertex {
     filament::math::float2 uv;
     filament::math::float4 surface_grid_projection;
     filament::math::float4 uv_carrier;
-    filament::math::float3 uv_geometric_normal;
+    filament::math::float4 uv_geometric_normal;
     filament::math::float4 quad_uv_coordinates;
     filament::math::float4 quad_uv_correction;
     std::uint32_t color;
@@ -74,7 +74,7 @@ struct DynamicRenderVertexStatic {
     filament::math::float2 uv;
     filament::math::float4 surface_grid_projection;
     filament::math::float4 uv_carrier;
-    filament::math::float3 uv_geometric_normal;
+    filament::math::float4 uv_geometric_normal;
     filament::math::float4 quad_uv_coordinates;
     filament::math::float4 quad_uv_correction;
     std::uint32_t color;
@@ -237,8 +237,8 @@ build_render_vertices(const RenderMeshAssetSnapshot &mesh,
       grid_plan ? build_mesh_surface_grid_vertex_projections(mesh.vertices, *grid_plan, positions)
                 : build_mesh_surface_grid_vertex_projections(mesh.vertices, mesh.indices, mesh.primitives, positions);
   const std::vector<MeshQuadUvInterpolation> quad_interpolations =
-      quad_plan ? build_mesh_quad_uv_interpolations(mesh.vertices, *quad_plan, positions)
-                : build_mesh_quad_uv_interpolations(mesh.vertices, mesh.indices, mesh.primitives, positions);
+      quad_plan ? build_mesh_quad_uv_interpolations(mesh.vertices, *quad_plan, positions, mesh.circular_uv_interpolations, mesh.indices)
+                : build_mesh_quad_uv_interpolations(mesh.vertices, mesh.indices, mesh.primitives, positions, mesh.circular_uv_interpolations);
   std::vector<Vertex> vertices;
   vertices.reserve(mesh.vertices.size());
   for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
@@ -254,11 +254,18 @@ build_render_vertices(const RenderMeshAssetSnapshot &mesh,
          grid_projection.face_projected ? 1.0f : 0.0f},
         .uv_carrier = {vertex.uv_carrier[0], vertex.uv_carrier[1], vertex.uv_carrier[2],
          vertex.uv_carrier[3]},
-        .uv_geometric_normal = to_filament(vertex.uv_geometric_normal),
-        .quad_uv_coordinates = {quad.coordinates.x, quad.coordinates.y, quad.coordinates.z,
-         quad.enabled ? 1.0f : 0.0f},
-        .quad_uv_correction = {quad.geometry_warp.x, quad.geometry_warp.y, quad.uv_correction.x,
-         quad.uv_correction.y},
+        .uv_geometric_normal = {vertex.uv_geometric_normal.x, vertex.uv_geometric_normal.y,
+         vertex.uv_geometric_normal.z, quad.circular ? 1.0F : 0.0F},
+        .quad_uv_coordinates = quad.circular
+            ? filament::math::float4{quad.circular_coordinates[0], quad.circular_coordinates[1],
+                quad.circular_coordinates[2], quad.circular_coordinates[3]}
+            : filament::math::float4{quad.coordinates.x, quad.coordinates.y, quad.coordinates.z,
+                quad.enabled ? 1.0F : 0.0F},
+        .quad_uv_correction = quad.circular
+            ? filament::math::float4{quad.uv_from_polar[0], quad.uv_from_polar[1],
+                quad.uv_from_polar[2], quad.uv_from_polar[3]}
+            : filament::math::float4{quad.geometry_warp.x, quad.geometry_warp.y,
+                quad.uv_correction.x, quad.uv_correction.y},
         .color = vertex.rgba,
     };
     if constexpr (std::is_same_v<Vertex, RenderVertex>) {
@@ -326,6 +333,7 @@ bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
          left.normal.z == right.normal.z && left.uv.x == right.uv.x &&
          left.uv.y == right.uv.y && left.rgba == right.rgba &&
          left.source_vertex_id == right.source_vertex_id &&
+         left.circular_uv_index == right.circular_uv_index &&
          left.uv_carrier == right.uv_carrier &&
          left.uv_geometric_normal.x == right.uv_geometric_normal.x &&
          left.uv_geometric_normal.y == right.uv_geometric_normal.y &&
@@ -338,12 +346,14 @@ std::uint64_t geometry_payload_signature(
     return mesh.geometry_content_id.value;
   }
   RenderSignatureBuilder signature;
+  signature.add_circular_uv_interpolations(mesh.circular_uv_interpolations);
   signature.add_size(mesh.vertices.size());
   for (const MeshVertex &vertex : mesh.vertices) {
     signature.add_vec3(vertex.position)
         .add_vec3(vertex.normal)
         .add_vec2(vertex.uv)
         .add_vec3(vertex.uv_geometric_normal)
+        .add_value(vertex.circular_uv_index)
         .add_value(vertex.source_vertex_id)
         .add_value(vertex.rgba);
     for (const float coefficient : vertex.uv_carrier) {
@@ -401,6 +411,7 @@ bool same_dynamic_vertex(const MeshVertex &left, const MeshVertex &right) {
          same_dynamic_float(left.uv.y, right.uv.y) &&
          left.rgba == right.rgba &&
          left.source_vertex_id == right.source_vertex_id &&
+         left.circular_uv_index == right.circular_uv_index &&
          std::equal(left.uv_carrier.begin(), left.uv_carrier.end(),
                     right.uv_carrier.begin(), same_dynamic_float) &&
          same_dynamic_vec3(left.uv_geometric_normal,
@@ -409,6 +420,7 @@ bool same_dynamic_vertex(const MeshVertex &left, const MeshVertex &right) {
 
 bool same_dynamic_geometry(const RenderMeshAssetSnapshot &left,
                            const RenderMeshAssetSnapshot &right) {
+  if (!std::ranges::equal(left.circular_uv_interpolations, right.circular_uv_interpolations)) return false;
   if (left.vertices.size() != right.vertices.size() ||
       left.indices.size() != right.indices.size() ||
       left.primitives.size() != right.primitives.size()) return false;
@@ -586,6 +598,7 @@ bool same_surface_attributes(const MeshVertex &left, const MeshVertex &right) {
   return same_dynamic_vec3(left.normal, right.normal) &&
       same_dynamic_float(left.uv.x, right.uv.x) && same_dynamic_float(left.uv.y, right.uv.y) &&
       left.rgba == right.rgba && left.source_vertex_id == right.source_vertex_id &&
+      left.circular_uv_index == right.circular_uv_index &&
       left.uv_carrier == right.uv_carrier &&
       same_dynamic_vec3(left.uv_geometric_normal, right.uv_geometric_normal);
 }
@@ -620,6 +633,8 @@ filament::math::mat3f surface_cofactor(const QMat4 &matrix, bool rescale) {
 
 bool pinned_surface_streams(const RenderMeshAssetSnapshot &mesh) {
   if (mesh.geometry_projection) {
+    if (mesh.circular_uv_interpolations.data() != mesh.geometry_projection->circular_uv_interpolations().data() ||
+        mesh.circular_uv_interpolations.size() != mesh.geometry_projection->circular_uv_interpolations().size()) return false;
     return mesh.vertices.data() == mesh.geometry_projection->vertices().data() &&
         mesh.vertices.size() == mesh.geometry_projection->vertices().size() &&
         mesh.indices.data() == mesh.geometry_projection->indices().data() &&
@@ -628,6 +643,8 @@ bool pinned_surface_streams(const RenderMeshAssetSnapshot &mesh) {
         mesh.primitives.size() == mesh.geometry_projection->primitives().size();
   }
   return mesh.geometry_payload && mesh.vertices.data() == mesh.geometry_payload->vertices.data() &&
+      mesh.circular_uv_interpolations.data() == mesh.geometry_payload->circular_uv_interpolations.data() &&
+      mesh.circular_uv_interpolations.size() == mesh.geometry_payload->circular_uv_interpolations.size() &&
       mesh.vertices.size() == mesh.geometry_payload->vertices.size() &&
       mesh.indices.data() == mesh.geometry_payload->indices.data() &&
       mesh.indices.size() == mesh.geometry_payload->indices.size() &&
@@ -654,6 +671,7 @@ bool same_surface_source(const EditableMeshGeometryState::Record &previous,
                          std::span<const QVec3> positions) {
   const auto &left = previous.source;
   const auto &right = source.mesh;
+  if (!std::ranges::equal(left.circular_uv_interpolations, right.circular_uv_interpolations)) return false;
   if (left.vertices.size() != right.vertices.size() || left.indices.size() != right.indices.size() ||
       left.primitives.size() != right.primitives.size()) return false;
   const bool same_owners = pinned_surface_streams(right) && pinned_surface_streams(left);
@@ -690,6 +708,7 @@ std::uint64_t surface_canonical_signature(const RenderMeshAssetSnapshot &mesh,
       .add_value(reinterpret_cast<std::uintptr_t>(mesh.vertices.data()))
       .add_value(reinterpret_cast<std::uintptr_t>(mesh.indices.data()))
       .add_value(reinterpret_cast<std::uintptr_t>(mesh.primitives.data()))
+      .add_value(reinterpret_cast<std::uintptr_t>(mesh.circular_uv_interpolations.data()))
       .add_value(reinterpret_cast<std::uintptr_t>(positions))
       .add_size(mesh.vertices.size()).add_size(mesh.indices.size()).value();
 }
@@ -849,12 +868,14 @@ MeshRenderableFactory::prepare_editable_surface_update(
           copy->vertices.assign(mesh.vertices.begin(), mesh.vertices.end());
           copy->indices.assign(mesh.indices.begin(), mesh.indices.end());
           copy->primitives.assign(mesh.primitives.begin(), mesh.primitives.end());
+          copy->circular_uv_interpolations.assign(mesh.circular_uv_interpolations.begin(), mesh.circular_uv_interpolations.end());
           next->copied_source = copy;
           next->source.geometry_payload = copy;
           next->source.geometry_projection.reset();
           next->source.vertices = copy->vertices;
           next->source.indices = copy->indices;
           next->source.primitives = copy->primitives;
+          next->source.circular_uv_interpolations = copy->circular_uv_interpolations;
         }
         next->source.positions = {};
         next->uses_source_positions = positions.empty();
@@ -1212,7 +1233,7 @@ bool MeshRenderableFactory::acquire_geometry(
                      AttributeType::FLOAT4, offsetof(RenderVertex, uv_carrier),
                      sizeof(RenderVertex))
           .attribute(filament::VertexAttribute::CUSTOM2, 0,
-                     AttributeType::FLOAT3,
+                     AttributeType::FLOAT4,
                      offsetof(RenderVertex, uv_geometric_normal),
                      sizeof(RenderVertex))
           .attribute(filament::VertexAttribute::CUSTOM3, 0,
@@ -1396,7 +1417,7 @@ bool MeshRenderableFactory::acquire_dynamic_geometry(
                      offsetof(DynamicRenderVertexStatic, uv_carrier),
                      sizeof(DynamicRenderVertexStatic))
           .attribute(filament::VertexAttribute::CUSTOM2, 1,
-                     AttributeType::FLOAT3,
+                     AttributeType::FLOAT4,
                      offsetof(DynamicRenderVertexStatic, uv_geometric_normal),
                      sizeof(DynamicRenderVertexStatic))
           .attribute(filament::VertexAttribute::CUSTOM3, 1,
@@ -2177,7 +2198,7 @@ MeshRenderableProxy MeshRenderableFactory::create_editable_surface_geometry(
                  offsetof(DynamicRenderVertexStatic, surface_grid_projection), sizeof(DynamicRenderVertexStatic))
       .attribute(filament::VertexAttribute::CUSTOM1, 1u, AttributeType::FLOAT4,
                  offsetof(DynamicRenderVertexStatic, uv_carrier), sizeof(DynamicRenderVertexStatic))
-      .attribute(filament::VertexAttribute::CUSTOM2, 1u, AttributeType::FLOAT3,
+      .attribute(filament::VertexAttribute::CUSTOM2, 1u, AttributeType::FLOAT4,
                  offsetof(DynamicRenderVertexStatic, uv_geometric_normal), sizeof(DynamicRenderVertexStatic))
       .attribute(filament::VertexAttribute::CUSTOM3, 1u, AttributeType::FLOAT4,
                  offsetof(DynamicRenderVertexStatic, quad_uv_coordinates), sizeof(DynamicRenderVertexStatic))

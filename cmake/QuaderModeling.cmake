@@ -245,6 +245,7 @@ add_library(quader_modeling_sdk_polygon STATIC
     src/sdk/core/modeling/src/face_texture_canvas.cpp
     src/sdk/core/modeling/src/obj_mesh_view.cpp
     src/sdk/core/modeling/src/uv_peel.cpp
+    src/sdk/core/modeling/src/uv_peel_circular.cpp
     src/sdk/core/modeling/src/uv_peel_structured.cpp
     src/sdk/core/modeling/src/uv_peel_solver.cpp
     src/sdk/core/modeling/src/stairs.cpp
@@ -641,6 +642,7 @@ if(QUADER_BUILD_TESTS)
         tests/sdk/dissolve_saved_scene_tests.cpp
         tests/sdk/uv_peel_saved_scene_tests.cpp
         tests/sdk/uv_peel_invariance_tests.cpp
+        tests/sdk/uv_peel_circular_tests.cpp
         tests/sdk/uv_preservation_foundation_tests.cpp
         tests/sdk/uv_action_reliability_tests.cpp
         tests/sdk/uv_precision_reliability_tests.cpp

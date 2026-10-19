@@ -41,9 +41,11 @@ private:
     std::vector<Triangle> triangles_;
     FaceTextureTransform transform_;
     std::optional<quader_geometry::QuadUvInterpolation> quad_;
+    std::optional<CircularUvInterpolation> circular_;
+    std::vector<std::array<float, 4>> circular_coordinates_;
 };
 
-// Samples the displayed base chart, including eligible bilinear quads.
+// Samples the displayed base chart, including circular and eligible bilinear mapping.
 // Positions outside the source face cannot be sampled.
 std::optional<quader::QVec2> sample_face_base_uv(
     const Document& document, const Face& face, quader::QVec3 position);

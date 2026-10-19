@@ -1367,6 +1367,251 @@ TEST(ModelingStairsTests, FootprintRulesRetainCircularAndMultiFlightDimensions) 
   EXPECT_EQ(result.value().footprint_width, result.value().footprint_depth);
 }
 
+/** Check one connected face region through its authored vertex incidence. */
+void expect_connected_faces(const AuthoredTopology &topology, const std::set<FaceId> &region) {
+  ASSERT_FALSE(region.empty());
+  std::map<VertexId, std::vector<FaceId>> vertex_faces;
+  std::map<FaceId, std::vector<VertexId>> face_vertices;
+  for (const auto &face : topology.faces) {
+    if (!region.contains(face.id)) continue;
+    face_vertices.emplace(face.id, face.vertices);
+    for (const auto vertex : face.vertices) vertex_faces[vertex].push_back(face.id);
+  }
+  std::set<FaceId> reached;
+  std::vector<FaceId> pending{*region.begin()};
+  while (!pending.empty()) {
+    const auto face = pending.back();
+    pending.pop_back();
+    if (!reached.insert(face).second) continue;
+    for (const auto vertex : face_vertices.at(face)) {
+      const auto &neighbors = vertex_faces.at(vertex);
+      pending.insert(pending.end(), neighbors.begin(), neighbors.end());
+    }
+  }
+  EXPECT_EQ(reached, region);
+}
+
+/** Detach changes only boundary identities, preserving complete face records. */
+void expect_detached_walking_strip(const StairsMesh &mesh, const PolygonDocument &detached) {
+  const auto validation = detached.validate();
+  ASSERT_TRUE(validation.ok()) << validation.error_message();
+  EXPECT_TRUE(validation.value().success) << validation.value().message;
+  const auto source = mesh.document.authored_topology().or_throw();
+  auto actual = detached.authored_topology().or_throw();
+  ASSERT_EQ(actual.faces.size(), source.faces.size());
+  EXPECT_EQ(actual.next_face_id, source.next_face_id);
+  const std::set<FaceId> walking(mesh.walking_faces.begin(), mesh.walking_faces.end());
+  std::set<FaceId> body;
+  std::set<VertexId> original_walking_vertices;
+  std::set<VertexId> original_body_vertices;
+  std::map<VertexId, Vec3> source_positions;
+  std::map<VertexId, Vec3> actual_positions;
+  for (const auto &vertex : source.vertices) source_positions.emplace(vertex.id, vertex.position);
+  for (const auto &vertex : actual.vertices) actual_positions.emplace(vertex.id, vertex.position);
+  for (const auto &face : source.faces) {
+    auto &vertices = walking.contains(face.id) ? original_walking_vertices : original_body_vertices;
+    vertices.insert(face.vertices.begin(), face.vertices.end());
+    if (!walking.contains(face.id)) body.insert(face.id);
+  }
+  std::set<VertexId> boundary_vertices;
+  for (const auto vertex : original_walking_vertices) {
+    if (original_body_vertices.contains(vertex)) boundary_vertices.insert(vertex);
+  }
+  ASSERT_FALSE(boundary_vertices.empty());
+  EXPECT_EQ(actual.vertices.size(), source.vertices.size() + boundary_vertices.size());
+  std::map<VertexId, VertexId> duplicated_vertices;
+  std::set<VertexId> walking_vertices;
+  std::set<VertexId> body_vertices;
+  for (std::size_t index = 0U; index < source.faces.size(); ++index) {
+    const auto &before = source.faces[index];
+    const auto &after = actual.faces[index];
+    ASSERT_EQ(after.id, before.id);
+    ASSERT_EQ(after.vertices.size(), before.vertices.size());
+    auto &vertices = walking.contains(after.id) ? walking_vertices : body_vertices;
+    vertices.insert(after.vertices.begin(), after.vertices.end());
+    for (std::size_t corner = 0U; corner < before.vertices.size(); ++corner) {
+      const auto old_id = before.vertices[corner];
+      const auto new_id = after.vertices[corner];
+      const auto old_position = source_positions.at(old_id);
+      const auto new_position = actual_positions.at(new_id);
+      EXPECT_EQ(new_position.x, old_position.x);
+      EXPECT_EQ(new_position.y, old_position.y);
+      EXPECT_EQ(new_position.z, old_position.z);
+      if (walking.contains(before.id) && boundary_vertices.contains(old_id)) {
+        EXPECT_GE(new_id.index, source.next_vertex_id);
+        const auto [found, inserted] = duplicated_vertices.emplace(old_id, new_id);
+        static_cast<void>(inserted);
+        EXPECT_EQ(found->second, new_id);
+      } else {
+        EXPECT_EQ(new_id, old_id);
+      }
+    }
+  }
+  EXPECT_EQ(duplicated_vertices.size(), boundary_vertices.size());
+  for (const auto vertex : walking_vertices) EXPECT_FALSE(body_vertices.contains(vertex));
+  expect_connected_faces(actual, walking);
+  expect_connected_faces(actual, body);
+  // Undo only the permitted identity changes in the snapshot, then compare every
+  // authored attribute byte, including circular fields and face texture settings.
+  for (std::size_t index = 0U; index < actual.faces.size(); ++index) {
+    actual.faces[index].vertices = source.faces[index].vertices;
+  }
+  actual.vertices = source.vertices;
+  actual.next_vertex_id = source.next_vertex_id;
+  actual.hard_normal_edges = source.hard_normal_edges;
+  actual.soft_normal_edges = source.soft_normal_edges;
+  const auto restored = PolygonDocument::from_authored_topology(actual);
+  ASSERT_TRUE(restored.ok()) << restored.error_message();
+  EXPECT_EQ(serialize_qdr_authored_topology(restored.value()).or_throw(),
+            serialize_qdr_authored_topology(mesh.document).or_throw());
+  auto ordinary_detach = mesh.document;
+  ASSERT_TRUE(ordinary_detach.select_faces(mesh.walking_faces).ok());
+  ASSERT_TRUE(ordinary_detach.detach_selected_faces().ok());
+  EXPECT_EQ(serialize_qdr_authored_topology(detached).or_throw(),
+            serialize_qdr_authored_topology(ordinary_detach).or_throw());
+  EXPECT_EQ(detached.selection().faces, ordinary_detach.selection().faces);
+  const auto compiled = detached.compile_mesh();
+  ASSERT_TRUE(compiled.ok()) << compiled.error_message();
+  std::size_t triangle_count = 0U;
+  for (const auto &face : source.faces) {
+    triangle_count += face.vertices.size() - 2U;
+  }
+  EXPECT_EQ(compiled.value().indices.size(), triangle_count * 3U);
+}
+
+TEST(ModelingStairsTests, DetachedWalkingStripRetainsAllFacesAcrossPresets) {
+  for (const auto layout : {StairsLayout::Straight, StairsLayout::L, StairsLayout::U,
+                            StairsLayout::Switchback, StairsLayout::Arc, StairsLayout::Spiral}) {
+    for (const auto surface : {StairsSurface::Steps, StairsSurface::Ramp}) {
+      for (const auto construction : {StairsConstruction::Solid, StairsConstruction::Slab}) {
+        for (const bool clockwise : {false, true}) {
+          for (const auto arrangement : {StairsSwitchbackArrangement::Spread,
+                                         StairsSwitchbackArrangement::Stacked}) {
+            if (arrangement == StairsSwitchbackArrangement::Stacked &&
+                (layout != StairsLayout::Switchback || construction != StairsConstruction::Slab)) {
+              continue;
+            }
+            SCOPED_TRACE(::testing::Message() << static_cast<int>(layout) << ", "
+                << static_cast<int>(surface) << ", " << static_cast<int>(construction)
+                << ", " << clockwise << ", " << static_cast<int>(arrangement));
+            StairsSpec spec;
+            spec.layout = layout;
+            spec.surface = surface;
+            spec.construction = construction;
+            spec.clockwise = clockwise;
+            spec.switchback_arrangement = arrangement;
+            spec.height = 4.0;
+            spec.turns = construction == StairsConstruction::Solid ? 0.75 : 1.5;
+            spec.automatic_step_count = false;
+            spec.step_count = 11U;
+            spec.curved_segments = 12U;
+            const auto generated = build_stairs_mesh(spec);
+            ASSERT_TRUE(generated.ok()) << generated.error_message();
+            const auto &mesh = generated.value();
+            const auto source_snapshot = mesh.document;
+            const auto source = mesh.document.authored_topology().or_throw();
+            std::map<VertexId, Vec3> positions;
+            for (const auto &vertex : source.vertices) positions.emplace(vertex.id, vertex.position);
+            std::set<FaceId> expected_walking;
+            std::size_t riser_count = 0U;
+            const std::set<FaceId> walking(mesh.walking_faces.begin(), mesh.walking_faces.end());
+            for (const auto &face : source.faces) {
+              double projected_area = 0.0;
+              for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+                const auto a = positions.at(face.vertices[corner]);
+                const auto b = positions.at(face.vertices[(corner + 1U) % face.vertices.size()]);
+                projected_area += static_cast<double>(a.z) * b.x - static_cast<double>(b.z) * a.x;
+              }
+              // These ordinary-sized fixtures separate actual upward sheets from
+              // sub-ULP projected side-wall slivers without relying on provenance.
+              if (projected_area > 1.0e-6) {
+                expected_walking.insert(face.id);
+              } else if (walking.contains(face.id)) {
+                ASSERT_EQ(surface, StairsSurface::Steps);
+                ASSERT_EQ(face.vertices.size(), 4U);
+                std::set<std::pair<float, float>> horizontal_positions;
+                float low = std::numeric_limits<float>::max();
+                float high = std::numeric_limits<float>::lowest();
+                for (const auto vertex : face.vertices) {
+                  const auto position = positions.at(vertex);
+                  horizontal_positions.emplace(position.x, position.z);
+                  low = std::min(low, position.y);
+                  high = std::max(high, position.y);
+                }
+                EXPECT_EQ(horizontal_positions.size(), 2U);
+                EXPECT_NEAR(static_cast<double>(high) - low, mesh.riser_height, 1.0e-6);
+                ++riser_count;
+                expected_walking.insert(face.id);
+              }
+            }
+            EXPECT_EQ(walking, expected_walking);
+            EXPECT_EQ(riser_count, surface == StairsSurface::Steps
+                ? 2U * (mesh.effective_step_count - 1U) : 0U);
+            EXPECT_FALSE(walking.contains(source.faces.back().id));
+            if (surface == StairsSurface::Steps || construction == StairsConstruction::Slab) {
+              EXPECT_FALSE(walking.contains(source.faces.front().id));
+            }
+            const auto detached = detach_stairs_walking_surface(mesh);
+            ASSERT_TRUE(detached.ok()) << detached.error_message();
+            expect_detached_walking_strip(mesh, detached.value());
+            EXPECT_TRUE(mesh.document.shares_topology_with(source_snapshot));
+            EXPECT_TRUE(mesh.document.shares_selection_with(source_snapshot));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ModelingStairsTests, WalkingDetachmentPreservesAttributesAndRejectsStaleProvenance) {
+  auto mesh = build_stairs_mesh(StairsSpec{}).or_throw();
+  auto topology = mesh.document.authored_topology().or_throw();
+  for (auto &face : topology.faces) {
+    face.material_slot = face.id.index % 5U;
+    face.shading = AuthoredSurfaceShading::Smooth;
+    face.texture_transform = {.scale = {-0.5F, 2.0F}, .shift_uv = {0.25F, -0.75F},
+                              .rotation_degrees = 37.0F};
+    face.uvs.resize(face.vertices.size());
+    for (std::size_t corner = 0U; corner < face.uvs.size(); ++corner) {
+      face.uvs[corner] = {static_cast<float>(corner) * 0.25F,
+                         static_cast<float>(face.id.index) * 0.125F};
+    }
+  }
+  topology.faces.front().circular_uv_interpolation = CircularUvInterpolation{
+      .center = {4.0F, 0.0F, 3.0F}, .uv_from_polar = {0.5F, 0.1F, 0.25F, -0.75F}};
+  const auto edges = mesh.document.edge_ids();
+  topology.hard_normal_edges = {edges.front()};
+  topology.soft_normal_edges = {edges.back()};
+  mesh.document = PolygonDocument::from_authored_topology(topology).or_throw();
+  ASSERT_TRUE(mesh.document.select_vertex(topology.vertices.front().id).ok());
+  const auto snapshot = mesh.document;
+  const auto detached = detach_stairs_walking_surface(mesh);
+  ASSERT_TRUE(detached.ok()) << detached.error_message();
+  expect_detached_walking_strip(mesh, detached.value());
+  EXPECT_TRUE(mesh.document.shares_topology_with(snapshot));
+  EXPECT_TRUE(mesh.document.shares_selection_with(snapshot));
+  const auto repeated = detach_stairs_walking_surface(mesh);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_EQ(serialize_qdr_authored_topology(detached.value()).or_throw(),
+            serialize_qdr_authored_topology(repeated.value()).or_throw());
+  auto already_detached = mesh;
+  already_detached.document = detached.value();
+  const auto unchanged = detach_stairs_walking_surface(already_detached);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+  EXPECT_EQ(serialize_qdr_authored_topology(unchanged.value()).or_throw(),
+            serialize_qdr_authored_topology(detached.value()).or_throw());
+  for (const int invalid_case : {0, 1, 2, 3}) {
+    auto invalid = mesh;
+    if (invalid_case == 0) invalid.walking_faces.clear();
+    if (invalid_case == 1) invalid.walking_faces.push_back(invalid.walking_faces.front());
+    if (invalid_case == 2) invalid.walking_faces.front() = make_id<FaceTag>(topology.next_face_id);
+    if (invalid_case == 3) invalid.walking_faces = invalid.document.face_ids();
+    EXPECT_FALSE(detach_stairs_walking_surface(invalid).ok()) << invalid_case;
+    EXPECT_TRUE(invalid.document.shares_topology_with(snapshot));
+    EXPECT_TRUE(invalid.document.shares_selection_with(snapshot));
+  }
+}
+
 TEST(ModelingStairsTests, InvalidInputsAndLimitsFailWithoutPartialDocuments) {
   for (const double invalid : {0.0, -1.0,
           std::numeric_limits<double>::infinity(),

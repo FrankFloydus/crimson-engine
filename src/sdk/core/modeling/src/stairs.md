@@ -13,6 +13,32 @@ tool supplies dimensions and publishes the resulting ordinary polygon document.
 Generation retains no recipe in accepted meshes; topology improvements apply when
 creating a new mesh.
 
+## Optional walking surface separation
+
+The native Stairs & Ramps tool exposes **Separate Walking Surface**, off by
+default. Enabled generation retains one editable mesh object and detaches the
+walking strip from its body. The strip includes flight treads, the vertical step
+risers between them, ramp decks and landing tops. Treads and risers remain
+connected to each other; side walls, undersides and full body end caps stay in
+the same document with a disconnected boundary. Placement, materials and the
+ordinary creation preview, Cancel, Apply and history behavior remain unchanged.
+Changing accepted live settings regenerates the complete single mesh.
+
+The SDK generator still builds and validates one closed boundary. Its
+`StairsMesh::walking_faces` records tread, riser, ramp and landing provenance, and
+`detach_stairs_walking_surface()` applies the existing **Detach Faces** operation
+to that selection in a document copy. Detaching duplicates only vertices shared
+with unselected body faces. All faces, positions, winding, UVs and material slots
+are retained, including connectivity within the selected strip. It adds no faces,
+caps or tessellation; the two surface parts have open boundaries where they meet.
+`StairsSpec` and the ordinary connected output remain unchanged.
+
+Select a walking center rail and expand its loop through both treads and risers.
+Peel can then follow the strip without entering the body. This separation changes
+generated connectivity without adding a Peel boundary rule or another object.
+Existing stair objects are unchanged and can be detached manually or recreated
+with the option enabled.
+
 ## Flight guides
 
 Flights have two quad lanes across their walking surfaces and undersides, with a

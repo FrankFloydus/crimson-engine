@@ -15,15 +15,18 @@
 #include "editor/session/scene_session.hpp"
 #include "editor/session/tool_session_defaults.hpp"
 #include "core/localization_service.hpp"
+#include "scene/scene_texture_mapping.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
+#include <quader/modeling/neutral/polygon/document_texture.hpp>
 
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QImage>
@@ -178,6 +181,120 @@ StairsUvSnapshot stairs_uv_snapshot(const quader_poly::Document &document) {
     for (const auto uv : face.uvs) corners.push_back({uv.x, uv.y});
   }
   return result;
+}
+
+std::set<quader_poly::ElementId> stairs_face_component(
+    const quader_poly::Document &document, quader_poly::ElementId seed) {
+  const auto incidents = stairs_edge_faces(document);
+  std::set<quader_poly::ElementId> result{seed};
+  std::vector<quader_poly::ElementId> pending{seed};
+  while (!pending.empty()) {
+    const auto &face = stairs_face(document, pending.back());
+    pending.pop_back();
+    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+      const auto edge = std::minmax(face.vertices[corner],
+          face.vertices[(corner + 1U) % face.vertices.size()]);
+      for (const auto neighbor : incidents.at({edge.first, edge.second})) {
+        if (result.insert(neighbor).second) pending.push_back(neighbor);
+      }
+    }
+  }
+  return result;
+}
+
+quader_poly::Document stairs_face_subset(
+    const quader_poly::Document &document,
+    const std::set<quader_poly::ElementId> &faces) {
+  auto result = document;
+  std::erase_if(result.faces, [&](const auto &face) { return !faces.contains(face.id); });
+  return result;
+}
+
+using StairsFacePositions =
+    std::map<quader_poly::ElementId, std::vector<std::array<float, 3U>>>;
+
+StairsFacePositions stairs_face_positions(const quader_poly::Document &document) {
+  StairsFacePositions result;
+  for (const auto &face : document.faces) {
+    auto &corners = result[face.id];
+    for (const auto id : face.vertices) {
+      const auto point = stairs_position(document, id);
+      corners.push_back({point.x, point.y, point.z});
+    }
+  }
+  return result;
+}
+
+StairsFacePositions stairs_all_face_positions(const StairsCreationHarness &harness) {
+  StairsFacePositions result;
+  for (const auto &record : harness.editor.query().modeling_objects()) {
+    const auto object = harness.editor.query().modeling_object_for_id(record.modeling_object_id);
+    EXPECT_TRUE(object.has_value());
+    if (!object) continue;
+    const auto faces = stairs_face_positions(stairs_document(harness, *object));
+    for (const auto &[id, corners] : faces) {
+      EXPECT_TRUE(result.emplace(id, corners).second) << "A generated face belongs to exactly one object.";
+    }
+  }
+  return result;
+}
+
+void expect_stairs_walking_uv_continuity(
+    const StairsCreationHarness &harness, QuaderModelingObjectRef object,
+    const std::set<quader_poly::ElementId> &walking_faces, bool circular) {
+  const auto snapshot = harness.session.modeling().polygon_document_read_snapshot(
+      object.modeling_object_id, true);
+  ASSERT_TRUE(snapshot.ok()) << snapshot.error_message();
+  const auto view = snapshot.value().document.view();
+  quader_poly::Document document;
+  document.vertices.assign(view.vertices.begin(), view.vertices.end());
+  document.faces.assign(view.faces.begin(), view.faces.end());
+  const auto sampling = effective_texture_sampling_from_local(
+      harness.session.scene(), object.entity);
+  ASSERT_TRUE(sampling.has_value());
+  const auto &matrix = sampling->values;
+  const quader_poly::Transform3 sampling_transform{
+      {matrix[0], matrix[1], matrix[2]}, {matrix[4], matrix[5], matrix[6]},
+      {matrix[8], matrix[9], matrix[10]}, {matrix[12], matrix[13], matrix[14]}};
+  std::map<quader_poly::ElementId, QVec2> shared;
+  std::size_t shared_corners = 0U;
+  std::size_t mapped_faces = 0U;
+  for (const auto &face : document.faces) {
+    if (!walking_faces.contains(face.id)) continue;
+    ++mapped_faces;
+    SCOPED_TRACE(face.id);
+    ASSERT_EQ(face.vertices.size(), 4U);
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    const auto normal = quader_poly::face_normal(document, face);
+    EXPECT_EQ(face.circular_uv_interpolation.has_value(),
+              circular && normal.y > 0.99F);
+    const auto carrier = quader_poly::face_texture_carrier(document, face, normal);
+    std::vector<QVec2> effective_uvs;
+    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+      const auto base = face.uvs[corner];
+      EXPECT_TRUE(std::isfinite(base.x) && std::isfinite(base.y));
+      effective_uvs.push_back(quader_poly::evaluate_texture_mapping(
+          quader_poly::apply_face_texture_transform(base, face.texture_transform),
+          stairs_position(document, face.vertices[corner]), normal, carrier,
+          sampling_transform));
+    }
+    double signed_area = 0.0;
+    for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+      const auto uv = effective_uvs[corner];
+      EXPECT_TRUE(std::isfinite(uv.x) && std::isfinite(uv.y));
+      const auto [other, inserted] = shared.emplace(face.vertices[corner], uv);
+      if (!inserted) {
+        ++shared_corners;
+        EXPECT_NEAR(uv.x, other->second.x, 0.00002F);
+        EXPECT_NEAR(uv.y, other->second.y, 0.00002F);
+      }
+      const auto next = effective_uvs[(corner+1U)%effective_uvs.size()];
+      signed_area += double(uv.x)*next.y-double(uv.y)*next.x;
+    }
+    EXPECT_GT(std::abs(signed_area), 1.0e-9);
+  }
+  EXPECT_EQ(mapped_faces, walking_faces.size());
+  EXPECT_GT(shared_corners, 0U);
 }
 
 std::set<quader_poly::ElementId>
@@ -700,6 +817,166 @@ TEST(StairsCreationToolTests, MinimalWallsPublishAutomaticUvsThroughLiveEditsAnd
   }
 }
 
+TEST(StairsCreationToolTests, SeparateWalkingSurfaceDetachesWithinOneObjectAndCancels) {
+  StairsCreationHarness harness;
+  ASSERT_NO_FATAL_FAILURE(prepare_stairs_peel(
+      harness, "spiral", "stairs", false, "spread", "slab", false));
+  auto &editor = harness.editor;
+  auto &tools = editor.tools();
+  ASSERT_TRUE(tools.stairs_creation_state());
+  EXPECT_FALSE(tools.stairs_creation_state()->separate_walking_surface);
+  const auto connected = stairs_all_face_positions(harness);
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  const auto primary = tools.live_primitive_creation()->object_id;
+  const auto object = editor.query().modeling_object_for_id(primary);
+  ASSERT_TRUE(object);
+  const auto connected_document = stairs_document(harness, *object);
+  const auto original_name = editor.query().modeling_objects().front().name;
+  ASSERT_TRUE(tools.set_setting("create_stairs", "stairs.separate_walking_surface", true).ok());
+  ASSERT_TRUE(tools.stairs_creation_state()->separate_walking_surface);
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 1U);
+  EXPECT_EQ(tools.live_primitive_creation()->object_id, primary);
+  EXPECT_EQ(editor.query().modeling_objects().front().name, original_name);
+  EXPECT_EQ(stairs_all_face_positions(harness), connected);
+  const auto detached = stairs_document(harness, *object);
+  EXPECT_GT(detached.vertices.size(), connected_document.vertices.size());
+  EXPECT_EQ(detached.faces.size(), connected_document.faces.size());
+  EXPECT_EQ(stairs_uv_snapshot(detached), stairs_uv_snapshot(connected_document));
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
+  const auto revision = editor.revisions().modeling_content_revision;
+  const auto unchanged = tools.set_setting("create_stairs", "stairs.separate_walking_surface", true);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.revisions().modeling_content_revision, revision);
+  EXPECT_FALSE(tools.set_setting("create_stairs", "stairs.separate_walking_surface", 0.5).ok());
+  EXPECT_EQ(stairs_all_face_positions(harness), connected);
+  ASSERT_TRUE(tools.begin_primitive_resize(QuaderPrimitiveResizeControl::PositiveY).ok());
+  ASSERT_TRUE(tools.update_primitive_resize(0.75).ok());
+  EXPECT_NE(stairs_all_face_positions(harness), connected);
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  EXPECT_EQ(editor.query().modeling_objects().front().modeling_object_id, primary);
+  ASSERT_TRUE(tools.cancel_primitive_resize().ok());
+  EXPECT_EQ(stairs_all_face_positions(harness), connected);
+  ASSERT_TRUE(tools.set_setting("create_stairs", "stairs.separate_walking_surface", false).ok());
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  EXPECT_EQ(editor.query().modeling_objects().front().modeling_object_id, primary);
+  EXPECT_EQ(stairs_all_face_positions(harness), connected);
+  EXPECT_EQ(stairs_document(harness, *object).vertices.size(), connected_document.vertices.size());
+  ASSERT_TRUE(tools.set_setting("create_stairs", "stairs.separate_walking_surface", true).ok());
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  ASSERT_TRUE(tools.cancel_active_tool_preview().ok());
+  EXPECT_TRUE(editor.query().modeling_objects().empty());
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
+  ASSERT_TRUE(tools.begin_stairs_creation().ok());
+  EXPECT_TRUE(tools.stairs_creation_state()->separate_walking_surface);
+  ASSERT_TRUE(tools.reset_active_settings().ok());
+  EXPECT_FALSE(tools.stairs_creation_state()->separate_walking_surface);
+}
+
+TEST(StairsCreationToolTests, SeparateWalkingSurfacePeelsWithoutChangingBodyAndReplaysHistory) {
+  StairsCreationHarness harness;
+  ASSERT_NO_FATAL_FAILURE(prepare_stairs_peel(
+      harness, "spiral", "stairs", false, "spread", "slab", false));
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.separate_walking_surface", true).ok());
+  const auto primary = editor.tools().live_primitive_creation()->object_id;
+  const auto primary_entity = harness.session.modeling().entity_for_modeling_object(primary);
+  ASSERT_TRUE(primary_entity);
+  EXPECT_EQ(harness.session.scene().primary_selection(), *primary_entity);
+  EXPECT_EQ(harness.session.modeling().selection_summary().active_object_id, primary);
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  const auto geometry = stairs_all_face_positions(harness);
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(harness.session.scene().primary_selection(), *primary_entity);
+  EXPECT_EQ(harness.session.history().undo_count(), 1U);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(editor.query().modeling_objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_EQ(editor.query().modeling_objects().size(), 1U);
+  EXPECT_EQ(harness.session.scene().primary_selection(), *primary_entity);
+  EXPECT_EQ(harness.session.modeling().selection_summary().active_object_id, primary);
+  EXPECT_EQ(stairs_all_face_positions(harness), geometry);
+  const auto object = editor.query().modeling_object_for_id(primary);
+  ASSERT_TRUE(object);
+  const auto source = stairs_document(harness, *object);
+  const auto seed = stairs_center_guide(source, 2.5);
+  ASSERT_TRUE(seed);
+  const auto incidents = stairs_edge_faces(source);
+  const auto walking = stairs_face_component(source, incidents.at(*seed).front());
+  std::set<quader_poly::ElementId> body;
+  std::set<quader_poly::ElementId> walking_vertices;
+  std::size_t risers = 0U;
+  for (const auto &face : source.faces) {
+    if (!walking.contains(face.id)) {
+      body.insert(face.id);
+      continue;
+    }
+    ASSERT_EQ(face.vertices.size(), 4U);
+    const auto normal = quader_poly::face_normal(source, face);
+    EXPECT_GE(normal.y, -0.0001F);
+    if (std::abs(normal.y) < 0.0001F) ++risers;
+    walking_vertices.insert(face.vertices.begin(), face.vertices.end());
+  }
+  EXPECT_EQ(risers, 20U);
+  ASSERT_FALSE(body.empty());
+  for (const auto id : body)
+    for (const auto vertex : stairs_face(source, id).vertices)
+      EXPECT_FALSE(walking_vertices.contains(vertex));
+  const auto body_uvs = stairs_uv_snapshot(stairs_face_subset(source, body));
+  const auto body_unchanged = [&] {
+    EXPECT_EQ(stairs_uv_snapshot(stairs_face_subset(
+        stairs_document(harness, *object), body)), body_uvs);
+  };
+  ASSERT_TRUE(editor.selection().select_object(*object).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(*object, seed->first, seed->second).ok());
+  ASSERT_TRUE(editor.selection().select_edge_loops().ok());
+  const auto selected = harness.session.modeling().polygon_document_read_snapshot(primary);
+  ASSERT_TRUE(selected.ok());
+  std::size_t vertical_guides = 0U;
+  for (const auto edge : selected.value().selection.edges) {
+    const auto a = stairs_position(source, edge.a.index);
+    const auto b = stairs_position(source, edge.b.index);
+    EXPECT_NEAR(std::hypot(a.x, a.z), 2.5F, 0.0001F);
+    EXPECT_NEAR(std::hypot(b.x, b.z), 2.5F, 0.0001F);
+    if (std::hypot(a.x - b.x, a.z - b.z) < 0.0001F &&
+        std::abs(a.y - b.y) > 0.0001F) ++vertical_guides;
+  }
+  EXPECT_EQ(vertical_guides, 10U);
+  ASSERT_TRUE(editor.modeling().set_uv_peel_options({.world_space=false}).ok());
+  harness.session.history().clear();
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().active_settings().can_apply);
+  const auto ordinary = stairs_document(harness, *object);
+  ASSERT_NO_FATAL_FAILURE(expect_stairs_walking_uv_continuity(
+      harness, *object, walking, false));
+  EXPECT_EQ(stairs_changed_uv_faces(stairs_uv_snapshot(source),
+                                   stairs_uv_snapshot(ordinary)), walking);
+  body_unchanged();
+  ASSERT_TRUE(editor.tools().set_setting("uv_peel", "uv_peel.smooth_circular_flow", true).ok());
+  const auto smooth = stairs_document(harness, *object);
+  ASSERT_NO_FATAL_FAILURE(expect_stairs_walking_uv_continuity(
+      harness, *object, walking, true));
+  body_unchanged();
+  EXPECT_EQ(stairs_all_face_positions(harness), geometry);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(stairs_uv_snapshot(stairs_document(harness, *object)), stairs_uv_snapshot(source));
+  body_unchanged();
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
+  ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(harness.session.history().undo_count(), 1U);
+  EXPECT_EQ(stairs_uv_snapshot(stairs_document(harness, *object)), stairs_uv_snapshot(smooth));
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(stairs_uv_snapshot(stairs_document(harness, *object)), stairs_uv_snapshot(source));
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(stairs_uv_snapshot(stairs_document(harness, *object)), stairs_uv_snapshot(smooth));
+  body_unchanged();
+  EXPECT_EQ(stairs_all_face_positions(harness), geometry);
+}
+
 TEST(StairsCreationToolTests, DedicatedCommandExposesGroupedSettingsAndOneMesh) {
   StairsCreationHarness harness;
   const auto activated = harness.editor.commands().execute(
@@ -917,6 +1194,7 @@ TEST(StairsCreationToolTests, CancelRemovesDraftAndRemembersAcceptedOptions) {
   ASSERT_TRUE(session.primitive_creation().accept_preview(stairs_placement(), "Canceled").ok);
   ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.automatic_step_count", false).ok());
   ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.step_count", 7.0).ok());
+  ASSERT_TRUE(editor.tools().set_setting("create_stairs", "stairs.separate_walking_surface", true).ok());
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_TRUE(editor.query().modeling_objects().empty());
   EXPECT_EQ(session.history().undo_count(), 0U);
@@ -929,6 +1207,7 @@ TEST(StairsCreationToolTests, CancelRemovesDraftAndRemembersAcceptedOptions) {
   ASSERT_TRUE(state.has_value());
   EXPECT_FALSE(state->specification.automatic_step_count);
   EXPECT_EQ(state->specification.step_count, 7U);
+  EXPECT_TRUE(state->separate_walking_surface);
 }
 
 TEST(StairsCreationToolTests, StairEditsPreserveAnotherScenesOrdinaryPrimitiveChoice) {
@@ -1056,6 +1335,13 @@ TEST(StairsCreationToolTests, NativeSettingsRemainReadableAtNarrowWidthsAndScale
       EXPECT_EQ(title->text(), button_title);
       EXPECT_EQ(title->accessibleName(), raw_title);
       EXPECT_EQ(panel.windowTitle(), raw_title);
+      auto *separate = panel.findChild<QCheckBox *>(
+          QStringLiteral("tool_settings.control.stairs.separate_walking_surface"));
+      ASSERT_NE(separate, nullptr);
+      EXPECT_TRUE(separate->isVisible());
+      EXPECT_FALSE(separate->isChecked());
+      EXPECT_EQ(separate->accessibleName(), QString::fromStdString(localization.text(
+          "stairs.separate_walking_surface", "Separate Walking Surface")));
       EXPECT_LE(panel.minimumSizeHint().width(), panel.width());
       for (auto *field : panel.findChildren<QDoubleSpinBox *>()) {
         if (!field->isVisible()) continue;
