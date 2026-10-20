@@ -218,6 +218,10 @@ private:
         std::array<unsigned,2> sourceExtent{};
         std::shared_ptr<const MaterialGraph> definition;
         std::vector<std::string> sources;
+        // A warm material can release the shared source request later in the
+        // same frame. Keep pending preview decodes wanted until their immutable
+        // pixels have been captured by the generation job.
+        std::unordered_map<std::string,ResourceHandle<DecodedImage>> pendingInputs;
         std::uint64_t valueKey{};
         std::shared_ptr<const PreparedTexture> current;
         bool pending{};

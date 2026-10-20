@@ -24,6 +24,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -1405,11 +1406,98 @@ void unrelatedDeletionMaterializesLegacyProfiles(bool independentlySaved) {
     require(hasAsset(library,creature.controller->profile.id)&&library.browserCatalog().contains(creature.controller->profile.id),"Materialized legacy profile was absent from the shared browser catalog.");
     require(std::none_of(rewritten.records.begin(),rewritten.records.end(),[](const auto& entity){return entity.navigationVolume.has_value();}),"Unrelated deletion auto-created a Navigation Volume.");
 }
+void materialPreviewSourceLifetime(const fs::path& compiler,const fs::path& sources,const fs::path& includes) {
+    Project p;const std::string image="assets/textures/shared-node-source.png";
+    model_test::Bytes pixels(128*128*4,255);
+    for(unsigned y=0;y<128;++y)for(unsigned x=0;x<128;++x) {
+        const auto offset=(std::size_t(y)*128+x)*4;pixels[offset]=x<64?255:0;pixels[offset+1]=y<64?0:255;
+    }
+    fs::create_directories(fixturePath(p.root,"assets/textures"));
+    model_test::writeBytes(fixturePath(p.root,image),model_test::png(128,128,pixels));
+    // Keep the active shared-input map alive, but immediately evict payloads
+    // once all decode handles are released. Zero idle grace would erase that
+    // map itself at each update and exercise a different lifetime contract.
+    ResourceConfig config;config.cpuRetentionBytes=0;config.idleGrace=std::chrono::seconds{60};
+    ResourceManager resources(config);MaterialGraphPrograms programs(resources,{compiler,sources,includes,fixturePath(p.root,"assets/cache/shaders")});
+    AssetLibrary library(p.root,&resources);library.setMaterialGraphPrograms(&programs);
+    MaterialAsset material;material.id="mixed-node-source-lifetime";material.name="Mixed node source lifetime";
+    const auto output=addMaterialNode(material.graph,MaterialNodeKind::Output).id;
+    const auto uv=addMaterialNode(material.graph,MaterialNodeKind::UV).id;
+    const auto source=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(material.graph,source)->texture.image.id=image;
+    const auto multiply=addMaterialNode(material.graph,MaterialNodeKind::Multiply).id;
+    findMaterialNode(material.graph,multiply)->right={MaterialValueType::Scalar,{.6f,.6f,.6f,.6f}};
+    const auto gray=addMaterialNode(material.graph,MaterialNodeKind::Grayscale).id;
+    const auto levels=addMaterialNode(material.graph,MaterialNodeKind::Levels).id;
+    findMaterialNode(material.graph,levels)->image.gamma=1.285f;
+    const auto resize=addMaterialNode(material.graph,MaterialNodeKind::Resize).id;
+    findMaterialNode(material.graph,resize)->resize={128,128,MaterialResizeFilter::Area};
+    connectMaterialNodes(material.graph,uv,MaterialPin::UV,source,MaterialPin::UV);
+    connectMaterialNodes(material.graph,source,MaterialPin::RGB,multiply,MaterialPin::Left);
+    connectMaterialNodes(material.graph,source,MaterialPin::RGB,gray,MaterialPin::Left);
+    connectMaterialNodes(material.graph,gray,MaterialPin::Value,levels,MaterialPin::Left);
+    connectMaterialNodes(material.graph,levels,MaterialPin::Value,resize,MaterialPin::Left);
+    connectMaterialNodes(material.graph,resize,MaterialPin::Value,output,MaterialPin::Roughness);
+    canonicalizeMaterialAsset(material);const auto graph=std::make_shared<const MaterialGraph>(material.graph);
+    const auto authored=serializeMaterialAsset(material);
+    const auto tick=[&]{resources.pump();library.updateResources(bgfx::frame());programs.trim();};
+    const auto ready=[](const ModelMaterialTextures& value){return value.graph&&!value.graphPending&&value.sourceReady&&value.complete&&value.drawable();};
+    ModelMaterialTextures full;const auto fullDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{25};
+    do {
+        tick();full=library.materialPreviewBindings(material,128);
+        if(ready(full)&&full.graph->programs->optimized&&resources.idle())break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }while(std::chrono::steady_clock::now()<fullDeadline);
+    require(ready(full)&&full.graph->programs->optimized&&resources.idle(),"Shared-input lifetime fixture could not warm its Resize material: "+full.diagnostic);
+    const auto sourceId=findMaterialNode(material.graph,source)->texture.image.id;
+    const auto initialPublications=resources.takePublications();
+    require(std::any_of(initialPublications.begin(),initialPublications.end(),[&](const auto& value) {
+        return value.kind==ResourceKind::Image&&value.id==sourceId&&value.variant=="source";
+    }),"Shared-input lifetime fixture did not initially decode its managed PNG.");
+    const auto fullSignature=full.graph->signature;
+    for(unsigned frame=0;frame<10;++frame){tick();full=library.materialPreviewBindings(material,128);require(ready(full)&&full.graph->signature==fullSignature,"Warm Resize material did not retain its completed source generation.");}
+    require(resources.stats().evictions>0,"Zero-retention lifetime fixture did not evict any released CPU payload.");
+    (void)resources.takePublications();
+    std::array<PreparedTexture,3> previews;
+    const auto previewReady=[](const PreparedTexture& value){return value.sourceReady&&value.complete&&bgfx::isValid(value.handle)&&value.lease&&!value.failed;};
+    bool settled=false;const auto previewDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+    do {
+        tick();
+        // Production order: node drawing requests generic source decodes,
+        // then scene/material preparation hits an already generated Resize.
+        // That cache hit must not clear the node preview's only decode owner
+        // before the next pump can accept the asynchronous result.
+        previews[0]=library.materialNodeImagePreview(material.id,graph,{multiply,MaterialPin::Value},128);
+        previews[1]=library.materialNodeImagePreview(material.id,graph,{levels,MaterialPin::Value},128);
+        previews[2]=library.materialNodeImagePreview(material.id,graph,{levels,MaterialPin::Value},256);
+        full=library.materialPreviewBindings(material,128);
+        require(ready(full)&&full.graph->signature==fullSignature,"Generic node requests invalidated the warm Resize material.");
+        settled=std::all_of(previews.begin(),previews.end(),previewReady)&&resources.idle();
+        if(settled)break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }while(std::chrono::steady_clock::now()<previewDeadline);
+    require(settled,"Generic node previews lost source decode ownership to a later warm material cache hit: "+
+        previews[0].diagnostic+" / "+previews[1].diagnostic+" / "+previews[2].diagnostic);
+    const auto loads=resources.stats().loads;const auto signatures=std::array{previews[0].signature,previews[1].signature,previews[2].signature};
+    for(unsigned frame=0;frame<30;++frame) {
+        tick();previews[0]=library.materialNodeImagePreview(material.id,graph,{multiply,MaterialPin::Value},128);
+        previews[1]=library.materialNodeImagePreview(material.id,graph,{levels,MaterialPin::Value},128);
+        previews[2]=library.materialNodeImagePreview(material.id,graph,{levels,MaterialPin::Value},256);
+        full=library.materialPreviewBindings(material,128);
+        for(unsigned index=0;index<previews.size();++index)require(previewReady(previews[index])&&previews[index].signature==signatures[index],
+            "Settled mixed-order node previews changed their accepted display images.");
+    }
+    require(resources.stats().loads==loads&&serializeMaterialAsset(material)==authored,
+        "Warm mixed-order node/material requests repeated generation or changed the authored graph.");
+    library.releaseMaterialNodeImagePreviews(material.id);resources.stop();
+}
 void materialPreviewResources(const fs::path& compiler,const fs::path& sources,const fs::path& includes){
     Project p;const std::string image="assets/textures/preview-pattern.png";
     model_test::Bytes pixels(512*512*4,255);
     for(std::size_t y=0;y<512;++y)for(std::size_t x=0;x<512;++x){const auto offset=(y*512+x)*4;pixels[offset]=x<256?255:0;pixels[offset+1]=y<256?0:255;}
     fs::create_directories(fixturePath(p.root,"assets/textures"));model_test::writeBytes(fixturePath(p.root,image),model_test::png(512,512,pixels));
+    const std::string coldNodeImage="assets/textures/cold-node-preview-pattern.png";
+    model_test::writeBytes(fixturePath(p.root,coldNodeImage),model_test::png(512,512,pixels));
     const std::string growingImage="assets/textures/cached-blur-size.png";
     const auto growingSeedFile=fixturePath(p.root,growingImage);
     model_test::writeBytes(growingSeedFile,model_test::png(2,2,model_test::Bytes{
@@ -1528,6 +1616,110 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         require(!preparedGraphSourcesCoherent(managed,versions),"Managed image revision conflicts stopped blocking incoherent publication.");
         versions.clear();for(const auto& source:managed.sources)managed.sourceFingerprints[source.slot]=11;
         require(preparedGraphSourcesCoherent(managed,versions)&&versions.size()==1,"Matching shared managed image versions failed coherent publication.");
+        // Match an ordinary authored image graph, rather than exercising only
+        // builtin/generated sources: explicit UV0, a managed Color PNG, and
+        // independently previewable color and grayscale processing branches.
+        MaterialAsset textured; textured.id="managed-texture-node-images";textured.name="Managed texture node images";
+        const auto texturedOutput=addMaterialNode(textured.graph,MaterialNodeKind::Output).id;
+        const auto texturedUv=addMaterialNode(textured.graph,MaterialNodeKind::UV).id;
+        findMaterialNode(textured.graph,texturedUv)->uv.mode=MaterialUvMode::UV0;
+        const auto texturedSource=addMaterialNode(textured.graph,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(textured.graph,texturedSource)->texture.image.id=coldNodeImage;
+        findMaterialNode(textured.graph,texturedSource)->texture.role=MaterialTextureRole::Color;
+        const auto texturedMultiply=addMaterialNode(textured.graph,MaterialNodeKind::Multiply).id;
+        findMaterialNode(textured.graph,texturedMultiply)->right={MaterialValueType::Scalar,{.6f,.6f,.6f,.6f}};
+        const auto texturedGray=addMaterialNode(textured.graph,MaterialNodeKind::Grayscale).id;
+        const auto texturedLevels=addMaterialNode(textured.graph,MaterialNodeKind::Levels).id;
+        findMaterialNode(textured.graph,texturedLevels)->image.gamma=1.285f;
+        const auto unrelatedSource=addMaterialNode(textured.graph,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(textured.graph,unrelatedSource)->texture.image.id="assets/textures/missing-unused-preview.png";
+        connectMaterialNodes(textured.graph,texturedUv,MaterialPin::UV,texturedSource,MaterialPin::UV);
+        connectMaterialNodes(textured.graph,texturedSource,MaterialPin::RGB,texturedMultiply,MaterialPin::Left);
+        connectMaterialNodes(textured.graph,texturedSource,MaterialPin::RGB,texturedGray,MaterialPin::Left);
+        connectMaterialNodes(textured.graph,texturedGray,MaterialPin::Value,texturedLevels,MaterialPin::Left);
+        connectMaterialNodes(textured.graph,texturedMultiply,MaterialPin::Value,texturedOutput,MaterialPin::BaseColor);
+        connectMaterialNodes(textured.graph,texturedLevels,MaterialPin::Value,texturedOutput,MaterialPin::Roughness);
+        canonicalizeMaterialAsset(textured);
+        const auto texturedAuthored=serializeMaterialAsset(textured);
+        const auto texturedGraph=std::make_shared<const MaterialGraph>(textured.graph);
+        const MaterialGraphPreviewTarget multiplyTarget{texturedMultiply,MaterialPin::Value},levelsTarget{texturedLevels,MaterialPin::Value};
+        const auto usedImage=findMaterialNode(textured.graph,texturedSource)->texture.image.id;
+        for(const auto target:{multiplyTarget,levelsTarget})
+            require(materialGraphImagePreviewSources(textured.graph,target)==std::vector<std::string>{usedImage},
+                "Managed node preview included an unrelated texture or omitted its actual linked PNG source.");
+        const auto awaitTextured=[&](const std::shared_ptr<const MaterialGraph>& graph,MaterialGraphPreviewTarget target,const char* failure) {
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{15};PreparedTexture texture;
+            do {
+                tick();texture=library.materialNodeImagePreview(textured.id,graph,target,128);
+                if(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle)&&resources.idle()) {
+                    require(texture.lease&&!texture.failed&&texture.width==128&&texture.height==128&&
+                        texture.sourceFingerprint&&texture.signature,"Managed node image accepted an incomplete texture descriptor.");
+                    return texture;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            }while(std::chrono::steady_clock::now()<deadline);
+            throw std::runtime_error(std::string(failure)+": "+texture.diagnostic);
+        };
+        const auto inspectTextured=[&](const PreparedTexture& texture,bool grayscale) {
+            const auto publications=resources.takePublications();
+            const auto publication=std::find_if(publications.begin(),publications.end(),[&](const auto& value) {
+                return value.kind==ResourceKind::TextureMips&&value.variant=="generated-float16-mips-v1:128x128"&&
+                    value.fingerprint==texture.sourceFingerprint;
+            });
+            require(publication!=publications.end(),"Managed node image published no inspectable display pixels.");
+            ResourceRequestOptions inspect;inspect.variant=publication->variant;inspect.retainLoader=false;
+            const auto descriptor=resources.requestDerived<streaming::TextureMipCache>(publication->id,[](std::stop_token)->ResourceLoadResult<streaming::TextureMipCache> {
+                throw std::runtime_error("Inspecting managed node display pixels scheduled another generation.");
+            },std::move(inspect));
+            const auto snapshot=descriptor.snapshot();
+            require(descriptor.state()==ResourceState::Ready&&snapshot&&snapshot->format==ImagePixelFormat::RGBA16F&&
+                !snapshot->memory.empty()&&snapshot->memory.size()==snapshot->levels.size()&&
+                snapshot->memory.front().width==128&&snapshot->memory.front().height==128&&
+                snapshot->memory.front().rgba.size()==128*128*8,
+                "Managed node preview accepted a missing, wrong-size or non-float display image.");
+            const auto& bytes=snapshot->memory.front().rgba;
+            const auto component=[&](unsigned x,unsigned y,unsigned channel) {
+                std::uint16_t value{};std::memcpy(&value,bytes.data()+((std::size_t(y)*128+x)*4+channel)*2,sizeof(value));
+                const unsigned exponent=(value>>10)&31,mantissa=value&1023;
+                require(exponent!=31,"Managed preview pixels contain nonfinite display values.");
+                const auto decoded=exponent?std::ldexp(1.f+mantissa/1024.f,int(exponent)-15):std::ldexp(float(mantissa),-24);
+                return value&0x8000?-decoded:decoded;
+            };
+            float minimum=1,maximum=0;
+            for(unsigned y:{16u,112u})for(unsigned x:{16u,112u}) {
+                const float red=component(x,y,0),green=component(x,y,1),blue=component(x,y,2);
+                minimum=std::min(minimum,red);maximum=std::max(maximum,red);
+                require(std::abs(component(x,y,3)-1)<.001f,"Managed node display unexpectedly became transparent.");
+                if(grayscale)require(std::abs(red-green)<.001f&&std::abs(red-blue)<.001f,
+                    "Grayscale/Levels preview did not broadcast its scalar result to RGB.");
+            }
+            require(maximum-minimum>.1f,"Managed node preview completed with flat placeholder pixels instead of the linked texture.");
+            if(!grayscale)require(component(16,16,0)>.7f&&component(112,16,0)<.01f&&
+                component(16,112,1)>.7f&&component(16,16,1)<.01f,
+                "Multiply node preview lost its Color PNG quadrant pattern or processed the wrong branch.");
+        };
+        (void)resources.takePublications();
+        const auto texturedProduct=awaitTextured(texturedGraph,multiplyTarget,"Managed Color-to-Multiply image preview did not settle");
+        inspectTextured(texturedProduct,false);
+        const auto texturedHeight=awaitTextured(texturedGraph,levelsTarget,"Managed Color-to-Grayscale-to-Levels image preview did not settle");
+        inspectTextured(texturedHeight,true);
+        require(texturedProduct.sourceFingerprint!=texturedHeight.sourceFingerprint&&texturedProduct.signature!=texturedHeight.signature,
+            "Independent managed color/grayscale preview targets shared one display identity.");
+        auto unrelatedEdit=textured.graph;
+        findMaterialNode(unrelatedEdit,texturedMultiply)->right.value={.25f,.25f,.25f,.25f};
+        findMaterialNode(unrelatedEdit,unrelatedSource)->texture.image.id="assets/textures/another-missing-unused-preview.png";
+        const auto unrelatedGraph=std::make_shared<const MaterialGraph>(std::move(unrelatedEdit));
+        const auto texturedWarmLoads=resources.stats().loads;
+        for(unsigned frame=0;frame<40;++frame) {
+            tick();const auto product=library.materialNodeImagePreview(textured.id,texturedGraph,multiplyTarget,128);
+            const auto height=library.materialNodeImagePreview(textured.id,unrelatedGraph,levelsTarget,128);
+            require(product.sourceReady&&product.complete&&product.signature==texturedProduct.signature&&
+                height.sourceReady&&height.complete&&height.signature==texturedHeight.signature,
+                "Warm managed node polling or an unrelated branch edit replaced the accepted image.");
+        }
+        require(resources.stats().loads==texturedWarmLoads&&resources.takePublications().empty()&&serializeMaterialAsset(textured)==texturedAuthored,
+            "Managed node preview repeated warm jobs, followed an unrelated missing source or changed its authored graph.");
+        library.releaseMaterialNodeImagePreviews(textured.id);
         // Exercise the public adapter, including a shared direct/baked source,
         // rather than only TextureStreamer's generated-float cache in isolation.
         MaterialAsset resized;resized.id="resize-resource-fixture";resized.name="Processed Resize";
@@ -1797,12 +1989,18 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
             "A procedural-only Resize rejected a mesh supplying UV0.");
         require(read(fixturePath(p.root,material.id))==sourceBytes,"Runtime material edits rewrote the authored fixture.");
         resources.stop();
-    }bgfx::shutdown();}catch(...){bgfx::shutdown();throw;}
+    }materialPreviewSourceLifetime(compiler,sources,includes);bgfx::shutdown();}catch(...){bgfx::shutdown();throw;}
     std::cout<<"Material preview coherent coarse publication and selected texture recovery under zero cache budget passed.\n";
 }
 }
 
 int main(int argc,char** argv){try{
+    if(argc==5&&std::string(argv[1])=="--material-preview-input-lifetime") {
+        bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
+        require(bgfx::init(init),"Could not initialize the shared node-preview input lifetime check.");
+        try{materialPreviewSourceLifetime(argv[2],argv[3],argv[4]);bgfx::shutdown();}catch(...){bgfx::shutdown();throw;}
+        return 0;
+    }
     if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.

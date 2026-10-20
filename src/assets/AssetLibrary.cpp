@@ -32,6 +32,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <mutex>
@@ -1663,6 +1664,11 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         PreparedTexture waiting;waiting.diagnostic="Waiting for a node image preview slot...";return waiting;
     }
     auto& state=nodeImagePreviews_[stateId];state.document=documentId;state.used=std::chrono::steady_clock::now();
+    struct ReleaseFailedInputs {
+        NodeImagePreview& state;
+        int exceptions{std::uncaught_exceptions()};
+        ~ReleaseFailedInputs(){if(std::uncaught_exceptions()>exceptions){state.pendingInputs.clear();state.pending=false;}}
+    } releaseFailedInputs{state};
     const auto waiting=[&](const std::string& message) {
         auto result=state.current?*state.current:PreparedTexture{};result.complete=false;result.sourceReady=false;result.diagnostic=message;return result;
     };
@@ -1675,6 +1681,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
             const auto& output=materialOutputNode(*graph).output;
             const auto valueKey=materialGraphValueHash(*graph,output.shading,output.blend,target.node);
             if(state.valueKey!=valueKey) {
+                state.pendingInputs.clear();
                 if(!state.textureKey.empty())textureStreamer_->forgetGenerated(state.textureKey);
                 state.textureKey.clear();state.sourceKey.clear();state.sourceExtent={};state.pending=false;state.edited=hadDefinition?state.used:std::chrono::steady_clock::time_point{};
                 state.valueKey=valueKey;state.sources=materialGraphImagePreviewSources(*graph,target);
@@ -1720,6 +1727,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
     if(!ready)return waiting("Loading node image inputs...");
     const auto key="material-node-image-v3:"+std::to_string(contentHash);
     if(state.textureKey!=key) {
+        state.pendingInputs.clear();
         if(!state.textureKey.empty())textureStreamer_->forgetGenerated(state.textureKey);
         state.textureKey=key;state.pending=false;
     }
@@ -1734,6 +1742,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         return result;
     };
     if(auto cached=textureStreamer_->cachedGeneratedFloat(key,edge,edge,false,edge,priority)) {
+        state.pendingInputs.clear();
         // Keep the shared authored source's CPU descriptor demanded while its
         // thumbnails are visible, allowing a second display size to reuse it.
         if(!state.sourceKey.empty())textureStreamer_->cachedGeneratedFloat(state.sourceKey,state.sourceExtent[0],state.sourceExtent[1],true,edge,priority);
@@ -1742,7 +1751,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
     std::shared_ptr<const DecodedImage> sourceMip;
     const auto* targetNode=findMaterialNode(*graph,target.node);
     if(target.pin==MaterialPin::Value&&targetNode&&isMaterialImageBakeNode(targetNode->kind)&&targetNode->kind!=MaterialNodeKind::ImageTransform) {
-        const auto pendingOthers=std::count_if(nodeImagePreviews_.begin(),nodeImagePreviews_.end(),[&](const auto& entry){return &entry.second!=&state&&entry.second.pending;});
+        const auto pendingOthers=std::count_if(nodeImagePreviews_.begin(),nodeImagePreviews_.end(),[&](const auto& entry){return &entry.second!=&state&&(entry.second.pending||!entry.second.pendingInputs.empty());});
         const MaterialGraphResizeBinding binding{graph,target.node,state.valueKey};
         CachedImageRequestInfo info;std::unordered_map<std::string,std::uint64_t> versions;
         const auto source=preparedResizeTexture(binding,edge,priority,versions,&info,nodeImageStarts_<2&&pendingOthers<8);
@@ -1767,10 +1776,11 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         // otherwise eight completed sources could prevent every display job.
         state.pending=false;
     }
-    const auto pending=std::count_if(nodeImagePreviews_.begin(),nodeImagePreviews_.end(),[](const auto& entry){return entry.second.pending;});
-    if(nodeImageStarts_>=2||pending>=8)return waiting("Waiting for node image generation...");
+    const auto pending=std::count_if(nodeImagePreviews_.begin(),nodeImagePreviews_.end(),[](const auto& entry){return entry.second.pending||!entry.second.pendingInputs.empty();});
+    if(nodeImageStarts_>=2||(pending>=8&&state.pendingInputs.empty()))return waiting("Waiting for node image generation...");
     const auto type=materialOutputType(*graph,target.node,target.pin);
     if(sourceMip) {
+        state.pendingInputs.clear();
         ++nodeImageStarts_;state.pending=true;
         return publish(textureStreamer_->requestGeneratedFloat(key,[sourceMip,edge,type](std::stop_token stop) {
             auto image=nodePreviewMipImage(*sourceMip,edge,stop);encodeNodeImageDisplay(image,type,stop);return image;
@@ -1779,6 +1789,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
     auto images=std::make_shared<std::unordered_map<std::string,std::shared_ptr<const DecodedImage>>>();
     for(const auto& input:inputs) {
         auto& source=*input.source;const bool builtin=input.resolved==GrayTextureId||input.resolved==NeutralNormalTextureId;
+        if(!source.pixels)if(const auto held=state.pendingInputs.find(input.original);held!=state.pendingInputs.end())source.pixels=held->second;
         if(!source.pixels) {
             ResourceRequestOptions config;config.variant="source";config.priority=priority;config.forceReload=source.reloadPixels;
             source.reloadPixels=false;if(!builtin)config.dependencies={source.file};
@@ -1789,13 +1800,15 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
                 return ResourceLoadResult<DecodedImage>{pixels,pixels->rgba.size(),builtin?fingerprint:0,{}};
             },std::move(config));
         }
+        state.pendingInputs[input.original]=source.pixels;
         if(source.pixels.state()==ResourceState::Failed)throw std::runtime_error(source.pixels.diagnostic());
         const auto pixels=source.pixels.snapshot();
         if(!pixels||source.pixels.state()!=ResourceState::Ready){ready=false;continue;}
-        if(pixels.fingerprint()!=input.fingerprint){source.pixels={};source.reloadPixels=true;ready=false;continue;}
+        if(pixels.fingerprint()!=input.fingerprint){state.pendingInputs.erase(input.original);source.pixels={};source.reloadPixels=true;ready=false;continue;}
         images->emplace(input.original,pixels.shared());
     }
     if(!ready)return waiting("Loading node image inputs...");
+    state.pendingInputs.clear(); // The worker's immutable pixel snapshots now own the inputs.
     ++nodeImageStarts_;state.pending=true;
     return publish(textureStreamer_->requestGeneratedFloat(key,[graph,target,images,options,type](std::stop_token stop) {
         auto image=bakeMaterialGraphImagePreview(*graph,target,[images](const std::string& id) {
