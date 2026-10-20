@@ -29,6 +29,7 @@ public:
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
+    AntiAliasing antiAliasing() const { return preferences_.values().antiAliasing; }
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
     std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
     const PanelVisibility& panels() const { return panels_; }

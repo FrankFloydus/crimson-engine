@@ -736,6 +736,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
                 ImGui::Text("Rendering: %zu omitted, %zu invalid",renderStats.dropped,renderStats.invalid);
             if(!renderer.particleStatus().empty()) ImGui::TextWrapped("%s",renderer.particleStatus().c_str());
             if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
+            if(!renderer.antiAliasingStatus().empty())ImGui::TextWrapped("%s",renderer.antiAliasingStatus().c_str());
             const auto size=ImGui::GetContentRegionAvail();
             if(size.x>0 && size.y>0) {
                 const auto scale=ImGui::GetWindowViewport()->FramebufferScale;

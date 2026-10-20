@@ -39,6 +39,8 @@ The `test` suffix runs the registered checks, including hidden native GPU fixtur
 
 **Direct3D 12 is the default renderer.** Choose **Edit → Preferences → Rendering → Renderer (restart required)** to select Direct3D 12 or Direct3D 11, then save your documents and restart the application. The preference is application-wide; its tooltip identifies the active backend. Both backends use the same lighting features and SM5/DXBC shader family, so switching alone does not recompile materials or change authored scenes. Vulkan is not exposed in this version.
 
+**Edit → Preferences → Rendering → Antialiasing** selects **Off** or **SMAA**, default SMAA. Changes apply immediately to Scene, Game and material/particle previews. Asset cards use SMAA independently. SMAA 1x filters the tone-mapped scene before grid, collision and editor overlays; picking and raw numerical inspection remain unfiltered. It smooths visible edges without jitter or frame history. Temporal AA and temporal upscaling remain future work.
+
 For recovery or a temporary comparison, launch the executable with an explicit backend. This overrides the preference for that process without saving it:
 
 ```powershell

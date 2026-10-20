@@ -30,6 +30,7 @@ public:
     bool canUndo() const;
     bool canRedo() const;
     void draw(AssetLibrary&,Renderer&,double dt,MaterialEditor&);
+    void setAntiAliasing(AntiAliasing value) { preview_.antiAliasing=value; }
     bool transactionActive() const { return document_.transactionActive(); }
     void finishInteraction();
     void filesChanged(std::span<const std::filesystem::path>);

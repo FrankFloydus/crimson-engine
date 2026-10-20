@@ -34,7 +34,31 @@ void writeJson(const std::filesystem::path& file,const nlohmann::json& value) {
 }
 bool samePreferences(const EditorPreferenceValues& a,const EditorPreferenceValues& b) {
     return a.appearance==b.appearance&&a.browserPreviewSize==b.browserPreviewSize&&a.pointShadowResolution==b.pointShadowResolution&&
-        a.graphicsBackend==b.graphicsBackend;
+        a.graphicsBackend==b.graphicsBackend&&a.antiAliasing==b.antiAliasing;
+}
+void antiAliasingPreferences() {
+    Temp temp;const auto file=temp.root/"aa-preferences.json";EditorPreferences preferences(file);
+    require(preferences.values().antiAliasing==AntiAliasing::Smaa,"New preferences must select SMAA.");
+    require(!std::filesystem::exists(file),"Default AA preferences wrote a file.");
+    auto values=preferences.values();values.antiAliasing=AntiAliasing::Off;
+    require(preferences.setValues(values),"Cannot persist Off antialiasing.");
+    const auto saved=readText(file);const auto json=nlohmann::json::parse(saved);
+    require(json.at("antiAliasing")=="off"&&samePreferences(EditorPreferences(file).values(),values),
+        "Off antialiasing did not round-trip with existing preferences.");
+    require(!preferences.setValues(values)&&readText(file)==saved,"Equal AA preferences rewrote the file.");
+    auto invalid=values;invalid.antiAliasing=static_cast<AntiAliasing>(99);
+    require(!preferences.setValues(invalid)&&samePreferences(preferences.values(),values)&&readText(file)==saved,
+        "Invalid live AA partially changed preferences.");
+    auto legacy=json;legacy.erase("antiAliasing");writeJson(file,legacy);const auto legacyBytes=readText(file);
+    values.antiAliasing=AntiAliasing::Smaa;
+    require(samePreferences(EditorPreferences(file).values(),values)&&readText(file)==legacyBytes,
+        "Older preferences failed to default SMAA without rewriting.");
+    for(const auto& mode:std::array<nlohmann::json,5>{"taa",17,nullptr,true,nlohmann::json::object()}) {
+        auto malformed=json;malformed["antiAliasing"]=mode;writeJson(file,malformed);const auto before=readText(file);
+        const EditorPreferences rejected(file);
+        require(!rejected.status().empty()&&samePreferences(rejected.values(),EditorPreferenceValues{})&&readText(file)==before,
+            "Invalid saved AA partially loaded or rewrote preferences.");
+    }
 }
 void graphicsBackendPreferences() {
     Temp temp;const auto file=temp.root/"graphics-preferences.json";EditorPreferences preferences(file);
@@ -126,6 +150,6 @@ void run() {
 }
 }
 int main() {
-    try { run();obsoletePlayerFadePreferencesAreIgnored();graphicsBackendPreferences(); std::cout<<"Editor preferences checks passed.\n"; return 0; }
+    try { run();obsoletePlayerFadePreferencesAreIgnored();graphicsBackendPreferences();antiAliasingPreferences(); std::cout<<"Editor preferences checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

@@ -329,6 +329,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
     if(frame.createMaterial)materialEditor_.requestCreate(frame.materialFolder,assets);
     if(!frame.openMaterial.empty())materialEditor_.requestOpen(frame.openMaterial,assets);
+    particleEditor_.setAntiAliasing(editor_.antiAliasing());
+    materialEditor_.setAntiAliasing(editor_.antiAliasing());
     particleEditor_.draw(assets,renderer,simulationSeconds,materialEditor_);
     materialEditor_.draw(assets,renderer,resources_,simulationSeconds);
     if(frame.createNavigationAgentProfile)navigationProfileEditor_.requestCreate(frame.navigationAgentProfileFolder,assets);
@@ -502,6 +504,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     }
     EditorRenderFrameInput renderInput;
     renderInput.extracted=std::move(extracted);renderInput.settings=settings_;
+    renderInput.settings.antiAliasing=editor_.antiAliasing();
     renderInput.sceneCamera=sceneCamera;renderInput.gameCamera=gameCamera;
     renderInput.sceneWidth=renderer.width();renderInput.sceneHeight=renderer.height();
     renderInput.gameWidth=game.pixelWidth;renderInput.gameHeight=game.pixelHeight;
@@ -552,6 +555,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!prepared_.status().empty())status_+=prepared_.status();
     if(!renderer.clusteredLightingStatus().empty())status_+=renderer.clusteredLightingStatus();
     if(!renderer.ssgiStatus().empty())status_+=renderer.ssgiStatus();
+    if(!renderer.antiAliasingStatus().empty())status_+=renderer.antiAliasingStatus()+'\n';
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
     if(play_.playing()) {
         status_+=play_.status();

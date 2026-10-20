@@ -84,7 +84,7 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true}) {
             const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=world || purpose==RenderViewPurpose::Thumbnail;
@@ -92,6 +92,7 @@ void profiles() {
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions && world;config.ssgi=gi && world;config.ssao=ao && world;
+            config.smaa=smaa;
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported profile has an invalid structural plan.");
             check(bool(validateRenderPassPlan(plan,concrete(plan))),"A supported profile has invalid concrete resource bindings.");
             for(const auto kind:{Kind::ModelDeformation,Kind::LightAssignment,Kind::Background,Kind::Opaque,Kind::Transparent,Kind::ToneMap,Kind::Encode})
@@ -102,6 +103,7 @@ void profiles() {
             for(const auto kind:{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish})
                 check(plan.has(kind)==config.ssgi,"GI does not contain exactly the complete enabled chain.");
             check(plan.has(Kind::SsaoEvaluate)==config.ssao && plan.has(Kind::SsaoPublish)==config.ssao,"AO does not contain exactly its enabled chain.");
+            check(plan.has(Kind::SmaaEdges)==smaa && plan.has(Kind::SmaaWeights)==smaa && plan.has(Kind::SmaaBlend)==smaa,"Spatial AA does not contain exactly its enabled chain.");
             check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Overlay work escaped its profile.");
             check(plan.has(Kind::Picking)==config.picking && plan.has(Kind::PickReadback)==config.picking && plan.has(Kind::ThumbnailReadback)==config.thumbnailReadback,"Readbacks escaped their profile.");
             check(plan.bindings[index(Resource::ShadowAtlas)].owner==(purpose==RenderViewPurpose::Thumbnail?RenderResourceOwner::ThumbnailWorldShadows:RenderResourceOwner::ActiveWorldShadows),"Thumbnail shadows share the active world owner.");
@@ -191,6 +193,37 @@ void concreteHazards() {
     check(bool(validateRenderPassBindings(plan,table,Kind::SsgiTrace)),"Before-dispatch validation required an unallocated later display output.");
     check(validateRenderPassBindings(plan,table,Kind::Encode).error==Error::MissingBinding,"Final recording boundary accepted an absent display output.");
 }
+void spatialAntiAliasingContracts() {
+    check(SceneSettings{}.antiAliasing==AntiAliasing::Off && valid_anti_aliasing(AntiAliasing::Off) && valid_anti_aliasing(AntiAliasing::Smaa) &&
+        !valid_anti_aliasing(static_cast<AntiAliasing>(255)),"Renderer AA settings lost their explicit Off default or enum validation.");
+    auto config=fullConfig();config.smaa=true;
+    const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
+    check(bool(validateRenderPassPlan(plan,resources)),"SMAA resource bindings failed validation.");
+    check(plan.find(Kind::ToneMap)->physicalView<plan.find(Kind::SmaaEdges)->physicalView &&
+        plan.find(Kind::SmaaEdges)->physicalView<plan.find(Kind::SmaaWeights)->physicalView &&
+        plan.find(Kind::SmaaWeights)->physicalView<plan.find(Kind::SmaaBlend)->physicalView &&
+        plan.find(Kind::SmaaBlend)->physicalView<plan.find(Kind::Grid)->physicalView &&
+        plan.find(Kind::Grid)->physicalView<plan.find(Kind::Encode)->physicalView,"SMAA does not run after tone mapping and before editor overlays/encoding.");
+    for(const auto kind:{Kind::Grid,Kind::CollisionOverlays,Kind::Encode}) {
+        const auto& entry=*plan.find(kind);
+        check(std::any_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::SmaaOutput;}),"Display composition reads unfiltered color after SMAA.");
+        check(std::none_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::Composite;}),"An editor overlay bypasses or precedes SMAA.");
+    }
+    auto broken=plan;erase(broken,Kind::SmaaEdges);error(broken,Error::MissingProducer,"SMAA weights accepted missing edge data.");
+    broken=plan;erase(broken,Kind::SmaaWeights);error(broken,Error::MissingProducer,"SMAA blend accepted missing neighborhood weights.");
+    broken=plan;erase(broken,Kind::SmaaBlend);error(broken,Error::UndefinedLoad,"Grid loaded AA color without neighborhood blending.");
+    broken=plan;use(broken,Kind::SmaaEdges,Resource::SmaaEdges).load=Load::DontCare;error(broken,Error::InvalidLoadStore,"SMAA edge discards left undefined edge pixels.");
+    broken=plan;use(broken,Kind::SmaaBlend,Resource::SceneDepth).access=Access::DepthAttachmentWrite;error(broken,Error::InvalidAccess,"SMAA replaced opaque depth needed by editor overlays.");
+    auto badResources=resources;badResources.bindings[index(Resource::SmaaArea)].initialized=false;error(plan,badResources,Error::MissingProducer,"SMAA weights sampled an uninitialized reference area LUT.");
+    badResources=resources;badResources.bindings[index(Resource::SmaaSearch)].textureCount=0;error(plan,badResources,Error::MissingBinding,"SMAA weights sampled an absent reference search LUT.");
+    badResources=resources;badResources.bindings[index(Resource::SmaaOutput)].textures=badResources.bindings[index(Resource::Composite)].textures;error(plan,badResources,Error::FeedbackLoop,"SMAA sampled and attached the same color image.");
+    badResources=resources;badResources.bindings[index(Resource::SmaaEdges)].view.instanceId++;error(plan,badResources,Error::InvalidOwner,"Two views shared SMAA scratch ownership.");
+    config.smaa=false;const auto off=buildRenderPassPlan(config);
+    check(plan.count==off.count+3,"Disabling AA retained extra passes.");
+    for(const auto& entry:off.passes())for(const auto& item:entry.uses())
+        check(item.resource<Resource::SmaaEdges || item.resource>Resource::SmaaSearch,"Disabled AA retained scratch/LUT dependencies.");
+    check(std::any_of(off.find(Kind::Encode)->uses().begin(),off.find(Kind::Encode)->uses().end(),[](const auto& item){return item.resource==Resource::Composite;}),"Off did not retain the ordinary tone-map composition path.");
+}
 void ownershipAndOrderFailures() {
     const auto correct=buildRenderPassPlan(fullConfig());
     auto value=correct;value.bindings[index(Resource::SceneHdr)].view.instanceId++;error(value,Error::InvalidOwner,"Logical HDR belongs to another view.");
@@ -219,7 +252,7 @@ void ownershipAndOrderFailures() {
 }
 int main() {
     static_assert(std::is_trivially_copyable_v<RenderPassPlan> && std::is_trivially_copyable_v<RenderResourceTable>);
-    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();ownershipAndOrderFailures(); }
+    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();spatialAntiAliasingContracts();ownershipAndOrderFailures(); }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
     std::cout<<"Render pass/resource contracts passed.\n";return 0;
 }

@@ -134,6 +134,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("MMB tumble · Shift+MMB pan · Ctrl+MMB rotate environment\nWheel zoom · Double-click MMB resets view and environment rotation");
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
     if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
+    if(!renderer.antiAliasingStatus().empty())ImGui::TextWrapped("%s",renderer.antiAliasingStatus().c_str());
     const auto size=ImGui::GetContentRegionAvail();
     if(size.x<=0 || size.y<=0){cancelInteraction();return;}
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;
@@ -163,7 +164,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(!displayed)return;
     SceneSettings settings;settings.camera.position={navigation_.pan[0],navigation_.pan[1],navigation_.distance};
     settings.camera.target={navigation_.pan[0],navigation_.pan[1],0};settings.camera.nearPlane=.1f;settings.camera.farPlane=30;
-    settings.exposure=1;settings.environment=environment_;
+    settings.exposure=1;settings.environment=environment_;settings.antiAliasing=antiAliasing_;
     renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,mesh_,navigation_.objectTransform(),showBackground_ && environment_.enabled,displayed,materialContext_);
 }
 void MaterialPreview::release(Renderer& renderer) {

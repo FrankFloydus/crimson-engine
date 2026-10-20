@@ -32,6 +32,7 @@ public:
     bool canSave() const { return document_.editable(); }
     bool canSaveAs() const { return document_.isOpen() && (particleMaterialCompatible(document_.definition()) || modelMaterialCompatible(document_.definition())); }
     void draw(AssetLibrary&,Renderer&,ResourceManager&,double dt);
+    void setAntiAliasing(AntiAliasing value) { preview_.setAntiAliasing(value); }
     void filesChanged(std::span<const std::filesystem::path>);
     void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel(); }
 private:

@@ -75,7 +75,10 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,17> definitions{{
+    constexpr std::array<Pair,20> definitions{{
+        {RendererProgram::SmaaEdges,"vs_smaa","fs_smaa_edges"},
+        {RendererProgram::SmaaWeights,"vs_smaa","fs_smaa_weights"},
+        {RendererProgram::SmaaBlend,"vs_smaa","fs_smaa_blend"},
         {RendererProgram::InstancedModel,"vs_model_instanced","fs_model"},
         {RendererProgram::InstancedPicking,"vs_pick_instanced","fs_pick_instanced"},
         {RendererProgram::InstancedPointShadow,"vs_point_shadow_instanced","fs_point_shadow"},

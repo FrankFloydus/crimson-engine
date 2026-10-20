@@ -2,6 +2,7 @@
 
 #include "crimson-renderer/RenderTypes.h"
 #include "crimson-renderer/GraphicsBackend.h"
+#include <crimson/renderer/AntiAliasing.hpp>
 #include <array>
 #include <filesystem>
 #include <string>
@@ -14,6 +15,7 @@ struct EditorPreferenceValues {
     int browserPreviewSize{128};
     int pointShadowResolution{1024};
     GraphicsBackend graphicsBackend{GraphicsBackend::Direct3D12};
+    AntiAliasing antiAliasing{AntiAliasing::Smaa};
 };
 // Application preferences are independent from authored scenes and dock state.
 class EditorPreferences {

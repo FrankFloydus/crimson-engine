@@ -15,6 +15,7 @@ class MaterialPreview {
 public:
     void environmentMenu(AssetLibrary&);
     void draw(AssetLibrary&,Renderer&,ResourceManager&,const MaterialAsset&,double dt);
+    void setAntiAliasing(AntiAliasing value) { antiAliasing_=value; }
     void setNodePreview(std::optional<MaterialGraphPreviewTarget> target);
     std::optional<MaterialGraphPreviewTarget> nodePreview() const {return nodePreview_;}
     void cancelInteraction() { gesture_=0; }
@@ -24,6 +25,7 @@ private:
     MaterialPreviewNavigation navigation_;
     MaterialPreviewMesh mesh_{MaterialPreviewMesh::Sphere};
     EnvironmentSettings environment_;
+    AntiAliasing antiAliasing_{AntiAliasing::Smaa};
     bool showBackground_{true};
     bool selectMaterial_{};
     int gesture_{};

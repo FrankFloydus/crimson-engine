@@ -142,6 +142,8 @@ Scene and Game each expose a top-right render-view dropdown with Lit, Albedo, Ro
 
 ## Renderer data, passes, shadows and lifetime
 
+Antialiasing is an application preference under **Edit → Preferences → Rendering → Antialiasing**, with **Off / SMAA** and SMAA enabled by default. Scene/Game and material/particle previews receive the current choice; asset cards use fixed SMAA. SMAA 1x High records edge detection, weight calculation and linear neighborhood blending after tone mapping, before grid/collision/editor overlays. It keeps the single final sRGB encoding and leaves picking and RawData inspection unfiltered. It uses no camera jitter or history; temporal AA, DLSS/FSR and offscreen MSAA are not implemented. The renderer's per-view scratch resources and failure diagnostics remain distinct from SSGI/SSAO resources.
+
 Current local lighting is GPU clustered Forward+: up to 4,096 point sources, initial 32-pixel tiles and 24 logarithmic depth slices per camera. Very large viewports grow tile size. Dense clusters retain all influencing lights within source capacity. The all-lights reference path is a correctness comparison, not a second authoring mode. Up to four ordinary directionals remain independent.
 
 The generated shader texture budget is fixed: graph textures 0…11, IBL cubes 12…13, combined BRDF/Forward+ data atlas 14 and shared shadow comparison atlas 15. Keep BRDF filtering/coordinates intact when extending the atlas. Keep new effects within the existing sampler budget.

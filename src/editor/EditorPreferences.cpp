@@ -23,7 +23,7 @@ bool same(const EditorPreferenceValues& a,const EditorPreferenceValues& b) {
         a.appearance.gridMinorSrgb==b.appearance.gridMinorSrgb && a.appearance.gridMajorSrgb==b.appearance.gridMajorSrgb &&
         a.appearance.gridMinorWidth==b.appearance.gridMinorWidth && a.appearance.gridMajorWidth==b.appearance.gridMajorWidth &&
         a.browserPreviewSize==b.browserPreviewSize && a.pointShadowResolution==b.pointShadowResolution &&
-        a.graphicsBackend==b.graphicsBackend;
+        a.graphicsBackend==b.graphicsBackend && a.antiAliasing==b.antiAliasing;
 }
 bool valid(const EditorPreferenceValues& value) {
     const auto color=[](const auto& channels) {
@@ -34,7 +34,8 @@ bool valid(const EditorPreferenceValues& value) {
         std::isfinite(value.appearance.gridMajorWidth) && value.appearance.gridMajorWidth>=.25f && value.appearance.gridMajorWidth<=8 &&
         std::find(BrowserPreviewSizes.begin(),BrowserPreviewSizes.end(),value.browserPreviewSize)!=BrowserPreviewSizes.end() &&
         std::find(PointShadowResolutions.begin(),PointShadowResolutions.end(),value.pointShadowResolution)!=PointShadowResolutions.end() &&
-        validGraphicsBackend(value.graphicsBackend);
+        validGraphicsBackend(value.graphicsBackend) &&
+        (value.antiAliasing==AntiAliasing::Off || value.antiAliasing==AntiAliasing::Smaa);
 }
 }
 EditorPreferences::EditorPreferences(std::filesystem::path file) {
@@ -52,6 +53,12 @@ EditorPreferences::EditorPreferences(std::filesystem::path file) {
         candidate.appearance.gridMajorWidth=appearance.at("gridMajorWidth").get<float>();
         candidate.browserPreviewSize=json.value("browserPreviewSize",128);
         candidate.pointShadowResolution=json.value("pointShadowResolution",1024);
+        if(const auto found=json.find("antiAliasing");found!=json.end()) {
+            const auto mode=found->get<std::string>();
+            if(mode=="off")candidate.antiAliasing=AntiAliasing::Off;
+            else if(mode=="smaa")candidate.antiAliasing=AntiAliasing::Smaa;
+            else throw std::runtime_error("Preferences contain an unsupported antialiasing mode.");
+        }
         if(const auto found=json.find("graphicsBackend");found!=json.end()) {
             const auto parsed=parseGraphicsBackend(found->get<std::string>());
             if(!parsed)throw std::runtime_error("Preferences contain an unsupported graphics backend.");
@@ -79,6 +86,7 @@ bool EditorPreferences::save() {
         const auto& appearance=values_.appearance;
         const nlohmann::json json{{"version",1},{"browserPreviewSize",values_.browserPreviewSize},{"pointShadowResolution",values_.pointShadowResolution},
             {"graphicsBackend",graphicsBackendKey(values_.graphicsBackend)},
+            {"antiAliasing",values_.antiAliasing==AntiAliasing::Smaa?"smaa":"off"},
             {"viewport",{{"background",appearance.backgroundSrgb},{"gridMinorColor",appearance.gridMinorSrgb},
                 {"gridMajorColor",appearance.gridMajorSrgb},{"gridMinorWidth",appearance.gridMinorWidth},{"gridMajorWidth",appearance.gridMajorWidth}}}};
         writeFileAtomically(file_,json.dump(2)+"\n"); status_.clear(); return true;
@@ -98,6 +106,10 @@ void EditorPreferences::draw(std::optional<GraphicsBackend> activeBackend) {
         changed|=ImGui::ColorEdit4("Minor line color",appearance.gridMinorSrgb.data());
         changed|=ImGui::DragFloat("Minor line width",&appearance.gridMinorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
         ImGui::SeparatorText("Rendering");
+        int antiAliasing=candidate.antiAliasing==AntiAliasing::Smaa?1:0;
+        if(ImGui::Combo("Antialiasing",&antiAliasing,"Off\0SMAA\0")) {
+            candidate.antiAliasing=antiAliasing?AntiAliasing::Smaa:AntiAliasing::Off;changed=true;
+        }
         if(ImGui::BeginCombo("Renderer (restart required)",graphicsBackendName(candidate.graphicsBackend))) {
             for(const auto backend:{GraphicsBackend::Direct3D12,GraphicsBackend::Direct3D11}) {
                 const bool selected=backend==candidate.graphicsBackend;

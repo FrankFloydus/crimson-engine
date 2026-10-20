@@ -29,7 +29,7 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=10;
+constexpr uint32_t PreviewVersion=11;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
@@ -309,7 +309,8 @@ struct AssetPreviews::Impl {
         if(!entry.clean && indexedCache(id,entry))return;
         if(std::chrono::steady_clock::now()>=validationDeadline)return;
         ++statistics.validations;
-        SceneSettings settings; settings.directional.enabled=false; for (auto& light:settings.points) light.enabled=false;
+        SceneSettings settings; settings.antiAliasing=AntiAliasing::Smaa;
+        settings.directional.enabled=false; for (auto& light:settings.points) light.enabled=false;
         std::vector<ExtractedModel> models; std::vector<DirectionalLight> directions; std::vector<PointLight> points;
         std::shared_ptr<const SceneSnapshot> sceneSnapshot; Aabb bounds;
         std::shared_ptr<const MaterialAsset> materialAsset;

@@ -117,9 +117,11 @@ int main() {
         scene.settings.camera.position={4,5,6};scene.settings.environment.fog.enabled=true;
         scene.settings.environment.ssgi={true,1.5f,4.f,.12f,.8f,SsgiQuality::High,2};
         scene.settings.environment.ssao={true,1.2f,.7f,SsaoQuality::High};
+        scene.settings.antiAliasing=AntiAliasing::Smaa;
         scene.instances.push_back(frozen->shadowInstances.front());
         PreparedRenderView game;game.identity={RenderViewPurpose::Game,0};game.width=960;game.height=540;
         game.settings=scene.settings;game.settings.camera.position={11,12,13};
+        game.settings.antiAliasing=AntiAliasing::Off;
         game.instances.push_back(frozen->shadowInstances.front());game.instances.front().entityId=72;
         game.instances.front().opacity=.25f;
         frame->views.push_back(std::move(scene));frame->views.push_back(std::move(game));
@@ -132,6 +134,8 @@ int main() {
         {
             const auto sceneAdapter=preparedRenderScene(*queued,queued->views[0]);
             const auto gameAdapter=preparedRenderScene(*queued,queued->views[1]);
+            require(sceneAdapter.settings.antiAliasing==AntiAliasing::Smaa&&gameAdapter.settings.antiAliasing==AntiAliasing::Off,
+                "Prepared Scene/Game adapters lost independent antialiasing settings.");
             require(sceneAdapter.settings.environment.ssgi==gameAdapter.settings.environment.ssgi&&
                 sceneAdapter.settings.environment.ssao==gameAdapter.settings.environment.ssao&&sceneAdapter.settings.environment.ssao.enabled,
                 "Prepared Scene/Game adapters lost authored screen-space lighting controls.");
