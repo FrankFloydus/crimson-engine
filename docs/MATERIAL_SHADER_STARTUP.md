@@ -1,6 +1,6 @@
 # Material shader startup and cache contract
 
-Updated 2026-10-18. This describes the implemented editor path, the relevant UE 5.8 source findings and the measured cache workload. It is not a full editor startup or gameplay FPS benchmark.
+Updated 2026-10-20. This describes the implemented editor path, the relevant UE 5.8 source findings and the measured cache workload. It is not a full editor startup or gameplay FPS benchmark.
 
 ## Presentation and ownership
 
@@ -10,7 +10,7 @@ Direct3D 12 is the default runtime backend; Direct3D 11 remains selectable in ap
 
 A true runtime miss compiles expensive Model/Particle surface fragments on the existing ResourceManager workers with an interactive policy that skips FXC optimization; cheap coverage and vertex stages retain full optimization. It then prepares the full O3 surface result in the background after 750 ms of quiet. A new foreground miss cancels obsolete background optimization; sibling owners share pending optimization work. The two policies have distinct cache identities; Release build preparation produces O3 results. Scene/Game rendering continues; there is no whole-world preparing-materials gate. Existing prepared graph entries retain their last complete packet, including programs, uniforms, textures, coverage and render state, until a coherent replacement is ready. Failed compilation retains that packet and reports the diagnostic. The first usable shader is temporary: full optimization replaces it atomically, with no authored-material changes.
 
-Individual stage names derive from their own generated source rather than the complete material topology key. Coverage has an independent postorder traversal and the first uniform/sampler slots. Surface-only graph rewiring therefore cannot rename or move unchanged coverage. Depth source contains only the expressions consumed by that pass: Mask opacity for shadows, Mask or transparent opacity for picking. Point and directional shadow fragments with identical compiler inputs share one cache artifact. The complete material retains a whole-bundle identity for coherent publication. Material and node-preview owners share their cache read session and source-family dependency memo.
+Individual stage names derive from their own generated source rather than the complete material topology key. Coverage has an independent postorder traversal and the first uniform/sampler slots. Surface-only graph rewiring therefore cannot rename or move unchanged coverage. Depth source contains only the expressions consumed by that pass: Mask opacity for shadows, Mask or transparent opacity for picking. Identical compiler inputs share an artifact; PointShadow v28 additionally consumes the prior-world varying and emits the optional motion MRT, so its interface differs from DirectionalShadow. The complete material retains a whole-bundle identity for coherent publication. Material and node-preview owners share their cache read session and source-family dependency memo.
 
 `materialGraphFixedSurface` certifies an exact subset for the embedded model program. It accepts opaque standard PBR with conventional color, ORM, normal, AO and emission slots, uniform factors/arithmetic and compatible shared mapping. Texture roles, channels and samplers must match. Normal UV must also match each primitive's tangent UV, except the built-in box's equivalent sets. Certified model graphs use that program as their complete renderer: no generated source is built and no shader jobs are queued. Normal texture streaming keeps its demand, priority and resource leases. These packets are complete rather than graph-pending, and a topology change outside the certified subset selects the ordinary generated-program path.
 
@@ -128,17 +128,26 @@ The final v13 lighting-family probe is `material-startup-after.json`: the same s
 
 ## Shared material lighting interface
 
-The current generator is v27 because generic None/Circular/Quad UV0 interpolation
-adds explicit mode data to the shared model vertex/varying contract. Embedded and
-generated surface, depth, picking and shadow stages reconstruct UV0 before
-material transforms; normal
+The current generator is v28. PointShadow vertex/fragment programs now carry a
+prior-world-position/validity varying through the existing `v_tangent` semantic;
+that depth-only semantic does not change surface tangents. `CC_GRAPH_POINT_SHADOW`
+selects the matching generated coverage interface and second readable-prepass MRT.
+The vertex program consumes `u_ssgiPreviousModel` for rigid draws, while the
+instanced variant reads each occurrence's previous transform from its retained
+palette. Both the embedded family and generated cache identity advance together;
+earlier PointShadow binaries cannot be mixed with this executable. Surface
+materials retain twelve texture slots and four MRT outputs, and `ModelVertex`
+remains 27 floats/108 bytes. This adds no authored scene/material migration.
+
+The None/Circular/Quad UV0 interpolation contract introduced in v27 remains.
+Embedded and generated surface, depth, picking and shadow stages reconstruct UV0
+before material transforms; normal
 mapping for nonlinear UVs derives its frame from final material UV derivatives
 after scale/rotation and skips a second normal rotation/sign adjustment. Shared
 derivative normalization keeps frame conditioning stable with camera distance.
-The change requires coherent program publication and source-cache invalidation,
-with no extra samplers or uniforms.
+Its UV reconstruction adds no material samplers or mesh subdivision.
 
-Generator v27 adds explicit None/Circular/Quad UV0 attributes/varyings to model surface and coverage programs and retains the shared Scene/Game four-cascade directional-shadow interface, including `u_directionalShadowSoftness[4]` and `u_directionalShadowDepthRange[16]`, and removes the former player-fade partition uniforms, nearest-layer composite program and packed occluder-depth publication compute stage. Source identity and uniform manifests reject earlier generated programs. Fixed PBR/model and generated model/particle paths share ordinary scene light/shadow evaluation. The previous private actor Key/Fill, dedicated actor shadows, darkness/reveal and Ambient Darkness interfaces remain removed. The six-texel point stride, twelve material texture slots, four MRT outputs, fog uniforms and independent GI/AO publication remain intact. Generic model instance opacity and material transparency remain supported. Release regenerates embedded shaders and prepares matching material cache entries through the existing commandlet; generated headers are never edited manually.
+Generator v28 retains explicit None/Circular/Quad UV0 attributes/varyings and the shared Scene/Game four-cascade directional-shadow interface, including `u_directionalShadowSoftness[4]` and `u_directionalShadowDepthRange[16]`. The former player-fade partition uniforms, nearest-layer compositor and private actor Key/Fill, dedicated actor shadows, darkness/reveal and Ambient Darkness interfaces remain removed. Source identity and reflected manifests reject earlier generated programs. Fixed PBR/model and generated model/particle paths share ordinary scene light/shadow evaluation. The six-texel point stride, twelve material texture slots, four surface MRT outputs, fog uniforms and independent GI/AO atlas publication remain intact. Generic model instance opacity and material transparency remain supported. GI reconstruction consumes separate raw luminance-moment histories and early spatial feedback, without feeding displayed GI into material donor capture. Release regenerates embedded shaders and prepares matching material cache entries through the existing commandlet; generated headers are never edited manually.
 
 
-Tone-mapping White Point and AgX Contrast are presentation parameters, separate from this material interface. Renderer computes their coefficients on the CPU and binds `u_toneCurve` / `u_toneShoulder` to the presentation shader alongside the existing operator/exposure settings. Parameter edits do not compile materials, rebake environment maps or change generator v27. The present shader's reflected uniform contract and staged binary must change together when this presentation interface changes. Default parameters retain the existing output; authored parameters persist through the shared Environment serializer, while preview environments retain independent settings. Direct/Indirect debug views use the authored presentation curve, so weak isolated GI can be clipped by ACES even with correct diffuse source capture; Albedo and other data views continue to bypass exposure and tone mapping.
+Tone-mapping White Point and AgX Contrast are presentation parameters, separate from this material interface. Renderer computes their coefficients on the CPU and binds `u_toneCurve` / `u_toneShoulder` to the presentation shader alongside the existing operator/exposure settings. Parameter edits do not compile materials, rebake environment maps or change generator v28. The present shader's reflected uniform contract and staged binary must change together when this presentation interface changes. Default parameters retain the existing output; authored parameters persist through the shared Environment serializer, while preview environments retain independent settings. Direct/Indirect debug views use the authored presentation curve, so weak isolated GI can be clipped by ACES even with correct diffuse source capture; Albedo and other data views continue to bypass exposure and tone mapping.

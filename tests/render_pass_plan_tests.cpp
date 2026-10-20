@@ -60,13 +60,18 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
            resource==Resource::EnvironmentLighting || resource==Resource::ShadowAtlas)continue;
         auto& binding=table.bindings[i];binding.textureCount=1;
         if(resource==Resource::SsgiSourcesPrevious || resource==Resource::SsgiSourcesCurrent)binding.textureCount=3;
-        if(resource==Resource::SsgiHistoryPrevious || resource==Resource::SsgiHistoryCurrent || resource==Resource::SsgiTraceScratch ||
-           resource==Resource::SsgiFilterA || resource==Resource::SsgiFilterB)binding.textureCount=2;
         for(unsigned lane=0;lane<binding.textureCount;++lane)binding.textures[lane]=texture(static_cast<std::uint32_t>(i*4+lane+1));
+        if(resource==Resource::SsgiHistoryPrevious || resource==Resource::SsgiHistoryCurrent ||
+           resource==Resource::SsgiTraceScratch || resource==Resource::SsgiTemporalScratch ||
+           resource==Resource::SsgiFilterA || resource==Resource::SsgiFilterB || resource==Resource::SsgiFilterC) {
+            binding.textures[0].layers=2;binding.textures[0].range.layerCount=2;
+        }
     }
     if(plan.config.ssgi) {
         table.bindings[index(Resource::SsgiSourcesCurrent)].textures=table.bindings[index(Resource::SsgiSourcesPrevious)].textures;
+        table.bindings[index(Resource::SsgiHistoryCurrent)].textures=table.bindings[index(Resource::SsgiHistoryPrevious)].textures;
         table.bindings[index(Resource::SsgiFilterB)].textures=table.bindings[index(Resource::SsgiTraceScratch)].textures;
+        table.bindings[index(Resource::SsgiFilterC)].textures=table.bindings[index(Resource::SsgiFilterA)].textures;
     }
     auto atlas=texture(500,64,64,4);
     auto& lighting=table.bindings[index(Resource::ClusteredLighting)];lighting.textures[0]=atlas;
@@ -100,8 +105,11 @@ void profiles() {
             check(plan.find(Kind::Background)->physicalView<plan.find(Kind::Opaque)->physicalView &&
                 plan.find(Kind::Opaque)->physicalView<plan.find(Kind::Transparent)->physicalView,"Color queues share or reverse physical execution views.");
             check(plan.has(Kind::DepthPrepass)==(config.ssgi || config.ssao),"Depth prepass does not follow active effects.");
-            for(const auto kind:{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish})
+            for(const auto kind:{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiReconstruct,Kind::SsgiFilterMedium,Kind::SsgiFilterWide,Kind::SsgiPublish})
                 check(plan.has(kind)==config.ssgi,"GI does not contain exactly the complete enabled chain.");
+            if(const auto* depth=plan.find(Kind::DepthPrepass))
+                check(std::any_of(depth->uses().begin(),depth->uses().end(),[](const auto& item){return item.resource==Resource::ObjectMotion;})==config.ssgi,
+                    "Object-motion attachment work escaped the GI profile.");
             check(plan.has(Kind::SsaoEvaluate)==config.ssao && plan.has(Kind::SsaoPublish)==config.ssao,"AO does not contain exactly its enabled chain.");
             check(plan.has(Kind::SmaaEdges)==smaa && plan.has(Kind::SmaaWeights)==smaa && plan.has(Kind::SmaaBlend)==smaa,"Spatial AA does not contain exactly its enabled chain.");
             check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Overlay work escaped its profile.");
@@ -141,16 +149,30 @@ void effectTopology() {
     const auto correct=buildRenderPassPlan(fullConfig());
     auto value=correct;erase(value,Kind::DepthPrepass);error(value,Error::MissingProducer,"Effects read missing depth/scope data.");
     value=correct;erase(value,Kind::SsgiTrace);error(value,Error::MissingProducer,"Temporal reprojection accepted missing trace/metadata.");
-    value=correct;erase(value,Kind::SsgiTemporal);error(value,Error::MissingProducer,"GI filtering accepted missing current history.");
-    value=correct;erase(value,Kind::SsgiFilterHorizontal);error(value,Error::MissingProducer,"Vertical GI filtering accepted missing filter scratch.");
+    value=correct;erase(value,Kind::SsgiTemporal);error(value,Error::MissingProducer,"GI reconstruction accepted missing temporal radiance/moments.");
+    value=correct;erase(value,Kind::SsgiReconstruct);error(value,Error::MissingProducer,"GI filtering accepted missing reconstructed radiance/history.");
+    value=correct;erase(value,Kind::SsgiFilterMedium);error(value,Error::MissingProducer,"Wide GI filtering accepted missing intermediate scratch.");
+    value=correct;erase(value,Kind::SsgiFilterWide);error(value,Error::MissingProducer,"GI publication accepted missing wide reconstruction.");
     value=correct;erase(value,Kind::SsgiPublish);error(value,Error::MissingProducer,"Opaque shading accepted unpublished indirect lighting.");
     value=correct;erase(value,Kind::SsaoEvaluate);error(value,Error::MissingProducer,"AO publication accepted missing scratch.");
     value=correct;erase(value,Kind::SsaoPublish);error(value,Error::MissingProducer,"Opaque shading accepted unpublished AO.");
     const auto& temporal=*correct.find(Kind::SsgiTemporal);
     check(std::none_of(temporal.uses().begin(),temporal.uses().end(),[](const auto& item){return item.resource==Resource::ReadableSceneDepth || item.resource==Resource::ReceiverScopes || item.resource==Resource::SsgiSourcesPrevious;}),"Temporal pass declares depth/donor inputs it does not bind.");
-    for(const auto kind:{Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical}) {
+    for(const auto resource:{Resource::ObjectMotion,Resource::SsgiMomentsPrevious,Resource::SsgiMomentsCurrent,Resource::SsgiTemporalScratch})
+        check(std::any_of(temporal.uses().begin(),temporal.uses().end(),[&](const auto& item){return item.resource==resource;}),
+            "Temporal reconstruction omitted motion, moments or its distinct scratch output.");
+    check(std::none_of(temporal.uses().begin(),temporal.uses().end(),[](const auto& item){return item.resource==Resource::SsgiHistoryCurrent;}),
+        "Temporal reconstruction overwrites spatial feedback before consuming it.");
+    const auto& reconstruct=*correct.find(Kind::SsgiReconstruct);
+    check(std::any_of(reconstruct.uses().begin(),reconstruct.uses().end(),[](const auto& item){
+        return item.resource==Resource::SsgiHistoryCurrent && item.access==Access::StorageWrite;
+    }),
+        "Early spatial reconstruction no longer publishes next-frame feedback.");
+    check(std::any_of(reconstruct.uses().begin(),reconstruct.uses().end(),[](const auto& item){return item.resource==Resource::SsgiMomentsCurrent;}),
+        "Short-history reconstruction omitted its independent luminance moments.");
+    for(const auto kind:{Kind::SsgiReconstruct,Kind::SsgiFilterMedium,Kind::SsgiFilterWide}) {
         const auto& entry=*correct.find(kind);
-        check(std::any_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::SsgiMetadataCurrent;}),"Bilateral filter omitted current metadata.");
+        check(std::any_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::SsgiMetadataCurrent;}),"Geometry-guided filter omitted current metadata.");
         check(std::none_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::ReadableSceneDepth || item.resource==Resource::ReceiverScopes;}),"Filter declares unbound raw depth/scope inputs.");
     }
     for(const auto kind:{Kind::SsgiPublish,Kind::SsaoPublish}) {
@@ -166,6 +188,12 @@ void concreteHazards() {
     table=correct;table.bindings[index(Resource::Composite)].textureCount=0;error(plan,table,Error::MissingBinding,"A recording accepted an absent composite allocation.");
     table=correct;table.bindings[index(Resource::PickReadback)].textureCount=0;error(plan,table,Error::MissingBinding,"Picking accepted an absent staging texture destination.");
     table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textureCount=1;error(plan,table,Error::InvalidTexture,"Capture MRT bundle omitted two actual physical lanes.");
+    table=correct;table.bindings[index(Resource::ObjectMotion)].textureCount=0;error(plan,table,Error::MissingBinding,"GI accepted an absent object-motion allocation.");
+    table=correct;table.bindings[index(Resource::SsgiTemporalScratch)].textures[0].layers=1;
+    table.bindings[index(Resource::SsgiTemporalScratch)].textures[0].range.layerCount=1;
+    error(plan,table,Error::InvalidTexture,"A single-layer temporal texture silently discarded Character irradiance.");
+    table=correct;table.bindings[index(Resource::SsgiFilterB)].textures[0].range.layerCount=1;
+    error(plan,table,Error::InvalidTexture,"Filtering bound only one of the two irradiance array layers.");
     table=correct;table.bindings[index(Resource::SceneDepth)].textures[0].range.firstMip=1;error(plan,table,Error::InvalidTexture,"A subresource escaped its allocation mip range.");
     table=correct;table.bindings[index(Resource::SceneHdr)].readEnabled=false;error(plan,table,Error::DisabledRead,"An ordinary texture bypassed its read dependency.");
     table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textures[0].format++;error(plan,table,Error::IncompatibleAlias,"One physical capture allocation accepted incompatible descriptors.");
@@ -173,11 +201,16 @@ void concreteHazards() {
     table=correct;table.bindings[index(Resource::Composite)].textures=table.bindings[index(Resource::SceneHdr)].textures;error(plan,table,Error::FeedbackLoop,"Tone mapping sampled its own attached output.");
     table=correct;table.bindings[index(Resource::PickColor)].textures=table.bindings[index(Resource::GlowA)].textures;error(plan,table,Error::IncompatibleAlias,"Unrelated picking and Glow allocations aliased silently.");
     table=correct;table.bindings[index(Resource::SsaoVisibility)].textures[0].range.firstTexel=1040;error(plan,table,Error::IncompatibleAlias,"GI and AO shared an overlapping packed atlas texel.");
-    table=correct;table.bindings[index(Resource::SsgiHistoryCurrent)].textures=table.bindings[index(Resource::SsgiHistoryPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote the same history allocation.");
+    table=correct;table.bindings[index(Resource::SsgiTemporalScratch)].textures=table.bindings[index(Resource::SsgiHistoryPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote its spatial feedback allocation.");
+    table=correct;table.bindings[index(Resource::SsgiHistoryCurrent)].textures=table.bindings[index(Resource::SsgiTemporalScratch)].textures;error(plan,table,Error::FeedbackLoop,"Early reconstruction sampled and overwrote temporal scratch.");
+    table=correct;table.bindings[index(Resource::SsgiMomentsCurrent)].textures=table.bindings[index(Resource::SsgiMomentsPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote independent raw moments.");
+    table=correct;table.bindings[index(Resource::SsgiFilterB)].textures=table.bindings[index(Resource::SsgiFilterA)].textures;error(plan,table,Error::FeedbackLoop,"Multi-scale GI filtering sampled and overwrote the same radiance array.");
     table=correct;table.bindings[index(Resource::SsgiMetadataCurrent)].textures=table.bindings[index(Resource::SsgiMetadataPrevious)].textures;error(plan,table,Error::StaleVersion,"Temporal compute read previous metadata after trace overwrote its physical storage.");
     table=correct;table.bindings[index(Resource::SsgiSourcesPrevious)].initialized=false;error(plan,table,Error::MissingProducer,"An enabled source read accepted uninitialized first-frame capture.");
+    table=correct;table.bindings[index(Resource::SsgiMomentsPrevious)].initialized=false;
+    error(plan,table,Error::MissingProducer,"Temporal reconstruction accepted undefined imported luminance moments.");
     table=correct;
-    for(const auto resource:{Resource::SsgiSourcesPrevious,Resource::SsgiHistoryPrevious,Resource::SsgiMetadataPrevious}) {
+    for(const auto resource:{Resource::SsgiSourcesPrevious,Resource::SsgiHistoryPrevious,Resource::SsgiMetadataPrevious,Resource::SsgiMomentsPrevious}) {
         table.bindings[index(resource)].initialized=false;table.bindings[index(resource)].readEnabled=false;
     }
     check(bool(validateRenderPassPlan(plan,table)),"Actual first-frame shader guards did not permit undefined previous inputs.");

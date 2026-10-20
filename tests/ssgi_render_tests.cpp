@@ -49,7 +49,7 @@ struct Temporary {
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle value{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}};
 struct Options {
-    bool benchmark{},ssgiAudit{},ssgiBenchmarkOnly{},movingDonor{};unsigned warmup{120},samples{300};
+    bool benchmark{},ssgiAudit{},ssgiReconstructionAudit{},ssgiReconstructionCheck{},ssgiBenchmarkOnly{},movingDonor{};unsigned warmup{120},samples{300};
     std::uint16_t benchmarkWidth{1920},benchmarkHeight{1080};fs::path artifacts,ssgiShaderDirectory;
     SsgiSettings auditSettings=[] {SsgiSettings value;value.enabled=true;return value;}();
 };
@@ -418,6 +418,279 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
     };
     if(options.ssgiBenchmarkOnly) {
         screenSpaceBenchmark();resources.stop();renderer.drainPending(frame);std::cout<<"SSGI benchmark completed.\n";return;
+    }
+    const auto reconstructionAudit=[&] {
+        // Test reconstruction rather than sample-count tuning: the tested path
+        // retains the authored budget. A separate unfiltered 16-ray reference
+        // changes only the number of directions, never the marching step count.
+        width=321;height=241;renderer.resizeGameViewport(width,height);
+        SceneSettings settings;settings.camera.position={2.5f,2.f,4.2f};settings.camera.target={0,1,0};
+        settings.camera.fov=47;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.1f;settings.camera.farPlane=32;
+        settings.exposure=.25f;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+        settings.environment.toneMapping=ToneMapping::Linear;settings.environment.debanding=false;
+        settings.environment.background.overrideColor=true;settings.environment.background.color={};
+        settings.environment.ssgi=options.auditSettings;
+        auto receiverMaterials=mesh->materials,emitterMaterials=mesh->materials,occluderMaterials=mesh->materials;
+        constexpr Vec3 emission{32,4,.5f};emitterMaterials[0].emissive=emission;occluderMaterials[0].baseColor={0,0,0,1};
+        std::vector<ModelMaterialTextures> textures(1);std::array<RenderModelInstance,8> instances;
+        for(std::size_t index=0;index<instances.size();++index) {
+            auto& instance=instances[index];instance.entityId=9800+index;instance.model.asset=mesh;instance.forceFullDetail=true;
+            instance.materials=index==0?&receiverMaterials:index==7?&occluderMaterials:&emitterMaterials;instance.textures=&textures;
+            instance.lightingScopes.directReceiverMask=lighting_scope::World;
+        }
+        instances[0].model.transform=math::translation({0,1,0})*math::scaling({1.4f,1.05f,1});
+        constexpr Vec3 center{-.8f,.95f,.48f};constexpr float halfSize=.18f,pi=3.14159265359f;
+        constexpr std::array<Vec3,6> offsets{{{0,0,halfSize},{0,0,-halfSize},{halfSize,0,0},{-halfSize,0,0},{0,halfSize,0},{0,-halfSize,0}}};
+        constexpr std::array<Vec3,6> axes{{{0,1,0},{0,1,0},{0,1,0},{0,1,0},{1,0,0},{1,0,0}}};
+        constexpr std::array angles{0.f,pi,pi*.5f,-pi*.5f,-pi*.5f,pi*.5f};
+        for(std::size_t face=0;face<6;++face)instances[face+1].model.transform=math::translation(center+offsets[face])*
+            math::rotation(math::axisAngle(axes[face],angles[face]))*math::scaling({halfSize,halfSize,1});
+        instances[7].model.transform=math::translation({.3f,.95f,.20f})*math::scaling({.42f,.44f,1});
+        const auto stationaryInstances=instances;Mat4 receiverDelta;
+        RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances={instances.data(),7};
+        scene.giWorldId=9800;scene.giCameraId=9801;scene.giEnvironmentId=9802;
+        PointLight movingPoint;movingPoint.entityId=9810;movingPoint.position={-.35f,1.18f,.42f};movingPoint.radius=2;
+        movingPoint.intensity=5;movingPoint.color={1,.125f,.015625f};movingPoint.specularStrength=0;
+        const auto stationaryPointPosition=movingPoint.position;
+        enum class Motion {None,Donor,Receiver,InstancedReceivers,Point};Motion motion=Motion::None;unsigned renderFrame{};
+        const auto draw=[&] {
+            const float phase=float(renderFrame++)*2*pi/180.f;
+            receiverDelta=Mat4{};
+            if(motion==Motion::Receiver||motion==Motion::InstancedReceivers)receiverDelta=math::translation({0,0,.025f*std::sin(phase)})*
+                math::rotation(math::axisAngle({0,1,0},.015f*std::sin(phase)));
+            instances[0].model.transform=receiverDelta*stationaryInstances[0].model.transform;
+            for(std::size_t index=1;index<7;++index)instances[index].model.transform=stationaryInstances[index].model.transform;
+            if(motion==Motion::Donor) {
+                const auto displacement=math::translation({.05f*std::sin(phase),.025f*std::cos(phase),0});
+                for(std::size_t index=1;index<7;++index)instances[index].model.transform=displacement*stationaryInstances[index].model.transform;
+            }
+            if(motion==Motion::InstancedReceivers)instances[7].model.transform=
+                math::translation({-1.f,1.8f,.30f-.025f*std::sin(phase)})*math::scaling({.25f,.18f,1});
+            movingPoint.position=stationaryPointPosition;
+            if(motion==Motion::Point)movingPoint.position=movingPoint.position+Vec3{.08f*std::sin(phase),.04f*std::cos(phase),0};
+            renderer.renderGame(scene);check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
+        };
+        const auto warm=[&](unsigned count){for(unsigned index=0;index<count;++index){draw();tick();}};
+        std::vector<Vec3> points;
+        for(unsigned y=0;y<40;++y)for(unsigned x=0;x<40;++x)
+            points.push_back({-.30f+1.35f*float(x)/39.f,.30f+1.40f*float(y)/39.f,0});
+        const auto sample=[&](const DecodedImage& image,const Mat4& delta,std::size_t* saturated=nullptr) {
+            const auto matrix=settings.camera.projectionMatrix(float(width)/height,ClipDepth::ZeroToOne)*settings.camera.viewMatrix();
+            std::vector<double> values;values.reserve(points.size());
+            for(const auto point:points) {
+                const auto pixel=math::project(math::transformPoint(delta,point),matrix,{0,0,float(width),float(height)},ClipDepth::ZeroToOne);
+                check(bool(pixel),"Reconstruction sample is not projectable.");const int x=int((*pixel)[0]),y=int((*pixel)[1]);
+                check(x>=0&&y>=0&&x<int(width)&&y<int(height),"Reconstruction sample left its receiver.");
+                const auto pixelIndex=std::size_t(y)*width+unsigned(x);
+                if(saturated&&(image.rgba[pixelIndex*4]==255||image.rgba[pixelIndex*4+1]==255||image.rgba[pixelIndex*4+2]==255))++*saturated;
+                values.push_back(linearLuminance(image,pixelIndex));
+            }
+            return values;
+        };
+        const auto average=[](const std::vector<double>& values) {double result{};for(const auto value:values)result+=value;return result/values.size();};
+        const auto samples=std::clamp(options.samples,32u,128u);
+        nlohmann::json report{{"schema",1},{"settings",ssgiSettingsJson(settings.environment.ssgi)},
+            {"backend",bgfx::getRendererName(bgfx::getRendererType())},{"width",width},{"height",height},{"exposure",settings.exposure},
+            {"shader_directory",options.ssgiShaderDirectory.empty()?"embedded":options.ssgiShaderDirectory.string()},
+            {"limitations","Display-linear luminance decoded from RGBA8. Moving cases include physical lighting changes. Reference retains 16 marching steps and clamp but averages 16 unfiltered rays per capture; it is not path-traced ground truth."},
+            {"cases",nlohmann::json::array()}};
+        std::vector<double> reference;
+        const auto captureSequence=[&](const char* name,unsigned count,bool save,bool compareReference=true) {
+            std::vector<std::vector<double>> values;std::vector<double> means;std::vector<double> field(points.size());
+            nlohmann::json captures=nlohmann::json::array();std::size_t saturated{};
+            for(unsigned index=0;index<count;++index) {
+                const auto before=frame;draw();const auto pose=receiverDelta;const auto image=read(renderer.gameViewportTexture(),draw);
+                values.push_back(sample(image,pose,&saturated));means.push_back(average(values.back()));
+                for(std::size_t point=0;point<field.size();++point)field[point]+=values.back()[point]/count;
+                captures.push_back({{"frame_before_draw",before},{"frame_after_readback",frame},{"mean_linear",means.back()}});
+                if(save&&!options.artifacts.empty()&&(index<8||index+1==count)) {
+                    const auto imageName=std::string(name)+"-"+std::to_string(index)+".png";saveComparison(options.artifacts,imageName.c_str(),image);
+                }
+            }
+            const double mean=average(field);double variance{},globalVariance{},relativeError{};
+            for(std::size_t index=0;index<values.size();++index) {
+                globalVariance+=(means[index]-mean)*(means[index]-mean)/count;
+                for(std::size_t point=0;point<field.size();++point)variance+=(values[index][point]-field[point])*(values[index][point]-field[point])/(count*field.size());
+            }
+            double nearEnergy{},farEnergy{};unsigned nearCount{},farCount{};
+            for(std::size_t point=0;point<points.size();++point) {
+                if(points[point][0]<.05f){nearEnergy+=field[point];++nearCount;}
+                if(points[point][0]>.70f){farEnergy+=field[point];++farCount;}
+                if(compareReference&&!reference.empty())relativeError+=(field[point]-reference[point])*(field[point]-reference[point])/field.size();
+            }
+            nlohmann::json result{{"name",name},{"frames",count},{"receiver_samples",points.size()},{"saturated_receiver_samples",saturated},{"mean_linear",mean},
+                {"relative_temporal_rms",std::sqrt(variance)/std::max(mean,1e-6)},
+                {"relative_global_rms",std::sqrt(globalVariance)/std::max(mean,1e-6)},
+                {"near_minus_far_gradient",nearEnergy/nearCount-farEnergy/farCount},{"captures",std::move(captures)}};
+            if(compareReference&&!reference.empty()) {
+                result["relative_mean_error_against_reference"]=(mean-average(reference))/std::max(average(reference),1e-6);
+                result["relative_field_rmse_against_reference"]=std::sqrt(relativeError)/std::max(average(reference),1e-6);
+            }
+            std::cout<<"SSGI reconstruction "<<name<<": mean="<<mean<<", relative_temporal_rms="<<result["relative_temporal_rms"]
+                <<", gradient="<<result["near_minus_far_gradient"]<<'\n';
+            check(mean>1e-5,std::string(name)+" erased the indirect signal.");report["cases"].push_back(std::move(result));return field;
+        };
+        // Independent many-direction reference prevents an excessively dark or
+        // spatially flattened denoiser from winning solely on noise variance.
+        const auto testedSettings=settings.environment.ssgi;const auto budget=ssgiQualityBudget(testedSettings);
+        settings.environment.ssgi.quality=SsgiQuality::Custom;settings.environment.ssgi.rays=16;settings.environment.ssgi.steps=int(budget.steps);
+        settings.environment.ssgi.temporalStability=0;settings.environment.ssgi.denoiseRadius=0;settings.environment.ssgi.denoiseStrength=0;
+        const auto referenceSettings=settings.environment.ssgi;
+        report["reference_settings"]=ssgiSettingsJson(settings.environment.ssgi);++scene.giWorldId;warm(32);
+        reference=captureSequence("unfiltered-reference",128,false);
+        settings.environment.ssgi=testedSettings;++scene.giWorldId;warm(256);
+        captureSequence("stationary",samples,true);
+        motion=Motion::Donor;++scene.giWorldId;warm(256);captureSequence("moving-donor",samples,true);
+        motion=Motion::Receiver;++scene.giWorldId;warm(256);captureSequence("moving-receiver",samples,true);
+        // A second visible occurrence shares geometry/material and moves in the
+        // opposite direction. This catches a single previous transform being
+        // incorrectly shared by an entire GPU instance batch.
+        motion=Motion::InstancedReceivers;instances[7].materials=&receiverMaterials;
+        scene.instances={instances.data(),8};++scene.giWorldId;warm(256);
+        captureSequence("moving-instanced-receivers",samples,true);
+        const auto instancing=renderer.meshInstancingStats(RenderViewPurpose::Game);
+        check(instancing.instancedInstances>=8&&instancing.depthDraws>0,
+            "The moving receiver pair did not exercise actual GPU-instanced readable-depth draws.");
+        report["moving_receiver_instancing"]={{"instances",instancing.instancedInstances},{"depth_draws",instancing.depthDraws},
+            {"fallback_draws",instancing.fallbackDraws}};
+        instances[7].materials=&occluderMaterials;instances[7].model.transform=stationaryInstances[7].model.transform;
+        // Two equally colored, parallel receivers at different depths create a
+        // genuine illumination edge. Keeping only a broad wall gradient could
+        // let a denoiser pass despite washing out smaller lighting features.
+        const auto fullReference=reference;reference.clear();motion=Motion::None;
+        occluderMaterials[0].baseColor=receiverMaterials[0].baseColor;settings.environment.ssgi=referenceSettings;
+        ++scene.giWorldId;warm(32);reference=captureSequence("depth-edge-reference",128,false);
+        const auto edgeReference=reference;settings.environment.ssgi=testedSettings;++scene.giWorldId;warm(256);
+        const auto edgeFiltered=captureSequence("depth-edge-reconstructed",samples,true);
+        const auto edgeContrast=[&](const std::vector<double>& field) {
+            double inside{},outside{};unsigned insideCount{},outsideCount{};
+            for(std::size_t point=0;point<points.size();++point) {
+                const auto direction=points[point]-settings.camera.position;
+                const float t=(.20f-settings.camera.position[2])/direction[2];const auto hit=settings.camera.position+direction*t;
+                if(std::abs(hit[1]-.95f)>.28f)continue;
+                const float edgeDistance=hit[0]-(.30f-.42f);
+                if(edgeDistance>.025f&&edgeDistance<.12f){inside+=field[point];++insideCount;}
+                if(edgeDistance<-.025f&&edgeDistance>-.12f){outside+=field[point];++outsideCount;}
+            }
+            check(insideCount>10&&outsideCount>10,"Lighting-detail edge has too few interior samples.");
+            return inside/insideCount-outside/outsideCount;
+        };
+        report["depth_edge"]={{"reference_contrast",edgeContrast(edgeReference)},{"reconstructed_contrast",edgeContrast(edgeFiltered)},
+            {"contrast_ratio",edgeContrast(edgeFiltered)/edgeContrast(edgeReference)},
+            {"relative_field_rmse",report["cases"].back().at("relative_field_rmse_against_reference")}};
+        reference=fullReference;occluderMaterials[0].baseColor={0,0,0,1};
+        motion=Motion::None;++scene.giWorldId;scene.instances={instances.data(),8};warm(128);
+        // Compute the exact formerly covered wall samples from the occluder's
+        // authored plane, retaining a margin inside its silhouette.
+        std::vector<std::size_t> revealed;
+        for(std::size_t point=0;point<points.size();++point) {
+            const auto direction=points[point]-settings.camera.position;
+            const float t=(.20f-settings.camera.position[2])/direction[2];const auto hit=settings.camera.position+direction*t;
+            if(hit[0]>.3f-.37f&&hit[0]<.3f+.37f&&hit[1]>.95f-.39f&&hit[1]<.95f+.39f)revealed.push_back(point);
+        }
+        check(revealed.size()>100,"Disocclusion fixture has no useful newly revealed samples.");
+        scene.instances={instances.data(),7};const auto revealStart=frame;
+        nlohmann::json reveal=nlohmann::json::array();
+        for(const unsigned checkpoint:{0u,2u,4u,8u,16u,32u,64u}) {
+            while(frame-revealStart<checkpoint){draw();tick();}
+            const auto before=frame;draw();const auto image=read(renderer.gameViewportTexture(),draw);const auto field=sample(image,Mat4{});
+            double mean{},expected{},squared{};
+            for(const auto point:revealed){mean+=field[point]/revealed.size();expected+=reference[point]/revealed.size();squared+=(field[point]-reference[point])*(field[point]-reference[point])/revealed.size();}
+            reveal.push_back({{"completed_frames_before_capture",before-revealStart},{"frame_after_readback",frame},
+                {"mean_linear",mean},{"reference_mean_linear",expected},{"relative_rmse",std::sqrt(squared)/std::max(expected,1e-6)}});
+            if(!options.artifacts.empty()){const auto name="revealed-"+std::to_string(before-revealStart)+".png";saveComparison(options.artifacts,name.c_str(),image);}
+        }
+        report["newly_revealed"]=std::move(reveal);
+        // A modest 20% source change below the radiance clamp exercises lighting
+        // responsiveness without conflating it with geometry rejection.
+        emitterMaterials[0].emissive=emission*.20f;warm(256);
+        const auto low=captureSequence("small-light-step-before",32,false,false);const double lowMean=average(low);
+        emitterMaterials[0].emissive=emission*.24f;const auto stepStart=frame;
+        nlohmann::json response=nlohmann::json::array();
+        for(const unsigned checkpoint:{0u,2u,4u,8u,16u,32u,64u}) {
+            while(frame-stepStart<checkpoint){draw();tick();}
+            const auto before=frame;draw();const auto image=read(renderer.gameViewportTexture(),draw);const double mean=average(sample(image,Mat4{}));
+            response.push_back({{"completed_frames_before_capture",before-stepStart},{"mean_linear",mean},{"ratio_to_pre_step",mean/lowMean}});
+        }
+        warm(256);const auto settled=captureSequence("small-light-step-settled",32,false,false);
+        report["small_light_step"]={{"emission_ratio",1.2},{"before_mean_linear",lowMean},{"settled_mean_linear",average(settled)},{"response",std::move(response)}};
+        emitterMaterials[0].emissive={};const auto removalStart=frame;nlohmann::json removal=nlohmann::json::array();
+        for(const unsigned checkpoint:{0u,2u,4u,8u,16u,32u,64u}) {
+            while(frame-removalStart<checkpoint){draw();tick();}
+            const auto before=frame;draw();const auto image=read(renderer.gameViewportTexture(),draw);const double mean=average(sample(image,Mat4{}));
+            removal.push_back({{"completed_frames_before_capture",before-removalStart},{"mean_linear",mean},{"fraction_of_settled",mean/std::max(average(settled),1e-6)}});
+        }
+        report["source_removal"]=std::move(removal);
+        // A real punctual light changes the diffuse donor capture without
+        // moving a mesh or changing authored source energy. Isolate indirect
+        // lighting so its direct illumination cannot conceal GI instability.
+        scene.pointLights={&movingPoint,1};renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::IndirectLighting);
+        ++scene.giWorldId;warm(256);const auto pointStationary=captureSequence("point-light-stationary",samples,true,false);
+        motion=Motion::Point;++scene.giWorldId;warm(256);const auto pointMoving=captureSequence("moving-point-light",samples,true,false);
+        report["point_light_motion"]={{"intensity",movingPoint.intensity},{"radius",movingPoint.radius},
+            {"displacement_x",.08},{"displacement_y",.04},{"period_frames",180},
+            {"stationary_mean_linear",average(pointStationary)},{"moving_mean_linear",average(pointMoving)}};
+        scene.pointLights={};motion=Motion::None;renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+        bool accepted=true;std::string failure;
+        if(options.ssgiReconstructionCheck) {
+            // These are measured engineering acceptance bounds for this fixed
+            // fixture, not constants prescribed by the denoising papers. The
+            // pre-reconstruction baseline fails stationary and rigid-motion
+            // noise while preserving the reference energy and lighting slope.
+            nlohmann::json checks=nlohmann::json::array();
+            const auto bound=[&](const char* name,double actual,double minimum,double maximum) {
+                const bool pass=std::isfinite(actual)&&actual>=minimum&&actual<=maximum;
+                checks.push_back({{"name",name},{"actual",actual},{"minimum",minimum},{"maximum",maximum},{"passed",pass}});
+                if(!pass){accepted=false;if(failure.empty())failure=name;}
+            };
+            const auto& raw=report["cases"][0];const auto& stationary=report["cases"][1];
+            const auto& movingDonor=report["cases"][2];const auto& movingReceiver=report["cases"][3];
+            const double referenceMean=raw.at("mean_linear").get<double>();
+            bound("unclipped reference",raw.at("saturated_receiver_samples").get<double>(),0,0);
+            bound("stationary retained energy",stationary.at("mean_linear").get<double>()/referenceMean,.80,1.20);
+            bound("stationary retained lighting gradient",stationary.at("near_minus_far_gradient").get<double>()/
+                raw.at("near_minus_far_gradient").get<double>(),.80,1.20);
+            bound("stationary temporal noise",stationary.at("relative_temporal_rms").get<double>(),0,.07);
+            bound("stationary reference field error",stationary.at("relative_field_rmse_against_reference").get<double>(),0,.18);
+            bound("moving donor retained energy",movingDonor.at("mean_linear").get<double>()/referenceMean,.75,1.25);
+            bound("moving donor temporal variation",movingDonor.at("relative_temporal_rms").get<double>(),0,.15);
+            bound("moving receiver retained energy",movingReceiver.at("mean_linear").get<double>()/referenceMean,.75,1.25);
+            bound("moving receiver temporal variation",movingReceiver.at("relative_temporal_rms").get<double>(),0,.20);
+            bound("moving instanced receiver temporal variation",report["cases"][4].at("relative_temporal_rms").get<double>(),0,.20);
+            bound("depth-edge retained lighting contrast",report["depth_edge"].at("contrast_ratio").get<double>(),.65,1.35);
+            bound("depth-edge reference field error",report["depth_edge"].at("relative_field_rmse").get<double>(),0,.18);
+            bound("newly revealed surface settled error",report["newly_revealed"].back().at("relative_rmse").get<double>(),0,.25);
+            bound("small lighting step retained response",average(settled)/lowMean,1.10,1.30);
+            bound("moving point light retained energy",average(pointMoving)/average(pointStationary),.75,1.25);
+            bound("stationary point light temporal noise",report["cases"][report["cases"].size()-2].at("relative_temporal_rms").get<double>(),0,.12);
+            bound("moving point light temporal variation",report["cases"].back().at("relative_temporal_rms").get<double>(),0,.25);
+            const double settledChange=average(settled)/lowMean-1;
+            for(const auto& checkpoint:report["small_light_step"]["response"]) {
+                const auto elapsed=checkpoint.at("completed_frames_before_capture").get<unsigned>();
+                if(elapsed>=6&&elapsed<9)bound("small lighting step six-frame response",
+                    (checkpoint.at("ratio_to_pre_step").get<double>()-1)/std::max(settledChange,1e-6),.50,1.50);
+                if(elapsed>=16&&elapsed<32)bound("small lighting step sixteen-frame response",
+                    (checkpoint.at("ratio_to_pre_step").get<double>()-1)/std::max(settledChange,1e-6),.50,1.50);
+            }
+            for(const auto& checkpoint:report["source_removal"]) {
+                const auto elapsed=checkpoint.at("completed_frames_before_capture").get<unsigned>();
+                if(elapsed>=9&&elapsed<16)bound("extinguished lighting nine frames",
+                    checkpoint.at("fraction_of_settled").get<double>(),0,.30);
+                if(elapsed>=16) {
+                    const auto label="extinguished lighting "+std::to_string(elapsed)+" frames";
+                    bound(label.c_str(),checkpoint.at("fraction_of_settled").get<double>(),0,elapsed<32?.20:elapsed<64?.05:.01);
+                }
+            }
+            report["acceptance"]={{"passed",accepted},{"checks",std::move(checks)}};
+        }
+        if(!options.artifacts.empty()) {
+            fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"ssgi-reconstruction.json");
+            check(bool(output),"Cannot create the SSGI reconstruction report.");output<<report.dump(2)<<'\n';output.flush();check(bool(output),"Cannot write the SSGI reconstruction report.");
+        }
+        check(accepted,"SSGI reconstruction acceptance failed: "+failure);
+    };
+    if(options.ssgiReconstructionAudit) {
+        reconstructionAudit();resources.stop();renderer.drainPending(frame);std::cout<<"SSGI reconstruction audit passed.\n";return;
     }
     const auto verticalSourceAudit=[&] {
         SceneSettings settings;settings.camera.position={2.5f,2.f,4.2f};settings.camera.target={0,1,0};
@@ -948,7 +1221,7 @@ point.castShadows=true;
 }
 int main(int argc,char** argv) {
     try {
-        check(argc>=4,"Pass shaderc, shader source and shader include directories, optionally --ssgi-benchmark-only --benchmark-size WxH (or --width W --height H) --warmup N --samples N --artifacts DIRECTORY, --ssgi-audit or --ssgi-shader-dir DIRECTORY.");
+        check(argc>=4,"Pass shaderc, shader source and shader include directories, optionally --ssgi-benchmark-only --benchmark-size WxH (or --width W --height H) --warmup N --samples N --artifacts DIRECTORY, --ssgi-audit, --ssgi-reconstruction-audit, --ssgi-reconstruction-check or --ssgi-shader-dir DIRECTORY.");
         Options options;
         for(int i=4;i<argc;++i){const std::string_view option=argv[i];
             if(option=="--benchmark")options.benchmark=true;
@@ -968,6 +1241,8 @@ int main(int argc,char** argv) {
                 else options.benchmarkHeight=static_cast<std::uint16_t>(dimension);
             }
             else if(option=="--ssgi-audit")options.ssgiAudit=true;
+            else if(option=="--ssgi-reconstruction-audit")options.ssgiReconstructionAudit=true;
+            else if(option=="--ssgi-reconstruction-check")options.ssgiReconstructionAudit=options.ssgiReconstructionCheck=true;
             else if(option=="--artifacts"){check(i+1<argc,"Missing SSGI artifact directory.");options.artifacts=fs::absolute(argv[++i]).lexically_normal();}
             else if(option=="--ssgi-shader-dir"){check(i+1<argc,"Missing SSGI shader override directory.");options.ssgiShaderDirectory=fs::absolute(argv[++i]).lexically_normal();}
             else if(option=="--ssgi-quality") {
@@ -1002,6 +1277,7 @@ int main(int argc,char** argv) {
             else throw std::runtime_error("Unknown SSGI option: "+std::string(option));}
         check(validSsgiSettings(options.auditSettings)&&effectiveSsgi(options.auditSettings),"SSGI audit settings must be valid and produce nonzero indirect light.");
         check(!options.ssgiAudit||(!options.benchmark&&!options.ssgiBenchmarkOnly),"Choose either the SSGI quality audit or the benchmark workload.");
+        check(!options.ssgiReconstructionAudit||(!options.benchmark&&!options.ssgiBenchmarkOnly&&!options.ssgiAudit),"Choose one SSGI audit or benchmark workload.");
         Temporary temporary;ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary.path};Sdl sdl;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson SSGI checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());std::cout<<std::fixed<<std::setprecision(3);exercise(window.get(),config,options);return 0;

@@ -513,11 +513,13 @@ The collapsed **Global Illumination** section provides:
 | Advanced → Ray Steps | 16 at Medium | Marching steps per ray segment, from 8 to 64; editing selects Custom |
 | Advanced → Ray Bias (m) | 0.02 | Origin offset from the receiver, from 0.001 to 0.5 m |
 | Advanced → Thickness (m) | 0.1 | Depth hit tolerance, from 0.01 to 2 m; excess tolerance can leak through thin surfaces |
-| Advanced → Denoise Radius (px) | 4 | Spatial-filter radius in half-resolution pixels, from 0 to 4 |
+| Advanced → Filter Extent | 4 | Filter extent, from 0 to 4; default filtering at steps 1/2/4 spans seven half-resolution pixels |
 | Advanced → Smoothing | 1 | Spatial-filter amount, from 0 to 1; zero preserves unfiltered samples |
 | Advanced → Radiance Clamp | 10 | HDR sample brightness limit, from 0 to 100; zero disables the clamp |
 
 Use **Use Defaults** to apply the calibrated tuning to an existing Environment; loading preserves its saved values. Medium retains four rays and sixteen steps. High is a more expensive option for difficult small bright sources. The [SSGI quality and cost audit](docs/SSGI_QUALITY_AUDIT.md) records the research, controlled comparisons and GPU measurements behind these choices.
+
+GI reconstructs lighting across frames and filters at several spatial scales while respecting surface boundaries. Rigid mesh movement, including instanced occurrences, reprojects each surface's own prior position. Newly revealed surfaces rebuild their history; skin/morph deformation still uses conservative rejection. Authored lighting-energy changes accelerate history response. Some noise and temporal lag can remain, especially for small bright emitters and surfaces becoming visible. These GI motion vectors do not enable temporal antialiasing or recover offscreen lighting.
 
 The separate collapsed **Screen Space Ambient Occlusion** section adds contact shading from nearby visible geometry. **Enabled** defaults off. **Strength** defaults to 1 with a 0–2 range; **Radius (m)** defaults to 0.5 with a 0.05–5 m range; **Quality** defaults to Medium with Low/Medium/High choices. SSAO attenuates indirect lighting and can be used independently of SSGI . Zero Strength bypasses its work.
 

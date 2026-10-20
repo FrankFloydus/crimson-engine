@@ -886,6 +886,8 @@ if(BUILD_TESTING)
     target_link_libraries(ssgi_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng d3d11)
     add_test(NAME ssgi_render_core COMMAND ssgi_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(ssgi_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
+    add_test(NAME ssgi_reconstruction_core COMMAND ssgi_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --ssgi-reconstruction-check --samples 48)
+    set_tests_properties(ssgi_reconstruction_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
 
     add_executable(ssao_render_tests tests/ssao_render_tests.cpp
         src/crimson-renderer/RendererHost.cpp
@@ -956,8 +958,9 @@ if(BUILD_TESTING)
     target_link_libraries(renderer_backend_benchmark PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json d3d11 d3d12 dxgi)
 
     add_test(NAME ssgi_render_dx11_core COMMAND ssgi_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    add_test(NAME ssgi_reconstruction_dx11_core COMMAND ssgi_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --ssgi-reconstruction-check --samples 48)
     add_test(NAME ssao_render_dx11_core COMMAND ssao_render_tests)
-    set_tests_properties(ssgi_render_dx11_core ssao_render_dx11_core PROPERTIES
+    set_tests_properties(ssgi_render_dx11_core ssgi_reconstruction_dx11_core ssao_render_dx11_core PROPERTIES
         ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11" RUN_SERIAL TRUE TIMEOUT 600)
     add_test(NAME native_resource_dx11_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --backend dx11)
     set_tests_properties(native_resource_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)

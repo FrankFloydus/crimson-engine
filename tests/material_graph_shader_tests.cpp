@@ -198,8 +198,8 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v27")!=std::string::npos,
-            "Generated material identity does not invalidate former corner-only UV bundles.");
+        check(variant.source.find("crimson-material-graph-generator-v28")!=std::string::npos,
+            "Generated material identity does not invalidate pre-motion readable-depth bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
             "Generated mesh/particle inputs disagree with the circular UV vertex interface.");
@@ -210,6 +210,12 @@ void cpuChecks() {
         };
         const bool surface=variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle;
         const bool readableDepth=variant.pass==MaterialGraphPass::PointShadow || variant.pass==MaterialGraphPass::DirectionalShadow;
+        const bool motionDepth=variant.pass==MaterialGraphPass::PointShadow;
+        const auto inputLine=variant.source.substr(0,variant.source.find('\n'));
+        check((inputLine.find(", v_tangent")!=std::string::npos)==bool(surface||motionDepth),
+            "Generated readable-depth input does not carry previous rigid position through the shared vertex interface.");
+        check((variant.source.find("#define CC_GRAPH_POINT_SHADOW 1")!=std::string::npos)==motionDepth,
+            "Generated motion-depth output is absent or leaks into another material pass.");
         check(has("u_directionalShadowSoftness",4)==surface && has("u_directionalShadowDepthRange",16)==surface,
             "Directional PCSS arrays are missing or incompatible with the generated surface contract.");
         for(const auto name:{"u_occluderDepthAtlas","u_occluderDepthOptions","u_occluderPhase"})

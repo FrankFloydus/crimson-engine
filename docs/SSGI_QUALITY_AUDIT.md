@@ -1,5 +1,7 @@
 # SSGI quality and cost audit — 2026-10-20
 
+The delivered reconstruction and object-motion slice is described in the final section below. Earlier sections retain the measurements and limitations of the successive tracing/history fixes.
+
 The reported symptom was large moving bands near a small bright emissive cube.
 This audit separates tracing defects, reconstruction behavior, sampling noise,
 default tuning and GPU cost. The implementation lives in the canonical renderer;
@@ -22,8 +24,7 @@ the Engine owns Inspector presentation and the measurement fixture.
   The resolve now gathers four history taps, validates each against the receiver
   plane/depth/normal/reactivity and renormalizes valid weights. Actual capture
   centers preserve alignment at odd dimensions. Existing moments and sparse-hit
-  history protection remain. This is not a complete SVGF implementation: spatial
-  reconstruction still uses two bilateral passes.
+  history protection remain. At that checkpoint, spatial reconstruction still used two bilateral passes; the later reconstruction slice below replaces them.
 - [Unity HDRP's SSGI](https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/ScreenSpaceLighting/ScreenSpaceGlobalIllumination.compute)
   uses separate blue-noise-sequence dimensions for cosine-hemisphere sampling.
   Crimson's paired gradient-noise coordinates had pronounced periodic spectral
@@ -88,12 +89,11 @@ with no added rays, steps, passes or GPU allocations.
 History still has finite response time: at Stability .90 an all-miss neighborhood
 retains about 12% after 20 frames and 4% after 30 frames. The source-removal check
 measures that decay rather than claiming instantaneous lighting changes. Donor
-capture is from the previous frame and has no object-motion reprojection;
+capture was from the previous frame without object-motion reprojection at this checkpoint;
 [Unity HDRP's SSGI](https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/ScreenSpaceLighting/ScreenSpaceGlobalIllumination.compute)
 uses hit-surface motion vectors for that lookup. Crimson conservatively rejects
 unmatched captured geometry; fast motion, newly revealed sources and offscreen
-transport remain limitations. This fix does not implement motion vectors or
-adaptive variance-guided reconstruction.
+transport remain limitations. That correction alone did not implement motion vectors or adaptive variance-guided reconstruction; both are added by the later slice below.
 
 An explicit `ssgi_scene_motion_capture` diagnostic also renders a disposable
 snapshot of the authored project through the real scene extraction/resource path.
@@ -175,10 +175,9 @@ For independent stationary noise, a history weight beta has an equivalent
 sample count `(1+beta)/(1-beta)`: .90 gives 19 frames, approximately 76 primary
 rays at four rays per frame. Sampling correlations and changing geometry reduce
 the usefulness of that idealized count. Increasing history weight trades residual
-noise for illumination lag. Current spatial filtering affects the published
-image only; the stored illumination history is the raw temporal result.
+noise for illumination lag. At this checkpoint, spatial filtering affected the published image only; the stored illumination history was the raw temporal result.
 
-The next proposed reconstruction slice is **not implemented**: consistent linear
+The subsequently requested reconstruction slice, now implemented below, comprises consistent linear
 luminance moments, short-history tracking, a modest symmetric spatial stage saved
 for next-frame feedback, then variance-guided filtering at wider scales. This
 preserves material detail by filtering illumination before material response.
@@ -289,8 +288,7 @@ rewrite was deferred rather than introducing numerical risk without a measured
 need.
 
 The final default therefore **retains Medium's four rays and sixteen steps**:
-Intensity 1, Reach 3 m, one bounce, Stability .90, radius four half-resolution
-pixels, Smoothing 1, Thickness .1 m, Ray Bias .02 m and Radiance Clamp 10. High
+Intensity 1, Reach 3 m, one bounce, Stability .90, authored filter extent 4, Smoothing 1, Thickness .1 m, Ray Bias .02 m and Radiance Clamp 10. The original filter used a four-half-pixel radius; the reconstruction slice changes extent 4 to steps 1/2/4 with a combined seven-half-pixel footprint. High
 remains an explicit quality/cost option. Enabled stays off by default.
 
 The basic Inspector exposes Enabled, Intensity, Reach and Quality. Use Defaults
@@ -309,3 +307,191 @@ The preserved baseline comes from renderer commit `b57e078`; the delivered
 initial calibrated renderer was `c37b62c`; moving-donor correction is `094376f` and preview isolation is `fdc3723`. Force `--ssgi-quality high --ssgi-radius 4 --ssgi-stability .9`
 when reproducing the old-shader banding-oracle failure; that check compares the
 algorithms at equal High settings rather than changing the new Medium default.
+
+
+## Delivered reconstruction and rigid-object motion
+
+The requested slice retains Medium's **four rays and sixteen steps**, one bounce,
+Stability .90 and all authored tuning. Source transport and donor eligibility are
+unchanged. It replaces the display-only bilateral filter with this sequence:
+
+1. Trace half-resolution irradiance, using hit-surface motion to locate the
+   previous captured donor.
+2. Reproject geometry-validated receiver history using that receiver's motion.
+   Accumulate independent raw linear-luminance moments and valid history age.
+3. Bootstrap variance during short histories, then filter with a symmetric 3×3
+   geometry/luminance-guided kernel. Save this modest step-one result for next-frame
+   irradiance feedback.
+4. Apply wider steps two and four with propagated variance, without feeding those
+   wider results back into future frames.
+5. Publish the depth/normal-guided full-resolution irradiance into the existing atlas.
+
+[SVGF](https://research.nvidia.com/labs/rtr/publication/schied2017spatiotemporal/)
+supplies the basis for luminance moments, short-history handling and multiscale
+reconstruction. [Falcor's selected spatial feedback](https://github.com/NVIDIAGameWorks/Falcor/blob/master/Source/RenderPasses/SVGFPass/SVGFPass.cpp)
+provides a concrete renderer reference for keeping wider blur out of next-frame
+history. The production code is independently implemented through Crimson's
+existing owners; no copied prototype is retained. An independent review corrected
+RGB/luminance clipping inconsistency, smoothing-aware variance propagation and
+short-history variance loss before the first candidate build.
+
+World and Character irradiance remain separate two-layer RGBA16F arrays. Their
+layer arrangement keeps every dispatch within eight compute bindings, retaining
+DX11's existing capability requirement. Separate FP32 raw-moment history avoids
+combining the second moment of noisy samples with a differently filtered mean.
+The pass plan validates array-layer coverage, history versions, guarded imports,
+feedback lifetime and the intentional scratch aliases.
+
+The existing readable-depth pass optionally writes RGBA16F world displacement
+(previous minus current) plus validity. Rigid fallback draws and independently
+moving GPU instances retain their own previous transforms. The rich instance
+record uses previously unused matrix lanes, preserving its size and picking
+identity. Generated PointShadow coverage moves to material ABI28; embedded shaders,
+cache identity, manifests and both consumers advance together. Surface texture
+slots, surface MRT count and the 27-float/108-byte mesh layout are unchanged.
+
+New/incompatible geometry, changed coverage/materials, frame gaps and unsupported
+skin/morph/runtime-graph deformation conservatively reject receiver history.
+Unsupported donor motion retains camera-only geometry validation. Normal history
+is not separately transported, so substantial rotations may also reject history.
+This supplies rigid object motion for GI; it does not implement temporal AA.
+
+An authored source-energy/material/light/environment change caps the corresponding
+view's history age at four, raising current-frame influence. Object/camera motion,
+exposure and tone mapping do not trigger this event. Moving source positions do
+not reset the entire view. This is explicit known-event responsiveness, **not**
+A-SVGF's matched-random-sequence temporal-gradient estimator. The latter is described
+by [Schied, Peters and Dachsbacher, HPG2018](https://www.momentsingraphics.de/HPG2018.html).
+Sparse-hit RGB differences alone cannot reliably distinguish noise from lighting
+change. Fast untracked lighting changes and screen-space visibility remain limits.
+
+### Controlled quality at the same Medium budget
+
+The baseline is renderer `fdc3723`; the first candidate implementation is `b9fa075`.
+The expanded reconstruction fixture uses 48 captured frames per sequence, a
+16-ray/16-step, unfiltered 128-capture reference, fixed Linear presentation and
+unsaturated receiving ROIs. Both ordinary and tracked moving-receiver ROIs sample
+world-space patches; source motion also contains legitimate physical lighting
+variation. All comparisons retain the four-ray/sixteen-step Medium estimator.
+
+| Metric | Before reconstruction | After reconstruction |
+| --- | ---: | ---: |
+| Stationary relative temporal RMS | 8.67% | 5.29% |
+| Moving emissive donor, receiver relative temporal RMS | 13.01% | 10.39% |
+| Moving rigid receiver, tracked relative temporal RMS | 49.43% | 7.03% |
+| Independently moving instanced receivers | No prior vector support | 6.50% |
+| Mean stationary exposed linear luminance | .00772513 | .00772432 |
+| Smooth lighting gradient, fraction of raw reference | 99.44% | 98.91% |
+| Stationary mean-field RMSE against finite raw reference | 6.51% | 8.76% |
+| Newly revealed surface RMSE after three frames | 30.7% | 11.6% |
+| Newly revealed surface RMSE after sixteen frames | 12.2% | 7.1% |
+| 20% source-energy increase, ratio after three frames | 1.015 | 1.103 |
+| 20% source-energy increase, ratio after nine frames | 1.102 | 1.180 |
+| Remaining source-off signal after sixteen frames | About 18% | 10.7% |
+| Remaining source-off signal after thirty-two frames | About 3% | 1.43% |
+
+Stationary mean-field RMSE increases from 6.51% to 8.76% despite stable energy and gradient. This records the spatial feedback's noise/detail tradeoff; the finite unfiltered reference is not ground truth.
+
+The new parallel-surface illumination-edge fixture retains **105.0%** of raw-reference
+contrast with 13.54% field RMSE. This tests an actual GI lighting discontinuity,
+complementing the smooth-gradient check. It is a new oracle, without an old-binary
+edge comparison. The instanced fixture requires actual batched submission (eight
+instances, two readable-depth draws, no fallback occurrences) and independently
+moves two receiving occurrences in opposite directions.
+
+The real moving-point-light case uses fixed intensity/radius, disables emission
+and inspects Indirect Lighting. Its stationary baseline has 6.36% temporal RMS.
+Moving the point continuously yields 22.21% total variation, including 15.46%
+whole-patch brightness variation, with a -2.13% mean-energy change. These values
+include the physically changing illumination and are not pure noise/error.
+The source-step regression additionally requires at least half the settled change
+at its six-to-eight-frame checkpoint; measured response is 69.4%, versus 27.6%
+for the preceding renderer. The extinction guard requires no more than 30%
+remaining at its nine-to-fifteen-frame checkpoint; the candidate is 23.4%.
+
+A positive control disables only nonzero-motion receiver-history reuse, retaining
+all new filtering and donor reprojection. Moving-receiver noise rises from 7.03%
+to **32.81%**, and instanced-receiver noise rises from 6.50% to **32.63%**.
+Stationary and moving-donor metrics are unchanged. This isolates the useful
+contribution of object vectors from that of reconstruction alone.
+
+### Authored ShadowCamera capture
+
+The actual-project diagnostic renders a disposable project snapshot through the
+real extraction/resource/material path. The source hashes, saved ShadowCamera,
+GI defaults, sample phase and readback timing match the previous stationary
+baseline. Protected source files remain unchanged. It captures 256 stationary
+images after 512 warmup frames, followed by moving, stopped and removed-emitter
+phases in Lit and Indirect views.
+
+In the fixed upper-wall ROI, the last three 64-capture Lit windows improve from
+**.776/.781/.778%** pixel temporal RMS to **.516/.515/.517%**, relative to total Lit
+luminance. This is about a one-third reduction in the persistent stationary
+noise floor. The 32-pixel block result improves more modestly from
+.254/.254/.270% to .221/.217/.227%. Mean Lit luminance changes about -.24% over
+all 256 captures. Total Lit noise and isolated-GI noise have different denominators;
+they must not be compared directly to the controlled fixture's percentages.
+The result is smoother, and **residual animated noise remains**. Waiting longer,
+object vectors and wider filtering do not guarantee a noise-free solution.
+
+### Cost and reproducibility
+
+At 2560×1440, FP32 moment history adds 28.125 MiB per view and the full-resolution
+motion target adds another 28.125 MiB: **56.25 MiB per view**, or 112.5 MiB for
+simultaneous Scene and Game. The SSGI owner's figure includes moments; motion is
+accounted separately under readable-depth targets. Two-layer radiance arrays
+retain the preceding radiance allocation size. Effects with zero strength or
+Disabled schedule no GI dispatches, and SSAO alone does not allocate motion.
+
+A closed-editor DX12 RTX4090 measurement uses 240 warmup frames and 600 distinct
+completed GPU samples per phase. A quiet repeat at 1440p confirms the candidate
+cost without concurrent compilation or other GPU fixtures:
+
+| Resolution / views | Baseline GI median | Reconstructed GI median | Added time |
+| --- | ---: | ---: | ---: |
+| 1920 × 1080 / Game | .25088 ms | .31949 ms | .06861 ms |
+| 1920 × 1080 / Scene + Game | .51712 ms | .64307 ms | .12595 ms |
+| 2560 × 1440 / Game | .39322 ms | .48538 ms | .09216 ms |
+| 2560 × 1440 / Scene + Game | .80077 ms | .97792 ms | .17715 ms |
+
+Candidate GI p95 is .33075/.67789 ms at 1080p for single/dual views, and
+.50176/1.21446 ms in the quiet 1440p repeat. The corresponding 1440p baseline
+single/dual p95 is .41370/.81920 ms, with a previous dual repeat at 1.05779 ms;
+the increased dual-view tail is retained in the evidence. Whole-frame 1440p
+Game median increases from about .670 to .766 ms, and the candidate dual median
+is 1.534 ms. These are synthetic elapsed timestamps on one high-end GPU, not
+active execution occupancy, editor FPS or a lower-end hardware budget. The
+1080p candidate run may overlap CPU shader work; 1440p was repeated while quiet.
+
+Local artifacts are under `build/ssgi-reconstruction`: baseline/candidate quality
+JSON and selected PNGs, the isolated motion-control shader generator, repeated
+GPU measurements and actual-project captures. `ssgi_reconstruction_core` and
+`ssgi_reconstruction_dx11_core` retain the bounded quality acceptance checks.
+The report-only mode `--ssgi-reconstruction-audit` writes all results, and
+`--ssgi-reconstruction-check --samples 48` checks the thresholds after writing
+its report. The diagnostic and raw reference remain bounded and opt-in outside
+the focused CTest registrations.
+
+
+### Integration verification
+
+Release integration and material-cache preparation completed with no failures.
+Five focused CPU/compiler checks passed: SSGI settings/history policy, render-pass
+contracts, generated-material ABI28 compilation, embedded shader preflight and
+environment presentation. Ten final DX12/DX11 GPU checks passed: ordinary SSGI,
+reconstruction (all 23 quality/response bounds), SSAO, actual mesh instancing and
+native resource lifetime on each backend.
+
+Both consumers pin published renderer `29a4c933d1bf813a933cf8ba41cb984e13729085`
+(the implementation is `b9fa075`; the final renderer commit adds documentation).
+Quader Full and Public Release artifacts and recursive native runtime closures
+passed. Vulkan composition, scene, editor/overlay parity and depth fixtures
+passed. The first editor presentation comparison overlapped another native probe
+and failed one presented-pixel comparison; its isolated rerun passed all forty
+four-pane epochs without source changes. These Vulkan checks cover the modeling
+recipe, not rich Forward+ SSGI on Vulkan.
+
+The Engine's Inspector calls the retained `denoiseRadius` field **Filter Extent**,
+with a short tooltip for its actual footprint. Basic controls, defaults, serialized
+keys and scene version are unchanged. Authored scene/material/editor data is not
+part of these implementation commits.

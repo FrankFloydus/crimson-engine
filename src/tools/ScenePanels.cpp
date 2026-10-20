@@ -664,7 +664,8 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
                 ImGui::DragFloat("Thickness (m)",&gi.thickness,.005f,.01f,2,"%.3f",ImGuiSliderFlags_AlwaysClamp));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Depth hit tolerance. Higher values can leak through thin walls.");
             field(Edit::EnvironmentGiDenoiseRadius,"Change global illumination denoise radius",
-                ImGui::SliderInt("Denoise Radius (px)",&gi.denoiseRadius,0,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+                ImGui::SliderInt("Filter Extent",&gi.denoiseRadius,0,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Spatial filter extent: 0 disables it; 1 through 4 reach up to 1, 2, 3 or 7 half-resolution pixels. Higher values smooth larger noise patterns.");
             field(Edit::EnvironmentGiDenoiseStrength,"Change global illumination denoise strength",
                 ImGui::SliderFloat("Smoothing",&gi.denoiseStrength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Spatial noise filtering. Zero preserves unfiltered samples.");
