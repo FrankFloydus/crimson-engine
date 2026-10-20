@@ -92,8 +92,8 @@ void ShaderReloadSession::pump() {
         {RendererProgram::DirectionalShadow,"vs_directional_shadow","fs_directional_shadow"}}};
     std::vector<RendererShaderPair> pairs; pairs.reserve(definitions.size());
     for (const auto& pair:definitions) pairs.push_back({pair.program,ready.at(pair.vertex)->bytes,ready.at(pair.fragment)->bytes});
-    pairs.push_back({RendererProgram::GlowDownsample,{},ready.at("cs_glow_bloom_downsample")->bytes});
-    pairs.push_back({RendererProgram::GlowUpsample,{},ready.at("cs_glow_bloom_upsample")->bytes});
+    pairs.push_back({RendererProgram::GlowDownsample,{},ready.at("cs_glow_downsample")->bytes});
+    pairs.push_back({RendererProgram::GlowUpsample,{},ready.at("cs_glow_upsample")->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }

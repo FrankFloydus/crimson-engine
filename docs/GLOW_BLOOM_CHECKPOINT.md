@@ -1,6 +1,6 @@
 # Glow and Bloom implementation checkpoint
 
-Measured 2026-10-20. Current controls and ownership are documented in [the lighting guide](RENDERER_AND_CHARACTER_LIGHTING.md#glow-and-bloom); this document records implementation evidence and limits.
+Measured 2026-10-20. Historical evidence for the replaced two-effect implementation. See the [current Glow levels audit](GLOW_LEVELS_AUDIT.md) and [lighting guide](RENDERER_AND_CHARACTER_LIGHTING.md#glow) for the consolidated effect; the measurements below remain unchanged.
 
 ## Delivered contract
 

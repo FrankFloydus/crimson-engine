@@ -77,13 +77,10 @@ bool drawToneMappingControl(ToneMapping&);
 enum class ToneMappingParameterControl { ReinhardWhite, AcesWhite, AgxWhite, AgxContrast };
 using ToneMappingParameterEdit = std::function<void(ToneMappingParameterControl,bool)>;
 bool drawToneMappingParameterControls(ToneMapping, ToneMappingParameters&, const ToneMappingParameterEdit& edit = {});
-enum class GlowControl { Enabled, Strength, Size, Threshold, Tint, CoreHalo, Saturation, SoftKnee, BlendMode, Mix };
+enum class GlowControl { Enabled, Strength, Size, Threshold, Tint, Saturation, SoftKnee, BlendMode, Mix,
+    Anamorphic, Quality, Level1, Level2, Level3, Level4, Level5, Level6, Level7 };
 using GlowControlEdit = std::function<void(GlowControl,bool)>;
 bool drawGlowControls(GlowSettings&, const GlowControlEdit& edit = {});
-enum class BloomControl { Enabled, Strength, Size, Threshold, Tint, SoftKnee, Anamorphic, Quality,
-    Level1, Level2, Level3, Level4, Level5, Level6, Level7 };
-using BloomControlEdit = std::function<void(BloomControl,bool)>;
-bool drawBloomControls(BloomSettings&, const BloomControlEdit& edit = {});
 
 // Call once after creating the ImGui context. DPI is supplied by the host;
 // this does not change window/framebuffer coordinates or SDL input scaling.

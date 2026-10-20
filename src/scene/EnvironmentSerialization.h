@@ -15,8 +15,8 @@ namespace crimson {
 inline void validateEnvironmentSettings(const EnvironmentSettings& value) {
     if (!std::isfinite(value.intensity) || value.intensity<0 || !std::isfinite(value.rotation) ||
         !validToneMapping(value.toneMapping) || !validToneMappingParameters(value.toneMappingParameters) ||
-        !validGlowSettings(value.glow) || !validBloomSettings(value.bloom))
-        throw std::runtime_error("Environment intensity, rotation, tone mapping, Glow or Bloom is invalid.");
+        !validGlowSettings(value.glow))
+        throw std::runtime_error("Environment intensity, rotation, tone mapping or Glow is invalid.");
     if (value.source!=EnvironmentSource::Hdri && value.source!=EnvironmentSource::ProceduralSky)
         throw std::runtime_error("Environment source is invalid.");
     if (!validSsgiSettings(value.ssgi) || !validSsaoSettings(value.ssao))
@@ -148,43 +148,30 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
         ambient.skyContribution=source.value("skyContribution",ambient.skyContribution);
         ambient.energy=source.value("energy",ambient.energy);
     }
-    const auto readHalo=[](const nlohmann::json& source,auto& effect) {
-        if (!source.is_object())throw std::runtime_error("Glow/Bloom settings must be an object.");
+    const auto readGlow=[](const nlohmann::json& source,GlowSettings& glow) {
+        if (!source.is_object())throw std::runtime_error("Glow settings must be an object.");
         if (source.contains("enabled") && !source.at("enabled").is_boolean())
-            throw std::runtime_error("Glow/Bloom enabled must be a boolean.");
-        for(const auto* name:{"strength","radius","threshold","softKnee"})
+            throw std::runtime_error("Glow enabled must be a boolean.");
+        for(const auto* name:{"strength","radius","threshold","softKnee","saturation","anamorphic","mix"})
             if(source.contains(name) && !source.at(name).is_number())
-                throw std::runtime_error("Glow/Bloom tuning must be numeric.");
-        effect.enabled=source.value("enabled",effect.enabled);effect.strength=source.value("strength",effect.strength);
-        effect.radius=source.value("radius",effect.radius);effect.threshold=source.value("threshold",effect.threshold);
-        effect.softKnee=source.value("softKnee",effect.softKnee);effect.tint=source.value("tint",effect.tint);
-    };
-    if (json.contains("bloom")) {
-        const auto& source=json.at("bloom");auto& bloom=value.bloom;readHalo(source,bloom);
-        if(source.contains("anamorphic") && !source.at("anamorphic").is_number())
-            throw std::runtime_error("Bloom anamorphic stretch must be numeric.");
-        bloom.anamorphic=source.value("anamorphic",bloom.anamorphic);
+                throw std::runtime_error("Glow tuning must be numeric.");
+        glow.enabled=source.value("enabled",glow.enabled);glow.strength=source.value("strength",glow.strength);
+        glow.radius=source.value("radius",glow.radius);glow.threshold=source.value("threshold",glow.threshold);
+        glow.softKnee=source.value("softKnee",glow.softKnee);glow.tint=source.value("tint",glow.tint);
+        glow.saturation=source.value("saturation",glow.saturation);glow.anamorphic=source.value("anamorphic",glow.anamorphic);
+        glow.mix=source.value("mix",glow.mix);
         if(source.contains("quality")) {
-            const auto& bloomQuality=source.at("quality");
-            if(!bloomQuality.is_number_integer() || bloomQuality<0 || bloomQuality>1)throw std::runtime_error("Bloom quality is invalid.");
-            bloom.quality=static_cast<BloomQuality>(bloomQuality.get<int>());
+            const auto& glowQuality=source.at("quality");
+            if(!glowQuality.is_number_integer() || glowQuality<0 || glowQuality>1)throw std::runtime_error("Glow quality is invalid.");
+            glow.quality=static_cast<GlowQuality>(glowQuality.get<int>());
         }
         if(source.contains("levels")) {
             const auto& levels=source.at("levels");
-            if(!levels.is_array() || levels.size()!=BloomLevelCount ||
-                std::any_of(levels.begin(),levels.end(),[](const auto& weight){return !weight.is_number();}))
-                throw std::runtime_error("Bloom requires seven numeric level contributions.");
-            bloom.levels=levels.get<decltype(bloom.levels)>();
+            if(!levels.is_array() || levels.size()!=GlowLevelCount ||
+                std::any_of(levels.begin(),levels.end(),[](const auto& gain){return !gain.is_number();}))
+                throw std::runtime_error("Glow requires seven numeric level contributions.");
+            glow.levels=levels.get<decltype(glow.levels)>();
         }
-    }
-    if (json.contains("glow")) {
-        const auto& source=json.at("glow");GlowSettings glow;readHalo(source,glow);
-        for(const auto* name:{"coreHalo","saturation"})
-            if(source.contains(name) && !source.at(name).is_number())
-                throw std::runtime_error("Glow artistic tuning must be numeric.");
-        glow.coreHalo=source.value("coreHalo",glow.coreHalo);glow.saturation=source.value("saturation",glow.saturation);
-        if(source.contains("mix") && !source.at("mix").is_number())throw std::runtime_error("Glow mix must be numeric.");
-        glow.mix=source.value("mix",glow.mix);
         if(source.contains("blendMode")) {
             const auto& encoded=source.at("blendMode");
             constexpr std::array<const char*,5> names{"Additive","Screen","SoftLight","Replace","Mix"};
@@ -193,17 +180,59 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
             if(found==names.end())throw std::runtime_error("Glow blend mode is invalid.");
             glow.blendMode=static_cast<GlowBlendMode>(std::distance(names.begin(),found));
         }
-        if(source.contains("source") && source.at("source")!="Emission")
-            throw std::runtime_error("Glow source is invalid.");
         if(!validGlowSettings(glow))throw std::runtime_error("Glow settings are invalid.");
-        // The former Glow blurred the complete scene. Preserve that authored
-        // source selection by converting it into Bloom once, only in memory.
-        if(!source.contains("source") && !json.contains("bloom")) {
-            value.bloom.enabled=glow.enabled;value.bloom.strength=glow.strength;
-            value.bloom.radius=glow.radius;value.bloom.threshold=glow.threshold;
-            value.bloom.tint=glow.tint;value.bloom.softKnee=glow.softKnee;
-        } else value.glow=glow;
+    };
+    GlowSettings previousGlow,previousBloom;
+    bool currentGlow=false;
+    if (json.contains("glow")) {
+        const auto& source=json.at("glow");
+        if(!source.is_object())throw std::runtime_error("Glow settings must be an object.");
+        bool emissionSource=false;
+        if(source.contains("source")) {
+            const auto& encoded=source.at("source");
+            if(!encoded.is_string() || (encoded!="Scene" && encoded!="Emission"))
+                throw std::runtime_error("Glow source is invalid.");
+            currentGlow=encoded=="Scene";emissionSource=encoded=="Emission";
+        }
+        // Original scene-wide Glow and the replaced emission-only Glow both
+        // defaulted to .8; the current full-scene representation defaults to .1.
+        if(!currentGlow)previousGlow.strength=.8f;
+        readGlow(source,previousGlow);
+        if(source.contains("coreHalo")) {
+            const auto& encoded=source.at("coreHalo");
+            if(!encoded.is_number())throw std::runtime_error("Previous Glow core/halo balance must be numeric.");
+            const float balance=encoded.get<float>();
+            if(!std::isfinite(balance) || balance<0 || balance>1)
+                throw std::runtime_error("Previous Glow core/halo balance is invalid.");
+        }
+        if(emissionSource) {
+            constexpr std::array<float,GlowLevelCount> core{.65f,.25f,.10f,0,0,0,0};
+            constexpr std::array<float,GlowLevelCount> halo{0,.02f,.08f,.15f,.25f,.25f,.25f};
+            const float balance=source.value("coreHalo",.5f);
+            for(std::size_t level=0;level<GlowLevelCount;++level)
+                previousGlow.levels[level]=core[level]+(halo[level]-core[level])*balance;
+        }
     }
+    if (json.contains("bloom")) {
+        // The removed separate Bloom normalized its authored levels. Convert
+        // that profile once into direct gains; current Glow never normalizes.
+        readGlow(json.at("bloom"),previousBloom);
+        float sum=0;for(float gain:previousBloom.levels)sum+=gain;
+        if(sum>0)for(float& gain:previousBloom.levels)gain/=sum;
+    }
+    const auto activeGlow=[](const GlowSettings& glow) {
+        return glow.enabled && glow.strength>0 && glow.radius>0 &&
+            !(glow.blendMode==GlowBlendMode::Mix && glow.mix==0) &&
+            std::any_of(glow.levels.begin(),glow.levels.end(),[](float gain){return gain>0;});
+    };
+    // Collapse the replaced two-effect representation without summing two
+    // halos: prefer active full-scene Bloom, otherwise active Glow. If neither
+    // contributes, preserve Bloom's inactive tuning when it exists.
+    if(currentGlow)value.glow=previousGlow;
+    else if(json.contains("bloom") && activeGlow(previousBloom))value.glow=previousBloom;
+    else if(json.contains("glow") && activeGlow(previousGlow))value.glow=previousGlow;
+    else if(json.contains("bloom"))value.glow=previousBloom;
+    else if(json.contains("glow"))value.glow=previousGlow;
     if (extended) {
         if (json.contains("debanding")) {
             if (!json.at("debanding").is_boolean()) throw std::runtime_error("Environment Debanding must be a boolean.");
@@ -271,13 +300,11 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
             {"quality",static_cast<int>(value.ssao.quality)}}},
         {"ambientLight",{{"source",static_cast<int>(value.ambientLight.source)},{"color",value.ambientLight.color},
             {"skyContribution",value.ambientLight.skyContribution},{"energy",value.ambientLight.energy}}},
-        {"glow",{{"source","Emission"},{"enabled",value.glow.enabled},{"strength",value.glow.strength},
+        {"glow",{{"source","Scene"},{"enabled",value.glow.enabled},{"strength",value.glow.strength},
             {"radius",value.glow.radius},{"threshold",value.glow.threshold},{"tint",value.glow.tint},
-            {"coreHalo",value.glow.coreHalo},{"saturation",value.glow.saturation},{"softKnee",value.glow.softKnee},
-            {"blendMode",glowBlendModes[static_cast<std::size_t>(value.glow.blendMode)]},{"mix",value.glow.mix}}},
-        {"bloom",{{"enabled",value.bloom.enabled},{"strength",value.bloom.strength},{"radius",value.bloom.radius},
-            {"threshold",value.bloom.threshold},{"tint",value.bloom.tint},{"softKnee",value.bloom.softKnee},
-            {"anamorphic",value.bloom.anamorphic},{"quality",static_cast<int>(value.bloom.quality)},{"levels",value.bloom.levels}}},
+            {"saturation",value.glow.saturation},{"softKnee",value.glow.softKnee},
+            {"blendMode",glowBlendModes[static_cast<std::size_t>(value.glow.blendMode)]},{"mix",value.glow.mix},
+            {"anamorphic",value.glow.anamorphic},{"quality",static_cast<int>(value.glow.quality)},{"levels",value.glow.levels}}},
         {"source",static_cast<int>(value.source)},
         {"procedural",{{"skyTop",sky.skyTop},{"skyHorizon",sky.skyHorizon},{"groundBottom",sky.groundBottom},{"groundHorizon",sky.groundHorizon},
             {"skyCurve",sky.skyCurve},{"groundCurve",sky.groundCurve},{"sunDiameter",sky.sunDiameter},{"sunHaloExtent",sky.sunHaloExtent},{"sunHaloCurve",sky.sunHaloCurve}}},

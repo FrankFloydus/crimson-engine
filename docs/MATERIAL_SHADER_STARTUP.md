@@ -128,10 +128,9 @@ The final v13 lighting-family probe is `material-startup-after.json`: the same s
 
 ## Shared material lighting interface
 
-The current generator is v29. Surface programs add `u_glowSource` and a fifth
-color output for optional visible-emission publication. The optional full-resolution
-Glow source preserves Lit emission and Unlit radiance, cutout/transparent coverage
-and fog attenuation, without diffuse/specular lighting or fog in-scattering.
+The current generator is v30. Surface programs retain four lighting color
+outputs. Full-scene Glow reads the existing HDR frame; its superseded emission
+capture attachment, fifth surface output and `u_glowSource` uniform are removed.
 PointShadow vertex/fragment programs retain a
 prior-world-position/validity varying through the existing `v_tangent` semantic;
 that depth-only semantic does not change surface tangents. `CC_GRAPH_POINT_SHADOW`
@@ -140,7 +139,7 @@ The vertex program consumes `u_ssgiPreviousModel` for rigid draws, while the
 instanced variant reads each occurrence's previous transform from its retained
 palette. Both the embedded family and generated cache identity advance together;
 earlier PointShadow binaries cannot be mixed with this executable. Surface
-materials retain twelve texture slots and the four lighting MRT outputs plus the optional fifth emission output, and `ModelVertex`
+materials retain twelve texture slots and four lighting MRT outputs, and `ModelVertex`
 remains 27 floats/108 bytes. This adds no authored scene/material migration.
 
 The None/Circular/Quad UV0 interpolation contract introduced in v27 remains.
@@ -151,7 +150,7 @@ after scale/rotation and skips a second normal rotation/sign adjustment. Shared
 derivative normalization keeps frame conditioning stable with camera distance.
 Its UV reconstruction adds no material samplers or mesh subdivision.
 
-Generator v29 retains explicit None/Circular/Quad UV0 attributes/varyings and the shared Scene/Game four-cascade directional-shadow interface, including `u_directionalShadowSoftness[4]` and `u_directionalShadowDepthRange[16]`. The former player-fade partition uniforms, nearest-layer compositor and private actor Key/Fill, dedicated actor shadows, darkness/reveal and Ambient Darkness interfaces remain removed. Source identity and reflected manifests reject earlier generated programs. Fixed PBR/model and generated model/particle paths share ordinary scene light/shadow evaluation. The six-texel point stride, twelve material texture slots, four lighting MRT outputs plus the optional fifth emission output, fog uniforms and independent GI/AO atlas publication remain intact. Generic model instance opacity and material transparency remain supported. GI reconstruction consumes separate raw luminance-moment histories and early spatial feedback, without feeding displayed GI into material donor capture. Release regenerates embedded shaders and prepares matching material cache entries through the existing commandlet; generated headers are never edited manually.
+Generator v30 retains explicit None/Circular/Quad UV0 attributes/varyings and the shared Scene/Game four-cascade directional-shadow interface, including `u_directionalShadowSoftness[4]` and `u_directionalShadowDepthRange[16]`. The former player-fade partition uniforms, nearest-layer compositor and private actor Key/Fill, dedicated actor shadows, darkness/reveal and Ambient Darkness interfaces remain removed. Source identity and reflected manifests reject earlier generated programs. Fixed PBR/model and generated model/particle paths share ordinary scene light/shadow evaluation. The six-texel point stride, twelve material texture slots, four lighting MRT outputs, fog uniforms and independent GI/AO atlas publication remain intact. Generic model instance opacity and material transparency remain supported. GI reconstruction consumes separate raw luminance-moment histories and early spatial feedback, without feeding displayed GI into material donor capture. Release regenerates embedded shaders and prepares matching material cache entries through the existing commandlet; generated headers are never edited manually.
 
 
-Tone-mapping White Point and AgX Contrast are presentation parameters, separate from this material interface. Renderer computes their coefficients on the CPU and binds `u_toneCurve` / `u_toneShoulder` to the presentation shader alongside the existing operator/exposure settings. Parameter edits do not compile materials, rebake environment maps or change generator v29. The present shader's reflected uniform contract and staged binary must change together when this presentation interface changes. Default parameters retain the existing output; authored parameters persist through the shared Environment serializer, while preview environments retain independent settings. Direct/Indirect debug views use the authored presentation curve, so weak isolated GI can be clipped by ACES even with correct diffuse source capture; Albedo and other data views continue to bypass exposure and tone mapping.
+Tone-mapping White Point and AgX Contrast are presentation parameters, separate from this material interface. Renderer computes their coefficients on the CPU and binds `u_toneCurve` / `u_toneShoulder` to the presentation shader alongside the existing operator/exposure settings. Parameter edits do not compile materials, rebake environment maps or change generator v30. The present shader's reflected uniform contract and staged binary must change together when this presentation interface changes. Default parameters retain the existing output; authored parameters persist through the shared Environment serializer, while preview environments retain independent settings. Direct/Indirect debug views use the authored presentation curve, so weak isolated GI can be clipped by ACES even with correct diffuse source capture; Albedo and other data views continue to bypass exposure and tone mapping.

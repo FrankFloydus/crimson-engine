@@ -44,8 +44,8 @@ void error(const RenderPassPlan& plan,const RenderResourceTable& table,Error exp
 }
 RenderPassPlanConfig fullConfig(RenderViewPurpose purpose=RenderViewPurpose::Scene) {
     RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
-    config.glowBaseWidth=config.glowBaseHeight=config.bloomBaseWidth=config.bloomBaseHeight=32;
-    config.glow=true;config.bloom=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=purpose==RenderViewPurpose::Scene;
+    config.glowBaseWidth=config.glowBaseHeight=32;
+    config.glow=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=purpose==RenderViewPurpose::Scene;
     config.worldShadows=true;config.collisionOverlays=true;config.ssgi=true;config.ssao=true;return config;
 }
 RenderTextureView texture(std::uint32_t id,std::uint32_t width=64,std::uint32_t height=64,std::uint16_t format=1) {
@@ -68,24 +68,23 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
             binding.textures[0].layers=2;binding.textures[0].range.layerCount=2;
         }
     }
-    for(bool bloom:{false,true}) {
+    if(plan.config.glow) {
         const auto& config=plan.config;
-        if(!(bloom?config.bloom:config.glow))continue;
-        const auto first_prefilter=bloom?Resource::BloomPrefilter0:Resource::GlowPrefilter0;
-        const auto first_down=bloom?Resource::BloomDown0:Resource::GlowDown0;
-        const auto first_up=bloom?Resource::BloomUp0:Resource::GlowUp0;
-        const unsigned base_width=bloom?config.bloomBaseWidth:config.glowBaseWidth,base_height=bloom?config.bloomBaseHeight:config.glowBaseHeight;
+        const auto first_prefilter=Resource::GlowPrefilter0;
+        const auto first_down=Resource::GlowDown0;
+        const auto first_up=Resource::GlowUp0;
+        const unsigned base_width=config.glowBaseWidth,base_height=config.glowBaseHeight;
         unsigned width=64,height=64;
         const auto set_extent=[&](Resource resource,unsigned w,unsigned h) {
             auto& image=table.bindings[index(resource)].textures[0];image.width=w;image.height=h;
         };
-        const unsigned prefilters=bloom?config.bloomPrefilters:config.glowPrefilters;
+        const unsigned prefilters=config.glowPrefilters;
         for(unsigned i=0;i<prefilters;++i) {
             width=std::max(base_width,(width+1)/2);height=std::max(base_height,(height+1)/2);
             set_extent(static_cast<Resource>(unsigned(first_prefilter)+i),width,height);
         }
         width=base_width;height=base_height;
-        const unsigned levels=bloom?config.bloomLevels:config.glowLevels;
+        const unsigned levels=config.glowLevels;
         for(unsigned i=0;i<levels;++i) {
             set_extent(static_cast<Resource>(unsigned(first_down)+i),width,height);
             if(i<std::max(1u,levels-1))set_extent(static_cast<Resource>(unsigned(first_up)+i),width,height);
@@ -114,17 +113,16 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
-        for(bool glow:{false,true})for(bool bloom:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true}) {
             const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=world || purpose==RenderViewPurpose::Thumbnail;
             config.glow=glow && purpose!=RenderViewPurpose::Thumbnail;
-            config.bloom=bloom && purpose!=RenderViewPurpose::Thumbnail;
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions && world;config.ssgi=gi && world;config.ssao=ao && world;
             config.smaa=smaa;
-            config.glowBaseWidth=config.glowBaseHeight=config.bloomBaseWidth=config.bloomBaseHeight=32;
+            config.glowBaseWidth=config.glowBaseHeight=32;
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported profile has an invalid structural plan.");
             check(bool(validateRenderPassPlan(plan,concrete(plan))),"A supported profile has invalid concrete resource bindings.");
             for(const auto kind:{Kind::ModelDeformation,Kind::LightAssignment,Kind::Background,Kind::Opaque,Kind::Transparent,Kind::ToneMap,Kind::Encode})
@@ -254,78 +252,63 @@ void concreteHazards() {
     check(validateRenderPassBindings(plan,table,Kind::Encode).error==Error::MissingBinding,"Final recording boundary accepted an absent display output.");
 }
 void glarePyramidContracts() {
-    for(unsigned levels=1;levels<=7;++levels)for(bool glow:{false,true}) {
-        auto config=fullConfig();config.glow=glow;config.bloom=!glow;
-        config.glowLevels=config.bloomLevels=static_cast<std::uint8_t>(levels);
+    for(unsigned levels=1;levels<=7;++levels) {
+        auto config=fullConfig();config.glowLevels=static_cast<std::uint8_t>(levels);
         const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
-        check(bool(validateRenderPassPlan(plan,resources)),"An effective glare level count has invalid bindings.");
-        const auto down=glow?Kind::GlowDown0:Kind::BloomDown0;
-        const auto last=glow?Kind::GlowUp0:Kind::BloomUp0;
+        check(bool(validateRenderPassPlan(plan,resources)),"An effective Glow level count has invalid bindings.");
+        constexpr auto down=Kind::GlowDown0,last=Kind::GlowUp0;
         unsigned down_count=0,up_count=0;
         for(const auto& entry:plan.passes()) {
-            if(entry.kind>=down && entry.kind<=static_cast<Kind>(unsigned(down)+6))++down_count;
-            if(entry.kind>=static_cast<Kind>(unsigned(last)-5) && entry.kind<=last)++up_count;
+            if(entry.kind>=down && entry.kind<=Kind::GlowDown6)++down_count;
+            if(entry.kind>=Kind::GlowUp5 && entry.kind<=last)++up_count;
         }
-        check(down_count==levels && up_count==std::max(1u,levels-1),"Unused glare levels retained dispatches or a needed scale disappeared.");
+        check(down_count==levels && up_count==std::max(1u,levels-1),"Unused Glow levels retained dispatches or a needed scale disappeared.");
         check(plan.find(down)->execution==RenderPassExecution::Compute &&
             plan.find(last)->physicalView==plan.find(down)->physicalView &&
-            plan.find(last)->physicalView<plan.find(Kind::ToneMap)->physicalView,"Glare pyramid escaped ordered compute before tone mapping.");
-        const auto source=glow?Resource::GlowEmissionSource:Resource::SceneHdr;
-        check(std::any_of(plan.find(down)->uses().begin(),plan.find(down)->uses().end(),[&](const auto& item){return item.resource==source && item.access==Access::SampledRead;}),"Bloom/Glow selected the wrong original source.");
-        auto broken=plan;erase(broken,down);error(broken,Error::MissingProducer,"A glare chain accepted an absent original-source extraction.");
+            plan.find(last)->physicalView<plan.find(Kind::ToneMap)->physicalView,"Glow pyramid escaped ordered compute before tone mapping.");
+        check(std::any_of(plan.find(down)->uses().begin(),plan.find(down)->uses().end(),[](const auto& item){
+            return item.resource==Resource::SceneHdr && item.access==Access::SampledRead;
+        }),"Glow did not sample the complete visible HDR scene.");
+        auto broken=plan;erase(broken,down);error(broken,Error::MissingProducer,"A Glow chain accepted an absent original-source extraction.");
         if(levels>1) {
             broken=plan;erase(broken,static_cast<Kind>(unsigned(down)+levels-1));
-            error(broken,Error::MissingProducer,"Reconstruction read a missing coarse glare level.");
+            error(broken,Error::MissingProducer,"Reconstruction read a missing coarse Glow level.");
         }
-        const auto output=glow?Resource::GlowUp0:Resource::BloomUp0;
-        const auto input=glow?Resource::GlowDown0:Resource::BloomDown0;
-        auto bad=resources;bad.bindings[index(output)].textures=bad.bindings[index(input)].textures;
-        error(plan,bad,Error::FeedbackLoop,"Glare reconstruction sampled its own output allocation.");
-        broken=plan;erase(broken,last);error(broken,Error::MissingProducer,"Tone mapping accepted unpublished glare.");
+        auto bad=resources;bad.bindings[index(Resource::GlowUp0)].textures=bad.bindings[index(Resource::GlowDown0)].textures;
+        error(plan,bad,Error::FeedbackLoop,"Glow reconstruction sampled its own output allocation.");
+        broken=plan;erase(broken,last);error(broken,Error::MissingProducer,"Tone mapping accepted unpublished Glow.");
     }
-    for(unsigned prefilters=0;prefilters<=5;++prefilters)for(bool bloom:{false,true}) {
-        auto config=fullConfig();config.glow=!bloom;config.bloom=bloom;
-        const auto base=static_cast<std::uint16_t>(32u>>prefilters);
-        config.glowBaseWidth=config.glowBaseHeight=config.bloomBaseWidth=config.bloomBaseHeight=base;
-        config.glowPrefilters=config.bloomPrefilters=static_cast<std::uint8_t>(prefilters);
+    for(unsigned prefilters=0;prefilters<=5;++prefilters) {
+        auto config=fullConfig();const auto base=static_cast<std::uint16_t>(32u>>prefilters);
+        config.glowBaseWidth=config.glowBaseHeight=base;config.glowPrefilters=static_cast<std::uint8_t>(prefilters);
         const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
-        check(bool(validateRenderPassPlan(plan,resources)),"A bounded glare prefilter chain has invalid concrete extents.");
-        const auto first=bloom?Kind::BloomPrefilter0:Kind::GlowPrefilter0;
-        for(unsigned i=0;i<5;++i)check(plan.has(static_cast<Kind>(unsigned(first)+i))==(i<prefilters),"Glare prefix includes disabled stages or skips a required source reduction.");
+        check(bool(validateRenderPassPlan(plan,resources)),"A bounded Glow prefilter chain has invalid concrete extents.");
+        constexpr auto first=Kind::GlowPrefilter0;
+        for(unsigned i=0;i<5;++i)check(plan.has(static_cast<Kind>(unsigned(first)+i))==(i<prefilters),"Glow prefix includes disabled stages or skips a required source reduction.");
         if(prefilters) {
-            auto broken=plan;erase(broken,first);error(broken,Error::MissingProducer,"A glare prefix read an unproduced reduced source.");
-            auto bad=resources;
-            const auto resource=bloom?Resource::BloomPrefilter0:Resource::GlowPrefilter0;
-            --bad.bindings[index(resource)].textures[0].width;
+            auto broken=plan;erase(broken,first);error(broken,Error::MissingProducer,"A Glow prefix read an unproduced reduced source.");
+            auto bad=resources;--bad.bindings[index(Resource::GlowPrefilter0)].textures[0].width;
             error(plan,bad,Error::InvalidTexture,"An incorrect prefilter extent silently increased the source reduction ratio.");
-            bad=resources;const auto down=bloom?Resource::BloomDown0:Resource::GlowDown0;
-            ++bad.bindings[index(down)].textures[0].height;
+            bad=resources;++bad.bindings[index(Resource::GlowDown0)].textures[0].height;
             error(plan,bad,Error::InvalidTexture,"A stale artistic base allocation was accepted.");
-        }
-        if(prefilters) {
-            auto missing=plan;
-            if(bloom)--missing.config.bloomPrefilters;else --missing.config.glowPrefilters;
-            error(missing,Error::UnexpectedPass,"An undeclared glare prefix remained in the plan.");
+            auto missing=plan;--missing.config.glowPrefilters;
+            error(missing,Error::UnexpectedPass,"An undeclared Glow prefix remained in the plan.");
         }
     }
-    auto maximum=fullConfig();maximum.glowPrefilters=maximum.bloomPrefilters=5;
-    maximum.glowBaseWidth=maximum.glowBaseHeight=maximum.bloomBaseWidth=maximum.bloomBaseHeight=1;
-    maximum.smaa=true;
+    auto maximum=fullConfig();maximum.glowPrefilters=5;maximum.glowBaseWidth=maximum.glowBaseHeight=1;maximum.smaa=true;
     const auto maximum_plan=buildRenderPassPlan(maximum);
-    check(maximum_plan.count<=RenderPassPlan::MaximumPasses && bool(validateRenderPassPlan(maximum_plan,concrete(maximum_plan))),"Maximum dual-effect glare chains exceed the fixed plan capacity.");
-    auto config=fullConfig();config.bloomLevels=0;error(buildRenderPassPlan(config),Error::InvalidPass,"Active Bloom accepted zero levels.");
-    config.bloomLevels=8;error(buildRenderPassPlan(config),Error::InvalidPass,"Bloom accepted an eighth unsupported scale.");
-    config=fullConfig();config.glow=false;config.bloom=false;
-    const auto off=buildRenderPassPlan(config);
+    check(maximum_plan.count<=RenderPassPlan::MaximumPasses && bool(validateRenderPassPlan(maximum_plan,concrete(maximum_plan))),"Maximum Glow chain exceeds the fixed plan capacity.");
+    auto config=fullConfig();config.glowLevels=0;error(buildRenderPassPlan(config),Error::InvalidPass,"Active Glow accepted zero levels.");
+    config.glowLevels=8;error(buildRenderPassPlan(config),Error::InvalidPass,"Glow accepted an eighth unsupported scale.");
+    config=fullConfig();config.glow=false;const auto off=buildRenderPassPlan(config);
     for(const auto& entry:off.passes())for(const auto& item:entry.uses())
-        check(item.resource<Resource::GlowEmissionSource || item.resource>Resource::BloomUp5,"Disabled glare retained emission or pyramid dependencies.");
-    config=fullConfig();const auto full=buildRenderPassPlan(config);
-    const auto* opaque=full.find(Kind::Opaque);const auto* transparent=full.find(Kind::Transparent);
-    for(const auto* entry:{opaque,transparent})
-        check(std::any_of(entry->uses().begin(),entry->uses().end(),[](const auto& item){return item.resource==Resource::GlowEmissionSource && item.access==Access::ColorAttachment && item.load==Load::Load;}),"Visible emission lost opaque or transparent coverage publication.");
-    config.glow=false;const auto bloom_only=buildRenderPassPlan(config);
-    for(const auto& entry:bloom_only.passes())for(const auto& item:entry.uses())
-        check(item.resource!=Resource::GlowEmissionSource,"Bloom alone retained the optional emission target.");
+        check(item.resource<Resource::GlowPrefilter0 || item.resource>Resource::GlowUp5,"Disabled Glow retained pyramid dependencies.");
+    const auto full=buildRenderPassPlan(fullConfig());
+    for(const auto kind:{Kind::Background,Kind::Opaque,Kind::Transparent}) {
+        const auto* enabled=full.find(kind);const auto* disabled=off.find(kind);
+        check(enabled->resourceCount==disabled->resourceCount && std::equal(enabled->uses().begin(),enabled->uses().end(),disabled->uses().begin()),
+            "Enabling full-scene Glow changed scene attachments or GI donor capture.");
+    }
 }
 void spatialAntiAliasingContracts() {
     check(SceneSettings{}.antiAliasing==AntiAliasing::Off && valid_anti_aliasing(AntiAliasing::Off) && valid_anti_aliasing(AntiAliasing::Smaa) &&

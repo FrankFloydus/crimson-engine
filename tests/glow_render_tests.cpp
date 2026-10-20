@@ -3,9 +3,9 @@
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
-#include <crimson/renderer/forward/GlowBloomGpu.h>
-#include "cs_glow_bloom_downsample.h"
-#include "cs_glow_bloom_upsample.h"
+#include <crimson/renderer/forward/GlowGpu.h>
+#include "cs_glow_downsample.h"
+#include "cs_glow_upsample.h"
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
 #include <lodepng.h>
@@ -31,7 +31,7 @@ using Json=nlohmann::json;
 using Clock=std::chrono::steady_clock;
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
-struct Options {bool benchmark{};unsigned warmup{240},samples{600};fs::path artifacts;};
+struct Options {bool benchmark{},levelResponseOnly{};unsigned warmup{240},samples{600};fs::path artifacts;};
 struct Texture {bgfx::TextureHandle value{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}};
 struct Program {bgfx::ProgramHandle value{BGFX_INVALID_HANDLE};~Program(){if(bgfx::isValid(value))bgfx::destroy(value);}};
 double linear(unsigned value) {const double v=value/255.;return v<=.04045?v/12.92:std::pow((v+.055)/1.055,2.4);}
@@ -63,7 +63,7 @@ void continuousHalo(const DecodedImage& image,const char* label) {
 }
 void save(const fs::path& directory,const char* name,const DecodedImage& image) {
     if(directory.empty())return;fs::create_directories(directory);std::vector<unsigned char> encoded;
-    check(lodepng::encode(encoded,image.rgba,image.width,image.height)==0,"Cannot encode Glow/Bloom comparison.");
+    check(lodepng::encode(encoded,image.rgba,image.width,image.height)==0,"Cannot encode Glow comparison.");
     std::ofstream output(directory/name,std::ios::binary);check(bool(output),"Cannot create comparison image.");
     output.write(reinterpret_cast<const char*>(encoded.data()),std::streamsize(encoded.size()));
 }
@@ -118,7 +118,7 @@ void exercise(SDL_Window* window,const Options& options) {
     RenderScene game{gameSettings,{}},scene{sceneSettings,{}};game.sceneMode=scene.sceneMode=true;game.instances=scene.instances=instances;
     if(options.benchmark) {
         bgfx::setDebug(BGFX_DEBUG_PROFILER);const auto* caps=bgfx::getCaps();
-        Json report{{"schema",2},{"backend",renderer.backendName()},{"vendor_id",caps->vendorId},{"device_id",caps->deviceId},
+        Json report{{"schema",3},{"backend",renderer.backendName()},{"vendor_id",caps->vendorId},{"device_id",caps->deviceId},
             {"warmup_frames",options.warmup},{"requested_unique_gpu_samples",options.samples},
             {"fresh_view_targets_each_phase",true},
             {"fixture","Three shared-mesh wall/floor/emissive instances; HDR Scene/Game with GI, AO, SMAA and shadows disabled"},
@@ -126,21 +126,19 @@ void exercise(SDL_Window* window,const Options& options) {
             {"phases",Json::array()}};
         for(const auto extent:std::array<std::array<std::uint16_t,2>,2>{{{1920,1080},{2560,1440}}})for(const bool dual:{false,true}) {
             const auto width=extent[0],height=extent[1];renderer.resizeGameViewport(width,height);renderer.resizeViewport(dual?width:1,dual?height:1);
-            struct EffectCase {const char* name;bool glow,bloom;float radius;BloomQuality quality{BloomQuality::High};};
-            for(const auto effectCase:std::array<EffectCase,9>{{{"off",false,false,1},{"bloom",false,true,1},{"bloom",false,true,8},
-                {"glow",true,false,1},{"glow",true,false,8},{"both",true,true,1},{"both",true,true,8},
-                {"bloom-low",false,true,1,BloomQuality::Low},{"bloom-low",false,true,8,BloomQuality::Low}}}) {
-                const float radius=effectCase.radius;const bool active=effectCase.glow||effectCase.bloom;
+            struct EffectCase {const char* name;bool enabled;float radius;GlowQuality quality{GlowQuality::High};};
+            for(const auto effectCase:std::array<EffectCase,5>{{{"off",false,1},{"glow-high",true,1},{"glow-high",true,8},
+                {"glow-low",true,1,GlowQuality::Low},{"glow-low",true,8,GlowQuality::Low}}}) {
+                const float radius=effectCase.radius;const bool active=effectCase.enabled;
                 // Isolate active-effect residency from allocations retained by
                 // a previously enabled effect. Allocation is outside warmup and
                 // every measured interval; immutable model/program data stays.
                 renderer.releaseGameViewport();renderer.resizeGameViewport(width,height);
                 renderer.resizeViewport(1,1);if(dual)renderer.resizeViewport(width,height);
-                gameSettings.environment.glow=sceneSettings.environment.glow={effectCase.glow,.8f,radius,1};
-                gameSettings.environment.bloom=sceneSettings.environment.bloom={effectCase.bloom,.8f,radius,1};
-                gameSettings.environment.bloom.quality=sceneSettings.environment.bloom.quality=effectCase.quality;
+                gameSettings.environment.glow=sceneSettings.environment.glow={effectCase.enabled,.8f,radius,1};
+                gameSettings.environment.glow.quality=sceneSettings.environment.glow.quality=effectCase.quality;
                 const auto submit=[&]{if(dual)renderer.render(scene);renderer.renderGame(game);check(renderer.glowStatus().empty(),renderer.glowStatus());bgfx::touch(ToolsView);tick();};
-                std::cout<<"Glow/Bloom benchmark "<<width<<'x'<<height<<" views="<<(dual?2:1)<<" effect="<<effectCase.name<<" spread="<<radius<<" warmup="<<options.warmup<<" samples="<<options.samples<<std::endl;
+                std::cout<<"Glow benchmark "<<width<<'x'<<height<<" views="<<(dual?2:1)<<" effect="<<effectCase.name<<" spread="<<radius<<" warmup="<<options.warmup<<" samples="<<options.samples<<std::endl;
                 for(unsigned i=0;i<options.warmup;++i)submit();
                 const auto firstFrame=frame+1;std::set<std::uint32_t> completed;std::vector<double> total,effect,source,backgroundTimes,transparentTimes,presentationTimes,cpu;
                 Json samples=Json::array();const auto deadline=Clock::now()+std::chrono::minutes{4};unsigned submitted{};
@@ -187,8 +185,8 @@ void exercise(SDL_Window* window,const Options& options) {
                 std::cout<<"Result frame="<<phase["gpu_frame_elapsed"]<<" effect="<<phase["effect_elapsed_sum"]<<std::endl;report["phases"].push_back(std::move(phase));
             }
         }
-        fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-bloom-benchmark.json");check(bool(output),"Cannot create benchmark report.");output<<report.dump(2)<<'\n';
-        auto compact=report;for(auto& phase:compact["phases"])phase.erase("gpu_samples");std::cout<<"GLOW_BLOOM_BENCHMARK_JSON "<<compact.dump()<<std::endl;
+        fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-benchmark.json");check(bool(output),"Cannot create benchmark report.");output<<report.dump(2)<<'\n';
+        auto compact=report;for(auto& phase:compact["phases"])phase.erase("gpu_samples");std::cout<<"GLOW_BENCHMARK_JSON "<<compact.dump()<<std::endl;
         bgfx::setDebug(BGFX_DEBUG_NONE);
     }
     if(!options.benchmark) {
@@ -196,9 +194,9 @@ void exercise(SDL_Window* window,const Options& options) {
             const auto compute=[](const auto& bytes) {const auto shader=bgfx::createShader(bgfx::copy(bytes,std::uint32_t(sizeof(bytes))));
                 check(bgfx::isValid(shader),"Direct glare test compute shader creation failed.");const auto program=bgfx::createProgram(shader,true);
                 check(bgfx::isValid(program),"Direct glare test compute program creation failed.");return program;};
-            Program down{compute(cc_cs_glow_bloom_downsample)},up{compute(cc_cs_glow_bloom_upsample)};
-            GlowBloomGpu reconstruction(down.value,up.value);reconstruction.advance(frame);
-            check(!reconstruction.prepare(129,97,{},{} )&&reconstruction.resident_bytes()==0,"Disabled Glow/Bloom allocated direct filter resources.");
+            Program down{compute(cc_cs_glow_downsample)},up{compute(cc_cs_glow_upsample)};
+            GlowGpu reconstruction(down.value,up.value);reconstruction.advance(frame);
+            check(!reconstruction.prepare(129,97,{})&&reconstruction.resident_bytes()==0,"Disabled Glow allocated direct filter resources.");
             const auto readFloat=[&](bgfx::TextureHandle input,std::uint16_t w,std::uint16_t h) {
                 Texture staging{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
                 check(bgfx::isValid(staging.value),"FP32 glare readback allocation failed.");
@@ -208,51 +206,148 @@ void exercise(SDL_Window* window,const Options& options) {
                 for(unsigned i=0;i<120;++i){tick();reconstruction.advance(frame);if(picking::frameReady(frame,ready))return *values;}
                 renderer.drainPending(frame);throw std::runtime_error("FP32 glare readback timed out.");
             };
-            for(const auto extent:std::array<std::array<std::uint16_t,2>,2>{{{129,97},{1,1}}}) {
+            // Read the filter's linear FP32 output. Display encoding and tone
+            // mapping can conceal coefficient changes around bright sources.
+            {
+                constexpr std::uint16_t w=129,h=97;
+                GlowSettings levels;levels.enabled=true;levels.strength=1;levels.threshold=0;levels.levels.fill(0);
+                check(!reconstruction.prepare(w,h,levels)&&!reconstruction.active()&&reconstruction.resident_bytes()==0,
+                    "Enabled Glow with zero levels allocated or activated direct filter resources.");
+                for(unsigned i=0;i<4;++i){tick();reconstruction.advance(frame);}
+                check(bgfx::getStats()->numCompute==0,"Zero direct Glow levels scheduled compute work.");
+                Json levelReport{{"space","linear FP32 filter output before presentation"},{"width",w},{"height",h},
+                    {"checks",Json::array()}};
+                std::vector<std::string> failures;
+                const auto compare=[&](const std::string& label,const std::vector<float>& actual,const std::vector<float>& expected) {
+                    check(actual.size()==expected.size(),"Direct Glow response dimensions changed.");
+                    double maximumError{},maximumExpected{},actualEnergy{},expectedEnergy{};bool finite=true;
+                    for(std::size_t i=0;i<actual.size();++i)if(i%4<3) {
+                        finite&=std::isfinite(actual[i]);
+                        maximumError=std::max(maximumError,std::abs(double(actual[i])-expected[i]));
+                        maximumExpected=std::max(maximumExpected,std::abs(double(expected[i])));
+                        actualEnergy+=actual[i];expectedEnergy+=expected[i];
+                    }
+                    const double tolerance=std::max(1e-10,maximumExpected*.0005);
+                    const bool passed=finite&&maximumError<=tolerance;
+                    levelReport["checks"].push_back({{"name",label},{"passed",passed},{"maximum_absolute_error",maximumError},
+                        {"tolerance",tolerance},{"actual_energy",actualEnergy},{"expected_energy",expectedEnergy}});
+                    if(!passed)failures.push_back(label+": maximum error "+std::to_string(maximumError)+
+                        ", expected peak "+std::to_string(maximumExpected));
+                };
+                const auto scaled=[](const std::vector<float>& input,float scale) {
+                    auto result=input;for(std::size_t i=0;i<result.size();++i)if(i%4<3)result[i]*=scale;return result;
+                };
+                for(const bool constant:{true,false}) {
+                    const std::string sourceName=constant?"constant":"impulse";
+                    std::vector<float> pixels(std::size_t(w)*h*4);
+                    const auto sourcePixel=[&](unsigned x,unsigned y,float strength) {
+                        const auto pixel=(std::size_t(y)*w+x)*4;
+                        pixels[pixel]=.5f*strength;pixels[pixel+1]=.25f*strength;pixels[pixel+2]=.125f*strength;
+                    };
+                    if(constant)for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)sourcePixel(x,y,1);
+                    else {
+                        for(unsigned y=h/2-1;y<=h/2+1;++y)for(unsigned x=w/2-1;x<=w/2+1;++x)sourcePixel(x,y,1);
+                        sourcePixel(w/3,h/3,.3f);
+                    }
+                    Texture input{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,
+                        BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,bgfx::copy(pixels.data(),std::uint32_t(pixels.size()*sizeof(float))))};
+                    check(bgfx::isValid(input.value),"Linear Glow level-response source allocation failed.");
+                    const auto captureLevels=[&](const std::array<float,GlowLevelCount>& coefficients) {
+                        levels.levels=coefficients;
+                        check(reconstruction.prepare(w,h,levels),reconstruction.status());
+                        check(reconstruction.execute(input.value,1,SceneGlowExtractView),reconstruction.status());
+                        return readFloat(reconstruction.texture(),reconstruction.width(),reconstruction.height());
+                    };
+                    std::array<std::vector<float>,GlowLevelCount> isolated;
+                    for(unsigned level=0;level<GlowLevelCount;++level) {
+                        std::array<float,GlowLevelCount> coefficients{};coefficients[level]=1;
+                        isolated[level]=captureLevels(coefficients);
+                        double peak{};for(std::size_t i=0;i<isolated[level].size();++i)if(i%4<3)
+                            peak=std::max(peak,double(isolated[level][i]));
+                        check(peak>0,"Isolated linear Glow level produced no radiance.");
+                        for(const float coefficient:{0.f,.01f,.1f,.25f,.5f,1.f}) {
+                            coefficients[level]=coefficient;
+                            const std::string label=sourceName+" level "+std::to_string(level+1)+" coefficient "+std::to_string(coefficient);
+                            if(coefficient==0) {
+                                levels.levels=coefficients;
+                                check(!reconstruction.prepare(w,h,levels)&&!reconstruction.active(),
+                                    "Zero isolated Glow coefficient activated a filter pyramid.");
+                                for(unsigned i=0;i<4;++i){tick();reconstruction.advance(frame);}
+                                check(bgfx::getStats()->numCompute==0&&reconstruction.resident_bytes()==0,
+                                    "Zero isolated Glow coefficient retained active/retired resources or compute work.");
+                                levelReport["checks"].push_back({{"name",label},{"passed",true},{"compute",0},{"resident_bytes",0}});
+                            } else compare(label,captureLevels(coefficients),scaled(isolated[level],coefficient));
+                        }
+                    }
+                    std::array<float,GlowLevelCount> mixedWeights{.07f,.11f,.13f,.17f,.19f,.23f,.29f};
+                    auto expected=scaled(isolated[0],0);
+                    for(unsigned level=0;level<GlowLevelCount;++level)for(std::size_t i=0;i<expected.size();++i)if(i%4<3)
+                        expected[i]+=mixedWeights[level]*isolated[level][i];
+                    const auto mixed=captureLevels(mixedWeights);compare(sourceName+" mixed scale additivity",mixed,expected);
+                    auto doubled=mixedWeights;for(auto& coefficient:doubled)coefficient*=2;
+                    compare(sourceName+" doubling contributions doubles radiance",captureLevels(doubled),scaled(mixed,2));
+                    auto changed=mixedWeights;changed[3]+=.3f;auto independent=captureLevels(changed);
+                    for(std::size_t i=0;i<independent.size();++i)if(i%4<3)independent[i]-=mixed[i];
+                    compare(sourceName+" one slider leaves other contributions unchanged",independent,scaled(isolated[3],.3f));
+                    for(unsigned boundary=1;boundary<GlowLevelCount;++boundary) {
+                        std::array<float,GlowLevelCount> coefficients{};coefficients[boundary-1]=.6f;
+                        const auto preceding=captureLevels(coefficients);
+                        for(const float epsilon:{.01f,.0001f}) {
+                            coefficients[boundary]=epsilon;auto expectedLimit=preceding;
+                            for(std::size_t i=0;i<expectedLimit.size();++i)if(i%4<3)expectedLimit[i]+=epsilon*isolated[boundary][i];
+                            compare(sourceName+" pruning continuity at level "+std::to_string(boundary+1)+" epsilon "+std::to_string(epsilon),
+                                captureLevels(coefficients),expectedLimit);
+                        }
+                    }
+                }
+                levelReport["passed"]=failures.empty();levelReport["failures"]=failures;
+                if(!options.artifacts.empty()) {
+                    fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-level-response.json");
+                    check(bool(output),"Cannot write linear Glow level-response report.");output<<levelReport.dump(2)<<'\n';
+                }
+                std::cout<<"GLOW_LEVEL_RESPONSE_JSON "<<levelReport.dump()<<std::endl;
+                check(failures.empty(),"Linear Glow level response failed "+std::to_string(failures.size())+" checks; first: "+
+                    (failures.empty()?std::string{}:failures.front()));
+            }
+            if(!options.levelResponseOnly)for(const auto extent:std::array<std::array<std::uint16_t,2>,2>{{{129,97},{1,1}}}) {
                 const auto w=extent[0],h=extent[1];constexpr std::array<float,4> radiance{1e11f,5e10f,1e10f,0};
                 std::vector<float> pixels(std::size_t(w)*h*4);for(std::size_t i=0;i<pixels.size();++i)pixels[i]=radiance[i%4];
                 Texture input{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,
                     bgfx::copy(pixels.data(),std::uint32_t(pixels.size()*sizeof(float))))};check(bgfx::isValid(input.value),"FP32 glare source allocation failed.");
                 GlowSettings flatGlow;flatGlow.enabled=true;flatGlow.strength=.8f;flatGlow.threshold=0;
-                BloomSettings flatBloom;flatBloom.enabled=true;flatBloom.strength=.8f;flatBloom.threshold=0;
-                check(reconstruction.prepare(w,h,flatGlow,flatBloom),reconstruction.status());
-                check(reconstruction.execute(input.value,input.value,256,SceneGlowExtractView),reconstruction.status());
-                const auto gw=std::uint16_t((w+1)/2),gh=std::uint16_t((h+1)/2);
-                const auto glowValues=readFloat(reconstruction.glow_texture(),gw,gh),bloomValues=readFloat(reconstruction.bloom_texture(),gw,gh);
-                for(const auto* values:{&glowValues,&bloomValues})for(std::size_t i=0;i<values->size();++i) {
-                    check(std::isfinite((*values)[i])&&(*values)[i]>=0,"Glow/Bloom produced negative/nonfinite FP32 HDR radiance.");
+                check(reconstruction.prepare(w,h,flatGlow),reconstruction.status());
+                check(reconstruction.execute(input.value,256,SceneGlowExtractView),reconstruction.status());
+                const auto values=readFloat(reconstruction.texture(),reconstruction.width(),reconstruction.height());
+                for(std::size_t i=0;i<values.size();++i) {
+                    check(std::isfinite(values[i])&&values[i]>=0,"Glow produced negative/nonfinite FP32 HDR radiance.");
                     if(i%4<3) {const double expected=double(radiance[i%4])*256*.8;
-                        check(std::abs((*values)[i]-expected)/expected<.002,"Glow/Bloom changed normalized constant-field energy or overflowed exposure×HDR.");}
+                        check(std::abs(values[i]-expected)/expected<.002,"Glow changed constant-field energy or overflowed exposure×HDR.");}
                 }
             }
         }
+        if(options.levelResponseOnly){resources.stop();renderer.drainPending(frame);return;}
         constexpr std::uint16_t W=257,H=257;renderer.resizeViewport(W,H);renderer.resizeGameViewport(W,H);
         const auto read=[&](bgfx::TextureHandle texture) {
             Texture staging{bgfx::createTexture2D(W,H,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
-            check(bgfx::isValid(staging.value),"Glow/Bloom readback allocation failed.");
+            check(bgfx::isValid(staging.value),"Glow readback allocation failed.");
             auto result=std::make_shared<DecodedImage>(DecodedImage{W,H,std::vector<std::uint8_t>(std::size_t(W)*H*4)});retained.push_back(result);
             bgfx::blit(DiagnosticReadbackView,staging.value,0,0,texture,0,0,W,H);const auto ready=bgfx::readTexture(staging.value,result->rgba.data());
-            check(ready!=UINT32_MAX,"Glow/Bloom readback unsupported.");
+            check(ready!=UINT32_MAX,"Glow readback unsupported.");
             for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *result;}
-            renderer.drainPending(frame);throw std::runtime_error("Glow/Bloom readback timed out.");
+            renderer.drainPending(frame);throw std::runtime_error("Glow readback timed out.");
         };
         gameSettings.camera.position={0,0,4};gameSettings.camera.target={};gameSettings.exposure=1;
-        gameSettings.environment.glow={};gameSettings.environment.bloom={};gameSettings.environment.toneMapping=ToneMapping::Linear;
+        gameSettings.environment.glow={};gameSettings.environment.toneMapping=ToneMapping::Linear;
         emitterMaterials[0].emissive={32,4,.5f};instances[2].model.transform=math::scaling({.08f,.08f,1});
         game.instances=std::span(&instances[2],1);
         const auto capture=[&]{renderer.renderGame(game);check(renderer.glowStatus().empty(),renderer.glowStatus());return read(renderer.gameViewportTexture());};
         const auto base=capture();save(options.artifacts,"effects-off.png",base);
-        auto& bloom=gameSettings.environment.bloom;auto& glow=gameSettings.environment.glow;
-        bloom.enabled=true;bloom.strength=.6f;bloom.threshold=1;bloom.radius=1;
-        const auto bloomImage=capture();check(maximumDifference(base,bloomImage)>5,"Bloom created no halo around visible HDR emission.");
-        save(options.artifacts,"bloom-default.png",bloomImage);
-        bloom.enabled=false;glow.enabled=true;glow.strength=.6f;glow.radius=1;glow.threshold=1;
-        const auto glowImage=capture();check(maximumDifference(base,glowImage)>5,"Glow created no halo from explicit Lit emission.");
+        auto& glow=gameSettings.environment.glow;
+        glow.enabled=true;glow.strength=.6f;glow.radius=1;glow.threshold=1;
+        const auto glowImage=capture();check(maximumDifference(base,glowImage)>5,"Glow created no halo around visible HDR emission.");
         save(options.artifacts,"glow-default.png",glowImage);
-        glow.radius=8;const auto glowWide=capture();save(options.artifacts,"glow-spread-8.png",glowWide);continuousHalo(glowWide,"Maximum Glow Spread");glow.radius=1;
-        glow.enabled=false;bloom.enabled=true;bloom.radius=8;const auto bloomWide=capture();save(options.artifacts,"bloom-spread-8.png",bloomWide);
-        continuousHalo(bloomWide,"Maximum Bloom Spread");
-        bloom.radius=1;bloom.enabled=false;glow.enabled=true;
+        glow.radius=8;const auto glowWide=capture();save(options.artifacts,"glow-spread-8.png",glowWide);
+        continuousHalo(glowWide,"Maximum Glow Spread");glow.radius=1;
         gameSettings.environment.toneMapping=ToneMapping::Reinhard;
         glow.enabled=false;const auto blendBase=capture();glow.enabled=true;glow.blendMode=GlowBlendMode::Additive;const auto additive=capture();
         glow.blendMode=GlowBlendMode::Screen;const auto screen=capture();
@@ -269,41 +364,37 @@ void exercise(SDL_Window* window,const Options& options) {
         for(const auto* image:{&additive,&screen,&softLight,&replaced})for(std::size_t p=3;p<image->rgba.size();p+=4)
             check(image->rgba[p]==blendBase.rgba[p],"Glow blend mode changed presentation alpha.");
         glow.blendMode=GlowBlendMode::Additive;glow.mix=.5f;gameSettings.environment.toneMapping=ToneMapping::Linear;
-        glow.enabled=false;check(maximumDifference(capture(),base)==0,"Disabled effects did not restore exact original output.");
-        bloom.enabled=true;bloom.levels.fill(0);const auto zeroLevels=capture();check(maximumDifference(zeroLevels,base)==0,"Zero Bloom levels changed the frame.");
-        for(unsigned i=0;i<5;++i){renderer.renderGame(game);tick();}check(bgfx::getStats()->numCompute==0,"Zero Bloom levels still scheduled compute work.");
-        bloom.levels.fill(0);bloom.levels[0]=1;const auto tight=capture();const auto tightMetric=haloMetrics(tight,base);
-        bloom.levels.fill(0);bloom.levels[6]=1;const auto wide=capture();const auto wideMetric=haloMetrics(wide,base);
-        check(tightMetric["energy"].get<double>()>.01&&wideMetric["energy"].get<double>()>.01,"Isolated Bloom level produced no usable halo.");
-        check(wideMetric["rms_radius_pixels"].get<double>()>tightMetric["rms_radius_pixels"].get<double>()*1.5,"Bloom Level 7 did not produce a wider contribution than Level 1.");
-        save(options.artifacts,"bloom-level-1.png",tight);save(options.artifacts,"bloom-level-7.png",wide);
-        bloom.levels.fill(0);bloom.levels[2]=.25f;bloom.levels[4]=.25f;const auto normalized=capture();
-        bloom.levels[2]=.5f;bloom.levels[4]=.5f;check(maximumDifference(normalized,capture())<=1,"Scaling all Bloom level weights changed normalized intensity.");
-        bloom=BloomSettings{};bloom.enabled=true;bloom.strength=.6f;bloom.threshold=100000;
-        check(maximumDifference(base,capture())<=1,"Bloom leaked a below-threshold HDR source.");
-        bloom.threshold=1;bloom.strength=0;check(maximumDifference(base,capture())==0,"Zero Bloom intensity changed output.");
-        bloom.strength=.6f;bloom.radius=0;check(maximumDifference(base,capture())==0,"Zero Bloom spread changed output.");
-        bloom.radius=1;gameSettings.exposure=0;const auto zeroExposure=capture();bloom.enabled=false;
-        check(maximumDifference(zeroExposure,capture())==0,"Zero exposure left an exposed Bloom halo or matte.");gameSettings.exposure=1;
-        bloom.enabled=true;bloom.strength=1;bloom.threshold=1;bloom.softKnee=0;emitterMaterials[0].emissive={1,0,0};
-        const auto hardThreshold=capture();bloom.softKnee=1;const auto softThreshold=capture();
-        check(maximumDifference(hardThreshold,softThreshold)>1,"Bloom threshold softness did not change highlight onset.");
-        bloom=BloomSettings{};emitterMaterials[0].emissive={32,4,.5f};
-        // Bright reflected/direct radiance belongs to scene-wide Bloom; its
-        // Lit material emits no light into the independent Glow source.
+        glow.enabled=false;check(maximumDifference(capture(),base)==0,"Disabled Glow did not restore exact original output.");
+        glow.enabled=true;glow.levels.fill(0);const auto zeroLevels=capture();check(maximumDifference(zeroLevels,base)==0,"Zero Glow levels changed the frame.");
+        for(unsigned i=0;i<5;++i){renderer.renderGame(game);tick();}check(bgfx::getStats()->numCompute==0,"Zero Glow levels still scheduled compute work.");
+        glow.levels[0]=1;const auto tight=capture();const auto tightMetric=haloMetrics(tight,base);
+        glow.levels.fill(0);glow.levels[6]=1;const auto wide=capture();const auto wideMetric=haloMetrics(wide,base);
+        check(tightMetric["energy"].get<double>()>.01&&wideMetric["energy"].get<double>()>.01,"Isolated Glow level produced no usable halo.");
+        check(wideMetric["rms_radius_pixels"].get<double>()>tightMetric["rms_radius_pixels"].get<double>()*1.5,"Glow Level 7 did not produce a wider contribution than Level 1.");
+        save(options.artifacts,"glow-level-1.png",tight);save(options.artifacts,"glow-level-7.png",wide);
+        glow=GlowSettings{};glow.enabled=true;glow.strength=.6f;glow.threshold=100000;
+        check(maximumDifference(base,capture())<=1,"Glow leaked a below-threshold HDR source.");
+        glow.threshold=1;glow.strength=0;check(maximumDifference(base,capture())==0,"Zero Glow intensity changed output.");
+        glow.strength=.6f;glow.radius=0;check(maximumDifference(base,capture())==0,"Zero Glow spread changed output.");
+        glow.radius=1;gameSettings.exposure=0;const auto zeroExposure=capture();glow.enabled=false;
+        check(maximumDifference(zeroExposure,capture())==0,"Zero exposure left an exposed Glow halo or matte.");gameSettings.exposure=1;
+        glow.enabled=true;glow.strength=1;glow.threshold=1;glow.softKnee=0;emitterMaterials[0].emissive={1,0,0};
+        const auto hardThreshold=capture();glow.softKnee=1;const auto softThreshold=capture();
+        check(maximumDifference(hardThreshold,softThreshold)>1,"Glow threshold softness did not change highlight onset.");
+        // Glow collects the complete HDR scene, including nonemissive direct
+        // and reflected light, rather than a separate emission-only MRT.
+        glow=GlowSettings{};glow.strength=.6f;
         emitterMaterials[0].emissive={};emitterMaterials[0].baseColor={1,1,1,1};emitterMaterials[0].metallic=0;emitterMaterials[0].roughness=.2f;
         DirectionalLight sun;sun.direction={0,0,-1};sun.intensity=100;sun.castShadows=false;game.directionalLights=std::span(&sun,1);
         const auto brightBase=capture();glow.enabled=true;const auto reflectedGlow=capture();
-        check(maximumDifference(brightBase,reflectedGlow)<=1,"Nonemissive Lit/direct radiance contaminated Glow.");
-        glow.enabled=false;bloom.enabled=true;const auto reflectedBloom=capture();
-        check(maximumDifference(brightBase,reflectedBloom)>5,"Bloom ignored bright nonemissive Lit/direct radiance.");save(options.artifacts,"bloom-lit-highlight.png",reflectedBloom);
-        game.directionalLights={};emitterMaterials[0].baseColor={0,0,0,1};emitterMaterials[0].emissive={32,32,32};bloom.enabled=false;
-        glow.enabled=true;glow.tint={1,0,0};const auto tinted=capture();
+        check(maximumDifference(brightBase,reflectedGlow)>5,"Glow ignored bright nonemissive Lit/direct radiance.");
+        save(options.artifacts,"glow-lit-highlight.png",reflectedGlow);
+        game.directionalLights={};emitterMaterials[0].baseColor={0,0,0,1};emitterMaterials[0].emissive={32,32,32};
+        glow.tint={1,0,0};const auto tinted=capture();
         double red{},green{},blue{};for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x)if(std::abs(int(x)-128)>16||std::abs(int(y)-128)>16) {
             const auto p=(std::size_t(y)*W+x)*4;red+=tinted.rgba[p];green+=tinted.rgba[p+1];blue+=tinted.rgba[p+2];}
-        check(red>100&&green<red*.02&&blue<red*.02,"Glow tint altered the emitter without coloring its independent halo.");
-        glow.tint={1,1,1};
-        emitterMaterials[0].emissive={32,4,.5f};
+        check(red>100&&green<red*.02&&blue<red*.02,"Glow tint failed to color the halo independently from the source.");
+        glow.tint={1,1,1};emitterMaterials[0].emissive={32,4,.5f};
         glow.saturation=0;const auto desaturated=capture();unsigned neutralHaloPixels{};
         for(unsigned y=0;y<H;++y)for(unsigned x=0;x<W;++x)if(std::abs(int(x)-128)>16||std::abs(int(y)-128)>16) {
             const auto p=(std::size_t(y)*W+x)*4;if(desaturated.rgba[p]>2){++neutralHaloPixels;
@@ -315,15 +406,14 @@ void exercise(SDL_Window* window,const Options& options) {
         instances[2].blend=MaterialBlend::Alpha;instances[2].opacity=.25f;
         glow.enabled=false;const auto alphaBase=capture();glow.enabled=true;const auto alphaGlow=capture();const auto alphaMetric=haloMetrics(alphaGlow,alphaBase);
         const double alphaRatio=alphaMetric["energy"].get<double>()/opaqueMetric["energy"].get<double>();
-        check(alphaRatio>.12&&alphaRatio<.4,"Transparent material Glow did not follow its visible coverage; halo energy ratio="+std::to_string(alphaRatio));
+        check(alphaRatio>.12&&alphaRatio<.4,"Transparent material Glow did not follow visible coverage; halo energy ratio="+std::to_string(alphaRatio));
         instances[2].blend=MaterialBlend::Opaque;instances[2].opacity=1;
-        // Self-lit Unlit base radiance is deliberately an eligible Glow source.
         emitterMaterials[0].emissive={};emitterMaterials[0].baseColor={32,4,.5f,1};instances[2].shading=MaterialShading::Unlit;
         glow.enabled=false;const auto unlitBase=capture();glow.enabled=true;
         check(maximumDifference(unlitBase,capture())>5,"Visible Unlit self-lit radiance was missing from Glow.");
         emitterMaterials[0].baseColor={0,0,0,1};emitterMaterials[0].emissive={32,4,.5f};instances[2].shading=MaterialShading::StandardPbr;
-        // Additive particles keep zero scene alpha but must still publish their
-        // visible colored radiance for Glow, including the supported HDR range.
+        // Additive particles keep zero scene alpha but their visible HDR
+        // radiance is still part of the scene supplied to Glow.
         RenderParticle spark;spark.position={};spark.size=.12f;spark.color={64,0,0,1};spark.billboardMode=ParticleBillboardMode::Enabled;
         RenderParticleMaterial sparkMaterial;sparkMaterial.blend=MaterialBlend::Additive;sparkMaterial.shading=MaterialShading::Unlit;sparkMaterial.baseColor={64,0,0,1};
         game.instances={};game.particles=std::span(&spark,1);game.particleMaterials=std::span(&sparkMaterial,1);
@@ -338,56 +428,48 @@ void exercise(SDL_Window* window,const Options& options) {
         glow.tint={};check(maximumDifference(grayBackdrop,capture())<=1,"Black Soft Light Glow changed uncovered gray matte.");
         glow.tint={1,1,1};glow.blendMode=GlowBlendMode::Additive;appearance.backgroundSrgb={};gameSettings.environment.background.color={};renderer.setAppearance(appearance);
         // Fallback material colors are bounded to 1e6. Generated particle
-        // graphs cover the 1e11 ParticleColor contract in native_resource_tests;
-        // the direct FP32 test above independently verifies 1e11×256 transport.
+        // graphs cover 1e11 in native_resource_tests; the FP32 test above
+        // independently verifies transport at radiance 1e11 and exposure 256.
         sparkMaterial.baseColor[0]=1e6f;const auto hdrSpark=capture();
         check(hdrSpark.rgba[(std::size_t(128)*W+155)*4]>=250,"Maximum supported fallback particle radiance overflowed the FP32 Glow chain.");
         save(options.artifacts,"glow-hdr-particle.png",hdrSpark);game.particles={};game.particleMaterials={};game.instances=std::span(&instances[2],1);
-        // Fully covered emission is not a source. The black occluder is closer
-        // to the camera and larger than the complete emitting primitive.
         surfaceMaterials[0].baseColor={0,0,0,1};surfaceMaterials[0].emissive={};
         instances[0].model.transform=math::translation({0,0,.3f})*math::scaling({.3f,.3f,1});
         std::array occluded{instances[2],instances[0]};game.instances=occluded;
-        const auto hiddenGlow=capture();glow.enabled=false;bloom.enabled=true;const auto hiddenBloom=capture();bloom.enabled=false;const auto hiddenBase=capture();
-        check(maximumDifference(hiddenBase,hiddenGlow)<=1&&maximumDifference(hiddenBase,hiddenBloom)<=1,"Occluded emission leaked into Glow/Bloom.");
+        const auto hiddenGlow=capture();glow.enabled=false;const auto hiddenBase=capture();
+        check(maximumDifference(hiddenBase,hiddenGlow)<=1,"Occluded emission leaked into Glow.");
         game.instances=std::span(&instances[2],1);emitterMaterials[0].emissive={32,4,.5f};
-        glow.enabled=true;glow.coreHalo=0;const auto core=capture();glow.coreHalo=1;const auto halo=capture();
-        const auto coreMetric=haloMetrics(core,base),haloMetric=haloMetrics(halo,base);
-        check(haloMetric["rms_radius_pixels"].get<double>()>coreMetric["rms_radius_pixels"].get<double>()*1.2,"Glow Core/Halo balance did not reshape the halo.");
-        glow.enabled=false;bloom.enabled=true;bloom.levels.fill(0);bloom.levels[3]=1;bloom.anamorphic=1;const auto horizontal=capture();
-        bloom.anamorphic=-1;const auto vertical=capture();const auto horizontalMetric=haloMetrics(horizontal,base),verticalMetric=haloMetrics(vertical,base);
+        glow.enabled=true;glow.levels.fill(0);glow.levels[3]=1;glow.anamorphic=1;const auto horizontal=capture();
+        glow.anamorphic=-1;const auto vertical=capture();const auto horizontalMetric=haloMetrics(horizontal,base),verticalMetric=haloMetrics(vertical,base);
         check(horizontalMetric["horizontal_rms_pixels"].get<double>()>horizontalMetric["vertical_rms_pixels"].get<double>()*1.2&&
-            verticalMetric["vertical_rms_pixels"].get<double>()>verticalMetric["horizontal_rms_pixels"].get<double>()*1.2,"Bloom anamorphic stretch did not rotate its dominant axis.");
+            verticalMetric["vertical_rms_pixels"].get<double>()>verticalMetric["horizontal_rms_pixels"].get<double>()*1.2,"Glow anamorphic stretch did not rotate its dominant axis.");
         const auto emitterSettings=gameSettings;
         game.instances={};gameSettings.environment.enabled=true;gameSettings.environment.source=EnvironmentSource::ProceduralSky;
         gameSettings.environment.background.show=true;gameSettings.environment.background.overrideColor=false;
         auto& sky=gameSettings.environment.procedural;sky.skyTop=sky.skyHorizon=sky.groundBottom=sky.groundHorizon={};sky.sunDiameter=2;sky.sunHaloExtent=2;
         gameSettings.proceduralSun.enabled=true;gameSettings.proceduralSun.direction=math::normalized(Vec3{0,.05f,-1});
         gameSettings.proceduralSun.color={1,.8f,.5f};gameSettings.proceduralSun.intensity=32;
-        bloom=BloomSettings{};glow=GlowSettings{};const auto sunBase=capture();bloom.enabled=true;bloom.strength=.6f;const auto sunBloom=capture();
-        check(maximumDifference(sunBase,sunBloom)>5,"Bloom ignored the visible procedural sun.");
-        bloom.enabled=false;glow.enabled=true;check(maximumDifference(sunBase,capture())<=1,"Sun/sky radiance contaminated emission-only Glow.");
-        game.instances=std::span(&instances[0],1);glow.enabled=false;const auto coveredSunBase=capture();bloom.enabled=true;const auto coveredSunBloom=capture();
-        check(maximumDifference(coveredSunBase,coveredSunBloom)<=1,"Fully occluded sun continued supplying Bloom.");
-        save(options.artifacts,"bloom-visible-sun.png",sunBloom);save(options.artifacts,"bloom-covered-sun.png",coveredSunBloom);
+        glow=GlowSettings{};const auto sunBase=capture();glow.enabled=true;glow.strength=.6f;const auto sunGlow=capture();
+        check(maximumDifference(sunBase,sunGlow)>5,"Glow ignored the visible procedural sun.");
+        game.instances=std::span(&instances[0],1);glow.enabled=false;const auto coveredSunBase=capture();glow.enabled=true;const auto coveredSunGlow=capture();
+        check(maximumDifference(coveredSunBase,coveredSunGlow)<=1,"Fully occluded sun continued supplying Glow.");
+        save(options.artifacts,"glow-visible-sun.png",sunGlow);save(options.artifacts,"glow-covered-sun.png",coveredSunGlow);
         gameSettings=emitterSettings;game.instances=std::span(&instances[2],1);
-        // Exercise the real combined source layout, including opaque GI donor
-        // lanes, prior-world metadata, visible emission and depth attachments.
-        gameSettings.environment.ssgi.enabled=true;glow.enabled=true;bloom.enabled=true;
-        const auto giGlowBloom=capture();check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
-        check(renderer.ssgiResidentBytes()>0&&maximumDifference(base,giGlowBloom)>5,"SSGI + Glow + Bloom bypassed its donor/emission resources or halo.");
-        glow.enabled=false;const auto giBloom=capture();check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
-        check(renderer.ssgiResidentBytes()>0&&maximumDifference(base,giBloom)>5,"Disabling Glow broke the retained SSGI/Bloom framebuffer layout.");
-        gameSettings.environment.ssgi.enabled=false;
-        // Independent view owners must not reuse the other viewport's source,
-        // target chain or artistic settings.
-        sceneSettings=gameSettings;sceneSettings.environment.glow={};sceneSettings.environment.bloom={};scene.instances=game.instances;
+        // GI retains its opaque donor and prior-world metadata independently
+        // from the full-scene HDR source consumed by Glow after lighting.
+        gameSettings.environment.ssgi.enabled=true;glow.enabled=true;
+        const auto giGlow=capture();check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
+        check(renderer.ssgiResidentBytes()>0&&maximumDifference(base,giGlow)>5,"SSGI + Glow bypassed its donor resources or halo.");
+        glow.enabled=false;capture();check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
+        check(renderer.ssgiResidentBytes()>0,"Disabling Glow invalidated the retained SSGI resources.");
+        gameSettings.environment.ssgi.enabled=false;glow.enabled=true;
+        sceneSettings=gameSettings;sceneSettings.environment.glow={};scene.instances=game.instances;
         const auto single=capture();renderer.render(scene);renderer.renderGame(game);const auto isolatedScene=read(renderer.viewportTexture()),isolatedGame=read(renderer.gameViewportTexture());
-        check(maximumDifference(base,isolatedScene)<=1&&maximumDifference(single,isolatedGame)<=1,"Scene/Game Glow/Bloom settings or resources leaked between views.");
-        Json quality{{"bloom_level_1",tightMetric},{"bloom_level_7",wideMetric},{"glow_core",coreMetric},{"glow_halo",haloMetric},{"transparent_emitter_halo_ratio",alphaRatio},
-            {"bloom_horizontal",horizontalMetric},{"bloom_vertical",verticalMetric},{"checks","disabled/zero-work, level scale+normalization, threshold/exposure, emission selection, opaque occlusion, tint, core/halo, anamorphic and Scene/Game isolation"}};
-        if(!options.artifacts.empty()){fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-bloom-quality.json");output<<quality.dump(2)<<'\n';}
-        std::cout<<"GLOW_BLOOM_QUALITY_JSON "<<quality.dump()<<'\n';
+        check(maximumDifference(base,isolatedScene)<=1&&maximumDifference(single,isolatedGame)<=1,"Scene/Game Glow settings or resources leaked between views.");
+        Json quality{{"glow_level_1",tightMetric},{"glow_level_7",wideMetric},{"transparent_emitter_halo_ratio",alphaRatio},
+            {"glow_horizontal",horizontalMetric},{"glow_vertical",verticalMetric},{"checks","disabled/zero-work, linear FP32 level response/additivity/continuity, threshold/exposure, full-scene HDR eligibility, opaque occlusion, tint, saturation, anamorphic and Scene/Game isolation"}};
+        if(!options.artifacts.empty()){fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-quality.json");output<<quality.dump(2)<<'\n';}
+        std::cout<<"GLOW_QUALITY_JSON "<<quality.dump()<<'\n';
     }
     resources.stop();renderer.drainPending(frame);
 }
@@ -395,11 +477,13 @@ void exercise(SDL_Window* window,const Options& options) {
 int main(int argc,char** argv) {
     try {Options options;for(int i=1;i<argc;++i){const std::string_view option=argv[i];
         const auto value=[&] {check(i+1<argc,"Missing option value.");return std::string(argv[++i]);};
-        if(option=="--benchmark")options.benchmark=true;else if(option=="--artifacts")options.artifacts=value();
+        if(option=="--benchmark")options.benchmark=true;else if(option=="--level-response-only")options.levelResponseOnly=true;
+        else if(option=="--artifacts")options.artifacts=value();
         else if(option=="--warmup")options.warmup=std::stoul(value());else if(option=="--samples")options.samples=std::stoul(value());
         else throw std::runtime_error("Unknown argument: "+std::string(option));}
         check(!options.benchmark||!options.artifacts.empty(),"Benchmark requires --artifacts.");
-        Sdl sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson Glow/Bloom regression",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
+        check(!options.benchmark||!options.levelResponseOnly,"Benchmark and level-response-only are mutually exclusive.");
+        Sdl sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson Glow regression",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());exercise(window.get(),options);return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

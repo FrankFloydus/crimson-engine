@@ -198,7 +198,7 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v29")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v30")!=std::string::npos,
             "Generated material identity does not invalidate pre-emission-publication bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
@@ -210,7 +210,7 @@ void cpuChecks() {
         };
         const bool surface=variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle;
         const bool readableDepth=variant.pass==MaterialGraphPass::PointShadow || variant.pass==MaterialGraphPass::DirectionalShadow;
-        check(has("u_glowSource")==surface,"Visible emission publication uniform leaked out of surface materials or is absent.");
+        check(!has("u_glowSource"),"Removed emission publication remained in the generated material manifest.");
         const bool motionDepth=variant.pass==MaterialGraphPass::PointShadow;
         const auto inputLine=variant.source.substr(0,variant.source.find('\n'));
         check((inputLine.find(", v_tangent")!=std::string::npos)==bool(surface||motionDepth),
@@ -630,7 +630,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
     std::ifstream mrtTemplateInput(source/"material_graph_model.sh");
     check(bool(mrtTemplateInput),"SSGI render target test template is unavailable.");
     const std::string mrtTemplate{std::istreambuf_iterator<char>(mrtTemplateInput),std::istreambuf_iterator<char>()};
-    for(unsigned corruption:{0u,1u,2u}) {
+    for(unsigned corruption:{0u,1u}) {
         const bool missingTargets=corruption==1;
         auto changed=mrtTemplate;
         if(missingTargets) {
@@ -638,10 +638,10 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
             check(body!=std::string::npos,"SSGI render target test lost its entry point.");
             changed.insert(body+1,"\n    vec4 discardedWorld, discardedCharacter, discardedGeometry;\n");
         }
-        for(unsigned target=corruption==2?4u:missingTargets?1u:3u;target<=(corruption==2?4u:3u);++target) {
+        for(unsigned target=missingTargets?1u:3u;target<=3u;++target) {
             const auto before="gl_FragData["+std::to_string(target)+"]";
             const std::string after=missingTargets?(target==1?"discardedWorld":target==2?"discardedCharacter":"discardedGeometry"):
-                corruption==2?"gl_FragData[5]":"gl_FragData[4]";
+                "gl_FragData[4]";
             std::size_t at{};
             while((at=changed.find(before,at))!=std::string::npos){changed.replace(at,before.size(),after);at+=after.size();}
         }
@@ -653,7 +653,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
         const auto fragment=compileShader(config,recipe);std::string diagnostic;
         check(!preflightGeneratedShaderPair(mrtVertex.bytes,fragment.bytes,mrtVertex.bytes,mrtVariant.manifest,diagnostic)&&
             diagnostic.find("render target")!=std::string::npos,
-            "Generated material admitted missing or reassigned lighting/emission render targets.");
+            "Generated material admitted missing or reassigned lighting render targets.");
         check(!preflightShaderPair(mrtVertex.bytes,fragment.bytes,mrtVertex.bytes,mrtFragment.bytes,diagnostic),
             "Shader reload admitted a changed fragment render target signature.");
     }

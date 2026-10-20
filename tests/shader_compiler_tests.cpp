@@ -363,9 +363,9 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
             "Changed SSAO publication UAV slot escaped atomic reload validation.");
         write(shadowSource/"cs_ssao_publish.sc",originalPublish);
     }
-    const auto glowFragment=compileShader(shadows,"cs_glow_bloom_downsample");
-    require(dependency(glowFragment,"glow_bloom_compute.sh"),"Glow kernel was absent from runtime reload dependencies.");
-    const auto warmGlow=compileShader(shadows,"cs_glow_bloom_downsample");
+    const auto glowFragment=compileShader(shadows,"cs_glow_downsample");
+    require(dependency(glowFragment,"glow_compute.sh"),"Glow kernel was absent from runtime reload dependencies.");
+    const auto warmGlow=compileShader(shadows,"cs_glow_downsample");
     require(warmGlow.bytes==glowFragment.bytes && warmGlow.fingerprint==glowFragment.fingerprint,
         "Warm Glow shader cache changed code or fingerprint.");
     auto mapping=read(shadowSource/"material_mapping.sh");const auto originalMapping=mapping;

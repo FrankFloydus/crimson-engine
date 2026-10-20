@@ -627,15 +627,14 @@ void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
     const auto id=document.createEnvironment("Glow");
     auto original=*document.scene().find(id);
-    require(!original.environment->environment.glow.enabled && !original.environment->environment.bloom.enabled,
-        "New environments unexpectedly enabled Glow/Bloom.");
+    require(!original.environment->environment.glow.enabled,"New environments unexpectedly enabled Glow.");
     auto edited=original;edited.environment->environment.enabled=false;
     edited.environment->environment.glow={true,2.5f,3.25f,.75f};
-    edited.environment->environment.glow.tint={.2f,.6f,.9f};edited.environment->environment.glow.coreHalo=.85f;
+    edited.environment->environment.glow.tint={.2f,.6f,.9f};
     edited.environment->environment.glow.saturation=1.4f;edited.environment->environment.glow.softKnee=.2f;
     edited.environment->environment.glow.blendMode=GlowBlendMode::Screen;edited.environment->environment.glow.mix=.3f;
-    auto& bloom=edited.environment->environment.bloom;bloom={true,.35f,1.8f,.4f};bloom.tint={.7f,.8f,.9f};
-    bloom.softKnee=.8f;bloom.anamorphic=-.35f;bloom.quality=BloomQuality::Low;bloom.levels={0,.2f,.4f,0,.8f,.6f,1};
+    auto& glow=edited.environment->environment.glow;glow.anamorphic=-.35f;glow.quality=GlowQuality::Low;
+    glow.levels={0,.2f,.4f,0,.8f,.6f,1};
     require(document.begin("Tune Glow"),document.status());
     const auto update=[&](auto& records,auto&){for(auto& record:records)if(record.id==id)record=edited;};
     require(document.update(update),document.status());
@@ -658,8 +657,8 @@ void environmentGlowHistoryAndMigration() {
         const auto asset="assets/scenes/legacy-glow-"+std::to_string(version)+".crimson-scene";
         const auto contents=legacy.dump();writeText(project.root/asset,contents);
         require(reopened.load(asset),reopened.status());
-        require(!resolveEnvironment(reopened.scene()).environment.glow.enabled && !resolveEnvironment(reopened.scene()).environment.bloom.enabled &&
-            readText(project.root/asset)==contents,"An older scene enabled Glow/Bloom or was rewritten on load.");
+        require(!resolveEnvironment(reopened.scene()).environment.glow.enabled && readText(project.root/asset)==contents,
+            "An older scene enabled Glow or was rewritten on load.");
     }
     auto oldGlow=Json::parse(saved);
     for(auto& entity:oldGlow["entities"])if(entity.contains("environment")) {
@@ -669,12 +668,12 @@ void environmentGlowHistoryAndMigration() {
     const auto oldGlowAsset="assets/scenes/scene-wide-glow.crimson-scene";const auto oldGlowText=oldGlow.dump();
     writeText(project.root/oldGlowAsset,oldGlowText);require(reopened.load(oldGlowAsset),reopened.status());
     const auto migrated=resolveEnvironment(reopened.scene()).environment;
-    require(migrated.glow==GlowSettings{} && migrated.bloom.enabled && migrated.bloom.strength==2.75f &&
-        migrated.bloom.radius==4.5f && migrated.bloom.threshold==.6f && !reopened.dirty() &&
-        readText(project.root/oldGlowAsset)==oldGlowText,"Scene-wide Glow migration lost authored Bloom or rewrote/marked the scene dirty.");
+    require(migrated.glow.enabled && migrated.glow.strength==2.75f && migrated.glow.radius==4.5f &&
+        migrated.glow.threshold==.6f && migrated.glow.levels==GlowSettings{}.levels && !reopened.dirty() &&
+        readText(project.root/oldGlowAsset)==oldGlowText,"Legacy Glow migration lost its authored tuning or rewrote/marked the scene dirty.");
     require(reopened.save(),reopened.status());
     const auto converted=Json::parse(readText(project.root/oldGlowAsset));
-    require(converted.at("version")==23,"Glow/Bloom introduced an unnecessary scene version change.");
+    require(converted.at("version")==23,"Glow introduced an unnecessary scene version change.");
     const auto roundTrip=readSceneSnapshot(project.root,oldGlowAsset);
     for(const auto& entity:roundTrip.records)if(entity.environment)
         require(entity.environment->environment==migrated,"Explicit save reapplied the old Glow conversion.");
@@ -690,49 +689,49 @@ void environmentGlowHistoryAndMigration() {
     require(!reopened.load(invalidAsset),"Malformed Glow settings replaced a working scene.");
     sameRecords(before,reopened.scene().records());
 }
-void glowBloomValidationAndLevelContribution() {
-    BloomSettings bloom;bloom.enabled=true;
-    const auto normalized=bloomLevelWeights(bloom);
-    require(std::abs(std::accumulate(normalized.begin(),normalized.end(),0.f)-1.f)<1e-6f,
-        "Default Bloom levels did not preserve a normalized light-spread profile.");
-    bloom.levels={0,0,0,0,0,0,1};
-    require(bloomLevelWeights(bloom)==bloom.levels,"An isolated Bloom level lost its exact contribution.");
-    bloom.levels.fill(0);
-    require(validBloomSettings(bloom) && bloomLevelWeightSum(bloom)==0 && bloomLevelWeights(bloom)==bloom.levels,
-        "Zero Bloom levels must remain valid and resolve to a disabled contribution.");
-    EnvironmentSettings environment;environment.glow={true,2,3,.5f};environment.bloom=bloom;
+void glowValidationAndLevelContribution() {
+    EnvironmentSettings environment;environment.glow={true,2,3,.5f};
+    auto& glow=environment.glow;glow.tint={.3f,.5f,.7f};glow.saturation=1.5f;glow.softKnee=.25f;
+    glow.blendMode=GlowBlendMode::Mix;glow.mix=.3f;glow.anamorphic=.6f;glow.quality=GlowQuality::Low;
+    glow.levels={.1f,.2f,.3f,.4f,.5f,.6f,.7f};
     const auto json=environmentSettingsJson(environment);
-    require(json.at("glow").at("source")=="Emission" && json.contains("bloom") &&
-        readEnvironmentSettings(json)==environment,"Current Glow/Bloom representation failed its explicit-source round trip.");
+    require(json.at("glow").at("source")=="Scene" && !json.contains("bloom") && !json.at("glow").contains("coreHalo") &&
+        readEnvironmentSettings(json)==environment,"Current Glow representation failed its full-scene, single-effect round trip.");
+    // Isolated gains must retain their amplitude instead of self-normalizing
+    // every positive value to one during serialization or scene extraction.
+    for(std::size_t level=0;level<GlowLevelCount;++level)for(float gain:{0.f,.01f,.25f,.5f,.75f,1.f}) {
+        auto authored=environment;authored.glow.levels.fill(0);authored.glow.levels[level]=gain;
+        const auto decoded=readEnvironmentSettings(environmentSettingsJson(authored));
+        require(decoded.glow.levels==authored.glow.levels && validGlowSettings(decoded.glow),
+            "A direct Glow level gain was normalized, quantized or rejected.");
+    }
     auto missingBlend=json;missingBlend["glow"].erase("blendMode");missingBlend["glow"].erase("mix");
     require(readEnvironmentSettings(missingBlend).glow.blendMode==GlowBlendMode::Additive &&
         readEnvironmentSettings(missingBlend).glow.mix==.5f,"Missing Glow blend tuning changed the default Additive composition.");
-    for(const char* effect:{"glow","bloom"})for(const auto* field:{"strength","radius","threshold","softKnee"}) {
-        auto bad=json;bad[effect][field]="1";rejects([&]{readEnvironmentSettings(bad);});
-        bad=json;bad[effect][field]=-1;rejects([&]{readEnvironmentSettings(bad);});
+    auto missingLevels=json;missingLevels["glow"].erase("levels");
+    require(readEnvironmentSettings(missingLevels).glow.levels==GlowSettings{}.levels,"Missing Glow levels did not retain defaults.");
+    for(const auto* field:{"strength","radius","threshold","softKnee","saturation"}) {
+        auto bad=json;bad["glow"][field]="1";rejects([&]{readEnvironmentSettings(bad);});
+        bad=json;bad["glow"][field]=-1;rejects([&]{readEnvironmentSettings(bad);});
     }
-    for(const char* effect:{"glow","bloom"}) {
-        auto bad=json;bad[effect]["enabled"]=1;rejects([&]{readEnvironmentSettings(bad);});
-        bad=json;bad[effect]["tint"]={1,2,1};rejects([&]{readEnvironmentSettings(bad);});
-        bad=json;bad[effect]["tint"]={1,true,1};rejects([&]{readEnvironmentSettings(bad);});
-    }
-    for(std::size_t level=0;level<BloomLevelCount;++level)for(const Json value:{Json(-.1),Json(1.1),Json(true),Json("1")}) {
-        auto bad=json;bad["bloom"]["levels"][level]=value;rejects([&]{readEnvironmentSettings(bad);});
+    auto bad=json;bad["glow"]["enabled"]=1;rejects([&]{readEnvironmentSettings(bad);});
+    bad=json;bad["glow"]["tint"]={1,2,1};rejects([&]{readEnvironmentSettings(bad);});
+    bad=json;bad["glow"]["tint"]={1,true,1};rejects([&]{readEnvironmentSettings(bad);});
+    for(std::size_t level=0;level<GlowLevelCount;++level)for(const Json value:{Json(-.1),Json(1.1),Json(true),Json("1")}) {
+        bad=json;bad["glow"]["levels"][level]=value;rejects([&]{readEnvironmentSettings(bad);});
     }
     for(const Json levels:{Json::array(),Json::array({0,0,0,0,0,0}),Json::array({0,0,0,0,0,0,0,0})}) {
-        auto bad=json;bad["bloom"]["levels"]=levels;rejects([&]{readEnvironmentSettings(bad);});
+        bad=json;bad["glow"]["levels"]=levels;rejects([&]{readEnvironmentSettings(bad);});
     }
     for(const Json quality:{Json(-1),Json(2),Json(.5),Json(true)}) {
-        auto bad=json;bad["bloom"]["quality"]=quality;rejects([&]{readEnvironmentSettings(bad);});
+        bad=json;bad["glow"]["quality"]=quality;rejects([&]{readEnvironmentSettings(bad);});
     }
     for(const Json stretch:{Json(-1.1),Json(1.1),Json("0")}) {
-        auto bad=json;bad["bloom"]["anamorphic"]=stretch;rejects([&]{readEnvironmentSettings(bad);});
+        bad=json;bad["glow"]["anamorphic"]=stretch;rejects([&]{readEnvironmentSettings(bad);});
     }
-    for(const auto* field:{"coreHalo","saturation"}) {
-        auto bad=json;bad["glow"][field]=-1;rejects([&]{readEnvironmentSettings(bad);});
-        bad=json;bad["glow"][field]=3;rejects([&]{readEnvironmentSettings(bad);});
+    for(const Json source:{Json("Unknown"),Json(0),Json(true),Json(nullptr)}) {
+        bad=json;bad["glow"]["source"]=source;rejects([&]{readEnvironmentSettings(bad);});
     }
-    auto bad=json;bad["glow"]["source"]="Scene";rejects([&]{readEnvironmentSettings(bad);});
     for(const Json mode:{Json("Screen "),Json("Soft Light"),Json("screen"),Json("Unknown"),Json(0),Json(true),Json(nullptr)}) {
         bad=json;bad["glow"]["blendMode"]=mode;rejects([&]{readEnvironmentSettings(bad);});
     }
@@ -743,10 +742,92 @@ void glowBloomValidationAndLevelContribution() {
         auto broken=environment;broken.glow.blendMode=mode;rejects([&]{environmentSettingsJson(broken);});
     }
     for(float invalid:{std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
-        auto broken=environment;broken.bloom.levels[3]=invalid;rejects([&]{environmentSettingsJson(broken);});
+        auto broken=environment;broken.glow.levels[3]=invalid;rejects([&]{environmentSettingsJson(broken);});
         broken=environment;broken.glow.tint[1]=invalid;rejects([&]{environmentSettingsJson(broken);});
         broken=environment;broken.glow.mix=invalid;rejects([&]{environmentSettingsJson(broken);});
+        broken=environment;broken.glow.anamorphic=invalid;rejects([&]{environmentSettingsJson(broken);});
     }
+}
+void glowSingleEffectMigration() {
+    const auto nearLevels=[](const auto& actual,const auto& expected) {
+        for(std::size_t level=0;level<GlowLevelCount;++level)
+            require(std::abs(actual[level]-expected[level])<1e-6f,"Migrated Glow level profile changed.");
+    };
+    const Json emission={{"source","Emission"},{"enabled",true},{"strength",2.25f},{"radius",3.5f},{"threshold",.6f},
+        {"tint",{.3f,.5f,.7f}},{"coreHalo",.75f},{"saturation",1.4f},{"softKnee",.2f},{"blendMode","Screen"},{"mix",.35f}};
+    const Json bloom={{"enabled",true},{"strength",.4f},{"radius",1.5f},{"threshold",.8f},{"tint",{.8f,.6f,.4f}},
+        {"softKnee",.7f},{"anamorphic",-.4f},{"quality",0},{"levels",{0,.2f,.4f,0,.8f,.6f,1}}};
+    const std::array<float,GlowLevelCount> normalizedBloom{0,.2f/3,.4f/3,0,.8f/3,.6f/3,1.f/3};
+    auto old=Json{{"glow",emission},{"bloom",bloom}};const auto original=old;
+    const auto migrated=readEnvironmentSettings(old).glow;
+    require(migrated.enabled && migrated.strength==.4f && migrated.radius==1.5f && migrated.threshold==.8f &&
+        migrated.tint==Vec3{.8f,.6f,.4f} && migrated.softKnee==.7f && migrated.anamorphic==-.4f &&
+        migrated.quality==GlowQuality::Low && migrated.blendMode==GlowBlendMode::Additive && old==original,
+        "Active full-scene Bloom did not take precedence or migration modified its input.");
+    nearLevels(migrated.levels,normalizedBloom);
+    const auto current=environmentSettingsJson(readEnvironmentSettings(old));
+    require(current.at("glow").at("source")=="Scene" && !current.contains("bloom") && !current.at("glow").contains("coreHalo") &&
+        readEnvironmentSettings(current).glow==migrated,"Explicit Glow save retained a removed effect or reapplied conversion.");
+    auto oldInactiveBloom=old;oldInactiveBloom["bloom"]["enabled"]=false;
+    const auto fromEmission=readEnvironmentSettings(oldInactiveBloom).glow;
+    require(fromEmission.enabled && fromEmission.strength==2.25f && fromEmission.radius==3.5f && fromEmission.threshold==.6f &&
+        fromEmission.tint==Vec3{.3f,.5f,.7f} && fromEmission.saturation==1.4f && fromEmission.softKnee==.2f &&
+        fromEmission.blendMode==GlowBlendMode::Screen && fromEmission.mix==.35f,
+        "Inactive Bloom discarded the active emission Glow's artistic tuning.");
+    nearLevels(fromEmission.levels,std::array<float,GlowLevelCount>{.1625f,.0775f,.085f,.1125f,.1875f,.1875f,.1875f});
+    for(float balance:{0.f,.5f,1.f}) {
+        auto onlyEmission=Json{{"glow",emission}};onlyEmission["glow"]["coreHalo"]=balance;
+        const auto converted=readEnvironmentSettings(onlyEmission).glow;
+        constexpr std::array<float,GlowLevelCount> core{.65f,.25f,.10f,0,0,0,0},halo{0,.02f,.08f,.15f,.25f,.25f,.25f};
+        auto expected=core;for(std::size_t level=0;level<GlowLevelCount;++level)expected[level]+=(halo[level]-core[level])*balance;
+        nearLevels(converted.levels,expected);
+    }
+    auto bothInactive=oldInactiveBloom;bothInactive["glow"]["enabled"]=false;
+    auto disabled=readEnvironmentSettings(bothInactive).glow;
+    require(!disabled.enabled && disabled.strength==.4f && disabled.anamorphic==-.4f,
+        "Disabled old effects did not preserve full-scene tuning.");nearLevels(disabled.levels,normalizedBloom);
+    for(const auto* field:{"strength","radius"}) {
+        auto zero=old;zero["bloom"][field]=0;
+        require(readEnvironmentSettings(zero).glow==fromEmission,"A zero-contribution Bloom hid active Glow tuning.");
+    }
+    auto zeroBloom=old;zeroBloom["bloom"]["levels"]={0,0,0,0,0,0,0};
+    require(readEnvironmentSettings(zeroBloom).glow==fromEmission,"All-zero old Bloom hid active Glow tuning.");
+    zeroBloom["glow"]["enabled"]=false;
+    const auto empty=readEnvironmentSettings(zeroBloom).glow;
+    require(empty.enabled && empty.levels==std::array<float,GlowLevelCount>{},"Zero old Bloom gained a halo during conversion.");
+    auto zeroMix=oldInactiveBloom;zeroMix["glow"]["blendMode"]="Mix";zeroMix["glow"]["mix"]=0;
+    require(!readEnvironmentSettings(zeroMix).glow.enabled && readEnvironmentSettings(zeroMix).glow.strength==.4f,
+        "Zero-mix Glow hid the old inactive Bloom tuning.");
+    const auto onlyBloom=readEnvironmentSettings(Json{{"bloom",bloom}}).glow;
+    require(onlyBloom==migrated,"Bloom-only legacy files did not migrate consistently.");
+    auto oldDefaultEmission=Json{{"glow",{{"source","Emission"}}}};
+    require(readEnvironmentSettings(oldDefaultEmission).glow.strength==.8f,"Old missing Glow intensity lost its previous default.");
+    auto sourceScene=current;sourceScene["bloom"]=bloom;sourceScene["glow"]["levels"]={0,0,.125f,0,0,0,0};
+    require(readEnvironmentSettings(sourceScene).glow.levels[2]==.125f,"Current Scene gains were normalized or overridden by a legacy effect.");
+    for(const Json badValue:{Json(-.1),Json(1.1),Json(".5"),Json(true),Json(nullptr)}) {
+        auto bad=old;bad["glow"]["coreHalo"]=badValue;rejects([&]{readEnvironmentSettings(bad);});
+    }
+    for(const char* effect:{"glow","bloom"}) {
+        auto bad=old;bad[effect]["enabled"]=0;rejects([&]{readEnvironmentSettings(bad);});
+        bad=old;bad[effect]["strength"]="1";rejects([&]{readEnvironmentSettings(bad);});
+        bad=old;bad[effect]["tint"]={true,1,1};rejects([&]{readEnvironmentSettings(bad);});
+    }
+    auto malformed=old;malformed["bloom"]["levels"][3]=1.1f;rejects([&]{readEnvironmentSettings(malformed);});
+    TempProject project;SceneDocument document(project.root);document.createEnvironment("Old two-effect environment");
+    require(document.save("Old two-effect environment"),document.status());
+    auto saved=Json::parse(readText(project.root/document.assetId()));
+    for(auto& entity:saved["entities"])if(entity.contains("environment")) {
+        auto& settings=entity["environment"]["environment"];settings["glow"]=emission;settings["bloom"]=bloom;
+    }
+    const auto bytes=saved.dump();writeText(project.root/document.assetId(),bytes);
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    const auto resolved=resolveEnvironment(reopened.scene()).environment;
+    require(resolved.glow==migrated && !reopened.dirty() && readText(project.root/document.assetId())==bytes,
+        "Two-effect migration rewrote the authored scene or changed its dirty state.");
+    require(reopened.save(),reopened.status());
+    const auto after=Json::parse(readText(project.root/document.assetId()));
+    require(after.at("version")==23 && readSceneSnapshot(project.root,document.assetId()).records.front().environment->environment==resolved,
+        "Saving consolidated Glow changed the scene schema or reapplied migration.");
 }
 void glowBlendModeStorageAndHistory() {
     TempProject project;SceneDocument document(project.root);const auto id=document.createEnvironment("Glow Blend");
@@ -1570,7 +1651,7 @@ int main() {
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
-        environmentsAndMigration();environmentGlowHistoryAndMigration();glowBloomValidationAndLevelContribution();glowBlendModeStorageAndHistory();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
+        environmentsAndMigration();environmentGlowHistoryAndMigration();glowValidationAndLevelContribution();glowSingleEffectMigration();glowBlendModeStorageAndHistory();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
         particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
         std::cout << "Scene core checks passed.\n";
         return 0;
