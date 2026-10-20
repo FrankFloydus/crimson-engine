@@ -26,6 +26,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -40,10 +41,31 @@ using Json=nlohmann::json;
 using Clock=std::chrono::steady_clock;
 void check(bool condition,const std::string& message){if(!condition)throw std::runtime_error(message);}
 struct Options {
-    fs::path source,artifacts,shaderDirectory;std::string scene{"Content/Main.crimson-scene"},camera{"ShadowCamera"},settings{"both"};
-    EntityId emitter{0x5bb7882f31e19ae7};unsigned width{960},height{540},warmup{96},frames{48};
-    float amplitude{.35f};bool keepProject{};
+    fs::path source,artifacts,shaderDirectory;std::string scene{"Content/Main.crimson-scene"},camera{"ShadowCamera"},settings{"both"},channel{"both"};
+    EntityId emitter{0x5bb7882f31e19ae7};unsigned width{960},height{540},warmup{512},frames{48},staticSamples{};
+    float amplitude{.35f};bool keepProject{},stationaryOnly{};std::map<std::string,std::string> overrides;
 };
+SsgiSettings overrideSettings(SsgiSettings value,const Options& options) {
+    for(const auto& [option,text]:options.overrides) {
+        if(option=="--ssgi-quality") {
+            if(text=="low")value.quality=SsgiQuality::Low;else if(text=="medium")value.quality=SsgiQuality::Medium;
+            else if(text=="high")value.quality=SsgiQuality::High;else if(text=="custom")value.quality=SsgiQuality::Custom;
+            else throw std::runtime_error("Unknown SSGI quality.");
+        } else if(option=="--ssgi-rays") {const auto budget=ssgiQualityBudget(value);value.rays=std::stoi(text);value.steps=int(budget.steps);value.quality=SsgiQuality::Custom;}
+        else if(option=="--ssgi-steps") {const auto budget=ssgiQualityBudget(value);value.steps=std::stoi(text);value.rays=int(budget.rays);value.quality=SsgiQuality::Custom;}
+        else if(option=="--ssgi-bounces")value.bounces=std::stoi(text);
+        else if(option=="--ssgi-radius")value.denoiseRadius=std::stoi(text);
+        else if(option=="--ssgi-strength")value.strength=std::stof(text);
+        else if(option=="--ssgi-reach")value.maxDistance=std::stof(text);
+        else if(option=="--ssgi-thickness")value.thickness=std::stof(text);
+        else if(option=="--ssgi-stability")value.temporalStability=std::stof(text);
+        else if(option=="--ssgi-bias")value.rayBias=std::stof(text);
+        else if(option=="--ssgi-smoothing")value.denoiseStrength=std::stof(text);
+        else if(option=="--ssgi-clamp")value.radianceClamp=std::stof(text);
+        else throw std::runtime_error("Unknown SSGI tuning option: "+option);
+    }
+    check(validSsgiSettings(value),"SSGI override settings are invalid.");return value;
+}
 std::string fileHash(const fs::path& path) {
     std::ifstream input(path,std::ios::binary);check(bool(input),"Cannot hash "+path.string());
     std::array<char,65536> buffer{};std::uint64_t hash=14695981039346656037ull;
@@ -119,6 +141,55 @@ Json imageMetrics(const DecodedImage& image,const DecodedImage* previous) {
     }
     return {{"central_mean_linear",mean/count},{"central_frame_delta_rms",previous?Json(std::sqrt(delta/count)):Json(nullptr)}};
 }
+struct Moments {
+    unsigned count{};double mean{},m2{};
+    void add(double value){++count;const auto delta=value-mean;mean+=delta/count;m2+=delta*(value-mean);}
+    double variance()const{return count>1?m2/(count-1):0;}
+};
+class StationaryStatistics {
+public:
+    StationaryStatistics(unsigned width,unsigned height) {
+        x0_=width*380/960;y0_=height*100/540;x1_=width*570/960;y1_=height*300/540;
+        const auto pixels=std::size_t(x1_-x0_)*(y1_-y0_);pixel_.resize(pixels);laplacian_.resize(pixels);
+        for(unsigned index=0;index<sizes_.size();++index)blocks_[index].resize(
+            std::size_t((x1_-x0_+sizes_[index]-1)/sizes_[index])*((y1_-y0_+sizes_[index]-1)/sizes_[index]));
+    }
+    Json add(const DecodedImage& image) {
+        const unsigned width=x1_-x0_,height=y1_-y0_;std::vector<double> values(pixel_.size());double total{},square{};
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+            const auto index=std::size_t(y)*width+x;const auto value=linearLuminance(image,std::size_t(y+y0_)*image.width+x+x0_);
+            values[index]=value;pixel_[index].add(value);total+=value;square+=value*value;
+        }
+        frameMean_.add(total/values.size());
+        for(unsigned y=1;y+1<height;++y)for(unsigned x=1;x+1<width;++x) {
+            const auto index=std::size_t(y)*width+x;
+            laplacian_[index].add(4*values[index]-values[index-1]-values[index+1]-values[index-width]-values[index+width]);
+        }
+        for(unsigned index=0;index<sizes_.size();++index) {
+            const unsigned size=sizes_[index],columns=(width+size-1)/size;
+            std::vector<double> sums(blocks_[index].size());std::vector<unsigned> counts(sums.size());
+            for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+                const auto block=std::size_t(y/size)*columns+x/size;sums[block]+=values[std::size_t(y)*width+x];++counts[block];
+            }
+            for(std::size_t block=0;block<sums.size();++block)blocks_[index][block].add(sums[block]/counts[block]);
+        }
+        const double mean=total/values.size();return {{"mean_linear",mean},{"spatial_std_linear",std::sqrt(std::max(0.,square/values.size()-mean*mean))}};
+    }
+    Json summary()const {
+        const auto rms=[](const auto& moments){double variance{};std::size_t count{};for(const auto& item:moments)if(item.count>1){variance+=item.variance();++count;}return count?std::sqrt(variance/count):0.;};
+        const double normalizer=std::max(frameMean_.mean,.000001),pixelNoise=rms(pixel_),laplacianNoise=rms(laplacian_);
+        Json blocks=Json::array();for(unsigned index=0;index<sizes_.size();++index) {
+            const double noise=rms(blocks_[index]);blocks.push_back({{"size_px",sizes_[index]},{"temporal_rms",noise},{"relative_temporal_rms",noise/normalizer}});
+        }
+        return {{"roi",{x0_,y0_,x1_,y1_}},{"captures",frameMean_.count},{"mean_linear",frameMean_.mean},
+            {"pixel_temporal_rms",pixelNoise},{"relative_pixel_temporal_rms",pixelNoise/normalizer},
+            {"frame_mean_temporal_rms",std::sqrt(frameMean_.variance())},{"relative_frame_mean_temporal_rms",std::sqrt(frameMean_.variance())/normalizer},
+            {"temporal_laplacian_rms",laplacianNoise},{"relative_temporal_laplacian_rms",laplacianNoise/normalizer},{"blocks",std::move(blocks)}};
+    }
+private:
+    unsigned x0_{},y0_{},x1_{},y1_{};Moments frameMean_;
+    std::vector<Moments> pixel_,laplacian_;std::array<std::vector<Moments>,3> blocks_;constexpr static std::array<unsigned,3> sizes_{8,16,32};
+};
 
 void exercise(SDL_Window* window,Snapshot& snapshot,const ShaderCompileConfig& config,const Options& options) {
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));TestGpuContext context;
@@ -147,6 +218,8 @@ void exercise(SDL_Window* window,Snapshot& snapshot,const ShaderCompileConfig& c
         {"camera",{{"position",camera->position},{"target",camera->target},{"up",camera->up},{"vertical_fov",camera->verticalFov(float(options.width)/options.height)},
             {"near",camera->nearPlane},{"far",camera->farPlane}}},{"emitter_id",entityText(options.emitter)},
         {"emitter_world",emissionWorld},{"width",options.width},{"height",options.height},
+        {"warmup_frames",options.warmup},{"static_capture_count",options.staticSamples},{"stationary_only",options.stationaryOnly},
+        {"tuning_overrides",options.overrides},
         {"motion",{{"amplitude_m",options.amplitude},{"direction","camera right"},{"period_rendered_frames",120},{"simulation_hz",60}}},
         {"metrics_note","Frame differences include the physical lighting change; compare identical trajectories and settings across shader variants."},
         {"cases",Json::array()}};
@@ -186,8 +259,10 @@ void exercise(SDL_Window* window,Snapshot& snapshot,const ShaderCompileConfig& c
     for(const std::string preset:{"saved","defaults"}) {
         if(options.settings!="both"&&options.settings!=preset)continue;
         settings=preset=="saved"?baseline.environment.environment.ssgi:SsgiSettings{};settings.enabled=baseline.environment.environment.ssgi.enabled;
+        settings=overrideSettings(settings,options);
         for(const auto debug:{RenderDebugView::Lit,RenderDebugView::IndirectLighting}) {
-            const std::string channel=debug==RenderDebugView::Lit?"lit":"indirect";renderer.setDebugView(RenderViewPurpose::Game,debug);
+            const std::string channel=debug==RenderDebugView::Lit?"lit":"indirect";if(options.channel!="both"&&options.channel!=channel)continue;
+            renderer.setDebugView(RenderViewPurpose::Game,debug);
             ++worldIdentity;moving=removed=false;heldOffset={};phaseFrame=0;
             const auto deadline=Clock::now()+std::chrono::minutes{3};unsigned readyFrames{};
             do{draw();tick();readyFrames=preparation.ready&&preparation.refined?readyFrames+1:0;if(readyFrames<8)std::this_thread::sleep_for(std::chrono::milliseconds{1});}
@@ -195,22 +270,32 @@ void exercise(SDL_Window* window,Snapshot& snapshot,const ShaderCompileConfig& c
             check(readyFrames>=8,"Actual scene resources did not become fully ready: "+prepared.status());
             // Align the shader's 4096-frame sample period across old/new runs,
             // independently of variable asset/material preparation latency.
-            while(frame%4096){draw();tick();}warm(options.warmup);
-            Json result{{"settings",preset},{"channel",channel},{"gi",giJson(settings)},{"frames",Json::array()}};DecodedImage previous;
-            for(const std::string phase:{"static","moving","stopped","removed"}) {
+            while(frame%4096)tick();warm(options.warmup);
+            Json result{{"settings",preset},{"channel",channel},{"gi",giJson(settings)},{"frames",Json::array()},
+                {"stationary_windows",Json::array()}};DecodedImage previous;
+            StationaryStatistics stationary(options.width,options.height),windowStatistics(options.width,options.height);unsigned staticCount{};
+            std::vector<std::string> phases{"static"};if(!options.stationaryOnly)phases.insert(phases.end(),{"moving","stopped","removed"});
+            for(const std::string phase:phases) {
                 moving=phase=="moving";removed=phase=="removed";phaseFrame=0;
                 const unsigned duration=phase=="moving"?options.frames:phase=="static"?24:32;
-                while(phaseFrame<duration) {
+                while(phase=="static"&&options.staticSamples?staticCount<options.staticSamples:phaseFrame<duration) {
                     draw();auto metadata=lastDraw;const auto image=read();metadata["frame_after_readback"]=frame;metadata["phase"]=phase;
                     const auto relative=fs::path(preset+"-"+channel)/(phase+"-"+std::to_string(metadata["phase_frame"].get<unsigned>())+".png");
                     saveImage(options.artifacts/relative,image);metadata["image"]=relative.generic_string();metadata["image_fnv1a64"]=fileHash(options.artifacts/relative);
                     metadata["metrics"]=imageMetrics(image,previous.rgba.empty()?nullptr:&previous);previous=image;
+                    if(phase=="static") {
+                        metadata["stationary_receiver"]=stationary.add(image);windowStatistics.add(image);++staticCount;
+                        if(staticCount%64==0) {auto summary=windowStatistics.summary();summary["first_capture"]=staticCount-64;summary["last_capture"]=staticCount-1;
+                            result["stationary_windows"].push_back(std::move(summary));windowStatistics=StationaryStatistics(options.width,options.height);}
+                    }
                     const auto* stats=bgfx::getStats();metadata["latest_gpu_frame_after_readback"]=stats->gpuFrameNum;
                     metadata["latest_gpu_elapsed_ms"]=stats->gpuTimerFreq>0&&stats->gpuTimeEnd>=stats->gpuTimeBegin?Json(double(stats->gpuTimeEnd-stats->gpuTimeBegin)*1000./stats->gpuTimerFreq):Json(nullptr);
                     result["frames"].push_back(std::move(metadata));
                 }
                 std::cout<<preset<<' '<<channel<<' '<<phase<<" complete, bgfx_frame="<<frame<<std::endl;
             }
+            result["stationary_summary"]=stationary.summary();
+            if(staticCount%64){auto summary=windowStatistics.summary();summary["first_capture"]=staticCount-staticCount%64;summary["last_capture"]=staticCount-1;result["stationary_windows"].push_back(std::move(summary));}
             report["cases"].push_back(std::move(result));
         }
     }
@@ -226,20 +311,27 @@ int main(int argc,char** argv) {
         check(argc>=4,"Pass shaderc, shader source and shader include directories plus --project-root SOURCE --artifacts OUTPUT.");Options options;
         for(int index=4;index<argc;++index) {
             const std::string_view option=argv[index];if(option=="--keep-project"){options.keepProject=true;continue;}
+            if(option=="--stationary-only"){options.stationaryOnly=true;continue;}
             check(index+1<argc,"Missing diagnostic option value.");const std::string value=argv[++index];
             if(option=="--project-root")options.source=fs::weakly_canonical(fs::absolute(value));
             else if(option=="--artifacts")options.artifacts=fs::absolute(value).lexically_normal();
             else if(option=="--scene")options.scene=value;else if(option=="--camera-name")options.camera=value;
             else if(option=="--emitter-id")options.emitter=std::stoull(value,nullptr,16);
             else if(option=="--settings")options.settings=value;
+            else if(option=="--channel")options.channel=value;
             else if(option=="--ssgi-shader-dir"||option=="--shader-dir")options.shaderDirectory=fs::absolute(value).lexically_normal();
+            else if(option.starts_with("--ssgi-"))options.overrides[std::string(option)]=value;
             else if(option=="--width")options.width=unsigned(std::stoul(value));else if(option=="--height")options.height=unsigned(std::stoul(value));
             else if(option=="--warmup")options.warmup=unsigned(std::stoul(value));else if(option=="--frames")options.frames=unsigned(std::stoul(value));
+            else if(option=="--static-samples")options.staticSamples=unsigned(std::stoul(value));
             else if(option=="--amplitude")options.amplitude=std::stof(value);else throw std::runtime_error("Unknown option: "+std::string(option));
         }
         check(!options.source.empty()&&!options.artifacts.empty(),"Source project and output directory are required.");
         check(options.width>=32&&options.height>=32&&options.width<=8192&&options.height<=8192&&options.frames>=8&&options.frames<=600&&options.warmup<=4096&&std::isfinite(options.amplitude)&&options.amplitude>=0&&options.amplitude<=2,"Diagnostic dimensions or trajectory is invalid.");
         check(options.settings=="saved"||options.settings=="defaults"||options.settings=="both","Settings must be saved, defaults or both.");
+        check(options.channel=="lit"||options.channel=="indirect"||options.channel=="both","Channel must be lit, indirect or both.");
+        if(options.stationaryOnly&&!options.staticSamples)options.staticSamples=128;
+        check(options.staticSamples<=2048,"Static capture count exceeds the diagnostic bound.");
         Snapshot snapshot(options.source,options.keepProject);fs::create_directories(options.artifacts);
         ShaderCompileConfig config{argv[1],argv[2],argv[3],options.artifacts/"shader-cache"};Sdl sdl;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson actual-scene GI motion capture",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);

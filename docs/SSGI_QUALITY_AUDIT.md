@@ -134,6 +134,77 @@ Follow-up shader snapshots, PNGs, raw JSON measurements and the bounded
 fixture accepts `--moving-donor` to keep the source transforming throughout both
 GI-off and GI-on workloads.
 
+## Scene history isolation from editor previews
+
+The follow-up audit found another independent correctness bug. All non-Game
+purposes selected the Scene draw-history map, and the disabled-SSGI path cleared
+it unconditionally. Material previews, particle previews and thumbnails correctly
+omit GI, but rendering them between Scene frames consequently erased the Scene's
+receiver records. The next Scene frame marked unchanged receivers reactive and
+rejected their temporal history. Isolated Game captures could not detect this.
+
+Renderer `fdc3723` restricts clearing to the actual Scene/Game owners. Primary
+receiver reactivity and explicit effect-disable/failure resets remain intact.
+The new GPU regression interleaves the real material/particle preview APIs and
+asynchronous thumbnails on every Scene draw, including readback waits. The old
+renderer measured 53.41% relative temporal RMS in the Scene case versus 9.31% in
+the stationary Game control. Its normal test failed the 12% noise bound at 53.95%.
+The corrected renderer measures 9.01% with previews present, retaining the signal.
+The audit completed 192 preview frames and 64 asynchronous thumbnails and checked
+real material/particle submissions. This repairs ownership; it does not implement
+the stronger reconstruction proposed below.
+
+## Residual stationary noise and reconstruction work
+
+A later user check established that global defaults improve the result but still
+leave persistent animated noise. A lower-noise still is not evidence of temporal
+stability. The extended actual-project diagnostic now captures 256 static images
+after 512 warmup frames, with camera, source and time fixed. It measures a fixed
+upper-wall ROI, pixel temporal variance, 8/16/32-pixel block variance and separate
+64-capture windows. A GI-zero control measures exactly zero temporal variation
+in this ROI, isolating the residual to GI rather than ordinary material lighting.
+
+Under defaults, the last three 64-capture windows retain approximately
+.776/.781/.778% pixel RMS relative to total Lit luminance and
+.254/.254/.270% at 32-pixel block scale. The saved Custom settings retain
+1.139/1.142/1.146% pixel RMS. These are total Lit measurements, not noise divided
+by isolated GI brightness. The stable variance floor confirms that waiting
+longer does not continuously converge this EMA to a static image.
+
+For independent stationary noise, a history weight beta has an equivalent
+sample count `(1+beta)/(1-beta)`: .90 gives 19 frames, approximately 76 primary
+rays at four rays per frame. Sampling correlations and changing geometry reduce
+the usefulness of that idealized count. Increasing history weight trades residual
+noise for illumination lag. Current spatial filtering affects the published
+image only; the stored illumination history is the raw temporal result.
+
+The next proposed reconstruction slice is **not implemented**: consistent linear
+luminance moments, short-history tracking, a modest symmetric spatial stage saved
+for next-frame feedback, then variance-guided filtering at wider scales. This
+preserves material detail by filtering illumination before material response.
+[SVGF (Schied et al., HPG 2017)](https://research.nvidia.com/labs/rtr/publication/schied2017spatiotemporal/),
+[Falcor's selected spatial feedback](https://github.com/NVIDIAGameWorks/Falcor/blob/master/Source/RenderPasses/SVGFPass/SVGFPass.cpp)
+and [Mara et al., HPG 2017](https://cs.dartmouth.edu/~wjarosz/publications/mara17towards.html)
+provide concrete reconstruction references. GPU cost, retained lighting gradients,
+source motion response and geometry-edge leakage require measured acceptance.
+No noise-free guarantee follows from adopting a denoiser's name.
+
+[Screen Space Indirect Lighting with Visibility Bitmask](https://arxiv.org/abs/2301.11376)
+is a credible alternative estimator to compare at equal GPU cost. The authors'
+[presentation](https://cdrinmatane.github.io/cgspotlight-slides/ssilvb_slides.pdf)
+explicitly shows artifacts from small bright emitters; random slice directions,
+sample jitter and incomplete visible geometry remain. Better sampling of bright
+emissive donors is a separate estimator improvement. Object motion vectors aid
+moving-surface reprojection, while DDGI adds world-space coverage; neither alone
+eliminates stationary Monte Carlo variance. A full deferred renderer is not a
+prerequisite for these compute reconstruction stages.
+
+The extended harness is explicit and excluded from default builds. The companion
+`tests/ssgi_scene_motion_video.py` reconstructs lossless APNG sequences using
+recorded frame spacing, verifies every encoded pixel and preserves their playback
+rate. Reports, snapshots and verified 12.8-second clips live under
+`build/ssgi-stationary`. These diagnostics add no product UI or renderer settings.
+
 ## Controlled quality experiments
 
 `ssgi_render_tests --ssgi-audit` renders a six-face emissive cube beside a diffuse
@@ -235,6 +306,6 @@ The checked-in fixture accepts `--ssgi-shader-dir`, `--ssgi-audit`,
 `--ssgi-benchmark-only`, `--benchmark-size`, `--warmup`, `--samples` and explicit
 `--ssgi-*` tuning, so comparisons do not require rebuilding each candidate.
 The preserved baseline comes from renderer commit `b57e078`; the delivered
-initial calibrated renderer was `c37b62c`; moving-donor correction is `094376f`. Force `--ssgi-quality high --ssgi-radius 4 --ssgi-stability .9`
+initial calibrated renderer was `c37b62c`; moving-donor correction is `094376f` and preview isolation is `fdc3723`. Force `--ssgi-quality high --ssgi-radius 4 --ssgi-stability .9`
 when reproducing the old-shader banding-oracle failure; that check compares the
 algorithms at equal High settings rather than changing the new Medium default.

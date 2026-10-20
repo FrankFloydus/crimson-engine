@@ -444,7 +444,13 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;
         scene.giWorldId=8800;scene.giCameraId=8801;scene.giEnvironmentId=8802;
         const auto stationaryInstances=instances;
-        bool donorMoving=false;unsigned donorFrame{};
+        bool donorMoving=false,interleavePreviews=false;unsigned donorFrame{};
+        unsigned previewFrames{},thumbnailSubmissions{},thumbnailCompletions{};
+        MaterialAsset previewMaterial;previewMaterial.id="ssgi-history-preview";
+        ModelMaterialTextures previewBindings;
+        SceneSettings previewSettings=settings;previewSettings.environment.ssgi.enabled=false;
+        RenderParticle previewParticle;previewParticle.size=.5f;
+        constexpr const char* thumbnailId="ssgi-history-thumbnail";
         const auto draw=[&]{
             if(donorMoving) {
                 // Move on EVERY rendered frame, including asynchronous readback
@@ -455,7 +461,21 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
                 for(std::size_t index=1;index<instances.size();++index)
                     instances[index].model.transform=displacement*stationaryInstances[index].model.transform;
             }
-            renderer.renderGame(scene);check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
+            if(interleavePreviews) {
+                renderer.render(scene);
+                // These are the real independent renderer recipes used by
+                // open editor documents and asynchronous asset-card creation.
+                renderer.renderMaterialPreview(previewSettings,previewMaterial,previewBindings,
+                    MaterialPreviewMesh::Plane,Mat4{},false);
+                renderer.renderParticlePreview(previewSettings,{&previewParticle,1});
+                if(renderer.pollThumbnail(frame))++thumbnailCompletions;
+                if(!renderer.thumbnailBusy()) {
+                    check(renderer.renderThumbnail(thumbnailId,thumbnailSubmissions+1,scene,32),renderer.thumbnailStatus());
+                    ++thumbnailSubmissions;
+                }
+                ++previewFrames;
+            } else renderer.renderGame(scene);
+            check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
         };
         const auto warm=[&](unsigned count){for(unsigned i=0;i<count;++i){draw();tick();}};
         nlohmann::json report{{"shader_directory",options.ssgiShaderDirectory.empty()?"embedded":options.ssgiShaderDirectory.string()},
@@ -465,7 +485,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         const auto measure=[&](const char* name,unsigned requestedWidth,unsigned requestedHeight,bool moving,const Camera* cameraOverride=nullptr) {
             const Camera& referenceCamera=cameraOverride?*cameraOverride:camera;
             width=static_cast<std::uint16_t>(requestedWidth);height=static_cast<std::uint16_t>(requestedHeight);
-            renderer.resizeGameViewport(width,height);settings.camera=referenceCamera;++scene.giWorldId;warm(96);
+            if(interleavePreviews)renderer.resizeViewport(width,height);else renderer.resizeGameViewport(width,height);
+            settings.camera=referenceCamera;++scene.giWorldId;warm(96);
             const auto pixels=verticalReceiverPixels(width,height,referenceCamera);std::vector<DecodedImage> images;images.reserve(32);
             nlohmann::json readbackFrames=nlohmann::json::array();
             for(unsigned sample=0;sample<32;++sample) {
@@ -474,7 +495,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
                     const Vec3 displacement{.025f*std::sin(phase),.008f*std::sin(phase*2),0};
                     settings.camera.position=referenceCamera.position+displacement;settings.camera.target=referenceCamera.target+displacement;
                 }
-                const auto frameBeforeDraw=frame;draw();images.push_back(read(renderer.gameViewportTexture(),draw));
+                const auto frameBeforeDraw=frame;draw();images.push_back(read(interleavePreviews?renderer.viewportTexture():renderer.gameViewportTexture(),draw));
                 readbackFrames.push_back({{"frame_before_draw",frameBeforeDraw},{"frame_after_readback",frame}});
                 if(!options.artifacts.empty()) {
                     const std::string imageName=std::string(name)+"-"+(sample<10?"0":"")+std::to_string(sample)+".png";
@@ -490,7 +511,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
                 // Energy bounds prevent erasing the signal to pass noise tests.
                 check(mean>=.005&&mean<=.010,std::string(name)+" lost or amplified the reference indirect-light energy.");
                 check(metrics.at("relative_temporal_rms").get<double>()<=(moving?.14:.12),
-                    std::string(name)+" exceeded the default indirect-light temporal noise bound.");
+                    std::string(name)+" exceeded the default indirect-light temporal noise bound: "+
+                    std::to_string(metrics.at("relative_temporal_rms").get<double>()));
                 // A fixed screen patch observes different world positions as
                 // the camera pans. Rank coherent sampling noise on stationary
                 // geometry; retain the separate motion energy/temporal bounds.
@@ -506,6 +528,18 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         measure("vertical-static",217,163,false);measure("vertical-camera-motion",217,163,true);
         donorMoving=true;measure("vertical-donor-motion",217,163,false);donorMoving=false;
         instances=stationaryInstances;
+        check(renderer.publishMaterialPreviewEnvironment(environment),renderer.environmentStatus());
+        renderer.resizeMaterialPreview(32,32);renderer.resizeParticlePreview(32,32);
+        interleavePreviews=true;measure("vertical-scene-with-previews",217,163,false);interleavePreviews=false;
+        check(previewFrames>=128&&thumbnailSubmissions>1&&thumbnailCompletions>0,
+            "SSGI preview-isolation regression did not render continuous previews and complete asynchronous thumbnails.");
+        check(renderer.meshInstancingStats(RenderViewPurpose::MaterialPreview).fallbackDraws>0&&
+            renderer.particlePreviewStats().submitted>0,"SSGI preview-isolation regression bypassed its material or particle draw.");
+        for(unsigned attempt=0;renderer.thumbnailBusy()&&attempt<120;++attempt){tick();if(renderer.pollThumbnail(frame))++thumbnailCompletions;}
+        check(!renderer.thumbnailBusy(),"SSGI preview-isolation thumbnail did not retire.");
+        renderer.evictThumbnail(thumbnailId);renderer.releaseMaterialPreview();renderer.releaseParticlePreview();
+        report["preview_isolation"]={{"rendered_frames",previewFrames},{"thumbnail_submissions",thumbnailSubmissions},
+            {"thumbnail_completions",thumbnailCompletions}};
         measure("vertical-resized",321,241,false);
         const auto pixels=verticalReceiverPixels(width,height,settings.camera);
         emitterMaterials[0].emissive={};const auto removedAtFrame=frame;
