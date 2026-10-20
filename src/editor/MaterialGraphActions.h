@@ -19,6 +19,9 @@ std::vector<MaterialNodeId> duplicateMaterialGraphSelection(MaterialGraph&,std::
 std::size_t deleteMaterialGraphSelection(MaterialGraph&,std::span<const MaterialNodeId>);
 
 struct MaterialGraphEndpoint {MaterialNodeId node{};MaterialPin pin{};bool input{};};
+// Shared authoring catalog for search and pin-drag creation. Output is unique.
+std::span<const MaterialNodeKind> materialGraphNodeKinds();
+
 struct MaterialGraphNodeChoice {
     MaterialNodeKind kind{};
     MaterialTextureRole textureRole{MaterialTextureRole::Color};

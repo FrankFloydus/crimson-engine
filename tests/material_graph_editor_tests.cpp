@@ -1353,6 +1353,95 @@ void grungeGeneratedImagePresentation() {
     require(ui.document.edit("Delete generated node",[&](auto& asset){removeMaterialNode(asset.graph,grunge);}),"Could not delete generated Grunge node.");ui.frame(3);
     require(retained.expired()&&ui.editor.presentation().images.empty(),"Deleting Grunge retained its generated image lease or presentation.");
 }
+void requestedImageAndChannelControls() {
+    GraphUi ui;MaterialNodeId output{},source{},merge{},split{},blend{};
+    require(ui.document.edit("Image authoring controls",[&](auto& asset) {
+        asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{700,0}).id;
+        source=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-650,0}).id;
+        merge=addMaterialNode(asset.graph,MaterialNodeKind::RGBAMerge,{-300,-160}).id;
+        split=addMaterialNode(asset.graph,MaterialNodeKind::RGBASplit,{80,-160}).id;
+        blend=addMaterialNode(asset.graph,MaterialNodeKind::Blend,{-250,220}).id;
+        connectMaterialNodes(asset.graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);
+    })&&ui.document.save(),"Could not configure image authoring controls.");ui.frame(24);
+    const std::array<std::pair<const char*,MaterialNodeKind>,13> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
+        {"image blend",MaterialNodeKind::Blend},{"luminance",MaterialNodeKind::Grayscale},{"to color",MaterialNodeKind::ToColor},{"procedural clouds",MaterialNodeKind::Noise},
+        {"brightness contrast",MaterialNodeKind::BrightnessContrast},{"unsharp",MaterialNodeKind::Sharpen},{"height normal",MaterialNodeKind::HeightToNormal},
+        {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge}}};
+    for(const auto& [alias,kind]:searches) {
+        const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
+        const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
+        if(!created||created->kind!=kind||ui.popup())throw std::runtime_error(std::string("Requested image node was not searchable: ")+alias);
+        ui.oneUndo(before);require(ui.document.undo(),"Could not remove searched image node.");ui.frame(2);
+    }
+    const auto field=[&](MaterialNodeId id,MaterialPin pin)->std::optional<MaterialGraphEditor::FieldPresentation> {
+        for(const auto& value:ui.editor.presentation().fields)if(value.node==id&&value.pin==pin)return value;return {};
+    };
+    const auto fieldPoint=[&](MaterialNodeId id,MaterialPin pin) {
+        const auto value=field(id,pin);require(value.has_value(),"Image-node fallback was not presented.");
+        return ImVec2{(value->minimum[0]+value->maximum[0])*.5f,(value->minimum[1]+value->maximum[1])*.5f};
+    };
+    require(field(merge,MaterialPin::R)&&field(merge,MaterialPin::G)&&field(merge,MaterialPin::B)&&field(merge,MaterialPin::A)&&
+        field(blend,MaterialPin::Left)&&field(blend,MaterialPin::Right)&&field(blend,MaterialPin::Alpha)&&!field(split,MaterialPin::Left),
+        "Image/channel disconnected fallbacks did not follow pin semantics.");
+    const auto beforeR=ui.snapshot();auto position=fieldPoint(merge,MaterialPin::R);ui.drag(position,{position.x+30,position.y});
+    const auto stored=findMaterialNode(ui.document.definition().graph,merge)->color;
+    require(stored[0]>0&&stored[1]==0&&stored[2]==0&&stored[3]==1,"RGBA Merge R edit changed other channels.");ui.oneUndo(beforeR);
+    ui.drag(ui.pin(source,MaterialPin::Value,false),ui.pin(merge,MaterialPin::R,true));
+    require(!field(merge,MaterialPin::R)&&findMaterialNode(ui.document.definition().graph,merge)->color==stored,"Connected RGBA Merge input lost or displayed its fallback.");
+    auto& io=ImGui::GetIO();io.AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(merge,MaterialPin::R,true));io.AddKeyEvent(ImGuiMod_Alt,false);ui.frame(2);
+    require(field(merge,MaterialPin::R)&&findMaterialNode(ui.document.definition().graph,merge)->color==stored,"Disconnecting RGBA Merge did not restore its fallback.");
+    const auto beforeCancel=ui.snapshot();position=fieldPoint(merge,MaterialPin::A);ui.move(position);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move({position.x-35,position.y});
+    require(ui.document.transactionActive()&&ui.snapshot()!=beforeCancel,"RGBA Merge alpha drag did not remain in one active edit.");
+    ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+    require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Cancelling RGBA Merge alpha failed to restore straight data.");
+    const auto beforePreview=ui.snapshot();const auto revision=ui.document.revision();ui.click(ui.pin(split,MaterialPin::G,false),ImGuiMouseButton_Right);
+    require(ui.popup(),"RGBA channel preview menu did not open.");ui.click(ui.popupItem(0));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{split,MaterialPin::G}&&ui.snapshot()==beforePreview&&ui.document.revision()==revision,
+        "RGBA Split channel preview changed authored values or selected the wrong output.");
+    const auto combo=std::find_if(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& item){return item.node==blend&&item.label=="Mode";});
+    require(combo!=ui.editor.presentation().combos.end(),"Blend mode control was not presented.");
+    const ImVec2 modePoint{(combo->minimum[0]+combo->maximum[0])*.5f,(combo->minimum[1]+combo->maximum[1])*.5f};const auto beforeMode=ui.snapshot();ui.click(modePoint);
+    require(ui.popup()&&!ui.document.transactionActive()&&ui.snapshot()==beforeMode,"Opening Blend modes started an authored edit.");ui.click(ui.popupItem(1));
+    require(findMaterialNode(ui.document.definition().graph,blend)->image.blendMode==MaterialImageBlend::Multiply,"Blend mode canvas dropdown did not accept Multiply.");ui.oneUndo(beforeMode);
+    require(ui.editor.status().empty(),"Image/channel controls left an editor diagnostic.");
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+void imageNodeParameterTransactions() {
+    const std::array<std::pair<MaterialNodeKind,const char*>,5> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
+        {MaterialNodeKind::BrightnessContrast,"Brightness"},{MaterialNodeKind::Sharpen,"Amount"},{MaterialNodeKind::HeightToNormal,"Strength"}}};
+    for(const auto& [kind,label]:cases) {
+        GraphUi ui;MaterialNodeId id{};
+        require(ui.document.edit("Image parameter fixture",[&](auto& asset){asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});id=addMaterialNode(asset.graph,kind,{-100,0}).id;})&&ui.document.save(),"Could not configure image parameter fixture.");ui.frame(24);
+        const auto point=[&] {
+            for(const auto& control:ui.editor.presentation().controls)if(control.node==id&&control.label==label) {
+                const auto& view=ui.editor.presentation();const float labelWidth=(ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemInnerSpacing.x)*view.zoom;
+                return ImVec2{control.minimum[0]+(control.maximum[0]-control.minimum[0]-labelWidth)*.55f,(control.minimum[1]+control.maximum[1])*.5f};
+            }throw std::runtime_error(std::string("Missing inline image parameter: ")+label);
+        };
+        const auto before=ui.snapshot();const auto start=point();ui.drag(start,{start.x+25,start.y});ui.oneUndo(before);
+        auto& io=ImGui::GetIO();
+        // These are separate drag gestures. A second press at the same point
+        // inside ImGui's double-click interval intentionally opens DragFloat's
+        // numeric text editor instead of dragging. Advance only this private
+        // context's synthetic clock past that interval before the next press.
+        ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);
+        const auto beforeCancel=ui.snapshot();ui.move(point());const auto cancelStart=point();io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();
+        require(ImGui::GetCurrentContext()->TempInputId==0,"Independent image drag unexpectedly entered temporary text input.");
+        ui.move({cancelStart.x+20,cancelStart.y});
+        if(!ui.document.transactionActive()||ui.snapshot()==beforeCancel)
+            throw std::runtime_error(std::string("Image parameter did not remain active and change while dragging: ")+materialNodeKindName(kind)+" / "+label+", active="+std::to_string(ui.document.transactionActive())+", text="+std::to_string(ImGui::GetCurrentContext()->TempInputId));
+        ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+        require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Cancelling image parameter did not restore its exact value.");
+        if(kind==MaterialNodeKind::Noise) {
+            require(ui.document.edit("Use Spots noise",[&](auto& asset){findMaterialNode(asset.graph,id)->image.noisePattern=MaterialNoisePattern::Spots;}),"Could not switch Noise to Spots.");ui.frame(3);
+            const auto stable=ui.snapshot();const auto revision=ui.document.revision();
+            const auto detail=std::find_if(ui.editor.presentation().controls.begin(),ui.editor.presentation().controls.end(),[&](const auto& item){return item.node==id&&item.label=="Detail amount";});
+            require(detail!=ui.editor.presentation().controls.end(),"Noise Detail amount was not presented.");
+            ui.click({detail->minimum[0]+20,(detail->minimum[1]+detail->maximum[1])*.5f});
+            require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Spots allowed editing a Clouds-only Detail amount.");
+        }
+    }
+}
+
+}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();requestedImageAndChannelControls();imageNodeParameterTransactions();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

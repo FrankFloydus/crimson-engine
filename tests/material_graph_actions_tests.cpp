@@ -161,7 +161,7 @@ void compatibleCreationAndReplacement() {
     require(uvChoices.size()==2&&uvChoices.front().kind==MaterialNodeKind::UV&&uvChoices.back().kind==MaterialNodeKind::Panner,"UV input offered incompatible node kinds.");
     const auto uv=addConnectedMaterialGraphNode(graph,mapping,uvChoices.front(),{});
     const MaterialGraphEndpoint uvOutput{uv,MaterialPin::UV,false};const auto textureChoices=materialGraphNodeChoices(graph,uvOutput);
-    require(textureChoices.size()==4&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::Grunge,"UV output offered incompatible node kinds.");
+    require(textureChoices.size()==5&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::Noise,"UV output offered incompatible node kinds.");
     const auto secondTexture=addConnectedMaterialGraphNode(graph,uvOutput,textureChoices.front(),{});
     const auto gradient=addConnectedMaterialGraphNode(graph,uvOutput,choiceFor(graph,uvOutput,MaterialNodeKind::RadialGradient),{});
     require(materialInputLink(graph,gradient,MaterialPin::UV)->fromNode==uv&&materialOutputType(graph,gradient,MaterialPin::Value)==MaterialValueType::Scalar,
@@ -173,14 +173,14 @@ void compatibleCreationAndReplacement() {
     const auto multiply=addConnectedMaterialGraphNode(graph,baseColor,choiceFor(graph,baseColor,MaterialNodeKind::Multiply),{});
     require(materialOutputType(graph,multiply,MaterialPin::Value)==MaterialValueType::Color,"New Multiply was not initialized for the destination Color type.");
     const MaterialGraphEndpoint normal{output,MaterialPin::Normal,true};const auto normalChoices=materialGraphNodeChoices(graph,normal);
-    require(normalChoices.size()==1&&normalChoices.front().kind==MaterialNodeKind::Texture2D&&normalChoices.front().textureRole==MaterialTextureRole::Normal&&normalChoices.front().pin==MaterialPin::Normal,"Normal input offered non-normal expressions.");
+    require(normalChoices.size()==2&&normalChoices.front().kind==MaterialNodeKind::Texture2D&&normalChoices.front().textureRole==MaterialTextureRole::Normal&&normalChoices.front().pin==MaterialPin::Normal&&normalChoices.back().kind==MaterialNodeKind::HeightToNormal,"Normal input offered non-normal expressions.");
     const auto normalTexture=addConnectedMaterialGraphNode(graph,normal,normalChoices.front(),{});
     require(materialGraphNodeChoices(graph,{normalTexture,MaterialPin::Normal,false}).empty(),"Normal output incorrectly offered arithmetic nodes.");
     materialOutputNode(graph).output.blend=MaterialBlend::Mask;
     const auto opacity=choiceFor(graph,{output,MaterialPin::OpacityMask,true},MaterialNodeKind::Texture2D);
     require(opacity.pin==MaterialPin::A&&opacity.textureRole==MaterialTextureRole::Color,"Opacity suggestion did not use a texture alpha channel.");
     const auto outgoing=materialGraphNodeChoices(graph,{texture,MaterialPin::R,false});
-    require(outgoing.size()==9&&outgoing.front().kind==MaterialNodeKind::Multiply&&outgoing.front().pin==MaterialPin::Left&&outgoing.back().kind==MaterialNodeKind::HueShift,"Numeric output did not offer compatible arithmetic and adjustment inputs.");
+    require(outgoing.size()>9&&outgoing.front().kind==MaterialNodeKind::Multiply&&outgoing.front().pin==MaterialPin::Left&&std::any_of(outgoing.begin(),outgoing.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::HeightToNormal;}),"Numeric output did not offer compatible arithmetic and adjustment inputs.");
     rejectedWithoutChange(graph,[&]{addConnectedMaterialGraphNode(graph,{9999,MaterialPin::Value,false},outgoing.front(),{});},"Stale endpoint changed the graph.");
     rejectedWithoutChange(graph,[&]{addConnectedMaterialGraphNode(graph,roughness,{MaterialNodeKind::UV,MaterialTextureRole::Color,MaterialPin::UV},{});},"Incompatible drag-created node changed the graph.");
     materialOutputNode(graph).output.shading=MaterialShading::Unlit;
@@ -324,8 +324,50 @@ void adjustmentAndGrungeActions() {
     require(document.save(),"Could not save image tool document.");MaterialDocument reopened(project.root);
     require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==authored,"Image adjustments or Grunge changed during save/reopen.");
 }
+void requestedImageAndChannelActions() {
+    Project project;MaterialDocument document(project.root);require(document.create("Image nodes history"),"Could not create image-node document.");
+    std::vector<MaterialNodeId> added;
+    require(document.edit("Add requested image nodes",[&](auto& asset) {
+        for(const auto kind:{MaterialNodeKind::Levels,MaterialNodeKind::Invert,MaterialNodeKind::Blend,MaterialNodeKind::Grayscale,MaterialNodeKind::ToColor,MaterialNodeKind::Noise,
+            MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::HeightToNormal,MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaSplit,MaterialNodeKind::AlphaMerge})
+            added.push_back(addMaterialNode(asset.graph,kind).id);
+        findMaterialNode(asset.graph,added[0])->image.gamma=1.6f;
+        findMaterialNode(asset.graph,added[2])->image.blendMode=MaterialImageBlend::SoftLight;
+        findMaterialNode(asset.graph,added[5])->image.seed=421;
+        findMaterialNode(asset.graph,added[5])->image.noisePattern=MaterialNoisePattern::Spots;
+        findMaterialNode(asset.graph,added[8])->image.normalFlipY=true;
+        findMaterialNode(asset.graph,added[9])->color={.2f,2.f,-.4f,0.f};
+        connectMaterialNodes(asset.graph,added[9],MaterialPin::RGBA,added[10],MaterialPin::Left);
+        connectMaterialNodes(asset.graph,added[9],MaterialPin::RGBA,added[11],MaterialPin::Left);
+        connectMaterialNodes(asset.graph,added[11],MaterialPin::RGB,added[12],MaterialPin::Left);
+        connectMaterialNodes(asset.graph,added[11],MaterialPin::A,added[12],MaterialPin::Alpha);
+    }),"Could not prepare requested image nodes.");
+    const auto authored=serializeMaterialAsset(document.definition());
+    require(document.save(),"Could not save image-node document.");
+    const auto text=copyMaterialGraphSelection(document.definition().graph,added);std::vector<MaterialNodeId> pasted;
+    require(document.edit("Paste image nodes",[&](auto& asset){pasted=pasteMaterialGraphSelection(asset.graph,text,{400,300});}),"Image-node paste failed.");
+    require(pasted.size()==added.size(),"Image-node clipboard omitted a requested kind.");
+    const auto& graph=document.definition().graph;
+    require(findMaterialNode(graph,pasted[0])->image.gamma==1.6f&&findMaterialNode(graph,pasted[2])->image.blendMode==MaterialImageBlend::SoftLight&&
+        findMaterialNode(graph,pasted[5])->image.seed==421&&findMaterialNode(graph,pasted[5])->image.noisePattern==MaterialNoisePattern::Spots&&
+        findMaterialNode(graph,pasted[8])->image.normalFlipY&&findMaterialNode(graph,pasted[9])->color==Vec4{.2f,2.f,-.4f,0.f},"Image-node clipboard changed settings or hidden transparent RGB.");
+    require(materialInputLink(graph,pasted[10],MaterialPin::Left)->fromNode==pasted[9]&&
+        evaluateMaterialUniform(graph,pasted[12],MaterialPin::RGBA).value==Vec4{.2f,2.f,-.4f,0.f},"Image-node clipboard lost RGBA channel identity or straight data.");
+    require(document.undo()&&serializeMaterialAsset(document.definition())==authored,"Image-node paste was not one undo command.");
+    require(document.redo()&&document.undo(),"Image-node paste redo/undo failed.");
+    MaterialDocument reopened(project.root);require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==authored,"Requested nodes changed during save/reopen.");
+    auto candidate=document.definition().graph;
+    const auto normal=materialGraphNodeChoices(candidate,{materialOutputNode(candidate).id,MaterialPin::Normal,true});
+    require(std::any_of(normal.begin(),normal.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::HeightToNormal&&choice.pin==MaterialPin::Normal;}),"Normal input cannot create Height to Normal.");
+    const auto split=added[10];const auto sources=materialGraphNodeChoices(candidate,{split,MaterialPin::Left,true});
+    require(std::any_of(sources.begin(),sources.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::RGBAMerge&&choice.pin==MaterialPin::RGBA;}),"RGBA input cannot create RGBA Merge.");
+    const auto outgoing=materialGraphNodeChoices(candidate,{added[9],MaterialPin::RGBA,false});
+    require(std::any_of(outgoing.begin(),outgoing.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::AlphaSplit&&choice.pin==MaterialPin::Left;})&&
+        std::none_of(outgoing.begin(),outgoing.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::UV||choice.kind==MaterialNodeKind::Vector2;}),"RGBA pin-drag suggestions lost channel nodes or offered mapping expressions.");
+}
+
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();animatedNodeHistory();adjustmentAndGrungeActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

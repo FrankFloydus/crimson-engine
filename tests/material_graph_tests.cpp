@@ -544,7 +544,7 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==8&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Schema 8 nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==9&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema9 nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
@@ -645,7 +645,7 @@ void imageAdjustmentsAndGrunge() {
             "Prior Grunge style conversion lost authored values or layer defaults.");
         require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
             "Grunge style conversion changed links or persistent identities.");
-        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==8,"Legacy Grunge did not write the current schema.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==9,"Legacy Grunge did not write the current schema.");
         for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
         for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
         rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
@@ -695,6 +695,43 @@ void imageAdjustmentsAndGrunge() {
     rejects([&]{connectMaterialNodes(samplerGraph,extraMultiply,MaterialPin::Value,samplerOutput,MaterialPin::BaseColor);},"The combined Texture 2D/Grunge sampler budget was ignored.");
     require(serializeMaterialGraph(samplerGraph)==bounded,"Rejected sampler-budget overflow modified the graph.");
 }
+void imageNodeFoundation() {
+    auto graph=blank();const auto out=materialOutputNode(graph).id;
+    const auto merge=node(graph,MaterialNodeKind::RGBAMerge),split=node(graph,MaterialNodeKind::RGBASplit),alphaSplit=node(graph,MaterialNodeKind::AlphaSplit),alphaMerge=node(graph,MaterialNodeKind::AlphaMerge);
+    require(!setMaterialInputDefault(*findMaterialNode(graph,merge),MaterialPin::Left,MaterialValue{}),"RGBA Merge accepted a nonexistent fallback input.");
+    const Vec4 packed{.2f,.4f,.8f,0};for(unsigned i=0;i<4;++i){const auto p=i==0?MaterialPin::R:i==1?MaterialPin::G:i==2?MaterialPin::B:MaterialPin::A;require(setMaterialInputDefault(*findMaterialNode(graph,merge),p,{MaterialValueType::Scalar,{packed[i],packed[i],packed[i],packed[i]}}),"RGBA fallback setter rejected a lane.");}
+    connectMaterialNodes(graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);connectMaterialNodes(graph,merge,MaterialPin::RGBA,alphaSplit,MaterialPin::Left);
+    for(unsigned i=0;i<4;++i){const auto p=i==0?MaterialPin::R:i==1?MaterialPin::G:i==2?MaterialPin::B:MaterialPin::A;require(near(evaluateMaterialUniform(graph,split,p).value[0],packed[i]),"RGBA split lost or reordered a channel.");}
+    require(evaluateMaterialUniform(graph,alphaSplit,MaterialPin::RGB).value==Vec4{.2f,.4f,.8f,1},"Alpha Split premultiplied or erased RGB at zero alpha.");
+    require(evaluateMaterialUniform(graph,alphaSplit,MaterialPin::A).value[0]==0,"Alpha Split ignored original alpha.");
+    connectMaterialNodes(graph,alphaSplit,MaterialPin::RGB,alphaMerge,MaterialPin::Left);connectMaterialNodes(graph,alphaSplit,MaterialPin::A,alphaMerge,MaterialPin::Alpha);
+    require(evaluateMaterialUniform(graph,alphaMerge,MaterialPin::RGBA).value==packed,"Alpha Merge failed lossless straight-alpha reconstruction.");
+    connectMaterialNodes(graph,merge,MaterialPin::RGB,split,MaterialPin::Left);require(evaluateMaterialUniform(graph,split,MaterialPin::A).value[0]==1,"RGB-to-RGBA did not supply opaque alpha.");
+    connectMaterialNodes(graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);
+    const auto invert=node(graph,MaterialNodeKind::Invert),levels=node(graph,MaterialNodeKind::Levels),bc=node(graph,MaterialNodeKind::BrightnessContrast),sharpen=node(graph,MaterialNodeKind::Sharpen);
+    connectMaterialNodes(graph,merge,MaterialPin::RGBA,invert,MaterialPin::Left);connectMaterialNodes(graph,invert,MaterialPin::Value,levels,MaterialPin::Left);connectMaterialNodes(graph,levels,MaterialPin::Value,bc,MaterialPin::Left);connectMaterialNodes(graph,bc,MaterialPin::Value,sharpen,MaterialPin::Left);
+    require(materialOutputType(graph,sharpen,MaterialPin::Value)==MaterialValueType::Color4,"Image operators discarded RGBA type.");
+    {auto disconnected=graph;const auto link=materialInputLink(disconnected,invert,MaterialPin::Left)->id;require(removeMaterialLink(disconnected,link),"Image disconnection failed.");require(materialOutputType(disconnected,invert,MaterialPin::Value)==MaterialValueType::Color4&&materialInputDefault(*findMaterialNode(disconnected,invert),MaterialPin::Left).value[3]==1,"Image disconnection did not retain RGBA type and its authored fallback.");validateMaterialGraph(disconnected);}
+    const auto adjusted=evaluateMaterialUniform(graph,sharpen,MaterialPin::Value);require(near(adjusted.value[0],.8f)&&near(adjusted.value[1],.6f)&&near(adjusted.value[2],.2f)&&adjusted.value[3]==0,"Neutral image adjustments or alpha preservation failed.");
+    findMaterialNode(graph,levels)->image.outputWhite=0;require(evaluateMaterialUniform(graph,levels,MaterialPin::Value).value==Vec4{0,0,0,0},"Levels output collapse changed alpha.");findMaterialNode(graph,levels)->image.outputWhite=1;
+    findMaterialNode(graph,bc)->image.brightness=1;require(evaluateMaterialUniform(graph,bc,MaterialPin::Value).value==Vec4{1,1,1,0},"Brightness white endpoint/alpha failed.");findMaterialNode(graph,bc)->image.brightness=-1;require(evaluateMaterialUniform(graph,bc,MaterialPin::Value).value==Vec4{0,0,0,0},"Brightness black endpoint/alpha failed.");findMaterialNode(graph,bc)->image.brightness=0;
+    const auto blend=node(graph,MaterialNodeKind::Blend),gray=node(graph,MaterialNodeKind::Grayscale),toColor=node(graph,MaterialNodeKind::ToColor);
+    connectMaterialNodes(graph,merge,MaterialPin::RGBA,blend,MaterialPin::Left);findMaterialNode(graph,blend)->right={MaterialValueType::Color4,{.8f,.2f,.1f,1}};
+    findMaterialNode(graph,blend)->image.opacity=0;require(evaluateMaterialUniform(graph,blend,MaterialPin::Value).value==packed,"Blend opacity zero changed its base.");
+    findMaterialNode(graph,blend)->image.opacity=1;findMaterialNode(graph,blend)->alpha.value={0,0,0,0};require(evaluateMaterialUniform(graph,blend,MaterialPin::Value).value==packed,"Blend mask zero changed its base.");
+    findMaterialNode(graph,blend)->alpha.value={1,1,1,1};require(evaluateMaterialUniform(graph,blend,MaterialPin::Value).value==Vec4{.8f,.2f,.1f,1},"Blend Mix endpoint failed.");
+    {auto endpoints=graph;findMaterialNode(endpoints,merge)->color[3]=.8f;findMaterialNode(endpoints,blend)->right.value[3]=.1f;require(evaluateMaterialUniform(endpoints,blend,MaterialPin::Value).value==Vec4{.8f,.2f,.1f,.1f},"Blend full-mask RGB/alpha endpoints suffered float cancellation.");findMaterialNode(endpoints,merge)->color={3,-.5f,.8f,.2f};for(int mode=0;mode<=10;++mode){auto& n=*findMaterialNode(endpoints,blend);n.image.blendMode=static_cast<MaterialImageBlend>(mode);n.image.opacity=0;require(evaluateMaterialUniform(endpoints,blend,MaterialPin::Value).value==Vec4{3,-.5f,.8f,.2f},"Blend disabled opacity clipped HDR base data.");}}
+    for(int mode=0;mode<=10;++mode){findMaterialNode(graph,blend)->image.blendMode=static_cast<MaterialImageBlend>(mode);const auto v=evaluateMaterialUniform(graph,blend,MaterialPin::Value);require(std::all_of(v.value.begin(),v.value.end(),[](float x){return std::isfinite(x);}),"Blend mode produced a nonfinite result.");}
+    connectMaterialNodes(graph,merge,MaterialPin::RGBA,gray,MaterialPin::Left);findMaterialNode(graph,gray)->image.grayMode=MaterialGrayscaleMode::Alpha;require(evaluateMaterialUniform(graph,gray,MaterialPin::Value).value[0]==0,"Grayscale alpha selection failed.");findMaterialNode(graph,gray)->image.grayMode=MaterialGrayscaleMode::Luminance;require(near(evaluateMaterialUniform(graph,gray,MaterialPin::Value).value[0],.38636f),"Grayscale Rec709 conversion failed.");
+    connectMaterialNodes(graph,gray,MaterialPin::Value,toColor,MaterialPin::Left);require(evaluateMaterialUniform(graph,toColor,MaterialPin::RGBA).value[3]==1,"To Color did not supply opaque alpha.");
+    const auto noise=node(graph,MaterialNodeKind::Noise),h2n=node(graph,MaterialNodeKind::HeightToNormal);connectMaterialNodes(graph,noise,MaterialPin::Value,h2n,MaterialPin::Left);require(!materialExpressionUniform(graph,noise,MaterialPin::Value)&&!materialExpressionUniform(graph,h2n,MaterialPin::Normal),"Spatial procedural nodes were classified as uniform.");
+    auto a=findMaterialNode(graph,noise)->image;const auto n0=sampleMaterialNoise({.17f,-.23f,.61f},a);require(n0==sampleMaterialNoise({.17f,-.23f,.61f},a),"Noise is not deterministic.");a.seed=314;require(std::abs(n0-sampleMaterialNoise({.17f,-.23f,.61f},a))>.0001f,"Noise seed did not change the field.");require(near(sampleMaterialNoise({.17f,-.23f,.61f},a,100),.5f),"Unresolved Clouds did not converge to its mean.");a.noisePattern=MaterialNoisePattern::Spots;const auto spot=sampleMaterialNoise({.17f,-.23f,.61f},a,100);require(spot>0&&spot<.1f,"Unresolved Spots did not converge to its measured mean.");
+    connectMaterialNodes(graph,sharpen,MaterialPin::Value,out,MaterialPin::BaseColor);
+    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":9")!=std::string::npos,"New nodes did not write graph schema 9.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
+    auto bad=graph;findMaterialNode(bad,levels)->image.inputWhite=0;rejects([&]{validateMaterialGraph(bad);},"Levels accepted an empty input interval.");
+    const auto vector=node(graph,MaterialNodeKind::Vector2);rejects([&]{connectMaterialNodes(graph,vector,MaterialPin::XY,invert,MaterialPin::Left);},"Vector2 connected to an image node.");
+    auto& settings=findMaterialNode(graph,blend)->image;const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);settings.contrast=.2f;require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==topology,"A numeric image setting changed topology identity.");require(materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==values,"An inactive image branch affected active material values.");
+}
 void exactColdModelSurface() {
     ModelMaterial original;original.baseColor={.3f,.5f,.7f,1};original.metallic=.4f;original.roughness=.8f;
     original.normalScale=.7f;original.occlusionStrength=.6f;original.emissive={1,.5f,.2f};
@@ -736,5 +773,5 @@ void exactColdModelSurface() {
     require(!materialGraphFixedSurface(changed),"Animated graph uniforms were frozen by the fixed lowering.");
 }
 }
-int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+int main(int argc,char** argv){try{imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -411,6 +411,39 @@ std::map<std::filesystem::path,std::filesystem::file_time_type> cacheTimes(const
     for(const auto& entry:std::filesystem::directory_iterator(root))if(entry.is_regular_file())result.emplace(entry.path(),entry.last_write_time());
     return result;
 }
+MaterialAsset imageFoundationFixture() {
+    MaterialAsset material;auto& g=material.graph;const auto add=[&](MaterialNodeKind k){return addMaterialNode(g,k).id;};
+    const auto out=add(MaterialNodeKind::Output);materialOutputNode(g).output.blend=MaterialBlend::Mask;
+    const auto uv=add(MaterialNodeKind::UV),texture=add(MaterialNodeKind::Texture2D),noise=add(MaterialNodeKind::Noise);
+    findMaterialNode(g,uv)->uv.mode=MaterialUvMode::UV1;findMaterialNode(g,uv)->uv.scale={2,3,1};findMaterialNode(g,texture)->texture.image.id="assets/textures/packed.png";findMaterialNode(g,texture)->texture.role=MaterialTextureRole::Data;
+    connectMaterialNodes(g,uv,MaterialPin::UV,texture,MaterialPin::UV);
+    const auto levels=add(MaterialNodeKind::Levels),invert=add(MaterialNodeKind::Invert),bc=add(MaterialNodeKind::BrightnessContrast),sharpen=add(MaterialNodeKind::Sharpen),blend=add(MaterialNodeKind::Blend);
+    connectMaterialNodes(g,texture,MaterialPin::RGBA,levels,MaterialPin::Left);connectMaterialNodes(g,levels,MaterialPin::Value,invert,MaterialPin::Left);connectMaterialNodes(g,invert,MaterialPin::Value,bc,MaterialPin::Left);connectMaterialNodes(g,bc,MaterialPin::Value,sharpen,MaterialPin::Left);connectMaterialNodes(g,sharpen,MaterialPin::Value,blend,MaterialPin::Left);connectMaterialNodes(g,noise,MaterialPin::RGB,blend,MaterialPin::Right);
+    const auto split=add(MaterialNodeKind::RGBASplit),merge=add(MaterialNodeKind::RGBAMerge),alphaSplit=add(MaterialNodeKind::AlphaSplit),alphaMerge=add(MaterialNodeKind::AlphaMerge),gray=add(MaterialNodeKind::Grayscale),toColor=add(MaterialNodeKind::ToColor),normal=add(MaterialNodeKind::HeightToNormal);
+    connectMaterialNodes(g,blend,MaterialPin::Value,split,MaterialPin::Left);
+    for(const auto pin:{MaterialPin::R,MaterialPin::G,MaterialPin::B,MaterialPin::A})connectMaterialNodes(g,split,pin,merge,pin);
+    connectMaterialNodes(g,merge,MaterialPin::RGBA,alphaSplit,MaterialPin::Left);connectMaterialNodes(g,alphaSplit,MaterialPin::RGB,alphaMerge,MaterialPin::Left);connectMaterialNodes(g,alphaSplit,MaterialPin::A,alphaMerge,MaterialPin::Alpha);
+    connectMaterialNodes(g,alphaMerge,MaterialPin::RGBA,out,MaterialPin::BaseColor);connectMaterialNodes(g,alphaMerge,MaterialPin::A,out,MaterialPin::OpacityMask);
+    connectMaterialNodes(g,alphaMerge,MaterialPin::RGBA,gray,MaterialPin::Left);connectMaterialNodes(g,gray,MaterialPin::Value,toColor,MaterialPin::Left);connectMaterialNodes(g,toColor,MaterialPin::RGB,out,MaterialPin::Roughness);connectMaterialNodes(g,noise,MaterialPin::Value,normal,MaterialPin::Left);connectMaterialNodes(g,normal,MaterialPin::Normal,out,MaterialPin::Normal);
+    return material;
+}
+void imageFoundationShaderChecks() {
+    auto material=imageFoundationFixture();const auto generated=generateMaterialGraphShader(material);check(generated.textures.size()==1,"Procedural Noise allocated a sampler or split/merge duplicated image resources.");
+    check(generated.variants.front().source.find("ccImageOffsetContext")!=std::string::npos&&generated.variants.front().source.find("dFdx(context.uv.zw)")!=std::string::npos,"Spatial image operations omitted the UV0-to-UV1 Jacobian.");
+    {MaterialAsset four;const auto out=addMaterialNode(four.graph,MaterialNodeKind::Output).id,color=addMaterialNode(four.graph,MaterialNodeKind::Color).id,power=addMaterialNode(four.graph,MaterialNodeKind::Power).id;connectMaterialNodes(four.graph,color,MaterialPin::RGBA,power,MaterialPin::Left);connectMaterialNodes(four.graph,power,MaterialPin::Value,out,MaterialPin::BaseColor);const auto rgbaPower=generateMaterialGraphShader(four);check(rgbaPower.variants.front().source.find("vec4 ccGraphPositivePow")!=std::string::npos,"RGBA on an existing Power node omitted its fourth-lane overload.");}
+    const auto old=generateMaterialGraphShader(fixture());check(old.variants.front().source.find("ccImageNoiseField")==std::string::npos,"New image helpers changed an existing material's generated source.");
+    for(auto& n:material.graph.nodes)if(n.kind>=MaterialNodeKind::Levels){const auto value=serializeMaterialGraph(material.graph);const auto restored=parseMaterialGraph(value);check(serializeMaterialGraph(restored)==value,"New image node settings failed shader-fixture persistence.");break;}
+    auto changed=material;for(auto& n:changed.graph.nodes)if(n.kind==MaterialNodeKind::Levels)n.image.gamma=2;
+    const auto updated=generateMaterialGraphShader(changed);check(updated.topologyKey==generated.topologyKey&&updated.uniforms!=generated.uniforms,"A numeric Levels edit rebuilt the shader or failed to update parameters.");
+    auto& root=materialOutputNode(material.graph);root.output.tessellation.enabled=true;
+    const auto scalar=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Grayscale;})->id;
+    connectMaterialNodes(material.graph,scalar,MaterialPin::Value,root.id,MaterialPin::Height);
+    const auto domain=generateMaterialGraphShader(material);check(domain.variants.front().domainSource.find("imageUv1Du")!=std::string::npos&&domain.variants.front().domainSource.find("ccImagePatchUv0")!=std::string::npos,"Image Height branches omitted patch coordinate metrics.");
+    // Independently solve a rotated/scaled UV1 chart and an affine world frame.
+    // A UV0 displacement must preserve the same physical point in every source.
+    const Vec2 u{2,1},v{-1,3},delta{.02f,-.03f};const Vec2 uv1Delta{u[0]*delta[0]+v[0]*delta[1],u[1]*delta[0]+v[1]*delta[1]};
+    const float actualGradient=4*uv1Delta[0]-2*uv1Delta[1],expectedGradient=6*delta[0]-10*delta[1];check(std::abs(actualGradient-expectedGradient)<1e-6f,"Mixed UV1 image gradient lost scale or rotation.");
+}
 void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
     {
         std::ifstream input(source/"material_graph_depth.sh");check(bool(input),"Tessellated coverage template is unavailable.");
@@ -432,6 +465,12 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
+    {
+        auto imageMaterial=imageFoundationFixture();compileGenerated(generateMaterialGraphShader(imageMaterial));
+        for(const auto& n:imageMaterial.graph.nodes)if(n.kind>=MaterialNodeKind::Levels){const auto pins=materialNodeOutputs(imageMaterial.graph,n);for(const auto& pin:pins) {const auto preview=generateMaterialGraphPreviewShader(imageMaterial,{n.id,pin.pin});check(!compileShader(config,materialGraphShaderRecipe(config,preview,preview.variants.front())).bytes.empty(),"An image node/output preview failed to compile.");}}
+        auto& output=materialOutputNode(imageMaterial.graph);output.output.tessellation.enabled=true;const auto gray=std::find_if(imageMaterial.graph.nodes.begin(),imageMaterial.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Grayscale;})->id;connectMaterialNodes(imageMaterial.graph,gray,MaterialPin::Value,output.id,MaterialPin::Height);
+        const auto generated=generateMaterialGraphShader(imageMaterial);for(const auto& variant:generated.variants)if(variant.tessellation){check(!compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant)).bytes.empty(),"Image nodes in a native Height/domain branch failed to compile.");}
+    }
     compileGenerated(grungeShader);
     for(const auto& node:grunge.graph.nodes)if(materialNodeImageAdjustment(node.kind)||node.kind==MaterialNodeKind::Grunge)
         compileGenerated(generateMaterialGraphPreviewShader(grunge,{node.id,node.kind==MaterialNodeKind::Grunge||node.kind==MaterialNodeKind::Contrast?MaterialPin::Value:MaterialPin::RGB}));
@@ -703,7 +742,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        imageFoundationShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

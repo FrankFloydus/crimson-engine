@@ -426,6 +426,88 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 ImGui::TreePop();
             }
         }
+        if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise) {
+            if(node.kind==MaterialNodeKind::Levels) {
+                ImGui::SeparatorText("Levels");
+                control("Change input black",[](auto& n){return ImGui::DragFloat("Input black",&n.image.inputBlack,.005f,0,1,"%.3f");});
+                control("Change input white",[](auto& n){return ImGui::DragFloat("Input white",&n.image.inputWhite,.005f,0,1,"%.3f");});
+                control("Change midtones",[](auto& n){return ImGui::DragFloat("Midtones",&n.image.gamma,.01f,.01f,100,"%.3f");});
+                control("Change output black",[](auto& n){return ImGui::DragFloat("Output black",&n.image.outputBlack,.005f,0,1,"%.3f");});
+                control("Change output white",[](auto& n){return ImGui::DragFloat("Output white",&n.image.outputWhite,.005f,0,1,"%.3f");});
+            } else if(node.kind==MaterialNodeKind::Blend) {
+                ImGui::SeparatorText("Blend");
+                control("Change image blend mode",[](auto& n){int mode=static_cast<int>(n.image.blendMode);const bool changed=ImGui::Combo("Mode",&mode,"Mix\0Multiply\0Add\0Subtract\0Screen\0Overlay\0Minimum\0Maximum\0Difference\0Add/Subtract\0Soft Light\0");if(changed)n.image.blendMode=static_cast<MaterialImageBlend>(mode);return changed;});
+                control("Change blend opacity",[](auto& n){return ImGui::SliderFloat("Opacity",&n.image.opacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            } else if(node.kind==MaterialNodeKind::Grayscale) {
+                ImGui::SeparatorText("Grayscale");
+                control("Change grayscale method",[](auto& n){int mode=static_cast<int>(n.image.grayMode);const bool changed=ImGui::Combo("Method",&mode,"Luminance\0Red\0Green\0Blue\0Alpha\0Average\0Desaturation\0Minimum\0Maximum\0");if(changed)n.image.grayMode=static_cast<MaterialGrayscaleMode>(mode);return changed;});
+            } else if(node.kind==MaterialNodeKind::Noise) {
+                ImGui::SeparatorText("Noise");
+                control("Change noise pattern",[](auto& n){int mode=static_cast<int>(n.image.noisePattern);const bool changed=ImGui::Combo("Pattern",&mode,"Clouds\0Spots\0");if(changed)n.image.noisePattern=static_cast<MaterialNoisePattern>(mode);return changed;});
+                control("Change noise seed",[](auto& n){int seed=static_cast<int>(n.image.seed);const bool changed=ImGui::SliderInt("Seed",&seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.image.seed=static_cast<unsigned>(seed);return changed;});
+                control("Change noise feature size",[](auto& n){return ImGui::DragFloat("Feature size",&n.image.featureSize,.1f,.1f,100,"%.2f");});
+                ImGui::BeginDisabled(node.image.noisePattern==MaterialNoisePattern::Spots);
+                control("Change noise detail",[](auto& n){return ImGui::SliderFloat("Detail amount",&n.image.roughness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Clouds only. Adds finer layers of detail.");
+                ImGui::EndDisabled();
+                control("Change noise contrast",[](auto& n){return ImGui::SliderFloat("Contrast",&n.image.noiseContrast,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            } else if(node.kind==MaterialNodeKind::BrightnessContrast) {
+                ImGui::SeparatorText("Brightness / Contrast");
+                control("Change image brightness",[](auto& n){return ImGui::SliderFloat("Brightness",&n.image.brightness,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                control("Change image contrast",[](auto& n){return ImGui::SliderFloat("Contrast",&n.image.contrast,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            } else if(node.kind==MaterialNodeKind::Sharpen) {
+                ImGui::SeparatorText("Sharpen");
+                control("Change sharpen amount",[](auto& n){return ImGui::DragFloat("Amount",&n.image.sharpen,.01f,0,4,"%.3f");});
+            } else if(node.kind==MaterialNodeKind::HeightToNormal) {
+                ImGui::SeparatorText("Height to Normal");
+                control("Change height normal strength",[](auto& n){return ImGui::DragFloat("Strength",&n.image.normalStrength,.01f,0,0,"%.3f");});
+                control("Change height normal Y",[](auto& n){return ImGui::Checkbox("Flip Y",&n.image.normalFlipY);});
+            }
+            if(node.kind==MaterialNodeKind::Sharpen || node.kind==MaterialNodeKind::HeightToNormal) {
+                if(ImGui::TreeNodeEx("Advanced##Image",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    control("Change image detail size",[](auto& n){float size=n.image.radius*1024;const bool changed=ImGui::DragFloat("Detail size",&size,.05f,.01f,1024,"%.2f");if(changed)n.image.radius=size/1024;return changed;});
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("Higher values sample across broader features.");
+                    ImGui::TreePop();
+                }
+            }
+            const auto inputs=materialNodeInputs(document_.definition().graph,node,materialOutputNode(document_.definition().graph).output.shading,materialOutputNode(document_.definition().graph).output.blend);
+            bool heading=false;
+            for(const auto& input:inputs) {
+                if(input.type==MaterialValueType::Mapping || input.type==MaterialValueType::Normal || materialInputLink(document_.definition().graph,selected,input.pin))continue;
+                if(!heading){ImGui::SeparatorText("Default inputs");heading=true;}
+                ImGui::PushID(static_cast<int>(input.pin));
+                const bool dynamic=(node.kind==MaterialNodeKind::Levels||node.kind==MaterialNodeKind::Invert||node.kind==MaterialNodeKind::Blend||node.kind==MaterialNodeKind::BrightnessContrast||node.kind==MaterialNodeKind::Sharpen)&&
+                    (input.pin==MaterialPin::Left||input.pin==MaterialPin::Right);
+                if(dynamic)control("Change image input type",[&](auto& n) {
+                    auto value=materialInputDefault(n,input.pin);int type=value.type==MaterialValueType::Color4?2:value.type==MaterialValueType::Color?1:0;
+                    const bool changed=ImGui::Combo("Type",&type,"Grayscale\0RGB\0RGBA\0");
+                    if(changed) {
+                        const auto previous=value.type;value.type=type==2?MaterialValueType::Color4:type==1?MaterialValueType::Color:MaterialValueType::Scalar;
+                        if(previous==MaterialValueType::Scalar && type>0)value.value={value.value[0],value.value[0],value.value[0],1};
+                        else if(previous==MaterialValueType::Color && type==2)value.value[3]=1;
+                        setMaterialInputDefault(n,input.pin,value);
+                    }return changed;
+                });
+                auto candidate=document_.definition();auto* edited=findMaterialNode(candidate.graph,selected);auto value=materialInputDefault(*edited,input.pin);
+                if(value.type==MaterialValueType::Color||value.type==MaterialValueType::Color4) {
+                    Vec3 rgb{value.value[0],value.value[1],value.value[2]};float alpha=value.value[3];
+                    ImGui::BeginDisabled(!editable);
+                    auto change=drawHdrColorControl(input.name,rgb,nullptr,input.pin==MaterialPin::Right?emissionEditor_:colorEditor_);
+                    if(value.type==MaterialValueType::Color4)change.include(ImGui::DragFloat("Alpha",&alpha,.01f,0,0,"%.3f"));
+                    ImGui::EndDisabled();
+                    if(editable&&!canceled&&(change.activated||change.changed)&&!document_.transactionActive())propertyEditing_=document_.begin("Change image input default");
+                    if(editable&&!canceled&&change.changed&&propertyEditing_) {
+                        value.value={rgb[0],rgb[1],rgb[2],alpha};setMaterialInputDefault(*edited,input.pin,value);
+                        document_.update([&](auto& asset){asset=std::move(candidate);});
+                    }
+                    if(change.deactivated&&propertyEditing_)finish();
+                } else control("Change image input default",[&](auto& n) {
+                    auto value=materialInputDefault(n,input.pin);const bool changed=ImGui::DragFloat(input.name,value.value.data(),.01f,0,0,"%.3f");
+                    if(changed)setMaterialInputDefault(n,input.pin,value);return changed;
+                });
+                ImGui::PopID();
+            }
+        }
         if(node.kind==MaterialNodeKind::Color)hdr("Constant","Change color",false);
         if(node.kind==MaterialNodeKind::Texture2D) {
             {

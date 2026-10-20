@@ -106,6 +106,19 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::Lerp:aliases="lerp linear interpolate interpolation mix blend math node";break;
     case MaterialNodeKind::Power:aliases="power pow exponent math node";break;
     case MaterialNodeKind::Panner:aliases="panner pan scroll uv coordinate speed mapping node";break;
+    case MaterialNodeKind::Levels:aliases="levels input black white gamma midpoint output adjustment filter node";break;
+    case MaterialNodeKind::Invert:aliases="invert inverse negative adjustment filter node";break;
+    case MaterialNodeKind::Blend:aliases="blend image blend mode mix multiply screen overlay composite mask opacity node";break;
+    case MaterialNodeKind::Grayscale:aliases="grayscale greyscale luminance channel monochrome conversion node";break;
+    case MaterialNodeKind::ToColor:aliases="to color colour grayscale greyscale conversion node";break;
+    case MaterialNodeKind::Noise:aliases="noise procedural clouds spots seed feature roughness node";break;
+    case MaterialNodeKind::BrightnessContrast:aliases="brightness contrast adjustment filter node";break;
+    case MaterialNodeKind::Sharpen:aliases="sharpen sharp unsharp detail filter node";break;
+    case MaterialNodeKind::HeightToNormal:aliases="height to normal normalmap bump relief conversion filter node";break;
+    case MaterialNodeKind::RGBAMerge:aliases="rgba merge pack combine channels red green blue alpha node";break;
+    case MaterialNodeKind::RGBASplit:aliases="rgba split unpack separate channels red green blue alpha node";break;
+    case MaterialNodeKind::AlphaSplit:aliases="alpha split separate rgb opacity channel node";break;
+    case MaterialNodeKind::AlphaMerge:aliases="alpha merge combine rgb opacity channel node";break;
     case MaterialNodeKind::Time:aliases="time seconds clock runtime input node";break;
     default:break;
     }
@@ -113,6 +126,13 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     std::istringstream words(search);std::string word;
     while(words>>word)if(std::string_view(aliases).find(word)==std::string_view::npos)return false;
     return true;
+}
+bool exactNodeName(MaterialNodeKind kind,const char* query) {
+    const auto normalized=[](const char* text) {
+        std::string value;for(;*text;++text)if(std::isalnum(static_cast<unsigned char>(*text)))value+=static_cast<char>(std::tolower(static_cast<unsigned char>(*text)));
+        return value;
+    };
+    return normalized(materialNodeKindName(kind))==normalized(query);
 }
 const char* uvModeName(MaterialUvMode mode) {
     switch(mode) {
@@ -128,6 +148,9 @@ ImVec4 nodeColor(MaterialNodeKind kind) {
     case MaterialNodeKind::Scalar:case MaterialNodeKind::Multiply:case MaterialNodeKind::RadialGradient:case MaterialNodeKind::Clamp:
     case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:
     case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:case MaterialNodeKind::Grunge:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::Levels:case MaterialNodeKind::Invert:case MaterialNodeKind::Blend:case MaterialNodeKind::Grayscale:case MaterialNodeKind::ToColor:
+    case MaterialNodeKind::Noise:case MaterialNodeKind::BrightnessContrast:case MaterialNodeKind::Sharpen:case MaterialNodeKind::HeightToNormal:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::RGBAMerge:case MaterialNodeKind::RGBASplit:case MaterialNodeKind::AlphaSplit:case MaterialNodeKind::AlphaMerge:
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
     case MaterialNodeKind::Texture2D:return {.23f,.48f,.65f,1};
     case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:case MaterialNodeKind::Panner:case MaterialNodeKind::Time:return {.22f,.58f,.54f,1};
@@ -142,6 +165,7 @@ ImVec4 pinColor(MaterialValueType type,MaterialPin pin=MaterialPin::Value) {
     case MaterialValueType::Mapping:return {.3f,.8f,.72f,1};
     case MaterialValueType::Normal:return {.7f,.47f,.94f,1};
     case MaterialValueType::Vector2:return {.9f,.72f,.3f,1};
+    case MaterialValueType::Color4:
     case MaterialValueType::Color:return ImGui::GetStyleColorVec4(ImGuiCol_SliderGrabActive);
     default:return ImGui::GetStyleColorVec4(ImGuiCol_Text);
     }
@@ -165,22 +189,6 @@ std::vector<std::string> texturePayload(const ImGuiPayload& payload) {
     }
     if(payload.IsDataType("CC_TEXTURE_ASSET") && result.size()!=1)return {};
     return result;
-}
-void setInputDefault(MaterialNode& node,MaterialPin pin,const MaterialValue& value) {
-    switch(pin) {
-    case MaterialPin::Left:node.left=value;break;case MaterialPin::Right:node.right=value;break;
-    case MaterialPin::Alpha:node.alpha=value;break;
-    case MaterialPin::Speed:node.panner.speed={value.value[0],value.value[1]};break;
-    case MaterialPin::ScaleXY:node.uv.scale[0]=value.value[0];node.uv.scale[1]=value.value[1];break;
-    case MaterialPin::OffsetXY:node.uv.offset[0]=value.value[0];node.uv.offset[1]=value.value[1];break;
-    case MaterialPin::BaseColor:node.output.baseColor={value.value[0],value.value[1],value.value[2]};break;
-    case MaterialPin::Emission:node.output.emission={value.value[0],value.value[1],value.value[2]};break;
-    case MaterialPin::Roughness:node.output.roughness=value.value[0];break;case MaterialPin::Metallic:node.output.metallic=value.value[0];break;
-    case MaterialPin::Specular:node.output.specular=value.value[0];break;case MaterialPin::Occlusion:node.output.occlusion=value.value[0];break;
-    case MaterialPin::Opacity:node.output.opacity=value.value[0];break;case MaterialPin::OpacityMask:node.output.opacityMask=value.value[0];break;
-    case MaterialPin::Height:node.output.height=value.value[0];break;
-    default:break;
-    }
 }
 void grid(ImVec2 minimum,ImVec2 maximum) {
     const auto a=ed::ScreenToCanvas(minimum),b=ed::ScreenToCanvas(maximum);
@@ -509,6 +517,51 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto labeledWidth=[&](const char* label) {
             return std::max(1.f,width-ImGui::CalcTextSize(label).x-ImGui::GetStyle().ItemInnerSpacing.x);
         };
+        if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise) {
+            const auto parameter=[&](const char* label,const char* transaction,const auto& draw) {
+                ImGui::SetNextItemWidth(labeledWidth(label));field(transaction,draw);
+                s.presentation.controls.push_back({node.id,label,point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
+            };
+            const auto option=[&](const char* label,const char* transaction,const char* values,const auto& get,const auto& set) {
+                ImGui::SetNextItemWidth(labeledWidth(label));choice(transaction,[&](auto& n) {
+                    int selected=get(n);ImVec2 minimum,maximum;
+                    const bool changed=canvasCombo(label,selected,values,minimum,maximum);
+                    s.presentation.combos.push_back({node.id,label,point(minimum),point(maximum)});
+                    if(changed)set(n,selected);return changed;
+                });
+            };
+            if(node.kind==MaterialNodeKind::Levels) {
+                parameter("Input black","Change input black",[](auto& n){return ImGui::DragFloat("Input black",&n.image.inputBlack,.005f,0,1,"%.3f");});
+                parameter("Input white","Change input white",[](auto& n){return ImGui::DragFloat("Input white",&n.image.inputWhite,.005f,0,1,"%.3f");});
+                parameter("Midtones","Change midtones",[](auto& n){return ImGui::DragFloat("Midtones",&n.image.gamma,.01f,.01f,100,"%.3f");});
+                parameter("Output black","Change output black",[](auto& n){return ImGui::DragFloat("Output black",&n.image.outputBlack,.005f,0,1,"%.3f");});
+                parameter("Output white","Change output white",[](auto& n){return ImGui::DragFloat("Output white",&n.image.outputWhite,.005f,0,1,"%.3f");});
+            } else if(node.kind==MaterialNodeKind::Blend) {
+                option("Mode","Change image blend mode","Mix\0Multiply\0Add\0Subtract\0Screen\0Overlay\0Minimum\0Maximum\0Difference\0Add/Subtract\0Soft Light\0",
+                    [](const auto& n){return static_cast<int>(n.image.blendMode);},[](auto& n,int mode){n.image.blendMode=static_cast<MaterialImageBlend>(mode);});
+                parameter("Opacity","Change blend opacity",[](auto& n){return ImGui::SliderFloat("Opacity",&n.image.opacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            } else if(node.kind==MaterialNodeKind::Grayscale) {
+                option("Method","Change grayscale method","Luminance\0Red\0Green\0Blue\0Alpha\0Average\0Desaturation\0Minimum\0Maximum\0",
+                    [](const auto& n){return static_cast<int>(n.image.grayMode);},[](auto& n,int mode){n.image.grayMode=static_cast<MaterialGrayscaleMode>(mode);});
+            } else if(node.kind==MaterialNodeKind::Noise) {
+                option("Pattern","Change noise pattern","Clouds\0Spots\0",[](const auto& n){return static_cast<int>(n.image.noisePattern);},[](auto& n,int mode){n.image.noisePattern=static_cast<MaterialNoisePattern>(mode);});
+                parameter("Seed","Change noise seed",[](auto& n){int seed=static_cast<int>(n.image.seed);const bool changed=ImGui::SliderInt("Seed",&seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.image.seed=static_cast<unsigned>(seed);return changed;});
+                parameter("Feature size","Change noise feature size",[](auto& n){return ImGui::DragFloat("Feature size",&n.image.featureSize,.1f,.1f,100,"%.2f");});
+                ImGui::BeginDisabled(node.image.noisePattern==MaterialNoisePattern::Spots);
+                parameter("Detail amount","Change noise detail",[](auto& n){return ImGui::SliderFloat("Detail amount",&n.image.roughness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)){ed::Suspend();ImGui::SetTooltip("Clouds only. Adds finer layers of detail.");ed::Resume();}
+                ImGui::EndDisabled();
+                parameter("Contrast","Change noise contrast",[](auto& n){return ImGui::SliderFloat("Contrast",&n.image.noiseContrast,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            } else if(node.kind==MaterialNodeKind::BrightnessContrast) {
+                parameter("Brightness","Change image brightness",[](auto& n){return ImGui::SliderFloat("Brightness",&n.image.brightness,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Contrast","Change image contrast",[](auto& n){return ImGui::SliderFloat("Contrast",&n.image.contrast,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            } else if(node.kind==MaterialNodeKind::Sharpen) {
+                parameter("Amount","Change sharpen amount",[](auto& n){return ImGui::DragFloat("Amount",&n.image.sharpen,.01f,0,4,"%.3f");});
+            } else if(node.kind==MaterialNodeKind::HeightToNormal) {
+                parameter("Strength","Change height normal strength",[](auto& n){return ImGui::DragFloat("Strength",&n.image.normalStrength,.01f,0,0,"%.3f");});
+                parameter("Flip Y","Change height normal Y",[](auto& n){return ImGui::Checkbox("Flip Y",&n.image.normalFlipY);});
+            }
+        }
         if(node.kind==MaterialNodeKind::Scalar) {
             ImGui::SetNextItemWidth(width);
             field("Change scalar",[](auto& n){return ImGui::SliderFloat("##Value",&n.scalar,n.scalarRange[0],n.scalarRange[1],"%.3f");});
@@ -659,14 +712,16 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     ImGui::SetCursorPos({x+ImGui::CalcTextSize(definition.name).x+24,y});ImGui::SetNextItemWidth(100);ImGui::PushID(static_cast<int>(definition.pin));
                     const auto minimum=ImGui::GetCursorScreenPos();
                     s.presentation.fields.push_back({node.id,definition.pin,point(minimum),{minimum.x+100,minimum.y+ImGui::GetFrameHeight()}});
-                    if(definition.type==MaterialValueType::Color) {
+                    if(definition.type==MaterialValueType::Color || definition.type==MaterialValueType::Color4) {
                         const auto value=materialInputDefault(node,definition.pin);const auto color=hdrColorDisplay(value.value);
-                        ImGui::BeginDisabled(!editable);const bool open=ImGui::ColorButton("##Default",{color[0],color[1],color[2],1},ImGuiColorEditFlags_NoTooltip,{100,ImGui::GetFrameHeight()});ImGui::EndDisabled();
+                        ImGui::BeginDisabled(!editable);const bool open=ImGui::ColorButton("##Default",{color[0],color[1],color[2],definition.type==MaterialValueType::Color4?color[3]:1},ImGuiColorEditFlags_NoTooltip|ImGuiColorEditFlags_AlphaPreviewHalf,{100,ImGui::GetFrameHeight()});ImGui::EndDisabled();
                         ed::Suspend();if(open)ImGui::OpenPopup("Input color");
                         if(ImGui::BeginPopup("Input color")) {
                             auto candidate=node;auto edited=value;Vec3 rgb{value.value[0],value.value[1],value.value[2]};
-                            const auto edit=drawHdrColorControl("Color",rgb,nullptr,s.colorEditors[{node.id,definition.pin}],true);
-                            edited.value={rgb[0],rgb[1],rgb[2],value.value[3]};setInputDefault(candidate,definition.pin,edited);
+                            auto edit=drawHdrColorControl("Color",rgb,nullptr,s.colorEditors[{node.id,definition.pin}],true);
+                            float alpha=value.value[3];
+                            if(value.type==MaterialValueType::Color4)edit.include(ImGui::DragFloat("Alpha",&alpha,.01f,0,0,"%.3f"));
+                            edited.value={rgb[0],rgb[1],rgb[2],alpha};setMaterialInputDefault(candidate,definition.pin,edited);
                             editNode("Change input color",candidate,edit.changed,edit.activated,edit.deactivated);ImGui::EndPopup();
                         }ed::Resume();
                     } else field("Change input default",[&](auto& n){
@@ -678,7 +733,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                         } else changed=ImGui::DragFloat("##Default",&value.value[0],.01f,0,node.kind==MaterialNodeKind::Output?1.f:0.f,"%.3f");
                         if(definition.pin==MaterialPin::ScaleXY && ImGui::IsItemActivated())s.scaleBaselines[node.id]=n.uv.scale;
                         if(changed) {
-                            const auto before=n.uv.scale;setInputDefault(n,definition.pin,value);
+                            const auto before=n.uv.scale;setMaterialInputDefault(n,definition.pin,value);
                             if(definition.pin==MaterialPin::ScaleXY && n.uv.scaleLinked)for(unsigned axis=0;axis<2;++axis)if(n.uv.scale[axis]!=before[axis]) {
                                 const auto baseline=s.scaleBaselines.contains(node.id)?s.scaleBaselines.at(node.id):before;const float current=n.uv.scale[axis];
                                 if(std::abs(baseline[axis])>1e-8f)n.uv.scale=baseline*(static_cast<double>(current)/baseline[axis]);
@@ -785,11 +840,10 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         std::vector<MaterialGraphNodeChoice> choices;
         try {
             if(s.addFrom)choices=materialGraphNodeChoices(document.definition().graph,*s.addFrom);
-            else for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Vector2,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Clamp,
-                MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power,
-                MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift,MaterialNodeKind::Grunge})choices.push_back({kind});
+            else for(const auto kind:materialGraphNodeKinds())choices.push_back({kind});
         } catch(const std::exception& error){s.status=error.what();}
         std::erase_if(choices,[&](const auto& choice){return !nodeMatches(choice.kind,s.search.data());});
+        std::stable_sort(choices.begin(),choices.end(),[&](const auto& a,const auto& b){return exactNodeName(a.kind,s.search.data())>exactNodeName(b.kind,s.search.data());});
         if(!choices.empty())s.searchIndex=(s.searchIndex%static_cast<int>(choices.size())+static_cast<int>(choices.size()))%static_cast<int>(choices.size());
         else {s.searchIndex=0;ImGui::TextDisabled("No compatible nodes");}
         std::optional<MaterialGraphNodeChoice> chosen;

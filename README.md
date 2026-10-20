@@ -617,3 +617,11 @@ Existing capture scripts remain optional manual diagnostics, not a feature-compl
 The internal `--project-root PATH` override isolates diagnostic assets, persistence and layout in a disposable directory. Native `--ibl-smoke` diagnostics require an explicit disposable project root because they create fixtures and change assignments. Run them in a scratch folder, followed by `--scenario ibl-reopen` with the same root to check reopening. Focused capture scenarios include `ibl-dielectric`, `ibl-metal`, `ibl-rough`, `ibl-neutral`, `ibl-normal`, `ibl-zero-normal` and `ibl-extreme`; normal scenarios use the smoke fixtures. Pair a scenario with `--frames COUNT` and optionally `--capture PATH`. The separate `--editor-smoke` mode also changes material assignments; it is intended for import/assignment verification.
 
 `.\scripts\Verify-Models.ps1 -Configuration Release` retains the older isolated model-preview diagnostics. Its `--model-smoke` mode requires a disposable `--project-root`; `--scenario model-reopen` and `--scenario model-sphere` exercise the legacy preview path. They are not the scene-authoring acceptance workflow.
+
+### Image and channel graph nodes
+
+The material graph now includes Levels, Invert, Blend, Grayscale, To Color, Noise,
+Brightness / Contrast, Sharpen, Height to Normal, RGBA Merge/Split and Alpha
+Merge/Split. Search the add-node menu by these names. Use explicit RGBA outputs
+for packing; connect alpha to Opacity/Opacity Mask when it should affect coverage.
+Packed data textures use Linear Data. See [the node workflow and contracts](docs/MATERIAL_IMAGE_NODES.md).
