@@ -6,6 +6,8 @@
 #include "resources/ResourceManager.h"
 #include "resources/ImageDecoder.h"
 #include "assets/MaterialAsset.h"
+#include "assets/ModelAsset.h"
+#include "assets/ContentStorage.h"
 #include <crimson/renderer/forward/MeshNormals.h>
 #include <crimson/renderer/forward/ModelAnimation.h>
 #include "GpuTestBackend.h"
@@ -18,8 +20,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <limits>
 #include <optional>
 #include <set>
@@ -36,7 +40,15 @@ struct Texture {
     bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
     ~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}
 };
-struct Options {fs::path artifacts;bool benchmark{};unsigned warmup{240},samples{600};};
+struct Options {fs::path artifacts,heightSceneRoot;bool benchmark{};unsigned warmup{240},samples{600};};
+std::uint32_t samplerFlags(const ModelSampler& sampler) {
+    std::uint32_t flags{};
+    if(sampler.wrapU==ModelWrap::Clamp)flags|=BGFX_SAMPLER_U_CLAMP;else if(sampler.wrapU==ModelWrap::Mirror)flags|=BGFX_SAMPLER_U_MIRROR;
+    if(sampler.wrapV==ModelWrap::Clamp)flags|=BGFX_SAMPLER_V_CLAMP;else if(sampler.wrapV==ModelWrap::Mirror)flags|=BGFX_SAMPLER_V_MIRROR;
+    if(sampler.minFilter==ModelFilter::Nearest||sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::NearestMipmapLinear)flags|=BGFX_SAMPLER_MIN_POINT;
+    if(sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::LinearMipmapNearest)flags|=BGFX_SAMPLER_MIP_POINT;
+    if(sampler.magFilter==ModelFilter::Nearest)flags|=BGFX_SAMPLER_MAG_POINT;return flags;
+}
 std::shared_ptr<ModelAsset> plane(unsigned divisions=1) {
     auto mesh=std::make_shared<ModelAsset>();mesh->id="height-plane-"+std::to_string(divisions);
     ModelPrimitive primitive;primitive.uvMask=3;primitive.tangentUv=0;
@@ -84,6 +96,27 @@ std::shared_ptr<ModelAsset> hardCube() {
         primitive.indices.insert(primitive.indices.end(),{first,first+1,first+2,first,first+2,first+3});
     }
     mesh->primitives.push_back(std::move(primitive));mesh->draws.push_back({0,{}});mesh->materials.emplace_back();return mesh;
+}
+std::shared_ptr<ModelAsset> thinQuadTriangle(unsigned orientation) {
+    // Exact chart/triangle 311 from the staircase import, rotated onto XY and
+    // recentered. It has a 16.93 edge-length ratio and near-parallel source
+    // parameter directions. All three cyclic index orders describe one surface.
+    constexpr std::array<Vec3,3> source{{{-1.129502773284912f,1.2027982473373413f,0},
+        {-.32360678911209106f,.23511409759521484f,0},{-.27381885051727295f,.2915874421596527f,0}}};
+    constexpr std::array<Vec2,3> uv{{{2.000000238418579f,1.742229700088501f},
+        {3.250000238418579f,2.0527873039245605f},{3.250000238418579f,1.742229700088501f}}};
+    constexpr std::array<Vec4,3> chart{{{0,1,0,1},{1,0,0,1},{1,1,1,1}}};
+    const auto center=(source[0]+source[1]+source[2])*(1.f/3);
+    auto mesh=std::make_shared<ModelAsset>();mesh->id="height-thin-quad-"+std::to_string(orientation);ModelPrimitive primitive;
+    primitive.uvMask=3;primitive.tangentUv=0;
+    for(unsigned i=0;i<source.size();++i) {
+        ModelVertex vertex;vertex.position=source[i]-center;vertex.normal={0,0,1};vertex.tangent={1,0,0,-1};
+        vertex.uv0=uv[i];vertex.uv1={uv[i][1]*.9f+.1f,uv[i][0]*1.1f-.2f};vertex.uvInterpolationCoordinates=chart[i];
+        vertex.uvInterpolationCorrection={-3.559525563190391e-9f,-.7575758099555969f,4.449406620921081e-9f,-.2352709323167801f};
+        vertex.uvInterpolationMode=2;primitive.vertices.push_back(vertex);math::include(mesh->bounds,vertex.position);
+    }
+    primitive.indices={orientation%3,(orientation+1)%3,(orientation+2)%3};mesh->primitives.push_back(std::move(primitive));
+    mesh->draws.push_back({0,{}});mesh->materials.emplace_back();return mesh;
 }
 Vec3 debugNormal(const DecodedImage& image,unsigned x,unsigned y) {
     Vec3 result;const auto offset=(std::size_t(y)*image.width+x)*4;
@@ -170,7 +203,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Height readback timed out.");
     };
-    const auto prepare=[&](const MaterialAsset& authored,bgfx::TextureHandle image=BGFX_INVALID_HANDLE) {
+    const auto prepare=[&](const MaterialAsset& authored,bgfx::TextureHandle image=BGFX_INVALID_HANDLE,
+        const std::function<bgfx::TextureHandle(const MaterialGraphTextureBinding&)>& textureLookup={}) {
         const auto generated=generateMaterialGraphShader(authored);MaterialGraphProgramResult published;
         const auto deadline=Clock::now()+std::chrono::seconds{120};
         do {
@@ -185,11 +219,78 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         packet->receiveFog=materialOutputNode(authored.graph).output.receiveFog;packet->tessellation=generated.tessellation;
         packet->dynamicCoverage=generated.dynamicCoverage;packet->dynamicHeight=generated.dynamicHeight;packet->signature=published.programs->signature;
         for(const auto& source:generated.textures) {
+            if(textureLookup) {
+                packet->textures[source.slot]=textureLookup(source);packet->flags[source.slot]=samplerFlags(source.sampler);
+                check(bgfx::isValid(packet->textures[source.slot]),"Diagnostic graph texture upload failed.");continue;
+            }
             check(bgfx::isValid(image)&&source.role==MaterialGraphTextureRole::Data,"Height graph must bind its image as linear data.");
             packet->textures[source.slot]=image;packet->flags[source.slot]=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
         }
         return packet;
     };
+    if(!options.heightSceneRoot.empty()) {
+        check(bgfx::getRendererType()==bgfx::RendererType::Direct3D12,"Actual height diagnostic requires Direct3D 12.");
+        check(!options.artifacts.empty(),"Actual height diagnostic requires --artifacts.");
+        const auto root=fs::weakly_canonical(options.heightSceneRoot);
+        (void)refreshContentStorage(root);
+        check(contentStorageReady(root),"Cannot read the existing project location index without migration.");
+        auto actual=loadMaterialAsset(root,"8bbc4fed-ae99-5080-a32b-e96dbe088c08");
+        const auto manifest=root/".crimson/cache/quader-imports/a8695214-0c58-5bed-bd3b-77a26ce5f828/c27dc7a1-0e0b-55a0-ac6a-c0b2bccf8937/manifest.json";
+        auto target=loadModelPackage(manifest,root,ModelResolvers{{},[&](const std::string&)->std::optional<ModelMaterial>{return actual.surface;}});
+        check(renderer.prepareModel(*target),renderer.modelStatus());
+        std::map<std::string,std::unique_ptr<Texture>> textures;nlohmann::json textureReport=nlohmann::json::array();
+        const auto lookup=[&](const MaterialGraphTextureBinding& source) {
+            const auto key=source.image.id+":"+std::to_string(static_cast<unsigned>(source.role));
+            if(const auto found=textures.find(key);found!=textures.end())return found->second->handle;
+            const auto file=resolveAssetPath(root,source.image.id);const auto decoded=decodeManagedImage(file);
+            const auto role=source.role==MaterialGraphTextureRole::Color?streaming::TextureRole::Color:
+                source.role==MaterialGraphTextureRole::Normal?streaming::TextureRole::Normal:streaming::TextureRole::Data;
+            const auto mips=streaming::generateTextureMips(decoded.width,decoded.height,decoded.rgba,role);
+            auto texture=std::make_unique<Texture>();texture->handle=bgfx::createTexture2D(static_cast<std::uint16_t>(decoded.width),
+                static_cast<std::uint16_t>(decoded.height),true,1,bgfx::TextureFormat::RGBA8,
+                source.role==MaterialGraphTextureRole::Color?BGFX_TEXTURE_SRGB:BGFX_TEXTURE_NONE);
+            check(bgfx::isValid(texture->handle),"Actual diagnostic texture allocation failed.");
+            for(unsigned level=0;level<mips.size();++level)bgfx::updateTexture2D(texture->handle,0,static_cast<std::uint8_t>(level),0,0,
+                static_cast<std::uint16_t>(mips[level].width),static_cast<std::uint16_t>(mips[level].height),
+                bgfx::copy(mips[level].rgba.data(),static_cast<std::uint32_t>(mips[level].rgba.size())));
+            textureReport.push_back({{"id",source.image.id},{"file",file.string()},{"role",static_cast<unsigned>(source.role)},
+                {"width",decoded.width},{"height",decoded.height},{"mip_levels",mips.size()}});
+            const auto handle=texture->handle;textures.emplace(key,std::move(texture));return handle;
+        };
+        constexpr std::uint16_t Width=1024,Height=768;renderer.resizeGameViewport(Width,Height);renderer.resizeViewport(1,1);
+        SceneSettings actualSettings;actualSettings.environment.enabled=true;actualSettings.environment.toneMapping=ToneMapping::Linear;
+        actualSettings.environment.background.show=false;actualSettings.environment.background.overrideColor=true;actualSettings.environment.background.color={};
+        actualSettings.camera.position={4.521776676f,2.161623955f,3.139229536f};actualSettings.camera.target={8.848543167f,-2.295485973f,10.090497971f};
+        actualSettings.camera.up={.252654999f,.878300905f,.405897796f};actualSettings.camera.fov=45;
+        actualSettings.camera.nearPlane=.000699424f;actualSettings.camera.farPlane=2048;actualSettings.camera.fovAxis=CameraFovAxis::Vertical;
+        const auto closeup=actualSettings.camera;Camera overview=closeup;
+        const auto world=math::translation({7.5f,.5f,6});const auto bounds=math::transformBounds(target->bounds,world);
+        check(bounds.valid,"Actual height target has invalid bounds.");const auto center=(bounds.minimum+bounds.maximum)*.5f;
+        overview.position=center+math::normalized(Vec3{1,1,-1})*float(std::max(2.,math::length(bounds.maximum-bounds.minimum)));
+        overview.target=center;overview.up={0,1,0};overview.frameBounds(bounds.minimum,bounds.maximum,float(Width)/Height);
+        std::vector<ModelMaterial> actualSurfaces(target->materials.size(),actual.surface);
+        std::vector<ModelMaterialTextures> actualBindings(target->materials.size());
+        RenderModelInstance instance;instance.entityId=501;instance.model={target,world};instance.materials=&actualSurfaces;
+        instance.textures=&actualBindings;instance.forceFullDetail=true;instance.meshShading=MeshShading::Smooth;
+        RenderScene actualScene{actualSettings,{}};actualScene.sceneMode=true;actualScene.instances=std::span(&instance,1);
+        DirectionalLight sun;sun.direction=math::normalized(Vec3{-.45f,-1,-.3f});sun.intensity=2;sun.color={1,1,1};actualScene.directionalLights=std::span(&sun,1);
+        for(const auto lod:{0.f,5.f}) {
+            auto diagnostic=actual;materialOutputNode(diagnostic.graph).output.tessellation.heightLod=lod;
+            const auto packet=prepare(diagnostic,BGFX_INVALID_HANDLE,lookup);for(auto& binding:actualBindings)binding.graph=packet;
+            for(unsigned view=0;view<2;++view)for(const auto mode:{MeshShading::Flat,MeshShading::Smooth})for(const auto debug:{RenderDebugView::Normal,RenderDebugView::Lit}) {
+                actualSettings.camera=view?closeup:overview;instance.meshShading=mode;renderer.setDebugView(RenderViewPurpose::Game,debug);
+                renderer.renderGame(actualScene);check(renderer.modelStatus().empty(),renderer.modelStatus());const auto image=read(renderer.gameViewportTexture(),Width,Height);
+                const auto name="actual-height-"+std::to_string(unsigned(lod))+"-"+(view?"close":"overview")+"-"+
+                    (mode==MeshShading::Smooth?"smooth":"flat")+"-"+(debug==RenderDebugView::Normal?"normal":"lit")+".png";
+                save(options.artifacts,name.c_str(),image);
+            }
+        }
+        nlohmann::json report{{"manifest",manifest.string()},{"material",actual.id},{"name",actual.name},{"textures",textureReport},
+            {"width",Width},{"height",Height},{"factor",materialOutputNode(actual.graph).output.tessellation.maxFactor},
+            {"amount",materialOutputNode(actual.graph).output.tessellation.amount},{"scope","read-only target mesh/material diagnostic; authored source unchanged; real full production mip chains; diagnostic Height LOD 0 and 5 copies"}};
+        fs::create_directories(options.artifacts);std::ofstream file(options.artifacts/"actual-height-diagnostic.json");file<<report.dump(2)<<'\n';check(bool(file),"Cannot write actual height diagnostic report.");
+        actualScene.instances={};actualBindings.clear();resources.stop();frame=renderer.drainPending(frame);return;
+    }
     auto mesh=plane();check(renderer.prepareModel(*mesh),renderer.modelStatus());
     std::vector<ModelMaterial> surfaces(1);std::vector<ModelMaterialTextures> bindings(1);
     RenderModelInstance front;front.entityId=501;front.model.asset=mesh;front.materials=&surfaces;front.textures=&bindings;
@@ -589,6 +690,78 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
                 scene.instances=std::span(&front,1);
             }
         }
+        if(supported&&!options.benchmark) {
+            // Cyclic control-point order is a parameterization choice, not a
+            // surface edit. A stable differential must yield the same normals
+            // for this ill-conditioned source triangle under all three orders.
+            // Two independent high-frequency analytic waves expose large-probe
+            // filtering that a low-frequency quadratic cannot detect.
+            constexpr unsigned Edge=1024;
+            std::vector<float> pixels(Edge*Edge);
+            for(unsigned y=0;y<Edge;++y)for(unsigned x=0;x<Edge;++x) {
+                const double u=(double(x)+.5)/Edge,v=(double(y)+.5)/Edge;
+                pixels[std::size_t(y)*Edge+x]=float(.5+.25*std::sin(Tau*(97*u+61*v))+.20*std::cos(Tau*(53*u-89*v)));
+            }
+            Texture waves{bgfx::createTexture2D(Edge,Edge,true,1,bgfx::TextureFormat::R32F,BGFX_TEXTURE_NONE)};
+            check(bgfx::isValid(waves.handle),"Thin Quad analytic height allocation failed.");
+            unsigned edge=Edge,mip{};
+            while(true) {
+                bgfx::updateTexture2D(waves.handle,0,static_cast<std::uint8_t>(mip),0,0,static_cast<std::uint16_t>(edge),static_cast<std::uint16_t>(edge),
+                    bgfx::copy(pixels.data(),static_cast<std::uint32_t>(pixels.size()*sizeof(float))));
+                if(edge==1)break;const unsigned next=edge/2;std::vector<float> reduced(next*next);
+                for(unsigned y=0;y<next;++y)for(unsigned x=0;x<next;++x)
+                    reduced[std::size_t(y)*next+x]=(pixels[std::size_t(2*y)*edge+2*x]+pixels[std::size_t(2*y)*edge+2*x+1]+
+                        pixels[std::size_t(2*y+1)*edge+2*x]+pixels[std::size_t(2*y+1)*edge+2*x+1])*.25f;
+                pixels=std::move(reduced);edge=next;++mip;
+            }
+            std::array<std::shared_ptr<ModelAsset>,3> triangles;
+            for(unsigned i=0;i<triangles.size();++i){triangles[i]=thinQuadTriangle(i);check(renderer.prepareModel(*triangles[i]),renderer.modelStatus());}
+            const auto e=math::normalized(triangles[0]->primitives[0].vertices[1].position-triangles[0]->primitives[0].vertices[0].position);
+            const Vec3 perpendicular{-e[1],e[0],0};Mat4 stretch;
+            for(unsigned row=0;row<3;++row)for(unsigned column=0;column<3;++column)
+                stretch.at(row,column)=(row==column?1.f:0.f)+11*perpendicular[row]*perpendicular[column];
+            stretch.at(2,2)=12;front.model.transform=stretch;front.meshShading=MeshShading::Smooth;front.shading=MaterialShading::StandardPbr;
+            settings.camera.position={0,0,3};settings.camera.target={};scene.instances=std::span(&front,1);
+            renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Normal);
+            auto thin=material();auto& output=materialOutputNode(thin.graph).output;
+            output.shading=MaterialShading::StandardPbr;output.doubleSided=false;output.tessellation.amount=.001f;output.tessellation.maxFactor=20;
+            const auto outputId=materialOutputNode(thin.graph).id;
+            const auto mapping=addMaterialNode(thin.graph,MaterialNodeKind::UV).id;
+            const auto texture=addMaterialNode(thin.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(thin.graph,texture)->texture.role=MaterialTextureRole::Data;
+            findMaterialNode(thin.graph,texture)->texture.image.id="assets/textures/thin-quad-analytic-waves.png";
+            connectMaterialNodes(thin.graph,mapping,MaterialPin::UV,texture,MaterialPin::UV);
+            connectMaterialNodes(thin.graph,texture,MaterialPin::R,outputId,MaterialPin::Height);
+            for(unsigned variant=0;variant<4;++variant) {
+                auto& uv=findMaterialNode(thin.graph,mapping)->uv;uv={};
+                uv.mode=variant==2?MaterialUvMode::UV1:MaterialUvMode::UV0;
+                if(variant==1){uv.scale={.75f,1.3f,1};uv.rotation={0,0,23};uv.offset={.13f,-.27f,0};}
+                materialOutputNode(thin.graph).output.tessellation.heightLod=variant==3?2.f:0.f;
+                bindings[0].graph=prepare(thin,BGFX_INVALID_HANDLE,[&](const MaterialGraphTextureBinding&){return waves.handle;});
+                std::array<DecodedImage,3> images;
+                for(unsigned i=0;i<images.size();++i) {
+                    front.model.asset=triangles[i];images[i]=capture();const auto name="height-thin-quad-"+std::to_string(variant)+"-order-"+std::to_string(i)+".png";
+                    save(options.artifacts,name.c_str(),images[i]);
+                }
+                std::vector<double> angles;
+                for(unsigned y=4;y+4<Size;++y)for(unsigned x=4;x+4<Size;++x) {
+                    bool interior=true;
+                    for(const auto& image:images)for(const int dy:{-3,0,3})for(const int dx:{-3,0,3}) {
+                        const auto offset=(std::size_t(int(y)+dy)*Size+unsigned(int(x)+dx))*4;
+                        if(image.rgba[offset]<15&&image.rgba[offset+1]<15&&image.rgba[offset+2]<15)interior=false;
+                    }
+                    if(!interior)continue;const auto reference=debugNormal(images[0],x,y);double error{};
+                    for(unsigned i=1;i<images.size();++i)error=std::max(error,std::acos(std::clamp(math::dot(reference,debugNormal(images[i],x,y)),-1.,1.))*180/3.141592653589793);
+                    angles.push_back(error);
+                }
+                check(angles.size()>1000,"Thin Quad source-order oracle has insufficient interior coverage.");
+                std::sort(angles.begin(),angles.end());const double median=angles[angles.size()/2],p95=angles[std::size_t(.95*(angles.size()-1))];
+                std::cout<<"Thin Quad Height source-order variant="<<variant<<" interior="<<angles.size()<<" median_degrees="<<median<<" p95_degrees="<<p95<<'\n';
+                shadingChecks["thin_quad_gradient"].push_back({{"variant",variant},{"interior_pixels",angles.size()},{"median_angle_degrees",median},{"p95_angle_degrees",p95}});
+                check(median<3&&p95<12,"Smooth Height gradients depend on thin Quad triangle control-point order: variant="+
+                    std::to_string(variant)+", median="+std::to_string(median)+" degrees, p95="+std::to_string(p95)+" degrees.");
+            }
+        }
         settings=savedSettings;front=savedFront;bindings[0].graph=savedGraph;surfaces[0]=ModelMaterial{};
         scene.instances=std::span(&front,1);renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
         renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::Lit);
@@ -810,6 +983,7 @@ int main(int argc,char** argv) {
         Options options;for(int i=4;i<argc;++i) {
             const std::string arg=argv[i];check(i+1<argc,"Height option requires a value.");
             if(arg=="--artifacts")options.artifacts=argv[++i];else if(arg=="--benchmark"){options.benchmark=true;options.artifacts=argv[++i];}
+            else if(arg=="--height-scene-root")options.heightSceneRoot=argv[++i];
             else if(arg=="--warmup")options.warmup=std::stoul(argv[++i]);else if(arg=="--samples")options.samples=std::stoul(argv[++i]);else throw std::runtime_error("Unknown height option: "+arg);
         }
         check(options.warmup>=32&&options.samples>0,"Height timing requires at least 32 warmup frames and a positive sample count.");
@@ -820,6 +994,7 @@ int main(int argc,char** argv) {
         check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());struct Quit{~Quit(){SDL_Quit();}} quit;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson material height GPU checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());exercise(window.get(),config,options);
-        std::cout<<"Material height perspective silhouette, depth/picking, preview, shadow geometry and source edits passed.\n";return 0;
+        std::cout<<(options.heightSceneRoot.empty()?"Material height perspective silhouette, depth/picking, preview, shadow geometry and source edits passed.\n":
+            "Actual target mesh/material height diagnostic captures completed without authored changes.\n");return 0;
     } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

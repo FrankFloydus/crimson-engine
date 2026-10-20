@@ -740,6 +740,7 @@ if(BUILD_TESTING)
     add_test(NAME point_shadow_render_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 240)
     add_executable(material_height_render_tests tests/material_height_render_tests.cpp
+        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
         src/crimson-renderer/RendererHost.cpp
         src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
         src/crimson-renderer/PlatformSurface.cpp
@@ -748,7 +749,7 @@ if(BUILD_TESTING)
     target_include_directories(material_height_render_tests PRIVATE src tests "${CC_GENERATED_DIR}")
     target_compile_definitions(material_height_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(material_height_render_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(material_height_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    target_link_libraries(material_height_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera mikktspace::mikktspace assimp::assimp SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME material_height_render_core COMMAND material_height_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --artifacts "${CMAKE_BINARY_DIR}/diagnostics/material-height")
     add_test(NAME material_height_render_dx11_core COMMAND material_height_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" --artifacts "${CMAKE_BINARY_DIR}/diagnostics/material-height-dx11")
     set_tests_properties(material_height_render_core material_height_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
