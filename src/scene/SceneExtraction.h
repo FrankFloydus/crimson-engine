@@ -20,6 +20,7 @@ struct ExtractedModel {
     double animationSeconds{}; // Transient sample time; never scene-authored.
     bool visible{true}; // Hidden models retain transient animation clocks.
     EntityId actorOwner{};
+    MeshShading meshShading{MeshShading::UseMeshNormals};
 };
 struct ExtractedParticle {
     EntityId id{};

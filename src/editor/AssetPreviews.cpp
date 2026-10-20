@@ -553,6 +553,7 @@ struct AssetPreviews::Impl {
             instances.back().lightingScopes=model.lightingScopes;
             instances.back().lightingCategory=model.lightingCategory;
             instances.back().actorOwner=model.actorOwner;
+            instances.back().meshShading=model.meshShading;
             instances.back().pose=prepared.pose(model,ready->asset);
         }
         if (thumbnailEnvironment!=bake->key) {

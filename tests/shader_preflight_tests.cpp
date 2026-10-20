@@ -32,6 +32,7 @@
 #include "fs_directional_shadow.h"
 #include "cs_procedural_filter.h"
 #include "cs_model_deform.h"
+#include "cs_model_smooth_normals.h"
 #include "cs_ssgi_trace.h"
 #include "cs_ssgi_temporal.h"
 #include "cs_ssgi_filter.h"
@@ -71,6 +72,9 @@ int main() {
         check(!crimson::preflightShaderPair(wrong,cc_fs_model,cc_vs_model,cc_fs_model,diagnostic),"Wrong shader stage should fail safely.");
         check(crimson::preflightComputeShader(cc_cs_procedural_filter,cc_cs_procedural_filter,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_model_deform,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_model_smooth_normals,cc_cs_model_smooth_normals,diagnostic),diagnostic);
+        check(!crimson::preflightComputeShader(cc_cs_model_smooth_normals,cc_cs_model_deform,diagnostic),
+            "Smooth normal reconstruction must retain its own topology/output contract.");
         check(crimson::preflightComputeShader(cc_cs_ssgi_trace,cc_cs_ssgi_trace,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_ssgi_temporal,cc_cs_ssgi_temporal,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_ssgi_filter,cc_cs_ssgi_filter,diagnostic),diagnostic);

@@ -31,6 +31,7 @@ const std::map<std::string,std::string> varying{
     {"cs_procedural_filter","varying.def.sc"},
     {"cs_cluster_lights","varying.def.sc"},
     {"cs_model_deform","varying.def.sc"},
+    {"cs_model_smooth_normals","varying.def.sc"},
     {"cs_ssgi_trace","varying.def.sc"},{"cs_ssgi_temporal","varying.def.sc"},
     {"cs_ssgi_filter","varying.def.sc"},{"cs_ssgi_publish","varying.def.sc"},
     {"cs_ssao_evaluate","varying.def.sc"},{"cs_ssao_publish","varying.def.sc"},

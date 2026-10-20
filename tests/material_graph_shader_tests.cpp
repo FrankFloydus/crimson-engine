@@ -213,7 +213,7 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v31")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v32")!=std::string::npos,
             "Generated material identity does not invalidate pre-emission-publication bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle),

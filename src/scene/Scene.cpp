@@ -119,7 +119,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation && a.visible==b.visible &&
-        a.outlinerStyle==b.outlinerStyle;
+        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -149,6 +149,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
+        record.meshShading=model->meshShading;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
@@ -262,6 +263,10 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
+        if(!validMeshShading(record.meshShading))
+            throw std::runtime_error("Mesh shading must use mesh normals, flat, or smooth.");
+        if(!record.model && record.meshShading!=MeshShading::UseMeshNormals)
+            throw std::runtime_error("Mesh shading settings require a model entity.");
         const auto& animation=record.modelAnimation;
         if(animation.clip<-1 || !std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
             !std::isfinite(animation.startTime) || animation.startTime<0 || animation.startTime>1e9f)
@@ -504,7 +509,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);

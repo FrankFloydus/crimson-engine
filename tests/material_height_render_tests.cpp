@@ -6,6 +6,8 @@
 #include "resources/ResourceManager.h"
 #include "resources/ImageDecoder.h"
 #include "assets/MaterialAsset.h"
+#include <crimson/renderer/forward/MeshNormals.h>
+#include <crimson/renderer/forward/ModelAnimation.h>
 #include "GpuTestBackend.h"
 #include <SDL3/SDL.h>
 #include <lodepng.h>
@@ -18,6 +20,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -64,6 +67,54 @@ std::shared_ptr<ModelAsset> smoothSphere() {
         primitive.indices.insert(primitive.indices.end(),{a,b,c,a,c,d});
     }
     mesh->primitives.push_back(std::move(primitive));mesh->draws.push_back({0,{}});mesh->materials.emplace_back();return mesh;
+}
+std::shared_ptr<ModelAsset> hardCube() {
+    auto mesh=std::make_shared<ModelAsset>();mesh->id="mesh-shading-hard-cube";
+    ModelPrimitive primitive;primitive.uvMask=3;primitive.tangentUv=0;
+    const std::array<Vec3,6> normals{{{0,0,1},{0,0,-1},{1,0,0},{-1,0,0},{0,1,0},{0,-1,0}}};
+    const std::array<Vec3,6> axes{{{1,0,0},{-1,0,0},{0,0,-1},{0,0,1},{1,0,0},{1,0,0}}};
+    for(unsigned face=0;face<normals.size();++face) {
+        const auto normal=normals[face],uAxis=axes[face],vAxis=math::cross(normal,uAxis);
+        const auto first=static_cast<std::uint32_t>(primitive.vertices.size());
+        for(const Vec2 uv:std::array<Vec2,4>{{{0,0},{1,0},{1,1},{0,1}}}) {
+            ModelVertex vertex;vertex.position=normal*.6f+uAxis*(1.2f*uv[0]-.6f)+vAxis*(1.2f*uv[1]-.6f);
+            vertex.normal=normal;vertex.uv0={uv[0],1-uv[1]};vertex.uv1=vertex.uv0;vertex.tangent={uAxis[0],uAxis[1],uAxis[2],-1};
+            primitive.vertices.push_back(vertex);math::include(mesh->bounds,vertex.position);
+        }
+        primitive.indices.insert(primitive.indices.end(),{first,first+1,first+2,first,first+2,first+3});
+    }
+    mesh->primitives.push_back(std::move(primitive));mesh->draws.push_back({0,{}});mesh->materials.emplace_back();return mesh;
+}
+Vec3 debugNormal(const DecodedImage& image,unsigned x,unsigned y) {
+    Vec3 result;const auto offset=(std::size_t(y)*image.width+x)*4;
+    for(unsigned c=0;c<3;++c) {
+        const double encoded=double(image.rgba[offset+c])/255;
+        const double linear=encoded<=.04045?encoded/12.92:std::pow((encoded+.055)/1.055,2.4);
+        result[c]=float(2*linear-1);
+    }
+    return math::normalized(result);
+}
+std::string normalText(const Vec3& value) {
+    return "("+std::to_string(value[0])+","+std::to_string(value[1])+","+std::to_string(value[2])+")";
+}
+std::array<unsigned,2> projectProbe(const Camera& camera,const Vec3& point) {
+    const auto projected=math::project(point,camera.projectionMatrix(1,ClipDepth::ZeroToOne)*camera.viewMatrix(),
+        {0,0,Size,Size},ClipDepth::ZeroToOne);
+    check(projected&&(*projected)[0]>=0&&(*projected)[0]<Size&&(*projected)[1]>=0&&(*projected)[1]<Size,"Mesh shading probe is not projectable.");
+    return {unsigned((*projected)[0]),unsigned((*projected)[1])};
+}
+std::optional<Vec3> quadraticSurfacePoint(const Camera& camera,unsigned x,unsigned y,const Mat4& inverse,float amount) {
+    const auto ray=camera.screenRay(float(x)+.5f,float(y)+.5f,{0,0,Size,Size});if(!ray)return {};
+    const auto origin=math::transformPoint(inverse,ray->origin),direction=math::transformDirection(inverse,ray->direction);
+    const double u=(origin[0]+.6)/1.2,du=direction[0]/1.2;
+    const double a=amount*du*du,b=2*amount*u*du-direction[2],c=amount*(u*u-.5)-origin[2];
+    double t=std::numeric_limits<double>::infinity();
+    if(std::abs(a)<1e-12) {if(std::abs(b)>1e-12)t=-c/b;}
+    else {
+        const double discriminant=b*b-4*a*c;if(discriminant<0)return {};
+        for(const double root:{(-b-std::sqrt(discriminant))/(2*a),(-b+std::sqrt(discriminant))/(2*a)})if(root>0)t=std::min(t,root);
+    }
+    if(!std::isfinite(t)||t<=0)return {};return origin+direction*float(t);
 }
 MaterialAsset material(bool enabled=true) {
     MaterialAsset asset;asset.id="height-gpu-material";asset.name="Height GPU contract";
@@ -344,11 +395,244 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         }
     }
 
+    nlohmann::json shadingChecks=nlohmann::json::object();
+    {
+        const auto savedSettings=settings;const auto savedFront=front;const auto savedGraph=bindings[0].graph;
+        scene.instances=std::span(&front,1);scene.pointLights={};scene.directionalLights={};
+        settings.camera.position={0,0,3};settings.camera.target={};
+        renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Normal);
+        renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::Normal);
+        front.shading=MaterialShading::StandardPbr;front.model.transform={};bindings[0].graph.reset();
+        surfaces[0]=ModelMaterial{};surfaces[0].baseColor={1,1,1,1};surfaces[0].doubleSided=false;
+        auto custom=plane();custom->id="mesh-shading-custom-normal-plane";
+        const auto authoredNormal=math::normalized(Vec3{.4f,.25f,1});
+        for(auto& vertex:custom->primitives[0].vertices)vertex.normal=authoredNormal;
+        check(renderer.prepareModel(*custom),renderer.modelStatus());front.model.asset=custom;
+        std::array<DecodedImage,3> ordinary;
+        constexpr std::array ordinaryNames{"mesh-shading-ordinary-authored.png","mesh-shading-ordinary-flat.png","mesh-shading-ordinary-smooth.png"};
+        for(unsigned mode=0;mode<ordinary.size();++mode) {
+            front.meshShading=static_cast<MeshShading>(mode);ordinary[mode]=capture();
+            const auto expected=mode?Vec3{0,0,1}:authoredNormal;
+            const auto actual=debugNormal(ordinary[mode],Size/2,Size/2);
+            save(options.artifacts,ordinaryNames[mode],ordinary[mode]);
+            check(math::length(actual-expected)<.015f,
+                "Ordinary mesh mode="+std::to_string(mode)+" did not select its normals: actual="+normalText(actual)+", expected="+normalText(expected));
+        }
+        check(imageRms(ordinary[0],ordinary[2])>5&&imageRms(ordinary[1],ordinary[2])<1,
+            "Ordinary Smooth neither regenerated geometry normals nor agreed with a planar face.");
+        std::array independent{front,front};independent[0].entityId=711;independent[1].entityId=712;
+        independent[0].meshShading=MeshShading::UseMeshNormals;independent[1].meshShading=MeshShading::Smooth;
+        independent[0].model.transform=math::translation({-.7f,0,0})*math::scaling({.8f,.8f,.8f});
+        independent[1].model.transform=math::translation({.7f,0,0})*math::scaling({.8f,.8f,.8f});
+        scene.instances=independent;const auto occurrences=capture();
+        for(unsigned i=0;i<independent.size();++i) {
+            const auto probe=projectProbe(settings.camera,{i?.7f:-.7f,0,0});
+            check(math::length(debugNormal(occurrences,probe[0],probe[1])-(i?Vec3{0,0,1}:authoredNormal))<.015f,
+                "Occurrences sharing one GPU mesh leaked their shading choice.");
+            check(pick(probe[0],probe[1])==independent[i].entityId,"Per-mesh shading changed shared-asset selection identity.");
+        }
+        scene.instances=std::span(&front,1);
+        {
+            auto morphed=plane();morphed->id="mesh-shading-morphed-plane";morphed->draws[0].node=0;
+            morphed->nodes.resize(1);morphed->nodes[0].mesh=0;constexpr float Slope=.65f;
+            ModelMorphTarget morph;for(const auto& vertex:morphed->primitives[0].vertices)morph.positions.push_back({0,0,Slope*vertex.position[0]});
+            morphed->primitives[0].morphTargets.push_back(std::move(morph));
+            check(renderer.prepareModel(*morphed),renderer.modelStatus());front.model.asset=morphed;
+            for(const float weight:{1.f,-.75f}) {
+                auto pose=std::make_shared<ModelPose>();pose->localTransforms.resize(1);pose->worldTransforms.resize(1);
+                pose->nodeWeights={{weight}};pose->skinPalettes.resize(1);pose->drawTransforms.resize(1);
+                pose->bounds={{-.6f,-.6f,-.6f},{.6f,.6f,.6f},true};pose->signature=weight>0?1711:1712;front.pose=pose;
+                const auto expected=math::normalized(Vec3{-Slope*weight,0,1});
+                std::array<DecodedImage,3> images;
+                for(unsigned mode=0;mode<images.size();++mode) {
+                    front.meshShading=static_cast<MeshShading>(mode);images[mode]=capture();
+                    const auto actual=debugNormal(images[mode],Size/2,Size/2),reference=mode?expected:Vec3{0,0,1};
+                    const auto name="mesh-shading-morph-"+std::to_string(weight)+"-"+std::to_string(mode)+".png";
+                    save(options.artifacts,name.c_str(),images[mode]);
+                    check(math::length(actual-reference)<.015f,
+                        "GPU morph normals mode="+std::to_string(mode)+" actual="+normalText(actual)+", expected="+normalText(reference));
+                }
+                check(imageRms(images[1],images[2])<1,"A planar morph disagreed between regenerated Smooth and face normals.");
+                if(supported) {
+                    auto neutral=material();auto& output=materialOutputNode(neutral.graph).output;
+                    output.shading=MaterialShading::StandardPbr;output.doubleSided=false;
+                    bindings[0].graph=prepare(neutral);front.meshShading=MeshShading::Smooth;
+                    const auto neutralImage=capture();const auto name="mesh-shading-morph-neutral-"+std::to_string(weight)+".png";
+                    save(options.artifacts,name.c_str(),neutralImage);
+                    const auto before=debugNormal(images[2],Size/2,Size/2),after=debugNormal(neutralImage,Size/2,Size/2);
+                    const auto rms=imageRms(images[2],neutralImage);
+                    double interiorSquared{};unsigned interiorPixels{},silhouettePixels{};
+                    for(std::size_t i=0;i<images[2].rgba.size();i+=4) {
+                        const bool beforeCovered=images[2].rgba[i]>15||images[2].rgba[i+1]>15||images[2].rgba[i+2]>15;
+                        const bool afterCovered=neutralImage.rgba[i]>15||neutralImage.rgba[i+1]>15||neutralImage.rgba[i+2]>15;
+                        silhouettePixels+=beforeCovered!=afterCovered;
+                    }
+                    for(unsigned y=4;y+4<Size;++y)for(unsigned x=4;x+4<Size;++x) {
+                        bool interior=true;
+                        for(const int dy:{-3,0,3})for(const int dx:{-3,0,3}) {
+                            const auto i=(std::size_t(int(y)+dy)*Size+unsigned(int(x)+dx))*4;
+                            if(images[2].rgba[i+2]<128||neutralImage.rgba[i+2]<128)interior=false;
+                        }
+                        if(!interior)continue;++interiorPixels;const auto i=(std::size_t(y)*Size+x)*4;
+                        for(unsigned c=0;c<3;++c){const double d=int(images[2].rgba[i+c])-int(neutralImage.rgba[i+c]);interiorSquared+=d*d;}
+                    }
+                    const double interiorRms=interiorPixels?std::sqrt(interiorSquared/(interiorPixels*3)):1000;
+                    // Subdivision can move an outer edge by a pixel through
+                    // floating-point raster setup. Test interior normals and
+                    // bound coverage independently so that two edge pixels
+                    // cannot masquerade as a changed shading normal.
+                    check(interiorPixels>1500&&interiorRms<=1&&silhouettePixels<=8&&
+                        math::length(before-expected)<.015f&&math::length(after-expected)<.015f,
+                        "Neutral tessellation changed GPU-morphed Smooth normals: whole-image RGB RMS="+std::to_string(rms)+
+                        ", interior RGB RMS="+std::to_string(interiorRms)+", interior pixels="+std::to_string(interiorPixels)+
+                        ", silhouette pixels="+std::to_string(silhouettePixels)+
+                        ", center before="+normalText(before)+", center after="+normalText(after)+", expected="+normalText(expected));
+                    shadingChecks["neutral_morph"].push_back({{"weight",weight},{"whole_image_rgb_rms",rms},
+                        {"interior_rgb_rms",interiorRms},{"interior_pixels",interiorPixels},{"silhouette_pixels",silhouettePixels}});
+                    bindings[0].graph.reset();
+                }
+            }
+            front.pose.reset();shadingChecks["current_gpu_morph_normals"]=true;
+        }
+        auto cube=hardCube();check(renderer.prepareModel(*cube),renderer.modelStatus());front.model.asset=cube;
+        settings.camera.position={2,1.6f,3};settings.camera.target={};front.meshShading=MeshShading::UseMeshNormals;
+        const auto cubeReference=capture();
+        for(const auto mode:{MeshShading::Flat,MeshShading::Smooth}) {
+            front.meshShading=mode;const auto image=capture();
+            check(imageRms(cubeReference,image)<1,"Mesh shading rounded a cube's authored hard edges.");
+            for(const Vec3 normal:std::array<Vec3,3>{{{0,0,1},{1,0,0},{0,1,0}}}) {
+                const auto probe=projectProbe(settings.camera,normal*.6f);
+                check(math::length(debugNormal(image,probe[0],probe[1])-normal)<.015f,
+                    "A cube side acquired averaged cross-edge normals.");
+                check(pick(probe[0],probe[1])==front.entityId,"A shading mode changed cube surface picking.");
+            }
+            if(mode==MeshShading::Smooth)save(options.artifacts,"mesh-shading-hard-cube.png",image);
+        }
+        if(supported) {
+            auto neutral=material();auto& output=materialOutputNode(neutral.graph).output;
+            output.shading=MaterialShading::StandardPbr;output.doubleSided=false;
+            bindings[0].graph=prepare(neutral);front.meshShading=MeshShading::Smooth;
+            check(imageRms(cubeReference,capture())<1,"Tessellated Smooth rounded the cube's independent hard-edge charts.");
+            bindings[0].graph.reset();
+        }
+        shadingChecks["ordinary_custom_normals"]=true;shadingChecks["independent_same_asset_occurrences"]=true;
+        shadingChecks["cube_hard_edges"]=true;
+
+        if(supported) {
+            // Exact independent analytic reference: z = amount * (u*u-.5),
+            // u=(x+.6)/1.2. The 256x1 R32F map avoids byte quantization noise;
+            // its bilinear reconstruction differs from the polynomial by less
+            // than four millionths. No CPU helper from the shader is reused.
+            constexpr unsigned PolynomialEdge=256;constexpr float Amount=.8f;
+            std::array<float,PolynomialEdge> polynomial{};
+            for(unsigned x=0;x<PolynomialEdge;++x){const float u=(float(x)+.5f)/PolynomialEdge;polynomial[x]=u*u;}
+            Texture polynomialTexture{bgfx::createTexture2D(PolynomialEdge,1,false,1,bgfx::TextureFormat::R32F,0,
+                bgfx::copy(polynomial.data(),sizeof(polynomial)))};
+            check(bgfx::isValid(polynomialTexture.handle),"Analytic height texture allocation failed.");
+            auto curved=material();curved.id="mesh-shading-analytic-height";
+            auto& controls=materialOutputNode(curved.graph).output;controls.shading=MaterialShading::StandardPbr;
+            controls.doubleSided=false;controls.tessellation.amount=Amount;controls.tessellation.maxFactor=8;
+            const auto output=materialOutputNode(curved.graph).id;
+            const auto texture=addMaterialNode(curved.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(curved.graph,texture)->texture.role=MaterialTextureRole::Data;
+            findMaterialNode(curved.graph,texture)->texture.image.id="assets/textures/analytic-height.png";
+            connectMaterialNodes(curved.graph,texture,MaterialPin::R,output,MaterialPin::Height);
+            bindings[0].graph=prepare(curved,polynomialTexture.handle);front.model.asset=mesh;
+            settings.camera.position={0,0,3};settings.camera.target={};
+            Mat4 shear;shear.at(0,1)=.25f;shear.at(2,1)=.15f;
+            const std::array transforms{Mat4{},shear*math::scaling({1.15f,.85f,1.25f})};
+            for(unsigned transformIndex=0;transformIndex<transforms.size();++transformIndex) {
+                front.model.transform=transforms[transformIndex];
+                const auto inverse=math::inverse(front.model.transform),normalMatrix=math::normalMatrix(front.model.transform);
+                check(inverse&&normalMatrix,"Analytic shading fixture has a singular transform.");
+                std::array<DecodedImage,3> images;
+                for(unsigned mode=0;mode<images.size();++mode){front.meshShading=static_cast<MeshShading>(mode);images[mode]=capture();}
+                for(unsigned mode=0;mode<images.size();++mode) {
+                    const auto name="mesh-shading-curve-"+std::to_string(transformIndex)+"-"+std::to_string(mode)+".png";
+                    save(options.artifacts,name.c_str(),images[mode]);
+                }
+                std::array<double,3> squared{};unsigned probes{};
+                for(unsigned y=8;y+8<Size;y+=2)for(unsigned x=8;x+8<Size;x+=2) {
+                    const auto point=quadraticSurfacePoint(settings.camera,x,y,*inverse,Amount);
+                    if(!point||std::abs((*point)[0])>.48f||std::abs((*point)[1])>.48f)continue;
+                    const float u=((*point)[0]+.6f)/1.2f;
+                    const auto expected=math::normalized(math::transformDirection(*normalMatrix,Vec3{-2*Amount*u/1.2f,0,1}));
+                    for(unsigned mode=0;mode<images.size();++mode) {
+                        const auto delta=debugNormal(images[mode],x,y)-expected;squared[mode]+=math::dot(delta,delta);
+                    }
+                    ++probes;
+                }
+                check(probes>700,"Analytic curved-height oracle has insufficient interior coverage.");
+                std::array<double,3> rms{};for(unsigned mode=0;mode<rms.size();++mode)rms[mode]=std::sqrt(squared[mode]/probes);
+                check(rms[2]<.025&&rms[1]>.025&&rms[2]<rms[1]*.65,
+                    "Smooth failed to remove tessellation faceting against analytic surface normals: Flat="+std::to_string(rms[1])+", Smooth="+std::to_string(rms[2]));
+                shadingChecks[transformIndex?"curved_height_affine":"curved_height_identity"]={{"interior_probes",probes},
+                    {"authored_normal_rms",rms[0]},{"flat_normal_rms",rms[1]},{"smooth_normal_rms",rms[2]}};
+            }
+            front.model.transform={};settings.camera.position={0,0,3};settings.camera.target={};
+            renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+            renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::Lit);
+            materialOutputNode(curved.graph).output.shading=MaterialShading::Unlit;bindings[0].graph=prepare(curved,polynomialTexture.handle);
+            front.shading=MaterialShading::Unlit;front.meshShading=MeshShading::UseMeshNormals;const auto silhouette=capture();
+            const auto probe=projectProbe(settings.camera,{.25f,0,Amount*((.85f/1.2f)*(.85f/1.2f)-.5f)});
+            for(const auto mode:{MeshShading::UseMeshNormals,MeshShading::Flat,MeshShading::Smooth}) {
+                front.meshShading=mode;check(imageRms(silhouette,capture())<1,"Smooth/Flat changed displaced geometry or silhouette.");
+                check(pick(probe[0],probe[1])==front.entityId&&pick(probe[0],probe[1],PickMode::MaterialSlot)==front.entityId,
+                    "Smooth/Flat changed tessellated surface picking.");
+                std::vector<ModelMaterial> occluderMaterial(1);occluderMaterial[0].baseColor={0,1,0,1};
+                RenderModelInstance occluder=front;occluder.entityId=713;occluder.textures=nullptr;occluder.materials=&occluderMaterial;
+                occluder.model.transform=math::translation({0,0,-.05f});occluder.meshShading=MeshShading::UseMeshNormals;
+                std::array depthPair{front,occluder};scene.instances=depthPair;
+                const auto depthImage=capture();const auto offset=(std::size_t(probe[1])*Size+probe[0])*4;
+                check(depthImage.rgba[offset]>240&&depthImage.rgba[offset+1]>240&&depthImage.rgba[offset+2]>240&&
+                    pick(probe[0],probe[1])==front.entityId,"Shading mode changed displaced depth against an occluder.");
+                scene.instances=std::span(&front,1);
+            }
+        }
+        settings=savedSettings;front=savedFront;bindings[0].graph=savedGraph;surfaces[0]=ModelMaterial{};
+        scene.instances=std::span(&front,1);renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+        renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::Lit);
+    }
+
     if(options.benchmark) {
         check(supported,"Hardware tessellation benchmark requires Direct3D 12.");
         check(!options.artifacts.empty(),"Height benchmark requires an artifact directory.");
-        renderer.resizeViewport(1,1);renderer.resizeGameViewport(1920,1080);auto benchmarkMesh=plane(16);check(renderer.prepareModel(*benchmarkMesh),renderer.modelStatus());
-        front.model.asset=benchmarkMesh;front.shading=MaterialShading::StandardPbr;front.model.transform=math::scaling({2.4f,1.35f,1});scene.instances=std::span(&front,1);
+        renderer.resizeViewport(1,1);renderer.resizeGameViewport(1920,1080);auto benchmarkMesh=plane(16);
+        benchmarkMesh->id="mesh-shading-benchmark-stream";
+        auto level=std::make_shared<ModelGeometryLevel>();level->geometry=benchmarkMesh->primitives.front();
+        auto descriptor=std::make_shared<streaming::ModelStream>();descriptor->id=benchmarkMesh->id;
+        descriptor->key=streaming::model_primitive_content_key(level->geometry);
+        streaming::PrimitiveLods primitive;primitive.bounds=benchmarkMesh->bounds;
+        primitive.levels.push_back({{},descriptor->key,static_cast<std::uint32_t>(level->geometry.vertices.size()),
+            static_cast<std::uint32_t>(level->geometry.indices.size()),0});descriptor->primitives.push_back(std::move(primitive));
+        benchmarkMesh->stream=descriptor;const auto bytesBefore=renderer.modelResidentBytes();
+        renderer.configureModelStream(benchmarkMesh->id,1,*descriptor);
+        check(renderer.queueModelLod(benchmarkMesh->id,1,level),"Cannot queue shading benchmark geometry.");
+        for(unsigned i=0;i<120&&!renderer.modelLodReady(benchmarkMesh->id,1,0,0);++i)tick();
+        check(renderer.modelLodReady(benchmarkMesh->id,1,0,0),"Shading benchmark geometry upload timed out.");
+        check(!renderer.modelLodReady(benchmarkMesh->id,1,0,0,true),"Default mesh upload eagerly generated Smooth normals.");
+        const auto baseResidentBytes=renderer.modelResidentBytes()-bytesBefore;
+        const auto queueStarted=Clock::now();check(renderer.queueModelLod(benchmarkMesh->id,1,level,true),"Cannot request lazy Smooth benchmark normals.");
+        const double lazyQueueCpuMs=std::chrono::duration<double,std::milli>(Clock::now()-queueStarted).count();
+        for(unsigned i=0;i<120&&!renderer.modelLodReady(benchmarkMesh->id,1,0,0,true);++i)tick();
+        check(renderer.modelLodReady(benchmarkMesh->id,1,0,0,true),"Lazy Smooth normal upload timed out.");
+        const auto smoothResidentBytes=renderer.modelResidentBytes()-bytesBefore;
+        check(smoothResidentBytes-baseResidentBytes==level->geometry.vertices.size()*3*sizeof(float),
+            "Lazy Smooth geometry did not account for exactly one 12-byte normal per vertex.");
+        const auto retainedBytes=renderer.modelResidentBytes();
+        check(renderer.queueModelLod(benchmarkMesh->id,1,level,true)&&renderer.modelResidentBytes()==retainedBytes,
+            "Repeated Smooth requests duplicated the derived GPU stream.");
+        std::vector<double> normalCpuMs;std::uint64_t normalChecksum{};
+        for(unsigned repeat=0;repeat<116;++repeat) {
+            const auto started=Clock::now();const auto normals=generate_smooth_mesh_normals(level->geometry);
+            const auto elapsed=std::chrono::duration<double,std::milli>(Clock::now()-started).count();
+            for(const auto& normal:normals)normalChecksum+=static_cast<std::uint64_t>(std::lround((normal[2]+1)*1000000));
+            check(normals.size()==level->geometry.vertices.size(),"CPU Smooth normals changed vertex count.");
+            if(repeat>=16)normalCpuMs.push_back(elapsed);
+        }
+        std::sort(normalCpuMs.begin(),normalCpuMs.end());
+        front.model.asset=benchmarkMesh;front.resourceRevision=1;front.shading=MaterialShading::StandardPbr;
+        front.model.transform=math::scaling({2.4f,1.35f,1});scene.instances=std::span(&front,1);
         settings.camera.position={0,0,3};settings.camera.target={};
         DirectionalLight sun;sun.direction={0,0,-1};sun.color={1,1,1};sun.intensity=2;scene.directionalLights=std::span(&sun,1);
         PointLight point;point.position={1,1,2};point.color={.6f,.8f,1};point.intensity=10;point.radius=8;scene.pointLights=std::span(&point,1);
@@ -361,29 +645,36 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         const auto benchmarkMapping=addMaterialNode(benchmarkMaterial.graph,MaterialNodeKind::UV).id;
         connectMaterialNodes(benchmarkMaterial.graph,benchmarkMapping,MaterialPin::UV,benchmarkTexture,MaterialPin::UV);
         connectMaterialNodes(benchmarkMaterial.graph,benchmarkTexture,MaterialPin::R,benchmarkOutput,MaterialPin::Height);
-        std::array<std::shared_ptr<PreparedGraphMaterial>,4> packets;
-        constexpr std::array factors{0u,4u,8u,16u};
-        for(unsigned i=0;i<factors.size();++i){
+        std::array<std::shared_ptr<PreparedGraphMaterial>,2> packets;
+        for(unsigned i=0;i<packets.size();++i){
             auto& controls=materialOutputNode(benchmarkMaterial.graph).output.tessellation;
-            controls.enabled=factors[i]!=0;controls.maxFactor=std::max(1u,factors[i]);
+            controls.enabled=i!=0;controls.maxFactor=8;
             packets[i]=prepare(benchmarkMaterial,varyingHeight.handle);
         }
         const auto* capabilities=bgfx::getCaps();
-        nlohmann::json report{{"schema",1},{"backend",bgfx::getRendererName(bgfx::getRendererType())},
+        nlohmann::json report{{"schema",2},{"backend",bgfx::getRendererName(bgfx::getRendererType())},
             {"gpu_vendor_id",capabilities->vendorId},{"gpu_device_id",capabilities->deviceId},{"width",1920},{"height",1080},
-            {"base_triangles",512},{"height","64x64 linear RGBA8 data: 0.5+0.5*sin(2*pi*u)*sin(2*pi*v); amount 0.02; midpoint 0.5; one bilinear SampleLevel LOD-0 fetch per domain invocation"},
+            {"base_triangles",512},{"factor",8},{"height","64x64 linear RGBA8 data: 0.5+0.5*sin(2*pi*u)*sin(2*pi*v); amount 0.02; midpoint 0.5; bilinear LOD-0 sampling; Smooth adds height evaluations for differential normals"},
             {"height_texture_bytes",HeightEdge*HeightEdge*4},{"common_warmup_seconds",3},
-            {"phase_order","off,4,8,16,16,8,4,off"},{"warmup",options.warmup},{"requested_samples",options.samples},
+            {"phase_order","ordinary-use,ordinary-flat,ordinary-smooth,tess-use,tess-flat,tess-smooth,tess-smooth,tess-flat,tess-use,ordinary-smooth,ordinary-flat,ordinary-use"},
+            {"warmup",options.warmup},{"requested_samples",options.samples},
+            {"geometry_residency",{{"base_bytes",baseResidentBytes},{"with_smooth_bytes",smoothResidentBytes},
+                {"derived_bytes",smoothResidentBytes-baseResidentBytes},{"derived_stride",12},{"vertex_count",level->geometry.vertices.size()},
+                {"lazy_first_request_cpu_ms",lazyQueueCpuMs},{"pure_normals_cpu_median_ms",normalCpuMs[normalCpuMs.size()/2]},
+                {"pure_normals_cpu_p95_ms",normalCpuMs[94]},{"cpu_warmup",16},{"cpu_samples",normalCpuMs.size()},{"cpu_checksum",normalChecksum}}},
+            {"correctness",shadingChecks},
             {"scope","Game opaque PBR pass with one directional and one point light; excludes presentation, uploads and shadow work; timestamp elapsed, not active GPU execution"},
             {"phases",nlohmann::json::array()}};
         // Exercise both directions after a sustained common warmup. Keep every
         // phase's raw samples: a cold first baseline must not imply a speedup.
-        bindings[0].graph=packets.back();
+        bindings[0].graph=packets.back();front.meshShading=MeshShading::Smooth;
         const auto settleUntil=Clock::now()+std::chrono::seconds{3};
         while(Clock::now()<settleUntil){renderer.renderGame(scene);tick();}
-        constexpr std::array phaseOrder{0u,1u,2u,3u,3u,2u,1u,0u};
+        constexpr std::array phaseOrder{0u,1u,2u,3u,4u,5u,5u,4u,3u,2u,1u,0u};
+        constexpr std::array modeNames{"Use Mesh Normals","Flat","Smooth"};
         for(const auto i:phaseOrder) {
-            bindings[0].graph=packets[i];const auto submit=[&]{renderer.renderGame(scene);tick();};
+            bindings[0].graph=packets[i/3];front.meshShading=static_cast<MeshShading>(i%3);
+            const auto submit=[&]{renderer.renderGame(scene);tick();};
             for(unsigned w=0;w<options.warmup;++w)submit();const auto firstSubmitted=frame+1;
             std::set<std::uint32_t> completed;std::vector<double> timings;nlohmann::json raw=nlohmann::json::array();
             const auto deadline=Clock::now()+std::chrono::minutes{2};unsigned submissions{};
@@ -401,12 +692,115 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             }
             check(timings.size()==options.samples,"Could not collect unique coherent post-warmup height GPU samples.");
             std::sort(timings.begin(),timings.end());const auto percentile=[&](double p){return timings[std::min(timings.size()-1,std::size_t(std::ceil(p*timings.size())-1))];};
-            nlohmann::json phase{{"phase_index",report["phases"].size()},{"factor",factors[i]},{"first_submitted_frame",firstSubmitted},{"submissions",submissions},{"unique_completed_frames",completed.size()},
+            nlohmann::json phase{{"phase_index",report["phases"].size()},{"tessellation",i>=3},{"mode",modeNames[i%3]},
+                {"factor",8},{"first_submitted_frame",firstSubmitted},{"submissions",submissions},{"unique_completed_frames",completed.size()},
                 {"median_ms",percentile(.5)},{"p95_ms",percentile(.95)},{"samples",std::move(raw)}};
-            std::cout<<"Height opaque PBR factor="<<factors[i]<<" median_ms="<<phase["median_ms"]<<" p95_ms="<<phase["p95_ms"]<<'\n';report["phases"].push_back(std::move(phase));
+            std::cout<<"Mesh shading opaque PBR tessellation="<<(i>=3)<<" mode="<<modeNames[i%3]<<" median_ms="<<phase["median_ms"]<<" p95_ms="<<phase["p95_ms"]<<'\n';report["phases"].push_back(std::move(phase));
         }
-        fs::create_directories(options.artifacts);std::ofstream file(options.artifacts/"material-height-benchmark.json");check(bool(file),"Cannot create height GPU report.");file<<report.dump(2)<<'\n';file.flush();check(bool(file),"Cannot write height GPU report.");
+        {
+            // A fresh immutable pose each frame prevents deformation-output
+            // reuse. All modes consume the same source, pose sequence, vertex
+            // count and material; only Smooth adds the normal reconstruction.
+            auto animated=plane(128);animated->id="mesh-shading-animated-benchmark";animated->draws[0].node=0;
+            animated->nodes.resize(1);animated->nodes[0].mesh=0;ModelMorphTarget morph;
+            for(const auto& vertex:animated->primitives[0].vertices) {
+                const float u=vertex.uv0[0],v=vertex.uv0[1];
+                morph.positions.push_back({0,0,.12f*std::sin(float(Tau)*2*u)*std::cos(float(Tau)*2*v)});
+            }
+            animated->primitives[0].morphTargets.push_back(std::move(morph));
+            check(renderer.prepareModel(*animated),renderer.modelStatus());
+            const auto topology=make_mesh_normal_topology(animated->primitives[0]);
+            const auto groupCount=topology.groupOffsets.size()-1;
+            const auto topologyBytes=(groupCount+1+topology.vertexGroups.size()+topology.groupOffsets.size()+
+                topology.groupFaces.size()+topology.triangleVertices.size())*sizeof(std::uint32_t);
+            bindings[0].graph=packets[0];front.model.asset=animated;front.resourceRevision=0;front.meshShading=MeshShading::Smooth;
+            scene.pointLights={};scene.shadowInstances={};scene.shadowWorldId=0;scene.localLightMode=LocalLightMode::AllLightsReference;
+            constexpr unsigned AnimatedInstances=16;
+            std::array<RenderModelInstance,AnimatedInstances> animatedInstances;
+            for(unsigned i=0;i<animatedInstances.size();++i) {
+                animatedInstances[i]=front;animatedInstances[i].entityId=10001+i;
+                animatedInstances[i].model.transform=math::translation({float(i%4)-1.5f,(float(i/4)-1.5f)*.56f,0})*
+                    math::scaling({.72f,.42f,1});
+            }
+            scene.instances=animatedInstances;
+            std::uint64_t poseSerial{};
+            const auto submitAnimated=[&] {
+                ++poseSerial;
+                for(unsigned i=0;i<animatedInstances.size();++i) {
+                    auto pose=std::make_shared<ModelPose>();pose->localTransforms.resize(1);pose->worldTransforms.resize(1);
+                    pose->nodeWeights={{((poseSerial+i)&1)?.8f:.4f}};pose->skinPalettes.resize(1);pose->drawTransforms.resize(1);
+                    pose->bounds={{-.6f,-.6f,-.12f},{.6f,.6f,.12f},true};pose->signature=(poseSerial<<8)|(i+1);
+                    animatedInstances[i].pose=std::move(pose);
+                }
+                renderer.renderGame(scene);tick();
+            };
+            const auto settle=Clock::now()+std::chrono::seconds{3};while(Clock::now()<settle)submitAnimated();
+            nlohmann::json animatedReport{{"vertices",animated->primitives[0].vertices.size()},
+                {"triangles",animated->primitives[0].indices.size()/3},{"tessellation",false},{"morph_targets",1},
+                {"instances",AnimatedInstances},{"total_vertices",AnimatedInstances*animated->primitives[0].vertices.size()},
+                {"total_triangles",AnimatedInstances*animated->primitives[0].indices.size()/3},
+                {"layout","4x4 visible grid; all occurrences share source geometry, each owns an independent fresh pose"},
+                {"pose_sequence","new immutable pose per occurrence per frame; morph weight alternates 0.8/0.4"},
+                {"smooth_topology_groups",groupCount},{"packed_gpu_topology_bytes",topologyBytes},
+                {"smooth_output_bytes_per_pose",animated->primitives[0].vertices.size()*3*sizeof(float)},
+                {"common_warmup_seconds",3},{"warmup",options.warmup},{"requested_samples",options.samples},
+                {"phase_order","Use Mesh Normals,Flat,Smooth,Smooth,Flat,Use Mesh Normals"},
+                {"compute_scope","EnvironmentComputeView elapsed: 16 deformation dispatches, plus 16 Smooth reconstruction dispatches in Smooth; includes command-list submission/queue gaps around the view boundary; not isolated kernel execution time; no point lights, procedural environment, shadows, GI/AO, external jobs or tessellation"},
+                {"opaque_scope","GameSceneView elapsed for 16 opaque PBR draws; one directional light; excludes presentation; timestamp elapsed, not active GPU execution"},
+                {"combined_scope","sum of coherent compute-view and opaque-view elapsed durations; excludes time outside those view intervals; not total GPU frame time"},
+                {"global_scope","coherent bgfx gpuTimeEnd-gpuTimeBegin for the complete benchmark GPU frame, including presentation and queue/submission gaps; elapsed rather than isolated active execution; not an FPS prediction"},
+                {"topology_scope","exact bytes of production packed member-offset/member/group-offset/incident-corner/triangle CSR arrays; shared across poses"},
+                {"phases",nlohmann::json::array()}};
+            for(const unsigned mode:std::array{0u,1u,2u,2u,1u,0u}) {
+                for(auto& instance:animatedInstances)instance.meshShading=static_cast<MeshShading>(mode);
+                for(unsigned w=0;w<options.warmup;++w)submitAnimated();const auto firstSubmitted=frame+1;
+                std::set<std::uint32_t> completed;std::vector<double> opaque,compute,combined,global;nlohmann::json raw=nlohmann::json::array();
+                unsigned minCalls=UINT32_MAX,maxCalls{},submissions{};const auto deadline=Clock::now()+std::chrono::minutes{2};
+                while(opaque.size()<options.samples&&submissions<options.samples*5+128&&Clock::now()<deadline) {
+                    submitAnimated();++submissions;const auto* stats=bgfx::getStats();
+                    if(stats->gpuFrameNum<firstSubmitted||stats->gpuTimerFreq<=0||completed.contains(stats->gpuFrameNum))continue;
+                    std::optional<double> opaqueMs,computeMs;
+                    for(unsigned viewIndex=0;viewIndex<stats->numViews;++viewIndex) {
+                        const auto& view=stats->viewStats[viewIndex];if(view.gpuFrameNum!=stats->gpuFrameNum||view.gpuTimeEnd<=view.gpuTimeBegin)continue;
+                        const double ms=double(view.gpuTimeEnd-view.gpuTimeBegin)*1000./stats->gpuTimerFreq;
+                        if(view.view==GameSceneView)opaqueMs=ms;else if(view.view==EnvironmentComputeView)computeMs=ms;
+                    }
+                    if(!opaqueMs||!computeMs)continue;
+                    const auto expectedCalls=AnimatedInstances*(mode==2?2u:1u);
+                    check(stats->numCompute==expectedCalls,"Animated benchmark did not dispatch every independent deformation/Smooth reconstruction.");
+                    completed.insert(stats->gpuFrameNum);opaque.push_back(*opaqueMs);
+                    compute.push_back(*computeMs);combined.push_back(*opaqueMs+*computeMs);
+                    minCalls=std::min(minCalls,stats->numCompute);maxCalls=std::max(maxCalls,stats->numCompute);
+                    nlohmann::json sample{{"gpu_frame",stats->gpuFrameNum},{"opaque_ms",*opaqueMs},{"compute_calls",stats->numCompute},
+                        {"compute_ms",*computeMs},{"combined_views_ms",*opaqueMs+*computeMs}};
+                    if(stats->gpuTimeEnd>stats->gpuTimeBegin) {
+                        const double ms=double(stats->gpuTimeEnd-stats->gpuTimeBegin)*1000./stats->gpuTimerFreq;
+                        global.push_back(ms);sample["gpu_frame_ms"]=ms;
+                    }
+                    raw.push_back(std::move(sample));
+                }
+                check(opaque.size()==options.samples&&compute.size()==options.samples,
+                    "Could not collect positive coherent animated compute and opaque GPU samples.");
+                const auto distribution=[](std::vector<double>& values) {
+                    if(values.empty())return nlohmann::json(nullptr);std::sort(values.begin(),values.end());
+                    const auto at=[&](double p){return values[std::min(values.size()-1,std::size_t(std::ceil(p*values.size())-1))];};
+                    return nlohmann::json{{"median_ms",at(.5)},{"p95_ms",at(.95)},{"samples",values.size()}};
+                };
+                nlohmann::json phase{{"phase_index",animatedReport["phases"].size()},{"mode",modeNames[mode]},
+                    {"first_submitted_frame",firstSubmitted},{"submissions",submissions},{"unique_completed_frames",completed.size()},
+                    {"compute_calls_min",minCalls},{"compute_calls_max",maxCalls},{"compute_timing_available",compute.size()==options.samples},
+                    {"gpu_frame_timing_available",global.size()==options.samples},
+                    {"opaque",distribution(opaque)},{"compute",distribution(compute)},{"combined_views",distribution(combined)},
+                    {"gpu_frame",distribution(global)},{"samples",std::move(raw)}};
+                if(global.size()!=options.samples)phase["gpu_frame_timing_note"]="The backend did not expose a positive coherent full GPU frame interval for every sample.";
+                std::cout<<"Animated mesh shading instances="<<AnimatedInstances<<" mode="<<modeNames[mode]<<" opaque="<<phase["opaque"]<<" compute="<<phase["compute"]<<" frame="<<phase["gpu_frame"]<<'\n';
+                animatedReport["phases"].push_back(std::move(phase));
+            }
+            report["animated"]=std::move(animatedReport);front.pose.reset();scene.instances=std::span(&front,1);
+        }
+        fs::create_directories(options.artifacts);std::ofstream file(options.artifacts/"mesh-shading-benchmark.json");check(bool(file),"Cannot create shading GPU report.");file<<report.dump(2)<<'\n';file.flush();check(bool(file),"Cannot write shading GPU report.");
     }
+    if(!options.artifacts.empty()){fs::create_directories(options.artifacts);std::ofstream file(options.artifacts/"mesh-shading-correctness.json");file<<shadingChecks.dump(2)<<'\n';check(bool(file),"Cannot write mesh shading correctness report.");}
     bindings[0].graph.reset();scene.instances={};resources.stop();frame=renderer.drainPending(frame);
 }
 }

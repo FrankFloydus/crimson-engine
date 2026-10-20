@@ -54,6 +54,7 @@ void reimportIdentityHistoryAndAtomicFailure() {
         document.scene().find(visual)->parent==imported&&document.scene().find(collision)->parent==visual,"Import lost generated hierarchy or source identities.");
     require(document.scene().find(manual)->parent==owner&&document.scene().find(manual)->local==manualRecord.local,"Import changed a manual sibling.");
     auto wall=*document.scene().find(visual);wall.outlinerStyle.emplace();wall.outlinerStyle->color=Vec4{.2f,.5f,.7f,1};
+    wall.meshShading=MeshShading::Smooth;
     require(document.updateEntity(visual,wall),document.status());
     auto custom=*document.scene().find(collision);custom.collider->shape=ColliderShape::Capsule;
     custom.collider->radius=.7f;custom.collider->height=3.2f;custom.collider->size={2,3,4};
@@ -70,6 +71,7 @@ void reimportIdentityHistoryAndAtomicFailure() {
     require(generatedId(document.scene(),owner,"Imported")==imported&&generatedId(document.scene(),owner,"mesh/floor")==visual&&
         generatedId(document.scene(),owner,"collision/floor")==collision,"Matching source keys lost persistent entity IDs.");
     require(document.scene().find(visual)->outlinerStyle==wall.outlinerStyle,"Quader refresh discarded entity/component Outliner colors.");
+    require(document.scene().find(visual)->meshShading==MeshShading::Smooth,"Quader refresh discarded authored mesh shading when replacing its geometry generation.");
     auto expected=*custom.collider;expected.source=AssetRef<ModelAsset>{"assets/models/generation-b-collision/manifest.json"};
     require(document.scene().find(collision)->collider==expected,"Quader sync reset an authored collider shape, dimensions, or display instead of updating its source.");
     require(document.scene().find(collision)->local==custom.local&&document.scene().find(visual)->local==next[0].local,

@@ -170,10 +170,10 @@ void EditorResources::endFrame() {
     const auto reserved=renderer_.thumbnailResidentBytes();
     renderer_.trimModelCache(reserved>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-reserved,live);
 }
-void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint64_t revision,uint32_t primitive,uint32_t level,ResourcePriority priority) {
+void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint64_t revision,uint32_t primitive,uint32_t level,ResourcePriority priority,bool smoothNormals) {
     if (!asset.stream || primitive>=asset.stream->primitives.size() || level>=asset.stream->primitives[primitive].levels.size()) return;
     const auto key=std::to_string(primitive)+":"+std::to_string(level);
-    if (renderer_.modelLodReady(asset.id,revision,primitive,level)) { entry.geometry.erase(key); return; }
+    if (renderer_.modelLodReady(asset.id,revision,primitive,level,smoothNormals)) { entry.geometry.erase(key); return; }
     auto& request=entry.geometry[key];
     if (!request) {
         const auto descriptor=asset.stream->primitives[primitive].levels[level];
@@ -198,7 +198,7 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
         return;
     }
     if (request.state()==ResourceState::Ready) if (const auto data=request.snapshot())
-        if (!renderer_.queueModelLod(asset.id,revision,data.shared())) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; }
+        if (!renderer_.queueModelLod(asset.id,revision,data.shared(),smoothNormals)) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; }
 }
 std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::string& id,const Mat4& world,const Camera& camera,
     uint32_t height,bool selected,ResourcePriority priority,float aspect,std::span<const AssetRef<MaterialAsset>> materialOverrides,float shadowTexelWorld,const ExtractedModel* presentation) {
@@ -238,10 +238,11 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
                 desired[draw.primitive]=std::min(desired[draw.primitive],level);
             }
             for (uint32_t primitive=0;primitive<desired.size();++primitive) {
+                const bool smoothNormals=presentation&&presentation->meshShading==MeshShading::Smooth;
                 const auto coarse=static_cast<uint32_t>(asset->stream->primitives[primitive].levels.size()-1);
-                requestGeometry(entry,*asset,revision,primitive,coarse,priority);
-                if (desired[primitive]!=coarse) requestGeometry(entry,*asset,revision,primitive,desired[primitive],selected ? ResourcePriority::Selected : priority);
-                refined&=renderer_.modelLodReady(asset->id,revision,primitive,desired[primitive]);
+                requestGeometry(entry,*asset,revision,primitive,coarse,priority,smoothNormals);
+                if (desired[primitive]!=coarse) requestGeometry(entry,*asset,revision,primitive,desired[primitive],selected ? ResourcePriority::Selected : priority,smoothNormals);
+                refined&=renderer_.modelLodReady(asset->id,revision,primitive,desired[primitive],smoothNormals);
             }
             if (!renderer_.modelStreamReady(asset->id,revision)) return retain(entry.current);
         } else if (!renderer_.prepareModel(*asset)) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; return retain(entry.current); }
@@ -382,6 +383,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
             instance.castShadows=model.castShadows;instance.receiveShadows=model.receiveShadows;
             instance.lightingScopes=model.lightingScopes;
             instance.lightingCategory=model.lightingCategory;instance.actorOwner=model.actorOwner;
+            instance.meshShading=model.meshShading;
             instance.pose=pose(model,packet->asset);
             result->instances.push_back(instance);
         }

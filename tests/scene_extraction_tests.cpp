@@ -36,8 +36,10 @@ void run() {
     auto parent=entity(1,"Parent",0,math::translation({10,2,3})*rotation);
     auto model=entity(2,"Nested model",1,math::translation({2,0,0})*math::scaling({-2,3,4}));
     model.model=AssetRef<ModelAsset>{"assets/models/first/manifest.json"};
+    model.meshShading=MeshShading::Smooth;
     auto other=entity(3,"Repeated model",0,math::translation({-5,0,0}));
     other.model=model.model;
+    other.meshShading=MeshShading::Flat;
     auto missing=entity(4,"Missing model",0,math::translation({7,0,0}));
     missing.model=AssetRef<ModelAsset>{"assets/models/missing/manifest.json"};
     Mat4 shear;
@@ -53,6 +55,8 @@ void run() {
     require(extracted.models[0].id==2 && extracted.models[1].id==3 && extracted.models[2].id==4,
             "Extraction ordering must be deterministic across registry allocation order.");
     require(extracted.models[0].assetId==extracted.models[1].assetId,"Repeated models lost their shared asset identity.");
+    require(extracted.models[0].meshShading==MeshShading::Smooth&&extracted.models[1].meshShading==MeshShading::Flat&&
+        extracted.models[2].meshShading==MeshShading::UseMeshNormals,"Extraction lost independent mesh shading on shared or missing assets.");
     require(close(extracted.models[0].world,parent.local*model.local),"Nested model did not accumulate its parent transform.");
     require(extracted.models[2].assetId==missing.model->id,"An unresolved asset reference was discarded.");
     require(extracted.directional.size()==1 && extracted.points.size()==1,"Light components were not extracted.");

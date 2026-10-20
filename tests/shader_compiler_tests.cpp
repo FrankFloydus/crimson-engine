@@ -451,6 +451,11 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     write(shadowSource/"cs_model_deform.sc",deformationSource);const auto wrongDeformation=compileShader(shadows,"cs_model_deform");
     require(!preflightComputeShader(wrongDeformation.bytes,deformation.bytes,diagnostic),"Changed deformation binding escaped compute contract validation.");
     write(shadowSource/"cs_model_deform.sc",originalDeformation);
+    require(std::find(names.begin(),names.end(),"cs_model_smooth_normals")!=names.end(),"Smooth normal compute is absent from atomic shader discovery.");
+    const auto smoothNormals=compileShader(shadows,"cs_model_smooth_normals");
+    require(smoothNormals.bytes.size()>16&&smoothNormals.bytes[0]=='C'&&!smoothNormals.vertex,"Runtime compiler did not compile smooth normals as compute.");
+    require(preflightComputeShader(smoothNormals.bytes,smoothNormals.bytes,diagnostic),"Valid smooth normal compute failed preflight.");
+    require(!preflightComputeShader(smoothNormals.bytes,deformation.bytes,diagnostic),"Smooth normals replaced the independent deformation compute contract.");
     require(std::find(names.begin(),names.end(),"cs_procedural_filter")!=names.end(),"Procedural compute is absent from atomic shader discovery.");
     const auto compute=compileShader(shadows,"cs_procedural_filter");
     require(compute.bytes.size()>16 && compute.bytes[0]=='C' && !compute.vertex,"Runtime shader compiler did not compile the compute stage.");

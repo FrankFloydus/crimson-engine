@@ -48,7 +48,7 @@ enum class Edit { None, Name, InlineName, Visible,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
     DirectionReceivers,DirectionCasters,
     PointReceivers,PointCasters,
-    ModelCastShadows, ModelReceiveShadows,
+    ModelCastShadows, ModelReceiveShadows,ModelShading,
     ModelDirectReceivers,ModelCasterScope,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
     Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
@@ -1436,6 +1436,11 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                         (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters))finishEdit(document,state,state.active);
             }
             if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
+                auto shading=static_cast<int>(record.meshShading);
+                const bool shadingChanged=ImGui::Combo("Shading",&shading,"Use Mesh Normals\0Flat\0Smooth\0");
+                propertyEdit(document,state,Edit::ModelShading,"Change mesh shading",shadingChanged,
+                    changeEntity(record.id,[shading](auto& entity){entity.meshShading=static_cast<MeshShading>(shading);}));
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Smooth preserves mesh hard edges and smooths tessellated relief.");
                 auto castShadows=record.castShadows,receiveShadows=record.receiveShadows;
                 const bool castChanged=ImGui::Checkbox("Cast Shadows",&castShadows);
                 propertyEdit(document,state,Edit::ModelCastShadows,"Toggle model shadow casting",castChanged,

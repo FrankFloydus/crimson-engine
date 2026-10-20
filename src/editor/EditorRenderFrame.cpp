@@ -35,6 +35,7 @@ void includeMeshPopulation(PreparedRenderView& view,const PreparedEditorModel& p
     hash(revision,prepared.signature);hash(revision,instance.entityId);hash(revision,instance.model.transform);
     hash(revision,instance.resourceRevision);hash(revision,instance.forceFullDetail);hash(revision,instance.pickable);
     hash(revision,instance.shading);hash(revision,instance.blend);hash(revision,instance.castShadows);hash(revision,instance.receiveShadows);
+    hash(revision,instance.meshShading);
     hash(revision,instance.lightingScopes.directReceiverMask);hash(revision,instance.lightingScopes.shadowCasterMask);
     hash(revision,instance.lightingCategory);hash(revision,instance.opacity);
     if(instance.pose)hash(revision,instance.pose->signature);
@@ -48,6 +49,7 @@ void appendModel(PreparedRenderView& view,ViewPins& pins,const ExtractedModel& m
     view.instances.back().lightingScopes=model.lightingScopes;
     view.instances.back().lightingCategory=model.lightingCategory;
     view.instances.back().actorOwner=model.actorOwner;
+    view.instances.back().meshShading=model.meshShading;
     view.instances.back().pose=resources.pose(model,prepared->asset);
     includeMeshPopulation(view,*prepared,view.instances.back());
     pins.models.push_back(std::move(prepared));

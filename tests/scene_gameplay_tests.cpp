@@ -1187,6 +1187,69 @@ void environmentSsgiRuntime() {
     require(runtime.resetTransientFrom(document) && resolveEnvironment(runtime.scene()).environment.ssgi==authoredSsgi&&resolveEnvironment(runtime.scene()).environment.ssao==authoredSsao &&
         !runtime.history().canUndo() && !runtime.dirty(),"Restarting Play retained runtime GI tuning or history.");
 }
+void meshShadingStorageHistoryAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto box=document.createBox(),model=document.createModel("assets/models/normal-fixture/manifest.json","Imported"),empty=document.createEmpty();
+    require(box&&model&&empty,document.status());
+    require(document.scene().find(box)->meshShading==MeshShading::UseMeshNormals &&
+        document.scene().find(model)->meshShading==MeshShading::UseMeshNormals,"New meshes did not preserve their source normals by default.");
+    auto smooth=*document.scene().find(box);smooth.meshShading=MeshShading::Smooth;
+    require(document.updateEntity(box,smooth,"Smooth mesh"),document.status());
+    auto flat=*document.scene().find(model);flat.meshShading=MeshShading::Flat;
+    require(document.updateEntity(model,flat,"Flat mesh"),document.status());
+    const auto extracted=extractScene(document.scene());
+    for(const auto& mesh:extracted.models)require(mesh.meshShading==(mesh.id==box?MeshShading::Smooth:MeshShading::Flat),
+        "Render extraction changed per-occurrence mesh shading.");
+    require(document.undo()&&document.scene().find(model)->meshShading==MeshShading::UseMeshNormals&&document.redo()&&
+        document.scene().find(model)->meshShading==MeshShading::Flat,"Mesh shading was omitted from scene undo/redo.");
+    auto replacement=*document.scene().find(model);replacement.model=AssetRef<ModelAsset>{"assets/models/replacement/manifest.json"};
+    require(document.updateEntity(model,replacement,"Replace mesh")&&document.scene().find(model)->meshShading==MeshShading::Flat,
+        "Changing a mesh asset discarded its occurrence shading policy.");
+    require(document.undo()&&document.scene().find(model)->model==flat.model&&document.scene().find(model)->meshShading==MeshShading::Flat&&
+        document.redo(),"Mesh replacement undo changed the retained shading policy.");
+    require(document.save("Mesh shading"),document.status());
+    const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    require(json.at("version")==23,"Mesh shading unnecessarily changed the scene schema.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    same(document.scene().records(),reopened.scene().records());require(!reopened.dirty(),"Reading mesh shading dirtied the scene.");
+    const auto records=document.scene().records();const auto history=document.history().size();
+    auto invalid=*document.scene().find(box);invalid.meshShading=static_cast<MeshShading>(255);
+    require(!document.updateEntity(box,invalid),"Invalid mesh shading entered the scene.");
+    invalid=*document.scene().find(empty);invalid.meshShading=MeshShading::Smooth;
+    require(!document.updateEntity(empty,invalid),"A non-mesh entity accepted mesh shading.");
+    same(records,document.scene().records());require(document.history().size()==history&&!document.dirty(),"Rejected mesh shading changed scene history.");
+    for(const auto version:{22,23}) {
+        auto legacy=json;legacy["version"]=version;for(auto& entity:legacy["entities"])entity.erase("meshShading");
+        const std::string id="assets/scenes/default-mesh-shading.crimson-scene";writeSceneFixture(project.root,id,legacy);
+        const auto path=sceneAssetPath(project.root,id);std::ifstream beforeFile(path,std::ios::binary);
+        const std::string beforeBytes((std::istreambuf_iterator<char>(beforeFile)),{});
+        require(reopened.load(id),reopened.status());
+        for(const auto& record:reopened.scene().records())require(record.meshShading==MeshShading::UseMeshNormals,
+            "A missing optional mesh shading field changed source normals.");
+        std::ifstream afterFile(path,std::ios::binary);const std::string afterBytes((std::istreambuf_iterator<char>(afterFile)),{});
+        require(beforeBytes==afterBytes&&!reopened.dirty(),"Defaulting mesh shading rewrote or dirtied authored data.");
+    }
+    for(const auto& code:std::array<Json,7>{Json(-1),Json(3),Json(256),Json(1.5),Json(true),Json("Smooth"),Json(std::numeric_limits<std::uint64_t>::max())}) {
+        auto malformed=json;for(auto& entity:malformed["entities"])if(entity.contains("model"))entity["meshShading"]=code;
+        const std::string id="assets/scenes/invalid-mesh-shading.crimson-scene";writeSceneFixture(project.root,id,malformed);
+        const auto before=reopened.scene().records();require(!reopened.load(id),"Malformed saved mesh shading was accepted.");
+        same(before,reopened.scene().records());
+    }
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    auto live=*runtime.scene().find(box);live.meshShading=MeshShading::Flat;
+    require(runtime.updateEntity(box,live),runtime.status());pose(runtime,box,{3,4,5});
+    require(runtime.undo()&&runtime.scene().find(box)->meshShading==MeshShading::Smooth,"Runtime undo lost authored mesh shading.");
+    near(position(runtime.scene(),box),{3,4,5});
+    require(runtime.redo()&&runtime.scene().find(box)->meshShading==MeshShading::Flat,"Runtime redo lost a mesh shading patch.");
+    require(runtime.begin("Cancel shading"),runtime.status());
+    require(runtime.update([&](auto& entities,auto&){for(auto& entity:entities)if(entity.id==box)entity.meshShading=MeshShading::UseMeshNormals;}),runtime.status());
+    pose(runtime,box,{6,7,8});runtime.cancel();
+    require(runtime.scene().find(box)->meshShading==MeshShading::Flat,"Cancel did not restore mesh shading.");
+    near(position(runtime.scene(),box),{6,7,8});same(records,document.scene().records());
+    require(!document.dirty()&&document.history().size()==history,"Play mesh shading leaked into Edit state.");
+    document.select({box});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->meshShading==MeshShading::Smooth,"Duplication dropped mesh shading.");
+}
 void modelAnimationStorageAndRuntime() {
     TempProject project;SceneDocument document(project.root);
     const auto model=document.createModel("assets/models/animated/manifest.json","Animated model"),empty=document.createEmpty("Empty");
@@ -1236,4 +1299,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentGlowLevelsRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentGlowLevelsRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();meshShadingStorageHistoryAndRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

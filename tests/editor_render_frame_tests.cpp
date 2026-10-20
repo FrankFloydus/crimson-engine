@@ -63,6 +63,7 @@ int main() {
         ExtractedScene extracted;
         extracted.models.push_back({71,"model-a",math::translation({2,3,4}),{AssetRef<MaterialAsset>{"material-a"}},true,false});
         extracted.models.front().lightingCategory=lighting_scope::Character;
+        extracted.models.front().meshShading=MeshShading::Smooth;
         extracted.directional.push_back({});extracted.directional.front().intensity=2.25f;
         extracted.points.push_back({});extracted.points.front().position={8,9,10};
         extracted.points.front().entityId=UINT64_C(0xfedcba9876543210);
@@ -85,6 +86,7 @@ int main() {
             false,true,&model->materials});
         casters->instances.back().lightingCategory=extracted.models.front().lightingCategory;
         casters->instances.back().actorOwner=71;
+        casters->instances.back().meshShading=extracted.models.front().meshShading;
         auto pins=std::make_shared<EditorRenderWorldPins>();pins->particles.push_back(particleMaterial);pins->shadows=casters;
 
         const MaterialEvaluationContext clock{12.5,91.75};
@@ -124,6 +126,7 @@ int main() {
         game.settings.antiAliasing=AntiAliasing::Off;
         game.instances.push_back(frozen->shadowInstances.front());game.instances.front().entityId=72;
         game.instances.front().opacity=.25f;
+        game.instances.front().meshShading=MeshShading::Flat;
         frame->views.push_back(std::move(scene));frame->views.push_back(std::move(game));
         std::shared_ptr<const PreparedRenderFrame> queued=frame;
         require(queued->views[0].settings.camera.position==Vec3{4,5,6} && queued->views[1].settings.camera.position==Vec3{11,12,13} &&
@@ -149,6 +152,9 @@ int main() {
             require(sceneAdapter.instances.front().opacity==1 && gameAdapter.instances.front().opacity==.25f &&
                 sceneAdapter.shadowInstances.front().opacity==1 && gameAdapter.shadowInstances.front().opacity==1,
                 "Generic instance opacity changed another view or the full-opacity shadow snapshot.");
+            require(sceneAdapter.instances.front().meshShading==MeshShading::Smooth&&gameAdapter.instances.front().meshShading==MeshShading::Flat&&
+                sceneAdapter.shadowInstances.front().meshShading==MeshShading::Smooth&&gameAdapter.shadowInstances.front().meshShading==MeshShading::Smooth,
+                "Per-mesh shading changed another view or the frozen shadow snapshot.");
             require(sceneAdapter.directionalLights.data()==queued->world->directional.data() &&
                 gameAdapter.directionalLights.data()==sceneAdapter.directionalLights.data() &&
                 sceneAdapter.pointLights.data()==queued->world->points.data() &&

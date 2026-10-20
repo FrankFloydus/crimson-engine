@@ -4,6 +4,7 @@
 #include "CollisionMesh.h"
 #include "SceneComponentKind.h"
 #include "crimson-renderer/RenderTypes.h"
+#include <crimson/renderer/forward/MeshShading.h>
 #include "resources/AssetRef.h"
 #include "assets/ModelMaterialOverrides.h"
 #include "assets/NavigationAgentProfile.h"
@@ -44,6 +45,7 @@ struct ModelReference {
     bool castShadows{true},receiveShadows{true};
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation animation{};
+    MeshShading meshShading{MeshShading::UseMeshNormals};
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -215,6 +217,7 @@ struct EntityRecord {
     SceneModelAnimation modelAnimation{};
     bool visible{true}; // Authored rendering visibility, inherited by descendants.
     std::optional<SceneOutlinerStyle> outlinerStyle;
+    MeshShading meshShading{MeshShading::UseMeshNormals};
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);

@@ -277,6 +277,14 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         record.local = entity.at("local").get<Mat4>();
         if(version>=14)record.visible=entity.value("visible",true);
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
+        if(entity.contains("meshShading")) {
+            const auto& shading=entity.at("meshShading");
+            if(!shading.is_number_integer() ||
+               (shading.is_number_unsigned()?shading.get<std::uint64_t>()>2:
+                   shading.get<std::int64_t>()<0 || shading.get<std::int64_t>()>2))
+                throw std::runtime_error("Mesh shading must be an integer from 0 to 2.");
+            record.meshShading=static_cast<MeshShading>(shading.get<unsigned>());
+        }
         if(version>=10 && entity.contains("modelAnimation")) {
             const auto& source=entity.at("modelAnimation");
             if(!source.is_object())throw std::runtime_error("Model animation settings must be an object.");
@@ -661,6 +669,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
 
         if (record.model) {
             entity["model"] = *record.model;
+            entity["meshShading"]=static_cast<unsigned>(record.meshShading);
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
                 {"shadowCasterMask",record.lightingScopes.shadowCasterMask}};
@@ -728,7 +737,7 @@ enum EntityField : uint64_t {
     PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
-    TagsField=1ull<<32,EffectsField=1ull<<33,AllEntityFields=((1ull<<34)-1)&~(1ull<<31)
+    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,AllEntityFields=((1ull<<35)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -747,6 +756,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
+    if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
@@ -772,6 +782,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
+    if(fields&MeshShadingField)target.meshShading=source.meshShading;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
     if(fields&ControllerField)target.controller=source.controller;
@@ -1414,6 +1425,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 preserveAuthoredActorComponents(record,*previous);
                 if(record.model && previous->model) {
                     record.lightingScopes=previous->lightingScopes;
+                    record.meshShading=previous->meshShading;
                     if(remapMaterials)record.modelMaterials=remapMaterials(*previous,record);
                     else if(record.model==previous->model)record.modelMaterials=previous->modelMaterials;
                     else if(!previous->modelMaterials.empty())
