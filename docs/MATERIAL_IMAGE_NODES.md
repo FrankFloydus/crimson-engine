@@ -6,7 +6,7 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema10 additionally provides [Resize](MATERIAL_RESIZE.md) for a cached intermediate image with explicit pixel dimensions. Pin colors represent resolved types. New RGB/RGBA-to-fixed-Scalar wires insert an explicit Red conversion; older implicit conversions display an R badge and remain unchanged.
+Current graph schema10 additionally provides [Resize](MATERIAL_RESIZE.md) for a cached intermediate image with explicit pixel dimensions. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 

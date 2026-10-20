@@ -684,11 +684,10 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             const float x=ImGui::GetCursorPosX(),y=ImGui::GetCursorPosY();
             const auto drawPin=[&](const MaterialPinDefinition& definition,bool input) {
                 const bool active=!input || node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin,output.tessellation.enabled);
-                bool redConversion=false;
-                if(input&&definition.type==MaterialValueType::Scalar)if(const auto* wire=materialInputLink(graph,node.id,definition.pin)) {
-                    const auto type=materialOutputType(graph,wire->fromNode,wire->fromPin);
-                    redConversion=type==MaterialValueType::Color||type==MaterialValueType::Color4;
-                }
+                const auto* incoming=input?materialInputLink(graph,node.id,definition.pin):nullptr;
+                const auto signalType=incoming?materialOutputType(graph,incoming->fromNode,incoming->fromPin):definition.type;
+                const bool redConversion=incoming&&definition.type==MaterialValueType::Scalar&&
+                    (signalType==MaterialValueType::Color||signalType==MaterialValueType::Color4);
                 auto compatibility=PinCompatibility::Neutral;
                 const State::Pin endpoint{node.id,definition.pin,input};
                 if(s.dragFrom&&endpoint!=*s.dragFrom) {
@@ -719,8 +718,9 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 ed::PinRect(lo,hi);ed::PinPivotRect(center,center);
                 auto* draw=ImGui::GetWindowDrawList();
                 draw->AddText({lo.x+(input?18.f:0.f),lo.y+ImGui::GetStyle().FramePadding.y},ImGui::GetColorU32(active?ImGuiCol_Text:ImGuiCol_TextDisabled),definition.name);
-                const bool mixedImage=input&&materialGraphInputMixedImage(node,definition.pin);
-                auto color=pinColor(mixedImage?MaterialValueType::Scalar:definition.type);
+                const bool acceptsMixedImage=input&&materialGraphInputMixedImage(node,definition.pin);
+                const bool mixedImage=acceptsMixedImage&&!incoming;
+                auto color=pinColor(mixedImage?MaterialValueType::Scalar:signalType);
                 auto alternate=pinColor(MaterialValueType::Color);
                 if(!active){color.w=.3f;alternate.w=.3f;}
                 if(compatibility==PinCompatibility::Rejected){color.w*=.2f;alternate.w*=.2f;}
@@ -728,8 +728,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     ImGui::GetColorU32(compatibility==PinCompatibility::Conversion?ImGuiCol_PlotHistogram:ImGuiCol_Text),0,1);
                 draw->AddCircleFilled(center,3,ImGui::ColorConvertFloat4ToU32(color));
                 if(mixedImage) {
-                    // Accepted image families are an input capability. Keep
-                    // both halves visible even after one family is connected.
+                    // An empty adaptable input advertises both image families;
+                    // a connected input uses its concrete incoming type color.
                     draw->PathLineTo(center);
                     draw->PathArcTo(center,3,-IM_PI*.5f,IM_PI*.5f,8);
                     draw->PathFillConvex(ImGui::ColorConvertFloat4ToU32(alternate));
@@ -737,7 +737,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 if(redConversion)draw->AddText({hi.x+3,lo.y+ImGui::GetStyle().FramePadding.y},ImGui::GetColorU32(ImGuiCol_PlotHistogram),"R");
                 s.presentation.pins.push_back({node.id,definition.pin,input,point(center),point(lo),point(hi),active,definition.type,
                     {color.x,color.y,color.z,color.w},redConversion,compatibility,mixedImage,
-                    mixedImage?Vec4{alternate.x,alternate.y,alternate.z,alternate.w}:Vec4{}});
+                    mixedImage?Vec4{alternate.x,alternate.y,alternate.z,alternate.w}:Vec4{},signalType});
                 ImGui::PopID();
                 ed::EndPin();
                 if(!active && ImGui::IsMouseHoveringRect(lo,hi)) {
@@ -749,7 +749,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     ed::Resume();
                 } else if(redConversion&&ImGui::IsMouseHoveringRect(lo,{hi.x+ImGui::CalcTextSize("R").x+6,hi.y})) {
                     ed::Suspend();ImGui::SetTooltip("Reads the Red channel (R) from RGB/RGBA.");ed::Resume();
-                } else if(mixedImage&&ImGui::IsMouseHoveringRect(lo,hi)) {
+                } else if(acceptsMixedImage&&ImGui::IsMouseHoveringRect(lo,hi)) {
                     ed::Suspend();ImGui::SetTooltip("Accepts grayscale or color.");ed::Resume();
                 }
             };
@@ -825,7 +825,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                         if(findMaterialNode(graph,to.node)->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,to.pin,output.tessellation.enabled))throw std::runtime_error("This input is unavailable for the current material settings.");
                         const auto connection=inspectMaterialGraphConnection(document.definition().graph,from.node,from.pin,to.node,to.pin);
                         if(connection.kind==MaterialGraphConnectionKind::Invalid)throw std::runtime_error(connection.diagnostic);
-                        if(connection.kind==MaterialGraphConnectionKind::RedChannel){ed::Suspend();ImGui::SetTooltip("Insert Grayscale: Red channel (R).");ed::Resume();}
+                        if(connection.kind==MaterialGraphConnectionKind::RedChannel){ed::Suspend();ImGui::SetTooltip("Reads the Red channel (R) from RGB/RGBA.");ed::Resume();}
                         if(ed::AcceptNewItem(connection.kind==MaterialGraphConnectionKind::RedChannel?ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogram):pinColor(materialOutputType(graph,from.node,from.pin)))) {
                             auto candidate=document.definition().graph;connectMaterialGraphAuthoring(candidate,from.node,from.pin,to.node,to.pin);
                             if(document.edit("Connect nodes",[&](auto& asset){asset.graph=std::move(candidate);}))s.status.clear();else s.status=document.status();

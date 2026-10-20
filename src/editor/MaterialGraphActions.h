@@ -21,8 +21,8 @@ std::size_t deleteMaterialGraphSelection(MaterialGraph&,std::span<const Material
 struct MaterialGraphEndpoint {MaterialNodeId node{};MaterialPin pin{};bool input{};bool operator==(const MaterialGraphEndpoint&) const=default;};
 enum class MaterialGraphConnectionKind { Invalid,Direct,RedChannel };
 struct MaterialGraphConnection {MaterialGraphConnectionKind kind{MaterialGraphConnectionKind::Invalid};std::string diagnostic;};
-// New authoring links expose fixed Color/RGBA-to-Scalar conversions as a Red
-// Grayscale node. Existing serialized direct conversions remain untouched.
+// Authoring links retain their endpoints. RedChannel identifies the existing
+// implicit first-component read by a fixed Scalar input; it adds no nodes.
 MaterialGraphConnection inspectMaterialGraphConnection(const MaterialGraph&,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin);
 MaterialLinkId connectMaterialGraphAuthoring(MaterialGraph&,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin);
 // Shared authoring catalog for search and pin-drag creation. Output is unique.

@@ -862,13 +862,7 @@ void boundedTextureLabelsAndScalarMapGestures() {
         ui.drag(reversed?to:from,reversed?from:to);
         const auto* link=materialInputLink(ui.document.definition().graph,output,targetPin);
         require(link,"A texture pin drag could not connect to a PBR scalar input.");
-        if(sourcePin==MaterialPin::RGB) {
-            const auto* gray=findMaterialNode(ui.document.definition().graph,link->fromNode);
-            const auto* input=gray?materialInputLink(ui.document.definition().graph,gray->id,MaterialPin::Left):nullptr;
-            require(gray&&gray->kind==MaterialNodeKind::Grayscale&&gray->image.grayMode==MaterialGrayscaleMode::Red&&
-                input&&input->fromNode==source&&input->fromPin==sourcePin,
-                "An RGB-to-Scalar drag did not expose its Red-channel conversion.");
-        } else require(link->fromNode==source&&link->fromPin==sourcePin,"A scalar channel drag changed its selected channel.");
+        require(link->fromNode==source&&link->fromPin==sourcePin,"An image-to-Scalar drag inserted a conversion instead of retaining its source endpoint.");
         ui.oneUndo(before);checkBounds();
     };
     connect(roughness,MaterialPin::RGB,MaterialPin::Roughness);
@@ -876,7 +870,7 @@ void boundedTextureLabelsAndScalarMapGestures() {
     const auto links=ui.document.definition().graph.links.size();
     connect(metallic,MaterialPin::RGB,MaterialPin::Roughness);
     require(std::count_if(ui.document.definition().graph.links.begin(),ui.document.definition().graph.links.end(),[&](const auto& wire){return wire.toNode==output&&wire.toPin==MaterialPin::Roughness;})==1&&
-        ui.document.definition().graph.links.size()==links+1,"Replacing an occupied roughness input did not retain one incoming wire and its explicit conversion.");
+        ui.document.definition().graph.links.size()==links,"Replacing an occupied roughness input did not retain one direct incoming wire.");
     connect(roughness,MaterialPin::G,MaterialPin::Roughness);
     connect(metallic,MaterialPin::B,MaterialPin::Metallic);
     require(ui.editor.status().empty(),"Valid scalar texture connections left an editor diagnostic.");
@@ -1474,17 +1468,23 @@ void mixedImageInputsAndResolvedOutputs() {
     const auto verify=[&](MaterialValueType type,Vec4 resultColor) {
         for(const auto id:{levels,invert,resize}) {
             const auto input=presented(id,MaterialPin::Left,true),result=presented(id,MaterialPin::Value,false);
-            require(input.mixedImage&&input.color==gray&&input.alternateColor==color,
-                "An adaptable input lost its two accepted image families after wiring or history changes.");
+            const bool connected=materialInputLink(ui.document.definition().graph,id,MaterialPin::Left)!=nullptr;
+            require(input.mixedImage==!connected&&input.color==(connected?resultColor:gray)&&
+                input.alternateColor==(connected?Vec4{}:color),
+                "An adaptable input did not switch between its empty mixed glyph and connected type color.");
             require(!result.mixedImage&&result.type==type&&result.color==resultColor,
                 "A connected image branch retained stale output colors instead of its resolved type.");
         }
         const auto height=presented(output,MaterialPin::Height,true);
-        require(!height.mixedImage&&height.type==MaterialValueType::Scalar&&height.color==gray,
-            "A mixed source changed the fixed Height socket's presentation contract.");
+        require(!height.mixedImage&&height.type==MaterialValueType::Scalar&&height.signalType==type&&height.color==resultColor,
+            "Height did not show its actual incoming signal while retaining its scalar receiving contract.");
     };
     verify(MaterialValueType::Scalar,gray);
+    require(ui.document.edit("Disconnect adaptable input",[&](auto& asset) {
+        removeMaterialLink(asset.graph,materialInputLink(asset.graph,levels,MaterialPin::Left)->id);
+    }),"Could not disconnect the adaptable input for mixed-glyph drawing.");ui.frame(2);
     const auto socket=presented(levels,MaterialPin::Left,true);
+    require(socket.mixedImage,"An empty adaptable input did not restore its mixed glyph.");
     bool grayGeometry=false,colorGeometry=false;
     const auto grayPacked=ImGui::ColorConvertFloat4ToU32({gray[0],gray[1],gray[2],gray[3]});
     const auto colorPacked=ImGui::ColorConvertFloat4ToU32({color[0],color[1],color[2],color[3]});
@@ -1494,6 +1494,8 @@ void mixedImageInputsAndResolvedOutputs() {
         if(x*x+y*y<=radius*radius){grayGeometry|=vertex.col==grayPacked;colorGeometry|=vertex.col==colorPacked;}
     }
     require(grayGeometry&&colorGeometry,"The mixed input was reported but its actual draw data did not contain both type colors.");
+    require(ui.document.undo(),"Could not restore the grayscale source after mixed-glyph drawing.");ui.frame(2);
+    verify(MaterialValueType::Scalar,gray);
     const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.frame(3);
     require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.dirty(),
         "Mixed input presentation changed authored material data.");
@@ -1544,12 +1546,11 @@ void typedPinColorsConversionsAndResize() {
         const auto input=presented(id,MaterialPin::Left,true),result=presented(id,MaterialPin::Value,false);
         require(input.type==MaterialValueType::Color&&result.type==MaterialValueType::Color&&result.color==rgb.color&&!result.mixedImage,
             "Polymorphic Image/Math results did not retain resolved connected types.");
-        if(id==multiply)require(!input.mixedImage&&input.color==rgb.color,"Numeric arithmetic was mislabeled as a mixed image input.");
-        else require(input.mixedImage&&input.color==scalar.color&&input.alternateColor==rgb.color,
-            "An adaptable image input did not show both grayscale and color capabilities.");
+        require(!input.mixedImage&&input.color==rgb.color&&input.alternateColor==Vec4{},
+            "A connected input did not use its actual image type color.");
     }
     const auto legacy=presented(output,MaterialPin::Roughness,true);
-    require(legacy.type==MaterialValueType::Scalar&&legacy.color==scalar.color&&legacy.redConversion&&
+    require(legacy.type==MaterialValueType::Scalar&&legacy.signalType==MaterialValueType::Color&&legacy.color==rgb.color&&legacy.redConversion&&
         presented(normal,MaterialPin::Normal,false).type==MaterialValueType::Normal&&presented(uv,MaterialPin::UV,false).type==MaterialValueType::Mapping,
         "Legacy Red conversion badge or strict Normal/Mapping pin types were missing.");
     const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.frame(3);
@@ -1564,10 +1565,9 @@ void typedPinColorsConversionsAndResize() {
     require(ui.snapshot()==stable&&!ui.popup(),"Cancelling connection highlighting changed authored data or opened search.");
     const auto before=ui.snapshot();ui.drag(ui.pin(color,MaterialPin::RGBA,false),ui.pin(output,MaterialPin::Metallic,true));
     const auto& graph=ui.document.definition().graph;const auto* wire=materialInputLink(graph,output,MaterialPin::Metallic);
-    const auto* gray=wire?findMaterialNode(graph,wire->fromNode):nullptr;const auto* source=gray?materialInputLink(graph,gray->id,MaterialPin::Left):nullptr;
-    require(gray&&gray->kind==MaterialNodeKind::Grayscale&&gray->image.grayMode==MaterialGrayscaleMode::Red&&source&&
-        source->fromNode==color&&source->fromPin==MaterialPin::RGBA&&!presented(output,MaterialPin::Metallic,true).redConversion,
-        "New RGBA-to-Scalar drag did not create a visible exact Red conversion.");ui.oneUndo(before);
+    require(wire&&wire->fromNode==color&&wire->fromPin==MaterialPin::RGBA&&
+        std::count_if(graph.nodes.begin(),graph.nodes.end(),[](const auto& node){return node.kind==MaterialNodeKind::Grayscale;})==0,
+        "New RGBA-to-Scalar drag did not retain its direct source link.");ui.oneUndo(before);
     const auto filter=std::find_if(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& combo){return combo.node==resize&&combo.label=="Filter";});
     require(filter!=ui.editor.presentation().combos.end(),"Resize filter was absent from the common node controls.");
     const ImVec2 filterPoint{(filter->minimum[0]+filter->maximum[0])*.5f,(filter->minimum[1]+filter->maximum[1])*.5f};

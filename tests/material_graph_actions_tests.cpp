@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -246,8 +247,8 @@ void rgbScalarConnectionHistory() {
         materialInputLink(graph,out,MaterialPin::Metallic)->id==metalLink&&materialInputLink(graph,out,MaterialPin::Metallic)->fromPin==MaterialPin::RGB,
         "Save/reopen rewrote RGB-to-scalar connections.");
 }
-void explicitChannelAuthoringAndResize() {
-    Project project;MaterialDocument document(project.root);require(document.create("Explicit channel connections"),"Could not create connection fixture.");
+void directChannelAuthoringAndResize() {
+    Project project;MaterialDocument document(project.root);require(document.create("Direct channel connections"),"Could not create connection fixture.");
     MaterialNodeId output{},color{},levels{},resize{},uv{},texture{};
     require(document.edit("Configure connection sources",[&](auto& asset) {
         asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output).id;
@@ -265,21 +266,20 @@ void explicitChannelAuthoringAndResize() {
         inspectMaterialGraphConnection(graph,color,MaterialPin::RGBA,resize,MaterialPin::Left).kind==MaterialGraphConnectionKind::Direct,
         "A polymorphic image input was treated as a fixed Scalar socket.");
     require(inspectMaterialGraphConnection(graph,uv,MaterialPin::UV,output,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::Invalid&&
-        inspectMaterialGraphConnection(graph,color,MaterialPin::RGB,texture,MaterialPin::UV).kind==MaterialGraphConnectionKind::Invalid,
-        "Mapping links accepted numeric coercion.");
-    const auto before=serializeMaterialAsset(document.definition());MaterialNodeId red{};
-    require(document.edit("Connect explicit Red channel",[&](auto& asset) {
+        inspectMaterialGraphConnection(graph,color,MaterialPin::RGB,texture,MaterialPin::UV).kind==MaterialGraphConnectionKind::Invalid&&
+        inspectMaterialGraphConnection(graph,color,MaterialPin::RGB,output,MaterialPin::Normal).kind==MaterialGraphConnectionKind::Invalid,
+        "Mapping or Normal links accepted numeric coercion.");
+    const auto before=serializeMaterialAsset(document.definition());const auto nodeCount=graph.nodes.size();
+    require(document.edit("Connect RGBA to Scalar",[&](auto& asset) {
         connectMaterialGraphAuthoring(asset.graph,color,MaterialPin::RGBA,output,MaterialPin::Roughness);
-        const auto* link=materialInputLink(asset.graph,output,MaterialPin::Roughness);red=link->fromNode;
-    }),"Explicit channel connection failed.");
-    const auto& connected=document.definition().graph;const auto* node=findMaterialNode(connected,red);
-    require(node&&node->kind==MaterialNodeKind::Grayscale&&node->image.grayMode==MaterialGrayscaleMode::Red&&
-        materialInputLink(connected,red,MaterialPin::Left)->fromNode==color&&connected.links.size()==2&&
-        evaluateMaterialUniform(connected,red,MaterialPin::Value).value[0]==.21f,
-        "Visible conversion did not preserve the exact former first-component behavior.");
+    }),"Direct RGBA-to-Scalar connection failed.");
+    const auto& connected=document.definition().graph;const auto* link=materialInputLink(connected,output,MaterialPin::Roughness);
+    require(link&&link->fromNode==color&&link->fromPin==MaterialPin::RGBA&&connected.links.size()==1&&
+        connected.nodes.size()==nodeCount&&evaluateMaterialUniform(connected,color,MaterialPin::RGBA).value[0]==.21f,
+        "RGBA-to-Scalar authoring changed endpoints, inserted a node, or changed first-component behavior.");
     const auto after=serializeMaterialAsset(document.definition());
     require(document.undo()&&serializeMaterialAsset(document.definition())==before&&document.redo()&&serializeMaterialAsset(document.definition())==after,
-        "Conversion node and both wires did not form one exact undo/redo command.");
+        "Direct RGBA-to-Scalar wire did not form one exact undo/redo command.");
     require(document.edit("Resize an RGB image",[&](auto& asset) {
         connectMaterialGraphAuthoring(asset.graph,color,MaterialPin::RGB,resize,MaterialPin::Left);
         auto& settings=findMaterialNode(asset.graph,resize)->resize;settings.width=320;settings.height=192;settings.filter=MaterialResizeFilter::Area;
@@ -294,8 +294,54 @@ void explicitChannelAuthoringAndResize() {
     auto full=graphWithOutput();const auto source=addMaterialNode(full,MaterialNodeKind::Color).id;
     while(full.nodes.size()<MaterialGraph::MaximumNodes)addMaterialNode(full,MaterialNodeKind::Scalar);
     const auto stable=serializeMaterialGraph(full);
-    require(inspectMaterialGraphConnection(full,source,MaterialPin::RGB,materialOutputNode(full).id,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::Invalid&&
-        serializeMaterialGraph(full)==stable,"A full graph offered an impossible visible conversion.");
+    require(inspectMaterialGraphConnection(full,source,MaterialPin::RGB,materialOutputNode(full).id,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::RedChannel&&
+        serializeMaterialGraph(full)==stable,"Direct RGB-to-Scalar inspection incorrectly required another node slot.");
+    connectMaterialGraphAuthoring(full,source,MaterialPin::RGB,materialOutputNode(full).id,MaterialPin::Roughness);
+    require(full.nodes.size()==MaterialGraph::MaximumNodes&&full.links.size()==1&&
+        materialInputLink(full,materialOutputNode(full).id,MaterialPin::Roughness)->fromNode==source,
+        "A full graph could not connect existing RGB and Scalar endpoints directly.");
+    auto linksFull=graphWithOutput();const auto channel=addMaterialNode(linksFull,MaterialNodeKind::Color).id;
+    while(linksFull.links.size()<MaterialGraph::MaximumLinks) {
+        const auto merge=addMaterialNode(linksFull,MaterialNodeKind::RGBAMerge).id;
+        for(const auto pin:{MaterialPin::R,MaterialPin::G,MaterialPin::B,MaterialPin::A})
+            linksFull.links.push_back({linksFull.nextLinkId++,channel,merge,MaterialPin::R,pin});
+    }
+    validateMaterialGraph(linksFull);
+    require(inspectMaterialGraphConnection(linksFull,channel,MaterialPin::RGBA,materialOutputNode(linksFull).id,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::Invalid,
+        "Direct conversion ignored the real graph link budget.");
+    rejectedWithoutChange(linksFull,[&]{connectMaterialGraphAuthoring(linksFull,channel,MaterialPin::RGBA,materialOutputNode(linksFull).id,MaterialPin::Roughness);},
+        "A link-budget rejection partially changed the authored graph.");
+}
+void directDesaturationHeightRoute() {
+    auto graph=graphWithOutput();const auto output=materialOutputNode(graph).id;
+    materialOutputNode(graph).output.tessellation.enabled=true;
+    const auto albedo=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,albedo)->texture.image.id=canonicalAssetId("assets/textures/height-albedo.png");
+    findMaterialNode(graph,albedo)->texture.role=MaterialTextureRole::Color;
+    const auto desaturation=addMaterialNode(graph,MaterialNodeKind::Desaturation).id;
+    findMaterialNode(graph,desaturation)->right.value={0,0,0,0};
+    const auto levels=addMaterialNode(graph,MaterialNodeKind::Levels).id;
+    findMaterialNode(graph,levels)->image.gamma=2;
+    const auto nodeCount=graph.nodes.size();
+    connectMaterialGraphAuthoring(graph,albedo,MaterialPin::RGB,desaturation,MaterialPin::Left);
+    connectMaterialGraphAuthoring(graph,desaturation,MaterialPin::RGB,levels,MaterialPin::Left);
+    connectMaterialGraphAuthoring(graph,levels,MaterialPin::Value,output,MaterialPin::Height);
+    require(graph.nodes.size()==nodeCount&&graph.links.size()==3&&
+        materialInputLink(graph,desaturation,MaterialPin::Left)->fromNode==albedo&&
+        materialInputLink(graph,levels,MaterialPin::Left)->fromNode==desaturation&&
+        materialInputLink(graph,output,MaterialPin::Height)->fromNode==levels&&
+        materialInputLink(graph,output,MaterialPin::Height)->fromPin==MaterialPin::Value,
+        "Albedo -> Desaturation -> Levels -> Height inserted an unrequested conversion node.");
+    // Texture sampling is not a uniform expression. Substitute a known linear
+    // texel at the same source ID to check the downstream numerical contract.
+    auto numerical=graph;auto& texel=*findMaterialNode(numerical,albedo);texel.kind=MaterialNodeKind::Color;texel.color={.21f,.47f,.83f,.35f};
+    const auto value=evaluateMaterialUniform(numerical,levels,MaterialPin::Value);
+    const float expected=std::sqrt(.21f*.2126f+.47f*.7152f+.83f*.0722f);
+    require(value.type==MaterialValueType::Color&&std::abs(value.value[0]-expected)<1e-6f&&
+        value.value[0]==value.value[1]&&value.value[1]==value.value[2],
+        "Saturation zero and Levels did not deliver the same B&W height value in every RGB component.");
+    require(serializeMaterialGraph(parseMaterialGraph(serializeMaterialGraph(graph)))==serializeMaterialGraph(graph),
+        "Saving the direct Height route inserted conversion nodes or changed its endpoints.");
 }
 void mixedImageInputCapabilities() {
     auto graph=graphWithOutput();const auto scalar=addMaterialNode(graph,MaterialNodeKind::Scalar).id;
@@ -482,6 +528,6 @@ void requestedImageAndChannelActions() {
 
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();explicitChannelAuthoringAndResize();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

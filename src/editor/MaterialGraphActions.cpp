@@ -90,15 +90,8 @@ AuthoringConnection prepareAuthoringConnection(const MaterialGraph& graph,Materi
     if(!materialCanConnect(graph,from,fromPin,to,toPin,&diagnostic))throw std::runtime_error(diagnostic);
     AuthoringConnection result{graph};result.link=connectMaterialNodes(result.graph,from,fromPin,to,toPin);
     const auto sourceType=materialOutputType(result.graph,from,fromPin),destinationType=endpointType(result.graph,{to,toPin,true});
-    if((sourceType==MaterialValueType::Color||sourceType==MaterialValueType::Color4)&&destinationType==MaterialValueType::Scalar) {
-        const auto source=findMaterialNode(result.graph,from)->position,target=findMaterialNode(result.graph,to)->position;
-        removeMaterialLink(result.graph,result.link);
-        const auto grayscale=addMaterialNode(result.graph,MaterialNodeKind::Grayscale,
-            {std::min(target[0]-260,(source[0]+target[0])*.5f),(source[1]+target[1])*.5f}).id;
-        findMaterialNode(result.graph,grayscale)->image.grayMode=MaterialGrayscaleMode::Red;
-        connectMaterialNodes(result.graph,from,fromPin,grayscale,MaterialPin::Left);
-        result.link=connectMaterialNodes(result.graph,grayscale,MaterialPin::Value,to,toPin);result.kind=MaterialGraphConnectionKind::RedChannel;
-    }
+    if((sourceType==MaterialValueType::Color||sourceType==MaterialValueType::Color4)&&destinationType==MaterialValueType::Scalar)
+        result.kind=MaterialGraphConnectionKind::RedChannel;
     validateMaterialGraph(result.graph);return result;
 }
 MaterialNodeId createConnected(MaterialGraph& graph,MaterialGraphEndpoint endpoint,MaterialGraphNodeChoice choice,Vec2 position,MaterialValueType type) {
