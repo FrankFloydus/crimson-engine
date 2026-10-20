@@ -1,6 +1,7 @@
 #include "scene/SceneComponents.h"
 #include "material_fixtures.h"
 #include "assets/AssetLibrary.h"
+#include "assets/MaterialGraphReferences.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
@@ -11,6 +12,8 @@
 #include "resources/StreamingModel.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "editor/PreparedMaterialSignature.h"
+#include "editor/MaterialPreview.h"
+#include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "model_fixtures.h"
@@ -1407,6 +1410,10 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
     model_test::Bytes pixels(512*512*4,255);
     for(std::size_t y=0;y<512;++y)for(std::size_t x=0;x<512;++x){const auto offset=(y*512+x)*4;pixels[offset]=x<256?255:0;pixels[offset+1]=y<256?0:255;}
     fs::create_directories(fixturePath(p.root,"assets/textures"));model_test::writeBytes(fixturePath(p.root,image),model_test::png(512,512,pixels));
+    const std::string growingImage="assets/textures/cached-blur-size.png";
+    const auto growingSeedFile=fixturePath(p.root,growingImage);
+    model_test::writeBytes(growingSeedFile,model_test::png(2,2,model_test::Bytes{
+        0,32,64,255, 96,128,160,255, 192,224,255,255, 64,128,192,255}));
     auto material=createMaterialAsset(p.root,"Streamed preview");const auto output=materialOutputNode(material.graph).id;
     const auto uv=addMaterialNode(material.graph,MaterialNodeKind::UV).id;findMaterialNode(material.graph,uv)->uv.mode=MaterialUvMode::WorldTriplanar;
     const auto color=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
@@ -1578,6 +1585,198 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
             resizeBinding.graph->signature!=oldResize->signature&&resources.stats().loads>warmLoads&&
             bgfx::isValid(oldResize->textures[resizedSlot])&&oldResize->leases[resizedSlot],
             "Resize source reload rebuilt shaders, retained old content, or invalidated a leased prior generation.");
+        // A cached filter inherits its source dimensions. Do not request the
+        // source through AssetLibrary::find: its thumbnail path can refresh the
+        // catalog dimensions and hide a stale-size hot-reload regression.
+        // AssetLibrary initialization migrates legacy assets/ files into the
+        // managed Content layout. Resolve the current physical path here.
+        const auto growingFile=fixturePath(p.root,growingImage);
+        auto growing=resized;growing.id="blur-size-resource-fixture";growing.name="Blur source size reload";
+        findMaterialNode(growing.graph,resizeSource)->texture.image.id=growingImage;
+        auto* blurNode=findMaterialNode(growing.graph,resize);blurNode->kind=MaterialNodeKind::Blur;blurNode->name="Blur";blurNode->atomic.amount=.02f;
+        canonicalizeMaterialAsset(growing);
+        auto growingBinding=until([&]{return library.materialPreviewBindings(growing,4);},
+            [&](const auto& binding){return ready(binding)&&binding.graph->programs->optimized&&resources.idle();},
+            "Initial 2x2 cached Blur packet did not settle");
+        const auto oldBlur=growingBinding.graph;
+        const auto blurSlot=sourceSlot(*oldBlur,resize),blurDirectSlot=sourceSlot(*oldBlur,resizeSource);
+        const auto originalBlurFingerprint=oldBlur->sourceFingerprints[blurDirectSlot];
+        require(originalBlurFingerprint==fingerprintFiles({growingFile})&&oldBlur->sources[blurSlot].resize,
+            "Blur size fixture did not use the managed direct/derived source path.");
+        (void)resources.takePublications();
+        model_test::writeBytes(growingFile,model_test::png(4,2,model_test::Bytes{
+            255,64,16,255, 208,96,48,255, 160,128,80,255, 112,160,112,255,
+            64,192,144,255, 16,224,176,255, 96,128,208,255, 176,32,240,255}));
+        library.onFileChanged(growingFile);
+        const auto changedBlurFingerprint=fingerprintFiles({growingFile});
+        require(changedBlurFingerprint!=originalBlurFingerprint,"Blur size reload did not change the managed source.");
+        const auto pendingBlur=library.materialPreviewBindings(growing,4);
+        require(!pendingBlur.sourceReady&&bgfx::isValid(oldBlur->textures[blurSlot])&&oldBlur->leases[blurSlot]&&
+            bgfx::isValid(oldBlur->textures[blurDirectSlot])&&oldBlur->leases[blurDirectSlot],
+            "A pending source-size change was accepted as ready or invalidated the previous complete packet's leases.");
+        growingBinding=until([&]{return library.materialPreviewBindings(growing,4);},[&](const auto& binding){
+            if(!ready(binding))return false;
+            const auto direct=binding.graph->sourceFingerprints[blurDirectSlot],baked=binding.graph->sourceFingerprints[blurSlot];
+            const bool oldPair=direct==originalBlurFingerprint&&baked==oldBlur->sourceFingerprints[blurSlot];
+            const bool newPair=direct==changedBlurFingerprint&&baked!=oldBlur->sourceFingerprints[blurSlot];
+            require(oldPair||newPair,"Source-size reload published direct and cached Blur pixels from different generations.");
+            return newPair&&binding.graph->programs->optimized&&resources.idle();
+        },"2x2-to-4x2 source reload did not publish its new cached Blur extent without a thumbnail request");
+        require(growingBinding.graph->programs==oldBlur->programs&&growingBinding.graph->uniforms==oldBlur->uniforms&&
+            growingBinding.graph->signature!=oldBlur->signature&&bgfx::isValid(oldBlur->textures[blurSlot])&&oldBlur->leases[blurSlot],
+            "Source-size reload rebuilt the Blur shader or retired a still-leased previous generation.");
+        const auto publications=resources.takePublications();
+        const auto published=std::find_if(publications.begin(),publications.end(),[&](const auto& value){
+            return value.kind==ResourceKind::TextureMips&&value.variant=="generated-float16-mips-v1:4x2"&&
+                value.fingerprint==growingBinding.graph->sourceFingerprints[blurSlot];
+        });
+        require(published!=publications.end(),"The ready Blur packet did not publish a generated 4x2 image descriptor.");
+        ResourceRequestOptions inspect;inspect.variant=published->variant;inspect.retainLoader=false;
+        const auto descriptor=resources.requestDerived<streaming::TextureMipCache>(published->id,[](std::stop_token)->ResourceLoadResult<streaming::TextureMipCache>{
+            throw std::runtime_error("Inspecting a ready Blur generation unexpectedly scheduled another image job.");
+        },std::move(inspect));
+        const auto actualExtent=descriptor.snapshot();
+        require(descriptor.state()==ResourceState::Ready&&actualExtent&&actualExtent->format==ImagePixelFormat::RGBA16F&&
+            !actualExtent->levels.empty()&&actualExtent->levels.front().width==4&&actualExtent->levels.front().height==2,
+            "Blur hot reload retained its old 2x2 lattice despite accepting a changed source fingerprint.");
+        const auto settledBlur=growingBinding.graph;const auto blurWarmLoads=resources.stats().loads;
+        for(unsigned frame=0;frame<60;++frame){
+            tick();const auto warm=library.materialPreviewBindings(growing,4);
+            require(ready(warm)&&warm.graph->signature==settledBlur->signature&&warm.graph->textureSignatures==settledBlur->textureSignatures&&
+                warm.graph->textures[blurSlot].idx==settledBlur->textures[blurSlot].idx,
+                "Warm changed-size Blur requests replaced their settled GPU packet.");
+        }
+        require(resources.stats().loads==blurWarmLoads,"Warm changed-size Blur requests repeated decode or cached image generation.");
+        // A pinned node may be disconnected from the material Output. Scale
+        // and Disorder still replace its image without compiling another shader.
+        MaterialAsset cloud;cloud.id="disconnected-clouds-preview";cloud.name="Clouds preview";
+        addMaterialNode(cloud.graph,MaterialNodeKind::Output);
+        const auto cloudNode=addMaterialNode(cloud.graph,MaterialNodeKind::ProceduralTexture).id;
+        findMaterialNode(cloud.graph,cloudNode)->procedural.settings=material_procedural::default_settings(material_procedural::Pattern::Clouds1);
+        findMaterialNode(cloud.graph,cloudNode)->procedural.width=findMaterialNode(cloud.graph,cloudNode)->procedural.height=128;
+        canonicalizeMaterialAsset(cloud);const MaterialGraphPreviewTarget cloudTarget{cloudNode,MaterialPin::Value};
+        auto nodePrograms=library.createMaterialNodePreviewPrograms();require(bool(nodePrograms),"Pinned node preview program owner is unavailable.");
+        const auto requestCloud=[&]{auto result=library.materialNodePreviewBindings(*nodePrograms,cloud,cloudTarget,128);nodePrograms->trim();return result;};
+        const auto settledCloud=[&](const auto& binding){return ready(binding)&&binding.graph->programs->optimized&&resources.idle();};
+        auto cloudBinding=until(requestCloud,settledCloud,"Initial disconnected Clouds 1 preview did not settle");
+        require(cloudBinding.graph->sources.size()==1&&cloudBinding.graph->sources.front().resize,"Clouds preview did not use its cached image boundary.");
+        const auto cloudSlot=cloudBinding.graph->sources.front().slot;
+        auto cloudPixels=bakeMaterialCachedImage(cloud.graph,cloudNode,{});
+        const auto outputHash=materialGraphRenderHash(cloud.surface);auto cloudDefinition=materialNodePreviewDefinitionKey(cloud,cloudTarget);
+        for(unsigned control=0;control<2;++control) {
+            const auto previous=cloudBinding.graph;const auto previousPixels=cloudPixels;
+            if(control==0)findMaterialNode(cloud.graph,cloudNode)->procedural.settings.scale=2;
+            else findMaterialNode(cloud.graph,cloudNode)->procedural.settings.disorder=.35f;
+            canonicalizeMaterialAsset(cloud);
+            require(materialGraphRenderHash(cloud.surface)==outputHash&&materialNodePreviewDefinitionKey(cloud,cloudTarget)!=cloudDefinition,
+                "Disconnected procedural edits retained the pinned branch identity or changed the unrelated material Output.");
+            cloudDefinition=materialNodePreviewDefinitionKey(cloud,cloudTarget);
+            const auto pending=requestCloud();
+            require(!pending.sourceReady&&bgfx::isValid(previous->textures[cloudSlot])&&previous->leases[cloudSlot],
+                "A pending Clouds parameter edit reported stale pixels as current or invalidated the last-good image.");
+            cloudBinding=until(requestCloud,settledCloud,control==0?"Clouds 1 Scale edit did not replace its pinned preview":"Clouds 1 Disorder edit did not replace its pinned preview");
+            require(cloudBinding.graph->programs==previous->programs&&cloudBinding.graph->uniforms==previous->uniforms&&
+                cloudBinding.graph->sourceFingerprints[cloudSlot]!=previous->sourceFingerprints[cloudSlot]&&
+                cloudBinding.graph->textureSignatures[cloudSlot]!=previous->textureSignatures[cloudSlot]&&cloudBinding.graph->signature!=previous->signature,
+                "A procedural numeric edit retained stale image/packet fingerprints or recompiled its preview shader.");
+            cloudPixels=bakeMaterialCachedImage(cloud.graph,cloudNode,{});std::size_t changedPixels{};
+            for(std::size_t i=0;i<cloudPixels.rgba.size();i+=4)changedPixels+=std::abs(cloudPixels.rgba[i]-previousPixels.rgba[i])>1e-4f;
+            require(changedPixels>100,"Clouds 1 parameter edit changed only a cache key, not the generated image.");
+        }
+        // Rapid superseded definitions must not keep the final settled edit
+        // behind old jobs, and a layout edit must not regenerate image pixels.
+        for(float scale:{1.25f,1.5f,1.75f}){findMaterialNode(cloud.graph,cloudNode)->procedural.settings.scale=scale;canonicalizeMaterialAsset(cloud);tick();(void)requestCloud();}
+        const auto preRapid=cloudBinding.graph;
+        cloudBinding=until(requestCloud,settledCloud,"Final coalesced Clouds Scale edit did not replace the preview");
+        require(cloudBinding.graph->programs==preRapid->programs&&cloudBinding.graph->sourceFingerprints[cloudSlot]!=preRapid->sourceFingerprints[cloudSlot],"Rapid edit settlement retained an obsolete procedural image.");
+        const auto stableCloud=cloudBinding.graph;const auto cloudWarmLoads=resources.stats().loads;
+        findMaterialNode(cloud.graph,cloudNode)->position={321,654};canonicalizeMaterialAsset(cloud);
+        for(unsigned frame=0;frame<40;++frame){tick();const auto warm=requestCloud();require(ready(warm)&&warm.graph->signature==stableCloud->signature&&warm.graph->sourceFingerprints==stableCloud->sourceFingerprints,"Warm/layout-only Clouds preview requests changed its accepted image.");}
+        require(resources.stats().loads==cloudWarmLoads,"Warm/layout-only Clouds requests repeated image generation.");
+        auto flatGraph=std::make_shared<const MaterialGraph>(cloud.graph);
+        const auto awaitFlat=[&](const std::shared_ptr<const MaterialGraph>& graph,const char* failure) {
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{15};PreparedTexture texture;
+            do {tick();texture=library.materialNodeImagePreview(cloud.id,graph,cloudTarget,128);if(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle))return texture;std::this_thread::sleep_for(std::chrono::milliseconds{2});}while(std::chrono::steady_clock::now()<deadline);
+            throw std::runtime_error(std::string(failure)+": "+texture.diagnostic);
+        };
+        auto flatCloud=awaitFlat(flatGraph,"Initial flat Clouds preview did not publish");
+        for(unsigned control=0;control<2;++control) {
+            const auto previous=flatCloud;
+            if(control==0)findMaterialNode(cloud.graph,cloudNode)->procedural.settings.scale=1.5f;
+            else findMaterialNode(cloud.graph,cloudNode)->procedural.settings.disorder=.2f;
+            canonicalizeMaterialAsset(cloud);flatGraph=std::make_shared<const MaterialGraph>(cloud.graph);
+            const auto pending=library.materialNodeImagePreview(cloud.id,flatGraph,cloudTarget,128);
+            require(!pending.sourceReady&&previous.lease&&bgfx::isValid(previous.handle),"Flat procedural preview accepted stale pixels during an edit or dropped its last-good lease.");
+            flatCloud=awaitFlat(flatGraph,control==0?"Flat Clouds Scale edit did not refresh":"Flat Clouds Disorder edit did not refresh");
+            require(flatCloud.sourceFingerprint!=previous.sourceFingerprint&&flatCloud.signature!=previous.signature,"Flat Clouds edit retained its accepted image identity.");
+        }
+        const auto flatWarmLoads=resources.stats().loads;
+        for(unsigned frame=0;frame<40;++frame){tick();const auto warm=library.materialNodeImagePreview(cloud.id,flatGraph,cloudTarget,128);require(warm.sourceReady&&warm.complete&&warm.signature==flatCloud.signature,"Unchanged flat procedural preview changed its accepted image.");}
+        require(resources.stats().loads==flatWarmLoads,"Warm flat procedural preview requests scheduled another evaluation.");
+
+        // The inline thumbnail and pinned 2D sidebar are display sizes of the
+        // same authored cached image. Their tiny display exports must reuse
+        // one canonical source rather than generating its lattice twice.
+        auto sharedCloud=cloud;sharedCloud.id="shared-node-image-source";sharedCloud.name="Shared node image source";
+        auto* sharedSource=findMaterialNode(sharedCloud.graph,cloudNode);
+        sharedSource->procedural.width=512;sharedSource->procedural.height=256;sharedSource->procedural.settings.seed+=101;
+        canonicalizeMaterialAsset(sharedCloud);const auto sharedAuthored=serializeMaterialAsset(sharedCloud);
+        const auto sharedGraph=std::make_shared<const MaterialGraph>(sharedCloud.graph);
+        const auto awaitShared=[&](unsigned edge,const char* failure) {
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{20};PreparedTexture texture;
+            do {
+                tick();texture=library.materialNodeImagePreview(sharedCloud.id,sharedGraph,cloudTarget,edge);
+                if(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle)&&resources.idle())return texture;
+                std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            }while(std::chrono::steady_clock::now()<deadline);
+            throw std::runtime_error(std::string(failure)+": "+texture.diagnostic);
+        };
+        (void)resources.takePublications();
+        const auto inlineShared=awaitShared(128,"Shared-source inline thumbnail did not settle");
+        const auto inlinePublications=resources.takePublications();
+        const auto isSource=[](const auto& publication) {
+            return publication.kind==ResourceKind::TextureMips&&publication.variant=="generated-float16-mips-v1:512x256";
+        };
+        require(std::count_if(inlinePublications.begin(),inlinePublications.end(),isSource)==1,
+            "Inline cached-node preview did not publish exactly one complete authored 512x256 source.");
+        const auto sourcePublication=*std::find_if(inlinePublications.begin(),inlinePublications.end(),isSource);
+        const auto inlineDisplay=std::find_if(inlinePublications.begin(),inlinePublications.end(),[&](const auto& publication) {
+            return publication.kind==ResourceKind::TextureMips&&publication.variant=="generated-float16-mips-v1:128x128"&&
+                publication.fingerprint==inlineShared.sourceFingerprint;
+        });
+        require(inlineDisplay!=inlinePublications.end()&&inlineDisplay->id!=sourcePublication.id,
+            "Inline display pixels did not publish separately from their canonical source.");
+        const auto sidebarShared=awaitShared(256,"Shared-source pinned sidebar image did not settle");
+        const auto sidebarPublications=resources.takePublications();
+        require(std::none_of(sidebarPublications.begin(),sidebarPublications.end(),isSource),
+            "Requesting a 256-pixel sidebar regenerated the accepted 512x256 source used by its inline thumbnail.");
+        const auto sidebarDisplay=std::find_if(sidebarPublications.begin(),sidebarPublications.end(),[&](const auto& publication) {
+            return publication.kind==ResourceKind::TextureMips&&publication.variant=="generated-float16-mips-v1:256x256"&&
+                publication.fingerprint==sidebarShared.sourceFingerprint;
+        });
+        require(sidebarDisplay!=sidebarPublications.end()&&sidebarDisplay->id!=sourcePublication.id&&sidebarDisplay->id!=inlineDisplay->id&&
+            inlineShared.width==128&&inlineShared.height==128&&sidebarShared.width==256&&sidebarShared.height==256,
+            "Inline/sidebar display exports lost their independent size or shared the wrong image identity.");
+        ResourceRequestOptions inspectShared;inspectShared.variant=sourcePublication.variant;inspectShared.retainLoader=false;
+        const auto sharedDescriptor=resources.requestDerived<streaming::TextureMipCache>(sourcePublication.id,[](std::stop_token)->ResourceLoadResult<streaming::TextureMipCache> {
+            throw std::runtime_error("Inspecting the shared canonical source scheduled another generation.");
+        },std::move(inspectShared));
+        const auto sharedSnapshot=sharedDescriptor.snapshot();
+        require(sharedDescriptor.state()==ResourceState::Ready&&sharedSnapshot&&sharedSnapshot.fingerprint()==sourcePublication.fingerprint&&
+            sharedSnapshot.revision()==sourcePublication.revision&&sharedSnapshot->format==ImagePixelFormat::RGBA16F&&
+            !sharedSnapshot->levels.empty()&&sharedSnapshot->levels.front().width==512&&sharedSnapshot->levels.front().height==256,
+            "Inline/sidebar reuse replaced or downscaled its immutable canonical source descriptor.");
+        const auto sharedWarmLoads=resources.stats().loads;
+        for(unsigned frame=0;frame<40;++frame) {
+            tick();const auto inlineWarm=library.materialNodeImagePreview(sharedCloud.id,sharedGraph,cloudTarget,128);
+            const auto sidebarWarm=library.materialNodeImagePreview(sharedCloud.id,sharedGraph,cloudTarget,256);
+            require(inlineWarm.sourceReady&&inlineWarm.complete&&inlineWarm.signature==inlineShared.signature&&
+                sidebarWarm.sourceReady&&sidebarWarm.complete&&sidebarWarm.signature==sidebarShared.signature,
+                "Warm inline/sidebar polling changed its accepted shared-source display images.");
+        }
+        require(resources.stats().loads==sharedWarmLoads&&resources.takePublications().empty()&&serializeMaterialAsset(sharedCloud)==sharedAuthored,
+            "Warm inline/sidebar polling repeated source/display work or changed the authored graph.");
+        library.releaseMaterialNodeImagePreviews(sharedCloud.id);
         const auto proceduralAsset=library.createMaterial("Procedural Resize UV0");
         require(bool(proceduralAsset),"Could not create the procedural Resize compatibility fixture.");
         auto procedural=*proceduralAsset;procedural.graph={};

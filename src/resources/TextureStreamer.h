@@ -13,6 +13,7 @@ struct PreparedTexture {
     std::string diagnostic;
     bool complete{false};
     bool sourceReady{false};
+    bool failed{false};
 };
 // Owned by AssetLibrary. All calls and every GPU destructor run on the application thread.
 class TextureStreamer {
@@ -37,10 +38,17 @@ public:
     // decoding its original inputs. Empty means a CPU bake is required.
     std::optional<PreparedTexture> cachedGeneratedFloat(const std::string& key,std::uint32_t width,std::uint32_t height,
         bool mipmapped,std::uint32_t edge,ResourcePriority priority=ResourcePriority::Visible);
+    // Ready immutable CPU pixels for an already demanded generated image. This
+    // neither starts work nor reads back a GPU texture; an absent descriptor is
+    // expected after the source's CPU demand has expired.
+    ResourceSnapshot<streaming::TextureMipCache> generatedFloatSnapshot(const std::string& key,
+        std::uint32_t width,std::uint32_t height,bool mipmapped) const;
     void beginFrame();
     void advance(std::size_t bytes=4*1024*1024,double milliseconds=2);
     void invalidate(const std::string& id);
     void reload(const std::string& id);
+    // Forget a transient generated recipe; outstanding UI/draw leases remain valid.
+    void forgetGenerated(const std::string& key);
     void trim(std::size_t targetBytes);
     std::size_t residentBytes() const;
     std::string diagnostic() const;

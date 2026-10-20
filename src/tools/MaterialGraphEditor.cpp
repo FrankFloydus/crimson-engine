@@ -2,6 +2,7 @@
 #include "editor/MaterialDocument.h"
 #include "editor/MaterialGraphActions.h"
 #include "HdrColorEditor.h"
+#include "MaterialAtomicControls.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_node_editor.h>
@@ -121,6 +122,18 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::AlphaMerge:aliases="alpha merge combine rgb opacity channel node";break;
     case MaterialNodeKind::Resize:aliases="resize resample resolution image width height scale filter node";break;
     case MaterialNodeKind::Time:aliases="time seconds clock runtime input node";break;
+    case MaterialNodeKind::Blur:aliases="blur gaussian soften smoothing image filter node";break;
+    case MaterialNodeKind::GrowShrink:aliases="grow shrink expand contract dilate erode morphology mask node";break;
+    case MaterialNodeKind::MaskAdjust:aliases="mask adjust coverage contrast selection node";break;
+    case MaterialNodeKind::HistogramScan:aliases="histogram scan threshold coverage contrast mask image node";break;
+    case MaterialNodeKind::DirectionalWarp:aliases="directional warp distort displace image intensity angle node";break;
+    case MaterialNodeKind::ImageTransform:aliases="image transform texture mapping tiling scale rotation offset projection node";break;
+    case MaterialNodeKind::ProceduralTexture:aliases="procedural texture clouds multiscale spots fine dirt moisture creased messy fibers white gaussian noise parabolic gradient streaks directional scratches source node";break;
+    case MaterialNodeKind::HeightOcclusion:aliases="height occlusion ambient ao horizon image node";break;
+    case MaterialNodeKind::NormalOcclusion:aliases="normal occlusion ambient ao horizon image node";break;
+    case MaterialNodeKind::DirectionSelect:aliases="direction select encoded normal axis hemisphere node";break;
+    case MaterialNodeKind::ImageInput:aliases="image input override base fallback constant enabled source node";break;
+    case MaterialNodeKind::DecodeNormal:aliases="normal map decode encoded tangent rgb strength y conversion node";break;
     default:break;
     }
     std::string search(query);std::transform(search.begin(),search.end(),search.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -150,11 +163,14 @@ ImVec4 nodeColor(MaterialNodeKind kind) {
     case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:
     case MaterialNodeKind::Desaturation:case MaterialNodeKind::Contrast:case MaterialNodeKind::ContrastRGB:case MaterialNodeKind::HueShift:case MaterialNodeKind::Grunge:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::Levels:case MaterialNodeKind::Invert:case MaterialNodeKind::Blend:case MaterialNodeKind::Grayscale:case MaterialNodeKind::ToColor:
-    case MaterialNodeKind::Noise:case MaterialNodeKind::BrightnessContrast:case MaterialNodeKind::Sharpen:case MaterialNodeKind::HeightToNormal:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::Noise:case MaterialNodeKind::BrightnessContrast:case MaterialNodeKind::Sharpen:case MaterialNodeKind::HeightToNormal:
+    case MaterialNodeKind::Blur:case MaterialNodeKind::GrowShrink:case MaterialNodeKind::MaskAdjust:case MaterialNodeKind::HistogramScan:
+    case MaterialNodeKind::DirectionalWarp:case MaterialNodeKind::HeightOcclusion:case MaterialNodeKind::NormalOcclusion:
+    case MaterialNodeKind::DirectionSelect:case MaterialNodeKind::DecodeNormal:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::RGBAMerge:case MaterialNodeKind::RGBASplit:case MaterialNodeKind::AlphaSplit:case MaterialNodeKind::AlphaMerge:
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
-    case MaterialNodeKind::Texture2D:case MaterialNodeKind::Resize:return {.23f,.48f,.65f,1};
-    case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:case MaterialNodeKind::Panner:case MaterialNodeKind::Time:return {.22f,.58f,.54f,1};
+    case MaterialNodeKind::Texture2D:case MaterialNodeKind::Resize:case MaterialNodeKind::ImageInput:case MaterialNodeKind::ProceduralTexture:return {.23f,.48f,.65f,1};
+    case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:case MaterialNodeKind::Panner:case MaterialNodeKind::Time:case MaterialNodeKind::ImageTransform:return {.22f,.58f,.54f,1};
     default:return {.49f,.44f,.37f,1};
     }
 }
@@ -169,7 +185,7 @@ ImVec4 pinColor(MaterialValueType type) {
     }
 }
 std::vector<MaterialPinDefinition> visibleInputs(const MaterialGraph& graph,const MaterialNode& node,const MaterialOutputNode& output) {
-    auto result=materialNodeInputs(graph,node,output.shading,output.blend);
+    auto result=materialNodeInputs(graph,node,output.shading,output.blend,node.kind==MaterialNodeKind::ImageInput);
     if(node.kind==MaterialNodeKind::Output)for(const auto& pin:materialNodeInputs(graph,node,output.shading,output.blend,true))
         if((pin.pin==MaterialPin::Opacity || pin.pin==MaterialPin::OpacityMask || pin.pin==MaterialPin::Height) &&
             std::none_of(result.begin(),result.end(),[&](const auto& existing){return existing.pin==pin.pin;}))result.push_back(pin);
@@ -280,6 +296,7 @@ struct MaterialGraphEditor::State {
     std::map<std::pair<MaterialNodeId,MaterialPin>,HdrColorEditorState> colorEditors;
     std::map<MaterialNodeId,Vec3> scaleBaselines;
     std::map<MaterialNodeId,TexturePresentation> generatedTextures;
+    std::map<MaterialNodeId,MaterialGraphPreviewTarget> generatedTargets;
     MaterialLinkId contextLink{};
     std::array<char,128> search{};
     int searchIndex{};
@@ -394,6 +411,7 @@ const std::string& MaterialGraphEditor::status() const{return state_->status;}
 const MaterialGraphEditor::Presentation& MaterialGraphEditor::presentation() const{return state_->presentation;}
 std::optional<MaterialGraphPreviewTarget> MaterialGraphEditor::previewTarget() const{return state_->preview;}
 void MaterialGraphEditor::clearPreview(){state_->preview.reset();}
+void MaterialGraphEditor::releaseImages(){state_->generatedTextures.clear();state_->generatedTargets.clear();}
 void MaterialGraphEditor::clearSelection() {
     state_->selected=0;if(!state_->context)return;
     auto* previous=ed::GetCurrentEditor();ed::SetCurrentEditor(state_->context);ed::ClearSelection();ed::SetCurrentEditor(previous);
@@ -416,7 +434,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     if(s.creationGesture && s.creationItem)ImGui::KeepAliveID(s.creationItem);
     std::erase_if(s.colorEditors,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first.first);});
     std::erase_if(s.scaleBaselines,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
-    std::erase_if(s.generatedTextures,[&](const auto& entry){const auto* node=findMaterialNode(document.definition().graph,entry.first);return !node||node->kind!=MaterialNodeKind::Grunge;});
+    std::erase_if(s.generatedTextures,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
+    std::erase_if(s.generatedTargets,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
     auto* previous=ed::GetCurrentEditor();ed::SetCurrentEditor(s.context);
     const bool editable=document.editable();
     if(!findMaterialNode(document.definition().graph,s.selected))s.selected=0;
@@ -502,6 +521,36 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto rule=ImGui::GetCursorScreenPos();
         ImGui::GetWindowDrawList()->AddLine(rule,{rule.x+width,rule.y},ImGui::ColorConvertFloat4ToU32(nodeColor(node.kind)),3);
         ImGui::Dummy({width,1});
+        if(assets.nodeImage&&node.kind!=MaterialNodeKind::Output&&node.kind!=MaterialNodeKind::Grunge&&
+           node.kind!=MaterialNodeKind::Time&&node.kind!=MaterialNodeKind::ParticleColor&&!outputs.empty()) {
+            auto pin=previewing?s.preview->pin:outputs.front().pin;
+            if(!previewing)for(const auto& outputPin:outputs) {
+                if(outputPin.type==MaterialValueType::Scalar||outputPin.type==MaterialValueType::Color||
+                   outputPin.type==MaterialValueType::Color4||outputPin.type==MaterialValueType::Vector2){pin=outputPin.pin;break;}
+            }
+            const auto type=materialOutputType(graph,node.id,pin);
+            if(type==MaterialValueType::Scalar||type==MaterialValueType::Color||type==MaterialValueType::Color4||type==MaterialValueType::Vector2) {
+                const MaterialGraphPreviewTarget target{node.id,pin};
+                if(const auto old=s.generatedTargets.find(node.id);old!=s.generatedTargets.end()&&old->second!=target)s.generatedTextures.erase(node.id);
+                s.generatedTargets[node.id]=target;
+                constexpr float edge=128;
+                const auto origin=ImGui::GetCursorScreenPos();
+                const ImVec2 minimum{origin.x+(width-edge)*.5f,origin.y},maximum{minimum.x+edge,minimum.y+edge};
+                const auto screenMinimum=ed::CanvasToScreen(minimum),screenMaximum=ed::CanvasToScreen(maximum);
+                const bool visible=screenMaximum.x-screenMinimum.x>=24&&screenMaximum.x>canvasMinimum.x&&screenMaximum.y>canvasMinimum.y&&
+                    screenMinimum.x<canvasMinimum.x+canvasSize.x&&screenMinimum.y<canvasMinimum.y+canvasSize.y;
+                auto image=visible?assets.nodeImage(target,128):TexturePresentation{};
+                if(image.available&&image.textureId)s.generatedTextures[node.id]=image;
+                else if(const auto old=s.generatedTextures.find(node.id);old!=s.generatedTextures.end()) {
+                    const auto diagnostic=image.diagnostic;image=old->second;image.diagnostic=diagnostic;
+                }
+                ImGui::Dummy({width,edge});auto* draw=ImGui::GetWindowDrawList();
+                draw->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGuiCol_FrameBg));
+                if(image.available&&image.textureId)draw->AddImage(static_cast<ImTextureID>(image.textureId),minimum,maximum);
+                if(!image.diagnostic.empty()&&ImGui::IsItemHovered()){ed::Suspend();ImGui::SetTooltip("%s",image.diagnostic.c_str());ed::Resume();}
+                s.presentation.images.push_back({node.id,point(minimum),point(maximum),image.available?image.textureId:0});
+            }
+        }
         const auto editNode=[&](const char* label,MaterialNode candidate,bool changed,bool activated,bool deactivated) {
             if(!cancel && editable && (activated || changed) && !document.transactionActive())s.scalarEditing=document.begin(label);
             if(!cancel && changed && s.scalarEditing && !document.update([&](auto& asset){if(auto* target=findMaterialNode(asset.graph,node.id))*target=candidate;}))s.status=document.status();
@@ -521,7 +570,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto labeledWidth=[&](const char* label) {
             return std::max(1.f,width-ImGui::CalcTextSize(label).x-ImGui::GetStyle().ItemInnerSpacing.x);
         };
-        if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise) {
+        if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise || node.kind==MaterialNodeKind::ProceduralTexture) {
             const auto parameter=[&](const char* label,const char* transaction,const auto& draw) {
                 ImGui::SetNextItemWidth(labeledWidth(label));field(transaction,draw);
                 s.presentation.controls.push_back({node.id,label,point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
@@ -534,6 +583,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     if(changed)set(n,selected);return changed;
                 });
             };
+            draw_material_atomic_controls(node,parameter,option,materialInputLink(graph,node.id,MaterialPin::UV)!=nullptr);
             if(node.kind==MaterialNodeKind::Resize) {
                 parameter("Width","Change resize width",[](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
                 parameter("Height","Change resize height",[](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});
@@ -634,13 +684,14 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 if(changed)n.uv.mode=static_cast<MaterialUvMode>(mode);return changed;});
             ImGui::SetNextItemWidth(labeledWidth("Rotation"));
             field("Rotate UV mapping",[](auto& n){return ImGui::DragFloat("Rotation",&n.uv.rotation[2],.2f,0,0,"%.1f");});
-        } else if(node.kind==MaterialNodeKind::Texture2D) {
+        } else if(node.kind==MaterialNodeKind::Texture2D || node.kind==MaterialNodeKind::ImageInput) {
             auto texture=assets.describe?assets.describe(node.texture.image.id):TexturePresentation{};
             const auto slash=node.texture.image.id.find_last_of("/\\");
             const auto label=!texture.name.empty()?texture.name:node.texture.image.id.empty()?std::string("None"):node.texture.image.id.substr(slash==std::string::npos?0:slash+1);
             const auto origin=ImGui::GetCursorScreenPos();
             ImGui::BeginDisabled(!editable);
             if(ImGui::InvisibleButton("##Texture image",{width,80}) && assets.choose)assets.choose(node.id);
+            s.presentation.controls.push_back({node.id,"Image",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             ImGui::EndDisabled();
             auto* draw=ImGui::GetWindowDrawList();draw->AddRectFilled(origin,{origin.x+width,origin.y+80},ImGui::GetColorU32(ImGuiCol_FrameBg));
             if(texture.available && texture.textureId && texture.width && texture.height) {
@@ -660,9 +711,10 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             canvasLabel(label.c_str(),width);
             ImGui::BeginDisabled(!editable || node.texture.image.empty());
             if(ImGui::SmallButton("Clear"))document.edit("Clear graph texture",[&](auto& asset){findMaterialNode(asset.graph,node.id)->texture.image.id.clear();});
+            s.presentation.controls.push_back({node.id,"Clear",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             ImGui::EndDisabled();ImGui::SetNextItemWidth(labeledWidth("Sample Type"));
             choice("Change texture sample type",[&](auto& n){int role=static_cast<int>(n.texture.role);ImVec2 minimum,maximum;
-                const bool changed=canvasCombo("Sample Type",role,"Color\0Linear Data\0Normal\0",minimum,maximum);
+                const bool changed=canvasCombo("Sample Type",role,n.kind==MaterialNodeKind::ImageInput?"Color\0Linear Data\0":"Color\0Linear Data\0Normal\0",minimum,maximum);
                 s.presentation.combos.push_back({node.id,"Sample Type",point(minimum),point(maximum)});
                 if(changed)n.texture.role=static_cast<MaterialTextureRole>(role);return changed;});
             if(node.texture.role==MaterialTextureRole::Normal){ImGui::SetNextItemWidth(labeledWidth("Strength"));field("Change normal strength",[](auto& n){return ImGui::DragFloat("Strength",&n.texture.normalStrength,.01f);});}
@@ -888,14 +940,19 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         s.search.fill(0);s.searchIndex=0;s.focusSearch=true;
         ImGui::OpenPopup("Add material node");
     }
+    if(ImGui::IsPopupOpen("Add material node"))
+        ImGui::SetNextWindowSizeConstraints({0,0},ImGui::GetWindowViewport()->WorkSize);
     if(ImGui::BeginPopup("Add material node")) {
         const bool dismiss=ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+        const bool openingSearch=s.focusSearch;
+        const int previousIndex=s.searchIndex;
         if(s.focusSearch){ImGui::SetKeyboardFocusHere();s.focusSearch=false;}
         const std::string previousSearch(s.search.data());
         ImGui::SetNextItemWidth(230);
         const bool enter=ImGui::InputTextWithHint("Search","Type a node name...",s.search.data(),s.search.size(),ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CallbackHistory,
             [](ImGuiInputTextCallbackData* data){auto& state=*static_cast<State*>(data->UserData);state.searchIndex+=data->EventKey==ImGuiKey_UpArrow?-1:1;return 0;},&s);
-        if(previousSearch!=s.search.data())s.searchIndex=0;
+        const bool queryChanged=previousSearch!=s.search.data();
+        if(queryChanged)s.searchIndex=0;
         std::vector<MaterialGraphNodeChoice> choices;
         try {
             if(s.addFrom)choices=materialGraphNodeChoices(document.definition().graph,*s.addFrom);
@@ -904,12 +961,26 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         std::erase_if(choices,[&](const auto& choice){return !nodeMatches(choice.kind,s.search.data());});
         std::stable_sort(choices.begin(),choices.end(),[&](const auto& a,const auto& b){return exactNodeName(a.kind,s.search.data())>exactNodeName(b.kind,s.search.data());});
         if(!choices.empty())s.searchIndex=(s.searchIndex%static_cast<int>(choices.size())+static_cast<int>(choices.size()))%static_cast<int>(choices.size());
-        else {s.searchIndex=0;ImGui::TextDisabled("No compatible nodes");}
+        else s.searchIndex=0;
         std::optional<MaterialGraphNodeChoice> chosen;
-        for(std::size_t index=0;index<choices.size();++index) {
-            if(ImGui::Selectable(materialNodeKindName(choices[index].kind),s.searchIndex==static_cast<int>(index)))chosen=choices[index];
-            if(s.addFrom)ImGui::SetItemTooltip("Connect %s",materialPinName(choices[index].pin));
+        const auto& popupStyle=ImGui::GetStyle();
+        const float resultWidth=std::min(230.f+ImGui::CalcTextSize("Search").x+popupStyle.ItemInnerSpacing.x,
+            std::max(1.f,ImGui::GetWindowViewport()->WorkSize.x-popupStyle.WindowPadding.x*2));
+        const float reservedHeight=ImGui::GetFrameHeightWithSpacing()+popupStyle.WindowPadding.y*2+
+            (s.addFrom?0:ImGui::GetFrameHeightWithSpacing()+popupStyle.ItemSpacing.y+1);
+        const float availableHeight=std::max(ImGui::GetTextLineHeightWithSpacing(),ImGui::GetWindowViewport()->WorkSize.y-reservedHeight);
+        const auto visibleRows=std::clamp<std::size_t>(choices.size(),1,10);
+        const float resultHeight=std::min(static_cast<float>(visibleRows)*ImGui::GetTextLineHeightWithSpacing(),availableHeight);
+        if(ImGui::BeginChild("Node results",{resultWidth,resultHeight},ImGuiChildFlags_None)) {
+            if(choices.empty())ImGui::TextDisabled("No compatible nodes");
+            for(std::size_t index=0;index<choices.size();++index) {
+                if(ImGui::Selectable(materialNodeKindName(choices[index].kind),s.searchIndex==static_cast<int>(index)))chosen=choices[index];
+                if(s.addFrom)ImGui::SetItemTooltip("Connect %s",materialPinName(choices[index].pin));
+                if(s.searchIndex==static_cast<int>(index)&&(openingSearch||queryChanged||previousIndex!=s.searchIndex))
+                    ImGui::SetScrollHereY(.5f);
+            }
         }
+        ImGui::EndChild();
         if(enter && !choices.empty())chosen=choices[static_cast<std::size_t>(s.searchIndex)];
         if(chosen && !dismiss && editable && !document.transactionActive()) {
             MaterialNodeId created{};
@@ -980,6 +1051,15 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     ed::Resume();
     if(s.frameContent){ed::NavigateToContent(0);s.frameContent=false;}
     ed::End();
+    if(!cancel&&!s.scalarEditing&&!document.transactionActive()&&!ImGui::GetIO().WantTextInput&&
+        !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        const auto clicked=ed::GetDoubleClickedNode();
+        if(clicked&&!ed::GetDoubleClickedPin())for(const auto& [id,ui]:s.nodes)if(ui==clicked.Get()) {
+            if(s.preview&&s.preview->node==id)s.preview.reset();
+            else s.togglePreview(document.definition().graph,id);
+            break;
+        }
+    }
     bool createdFromCanvas{};
     const bool emptyCanvas=!ed::GetHoveredNode() && !ed::GetHoveredPin() && !ed::GetHoveredLink();
     if(keyboard && editable && !cancel && !document.transactionActive() && emptyCanvas && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {

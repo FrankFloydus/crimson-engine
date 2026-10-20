@@ -312,6 +312,8 @@ struct TextureStreamer::Impl {
         if(entry.descriptor.state()==ResourceState::Failed)result.diagnostic=entry.descriptor.diagnostic();
         else if(entry.generatedSource.state()==ResourceState::Failed)result.diagnostic=entry.generatedSource.diagnostic();
         else if(entry.original.state()==ResourceState::Failed)result.diagnostic=entry.original.diagnostic();
+        result.failed=!entry.error.empty()||entry.descriptor.state()==ResourceState::Failed||
+            entry.generatedSource.state()==ResourceState::Failed||entry.original.state()==ResourceState::Failed;
         return result;
     }
 };
@@ -368,6 +370,12 @@ std::optional<PreparedTexture> TextureStreamer::cachedGeneratedFloat(const std::
     if(!entry.descriptor&&(!entry.current||entry.current->level>generatedRequiredLevel(entry)))return {};
     return impl_->prepared(entry);
 }
+ResourceSnapshot<streaming::TextureMipCache> TextureStreamer::generatedFloatSnapshot(const std::string& key,std::uint32_t width,std::uint32_t height,bool mipmapped) const {
+    const auto variant="generated-float16:"+std::to_string(width)+"x"+std::to_string(height)+(mipmapped?":mips":":single");
+    const auto found=impl_->entries.find(key+'\0'+variant);
+    if(found==impl_->entries.end()||found->second.descriptor.state()!=ResourceState::Ready)return {};
+    return found->second.descriptor.snapshot();
+}
 void TextureStreamer::beginFrame() { impl_->framePins.clear(); for(auto& [key,entry]:impl_->entries) { (void)key; entry.wanted=false;entry.edge=0;entry.priority=ResourcePriority::Background; } }
 void TextureStreamer::advance(std::size_t bytes,double milliseconds) {
     for(auto& [key,entry]:impl_->entries)if(entry.generated&&!entry.wanted){(void)key;if(entry.floatGenerated){entry.floatCancellation.request_stop();entry.retryFloat|=entry.descriptor&&entry.descriptor.state()!=ResourceState::Ready;}entry.pending.reset();entry.descriptor={};entry.generatedSource={};}
@@ -380,6 +388,13 @@ void TextureStreamer::advance(std::size_t bytes,double milliseconds) {
     }
 }
 void TextureStreamer::invalidate(const std::string& id) { std::erase_if(impl_->entries,[&](const auto& pair){return !pair.second.generated&&pair.second.id==id;}); }
+void TextureStreamer::forgetGenerated(const std::string& key) {
+    for(auto i=impl_->entries.begin();i!=impl_->entries.end();) {
+        auto& entry=i->second;
+        if(entry.generated&&entry.id==key){entry.floatCancellation.request_stop();i=impl_->entries.erase(i);}
+        else ++i;
+    }
+}
 void TextureStreamer::reload(const std::string& id) {
     std::vector<streaming::TextureRole> refreshed;
     for(auto& [key,entry]:impl_->entries) if(!entry.generated&&entry.id==id) {

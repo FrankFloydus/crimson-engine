@@ -1,5 +1,6 @@
 #include "MaterialEditor.h"
 #include "DocumentEditorMenu.h"
+#include "MaterialAtomicControls.h"
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
@@ -426,7 +427,15 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 ImGui::TreePop();
             }
         }
-        if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise) {
+        if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise || node.kind==MaterialNodeKind::ProceduralTexture) {
+            if(node.kind>=MaterialNodeKind::Blur) {
+                ImGui::SeparatorText(materialNodeKindName(node.kind));
+                const auto parameter=[&](const char*,const char* transaction,const auto& draw){control(transaction,draw);};
+                const auto option=[&](const char* label,const char* transaction,const char* values,const auto& get,const auto& set) {
+                    control(transaction,[&](auto& n){int selected=get(n);const bool changed=ImGui::Combo(label,&selected,values);if(changed)set(n,selected);return changed;});
+                };
+                draw_material_atomic_controls(node,parameter,option,materialInputLink(document_.definition().graph,selected,MaterialPin::UV)!=nullptr);
+            }
             if(node.kind==MaterialNodeKind::Resize) {
                 ImGui::SeparatorText("Resize");
                 control("Change resize width",[](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
@@ -478,10 +487,10 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             const auto inputs=materialNodeInputs(document_.definition().graph,node,materialOutputNode(document_.definition().graph).output.shading,materialOutputNode(document_.definition().graph).output.blend);
             bool heading=false;
             for(const auto& input:inputs) {
-                if(input.type==MaterialValueType::Mapping || input.type==MaterialValueType::Normal || materialInputLink(document_.definition().graph,selected,input.pin))continue;
+                if(node.kind==MaterialNodeKind::ImageInput || input.type==MaterialValueType::Mapping || input.type==MaterialValueType::Normal || materialInputLink(document_.definition().graph,selected,input.pin))continue;
                 if(!heading){ImGui::SeparatorText("Default inputs");heading=true;}
                 ImGui::PushID(static_cast<int>(input.pin));
-                const bool dynamic=(node.kind==MaterialNodeKind::Levels||node.kind==MaterialNodeKind::Invert||node.kind==MaterialNodeKind::Blend||node.kind==MaterialNodeKind::BrightnessContrast||node.kind==MaterialNodeKind::Sharpen||node.kind==MaterialNodeKind::Resize)&&
+                const bool dynamic=materialNodeAdaptableImage(node.kind)&&
                     (input.pin==MaterialPin::Left||input.pin==MaterialPin::Right);
                 if(dynamic)control("Change image input type",[&](auto& n) {
                     auto value=materialInputDefault(n,input.pin);int type=value.type==MaterialValueType::Color4?2:value.type==MaterialValueType::Color?1:0;
@@ -513,14 +522,14 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 ImGui::PopID();
             }
         }
-        if(node.kind==MaterialNodeKind::Color)hdr("Constant","Change color",false);
-        if(node.kind==MaterialNodeKind::Texture2D) {
+        if(node.kind==MaterialNodeKind::Color || node.kind==MaterialNodeKind::ImageInput)hdr(node.kind==MaterialNodeKind::ImageInput?"Constant fallback":"Constant","Change color",false);
+        if(node.kind==MaterialNodeKind::Texture2D || node.kind==MaterialNodeKind::ImageInput) {
             {
                 ImGui::SeparatorText("Texture");
                 auto image=node.texture.image.id;ImGui::BeginDisabled(!editable);
                 const bool changed=textureField(assets,"Image",image,message_,node.texture.role==MaterialTextureRole::Normal);ImGui::EndDisabled();
                 if(changed && editable) {finish();document_.edit("Assign texture",[&](auto& asset){if(auto* n=findMaterialNode(asset.graph,selected))n->texture.image.id=image;});}
-                control("Change texture interpretation",[](auto& n){int role=static_cast<int>(n.texture.role);const bool changed=ImGui::Combo("Sample Type",&role,"Color\0Linear Data\0Normal\0");if(changed)n.texture.role=static_cast<MaterialTextureRole>(role);return changed;});
+                control("Change texture interpretation",[](auto& n){int role=static_cast<int>(n.texture.role);const bool changed=ImGui::Combo("Sample Type",&role,n.kind==MaterialNodeKind::ImageInput?"Color\0Linear Data\0":"Color\0Linear Data\0Normal\0");if(changed)n.texture.role=static_cast<MaterialTextureRole>(role);return changed;});
                 if(findMaterialNode(document_.definition().graph,selected)->texture.role==MaterialTextureRole::Normal)
                     control("Change normal strength",[](auto& n){return ImGui::DragFloat("Normal strength",&n.texture.normalStrength,.01f,0,0,"%.3f");});
             }
@@ -600,7 +609,16 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
             else { const auto id=document_.assetId();if(!document_.load(id))message_=document_.status();else reconcileReferences(assets,true); }
         }
     }
-    if(!isOpen()){preview_.release(renderer);modals(assets);return;}
+    if(!isOpen()){
+        if(!imageDocument_.empty())assets.releaseMaterialNodeImagePreviews(imageDocument_);
+        imageGraph_.reset();imageDocument_.clear();graph_.releaseImages();preview_.release(renderer);modals(assets);return;
+    }
+    if(!imageGraph_||imageDocument_!=document_.assetId()||imageRevision_!=document_.previewRevision()) {
+        if(!imageDocument_.empty()&&imageDocument_!=document_.assetId())assets.releaseMaterialNodeImagePreviews(imageDocument_);
+        imageDocument_=document_.assetId();imageRevision_=document_.previewRevision();
+        imageGraph_=std::make_shared<const MaterialGraph>(document_.definition().graph);
+    }
+    preview_.setImageGraph(imageGraph_);
     if(focusNext_){ImGui::SetNextWindowFocus();focusNext_=false;}
     ImGui::SetNextWindowDockID(0,ImGuiCond_Always);
     ImGui::SetNextWindowSize({1200,760},ImGuiCond_FirstUseEver);
@@ -664,6 +682,17 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
                 } catch(const std::exception& error){result.diagnostic=error.what();}
                 return result;
             };
+            graphAssets.nodeImage=[&](MaterialGraphPreviewTarget target,unsigned edge) {
+                MaterialGraphEditor::TexturePresentation result;
+                try {
+                    auto texture=assets.materialNodeImagePreview(imageDocument_,imageGraph_,target,edge);
+                    result.available=texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle);
+                    result.width=texture.width;result.height=texture.height;result.lease=std::move(texture.lease);
+                    result.diagnostic=std::move(texture.diagnostic);
+                    if(result.available)result.textureId=ImGuiBgfx::textureId(texture.handle);
+                } catch(const std::exception& error){result.diagnostic=error.what();}
+                return result;
+            };
             bool openTexturePicker=false;
             graphAssets.choose=[&](MaterialNodeId node){texturePickerNode_=node;openTexturePicker=true;};
             graph_.draw(document_,graphAssets);
@@ -671,7 +700,7 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
             if(openTexturePicker){graphTextureFilter.Clear();ImGui::OpenPopup("Graph texture picker");}
             if(ImGui::BeginPopup("Graph texture picker")) {
                 const auto* textureNode=findMaterialNode(document_.definition().graph,texturePickerNode_);
-                if(!textureNode || textureNode->kind!=MaterialNodeKind::Texture2D || !document_.editable())ImGui::CloseCurrentPopup();
+                if(!textureNode || (textureNode->kind!=MaterialNodeKind::Texture2D && textureNode->kind!=MaterialNodeKind::ImageInput) || !document_.editable())ImGui::CloseCurrentPopup();
                 else {
                     graphTextureFilter.Draw("Search");
                     const auto selectedImage=textureNode->texture.image.id;

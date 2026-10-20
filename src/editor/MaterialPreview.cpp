@@ -2,6 +2,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
 #include "assets/MaterialGraphReferences.h"
+#include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "tools/Tools.h"
@@ -13,9 +14,8 @@
 namespace crimson {
 void MaterialPreview::setNodePreview(std::optional<MaterialGraphPreviewTarget> target) {
     if(nodePreview_==target)return;
-    if(!target || !nodePreview_ || target->node!=nodePreview_->node){grungeCurrent_={};grungeNode_=0;}
-    nodePreview_=target;nodeDefinitionKey_.clear();
-    if(!target)nodeCurrent_.reset();
+    imageCurrent_={};classifiedImageGraph_.reset();classifiedImageTarget_.reset();staticImage_=false;
+    nodePreview_=target;nodeDefinitionKey_.clear();nodeCurrent_.reset();
 }
 void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     ImGui::PushItemWidth(260);
@@ -38,34 +38,46 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     }
     if(std::isfinite(dt)&&dt>0)materialContext_.gameSeconds+=std::min(dt,1.0);
     materialContext_.realSeconds=ImGui::GetTime();
-    if(grungeDocumentId_!=material.id){grungeCurrent_={};grungeNode_=0;grungeDocumentId_=material.id;}
+    if(imageDocumentId_!=material.id){imageCurrent_={};classifiedImageGraph_.reset();classifiedImageTarget_.reset();staticImage_=false;imageDocumentId_=material.id;}
     if(nodePreview_) {
         const auto* node=findMaterialNode(material.graph,nodePreview_->node);
         const auto outputs=node?materialNodeOutputs(material.graph,*node):std::vector<MaterialPinDefinition>{};
         if(!node || std::none_of(outputs.begin(),outputs.end(),[&](const auto& pin){return pin.pin==nodePreview_->pin;}))setNodePreview({});
-        else if(node->kind==MaterialNodeKind::Grunge) {
-            cancelInteraction();
-            if(grungeNode_!=node->id){grungeCurrent_={};grungeNode_=node->id;}
-            try {
-                auto texture=assets.grungePreview(node->grunge,1024);status_=texture.diagnostic;
-                if(texture.sourceReady && bgfx::isValid(texture.handle))grungeCurrent_=std::move(texture);
-                else if(status_.empty())status_="Generating texture...";
-            } catch(const std::exception& error){status_=error.what();}
-            if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
-            const auto available=ImGui::GetContentRegionAvail();const float edge=std::min(available.x,available.y);
-            if(edge>0) {
-                const auto origin=ImGui::GetCursorScreenPos();
-                ImGui::SetCursorScreenPos({origin.x+(available.x-edge)*.5f,origin.y+(available.y-edge)*.5f});
-                if(bgfx::isValid(grungeCurrent_.handle))ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(grungeCurrent_.handle,true)),{edge,edge},
-                    {0,0},{static_cast<float>(node->grunge.tiling),static_cast<float>(node->grunge.tiling)});
-                else ImGui::Dummy({edge,edge});
-                const auto& io=ImGui::GetIO();
-                if(!io.WantTextInput && !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) &&
-                    ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt)selectMaterial_=true;
+        else if(imageGraph_) {
+            if(classifiedImageGraph_!=imageGraph_||classifiedImageTarget_!=nodePreview_) {
+                classifiedImageGraph_=imageGraph_;classifiedImageTarget_=nodePreview_;staticImage_=false;
+                try {
+                    MaterialImagePreviewOptions options;options.width=options.height=256;
+                    validateMaterialGraphImagePreview(*imageGraph_,*nodePreview_,options);staticImage_=true;
+                } catch(const std::exception&) { /* Context-dependent outputs keep their mesh preview. */ }
             }
-            return;
+            if(staticImage_) {
+                cancelInteraction();
+                if(!displayingImage_){renderer.releaseMaterialPreview();displayedTarget_=UINT16_MAX;displayingImage_=true;}
+                try {
+                    auto texture=assets.materialNodeImagePreview(material.id,imageGraph_,*nodePreview_,256);status_=texture.diagnostic;
+                    if(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle))imageCurrent_=std::move(texture);
+                    else if(status_.empty())status_="Generating texture...";
+                } catch(const std::exception& error){status_=error.what();}
+                if(nodePrograms_)nodePrograms_->trim();
+                if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
+                const auto available=ImGui::GetContentRegionAvail();
+                const float aspect=imageCurrent_.width&&imageCurrent_.height?static_cast<float>(imageCurrent_.width)/imageCurrent_.height:1.f;
+                const float width=std::min(available.x,available.y*aspect),height=width/aspect;
+                if(width>0&&height>0) {
+                    const auto origin=ImGui::GetCursorScreenPos();ImGui::SetCursorScreenPos({origin.x+(available.x-width)*.5f,origin.y+(available.y-height)*.5f});
+                    if(bgfx::isValid(imageCurrent_.handle))ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(imageCurrent_.handle)),{width,height});
+                    else ImGui::Dummy({width,height});
+                    const auto& io=ImGui::GetIO();
+                    if(!io.WantTextInput&&!ImGui::IsAnyItemActive()&&!ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&
+                        ImGui::IsItemHovered()&&ImGui::IsMouseClicked(ImGuiMouseButton_Left)&&!io.KeyCtrl&&!io.KeyShift&&!io.KeyAlt)selectMaterial_=true;
+                }
+                return;
+            }
         }
     }
+    displayingImage_=false;
+
     const auto available=ImGui::GetContentRegionAvail(),framebufferScale=ImGui::GetWindowViewport()->FramebufferScale;
     const auto textureEdge=static_cast<std::uint32_t>(std::clamp(std::ceil(std::max(available.x*framebufferScale.x,available.y*framebufferScale.y)),1.f,16384.f));
     const auto source=assets.references().resolveEnvironment(environment_.map);
@@ -117,14 +129,14 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
         auto bindings=assets.materialNodePreviewBindings(*nodePrograms_,material,*nodePreview_,textureEdge);
         if(!bindings.diagnostic.empty())diagnose(bindings.diagnostic);
         if(materialPreviewPacketReady(bindings) && !bindings.graphPending && bindings.graph) {
-            const auto key=std::to_string(materialGraphRenderHash(material.surface))+":"+std::to_string(nodePreview_->node)+":"+std::to_string(static_cast<unsigned>(nodePreview_->pin));
+            const auto key=materialNodePreviewDefinitionKey(material,*nodePreview_);
             if(!nodeCurrent_ || nodeDefinitionKey_!=key || nodeCurrent_->bindings.graph->signature!=bindings.graph->signature) {
                 nodeCurrent_=std::make_shared<Prepared>(Prepared{material,std::move(bindings)});nodeDefinitionKey_=key;
             }
         }
         nodePrograms_->trim();
     } catch(const std::exception& error) {diagnose(error.what());}
-    const auto displayed=nodePreview_ && nodeCurrent_?nodeCurrent_:current_;
+    const auto displayed=nodePreview_?nodeCurrent_:current_;
     const bool particlePreview=displayed && usesParticleMaterialPreview(mesh_,displayed->bindings);
     constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane","Sprite"};
     auto selected=static_cast<int>(mesh_);
@@ -170,6 +182,6 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
 void MaterialPreview::release(Renderer& renderer) {
     cancelInteraction();renderer.releaseMaterialPreview();current_.reset();nodeCurrent_.reset();nodePrograms_.reset();nodePreview_.reset();nodeDefinitionKey_.clear();definitionKey_.clear();environmentHandle_={};
     requestedEnvironment_.clear();environmentRevision_=0;displayedTarget_=UINT16_MAX;navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;materialContext_={};
-    grungeCurrent_={};grungeDocumentId_.clear();grungeNode_=0;
+    imageCurrent_={};imageGraph_.reset();classifiedImageGraph_.reset();classifiedImageTarget_.reset();imageDocumentId_.clear();staticImage_=displayingImage_=false;
 }
 }

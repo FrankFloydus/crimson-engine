@@ -86,6 +86,37 @@ void preparedSignatureChecks() {
     check(signature()==original,"Unchanged prepared packets must retain their identity.");
     check(preparedModelSignature(asset,4,surfaces,bindings)!=original,"A replacement model generation retained the old packet identity.");
 }
+void preparedSourceCoherenceChecks() {
+    MaterialAsset material;
+    const auto output=addMaterialNode(material.graph,MaterialNodeKind::Output).id;
+    const auto resize=addMaterialNode(material.graph,MaterialNodeKind::Resize).id;
+    const auto blur=addMaterialNode(material.graph,MaterialNodeKind::Blur).id;
+    connectMaterialNodes(material.graph,resize,MaterialPin::Value,output,MaterialPin::Roughness);
+    connectMaterialNodes(material.graph,blur,MaterialPin::Value,output,MaterialPin::Metallic);
+    const auto generated=generateMaterialGraphShader(material);
+    PreparedGraphMaterial packet;packet.sources=generated.textures;
+    check(packet.sources.size()==2&&packet.sources[0].resize&&packet.sources[1].resize&&
+        packet.sources[0].image.empty()&&packet.sources[1].image.empty()&&
+        packet.sources[0].resize->definitionKey!=packet.sources[1].resize->definitionKey,
+        "Source coherence fixture needs distinct immutable cached recipes.");
+    packet.sourceFingerprints[packet.sources[0].slot]=101;
+    packet.sourceFingerprints[packet.sources[1].slot]=202;
+    std::unordered_map<std::string,std::uint64_t> versions{{"earlier-managed-image",17}};
+    check(preparedGraphSourcesCoherent(packet,versions)&&versions.size()==1&&!versions.contains(""),
+        "Distinct cached image fingerprints collided under the empty managed-image identity.");
+    MaterialGraphTextureBinding first;first.nodeId=91;first.slot=2;first.image.id="shared-managed-image";
+    auto second=first;second.nodeId=92;second.slot=3;
+    packet.sources.push_back(first);packet.sources.push_back(second);
+    packet.sourceFingerprints[2]=303;packet.sourceFingerprints[3]=303;
+    check(preparedGraphSourcesCoherent(packet,versions)&&versions.size()==2&&versions.at("shared-managed-image")==303,
+        "Matching managed image revisions failed alongside immutable cached recipes.");
+    packet.sourceFingerprints[3]=404;
+    check(!preparedGraphSourcesCoherent(packet,versions),
+        "Skipping immutable recipes also skipped a conflicting managed image revision.");
+    packet.sourceFingerprints[3]=0;
+    check(preparedGraphSourcesCoherent(packet,versions),
+        "An unavailable managed fingerprint was treated as a conflicting revision.");
+}
 
 MaterialGraphProgramResult waitForResult(ResourceManager& resources,MaterialGraphPrograms& programs,const MaterialGraphShader& shader,bool optimized=true) {
     MaterialGraphProgramResult result;
@@ -702,7 +733,7 @@ int main(int argc,char** argv) {
         if(profile)profileProject(argv[2],argv[3],argv[4],argc==6&&std::string(argv[5])=="--cold");
         else if(engine)profileEngine(argv[2],argv[3],argv[4]);
         else if(edit)profileProject(argv[2],argv[3],argv[4],false,true);
-        else {preparedSignatureChecks();publicationChecks(argv[1],argv[2],argv[3]);unsupportedHeightChecks(argv[1],argv[2],argv[3]);}
+        else {preparedSignatureChecks();preparedSourceCoherenceChecks();publicationChecks(argv[1],argv[2],argv[3]);unsupportedHeightChecks(argv[1],argv[2],argv[3]);}
         bgfx::shutdown();initialized=false;
         std::cout<<"Headless material shader publication, epoch, recovery and lease checks passed.\n";return 0;
     } catch(const std::exception& error) {

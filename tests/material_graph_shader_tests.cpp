@@ -213,7 +213,7 @@ void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v32")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v33")!=std::string::npos,
             "Generated material identity does not invalidate pre-emission-publication bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
@@ -544,6 +544,65 @@ void imageFoundationShaderChecks() {
     const Vec2 u{2,1},v{-1,3},delta{.02f,-.03f};const Vec2 uv1Delta{u[0]*delta[0]+v[0]*delta[1],u[1]*delta[0]+v[1]*delta[1]};
     const float actualGradient=4*uv1Delta[0]-2*uv1Delta[1],expectedGradient=6*delta[0]-10*delta[1];check(std::abs(actualGradient-expectedGradient)<1e-6f,"Mixed UV1 image gradient lost scale or rotation.");
 }
+MaterialAsset atomicImageFixture() {
+    MaterialAsset material;auto& g=material.graph;const auto add=[&](MaterialNodeKind k){return addMaterialNode(g,k).id;};
+    const auto out=add(MaterialNodeKind::Output);materialOutputNode(g).output.blend=MaterialBlend::Mask;materialOutputNode(g).output.tessellation.enabled=true;
+    const auto input=add(MaterialNodeKind::ImageInput),blur=add(MaterialNodeKind::Blur),warp=add(MaterialNodeKind::DirectionalWarp),transform=add(MaterialNodeKind::ImageTransform),panner=add(MaterialNodeKind::Panner);
+    findMaterialNode(g,input)->texture.image.id="assets/textures/atomic.png";findMaterialNode(g,input)->texture.role=MaterialTextureRole::Data;
+    findMaterialNode(g,panner)->panner.speed={.1f,.2f};
+    connectMaterialNodes(g,input,MaterialPin::RGBA,blur,MaterialPin::Left);connectMaterialNodes(g,blur,MaterialPin::Value,warp,MaterialPin::Left);connectMaterialNodes(g,warp,MaterialPin::Value,transform,MaterialPin::Left);connectMaterialNodes(g,panner,MaterialPin::UV,transform,MaterialPin::UV);
+    const auto scan=add(MaterialNodeKind::HistogramScan),mask=add(MaterialNodeKind::MaskAdjust),select=add(MaterialNodeKind::DirectionSelect),normal=add(MaterialNodeKind::DecodeNormal);
+    connectMaterialNodes(g,transform,MaterialPin::Value,scan,MaterialPin::Left);connectMaterialNodes(g,scan,MaterialPin::Value,mask,MaterialPin::Left);connectMaterialNodes(g,scan,MaterialPin::Value,select,MaterialPin::Left);connectMaterialNodes(g,scan,MaterialPin::Value,normal,MaterialPin::Left);
+    connectMaterialNodes(g,scan,MaterialPin::Value,out,MaterialPin::BaseColor);connectMaterialNodes(g,mask,MaterialPin::Value,out,MaterialPin::Height);connectMaterialNodes(g,mask,MaterialPin::Value,out,MaterialPin::OpacityMask);connectMaterialNodes(g,select,MaterialPin::Value,out,MaterialPin::Roughness);connectMaterialNodes(g,normal,MaterialPin::Normal,out,MaterialPin::Normal);
+    return material;
+}
+void atomicShaderChecks() {
+    auto material=atomicImageFixture();const auto generated=generateMaterialGraphShader(material);
+    check(generated.textures.size()==1&&generated.textures[0].resize&&generated.textures[0].image.empty(),"Nested cached atoms leaked private source samplers.");
+    check(generated.uniforms.size()<MaterialGraph::MaximumParameterRows&&generated.dynamicHeight&&generated.dynamicCoverage,"Mapped cached Height lost bounded uniforms or runtime motion.");
+    const auto& binding=generated.textures[0];const auto transform=binding.nodeId;const auto oldDefinition=binding.resize->definitionKey;
+    const auto& content=*binding.resize->graph;check(!materialInputLink(content,transform,MaterialPin::UV),"Cached Image Transform recipe retained runtime Panner.");
+    const auto panner=materialInputLink(material.graph,transform,MaterialPin::UV)->fromNode;
+    findMaterialNode(material.graph,panner)->panner.speed={.7f,-.4f};
+    const auto mappingEdit=generateMaterialGraphShader(material);check(mappingEdit.textures[0].resize->definitionKey==oldDefinition&&mappingEdit.topologyKey==generated.topologyKey,"Runtime mapping edit rebaked completed image or recompiled shader.");
+    auto packet=generated.uniforms;updateMaterialGraphRuntimeUniforms(material.graph,generated.runtimeParameters,{2,2},packet);check(packet!=generated.uniforms,"Image Transform Panner failed runtime parameter update.");
+    const auto scan=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::HistogramScan;})->id;
+    findMaterialNode(material.graph,scan)->atomic.coverage=.23f;findMaterialNode(material.graph,scan)->atomic.contrast=.7f;
+    const auto numericEdit=generateMaterialGraphShader(material);check(numericEdit.topologyKey==generated.topologyKey&&numericEdit.uniforms!=generated.uniforms,"Numeric atomic adjustment recompiled source or failed packet update.");
+    for(const auto& variant:generated.variants)if(variant.tessellation)check(variant.domainSource.find("ccImageMaskAdjust(")!=std::string::npos&&variant.domainSource.find("ccGraphImageSource")==std::string::npos,"Native Height lost point op or inlined a spatial neighborhood.");
+    MaterialAsset source;const auto out=addMaterialNode(source.graph,MaterialNodeKind::Output).id,tex=addMaterialNode(source.graph,MaterialNodeKind::Texture2D).id,input=addMaterialNode(source.graph,MaterialNodeKind::ImageInput).id;
+    findMaterialNode(source.graph,tex)->texture.image.id="assets/textures/base.png";findMaterialNode(source.graph,input)->texture.image.id="assets/textures/override.png";
+    connectMaterialNodes(source.graph,tex,MaterialPin::RGBA,input,MaterialPin::Left);connectMaterialNodes(source.graph,input,MaterialPin::RGB,out,MaterialPin::BaseColor);
+    auto shader=generateMaterialGraphShader(source);check(shader.textures.size()==1&&shader.textures[0].nodeId==input,"Assigned Image Input evaluated dormant Base sampler.");
+    findMaterialNode(source.graph,input)->atomic.enabled=false;shader=generateMaterialGraphShader(source);check(shader.textures.empty(),"Disabled Image Input scheduled source texture work.");
+    findMaterialNode(source.graph,input)->atomic.enabled=true;findMaterialNode(source.graph,input)->texture.image.id.clear();shader=generateMaterialGraphShader(source);check(shader.textures.size()==1&&shader.textures[0].nodeId==tex,"Empty override did not use connected Base.");
+}
+MaterialAsset decodedNormalFixture(MaterialUvMode mode,bool cached) {
+    MaterialAsset material;auto& g=material.graph;const auto add=[&](MaterialNodeKind k){return addMaterialNode(g,k).id;};
+    const auto out=add(MaterialNodeKind::Output),uv=add(MaterialNodeKind::UV),texture=add(MaterialNodeKind::Texture2D),levels=add(MaterialNodeKind::Levels),normal=add(MaterialNodeKind::DecodeNormal);
+    findMaterialNode(g,uv)->uv.mode=mode;findMaterialNode(g,uv)->uv.scale={-2,3,1};findMaterialNode(g,uv)->uv.rotation={15,-25,37};
+    findMaterialNode(g,texture)->texture.role=MaterialTextureRole::Data;findMaterialNode(g,texture)->texture.image.id="assets/textures/encoded-normal.png";
+    connectMaterialNodes(g,texture,MaterialPin::RGBA,levels,MaterialPin::Left);
+    if(cached){const auto transform=add(MaterialNodeKind::ImageTransform);connectMaterialNodes(g,levels,MaterialPin::Value,transform,MaterialPin::Left);connectMaterialNodes(g,uv,MaterialPin::UV,transform,MaterialPin::UV);connectMaterialNodes(g,transform,MaterialPin::Value,normal,MaterialPin::Left);}
+    else {connectMaterialNodes(g,uv,MaterialPin::UV,texture,MaterialPin::UV);connectMaterialNodes(g,levels,MaterialPin::Value,normal,MaterialPin::Left);}
+    connectMaterialNodes(g,normal,MaterialPin::Normal,out,MaterialPin::Normal);return material;
+}
+void decodedNormalMappingChecks() {
+    for(const auto mode:{MaterialUvMode::UV0,MaterialUvMode::UV1,MaterialUvMode::LocalTriplanar,MaterialUvMode::WorldTriplanar})for(bool cached:{false,true}){
+        auto material=decodedNormalFixture(mode,cached);const auto shader=generateMaterialGraphShader(material);check(shader.textures.size()==1,"Mapped decoder allocated extra samplers.");
+        const auto& source=shader.variants.front().source;
+        check(source.find("ccImageMappedTangentNormal(context,tangent,scale,rotation)")!=std::string::npos&&source.find("x=vec3((n.x<0.0?-1.0:1.0)*x.z,-x.y,-x.x)")!=std::string::npos&&source.find("ccMappingInverseRotate(x*weights.x+y*weights.y+z*weights.z,rotation)")!=std::string::npos,"Mapped decoder lost UV frame, per-projection reorientation or inverse rotation.");
+        check(source.find("context.uv = vec4(uv, uv)")!=std::string::npos,"Mapped decoder failed to evaluate the complete processed image per projection.");
+        const auto normal=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::DecodeNormal;})->id;
+        findMaterialNode(material.graph,normal)->image.normalFlipY=true;findMaterialNode(material.graph,normal)->image.normalStrength=.4f;
+        const auto edited=generateMaterialGraphShader(material);check(edited.topologyKey==shader.topologyKey&&edited.uniforms!=shader.uniforms,"Normal Strength/FlipY compiled new source.");
+    }
+    auto material=decodedNormalFixture(MaterialUvMode::UV0,false);auto& g=material.graph;const auto second=addMaterialNode(g,MaterialNodeKind::Texture2D).id,uv=addMaterialNode(g,MaterialNodeKind::UV).id,blend=addMaterialNode(g,MaterialNodeKind::Blend).id;
+    findMaterialNode(g,second)->texture.role=MaterialTextureRole::Data;findMaterialNode(g,second)->texture.image.id="assets/textures/second-normal.png";findMaterialNode(g,uv)->uv.mode=MaterialUvMode::UV1;connectMaterialNodes(g,uv,MaterialPin::UV,second,MaterialPin::UV);
+    const auto normal=std::find_if(g.nodes.begin(),g.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::DecodeNormal;})->id;const auto previous=*materialInputLink(g,normal,MaterialPin::Left);
+    connectMaterialNodes(g,previous.fromNode,previous.fromPin,blend,MaterialPin::Left);connectMaterialNodes(g,second,MaterialPin::RGBA,blend,MaterialPin::Right);connectMaterialNodes(g,blend,MaterialPin::Value,normal,MaterialPin::Left);
+    bool rejected=false;try{(void)generateMaterialGraphShader(material);}catch(const std::exception& error){rejected=std::string(error.what()).find("different mappings")!=std::string::npos;}check(rejected,"Decoder silently accepted encoded images in different mapping bases.");
+}
 void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
     {
         std::ifstream input(source/"material_graph_depth.sh");check(bool(input),"Tessellated coverage template is unavailable.");
@@ -565,6 +624,15 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
+    for(const auto mode:{MaterialUvMode::UV0,MaterialUvMode::UV1,MaterialUvMode::LocalTriplanar,MaterialUvMode::WorldTriplanar})for(bool cached:{false,true}){
+        const auto material=decodedNormalFixture(mode,cached);compileGenerated(generateMaterialGraphShader(material));
+        const auto normal=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::DecodeNormal;})->id;compileGenerated(generateMaterialGraphPreviewShader(material,{normal,MaterialPin::Normal}));
+    }
+    {
+        const auto material=atomicImageFixture();const auto generated=generateMaterialGraphShader(material);compileGenerated(generated);
+        for(const auto& variant:generated.variants)if(variant.tessellation)check(!compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant)).bytes.empty(),"Atomic cached/point Height failed native domain compilation.");
+        for(const auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::ImageInput||node.kind==MaterialNodeKind::DecodeNormal||node.kind==MaterialNodeKind::HistogramScan||node.kind==MaterialNodeKind::MaskAdjust||node.kind==MaterialNodeKind::DirectionSelect)for(const auto& pin:materialNodeOutputs(material.graph,node))compileGenerated(generateMaterialGraphPreviewShader(material,{node.id,pin.pin}));
+    }
     {
         const auto material=resizeFixture();const auto generated=generateMaterialGraphShader(material);
         compileGenerated(generated);
@@ -861,7 +929,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        resizeShaderChecks();imageFoundationShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

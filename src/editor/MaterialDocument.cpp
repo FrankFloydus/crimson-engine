@@ -60,7 +60,7 @@ bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver
         auto committed=committed_;
         const auto rewrite=[&](MaterialAsset& material) {
             bool changed=false;
-            for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D && !node.texture.image.empty()) {
+            for(auto& node:material.graph.nodes)if((node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput) && !node.texture.image.empty()) {
                 auto replacement=resolve(node.texture.image.id,node.texture.role);
                 if(replacement!=node.texture.image.id){node.texture.image.id=std::move(replacement);changed=true;}
             }

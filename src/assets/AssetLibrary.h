@@ -70,6 +70,9 @@ public:
     // Display-encoded view of the same canonical generated image used by graph
     // materials. The returned GPU lease is transient; no catalog asset is made.
     PreparedTexture grungePreview(const MaterialGrungeNode&,std::uint32_t edge=1024) const;
+    PreparedTexture materialNodeImagePreview(const std::string& documentId,const std::shared_ptr<const MaterialGraph>&,
+        MaterialGraphPreviewTarget,unsigned edge=128) const;
+    void releaseMaterialNodeImagePreviews(const std::string& documentId) const;
     std::unique_ptr<MaterialGraphPrograms> createMaterialNodePreviewPrograms() const;
     ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget,std::uint32_t textureEdge=512) const;
     void publishMaterial(std::shared_ptr<const MaterialAsset>);
@@ -210,6 +213,18 @@ private:
         std::chrono::steady_clock::time_point used;
     };
     mutable std::unordered_map<std::string,ResizeImageSource> resizeImageSources_;
+    struct NodeImagePreview {
+        std::string document,textureKey,sourceKey,diagnostic;
+        std::array<unsigned,2> sourceExtent{};
+        std::shared_ptr<const MaterialGraph> definition;
+        std::vector<std::string> sources;
+        std::uint64_t valueKey{};
+        std::shared_ptr<const PreparedTexture> current;
+        bool pending{};
+        std::chrono::steady_clock::time_point edited,used;
+    };
+    mutable std::unordered_map<std::string,NodeImagePreview> nodeImagePreviews_;
+    mutable unsigned nodeImageStarts_{};
     mutable std::unordered_map<std::string,ResourceHandle<ModelAsset>> modelResources_;
     mutable std::unordered_set<std::string> modelCacheRebuilds_;
     mutable std::unordered_map<std::string,ResourceHandle<MaterialAsset>> materialResources_;
@@ -246,7 +261,13 @@ private:
     ModelMaterialTextures materialBindings(const ModelMaterial&,std::uint32_t textureEdge,ResourcePriority) const;
     ModelMaterialTextures graphMaterialBindings(const std::shared_ptr<const MaterialGraph>&,std::uint32_t textureEdge,ResourcePriority,bool useFixedModel=false) const;
     ModelMaterialTextures preparedGraphBindings(MaterialGraphPrograms&,const MaterialGraphShader&,const MaterialGraph&,std::uint32_t textureEdge,ResourcePriority) const;
-    PreparedTexture preparedResizeTexture(const MaterialGraphResizeBinding&,std::uint32_t,ResourcePriority,std::unordered_map<std::string,std::uint64_t>&) const;
+    struct CachedImageRequestInfo {
+        std::string key;
+        std::array<unsigned,2> extent{};
+        bool requested{},started{};
+    };
+    PreparedTexture preparedResizeTexture(const MaterialGraphResizeBinding&,std::uint32_t,ResourcePriority,
+        std::unordered_map<std::string,std::uint64_t>&,CachedImageRequestInfo* = nullptr,bool allowStart=true) const;
     struct GraphShaderCache {
         std::weak_ptr<const MaterialGraph> source;
         std::shared_ptr<const MaterialGraphShader> shader;

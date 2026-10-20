@@ -68,6 +68,8 @@ This guide applies when adding or modifying Material Editor nodes. The CPU mater
 - RMB drag pans; a stationary RMB click opens context actions. Held 1/2/3/M/T plus LMB creates Scalar/Vector2/Constant/Multiply/Texture on empty canvas. Respect text entry, active widgets, popups and drag payload ownership.
 - Keep Alt-click disconnection, Q straightening, F/Home framing and clipboard/group commands consistent for new nodes. Output remains unique and protected.
 - Start/Stop Previewing and graph-scoped Ctrl+P operate on an explicit transient node/output target. Selection changes do not retarget preview. Deleting the target, changing documents or stopping preview restores the full material.
+- Double left click on a node body previews its primary output. Double clicking the currently previewed node stops preview, including when a non-primary output was pinned. Double clicking Output restores the full material. Pin gestures, numeric/text edits, popups and active transactions retain their input ownership.
+- Static image outputs show visible-only 128-pixel inline thumbnails and a 256-pixel flat preview when pinned. Evaluate the completed authored source before area reduction; never replace a detailed procedural source with an evaluation at thumbnail resolution. Debounce edits, cancel superseded requests and retain the last good leased image while work is pending. Contextual Normal, Mapping and animated branches retain the existing material preview path. Images and target changes remain transient.
 - Preview Scalars as grayscale, Vector2 as XY color, RGB directly, reconstructed normals in displayable 0–1 form, and Mapping through a neutral checker. Reuse expression and mapping code. Preview recipes/resources must not publish material changes to scenes or thumbnails.
 - Material preview geometry is an explicit editor choice, including Sprite alongside the mesh primitives. Never lock geometry or select a material category from connected pins, opacity, shader model or a legacy Usage field. Explicit Grunge node preview displays its generated 2D image without changing that stored transient geometry choice. Node previews remain transient; changing preview geometry must not dirty the material.
 
@@ -80,9 +82,11 @@ For each new node, cover CPU typing/validation, persistence and undo/redo, unifo
 ## Image and channel node foundation
 
 See [Image and channel nodes](MATERIAL_IMAGE_NODES.md) for the thirteen added nodes,
-explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema10 also adds [Resize](MATERIAL_RESIZE.md).
+explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 11 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations described there.
 Preserve all four independently wired split outputs, transparent RGB, disconnected
 defaults and per-output previews. Image adjustments preserve alpha. Noise Detail
 amount is Clouds-only; never expose it as material roughness.
 
 Resize exposes Width, Height and Filter inline and in Properties, using the same transaction and Escape cancellation rules. It preserves Scalar/RGB/RGBA type and materializes supported static UV0 branches into cached linear float images. Reject runtime or surface-dependent inputs rather than silently baking a different result. See [Resize](MATERIAL_RESIZE.md) for the sampling, cache and memory contract.
+
+New image operations reuse the same mixed-input, direct-wire, transaction and per-output preview rules. Keep expensive spatial kernels behind the canonical static-image boundary. Image Transform samples the whole completed image; runtime mapping edits must not alter its content key. Image Input retains override/Base/Constant precedence and prunes disabled work while preserving authored references. Normal Map decodes processed linear RGB with a common source mapping into the strict Normal type. Procedural Texture family selection uses canonical per-family defaults, preserves seed/resolution and displays only active controls.

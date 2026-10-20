@@ -40,6 +40,9 @@ private:
     MaterialDocument document_;
     MaterialPreview preview_;
     MaterialGraphEditor graph_;
+    std::shared_ptr<const MaterialGraph> imageGraph_;
+    std::string imageDocument_;
+    std::uint64_t imageRevision_{};
     HdrColorEditorState colorEditor_,emissionEditor_,alphaEditor_;
     MaterialNodeId propertyNode_{};
     MaterialNodeId texturePickerNode_{};

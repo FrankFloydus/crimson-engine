@@ -104,7 +104,7 @@ void canonicalizeMaterialAsset(MaterialAsset& material) {
     if(material.graph.empty())material.graph=materialGraphFromLegacy(material.surface,material.shading,material.blend);
     validateMaterialGraph(material.graph);
     material.id=canonicalAssetId(material.id);material.originModel=canonicalAssetId(material.originModel);
-    for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D)node.texture.image.id=canonicalAssetId(node.texture.image.id);
+    for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput)node.texture.image.id=canonicalAssetId(node.texture.image.id);
     const auto& output=materialOutputNode(material.graph).output;material.shading=output.shading;material.blend=output.blend;
     material.surface=materialGraphLegacySurface(material.graph,material.name);
 }

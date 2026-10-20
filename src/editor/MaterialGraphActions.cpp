@@ -14,9 +14,13 @@ constexpr std::array addableNodeKinds{MaterialNodeKind::UV,MaterialNodeKind::Tex
     MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power,
     MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift,MaterialNodeKind::Grunge,
     MaterialNodeKind::Levels,MaterialNodeKind::Invert,MaterialNodeKind::Blend,MaterialNodeKind::Grayscale,MaterialNodeKind::ToColor,MaterialNodeKind::Noise,
-    MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::HeightToNormal,MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaSplit,MaterialNodeKind::AlphaMerge,MaterialNodeKind::Resize};
+    MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::HeightToNormal,MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaSplit,MaterialNodeKind::AlphaMerge,MaterialNodeKind::Resize,
+    MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::MaskAdjust,MaterialNodeKind::HistogramScan,MaterialNodeKind::DirectionalWarp,
+    MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion,
+    MaterialNodeKind::DirectionSelect,MaterialNodeKind::ImageInput,MaterialNodeKind::DecodeNormal};
 bool polymorphicImage(MaterialNodeKind kind) {
-    return kind==MaterialNodeKind::Levels||kind==MaterialNodeKind::Invert||kind==MaterialNodeKind::Blend||kind==MaterialNodeKind::BrightnessContrast||kind==MaterialNodeKind::Sharpen||kind==MaterialNodeKind::Resize;
+    return kind==MaterialNodeKind::Levels||kind==MaterialNodeKind::Invert||kind==MaterialNodeKind::Blend||kind==MaterialNodeKind::BrightnessContrast||kind==MaterialNodeKind::Sharpen||kind==MaterialNodeKind::Resize||
+        kind==MaterialNodeKind::Blur||kind==MaterialNodeKind::HistogramScan||kind==MaterialNodeKind::DirectionalWarp||kind==MaterialNodeKind::ImageTransform;
 }
 [[noreturn]] void invalid(const char* message){throw std::runtime_error(std::string("Material graph action: ")+message);}
 
@@ -77,7 +81,7 @@ MaterialGraph readClipboard(std::string_view text) {
 MaterialValueType endpointType(const MaterialGraph& graph,MaterialGraphEndpoint endpoint) {
     const auto* node=findMaterialNode(graph,endpoint.node);if(!node)invalid("connection endpoint no longer exists.");
     const auto& output=materialOutputNode(graph).output;
-    const auto pins=endpoint.input?materialNodeInputs(graph,*node,output.shading,output.blend):materialNodeOutputs(graph,*node);
+    const auto pins=endpoint.input?materialNodeInputs(graph,*node,output.shading,output.blend,true):materialNodeOutputs(graph,*node);
     const auto pin=std::find_if(pins.begin(),pins.end(),[&](const auto& value){return value.pin==endpoint.pin;});
     if(pin==pins.end())invalid("connection endpoint is unavailable for this shader model.");
     return pin->type;
@@ -96,7 +100,7 @@ AuthoringConnection prepareAuthoringConnection(const MaterialGraph& graph,Materi
 }
 MaterialNodeId createConnected(MaterialGraph& graph,MaterialGraphEndpoint endpoint,MaterialGraphNodeChoice choice,Vec2 position,MaterialValueType type) {
     const auto id=addMaterialNode(graph,choice.kind,position).id;auto& node=*findMaterialNode(graph,id);
-    if(node.kind==MaterialNodeKind::Texture2D)node.texture.role=choice.textureRole;
+    if(node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput)node.texture.role=choice.textureRole;
     if(endpoint.input && ((polymorphicImage(node.kind)&&(type==MaterialValueType::Color||type==MaterialValueType::Color4)) ||
         ((node.kind==MaterialNodeKind::Multiply||node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||node.kind==MaterialNodeKind::Power)&&(type==MaterialValueType::Color||type==MaterialValueType::Vector2))))node.left.type=type;
     if(endpoint.input)connectMaterialGraphAuthoring(graph,id,choice.pin,endpoint.node,endpoint.pin);
@@ -109,7 +113,7 @@ std::span<const MaterialNodeKind> materialGraphNodeKinds() {return addableNodeKi
 bool materialGraphInputMixedImage(const MaterialNode& node,MaterialPin pin) {
     if(node.kind==MaterialNodeKind::Blend)return pin==MaterialPin::Left||pin==MaterialPin::Right;
     if(pin!=MaterialPin::Left)return false;
-    return polymorphicImage(node.kind)||materialNodeImageAdjustment(node.kind)||node.kind==MaterialNodeKind::Grayscale;
+    return polymorphicImage(node.kind)||materialNodeImageAdjustment(node.kind)||node.kind==MaterialNodeKind::Grayscale||node.kind==MaterialNodeKind::ImageInput;
 }
 MaterialGraphConnection inspectMaterialGraphConnection(const MaterialGraph& graph,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
     try {return {prepareAuthoringConnection(graph,from,fromPin,to,toPin).kind,{}};}
@@ -169,6 +173,11 @@ std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGrap
                 choice.pin=type==MaterialValueType::Normal?MaterialPin::Normal:type==MaterialValueType::Color4?MaterialPin::RGBA:type==MaterialValueType::Color?MaterialPin::RGB:
                     endpoint.pin==MaterialPin::Opacity||endpoint.pin==MaterialPin::OpacityMask?MaterialPin::A:MaterialPin::R;
             } else if(kind==MaterialNodeKind::HeightToNormal)choice.pin=type==MaterialValueType::Normal?MaterialPin::Normal:MaterialPin::RGB;
+            else if(kind==MaterialNodeKind::DecodeNormal)choice.pin=MaterialPin::Normal;
+            else if(kind==MaterialNodeKind::ImageInput) {
+                choice.textureRole=type==MaterialValueType::Scalar?MaterialTextureRole::Data:MaterialTextureRole::Color;
+                choice.pin=type==MaterialValueType::Color4?MaterialPin::RGBA:type==MaterialValueType::Color?MaterialPin::RGB:MaterialPin::R;
+            }
             else if(kind==MaterialNodeKind::RGBAMerge||kind==MaterialNodeKind::AlphaMerge||kind==MaterialNodeKind::ToColor)
                 choice.pin=type==MaterialValueType::Color4?MaterialPin::RGBA:type==MaterialValueType::Color?MaterialPin::RGB:MaterialPin::R;
             else if(kind==MaterialNodeKind::RGBASplit)choice.pin=endpoint.pin==MaterialPin::Opacity||endpoint.pin==MaterialPin::OpacityMask?MaterialPin::A:MaterialPin::R;
@@ -181,6 +190,7 @@ std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGrap
             else choice.pin=MaterialPin::Value;
         } else {
             if(kind==MaterialNodeKind::Texture2D||kind==MaterialNodeKind::RadialGradient||kind==MaterialNodeKind::Grunge||kind==MaterialNodeKind::Noise)choice.pin=MaterialPin::UV;
+            else if(kind==MaterialNodeKind::ImageTransform)choice.pin=type==MaterialValueType::Mapping?MaterialPin::UV:MaterialPin::Left;
             else if(kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power||kind==MaterialNodeKind::Clamp||materialNodeImageAdjustment(kind)||materialNodeImageOperation(kind))choice.pin=kind==MaterialNodeKind::RGBAMerge?MaterialPin::R:MaterialPin::Left;
             else if(kind==MaterialNodeKind::Panner)choice.pin=type==MaterialValueType::Mapping?MaterialPin::UV:type==MaterialValueType::Vector2?MaterialPin::Speed:MaterialPin::Time;
             else if(kind==MaterialNodeKind::UV&&type==MaterialValueType::Vector2)choice.pin=MaterialPin::ScaleXY;

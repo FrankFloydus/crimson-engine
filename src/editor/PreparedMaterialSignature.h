@@ -8,7 +8,7 @@ inline bool preparedGraphSourcesCoherent(const PreparedGraphMaterial& graph,std:
     for(const auto& source:graph.sources) {
         // Generated sources already name immutable recipe content. Only shared
         // managed images can mix file revisions across material bindings.
-        if(source.grunge)continue;
+        if(source.grunge||source.resize)continue;
         const auto fingerprint=graph.sourceFingerprints[source.slot];if(!fingerprint)continue;
         const auto [found,inserted]=versions.emplace(source.image.id,fingerprint);
         if(!inserted&&found->second!=fingerprint)return false;

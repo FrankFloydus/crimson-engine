@@ -11,12 +11,20 @@ class AssetLibrary;
 inline bool materialPreviewPacketReady(const ModelMaterialTextures& bindings) noexcept {
     return bindings.sourceReady&&bindings.drawable();
 }
+// A pinned diagnostic output can be disconnected from the material Output.
+// Its presentation identity must therefore follow its own active branch.
+inline std::string materialNodePreviewDefinitionKey(const MaterialAsset& material,MaterialGraphPreviewTarget target) {
+    const auto& output=materialOutputNode(material.graph).output;
+    return material.id+":"+std::to_string(target.node)+":"+std::to_string(static_cast<unsigned>(target.pin))+":"+
+        std::to_string(materialGraphValueHash(material.graph,output.shading,output.blend,target.node));
+}
 class MaterialPreview {
 public:
     void environmentMenu(AssetLibrary&);
     void draw(AssetLibrary&,Renderer&,ResourceManager&,const MaterialAsset&,double dt);
     void setAntiAliasing(AntiAliasing value) { antiAliasing_=value; }
     void setNodePreview(std::optional<MaterialGraphPreviewTarget> target);
+    void setImageGraph(std::shared_ptr<const MaterialGraph> graph) { imageGraph_=std::move(graph); }
     std::optional<MaterialGraphPreviewTarget> nodePreview() const {return nodePreview_;}
     void cancelInteraction() { gesture_=0; }
     bool takeMaterialSelectionRequest() {const bool value=selectMaterial_;selectMaterial_=false;return value;}
@@ -40,8 +48,10 @@ private:
     std::unique_ptr<MaterialGraphPrograms> nodePrograms_;
     std::string nodeDefinitionKey_;
     MaterialEvaluationContext materialContext_;
-    PreparedTexture grungeCurrent_;
-    std::string grungeDocumentId_;
-    MaterialNodeId grungeNode_{};
+    std::shared_ptr<const MaterialGraph> imageGraph_,classifiedImageGraph_;
+    std::optional<MaterialGraphPreviewTarget> classifiedImageTarget_;
+    PreparedTexture imageCurrent_;
+    std::string imageDocumentId_;
+    bool staticImage_{},displayingImage_{};
 };
 }

@@ -1,5 +1,6 @@
 #include "assets/MaterialAsset.h"
 #include "material_fixtures.h"
+#include "editor/MaterialTextureDemand.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
 #include <crimson/renderer/forward/MaterialGraphImageBake.h>
@@ -545,7 +546,7 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==10&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema10 nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==11&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema11 nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
@@ -646,7 +647,7 @@ void imageAdjustmentsAndGrunge() {
             "Prior Grunge style conversion lost authored values or layer defaults.");
         require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
             "Grunge style conversion changed links or persistent identities.");
-        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==10,"Legacy Grunge did not write the current schema.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==11,"Legacy Grunge did not write the current schema.");
         for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
         for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
         rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
@@ -728,7 +729,7 @@ void imageNodeFoundation() {
     const auto noise=node(graph,MaterialNodeKind::Noise),h2n=node(graph,MaterialNodeKind::HeightToNormal);connectMaterialNodes(graph,noise,MaterialPin::Value,h2n,MaterialPin::Left);require(!materialExpressionUniform(graph,noise,MaterialPin::Value)&&!materialExpressionUniform(graph,h2n,MaterialPin::Normal),"Spatial procedural nodes were classified as uniform.");
     auto a=findMaterialNode(graph,noise)->image;const auto n0=sampleMaterialNoise({.17f,-.23f,.61f},a);require(n0==sampleMaterialNoise({.17f,-.23f,.61f},a),"Noise is not deterministic.");a.seed=314;require(std::abs(n0-sampleMaterialNoise({.17f,-.23f,.61f},a))>.0001f,"Noise seed did not change the field.");require(near(sampleMaterialNoise({.17f,-.23f,.61f},a,100),.5f),"Unresolved Clouds did not converge to its mean.");a.noisePattern=MaterialNoisePattern::Spots;const auto spot=sampleMaterialNoise({.17f,-.23f,.61f},a,100);require(spot>0&&spot<.1f,"Unresolved Spots did not converge to its measured mean.");
     connectMaterialNodes(graph,sharpen,MaterialPin::Value,out,MaterialPin::BaseColor);
-    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":10")!=std::string::npos,"New nodes did not write graph schema 10.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
+    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":11")!=std::string::npos,"New nodes did not write graph schema 11.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
     auto bad=graph;findMaterialNode(bad,levels)->image.inputWhite=0;rejects([&]{validateMaterialGraph(bad);},"Levels accepted an empty input interval.");
     const auto vector=node(graph,MaterialNodeKind::Vector2);rejects([&]{connectMaterialNodes(graph,vector,MaterialPin::XY,invert,MaterialPin::Left);},"Vector2 connected to an image node.");
     auto& settings=findMaterialNode(graph,blend)->image;const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);settings.contrast=.2f;require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==topology,"A numeric image setting changed topology identity.");require(materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==values,"An inactive image branch affected active material values.");
@@ -753,7 +754,7 @@ void resizeImageBaking() {
         "Context-dependent Resize connection changed the graph or lacked a diagnostic.");
     const auto time=node(graph,MaterialNodeKind::Time);
     require(!materialCanConnect(graph,time,MaterialPin::Value,levels,MaterialPin::Left,&diagnostic),"Resize accepted Time input.");
-    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==10,"Resize did not write graph schema 10.");
+    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==11,"Resize did not write graph schema 11.");
     require(serializeMaterialGraph(parseMaterialGraph(before))==before,"Resize settings or typed input failed round trip.");
     auto malformed=serialized;for(auto& n:malformed["nodes"])if(n["id"]==resize)n["resize"]["width"]=1.5;
     rejects([&]{parseMaterialGraph(malformed.dump());},"Resize accepted a fractional width.");
@@ -882,6 +883,126 @@ void exactColdModelSurface() {
     connectMaterialNodes(changed,time,MaterialPin::Value,root,MaterialPin::Specular);
     require(!materialGraphFixedSurface(changed),"Animated graph uniforms were frozen by the fixed lowering.");
 }
+void atomicPointNodesAndSources() {
+    MaterialAtomicImageNode a;
+    // Independent affine-transfer and scan oracles, including HDR inputs and
+    // endpoint behavior. Contrast is applied after the coverage offset.
+    for(float coverage:{0.f,.17f,.5f,.83f,1.f})for(float contrast:{0.f,.27f,1.f})for(float v:{-5.f,0.f,.2f,.5f,.8f,1.f,8.f}){
+        a.coverage=coverage;a.contrast=contrast;
+        const float bounded=std::min(1.f,std::max(0.f,v));
+        const float expected=std::min(1.f,std::max(0.f,(bounded+2*coverage-1.5f)*(1+15*contrast)+.5f));
+        require(near(materialAtomicMaskAdjust(v,a),expected),"Mask Adjust changed clamp/offset/gain order.");
+        const float center=1-coverage,half=std::min(center,1-center)*(1-contrast);
+        const float scan=coverage==0?0:coverage==1?1:half<=1e-6f?(v>=center?1.f:0.f):std::min(1.f,std::max(0.f,(v-(center-half))/(2*half)));
+        require(std::abs(materialAtomicHistogramScan(v,a)-scan)<2e-6f,"Histogram Scan endpoints or affine interior changed.");
+    }
+    a.direction=0;a.bothDirections=false;
+    require(std::abs(materialAtomicDirectionSelect({1,.75f,.5f,0},a)-2/std::sqrt(5.f))<1e-6f,"Direction Select skipped encoded-vector normalization.");
+    a.direction=1;require(materialAtomicDirectionSelect({1,.75f,.5f,0},a)==0,"Direction Select selected opposite hemisphere.");
+    a.bothDirections=true;require(std::abs(materialAtomicDirectionSelect({1,.75f,.5f,0},a)-2/std::sqrt(5.f))<1e-6f,"Both Directions did not preserve absolute normalized component.");
+    a.direction=4;require(materialAtomicDirectionSelect({.5f,.5f,.5f,0},a)==1,"Degenerate direction did not choose finite +Z fallback.");
+    auto graph=blank();const auto source=node(graph,MaterialNodeKind::Color),input=node(graph,MaterialNodeKind::ImageInput),scan=node(graph,MaterialNodeKind::HistogramScan),mask=node(graph,MaterialNodeKind::MaskAdjust),direction=node(graph,MaterialNodeKind::DirectionSelect),decoder=node(graph,MaterialNodeKind::DecodeNormal);
+    findMaterialNode(graph,source)->color={.2f,.4f,.8f,0};
+    connectMaterialNodes(graph,source,MaterialPin::RGBA,input,MaterialPin::Left);
+    connectMaterialNodes(graph,input,MaterialPin::RGBA,scan,MaterialPin::Left);
+    connectMaterialNodes(graph,scan,MaterialPin::Value,mask,MaterialPin::Left);
+    connectMaterialNodes(graph,scan,MaterialPin::Value,direction,MaterialPin::Left);
+    connectMaterialNodes(graph,scan,MaterialPin::Value,decoder,MaterialPin::Left);
+    connectMaterialNodes(graph,decoder,MaterialPin::Normal,materialOutputNode(graph).id,MaterialPin::Normal);
+    connectMaterialNodes(graph,input,MaterialPin::RGB,materialOutputNode(graph).id,MaterialPin::BaseColor);
+    const auto resolved=evaluateMaterialUniform(graph,scan,MaterialPin::Value);
+    require(resolved.type==MaterialValueType::Color4&&near(resolved.value[0],.2f)&&near(resolved.value[1],.4f)&&near(resolved.value[2],.8f)&&resolved.value[3]==0,"Adaptable scan lost RGBA, neutral transfer or transparent RGB.");
+    require(materialOutputType(graph,mask,MaterialPin::Value)==MaterialValueType::Scalar&&materialOutputType(graph,direction,MaterialPin::Value)==MaterialValueType::Scalar&&materialOutputType(graph,decoder,MaterialPin::Normal)==MaterialValueType::Normal,"Fixed atomic outputs changed their semantic types.");
+    require(!materialCanConnect(graph,decoder,MaterialPin::Normal,scan,MaterialPin::Left),"Image filter accepted a decoded surface Normal.");
+    const auto originalNodes=graph.nodes.size();require(originalNodes==7&&graph.links.size()==7,"Atomic direct wiring inserted processing nodes.");
+    const auto fullOrder=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);require(std::find(fullOrder.begin(),fullOrder.end(),source)!=fullOrder.end(),"Enabled Image Input ignored connected Base.");
+    findMaterialNode(graph,input)->color={.6f,.3f,.1f,0};findMaterialNode(graph,input)->atomic.enabled=false;
+    auto order=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    require(std::find(order.begin(),order.end(),source)==order.end()&&evaluateMaterialUniform(graph,input,MaterialPin::RGBA).value==Vec4{.6f,.3f,.1f,0},"Disabled Image Input evaluated upstream Base or lost constant alpha.");
+    findMaterialNode(graph,input)->texture.image.id=canonicalAssetId("assets/textures/override.png");
+    require(materialGraphTextureReferences(graph).size()==1,"Disabled Image Input lost its authored dependency.");
+    const auto dormantHash=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    findMaterialNode(graph,input)->texture.image.id=canonicalAssetId("assets/textures/other.png");
+    require(materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==dormantHash,"Disabled override changed active evaluation identity.");
+    findMaterialNode(graph,input)->atomic.enabled=true;order=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    require(std::find(order.begin(),order.end(),source)==order.end()&&!materialExpressionUniform(graph,input,MaterialPin::RGBA),"Assigned Image Input did not override/prune Base.");
+    for(const auto kind:{MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::DirectionalWarp,MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion})node(graph,kind);
+    const auto text=serializeMaterialGraph(graph);require(text.find("\"version\":11")!=std::string::npos&&serializeMaterialGraph(parseMaterialGraph(text))==text,"Atomic kinds/settings changed during schema11 round trip.");
+    auto prior=nlohmann::json::parse(text);prior["version"]=10;rejects([&]{parseMaterialGraph(prior.dump());},"Prior schema accepted atomic node payloads.");
 }
-int main(int argc,char** argv){try{resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+
+void runtimeTextureDemandMappings() {
+    auto graph=blank();const auto output=materialOutputNode(graph).id;
+    const auto mapping=node(graph,MaterialNodeKind::UV);
+    findMaterialNode(graph,mapping)->uv.scale={.001f,.002f,.003f};
+    findMaterialNode(graph,mapping)->uv.offset={.25f,.5f,.75f};
+    const auto texture=node(graph,MaterialNodeKind::Texture2D);
+    findMaterialNode(graph,texture)->texture.image.id=canonicalAssetId("assets/textures/demand.png");
+    connectMaterialNodes(graph,mapping,MaterialPin::UV,texture,MaterialPin::UV);
+    const auto blur=node(graph,MaterialNodeKind::Blur),resize=node(graph,MaterialNodeKind::Resize);
+    connectMaterialNodes(graph,texture,MaterialPin::RGBA,blur,MaterialPin::Left);
+    connectMaterialNodes(graph,blur,MaterialPin::Value,resize,MaterialPin::Left);
+    connectMaterialNodes(graph,resize,MaterialPin::Value,output,MaterialPin::BaseColor);
+    const auto lookup=[](const auto& sampled,MaterialNodeId id)->const MaterialUvMapping* {
+        for(const auto& value:sampled)if(value.node==id)return &value.mapping;return nullptr;
+    };
+    auto sampled=materialRuntimeTextureMappings(graph);
+    require(sampled.size()==1&&sampled[0].node==resize&&sampled[0].mapping==MaterialUvMapping{},
+        "Streaming demand counted private bitmap/filter mappings instead of one outer cached sampler.");
+    // A second ordinary consumer must still request the source bitmap's actual
+    // mapping even though that source is also private to the cached branch.
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,output,MaterialPin::Emission);
+    sampled=materialRuntimeTextureMappings(graph);
+    require(sampled.size()==2&&lookup(sampled,texture)&&*lookup(sampled,texture)==findMaterialNode(graph,mapping)->uv,
+        "A cached cut hid an independently sampled direct source or lost its mapping.");
+    const auto transform=node(graph,MaterialNodeKind::ImageTransform);
+    MaterialUvMapping authored;authored.mode=MaterialUvMode::WorldTriplanar;
+    authored.scale={3,-5,7};authored.offset={1,2,3};authored.rotation={13,19,37};
+    findMaterialNode(graph,transform)->uv=authored;
+    connectMaterialNodes(graph,resize,MaterialPin::Value,transform,MaterialPin::Left);
+    connectMaterialNodes(graph,transform,MaterialPin::Value,output,MaterialPin::BaseColor);
+    sampled=materialRuntimeTextureMappings(graph);
+    require(sampled.size()==2&&lookup(sampled,transform)&&*lookup(sampled,transform)==authored&&!lookup(sampled,resize)&&!lookup(sampled,blur),
+        "Completed-image mapping was replaced by identity or nested cached images inflated runtime demand.");
+    const auto runtimeUv=node(graph,MaterialNodeKind::UV),panner=node(graph,MaterialNodeKind::Panner);
+    findMaterialNode(graph,runtimeUv)->uv.mode=MaterialUvMode::UV1;
+    findMaterialNode(graph,runtimeUv)->uv.scale={2,4,1};findMaterialNode(graph,panner)->panner.speed={.25f,.5f};
+    connectMaterialNodes(graph,runtimeUv,MaterialPin::UV,panner,MaterialPin::UV);
+    connectMaterialNodes(graph,panner,MaterialPin::UV,transform,MaterialPin::UV);
+    sampled=materialRuntimeTextureMappings(graph,{2,0});
+    require(lookup(sampled,transform)&&lookup(sampled,transform)->mode==MaterialUvMode::UV1&&
+        lookup(sampled,transform)->scale==Vec3{2,4,1}&&lookup(sampled,transform)->offset==Vec3{.5f,1,0},
+        "Runtime cached-image demand ignored UV1 or the current animated Mapping context.");
+    const auto image=node(graph,MaterialNodeKind::ImageInput);
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,image,MaterialPin::Left);
+    connectMaterialNodes(graph,image,MaterialPin::RGBA,output,MaterialPin::Emission);
+    sampled=materialRuntimeTextureMappings(graph);
+    require(sampled.size()==2&&lookup(sampled,texture),"Unassigned Image Input did not follow its active Base image demand.");
+    findMaterialNode(graph,image)->texture.image.id=canonicalAssetId("assets/textures/override.png");
+    sampled=materialRuntimeTextureMappings(graph);
+    require(sampled.size()==2&&lookup(sampled,image)&&*lookup(sampled,image)==MaterialUvMapping{}&&!lookup(sampled,texture),
+        "Image Input override failed to prune its Base or contribute an actual runtime sampler.");
+    findMaterialNode(graph,image)->atomic.enabled=false;sampled=materialRuntimeTextureMappings(graph);
+    require(sampled.size()==1&&!lookup(sampled,image)&&!lookup(sampled,texture),"Disabled Image Input still requested image storage or Base demand.");
+    const auto grunge=node(graph,MaterialNodeKind::Grunge),procedural=node(graph,MaterialNodeKind::ProceduralTexture);
+    findMaterialNode(graph,grunge)->grunge.tiling=3;
+    connectMaterialNodes(graph,mapping,MaterialPin::UV,grunge,MaterialPin::UV);
+    connectMaterialNodes(graph,grunge,MaterialPin::Value,output,MaterialPin::Roughness);
+    connectMaterialNodes(graph,procedural,MaterialPin::Value,output,MaterialPin::Occlusion);
+    sampled=materialRuntimeTextureMappings(graph);
+    const auto* grungeMapping=lookup(sampled,grunge);
+    require(sampled.size()==3&&grungeMapping&&near(grungeMapping->scale[0],.003f)&&near(grungeMapping->offset[1],1.5f)&&
+        lookup(sampled,procedural)&&*lookup(sampled,procedural)==MaterialUvMapping{},
+        "Grunge tiling or generated procedural sampler was missing from runtime streaming demand.");
+    const auto height=node(graph,MaterialNodeKind::GrowShrink);
+    connectMaterialNodes(graph,procedural,MaterialPin::Value,height,MaterialPin::Left);
+    materialOutputNode(graph).output.tessellation.enabled=true;
+    connectMaterialNodes(graph,height,MaterialPin::Value,output,MaterialPin::Height);
+    sampled=materialRuntimeTextureMappings(graph);require(lookup(sampled,height),"Enabled Height cached sampler was missing from demand.");
+    materialOutputNode(graph).output.tessellation.enabled=false;
+    sampled=materialRuntimeTextureMappings(graph);require(!lookup(sampled,height),"Inactive tessellation retained a demand-only Height sampler.");
+}
+
+}
+int main(int argc,char** argv){try{runtimeTextureDemandMappings();atomicPointNodesAndSources();resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -6,15 +6,28 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema10 additionally provides [Resize](MATERIAL_RESIZE.md) for a cached intermediate image with explicit pixel dimensions. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
+Current graph schema 11 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations below. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 
 Connect a Texture 2D or Noise source through an adjustment, then to a material
 channel. Edit disconnected input defaults inline or in Properties; connecting
 an input retains its default for later disconnection. A gesture is one undo
-command and Escape cancels it. Right-click an output to preview that specific
-output; selecting another node does not retarget the preview.
+command and Escape cancels it. Double left-click a node to start or stop its
+preview, or right-click an output to preview that specific output. Selecting
+another node does not retarget the preview. The add/search popup keeps its
+search field visible above a scrolling result list; Up/Down brings the selected
+result into view.
+
+Supported static image outputs show 128 px inline images and a 256 px sidebar
+image for the preview target. Evaluation uses the authored source resolution,
+then area-reduces the completed output for display. It does not reevaluate a
+1K/2K/4K procedural source on a coarse preview lattice. This preserves thin-mark
+coverage and nonlinear adjustments such as Levels. Cached image Value outputs
+reuse the renderer's generated source; other supported point branches retain
+source-resolution CPU evaluation. Inline requests are limited to visible nodes;
+edits are debounced and the last complete image remains visible while its
+replacement prepares. Layout, selection and warm frames do not regenerate images.
 
 Packed channel maps should use Texture 2D **Sample Type: Linear Data**. Color
 textures decode RGB for linear material calculations; alpha remains linear.
@@ -35,6 +48,80 @@ Do not interpret a packed roughness or metallic map as sRGB color.
 | RGBA Split | One RGB/RGBA input to four scalar R/G/B/A outputs | Source/default; choose an output to preview |
 | Alpha Split | One RGB/RGBA input to opaque RGB and scalar A | Source/default |
 | Alpha Merge | RGB/RGBA plus scalar A to RGBA; replaces alpha | Disconnected defaults |
+| Blur | Scalar/RGB/RGBA to the same family, including independent alpha | Amount; zero is identity |
+| Grow / Shrink | Scalar mask to scalar; square max/min envelope with continuous fractional support | Signed Amount; positive expands white |
+| Mask Adjust | Scalar mask; input clamp, coverage shift, contrast gain, final clamp | Coverage, Contrast |
+| Histogram Scan | Per-channel image selection; same family, alpha retained | Coverage, Contrast |
+| Directional Warp | Source image plus scalar Intensity; periodic bilinear source sampling | Amount, Angle |
+| Image Transform | Completed cached image sampled with existing Mapping | Mapping, linked Scale, Rotation, Offset; optional UV link |
+| Procedural Texture | Original repeatable 2D sources to scalar | Pattern, Resolution and active family controls |
+| Height Occlusion | Scalar height to scalar visibility; white is open | Strength, Radius, Depth |
+| Normal Occlusion | Encoded linear RGB normal image to scalar visibility | Strength, Radius, Depth, Flip Y |
+| Direction Select | Normalized encoded RGB direction to scalar selection | Signed Axis, Both directions |
+| Image Input | Optional managed image override, Base image and constant fallback | Enabled, Image, Color/Linear Data, Constant |
+| Normal Map | Processed encoded linear RGB to typed surface Normal | Strength, Flip Y |
+
+## Cached image operations
+
+Blur, Grow / Shrink, Directional Warp and the two Occlusion nodes materialize supported static UV0 image branches before rendering. They include upstream Levels, Blend and other adjustments in the generated result. Image Transform materializes its complete input before applying its runtime Mapping. Linking a UV/Panner node afterward can select UV1 or local/world triplanar projection; changing only that mapping reuses the cached image. Time, moving source mappings, Particle Color and decoded surface normals upstream of a cache boundary are rejected with a diagnostic. Source images and settings remain authored; generated textures are disposable resource data.
+
+Blur support is Amount multiplied by each image axis, with sigma equal to one third of that support. Small kernels use finite Gaussian convolution; broad kernels use five variance-matched box passes to bound execution cost. This approximation has independent impulse/normalization checks and is not claimed to be an exact large Gaussian. Grow / Shrink uses periodic square morphology and blends adjacent integer supports; it is not a disk or distance-field operation. Both preserve repeat edges and process without 8-bit intermediate quantization.
+
+Height Occlusion and Normal Occlusion are image-space local horizon approximations, independent of mesh baking and scene SSAO. Flat surfaces are open; a tilted height plane is open away from genuine periodic seam cliffs. Normal Occlusion integrates local normal-derived slopes rather than reconstructing a globally consistent displacement field. These maps do not replace mesh visibility or recover physical scale.
+
+Image Input uses an assigned override while Enabled, otherwise a connected Base, otherwise its Constant. Disabled uses only Constant and schedules no override/Base work. Its saved references and dormant Base wire remain available. Color images decode sRGB once; data/encoded-normal images use Linear Data. Normal Map belongs after image processing and converts the encoded image into the strict Normal type. It follows a common source mapping through UV0/UV1, rotated/mirrored coordinates and local/world triplanar projections. Branches with incompatible source mappings require a common Resize/Image Transform boundary before decoding; a precise diagnostic retains the last usable material. Height to Normal remains a separate height-gradient operation.
+
+Procedural Texture families are Clouds 1, Clouds 2, Multiscale Spots, Fine Dirt, Moisture, Creased, Messy Fibers, White Noise, Gaussian Noise, Parabolic Gradient, Gaussian Streaks and Directional Scratches. Selecting a family applies its own defaults and retains source resolution. Controls appear only where they affect that family. Multiscale Spots Detail balance changes spectral contribution, Moisture Contribution varies about neutral gray, and Messy Fibers Threads changes the threads inside each shape. Gaussian Noise describes scattered Gaussian shapes. Directional Scratches uses analytic subpixel coverage, including rectangular-image cell correction. The rejected legacy Scuff family is not available. Scale changes structures; Resolution changes actual raster size. Enlarging an already rasterized source does not restore missing detail.
+
+**Variation** is the continuous arrangement control stored as `disorder` in the
+material. Cyclic families such as Clouds 1 have the same arrangement at 0 and 1;
+intermediate values morph it, while Seed chooses a different distribution.
+The original source equations and phase behavior are retained.
+
+CPU generation prepares immutable stamp geometry and compiles each family's
+recipe once, then evaluates cell-oriented batches over bounded row tiles.
+This sequential path retains the original cell accumulation order and uses no
+additional worker threads. The authored 1K/2K/4K lattice remains intact; prepared
+storage and batch scratch both count toward the image job's memory allowance.
+
+Generated results use cancellable immutable resource jobs, source/content keys and budgeted streaming. Warm frames do not reevaluate source images. Superseded requests are canceled and the prior complete material remains available until replacement. Temporary image/scratch storage is capped at 512 MiB per bake, excluding immutable caller-owned source bitmaps, small planning/queue structures, retained host generations and GPU allocations. RGBA16F GPU images use the normal residency budget; a full 4K mip chain costs approximately 170.67 MiB. Nested private image operations consume only their outer runtime sampler; the twelve-slot material limit remains.
+
+Release measurements on 2026-10-20 used a Ryzen 9 7900X system with an RTX 4090,
+with the editor closed and no overlapping build. These are sequential CPU times
+for default-pattern preparation and scalar source generation, in seconds;
+they exclude host RGBA conversion, mip generation and GPU upload.
+
+| Pattern | 1K | 2K | 4K |
+| --- | ---: | ---: | ---: |
+| Clouds 1 | 0.194 | 0.690 | 2.724 |
+| Clouds 2 | 0.275 | 1.026 | 4.069 |
+| Fine Dirt | 0.030 | 0.097 | 0.373 |
+| Directional Scratches | 1.350 | 4.543 | 16.579 |
+
+Heavy sources remain a limitation: a first 4K Directional Scratches generation
+takes about 16.6 seconds on this machine, and an exact preview needs the
+completed source. Reusing that result avoids duplicate source generation.
+Total material publication also includes host conversion, mips and upload;
+per-frame GPU cost and FPS were not measured by this CPU benchmark.
+
+The separate warm DX12 Normal-decoding fixture measured 48 unique completed
+GPU view samples per phase, in forward and reverse variant order on the same
+RTX 4090. At 1024², one quad and a 2×2 point-sampled linear RGBA8 normal source,
+the opaque Normal diagnostic view measured these median elapsed GPU times:
+
+| Mapping | Texture Normal | Data → Levels → Normal Map | Completed Image Transform → Normal Map |
+| --- | ---: | ---: | ---: |
+| UV0 | 0.093–0.094 ms | 0.098 ms | 0.097 ms |
+| World triplanar | 0.097 ms | 0.113 ms | 0.109–0.110 ms |
+
+This isolates the warm mapping/decoding path: it excludes cold generation,
+upload, lighting, GI, AO and Glow. It is neither an FPS-loss estimate nor a
+4K RGBA16F bandwidth benchmark. Reproduce with
+`CRIMSON_TEST_NORMAL_TIMING_OUTPUT=<absolute report.json>` and the focused
+`material_mapping_render_core` check; profiling is enabled only in that
+optional measurement block. The source-generation and image-kernel reports
+are emitted by `material_procedural_tests --benchmark <report.json>` and
+`material_atomic_image_bake_tests --benchmark <report.json>`.
 
 Higher Noise Feature size makes larger structures in the selected coordinate
 domain. Clouds Detail amount adds smaller-scale variation and is unavailable
@@ -87,7 +174,7 @@ this change does not claim to solve that separate displacement limitation.
 ## Storage, ownership and validation
 
 Graph schema 9 introduced these kinds, Color4 and RGBA pin without renumbering old
-identities. The current schema10 writer adds Resize; readers retain schemas 1–10 and supply defaults without rewriting
+identities. The current schema 11 writer retains Resize and adds the reusable image operations; readers retain schemas 1–11 and supply defaults without rewriting
 loaded files. Native material files remain v6, generated material ABI remains 32,
 and the existing twelve-sampler and uniform budgets remain in force.
 
@@ -97,11 +184,21 @@ New shader helper text is conditional on the operations used, so unrelated
 older graphs retain their established generated-source behavior. Numeric edits
 remain parameter updates when topology is unchanged.
 
+Canonical hosts use `material_procedural::PreparedPattern::render()` for a full
+scalar raster, reserving `memory_bytes()` and `render_scratch_bytes()` beside
+the output. Pass cancellation to preparation and rendering. Include
+`material_procedural::algorithm_revision` (currently 1) in generated-image keys.
+`MaterialGraphImageBake.h` exposes `validateMaterialGraphImagePreview`,
+`materialGraphImagePreviewSources` and `bakeMaterialGraphImagePreview`; the
+preview options select display extent and preparation allowance, leaving
+authored graph values unchanged. Returned floats remain linear/data with
+independent alpha; display encoding and checker composition belong to the host.
+
 Focused checks cover mathematical endpoints, typing, alpha-zero RGB, all four
 simultaneous channels, preview selection, serialization/history, shader generation
 and the domain branch.
 
-The 2026-10-20 integration built the usual Release executable through
+The prior image/channel slice on 2026-10-20 built the usual Release executable through
 `Build.cmd Release`. All eight focused checks passed: `material_graph_core`,
 `material_graph_actions_core`, `material_graph_editor_core`,
 `material_graph_publication_core`, `material_graph_shader_core`,

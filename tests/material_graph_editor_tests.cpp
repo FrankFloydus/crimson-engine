@@ -1,5 +1,6 @@
 #include "resources/AssetId.h"
 #include "editor/MaterialDocument.h"
+#include "editor/MaterialGraphActions.h"
 #include "tools/MaterialGraphEditor.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -392,6 +393,7 @@ struct GraphUi {
     MaterialGraphEditor::Assets assets;
     std::string payloadType,payloadBytes;
     ImVec2 addButton{};
+    bool collapsed{};
     GraphUi() {
         ImGui::GetIO().DisplaySize={1800,1200};
         require(document.create("Graph command fixture"),"Could not create graph command fixture.");
@@ -399,12 +401,13 @@ struct GraphUi {
     void frame(int count=1) {
         for(int index=0;index<count;++index) {
             ImGui::NewFrame();ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({1660,1050});
-            ImGui::Begin("Private graph commands",nullptr,ImGuiWindowFlags_NoSavedSettings);
+            ImGui::SetNextWindowCollapsed(collapsed,ImGuiCond_Always);
+            const bool visible=ImGui::Begin("Private graph commands",nullptr,ImGuiWindowFlags_NoSavedSettings);
             const auto cursor=ImGui::GetCursorScreenPos();addButton={cursor.x+25,cursor.y+ImGui::GetFrameHeight()*.5f};
-            if(!payloadType.empty() && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceExtern)) {
+            if(visible&&!payloadType.empty() && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceExtern)) {
                 ImGui::SetDragDropPayload(payloadType.c_str(),payloadBytes.data(),payloadBytes.size());ImGui::EndDragDropSource();
             }
-            editor.draw(document,assets);ImGui::End();ImGui::Render();
+            if(visible)editor.draw(document,assets);ImGui::End();ImGui::Render();
             require(ImGui::GetDrawData()&&ImGui::GetDrawData()->Valid,"Graph command frame produced invalid draw data.");
         }
     }
@@ -1354,6 +1357,162 @@ void grungeGeneratedImagePresentation() {
     require(ui.document.edit("Delete generated node",[&](auto& asset){removeMaterialNode(asset.graph,grunge);}),"Could not delete generated Grunge node.");ui.frame(3);
     require(retained.expired()&&ui.editor.presentation().images.empty(),"Deleting Grunge retained its generated image lease or presentation.");
 }
+void staticNodeImagePresentation() {
+    GraphUi ui;MaterialNodeId procedural{},split{};
+    require(ui.document.edit("Static node thumbnail fixture",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{400,0});
+        procedural=addMaterialNode(asset.graph,MaterialNodeKind::ProceduralTexture,{-500,0}).id;
+        split=addMaterialNode(asset.graph,MaterialNodeKind::RGBASplit,{-100,0}).id;
+    })&&ui.document.save(),"Could not configure static node thumbnails.");
+    bool ready=true;unsigned requests{};
+    std::vector<MaterialGraphPreviewTarget> requested;
+    auto sourceLease=std::make_shared<int>(11),splitLease=std::make_shared<int>(12);
+    const std::weak_ptr<int> retainedSource=sourceLease,retainedSplit=splitLease;
+    ui.assets.nodeImage=[&](MaterialGraphPreviewTarget target,unsigned edge) {
+        require(edge==128,"Inline node image requested an unbounded or non-thumbnail working extent.");
+        require(target.node==procedural||target.node==split,"Output or an unrelated node requested a static image.");
+        ++requests;requested.push_back(target);
+        MaterialGraphEditor::TexturePresentation result;result.width=result.height=edge;result.available=ready;
+        if(ready) {
+            result.textureId=target.node==procedural?77:target.pin==MaterialPin::G?87:78;
+            result.lease=target.node==procedural?sourceLease:splitLease;
+        } else result.diagnostic="Preparing node image...";
+        return result;
+    };
+    const auto before=ui.snapshot();const auto revision=ui.document.revision();const auto undoLabel=ui.document.undoLabel();
+    ui.frame(24);
+    const auto image=[&](MaterialNodeId id) {
+        for(const auto& item:ui.editor.presentation().images)if(item.node==id)return item;
+        throw std::runtime_error("Static node did not submit its thumbnail presentation.");
+    };
+    require(requests>0&&image(procedural).textureId==77&&image(split).textureId==78,
+        "Procedural and ordinary static image nodes did not request and draw generic thumbnails.");
+    require(std::find(requested.begin(),requested.end(),MaterialGraphPreviewTarget{procedural,MaterialPin::Value})!=requested.end()&&
+        std::find(requested.begin(),requested.end(),MaterialGraphPreviewTarget{split,MaterialPin::R})!=requested.end(),
+        "Unpinned static thumbnails did not request their primary image outputs.");
+    for(const auto id:{procedural,split}) {
+        const auto item=image(id);const auto edge=item.maximum[0]-item.minimum[0];
+        require(std::abs(edge-(item.maximum[1]-item.minimum[1]))<.02f&&std::abs(edge/ui.editor.presentation().zoom-128)<.1f,
+            "Generic static thumbnail lost its square aspect or 128 canvas-pixel size.");
+    }
+    bool drewSource=false;
+    for(const auto* list:ImGui::GetDrawData()->CmdLists)for(const auto& command:list->CmdBuffer)
+        if(!command.UserCallback&&command.GetTexID()==77) {
+            drewSource=true;
+            for(unsigned index=0;index<command.ElemCount;++index) {
+                const auto& vertex=list->VtxBuffer[static_cast<int>(command.VtxOffset+list->IdxBuffer[static_cast<int>(command.IdxOffset+index)])];
+                require(vertex.uv.x>=0&&vertex.uv.x<=1&&vertex.uv.y>=0&&vertex.uv.y<=1,
+                    "A complete static node thumbnail repeated its UVs instead of displaying one image.");
+            }
+        }
+    require(drewSource,"Static thumbnail presentation did not emit its supplied texture into draw data.");
+    ready=false;sourceLease.reset();splitLease.reset();ui.frame(3);
+    require(!retainedSource.expired()&&!retainedSplit.expired()&&image(procedural).textureId==77&&image(split).textureId==78,
+        "A pending static node image discarded its leased last usable result.");
+    ui.click(ui.pin(split,MaterialPin::G,false),ImGuiMouseButton_Right);
+    require(ui.popup(),"Static thumbnail output preview menu did not open.");ui.click(ui.popupItem(0));ui.frame(2);
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{split,MaterialPin::G}&&
+        requested.back()==MaterialGraphPreviewTarget{split,MaterialPin::G}&&image(split).textureId==0&&retainedSplit.expired(),
+        "Changing a preview output retained another channel's image/lease or requested the wrong pin.");
+    sourceLease=std::make_shared<int>(21);splitLease=std::make_shared<int>(22);ready=true;ui.frame(3);
+    require(image(split).textureId==87,"The selected channel's ready thumbnail did not replace its empty pending result.");
+    require(ui.snapshot()==before&&ui.document.revision()==revision&&ui.document.undoLabel()==undoLabel&&!ui.document.dirty()&&!ui.document.transactionActive(),
+        "Static thumbnail generation or output selection changed authored material/history.");
+
+    const auto beforeCollapse=requests;ui.collapsed=true;ui.frame(3);
+    require(requests==beforeCollapse,"A collapsed graph window continued to request static node images.");
+    ui.collapsed=false;ui.frame(3);
+    // Move the complete canvas outside the private viewport, then let the
+    // navigation settle before counting requests. This tests actual culling,
+    // rather than merely turning the image callback off.
+    auto& io=ImGui::GetIO();const auto start=ui.emptyPoint();ui.move(start);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right,true);ui.frame();ui.move({start.x+4000,start.y+4000});
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right,false);ui.frame(3);
+    for(const auto& item:ui.editor.presentation().images) {
+        const auto& view=ui.editor.presentation();
+        require(item.maximum[0]<=view.canvasMinimum[0]||item.maximum[1]<=view.canvasMinimum[1]||
+            item.minimum[0]>=view.canvasMaximum[0]||item.minimum[1]>=view.canvasMaximum[1],
+            "Static thumbnail culling fixture failed to pan its images outside the viewport.");
+    }
+    const auto beforeHidden=requests;ui.frame(4);
+    require(requests==beforeHidden,"Offscreen static nodes continued to request image generations.");
+    require(ui.snapshot()==before&&ui.document.revision()==revision&&!ui.document.transactionActive(),
+        "Static thumbnail collapse/culling changed authored material state.");
+    ui.editor.releaseImages();sourceLease.reset();splitLease.reset();
+    require(retainedSource.expired(),"Releasing inline node images retained an obsolete generation lease.");
+}
+void overviewNodeImageCulling() {
+    GraphUi ui;MaterialNodeId source{};
+    require(ui.document.edit("Overview thumbnail fixture",[&](auto& asset) {
+        asset.graph={};source=addMaterialNode(asset.graph,MaterialNodeKind::ProceduralTexture,{-30000,0}).id;
+        addMaterialNode(asset.graph,MaterialNodeKind::Output,{30000,0});
+    })&&ui.document.save(),"Could not configure overview thumbnail culling.");
+    unsigned requests{};
+    ui.assets.nodeImage=[&](MaterialGraphPreviewTarget target,unsigned edge) {
+        require(target.node==source&&edge==128,"Overview thumbnail requested an unexpected node or resolution.");++requests;
+        return MaterialGraphEditor::TexturePresentation{};
+    };
+    const auto before=ui.snapshot();const auto revision=ui.document.revision();ui.frame(24);
+    ui.move(ui.emptyPoint());ui.key(ImGuiKey_Home);ui.frame(24);
+    require(ui.editor.presentation().images.size()==1,"Overview static image fixture lost its image geometry.");
+    const auto& item=ui.editor.presentation().images.front();
+    require(item.maximum[0]-item.minimum[0]<24,"Overview fixture did not produce a sub-24-screen-pixel thumbnail.");
+    const auto settledRequests=requests;ui.frame(4);
+    require(requests==settledRequests&&ui.snapshot()==before&&ui.document.revision()==revision&&!ui.document.transactionActive(),
+        "A sub-24-screen-pixel thumbnail requested work or overview navigation changed authored data.");
+}
+void doubleClickNodePreview() {
+    GraphUi ui;MaterialNodeId vector{},other{},split{},levels{},output{};
+    require(ui.document.edit("Double click preview fixture",[&](auto& asset) {
+        asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{650,0}).id;
+        vector=addMaterialNode(asset.graph,MaterialNodeKind::Vector2,{-500,-200}).id;
+        other=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-500,180}).id;
+        split=addMaterialNode(asset.graph,MaterialNodeKind::RGBASplit,{-100,-200}).id;
+        levels=addMaterialNode(asset.graph,MaterialNodeKind::Levels,{250,120}).id;
+    })&&ui.document.save(),"Could not configure double click preview fixture.");ui.frame(24);
+    auto& io=ImGui::GetIO();
+    const auto waitIndependentClick=[&]{ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);};
+    const auto doubleClick=[&](ImVec2 position) {
+        // Independent double clicks must start outside the prior click-count
+        // interval. The two presses within one gesture remain within it.
+        waitIndependentClick();ui.click(position);ui.click(position);ui.frame(2);
+    };
+    const auto before=ui.snapshot();const auto revision=ui.document.revision();const auto undoLabel=ui.document.undoLabel();
+    doubleClick(ui.title(vector));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{vector,MaterialPin::XY},
+        "Double clicking a node did not preview its primary output.");
+    doubleClick(ui.pin(vector,MaterialPin::XY,false));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{vector,MaterialPin::XY},
+        "Double clicking the current node's output pin incorrectly toggled its preview.");ui.key(ImGuiKey_Escape);
+    doubleClick(ui.pin(other,MaterialPin::Value,false));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{vector,MaterialPin::XY},
+        "Double clicking another node's output pin incorrectly switched preview.");ui.key(ImGuiKey_Escape);
+    doubleClick(ui.pin(levels,MaterialPin::Left,true));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{vector,MaterialPin::XY},
+        "Double clicking an input pin incorrectly selected its node for preview.");ui.key(ImGuiKey_Escape);
+    doubleClick(ui.title(other));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{other,MaterialPin::Value},
+        "Double clicking a different node did not switch the preview target.");
+    doubleClick(ui.title(other));require(!ui.editor.previewTarget(),"Double clicking the current node did not return to material preview.");
+    waitIndependentClick();ui.click(ui.pin(split,MaterialPin::G,false),ImGuiMouseButton_Right);
+    require(ui.popup(),"Double click channel fixture could not open its output preview menu.");ui.click(ui.popupItem(0));
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{split,MaterialPin::G},"Channel fixture did not select its non-primary output.");
+    doubleClick(ui.title(split));require(!ui.editor.previewTarget(),"Double clicking a node pinned to a non-primary output did not stop its preview.");
+    doubleClick(ui.title(vector));doubleClick(ui.title(output));
+    require(!ui.editor.previewTarget(),"Double clicking Output did not return to material preview.");
+    doubleClick(ui.title(vector));
+    ImVec2 numeric{};bool found=false;
+    for(const auto& control:ui.editor.presentation().controls)if(control.node==levels&&control.label=="Midtones") {
+        const auto label=(ImGui::CalcTextSize("Midtones").x+ImGui::GetStyle().ItemInnerSpacing.x)*ui.editor.presentation().zoom;
+        numeric={control.minimum[0]+(control.maximum[0]-control.minimum[0]-label)*.55f,(control.minimum[1]+control.maximum[1])*.5f};found=true;
+    }
+    require(found,"Double click fixture lost its numeric input control.");doubleClick(numeric);
+    require(ImGui::GetCurrentContext()->TempInputId!=0&&ui.editor.previewTarget()==MaterialGraphPreviewTarget{vector,MaterialPin::XY},
+        "Double clicking a numeric field toggled node preview or failed to open numeric text input.");
+    ui.key(ImGuiKey_Escape);ui.frame(2);
+    require(ui.snapshot()==before&&ui.document.revision()==revision&&ui.document.undoLabel()==undoLabel&&!ui.document.dirty()&&!ui.document.transactionActive(),
+        "Node/numeric double clicks changed authored data or inserted undo history.");
+}
 void requestedImageAndChannelControls() {
     GraphUi ui;MaterialNodeId output{},source{},merge{},split{},blend{};
     require(ui.document.edit("Image authoring controls",[&](auto& asset) {
@@ -1576,6 +1735,177 @@ void typedPinColorsConversionsAndResize() {
         "Resize filter selection did not choose Area.");ui.oneUndo(beforeFilter);
 }
 
+void atomicNodeCatalogAndTransactions() {
+    const std::array<std::pair<const char*,MaterialNodeKind>,12> searches{{
+        {"gaussian blur",MaterialNodeKind::Blur},{"dilate morphology",MaterialNodeKind::GrowShrink},
+        {"mask adjust",MaterialNodeKind::MaskAdjust},{"histogram scan",MaterialNodeKind::HistogramScan},
+        {"directional warp",MaterialNodeKind::DirectionalWarp},{"image transform",MaterialNodeKind::ImageTransform},
+        {"procedural texture",MaterialNodeKind::ProceduralTexture},{"height occlusion",MaterialNodeKind::HeightOcclusion},
+        {"normal occlusion",MaterialNodeKind::NormalOcclusion},{"hemisphere",MaterialNodeKind::DirectionSelect},
+        {"image input",MaterialNodeKind::ImageInput},{"decode normal",MaterialNodeKind::DecodeNormal}
+    }};
+    {
+        GraphUi ui;ui.frame(24);
+        for(const auto& [alias,kind]:searches) {
+            const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
+            const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
+            if(!created||created->kind!=kind||ui.popup())throw std::runtime_error(std::string("Missing atomic node search alias: ")+alias);
+            ui.oneUndo(before);require(ui.document.undo(),"Could not remove searched atomic node.");ui.frame(2);
+        }
+    }
+    const std::array<std::pair<MaterialNodeKind,const char*>,9> gestures{{
+        {MaterialNodeKind::Blur,"Amount"},{MaterialNodeKind::GrowShrink,"Amount"},
+        {MaterialNodeKind::MaskAdjust,"Coverage"},{MaterialNodeKind::HistogramScan,"Contrast"},
+        {MaterialNodeKind::DirectionalWarp,"Angle"},{MaterialNodeKind::HeightOcclusion,"Depth"},
+        {MaterialNodeKind::NormalOcclusion,"Radius"},{MaterialNodeKind::DecodeNormal,"Strength"},
+        {MaterialNodeKind::ProceduralTexture,"Scale"}
+    }};
+    for(const auto& [kind,label]:gestures) {
+        GraphUi ui;MaterialNodeId id{};
+        require(ui.document.edit("Atomic parameter fixture",[&](auto& asset) {
+            asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});
+            id=addMaterialNode(asset.graph,kind,{-100,0}).id;
+        })&&ui.document.save(),"Could not configure atomic parameter fixture.");ui.frame(24);
+        const auto control=[&] {
+            for(const auto& item:ui.editor.presentation().controls)if(item.node==id&&item.label==label) {
+                const auto labelWidth=(ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemInnerSpacing.x)*ui.editor.presentation().zoom;
+                return ImVec2{item.minimum[0]+(item.maximum[0]-item.minimum[0]-labelWidth)*.55f,(item.minimum[1]+item.maximum[1])*.5f};
+            }throw std::runtime_error(std::string("Missing atomic inline control: ")+label);
+        };
+        const auto before=ui.snapshot();const auto start=control();ui.drag(start,{start.x+25,start.y});ui.oneUndo(before);
+        auto& io=ImGui::GetIO();ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);
+        const auto beforeCancel=ui.snapshot();const auto cancelStart=control();ui.move(cancelStart);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move({cancelStart.x+20,cancelStart.y});
+        require(ui.document.transactionActive()&&ui.snapshot()!=beforeCancel,"Atomic drag failed to hold one changed transaction.");
+        ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+        require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Atomic Escape failed to restore the exact starting value.");
+    }
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+void proceduralFamilyControlsAndResolution() {
+    using namespace material_procedural;
+    GraphUi ui;MaterialNodeId id{};
+    require(ui.document.edit("Procedural control fixture",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});
+        auto& node=addMaterialNode(asset.graph,MaterialNodeKind::ProceduralTexture,{-150,-160});id=node.id;
+        node.procedural.width=node.procedural.height=2048;node.procedural.settings.seed=37;
+    })&&ui.document.save(),"Could not configure procedural controls.");ui.frame(24);
+    const auto combo=[&](const char* label) {
+        for(const auto& item:ui.editor.presentation().combos)if(item.node==id&&item.label==label)
+            return ImVec2{(item.minimum[0]+item.maximum[0])*.5f,(item.minimum[1]+item.maximum[1])*.5f};
+        throw std::runtime_error(std::string("Missing procedural dropdown: ")+label);
+    };
+    const auto has=[&](const char* label) {
+        return std::any_of(ui.editor.presentation().controls.begin(),ui.editor.presentation().controls.end(),[&](const auto& item){return item.node==id&&item.label==label;});
+    };
+    const auto choose=[&](Pattern pattern) {
+        const auto before=ui.snapshot();ui.click(combo("Pattern"));require(ui.popup()&&!ui.document.transactionActive(),"Opening pattern choices dirtied the document.");
+        const auto row=std::find(patterns.begin(),patterns.end(),pattern)-patterns.begin();ui.click(ui.popupItem(static_cast<int>(row)));
+        const auto& node=*findMaterialNode(ui.document.definition().graph,id);
+        auto expected=default_settings(pattern);expected.seed=37;
+        require(node.procedural.settings==expected&&node.procedural.width==2048&&node.procedural.height==2048,
+            "Pattern switch did not install family defaults while retaining seed and authored raster resolution.");
+        ui.oneUndo(before);
+    };
+    choose(Pattern::Moisture);require(has("Width")&&has("Height")&&!has("Length")&&has("Contribution"),"Moisture size controls have scratch labels or missing contribution.");
+    choose(Pattern::MessyFibers);require(has("Threads")&&has("Angle spread")&&!has("Width"),"Fiber controls expose unused dimensions.");
+    choose(Pattern::ParabolicGradient);require(!has("Seed")&&!has("Variation")&&has("Angle"),"Parabola exposes meaningless random controls.");
+    choose(Pattern::GaussianNoise);require(findMaterialNode(ui.document.definition().graph,id)->procedural.settings.scale==32,"Gaussian source creation lost its scale default.");
+    choose(Pattern::DirectionalScratches);require(has("Width")&&has("Length")&&has("Keep square tiles")&&!has("Height"),"Directional scratch controls are incomplete.");
+    const auto before=ui.snapshot();ui.click(combo("Resolution"));ui.click(ui.popupItem(2));
+    require(findMaterialNode(ui.document.definition().graph,id)->procedural.width==4096&&findMaterialNode(ui.document.definition().graph,id)->procedural.height==4096,
+        "4K control did not author a real 4096 raster.");ui.oneUndo(before);
+    const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.click(combo("Pattern"));ui.key(ImGuiKey_Escape);ui.frame(3);
+    require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Canceling the pattern dropdown changed authored material content.");
+}
+void atomicImageSourceAndMappingPins() {
+    GraphUi ui;MaterialNodeId image{},source{},mapping{},transform{},decoder{},chosen{};
+    const auto bitmap=canonicalAssetId("assets/textures/optional-override.png");
+    require(ui.document.edit("Atomic source fixture",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{800,0});
+        source=addMaterialNode(asset.graph,MaterialNodeKind::Color,{-700,60}).id;
+        image=addMaterialNode(asset.graph,MaterialNodeKind::ImageInput,{-350,-100}).id;
+        transform=addMaterialNode(asset.graph,MaterialNodeKind::ImageTransform,{30,40}).id;
+        mapping=addMaterialNode(asset.graph,MaterialNodeKind::UV,{-350,430}).id;
+        decoder=addMaterialNode(asset.graph,MaterialNodeKind::DecodeNormal,{400,400}).id;
+    })&&ui.document.save(),"Could not configure atomic source pins.");
+    ui.assets.choose=[&](MaterialNodeId node){chosen=node;};
+    ui.assets.validTexture=[&](const std::string& id){return id==bitmap;};ui.frame(24);
+    const auto control=[&](MaterialNodeId id,const char* label) {
+        for(const auto& item:ui.editor.presentation().controls)if(item.node==id&&item.label==label)
+            return ImVec2{item.minimum[0]+15,(item.minimum[1]+item.maximum[1])*.5f};
+        throw std::runtime_error(std::string("Missing atomic source control: ")+label);
+    };
+    const auto presentedPin=[&](MaterialNodeId id,MaterialPin pin,bool input) {
+        for(const auto& item:ui.editor.presentation().pins)if(item.node==id&&item.pin==pin&&item.input==input)return item;
+        throw std::runtime_error("Missing atomic source pin.");
+    };
+    require(presentedPin(image,MaterialPin::Left,true).mixedImage,"Empty Image Input Base lost its image-family capability glyph.");
+    ui.click(control(image,"Image"));require(chosen==image,"Image Input picker callback rejected the new source kind.");
+    const auto beforeWire=ui.snapshot();ui.drag(ui.pin(source,MaterialPin::RGB,false),ui.pin(image,MaterialPin::Left,true));ui.oneUndo(beforeWire);
+    const auto connected=presentedPin(image,MaterialPin::Left,true);
+    require(!connected.mixedImage&&connected.signalType==MaterialValueType::Color,"Connected Image Input Base still displays a mixed glyph.");
+    require(ui.document.edit("Assign image override",[&](auto& asset){findMaterialNode(asset.graph,image)->texture.image.id=bitmap;}),"Could not author optional image override.");ui.frame(3);
+    ui.pin(image,MaterialPin::Left,true);
+    const auto beforeClear=ui.snapshot();ui.click(control(image,"Clear"));
+    require(findMaterialNode(ui.document.definition().graph,image)->texture.image.empty(),"Image Input clear did not clear the optional override.");ui.oneUndo(beforeClear);
+    const auto beforeDisable=ui.snapshot();ui.click(control(image,"Enabled"));
+    require(!findMaterialNode(ui.document.definition().graph,image)->atomic.enabled&&materialInputLink(ui.document.definition().graph,image,MaterialPin::Left),
+        "Disabling Image Input lost the retained Base link.");ui.pin(image,MaterialPin::Left,true);ui.oneUndo(beforeDisable);
+    const auto transformHas=[&](const char* label) {
+        return std::any_of(ui.editor.presentation().controls.begin(),ui.editor.presentation().controls.end(),[&](const auto& item){return item.node==transform&&item.label==label;});
+    };
+    require(transformHas("Scale")&&transformHas("Rotation")&&transformHas("Offset"),"Disconnected Image Transform lacks editable mapping.");
+    ui.drag(ui.pin(mapping,MaterialPin::UV,false),ui.pin(transform,MaterialPin::UV,true));
+    require(!transformHas("Scale")&&!transformHas("Rotation")&&!transformHas("Offset"),"Connected Mapping still exposes ignored Image Transform controls.");
+    ui.pin(transform,MaterialPin::Left,true);
+    unsigned decoderOutputs{};for(const auto& pin:ui.editor.presentation().pins)if(pin.node==decoder&&!pin.input) {
+        ++decoderOutputs;require(pin.pin==MaterialPin::Normal&&pin.type==MaterialValueType::Normal,"Normal Map exposes an encoded RGB output instead of its typed Normal.");
+    }
+    require(decoderOutputs==1,"Normal Map does not expose exactly one typed Normal output.");
+}
+void boundedNodeSearchResults() {
+    GraphUi ui;ui.frame(24);const auto before=ui.snapshot();const auto revision=ui.document.revision();
+    ui.openAdd();ui.frame(3);
+    const auto popup=[&]()->ImGuiWindow* {
+        const auto& popups=ImGui::GetCurrentContext()->OpenPopupStack;
+        require(!popups.empty()&&popups.back().Window,"Bounded node search did not retain its popup.");
+        return popups.back().Window;
+    };
+    const auto results=[&]()->ImGuiWindow* {
+        const auto* parent=popup();
+        for(auto* window:ImGui::GetCurrentContext()->Windows)
+            if(window->Active&&window->ParentWindow==parent&&(window->Flags&ImGuiWindowFlags_ChildWindow))return window;
+        throw std::runtime_error("Node search results did not have a separate scrolling region.");
+    };
+    const float rowHeight=ImGui::GetTextLineHeightWithSpacing();
+    require(materialGraphNodeKinds().size()>10&&results()->Size.y<=rowHeight*10+.5f&&
+        results()->ScrollbarY&&results()->ScrollMax.y>0&&popup()->Size.y<rowHeight*16,
+        "The full node catalog expanded search into an oversized popup or omitted its scrollbar.");
+    const auto popupPosition=popup()->Pos;
+    auto& io=ImGui::GetIO();const auto* list=results();
+    ui.move({(list->InnerClipRect.Min.x+list->InnerClipRect.Max.x)*.5f,(list->InnerClipRect.Min.y+list->InnerClipRect.Max.y)*.5f});
+    io.AddMouseWheelEvent(0,-4);ui.frame(3);
+    require(results()->Scroll.y>0,"Node result scrollbar ignored ordinary wheel scrolling.");
+    ui.key(ImGuiKey_UpArrow);ui.frame(3);
+    list=results();
+    const float lastCenter=list->DC.CursorStartPos.y+(materialGraphNodeKinds().size()-1)*rowHeight+ImGui::GetTextLineHeight()*.5f;
+    require(list->Scroll.y>0&&lastCenter>=list->InnerClipRect.Min.y&&lastCenter<=list->InnerClipRect.Max.y&&
+        ImGui::GetCurrentContext()->ActiveIdWindow==popup()&&popup()->Pos.y==popupPosition.y,
+        "Keyboard selection failed to reveal the last result or scrolled the search field away.");
+    ui.key(ImGuiKey_DownArrow);ui.frame(3);
+    require(results()->Scroll.y<1&&ImGui::GetCurrentContext()->ActiveIdWindow==popup(),
+        "Wrapping keyboard selection did not reveal the first result while preserving search focus.");
+    require(ui.snapshot()==before&&ui.document.revision()==revision&&!ui.document.transactionActive(),
+        "Scrolling or keyboard navigation changed authored material state.");
+    ui.text("resample");ui.frame(3);
+    require(results()->Size.y<=rowHeight*1.5f&&results()->ScrollMax.y==0,
+        "A short filtered result retained the full catalog height or stale scrolling.");
+    ui.key(ImGuiKey_Enter);
+    const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
+    require(created&&created->kind==MaterialNodeKind::Resize&&!ui.popup(),"Bounded filtered search broke Enter creation.");
+    ui.oneUndo(before);
+}
+
+}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

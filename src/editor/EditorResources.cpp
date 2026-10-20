@@ -1,6 +1,7 @@
 #include "EditorResources.h"
 #include "crimson-renderer/ShadowLightSelection.h"
 #include "PreparedMaterialSignature.h"
+#include "MaterialTextureDemand.h"
 #include "assets/AssetLibrary.h"
 #include "assets/ModelAnimation.h"
 #include "assets/MaterialGraphReferences.h"
@@ -67,17 +68,7 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
     double span=std::numeric_limits<double>::infinity();
     const auto mappings=[context](const ModelMaterial& material,const auto& visit) {
         if(material.graph) {
-            const auto& graph=*material.graph;const auto& output=materialOutputNode(graph).output;
-            for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
-                const auto* node=findMaterialNode(graph,id);if(node->kind!=MaterialNodeKind::Grunge&&(node->kind!=MaterialNodeKind::Texture2D||node->texture.image.empty()))continue;
-                MaterialUvMapping mapping;
-                mapping=materialTextureMapping(graph,id,context);
-                if(node->kind==MaterialNodeKind::Grunge) {
-                    mapping.scale=mapping.scale*static_cast<float>(node->grunge.tiling);
-                    mapping.offset=mapping.offset*static_cast<float>(node->grunge.tiling);
-                }
-                visit(mapping);
-            }
+            for(const auto& sampled:materialRuntimeTextureMappings(*material.graph,context))visit(sampled.mapping);
         } else {
             for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
                 if(slot->image.empty())continue;

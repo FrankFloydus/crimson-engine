@@ -1,6 +1,7 @@
 #include "resources/AssetId.h"
 #include "editor/MaterialGraphActions.h"
 #include "editor/MaterialDocument.h"
+#include "assets/MaterialGraphReferences.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -162,7 +163,8 @@ void compatibleCreationAndReplacement() {
     require(uvChoices.size()==2&&uvChoices.front().kind==MaterialNodeKind::UV&&uvChoices.back().kind==MaterialNodeKind::Panner,"UV input offered incompatible node kinds.");
     const auto uv=addConnectedMaterialGraphNode(graph,mapping,uvChoices.front(),{});
     const MaterialGraphEndpoint uvOutput{uv,MaterialPin::UV,false};const auto textureChoices=materialGraphNodeChoices(graph,uvOutput);
-    require(textureChoices.size()==5&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::Noise,"UV output offered incompatible node kinds.");
+    require(textureChoices.size()==6&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&
+        std::any_of(textureChoices.begin(),textureChoices.end(),[](const auto& c){return c.kind==MaterialNodeKind::ImageTransform&&c.pin==MaterialPin::UV;}),"UV output omitted completed-image mapping or offered incompatible node kinds.");
     const auto secondTexture=addConnectedMaterialGraphNode(graph,uvOutput,textureChoices.front(),{});
     const auto gradient=addConnectedMaterialGraphNode(graph,uvOutput,choiceFor(graph,uvOutput,MaterialNodeKind::RadialGradient),{});
     require(materialInputLink(graph,gradient,MaterialPin::UV)->fromNode==uv&&materialOutputType(graph,gradient,MaterialPin::Value)==MaterialValueType::Scalar,
@@ -174,7 +176,8 @@ void compatibleCreationAndReplacement() {
     const auto multiply=addConnectedMaterialGraphNode(graph,baseColor,choiceFor(graph,baseColor,MaterialNodeKind::Multiply),{});
     require(materialOutputType(graph,multiply,MaterialPin::Value)==MaterialValueType::Color,"New Multiply was not initialized for the destination Color type.");
     const MaterialGraphEndpoint normal{output,MaterialPin::Normal,true};const auto normalChoices=materialGraphNodeChoices(graph,normal);
-    require(normalChoices.size()==2&&normalChoices.front().kind==MaterialNodeKind::Texture2D&&normalChoices.front().textureRole==MaterialTextureRole::Normal&&normalChoices.front().pin==MaterialPin::Normal&&normalChoices.back().kind==MaterialNodeKind::HeightToNormal,"Normal input offered non-normal expressions.");
+    require(normalChoices.size()==3&&normalChoices.front().kind==MaterialNodeKind::Texture2D&&normalChoices.front().textureRole==MaterialTextureRole::Normal&&normalChoices.front().pin==MaterialPin::Normal&&
+        std::all_of(normalChoices.begin(),normalChoices.end(),[](const auto& c){return c.pin==MaterialPin::Normal&&(c.kind==MaterialNodeKind::Texture2D||c.kind==MaterialNodeKind::HeightToNormal||c.kind==MaterialNodeKind::DecodeNormal);}),"Normal input offered non-normal expressions.");
     const auto normalTexture=addConnectedMaterialGraphNode(graph,normal,normalChoices.front(),{});
     require(materialGraphNodeChoices(graph,{normalTexture,MaterialPin::Normal,false}).empty(),"Normal output incorrectly offered arithmetic nodes.");
     materialOutputNode(graph).output.blend=MaterialBlend::Mask;
@@ -526,8 +529,98 @@ void requestedImageAndChannelActions() {
         std::none_of(outgoing.begin(),outgoing.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::UV||choice.kind==MaterialNodeKind::Vector2;}),"RGBA pin-drag suggestions lost channel nodes or offered mapping expressions.");
 }
 
+void atomicAuthoringAndReferences() {
+    constexpr std::array kinds{MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::MaskAdjust,MaterialNodeKind::HistogramScan,
+        MaterialNodeKind::DirectionalWarp,MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,
+        MaterialNodeKind::NormalOcclusion,MaterialNodeKind::DirectionSelect,MaterialNodeKind::ImageInput,MaterialNodeKind::DecodeNormal};
+    Project project;MaterialDocument document(project.root);require(document.create("Atomic image nodes"),"Could not create atomic authoring fixture.");
+    std::vector<MaterialNodeId> added;
+    require(document.edit("Add image atoms",[&](auto& asset){
+        for(const auto kind:kinds) {
+            require(std::count(materialGraphNodeKinds().begin(),materialGraphNodeKinds().end(),kind)==1,"Missing or duplicate atomic catalog entry.");
+            added.push_back(addMaterialNode(asset.graph,kind).id);
+        }
+    }),"Could not author all atomic defaults.");
+    const auto authored=serializeMaterialAsset(document.definition());
+    require(document.undo()&&document.redo()&&serializeMaterialAsset(document.definition())==authored,"Atomic settings did not survive exact undo/redo.");
+    const auto clipboard=copyMaterialGraphSelection(document.definition().graph,added);
+    require(document.edit("Paste image atoms",[&](auto& asset){require(pasteMaterialGraphSelection(asset.graph,clipboard,{100,100}).size()==kinds.size(),"Atomic clipboard omitted a kind.");}),"Atomic clipboard paste failed.");
+    require(document.undo()&&serializeMaterialAsset(document.definition())==authored,"Atomic clipboard undo changed original nodes.");
+    auto graph=graphWithOutput();const auto output=materialOutputNode(graph).id;
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id;
+    for(const auto kind:{MaterialNodeKind::Blur,MaterialNodeKind::HistogramScan,MaterialNodeKind::DirectionalWarp,MaterialNodeKind::ImageTransform}) {
+        const auto id=addMaterialNode(graph,kind).id;
+        require(materialGraphInputMixedImage(*findMaterialNode(graph,id),MaterialPin::Left),"New adaptable atom lost its mixed input capability.");
+        const auto before=graph.nodes.size();connectMaterialGraphAuthoring(graph,color,MaterialPin::RGBA,id,MaterialPin::Left);
+        require(graph.nodes.size()==before&&materialOutputType(graph,id,MaterialPin::Value)==MaterialValueType::Color4,"Atomic image connection inserted a node or discarded RGBA type.");
+    }
+    const auto normalChoices=materialGraphNodeChoices(graph,{output,MaterialPin::Normal,true});
+    require(std::any_of(normalChoices.begin(),normalChoices.end(),[](const auto& c){return c.kind==MaterialNodeKind::DecodeNormal&&c.pin==MaterialPin::Normal;}),"Normal socket search omitted the processed normal decoder.");
+    const auto input=addMaterialNode(graph,MaterialNodeKind::ImageInput).id;
+    const auto overrideId=canonicalAssetId("Content/textures/override.png");
+    auto& source=*findMaterialNode(graph,input);source.texture.image.id=overrideId;source.atomic.enabled=false;
+    connectMaterialGraphAuthoring(graph,input,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    ModelMaterial material;material.graph=std::make_shared<MaterialGraph>(graph);
+    std::vector<std::string> authoredReferences,activeReferences;
+    visitMaterialTextures(material,false,[&](const auto& id,auto){authoredReferences.push_back(id);});
+    visitMaterialTextures(material,true,[&](const auto& id,auto){activeReferences.push_back(id);});
+    require(authoredReferences==std::vector<std::string>{overrideId}&&activeReferences.empty(),"Disabled Image Input lost authored dependency or requested unused residency.");
+}
+void cachedRuntimeUvRequirements() {
+    auto graph=graphWithOutput();const auto out=materialOutputNode(graph).id;
+    const auto source=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,source)->texture.image.id=canonicalAssetId("Content/textures/private.png");
+    const auto resize=addMaterialNode(graph,MaterialNodeKind::Resize).id,transform=addMaterialNode(graph,MaterialNodeKind::ImageTransform).id;
+    connectMaterialNodes(graph,source,MaterialPin::RGB,resize,MaterialPin::Left);
+    connectMaterialNodes(graph,resize,MaterialPin::Value,transform,MaterialPin::Left);
+    connectMaterialNodes(graph,transform,MaterialPin::Value,out,MaterialPin::BaseColor);
+    findMaterialNode(graph,transform)->uv.mode=MaterialUvMode::WorldTriplanar;
+    require(materialGraphRequiredUvs(graph)==0,"World triplanar cached image inherited a private source's mesh UV0 requirement.");
+    findMaterialNode(graph,transform)->uv.mode=MaterialUvMode::LocalTriplanar;
+    require(materialGraphRequiredUvs(graph)==0,"Local triplanar cached image required mesh UVs.");
+    findMaterialNode(graph,transform)->uv.mode=MaterialUvMode::UV1;
+    require(materialGraphRequiredUvs(graph)==2,"Cached Image Transform did not require its runtime UV1 chart.");
+    connectMaterialNodes(graph,source,MaterialPin::R,out,MaterialPin::Roughness);
+    require(materialGraphRequiredUvs(graph)==3,"Cutting a cached branch hid a source still sampled directly through UV0.");
+    removeMaterialLink(graph,materialInputLink(graph,out,MaterialPin::Roughness)->id);
+    findMaterialNode(graph,transform)->uv.mode=MaterialUvMode::UV0;
+    require(materialGraphRequiredUvs(graph)==1,"Cached runtime UV0 was omitted from mesh compatibility.");
+    const auto procedural=addMaterialNode(graph,MaterialNodeKind::ProceduralTexture).id,gray=addMaterialNode(graph,MaterialNodeKind::ToColor).id;
+    connectMaterialNodes(graph,procedural,MaterialPin::Value,gray,MaterialPin::Left);connectMaterialNodes(graph,gray,MaterialPin::RGB,out,MaterialPin::BaseColor);
+    require(materialGraphRequiredUvs(graph)==1,"A procedural-only cached sampler did not require runtime UV0.");
+    const auto uv=addMaterialNode(graph,MaterialNodeKind::UV).id;findMaterialNode(graph,uv)->uv.mode=MaterialUvMode::UV1;
+    const auto noise=addMaterialNode(graph,MaterialNodeKind::Noise).id;
+    connectMaterialNodes(graph,uv,MaterialPin::UV,noise,MaterialPin::UV);connectMaterialNodes(graph,noise,MaterialPin::RGB,out,MaterialPin::BaseColor);
+    require(materialGraphRequiredUvs(graph)==2,"Direct analytic Noise lost its mesh UV1 requirement.");
+    const auto radial=addMaterialNode(graph,MaterialNodeKind::RadialGradient).id;connectMaterialNodes(graph,uv,MaterialPin::UV,radial,MaterialPin::UV);
+    connectMaterialNodes(graph,radial,MaterialPin::Value,gray,MaterialPin::Left);connectMaterialNodes(graph,gray,MaterialPin::RGB,out,MaterialPin::BaseColor);
+    require(materialGraphRequiredUvs(graph)==2,"Direct analytic Radial Gradient lost its mesh UV1 requirement.");
+    // Analytic sources in a static image consume an internal UV0 lattice. Only
+    // the outer image mapping determines whether the eventual mesh needs UVs.
+    removeMaterialLink(graph,materialInputLink(graph,noise,MaterialPin::UV)->id);
+    connectMaterialNodes(graph,noise,MaterialPin::RGB,resize,MaterialPin::Left);
+    findMaterialNode(graph,transform)->uv.mode=MaterialUvMode::WorldTriplanar;connectMaterialNodes(graph,transform,MaterialPin::Value,out,MaterialPin::BaseColor);
+    require(materialGraphRequiredUvs(graph)==0,"A cached analytic source leaked its private UV0 lattice into triplanar compatibility.");
+    const auto image=addMaterialNode(graph,MaterialNodeKind::ImageInput).id;
+    connectMaterialNodes(graph,uv,MaterialPin::UV,source,MaterialPin::UV);
+    // The bitmap now feeds this separate active Image Input; the cached
+    // branch above consumes Noise instead.
+    connectMaterialNodes(graph,source,MaterialPin::RGBA,image,MaterialPin::Left);
+    connectMaterialNodes(graph,image,MaterialPin::RGB,out,MaterialPin::BaseColor);
+    require(materialGraphRequiredUvs(graph)==2,"Image Input with no override ignored its active Base mapping.");
+    findMaterialNode(graph,image)->texture.image.id=canonicalAssetId("Content/textures/override.png");
+    require(materialGraphRequiredUvs(graph)==1,"Assigned Image Input failed to prune Base UV1 or omitted override UV0.");
+    findMaterialNode(graph,image)->atomic.enabled=false;
+    require(materialGraphRequiredUvs(graph)==0,"Disabled Image Input retained an unused override/Base UV requirement.");
+    // Preserve the existing publication contract for an unassigned ordinary
+    // bitmap node: it still advertises its selected mesh chart.
+    const auto empty=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    connectMaterialNodes(graph,uv,MaterialPin::UV,empty,MaterialPin::UV);connectMaterialNodes(graph,empty,MaterialPin::RGB,out,MaterialPin::BaseColor);
+    require(materialGraphRequiredUvs(graph)==2,"Unassigned ordinary Texture2D changed its established UV requirement.");
+}
+
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();atomicAuthoringAndReferences();cachedRuntimeUvRequirements();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

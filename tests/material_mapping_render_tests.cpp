@@ -27,6 +27,9 @@
 #include <sstream>
 #include <cstdlib>
 #include <iomanip>
+#include <set>
+#include <numeric>
+#include <nlohmann/json.hpp>
 
 namespace {
 using namespace crimson;
@@ -501,6 +504,93 @@ void captureQuaderCircularUv(Renderer& renderer,Read&& read) {
     std::cerr<<"[material mapping] Actual "<<meshName<<" capture: "<<circular<<" circular / "<<quadVertices<<" quad vertices, "<<triangles<<" triangles, "
         <<changedPixels[0]<<" color / "<<changedPixels[1]<<" normal pixels changed.\n"<<std::flush;
     }
+}
+template<class Read,class Prepare,class Advance>
+void exerciseDecodedNormalMapping(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare,Advance&& advance) {
+    // Compare processed-image decoding against the established Normal-role
+    // texture path. Use spatially varying, non-neutral X/Y normals so UV1,
+    // rotation, reflection and triplanar sample-before-decode all matter.
+    constexpr std::array<std::uint8_t,16> pixels{{218,150,218,255, 100,218,200,255, 180,80,230,255, 80,120,230,255}};
+    auto flippedPixels=pixels;for(unsigned i=1;i<flippedPixels.size();i+=4)flippedPixels[i]=static_cast<std::uint8_t>(255-flippedPixels[i]);
+    Texture image{bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(pixels.data(),unsigned(pixels.size())))};
+    Texture flipped{bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(flippedPixels.data(),unsigned(flippedPixels.size())))};
+    check(bgfx::isValid(image.handle)&&bgfx::isValid(flipped.handle),"Decoded Normal fixture allocation failed.");
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;
+    settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.background.show=false;
+    std::vector<ModelMaterial> materials=mesh->materials;std::vector<ModelMaterialTextures> bindings(1);RenderModelInstance instance;instance.model.asset=mesh;instance.materials=&materials;instance.textures=&bindings;instance.shading=MaterialShading::StandardPbr;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Normal);
+    const auto capture=[&](const MaterialAsset& material,bgfx::TextureHandle texture){bindings[0].graph=prepare(material,texture);renderer.renderGame(scene);return read(renderer.gameViewportTexture());};
+    const auto authored=[&](MaterialUvMode mode,unsigned variant,bool flipY,float strength){
+        MaterialAsset material;auto& g=material.graph;const auto out=addMaterialNode(g,MaterialNodeKind::Output).id,uv=addMaterialNode(g,MaterialNodeKind::UV).id,texture=addMaterialNode(g,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(g,uv)->uv.mode=mode;findMaterialNode(g,uv)->uv.scale={-1.4f,2.3f,.7f};findMaterialNode(g,uv)->uv.offset={.37f,.21f,.17f};findMaterialNode(g,uv)->uv.rotation={17,-28,37};
+        auto& source=findMaterialNode(g,texture)->texture;source.role=variant?MaterialTextureRole::Data:MaterialTextureRole::Normal;source.image.id="assets/textures/decode-normal-fixture.png";source.normalStrength=strength;
+        if(!variant){connectMaterialNodes(g,uv,MaterialPin::UV,texture,MaterialPin::UV);connectMaterialNodes(g,texture,MaterialPin::Normal,out,MaterialPin::Normal);return material;}
+        const auto levels=addMaterialNode(g,MaterialNodeKind::Levels).id,decoder=addMaterialNode(g,MaterialNodeKind::DecodeNormal).id;findMaterialNode(g,decoder)->image.normalFlipY=flipY;findMaterialNode(g,decoder)->image.normalStrength=strength;
+        connectMaterialNodes(g,texture,MaterialPin::RGBA,levels,MaterialPin::Left);
+        if(variant==1){connectMaterialNodes(g,uv,MaterialPin::UV,texture,MaterialPin::UV);connectMaterialNodes(g,levels,MaterialPin::Value,decoder,MaterialPin::Left);}
+        else {const auto transform=addMaterialNode(g,MaterialNodeKind::ImageTransform).id;connectMaterialNodes(g,levels,MaterialPin::Value,transform,MaterialPin::Left);connectMaterialNodes(g,uv,MaterialPin::UV,transform,MaterialPin::UV);connectMaterialNodes(g,transform,MaterialPin::Value,decoder,MaterialPin::Left);}
+        connectMaterialNodes(g,decoder,MaterialPin::Normal,out,MaterialPin::Normal);return material;
+    };
+    for(const auto mode:{MaterialUvMode::UV0,MaterialUvMode::UV1,MaterialUvMode::LocalTriplanar,MaterialUvMode::WorldTriplanar})for(bool flipY:{false,true})for(float strength:{.45f,1.f}){
+        const auto reference=capture(authored(mode,0,false,strength),flipY?flipped.handle:image.handle);
+        for(unsigned variant:{1u,2u}){
+            // In variant2 the supplied texture represents the completed neutral
+            // Levels tile; this fixture isolates its production GPU mapping.
+            const auto decoded=capture(authored(mode,variant,flipY,strength),image.handle);
+            for(const auto probe:{Vec3{-.55f,.55f,0},Vec3{.55f,.55f,0},Vec3{-.55f,-.55f,0},Vec3{.55f,-.55f,0},Vec3{}})
+                check(difference(sample(reference,settings.camera,probe),sample(decoded,settings.camera,probe))<=4,"Processed Normal decoding disagreed with native normal-map mapping; mode="+std::to_string(unsigned(mode))+", variant="+std::to_string(variant)+", FlipY="+std::to_string(flipY));
+        }
+    }
+    char* timingPath{};std::size_t timingLength{};
+    check(_dupenv_s(&timingPath,&timingLength,"CRIMSON_TEST_NORMAL_TIMING_OUTPUT")==0,"Cannot read Normal timing output option.");
+    const std::filesystem::path timingOutput=timingPath?timingPath:"";std::free(timingPath);
+    if(!timingOutput.empty()) {
+        bgfx::setDebug(BGFX_DEBUG_PROFILER);
+        using Clock=std::chrono::steady_clock;using Json=nlohmann::json;
+        renderer.resizeGameViewport(1024,1024);
+        const auto summary=[](std::vector<double> samples)->Json {
+            if(samples.empty())return nullptr;std::sort(samples.begin(),samples.end());
+            const auto percentile=[&](double p){return samples[std::min(samples.size()-1,std::size_t(std::ceil(p*samples.size())-1))];};
+            return {{"count",samples.size()},{"median",percentile(.5)},{"p95",percentile(.95)},{"min",samples.front()},{"max",samples.back()},{"mean",std::accumulate(samples.begin(),samples.end(),0.)/samples.size()}};
+        };
+        const auto* caps=bgfx::getCaps();
+        Json report{{"schema",1},{"backend",bgfx::getRendererName(bgfx::getRendererType())},{"gpu_vendor_id",caps->vendorId},{"gpu_device_id",caps->deviceId},
+            {"width",1024},{"height",1024},{"triangles",2},{"source_image","2x2 linear RGBA8 varying tangent normals; clamp/point; cached variant supplies the same completed neutral Levels tile"},
+            {"scope","Warm Game opaque Normal diagnostic view, one quad, no lights/GI/AO/Glow; timestamps measure elapsed view time, not isolated active execution or FPS loss. CPU submit excludes graph preparation and readback; advance may wait on the GPU. Cold CPU generation and uploads are excluded."},
+            {"gpu_frame_validation","Unique completed GPU frame, >= phase first submitted frame, view GameSceneView has the same gpuFrameNum as stats and a positive timestamp interval"},
+            {"warmup_frames",24},{"requested_gpu_samples",48},{"phase_order","native,processed,cached,cached,processed,native"},{"phases",Json::array()}};
+        constexpr std::array names{"Texture2D Normal","Data + neutral Levels + Decode Normal","Completed Image Transform + Decode Normal"};
+        for(const auto mode:{MaterialUvMode::UV0,MaterialUvMode::WorldTriplanar}) {
+            std::array<std::shared_ptr<const PreparedGraphMaterial>,3> packets;
+            for(unsigned variant=0;variant<packets.size();++variant)packets[variant]=prepare(authored(mode,variant,false,1),image.handle);
+            // No shader compilation or upload occurs inside a measured phase.
+            for(unsigned variant:{0u,1u,2u,2u,1u,0u}) {
+                bindings[0].graph=packets[variant];std::uint32_t lastSubmitted{};
+                const auto submit=[&]{renderer.renderGame(scene);return advance();};
+                for(unsigned warm=0;warm<24;++warm)lastSubmitted=submit();const auto firstSubmitted=lastSubmitted+1;
+                std::set<std::uint32_t> completed;std::vector<double> gpu,cpuSubmit,cpuSubmitAdvance;Json raw=Json::array();
+                const auto deadline=Clock::now()+std::chrono::seconds{20};unsigned submissions{};
+                while(gpu.size()<48&&submissions<256&&Clock::now()<deadline) {
+                    const auto begin=Clock::now();renderer.renderGame(scene);const auto submitted=Clock::now();advance();const auto end=Clock::now();++submissions;
+                    cpuSubmit.push_back(std::chrono::duration<double,std::milli>(submitted-begin).count());cpuSubmitAdvance.push_back(std::chrono::duration<double,std::milli>(end-begin).count());
+                    const auto* stats=bgfx::getStats();if(stats->gpuTimerFreq<=0||stats->gpuFrameNum<firstSubmitted||completed.contains(stats->gpuFrameNum))continue;
+                    for(unsigned v=0;v<stats->numViews;++v) {
+                        const auto& view=stats->viewStats[v];if(view.view!=GameSceneView||view.gpuFrameNum!=stats->gpuFrameNum||view.gpuTimeEnd<=view.gpuTimeBegin)continue;
+                        const double milliseconds=double(view.gpuTimeEnd-view.gpuTimeBegin)*1000./stats->gpuTimerFreq;completed.insert(stats->gpuFrameNum);gpu.push_back(milliseconds);raw.push_back({{"gpu_frame",stats->gpuFrameNum},{"opaque_ms",milliseconds}});break;
+                    }
+                }
+                Json phase{{"mapping",mode==MaterialUvMode::UV0?"UV0":"World Triplanar"},{"variant",variant},{"name",names[variant]},{"first_submitted_frame",firstSubmitted},{"submissions",submissions},
+                    {"gpu_opaque_ms",summary(gpu)},{"cpu_submit_ms",summary(cpuSubmit)},{"cpu_submit_and_advance_ms",summary(cpuSubmitAdvance)},{"samples",std::move(raw)}};
+                phase["gpu_metric_status"]=gpu.empty()?"Unavailable: no coherent per-view timestamps; no GPU timing claim":gpu.size()<48?"Partial coherent timestamp sample set":"48 unique coherent per-view timestamp samples";
+                std::cerr<<"[normal timing] "<<phase["mapping"]<<" / "<<names[variant]<<" GPU ms="<<phase["gpu_opaque_ms"]<<" CPU submit ms="<<phase["cpu_submit_ms"]<<'\n'<<std::flush;
+                report["phases"].push_back(std::move(phase));
+            }
+        }
+        if(!timingOutput.parent_path().empty())std::filesystem::create_directories(timingOutput.parent_path());std::ofstream stream(timingOutput);stream<<report.dump(2)<<'\n';check(bool(stream),"Cannot write Normal mapping performance report.");
+        renderer.resizeGameViewport(Size,Size);
+        bgfx::setDebug(BGFX_DEBUG_NONE);
+    }
+    renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
 }
 template<class Read,class Prepare>
 void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
@@ -1325,6 +1415,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
         }
         return packet;
     };
+    std::cerr<<"[material mapping] Processed Normal mapping parity.\n"<<std::flush;
+    exerciseDecodedNormalMapping(renderer,mesh,read,prepare,[&]{tick();return frame;});
     std::cerr<<"[material mapping] Material fog.\n"<<std::flush;
     exerciseMaterialFog(renderer,mesh,read,prepare);
 

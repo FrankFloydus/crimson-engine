@@ -79,16 +79,12 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
         for(const auto& primitive:model->primitives) {
             if(primitive.material>=model->materials.size())throw std::runtime_error("Replacement model has an invalid material index.");
             const auto& surface=model->materials[primitive.material];if(!surface.graph)continue;
-            const auto& graph=*surface.graph;const auto& output=materialOutputNode(graph).output;
-            for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
-                const auto& node=*findMaterialNode(graph,id);if(node.kind!=MaterialNodeKind::Texture2D||node.texture.image.empty())continue;
-                auto mode=MaterialUvMode::UV0;if(const auto* link=materialInputLink(graph,node.id,MaterialPin::UV))mode=resolveMaterialUvMapping(graph,link->fromNode).mode;
-                if(mode==MaterialUvMode::LocalTriplanar||mode==MaterialUvMode::WorldTriplanar)continue;
-                const auto uv=mode==MaterialUvMode::UV1?1u:0u;
-                if(!(primitive.uvMask&(1u<<uv)))throw std::runtime_error("Replacement graph requires an unavailable UV set: "+surface.name);
-                // Generated normal evaluation derives a basis from the selected
-                // UV set when it differs from the mesh's imported tangent UV.
-            }
+            const auto required=materialGraphRequiredUvs(*surface.graph);
+            if((primitive.uvMask&required)!=required)
+                throw std::runtime_error("Replacement graph requires an unavailable UV set: "+surface.name);
+            // Generated normal evaluation derives a basis from the selected UV
+            // set when it differs from the mesh's imported tangent UV.
+
         }
         for(auto& primitive:model->primitives){primitive.sourceVertexCount=primitive.vertices.size();primitive.sourceIndexCount=primitive.indices.size();primitive.vertices=decltype(primitive.vertices){};primitive.indices=decltype(primitive.indices){};}
         result->bytes+=sizeof(ModelAsset)+model->nodes.size()*sizeof(ModelNode)+model->draws.size()*sizeof(ModelDraw)+model->materials.size()*sizeof(ModelMaterial)+model->primitives.size()*sizeof(ModelPrimitive);
