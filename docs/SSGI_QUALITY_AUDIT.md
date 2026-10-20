@@ -46,6 +46,94 @@ generator are retained in the renderer's `third_party/blue-noise` and
 or material ABI change. This preserves the existing eight-binding compute path
 and twelve material texture slots.
 
+## Moving-emitter follow-up
+
+The initial experiments moved the camera while the emitter remained stationary.
+They did not cover continuous donor motion. A subsequent reproduction found a
+separate history ownership defect: a ray hitting reactive donor geometry marked
+the primary receiving pixel reactive too. Temporal reconstruction then rejected
+history on that bright hit and rejected the stored reactive sample on the next
+frame. Sparse emissive hits therefore bypassed accumulation and the fixed spatial
+filter spread their peaks into visible blotches. Even donor hits subsequently
+rejected by capture-geometry validation could invalidate receiver history.
+
+The correction removes only those two donor-to-receiver reactivity assignments.
+The primary receiver's own transform/deformation/material reactivity and all
+depth/normal history checks remain. Captured donor validity, geometry matching,
+scope separation and energy limits also remain. A stationary wall can accumulate
+changing illumination without being classified as displaced geometry.
+[Falcor's SVGF reprojection](https://github.com/NVIDIAGameWorks/Falcor/blob/master/Source/RenderPasses/SVGFPass/SVGFReproject.ps.slang)
+validates primary-surface history before accumulating illumination.
+[NRD's history-confidence guidance](https://github.com/NVIDIA-RTX/NRD#history-confidence)
+separates lighting responsiveness from primary-surface disocclusion and requires
+matched random samples when estimating lighting changes. A raw sample's RGB
+difference is not sufficient evidence to discard its history.
+
+The regression now translates the emitter on **every rendered frame**, including
+asynchronous readback waits. Its small 1.5 cm / 1 cm oscillation preserves nearly
+the same physical illumination while exercising actual donor transform changes.
+At unchanged Medium 4-ray / 16-step settings:
+
+| Moving-emitter receiver metric | Before correction | After correction |
+| --- | ---: | ---: |
+| Mean exposed linear luminance | .00655380 | .00654468 |
+| Relative temporal RMS | 54.65% | 9.32% |
+| Relative local coherent RMS | 29.33% | 5.36% |
+
+The temporal RMS reduction is 83%, with a .14% mean difference. The ordinary
+default-quality test enforces the same retained-energy and noise limits on this
+moving-donor case as on its stationary receiver. This is a correctness change,
+with no added rays, steps, passes or GPU allocations.
+
+History still has finite response time: at Stability .90 an all-miss neighborhood
+retains about 12% after 20 frames and 4% after 30 frames. The source-removal check
+measures that decay rather than claiming instantaneous lighting changes. Donor
+capture is from the previous frame and has no object-motion reprojection;
+[Unity HDRP's SSGI](https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/ScreenSpaceLighting/ScreenSpaceGlobalIllumination.compute)
+uses hit-surface motion vectors for that lookup. Crimson conservatively rejects
+unmatched captured geometry; fast motion, newly revealed sources and offscreen
+transport remain limitations. This fix does not implement motion vectors or
+adaptive variance-guided reconstruction.
+
+An explicit `ssgi_scene_motion_capture` diagnostic also renders a disposable
+snapshot of the authored project through the real scene extraction/resource path.
+It selects the named `ShadowCamera` in memory and translates the existing emitter
+on every rendered frame. It never changes the authored active camera or scene.
+The test records Lit/Indirect views under both saved settings and global defaults,
+covering static, moving, stopped and removed phases. The 960×540 before/after runs
+have identical source hashes, camera, settings, readback frame numbers and emitter
+trajectories, with no source-file changes. Matching saved-setting images reproduce
+the original wall blotches and show the corrected, smoother diffuse bounce. The
+source travels up to .35 m along camera right over a 120-rendered-frame period;
+this larger-motion image comparison complements the small-motion noise oracle.
+Frame differences also include real lighting change and are not a reference-error
+metric. The saved scene used Custom 7 rays / 16 steps, 3 bounces, Strength 3.57,
+Reach 1 m and Stability .76; those values were preserved for the saved A/B pair.
+
+For the upper-wall ROI `(380,100)–(570,300)`, excluding the moving cube, temporal
+RMS fell by 32.9% in saved Lit and 34.9% in saved Indirect. With defaults the
+reductions were 43.7% / 46.4%. Static upper-wall measurements were unchanged.
+These scene measurements include legitimate motion of the lighting gradient;
+the small-motion oracle above isolates the erroneous history resets more directly.
+
+A final closed-editor DX12 RTX 4090 comparison at 2560×1440 used 240 warmup
+frames and 600 distinct whole-frame GPU samples per phase, with the emitter
+moving continuously. Median GI-stage elapsed time was .4229 ms before / .4219 ms
+after for Game, and .8479 / .8417 ms for Scene+Game. Matching-view samples numbered
+579/600 and 572/547, respectively. Single-view GI p95 was .4280 / .4270 ms;
+dual-view summed p95 was 1.1080 / .8704 ms. These differences are measurement
+variation, not an optimization claim. Whole-frame medians were .7578 / .7823 ms
+for Game and 1.4705 / 1.4408 ms for both views; the opposite directions likewise
+do not establish a renderer-wide FPS improvement. GI owner memory remained
+206,438,400 bytes per 1440p view. The correction adds no targets or dispatches.
+Earlier repeated 1080p/1440p measurements with the editor open are retained too,
+but their noisy timing tails are not isolated cost evidence.
+
+Follow-up shader snapshots, PNGs, raw JSON measurements and the bounded
+`Measure-Motion.ps1` comparison are under `build/ssgi-motion`. The timestamp
+fixture accepts `--moving-donor` to keep the source transforming throughout both
+GI-off and GI-on workloads.
+
 ## Controlled quality experiments
 
 `ssgi_render_tests --ssgi-audit` renders a six-face emissive cube beside a diffuse
@@ -147,6 +235,6 @@ The checked-in fixture accepts `--ssgi-shader-dir`, `--ssgi-audit`,
 `--ssgi-benchmark-only`, `--benchmark-size`, `--warmup`, `--samples` and explicit
 `--ssgi-*` tuning, so comparisons do not require rebuilding each candidate.
 The preserved baseline comes from renderer commit `b57e078`; the delivered
-renderer is `c37b62c`. Force `--ssgi-quality high --ssgi-radius 4 --ssgi-stability .9`
+initial calibrated renderer was `c37b62c`; moving-donor correction is `094376f`. Force `--ssgi-quality high --ssgi-radius 4 --ssgi-stability .9`
 when reproducing the old-shader banding-oracle failure; that check compares the
 algorithms at equal High settings rather than changing the new Medium default.

@@ -49,7 +49,7 @@ struct Temporary {
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle value{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}};
 struct Options {
-    bool benchmark{},ssgiAudit{},ssgiBenchmarkOnly{};unsigned warmup{120},samples{300};
+    bool benchmark{},ssgiAudit{},ssgiBenchmarkOnly{},movingDonor{};unsigned warmup{120},samples{300};
     std::uint16_t benchmarkWidth{1920},benchmarkHeight{1080};fs::path artifacts,ssgiShaderDirectory;
     SsgiSettings auditSettings=[] {SsgiSettings value;value.enabled=true;return value;}();
 };
@@ -306,6 +306,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         constexpr std::array angles{0.f,pi,pi*.5f,-pi*.5f,-pi*.5f,pi*.5f};
         for(std::size_t face=0;face<6;++face)instances[face+2].model.transform=math::translation(center+offsets[face])*
             math::rotation(math::axisAngle(axes[face],angles[face]))*math::scaling({halfSize,halfSize,1});
+        const auto stationaryInstances=instances;unsigned donorFrame{};
         SceneSettings gameSettings;gameSettings.camera.position={3.4f,4.7f,6.3f};gameSettings.camera.target={0,.45f,-.4f};
         gameSettings.camera.fov=48;gameSettings.camera.fovAxis=CameraFovAxis::Vertical;gameSettings.camera.nearPlane=.1f;gameSettings.camera.farPlane=32;
         gameSettings.environment.enabled=false;gameSettings.environment.ambientLight.source=AmbientLightSource::Disabled;
@@ -324,7 +325,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             {"vendor_id",caps->vendorId},{"device_id",caps->deviceId},{"width",width},{"height",height},
             {"settings",ssgiSettingsJson(options.auditSettings)},{"warmup_frames",options.warmup},
             {"requested_unique_gpu_samples",options.samples},{"shader_directory",options.ssgiShaderDirectory.empty()?"embedded":options.ssgiShaderDirectory.string()},
-            {"fixture","static diffuse wall/floor and six-face emissive cube; eight fallback material instances per view"},
+            {"fixture","diffuse wall/floor and six-face emissive cube; eight fallback material instances per view"},
+            {"moving_donor",options.movingDonor},
             {"limitations","Synthetic offscreen scene with a hidden 320x240 primary presentation; no editor UI, asset traversal, textured material complexity, shadows or animation. GPU timestamps measure elapsed intervals, not active GPU utilization; measured throughput is not the user's editor FPS."},
             {"phases",nlohmann::json::array()}};
         for(const bool dual:{false,true}) {
@@ -332,6 +334,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             for(const bool enabled:{false,true}) {
                 gameSettings.environment.ssgi.enabled=sceneSettings.environment.ssgi.enabled=enabled;
                 const auto submit=[&] {
+                    if(options.movingDonor) {
+                        const float phase=float(donorFrame++)*6.28318530718f/180.f;
+                        const auto displacement=math::translation({.015f*std::sin(phase),.01f*std::cos(phase),0});
+                        for(std::size_t index=2;index<instances.size();++index)
+                            instances[index].model.transform=displacement*stationaryInstances[index].model.transform;
+                    }
                     if(dual)renderer.render(sceneScene);renderer.renderGame(gameScene);
                     check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
                     // Match DX11's conditional primary-present path to DX12's
@@ -435,7 +443,20 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             math::rotation(math::axisAngle(axes[face],angles[face]))*math::scaling({halfSize,halfSize,1});
         RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;
         scene.giWorldId=8800;scene.giCameraId=8801;scene.giEnvironmentId=8802;
-        const auto draw=[&]{renderer.renderGame(scene);check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());};
+        const auto stationaryInstances=instances;
+        bool donorMoving=false;unsigned donorFrame{};
+        const auto draw=[&]{
+            if(donorMoving) {
+                // Move on EVERY rendered frame, including asynchronous readback
+                // waits. Moving only at capture boundaries silently tests a
+                // stationary donor for most of the accumulated history.
+                const float phase=float(donorFrame++)*6.28318530718f/180.f;
+                const auto displacement=math::translation({.015f*std::sin(phase),.01f*std::cos(phase),0});
+                for(std::size_t index=1;index<instances.size();++index)
+                    instances[index].model.transform=displacement*stationaryInstances[index].model.transform;
+            }
+            renderer.renderGame(scene);check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
+        };
         const auto warm=[&](unsigned count){for(unsigned i=0;i<count;++i){draw();tick();}};
         nlohmann::json report{{"shader_directory",options.ssgiShaderDirectory.empty()?"embedded":options.ssgiShaderDirectory.string()},
             {"settings",ssgiSettingsJson(settings.environment.ssgi)},{"exposure",settings.exposure},
@@ -483,6 +504,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             report["cases"].push_back(std::move(metrics));
         };
         measure("vertical-static",217,163,false);measure("vertical-camera-motion",217,163,true);
+        donorMoving=true;measure("vertical-donor-motion",217,163,false);donorMoving=false;
+        instances=stationaryInstances;
         measure("vertical-resized",321,241,false);
         const auto pixels=verticalReceiverPixels(width,height,settings.camera);
         emitterMaterials[0].emissive={};const auto removedAtFrame=frame;
@@ -896,6 +919,7 @@ int main(int argc,char** argv) {
         for(int i=4;i<argc;++i){const std::string_view option=argv[i];
             if(option=="--benchmark")options.benchmark=true;
             else if(option=="--ssgi-benchmark-only")options.ssgiBenchmarkOnly=true;
+            else if(option=="--moving-donor")options.movingDonor=true;
             else if(option=="--benchmark-size") {
                 check(i+1<argc,"Missing SSGI benchmark dimensions.");const std::string dimensions=argv[++i];const auto separator=dimensions.find('x');
                 check(separator!=std::string::npos,"SSGI benchmark dimensions must use WIDTHxHEIGHT.");

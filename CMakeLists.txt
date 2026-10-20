@@ -980,9 +980,19 @@ if(BUILD_TESTING)
     target_compile_definitions(forward_plus_room_benchmark PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(forward_plus_room_benchmark PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(forward_plus_room_benchmark PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
+
+    # Explicit saved-project capture diagnostic; never a routine CTest. It
+    # snapshots authored Content before initializing any resource/asset stores.
+    get_target_property(CC_SSGI_SCENE_CAPTURE_SOURCES forward_plus_room_benchmark SOURCES)
+    list(REMOVE_ITEM CC_SSGI_SCENE_CAPTURE_SOURCES tests/forward_plus_room_benchmark.cpp)
+    add_executable(ssgi_scene_motion_capture EXCLUDE_FROM_ALL tests/ssgi_scene_motion_capture.cpp ${CC_SSGI_SCENE_CAPTURE_SOURCES})
+    target_include_directories(ssgi_scene_motion_capture PRIVATE src tests "${CC_GENERATED_DIR}")
+    target_compile_definitions(ssgi_scene_motion_capture PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(ssgi_scene_motion_capture PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(ssgi_scene_motion_capture PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer gpu_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests point_shadow_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark)
+foreach(CC_TARGET crimson-renderer gpu_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests point_shadow_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
     if(TARGET ${CC_TARGET})
         target_link_libraries(${CC_TARGET} PRIVATE Crimson::Renderer Crimson::HostShaders d3d12 dxgi)
         target_include_directories(${CC_TARGET} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")
