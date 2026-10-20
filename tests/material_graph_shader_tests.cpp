@@ -427,6 +427,106 @@ MaterialAsset imageFoundationFixture() {
     connectMaterialNodes(g,alphaMerge,MaterialPin::RGBA,gray,MaterialPin::Left);connectMaterialNodes(g,gray,MaterialPin::Value,toColor,MaterialPin::Left);connectMaterialNodes(g,toColor,MaterialPin::RGB,out,MaterialPin::Roughness);connectMaterialNodes(g,noise,MaterialPin::Value,normal,MaterialPin::Left);connectMaterialNodes(g,normal,MaterialPin::Normal,out,MaterialPin::Normal);
     return material;
 }
+MaterialAsset resizeFixture() {
+    MaterialAsset material;auto& graph=material.graph;
+    const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id;
+    materialOutputNode(graph).output.tessellation.enabled=true;
+    materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    const auto texture=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,texture)->texture.image.id="assets/textures/resize-source.png";
+    const auto levels=addMaterialNode(graph,MaterialNodeKind::Levels).id;
+    const auto gray=addMaterialNode(graph,MaterialNodeKind::Grayscale).id;
+    const auto resize=addMaterialNode(graph,MaterialNodeKind::Resize).id;
+    connectMaterialNodes(graph,texture,MaterialPin::RGBA,levels,MaterialPin::Left);
+    connectMaterialNodes(graph,levels,MaterialPin::Value,gray,MaterialPin::Left);
+    connectMaterialNodes(graph,gray,MaterialPin::Value,resize,MaterialPin::Left);
+    connectMaterialNodes(graph,resize,MaterialPin::Value,output,MaterialPin::Height);
+    connectMaterialNodes(graph,resize,MaterialPin::Value,output,MaterialPin::OpacityMask);
+    return material;
+}
+MaterialAsset mixedResizeFixture() {
+    MaterialAsset material;auto& graph=material.graph;
+    const auto add=[&](MaterialNodeKind kind){return addMaterialNode(graph,kind).id;};
+    const auto output=add(MaterialNodeKind::Output);
+    materialOutputNode(graph).output.tessellation.enabled=true;
+    materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    const auto texture=add(MaterialNodeKind::Texture2D),levels=add(MaterialNodeKind::Levels);
+    findMaterialNode(graph,texture)->texture.image.id="assets/textures/mixed-resize-source.png";
+    const auto rgb=add(MaterialNodeKind::Resize),rgba=add(MaterialNodeKind::Resize);
+    const auto sharpen=add(MaterialNodeKind::Sharpen),gray=add(MaterialNodeKind::Grayscale),normal=add(MaterialNodeKind::HeightToNormal);
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,rgb,MaterialPin::Left);
+    connectMaterialNodes(graph,texture,MaterialPin::RGBA,levels,MaterialPin::Left);
+    connectMaterialNodes(graph,levels,MaterialPin::Value,rgba,MaterialPin::Left);
+    connectMaterialNodes(graph,rgba,MaterialPin::Value,sharpen,MaterialPin::Left);
+    connectMaterialNodes(graph,sharpen,MaterialPin::Value,gray,MaterialPin::Left);
+    connectMaterialNodes(graph,gray,MaterialPin::Value,normal,MaterialPin::Left);
+    // The original source remains independently live beside both baked images.
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,rgb,MaterialPin::Value,output,MaterialPin::Emission);
+    connectMaterialNodes(graph,sharpen,MaterialPin::Value,output,MaterialPin::OpacityMask);
+    connectMaterialNodes(graph,gray,MaterialPin::Value,output,MaterialPin::Height);
+    connectMaterialNodes(graph,normal,MaterialPin::Normal,output,MaterialPin::Normal);
+    return material;
+}
+void resizeShaderChecks() {
+    auto material=resizeFixture();const auto generated=generateMaterialGraphShader(material);
+    check(generated.textures.size()==1&&generated.textures[0].resize.has_value(),
+        "Resize failed to replace its upstream image branch with one materialized sampler.");
+    check(generated.textures[0].role==MaterialGraphTextureRole::Data&&generated.textures[0].image.empty(),
+        "Resize output must be linear floating data with no authored image identity.");
+    const auto& recipe=*generated.textures[0].resize;
+    check(recipe.graph&&recipe.definitionKey&&generated.runtimeDefinitionSignature,
+        "Resize packet lost its immutable source definition or publication identity.");
+    for(const auto& variant:generated.variants)if(variant.tessellation) {
+        check(variant.domainSource.find("ccImageLevels(")==std::string::npos,
+            "The domain shader re-evaluates a CPU-baked Levels branch.");
+        check(!variant.domainSource.empty(),"Resize Height omitted a native domain variant.");
+    }
+    auto edited=material;
+    for(auto& node:edited.graph.nodes)if(node.kind==MaterialNodeKind::Levels)node.image.gamma=1.8f;
+    auto updated=generateMaterialGraphShader(edited);
+    check(updated.topologyKey==generated.topologyKey&&updated.uniforms==generated.uniforms&&
+        updated.runtimeDefinitionSignature!=generated.runtimeDefinitionSignature&&
+        updated.textures[0].resize->definitionKey!=recipe.definitionKey,
+        "A baked upstream value edit must replace image content without recompiling its sampler shader.");
+    for(auto& node:edited.graph.nodes)if(node.kind==MaterialNodeKind::Resize){node.resize.width=2048;node.resize.height=512;}
+    const auto resized=generateMaterialGraphShader(edited);
+    check(resized.topologyKey==updated.topologyKey&&resized.runtimeDefinitionSignature!=updated.runtimeDefinitionSignature,
+        "Resize dimensions failed content invalidation or changed per-sample shader topology.");
+    for(auto& node:edited.graph.nodes)node.position={456,789};
+    const auto moved=generateMaterialGraphShader(edited);
+    check(moved.runtimeDefinitionSignature==resized.runtimeDefinitionSignature,
+        "Moving material nodes invalidated a Resize image.");
+    const auto preview=generateMaterialGraphPreviewShader(material,{recipe.node,MaterialPin::Value});
+    check(preview.textures.size()==1&&preview.textures[0].resize,
+        "Resize preview escaped its materialized sampler boundary.");
+    const auto mixed=mixedResizeFixture();const auto mixedShader=generateMaterialGraphShader(mixed);
+    check(mixedShader.textures.size()==3&&std::count_if(mixedShader.textures.begin(),mixedShader.textures.end(),
+        [](const auto& binding){return binding.resize.has_value();})==2,
+        "Multiple Resize branches lost or duplicated an independently live source texture.");
+    const auto texture=std::find_if(mixed.graph.nodes.begin(),mixed.graph.nodes.end(),
+        [](const auto& node){return node.kind==MaterialNodeKind::Texture2D;})->id;
+    check(std::count_if(mixedShader.textures.begin(),mixedShader.textures.end(),
+        [&](const auto& binding){return binding.nodeId==texture&&!binding.resize;})==1,
+        "A texture used directly and through Resize must keep exactly one direct sampler.");
+    for(const auto& node:mixed.graph.nodes)if(node.kind==MaterialNodeKind::Resize||
+        node.kind==MaterialNodeKind::Sharpen||node.kind==MaterialNodeKind::HeightToNormal) {
+        const auto pin=node.kind==MaterialNodeKind::HeightToNormal?MaterialPin::Normal:MaterialPin::Value;
+        const auto branch=generateMaterialGraphPreviewShader(mixed,{node.id,pin});
+        check(branch.textures.size()==1&&branch.textures[0].resize,
+            "A Resize or downstream spatial preview escaped its baked image boundary.");
+        if(node.kind==MaterialNodeKind::Resize) {
+            const auto* input=materialInputLink(mixed.graph,node.id,MaterialPin::Left);
+            check(materialOutputType(mixed.graph,node.id,pin)==
+                (input->fromPin==MaterialPin::RGB?MaterialValueType::Color:MaterialValueType::Color4),
+                "Resize failed to retain its RGB or RGBA input family.");
+        }
+    }
+    for(const auto& variant:mixedShader.variants)if(variant.tessellation)
+        check(std::count_if(variant.domainManifest.begin(),variant.domainManifest.end(),
+            [](const auto& binding){return binding.kind==ShaderUniformKind::Sampler;})==1,
+            "Height domain bindings include a direct or Resize branch unrelated to Height.");
+}
 void imageFoundationShaderChecks() {
     auto material=imageFoundationFixture();const auto generated=generateMaterialGraphShader(material);check(generated.textures.size()==1,"Procedural Noise allocated a sampler or split/merge duplicated image resources.");
     check(generated.variants.front().source.find("ccImageOffsetContext")!=std::string::npos&&generated.variants.front().source.find("dFdx(context.uv.zw)")!=std::string::npos,"Spatial image operations omitted the UV0-to-UV1 Jacobian.");
@@ -465,6 +565,25 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
+    {
+        const auto material=resizeFixture();const auto generated=generateMaterialGraphShader(material);
+        compileGenerated(generated);
+        for(const auto& variant:generated.variants)if(variant.tessellation)
+            check(!compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant)).bytes.empty(),
+                "A materialized Resize texture failed native Height/coverage compilation.");
+        const auto resize=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),
+            [](const auto& node){return node.kind==MaterialNodeKind::Resize;})->id;
+        compileGenerated(generateMaterialGraphPreviewShader(material,{resize,MaterialPin::Value}));
+        const auto mixed=mixedResizeFixture();const auto mixedShader=generateMaterialGraphShader(mixed);
+        compileGenerated(mixedShader);
+        for(const auto& variant:mixedShader.variants)if(variant.tessellation)
+            check(!compileShader(config,materialGraphDomainShaderRecipe(config,mixedShader,variant)).bytes.empty(),
+                "Mixed RGB/RGBA Resize branches failed native Height compilation.");
+        for(const auto& node:mixed.graph.nodes)if(node.kind==MaterialNodeKind::Resize||
+            node.kind==MaterialNodeKind::Sharpen||node.kind==MaterialNodeKind::HeightToNormal)
+            compileGenerated(generateMaterialGraphPreviewShader(mixed,
+                {node.id,node.kind==MaterialNodeKind::HeightToNormal?MaterialPin::Normal:MaterialPin::Value}));
+    }
     {
         auto imageMaterial=imageFoundationFixture();compileGenerated(generateMaterialGraphShader(imageMaterial));
         for(const auto& n:imageMaterial.graph.nodes)if(n.kind>=MaterialNodeKind::Levels){const auto pins=materialNodeOutputs(imageMaterial.graph,n);for(const auto& pin:pins) {const auto preview=generateMaterialGraphPreviewShader(imageMaterial,{n.id,pin.pin});check(!compileShader(config,materialGraphShaderRecipe(config,preview,preview.variants.front())).bytes.empty(),"An image node/output preview failed to compile.");}}
@@ -742,7 +861,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        imageFoundationShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        resizeShaderChecks();imageFoundationShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

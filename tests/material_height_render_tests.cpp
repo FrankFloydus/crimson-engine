@@ -5,6 +5,8 @@
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
 #include "resources/ImageDecoder.h"
+#include "resources/TextureStreamer.h"
+#include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include "assets/MaterialAsset.h"
 #include "assets/ModelAsset.h"
 #include "assets/ContentStorage.h"
@@ -341,6 +343,47 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         check(materialOutputNode(authored.graph).output.tessellation.enabled,"Unsupported backend rewrote authored tessellation.");
         std::cout<<"DX11 material height fallback preserves the ordinary surface and authored settings.\n";
     } else {
+        if(!options.benchmark) {
+            // Exercise the real rectangular RGBA16F upload path, then compare
+            // native domain sampling against a separately uploaded RGBA32F image.
+            // This catches byte-pitch/format bugs that a Noop stream cannot see.
+            TextureStreamer resizeStreamer(resources,{});
+            auto resizedMaterial=material(true);
+            const auto sourceId=addMaterialNode(resizedMaterial.graph,MaterialNodeKind::Texture2D).id;
+            auto* sourceNode=findMaterialNode(resizedMaterial.graph,sourceId);
+            sourceNode->texture.role=MaterialTextureRole::Data;
+            sourceNode->texture.image.id="assets/textures/resize-reference.png";
+            const auto resizeId=addMaterialNode(resizedMaterial.graph,MaterialNodeKind::Resize).id;
+            findMaterialNode(resizedMaterial.graph,resizeId)->resize={256,128,MaterialResizeFilter::Linear};
+            connectMaterialNodes(resizedMaterial.graph,sourceId,MaterialPin::R,resizeId,MaterialPin::Left);
+            connectMaterialNodes(resizedMaterial.graph,resizeId,MaterialPin::Value,
+                materialOutputNode(resizedMaterial.graph).id,MaterialPin::Height);
+            auto sourceImage=std::make_shared<DecodedImage>(DecodedImage{HeightEdge,HeightEdge,heightPixels});
+            auto baked=std::make_shared<FloatImage>(bakeMaterialResizeImage(resizedMaterial.graph,resizeId,
+                [sourceImage](const std::string&){return sourceImage;}));
+            PreparedTexture streamed;
+            const auto deadline=Clock::now()+std::chrono::seconds{30};
+            do {
+                resources.pump();resizeStreamer.beginFrame();
+                streamed=resizeStreamer.requestGeneratedFloat("height-resize-upload-v1",
+                    [baked]{return *baked;},256,128,true,256,ResourcePriority::Selected);
+                resizeStreamer.advance(8192,10);tick();
+                check(streamed.diagnostic.empty(),streamed.diagnostic);
+                if(!streamed.complete)std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }while(!streamed.complete&&Clock::now()<deadline);
+            check(streamed.complete&&bgfx::isValid(streamed.handle),"DX12 Resize float upload did not complete.");
+            bindings[0].graph=prepare(resizedMaterial,streamed.handle);const auto halfResult=capture();
+            Texture floatReference{bgfx::createTexture2D(256,128,false,1,bgfx::TextureFormat::RGBA32F,0,
+                bgfx::copy(baked->rgba.data(),static_cast<std::uint32_t>(baked->rgba.size()*sizeof(float))))};
+            check(bgfx::isValid(floatReference.handle),"Resize independent RGBA32F reference allocation failed.");
+            bindings[0].graph=prepare(resizedMaterial,floatReference.handle);const auto fullResult=capture();
+            check(imageRms(halfResult,fullResult)<2,"Streamed RGBA16F Resize Height differs from the full-float reference.");
+            check(imageRms(halfResult,flat)>5,"Resize Height remained flat instead of sampling the baked image.");
+            save(options.artifacts,"height-resize-rgba16f.png",halfResult);
+            std::cout<<"DX12 Resize RGBA16F upload/domain reference RMS="<<imageRms(halfResult,fullResult)<<".\n";
+            bindings[0].graph=prepare(authored,heightTexture.handle);
+            streamed={};for(unsigned i=0;i<3;++i)tick();
+        }
         check(imageRms(capture(false),displaced)<=1,"Scene and Game disagree on material displacement.");
         auto singleSided=material(false);materialOutputNode(singleSided.graph).output.doubleSided=false;
         canonicalizeMaterialAsset(singleSided);surfaces[0]=singleSided.surface;bindings[0].graph=prepare(singleSided);

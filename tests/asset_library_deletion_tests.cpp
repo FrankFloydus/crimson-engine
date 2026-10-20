@@ -1521,6 +1521,81 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         require(!preparedGraphSourcesCoherent(managed,versions),"Managed image revision conflicts stopped blocking incoherent publication.");
         versions.clear();for(const auto& source:managed.sources)managed.sourceFingerprints[source.slot]=11;
         require(preparedGraphSourcesCoherent(managed,versions)&&versions.size()==1,"Matching shared managed image versions failed coherent publication.");
+        // Exercise the public adapter, including a shared direct/baked source,
+        // rather than only TextureStreamer's generated-float cache in isolation.
+        MaterialAsset resized;resized.id="resize-resource-fixture";resized.name="Processed Resize";
+        const auto resizeOutput=addMaterialNode(resized.graph,MaterialNodeKind::Output).id;
+        const auto resizeSource=addMaterialNode(resized.graph,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(resized.graph,resizeSource)->texture.image.id=image;
+        const auto gray=addMaterialNode(resized.graph,MaterialNodeKind::Grayscale).id;
+        findMaterialNode(resized.graph,gray)->image.grayMode=MaterialGrayscaleMode::Red;
+        const auto levels=addMaterialNode(resized.graph,MaterialNodeKind::Levels).id;
+        findMaterialNode(resized.graph,levels)->image.gamma=1.7f;
+        const auto resize=addMaterialNode(resized.graph,MaterialNodeKind::Resize).id;
+        findMaterialNode(resized.graph,resize)->resize={256,128,MaterialResizeFilter::Area};
+        connectMaterialNodes(resized.graph,resizeSource,MaterialPin::RGBA,gray,MaterialPin::Left);
+        connectMaterialNodes(resized.graph,gray,MaterialPin::Value,levels,MaterialPin::Left);
+        connectMaterialNodes(resized.graph,levels,MaterialPin::Value,resize,MaterialPin::Left);
+        connectMaterialNodes(resized.graph,resize,MaterialPin::Value,resizeOutput,MaterialPin::Roughness);
+        connectMaterialNodes(resized.graph,resizeSource,MaterialPin::RGB,resizeOutput,MaterialPin::BaseColor);
+        canonicalizeMaterialAsset(resized);
+        auto resizeBinding=until([&]{return library.materialPreviewBindings(resized,256);},
+            [&](const auto& binding){return ready(binding)&&binding.graph->programs->optimized&&resources.idle();},
+            "Processed Resize did not publish a complete settled packet");
+        const auto oldResize=resizeBinding.graph;
+        const auto resizedSlot=sourceSlot(*oldResize,resize),directSlot=sourceSlot(*oldResize,resizeSource);
+        require(oldResize->sources.size()==2&&oldResize->sources[resizedSlot].resize&&
+            !oldResize->sources[directSlot].resize&&oldResize->sourceFingerprints[resizedSlot]!=0&&
+            oldResize->sourceFingerprints[directSlot]==fingerprintFiles({fixturePath(p.root,image)}),
+            "Resize adapter lost its processed sampler or immutable source-file generation.");
+        const auto warmLoads=resources.stats().loads;
+        for(unsigned frame=0;frame<120;++frame) {
+            tick();const auto warm=library.materialPreviewBindings(resized,256);
+            require(ready(warm)&&warm.graph->signature==oldResize->signature&&
+                warm.graph->textureSignatures==oldResize->textureSignatures&&
+                warm.graph->textures[resizedSlot].idx==oldResize->textures[resizedSlot].idx,
+                "Warm AssetLibrary Resize requests replaced their immutable GPU packet.");
+        }
+        require(resources.stats().loads==warmLoads,
+            "Warm AssetLibrary Resize requests repeated CPU image decode or baking.");
+        auto editedPixels=pixels;
+        for(std::size_t i=0;i<editedPixels.size();i+=4){editedPixels[i]=255-editedPixels[i];editedPixels[i+2]=73;}
+        const auto imageFile=fixturePath(p.root,image);
+        model_test::writeBytes(imageFile,model_test::png(512,512,editedPixels));library.onFileChanged(imageFile);
+        const auto editedFingerprint=fingerprintFiles({imageFile});
+        require(editedFingerprint!=oldResize->sourceFingerprints[directSlot],"Resize reload fixture did not edit source bytes.");
+        const auto coherentEdit=[&](const auto& binding) {
+            if(!ready(binding))return false;
+            const auto direct=binding.graph->sourceFingerprints[directSlot],baked=binding.graph->sourceFingerprints[resizedSlot];
+            const bool oldPair=direct==oldResize->sourceFingerprints[directSlot]&&baked==oldResize->sourceFingerprints[resizedSlot];
+            const bool newPair=direct==editedFingerprint&&baked!=oldResize->sourceFingerprints[resizedSlot];
+            require(oldPair||newPair,"AssetLibrary published direct and resized pixels from different source-file generations.");
+            return newPair;
+        };
+        resizeBinding=until([&]{return library.materialPreviewBindings(resized,256);},coherentEdit,
+            "Edited Resize input did not publish a coherent regenerated packet");
+        require(resizeBinding.graph->programs==oldResize->programs&&resizeBinding.graph->uniforms==oldResize->uniforms&&
+            resizeBinding.graph->signature!=oldResize->signature&&resources.stats().loads>warmLoads&&
+            bgfx::isValid(oldResize->textures[resizedSlot])&&oldResize->leases[resizedSlot],
+            "Resize source reload rebuilt shaders, retained old content, or invalidated a leased prior generation.");
+        const auto proceduralAsset=library.createMaterial("Procedural Resize UV0");
+        require(bool(proceduralAsset),"Could not create the procedural Resize compatibility fixture.");
+        auto procedural=*proceduralAsset;procedural.graph={};
+        const auto proceduralOutput=addMaterialNode(procedural.graph,MaterialNodeKind::Output).id;
+        const auto proceduralNoise=addMaterialNode(procedural.graph,MaterialNodeKind::Noise).id;
+        const auto proceduralResize=addMaterialNode(procedural.graph,MaterialNodeKind::Resize).id;
+        connectMaterialNodes(procedural.graph,proceduralNoise,MaterialPin::RGB,proceduralResize,MaterialPin::Left);
+        connectMaterialNodes(procedural.graph,proceduralResize,MaterialPin::Value,proceduralOutput,MaterialPin::BaseColor);
+        canonicalizeMaterialAsset(procedural);library.publishMaterial(std::make_shared<MaterialAsset>(procedural));
+        auto missingUv=*geometry;missingUv.materialIds.assign(missingUv.materials.size(),procedural.id);
+        for(auto& primitive:missingUv.primitives)primitive.uvMask=0;
+        bool missingUvRejected=false;try{(void)library.resolvedModelMaterials(missingUv);}catch(const std::exception& error) {
+            missingUvRejected=std::string(error.what()).find("unavailable UV set")!=std::string::npos;
+        }
+        require(missingUvRejected,"A procedural-only Resize bypassed its required UV0 compatibility check.");
+        for(auto& primitive:missingUv.primitives)primitive.uvMask=1;
+        require(library.resolvedModelMaterials(missingUv).size()==missingUv.materials.size(),
+            "A procedural-only Resize rejected a mesh supplying UV0.");
         require(read(fixturePath(p.root,material.id))==sourceBytes,"Runtime material edits rewrote the authored fixture.");
         resources.stop();
     }bgfx::shutdown();}catch(...){bgfx::shutdown();throw;}

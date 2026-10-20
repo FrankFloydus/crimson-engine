@@ -20,6 +20,7 @@ struct GpuTexture {
     std::uint64_t signature{},sourceFingerprint{};
     std::size_t bytes{};
     bool thumbnail{};
+    ImagePixelFormat format{ImagePixelFormat::RGBA8};
     ~GpuTexture(){if(bgfx::isValid(handle)) bgfx::destroy(handle);}
 };
 struct Upload {
@@ -35,8 +36,11 @@ struct Entry {
     streaming::TextureRole role{};
     bool mipmapped{},thumbnail{},building{},wanted{};
     bool generated{};
-    std::uint32_t sourceEdge{};
+    std::uint32_t sourceEdge{},sourceHeight{};
     std::function<DecodedImage()> generator;
+    std::function<FloatImage(std::stop_token)> floatGenerator;
+    bool floatGenerated{},retryFloat{};
+    std::stop_source floatCancellation;
     ResourceHandle<streaming::TextureMipCache> generatedSource;
     bool repairNeeded{};
     unsigned repairAttempts{};
@@ -53,6 +57,17 @@ struct Entry {
     std::uint64_t buildingFingerprint{};
     std::chrono::steady_clock::time_point used{std::chrono::steady_clock::now()};
 };
+std::uint32_t generatedRequiredLevel(const Entry& entry) {
+    auto width=entry.sourceEdge,height=entry.sourceHeight?entry.sourceHeight:entry.sourceEdge;
+    std::uint32_t required{},last{};
+    while(width>1 || height>1) {
+        if(std::max(width,height)>entry.edge)required=last+1;
+        width=std::max(1u,width/2);height=std::max(1u,height/2);++last;
+    }
+    // level is the original source mip index, including when the GPU texture
+    // contains only that level rather than a mipmapped tail.
+    return std::max(required,std::min(entry.pressureLevel,last));
+}
 }
 struct TextureStreamer::Impl {
     ResourceManager& manager;
@@ -70,6 +85,23 @@ struct TextureStreamer::Impl {
     }
     void requestDescriptor(Entry& entry,bool forceReload=false) {
         if(entry.generated) {
+            if(entry.floatGenerator) {
+                ResourceRequestOptions config;config.variant="generated-float16-mips-v1:"+std::to_string(entry.sourceEdge)+"x"+std::to_string(entry.sourceHeight);
+                config.priority=entry.priority;config.retainLoader=false;config.cancelWhenUnused=true;
+                config.forceReload=entry.retryFloat;entry.retryFloat=false;entry.floatCancellation=std::stop_source{};
+                const auto generator=entry.floatGenerator;const auto width=entry.sourceEdge,height=entry.sourceHeight;
+                const auto cancellation=entry.floatCancellation.get_token();
+                const auto key=hashText(entry.id+":"+config.variant);
+                entry.descriptor=manager.requestDerived<streaming::TextureMipCache>(entry.id,[generator,width,height,key,cancellation](std::stop_token token) {
+                    std::stop_source combined;std::stop_callback resourceStop(token,[&]{combined.request_stop();});std::stop_callback demandStop(cancellation,[&]{combined.request_stop();});
+                    if(combined.stop_requested())throw std::runtime_error("Generated float image request canceled.");
+                    auto image=generator(combined.get_token());
+                    if(image.width!=width||image.height!=height)throw std::runtime_error("Generated float image dimensions do not match the declared output.");
+                    auto data=std::make_shared<streaming::TextureMipCache>(streaming::generatedFloatTextureMipCache(key,std::move(image),combined.get_token()));
+                    return ResourceLoadResult<streaming::TextureMipCache>{data,streaming::textureMipCacheBytes(*data),key,{}};
+                },std::move(config));
+                return;
+            }
             ResourceRequestOptions config;config.variant="generated-linear-mips-v1:"+std::to_string(entry.sourceEdge);config.priority=entry.priority;config.retainLoader=false;config.cancelWhenUnused=true;
             const auto generator=entry.generator;const auto sourceEdge=entry.sourceEdge;
             const auto key=hashText(entry.id+":"+config.variant);
@@ -142,6 +174,9 @@ struct TextureStreamer::Impl {
         for(auto sourceLevel=level;sourceLevel<tail;++sourceLevel) {
             if(entry.generated) {
                 if(descriptor->memory.size()!=descriptor->levels.size())throw std::runtime_error("Generated image mip payload is incomplete.");
+                const auto& image=descriptor->memory[sourceLevel];const auto& info=descriptor->levels[sourceLevel];
+                if(image.width!=info.width||image.height!=info.height||image.format!=descriptor->format||image.rgba.size()!=info.bytes)
+                    throw std::runtime_error("Generated image mip format or dimensions do not match its descriptor.");
                 upload->pixels.emplace_back(descriptor.shared(),&descriptor->memory[sourceLevel]);
                 continue;
             }
@@ -162,6 +197,7 @@ struct TextureStreamer::Impl {
         upload->texture->thumbnail=entry.thumbnail;
         upload->texture->width=descriptor->levels[level].width; upload->texture->height=descriptor->levels[level].height;
         upload->texture->level=level; upload->texture->sourceFingerprint=descriptor.fingerprint();
+        upload->texture->format=descriptor->format;
         upload->texture->signature=combine(combine(descriptor.fingerprint(),hashText(entry.variant)),level);
         for(auto index=level;index<tail;++index) upload->texture->bytes+=static_cast<std::size_t>(descriptor->levels[index].bytes);
         entry.pending=std::move(upload);
@@ -215,21 +251,23 @@ struct TextureStreamer::Impl {
                 const auto first=static_cast<std::size_t>(pending.texture->level);
                 for(std::size_t i=0;i<pending.pixels.size();++i) {
                     const auto& expected=descriptor->levels[first+i]; const auto& image=*pending.pixels[i];
-                    if(image.width!=expected.width || image.height!=expected.height || image.rgba.size()!=expected.bytes)
+                    if(image.width!=expected.width || image.height!=expected.height || image.rgba.size()!=expected.bytes || image.format!=descriptor->format)
                         throw std::runtime_error("Streamed mip payload dimensions do not match their descriptor.");
                 }
             }
             if(!bgfx::isValid(pending.texture->handle)) {
                 const auto limit=bgfx::getCaps()->limits.maxTextureSize;
                 if(pending.texture->width>limit || pending.texture->height>limit) { entry.error=error="Texture dimensions exceed GPU capabilities."; entry.pending.reset(); return; }
-                const auto flags=entry.role==streaming::TextureRole::Color && !entry.thumbnail ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE;
+                const auto format=pending.texture->format==ImagePixelFormat::RGBA16F?bgfx::TextureFormat::RGBA16F:bgfx::TextureFormat::RGBA8;
+                if(!(bgfx::getCaps()->formats[format]&BGFX_CAPS_FORMAT_TEXTURE_2D)) {entry.error=error="GPU does not support the requested streaming texture format.";entry.pending.reset();return;}
+                const auto flags=entry.role==streaming::TextureRole::Color && !entry.thumbnail && format==bgfx::TextureFormat::RGBA8 ? BGFX_TEXTURE_SRGB : BGFX_TEXTURE_NONE;
                 pending.texture->handle=bgfx::createTexture2D(static_cast<std::uint16_t>(pending.texture->width),static_cast<std::uint16_t>(pending.texture->height),
-                    entry.mipmapped,1,bgfx::TextureFormat::RGBA8,flags);
+                    entry.mipmapped,1,format,flags);
                 if(!bgfx::isValid(pending.texture->handle)) { entry.error=error="Streaming texture allocation failed; retaining prior texture."; entry.pending.reset(); return; }
                 bgfx::setName(pending.texture->handle,entry.id.c_str()); allocations.push_back(pending.texture);
             }
             while(pending.mip<pending.pixels.size() && remaining && std::chrono::steady_clock::now()<deadline) {
-                const auto& image=*pending.pixels[pending.mip]; const auto rowBytes=static_cast<std::size_t>(image.width)*4;
+                const auto& image=*pending.pixels[pending.mip]; const auto rowBytes=static_cast<std::size_t>(image.width)*imagePixelBytes(image.format);
                 // Row-aligned bgfx updates are indivisible. Defer this upload
                 // rather than forcing a row beyond the coordinator's byte cap.
                 if(remaining<rowBytes) return;
@@ -259,7 +297,7 @@ struct TextureStreamer::Impl {
         PreparedTexture result;
         if(entry.current) {framePins.push_back(entry.current);result={entry.current->handle,entry.current->width,entry.current->height,entry.current->signature,entry.current->sourceFingerprint,entry.current};}
         if(const auto descriptor=entry.descriptor.snapshot();descriptor && !descriptor->levels.empty()) {result.sourceWidth=descriptor->levels.front().width;result.sourceHeight=descriptor->levels.front().height;}
-        else if(entry.generated) {result.sourceWidth=entry.sourceEdge;result.sourceHeight=entry.sourceEdge;}
+        else if(entry.generated) {result.sourceWidth=entry.sourceEdge;result.sourceHeight=entry.sourceHeight?entry.sourceHeight:entry.sourceEdge;}
         else if(const auto original=entry.original.snapshot()) {result.sourceWidth=original->width;result.sourceHeight=original->height;}
         if(const auto descriptor=entry.descriptor.snapshot();descriptor && !descriptor->levels.empty() && entry.current && entry.descriptor.state()==ResourceState::Ready) {
             std::uint32_t required=0;
@@ -268,7 +306,7 @@ struct TextureStreamer::Impl {
             result.sourceReady=entry.current->sourceFingerprint==descriptor.fingerprint();
             result.complete=result.sourceReady && entry.current->level<=required;
         } else if(entry.generated&&entry.current) {
-            result.sourceReady=true;result.complete=std::max(entry.current->width,entry.current->height)>=std::min(entry.sourceEdge,entry.edge);
+            result.sourceReady=true;result.complete=entry.current->level<=generatedRequiredLevel(entry);
         }
         result.diagnostic=entry.error;
         if(entry.descriptor.state()==ResourceState::Failed)result.diagnostic=entry.descriptor.diagnostic();
@@ -278,7 +316,7 @@ struct TextureStreamer::Impl {
     }
 };
 TextureStreamer::TextureStreamer(ResourceManager& manager,std::filesystem::path root):impl_(std::make_unique<Impl>(manager,std::move(root))) {}
-TextureStreamer::~TextureStreamer()=default;
+TextureStreamer::~TextureStreamer(){for(auto& [key,entry]:impl_->entries){(void)key;if(entry.floatGenerated)entry.floatCancellation.request_stop();}}
 PreparedTexture TextureStreamer::request(const std::string& id,const std::filesystem::path& source,streaming::TextureRole role,bool mipmapped,std::uint32_t edge,ResourcePriority priority,bool thumbnail) {
     const auto variant=std::to_string(static_cast<unsigned>(role))+":"+(mipmapped ? "mips" : "single")+(thumbnail ? ":thumb" : "");
     auto [iterator,inserted]=impl_->entries.try_emplace(id+'\0'+variant); auto& entry=iterator->second;
@@ -305,9 +343,34 @@ PreparedTexture TextureStreamer::requestGenerated(const std::string& key,std::fu
     if(!entry.descriptor&&!entry.generatedSource&&(!entry.current||std::max(entry.current->width,entry.current->height)<std::min(entry.edge,entry.sourceEdge)))impl_->requestDescriptor(entry);
     return impl_->prepared(entry);
 }
+PreparedTexture TextureStreamer::requestGeneratedFloat(const std::string& key,std::function<FloatImage()> generator,std::uint32_t width,std::uint32_t height,bool mipmapped,std::uint32_t edge,ResourcePriority priority) {
+    if(!generator)throw std::runtime_error("Generated float texture requires a generator.");
+    return requestGeneratedFloat(key,[generator=std::move(generator)](std::stop_token){return generator();},width,height,mipmapped,edge,priority);
+}
+PreparedTexture TextureStreamer::requestGeneratedFloat(const std::string& key,std::function<FloatImage(std::stop_token)> generator,std::uint32_t width,std::uint32_t height,bool mipmapped,std::uint32_t edge,ResourcePriority priority) {
+    if(key.empty()||key.find('\0')!=std::string::npos||!generator||!width||!height||width>4096||height>4096)
+        throw std::runtime_error("Generated float texture requires a content key, generator and dimensions 1-4096.");
+    const auto variant="generated-float16:"+std::to_string(width)+"x"+std::to_string(height)+(mipmapped?":mips":":single");
+    auto [iterator,inserted]=impl_->entries.try_emplace(key+'\0'+variant);auto& entry=iterator->second;
+    if(inserted){entry.id=key;entry.variant=variant;entry.generated=true;entry.floatGenerated=true;entry.sourceEdge=width;entry.sourceHeight=height;entry.role=streaming::TextureRole::Data;entry.mipmapped=mipmapped;entry.priority=priority;}
+    entry.edge=std::max(entry.wanted?entry.edge:0u,std::max(1u,edge));entry.wanted=true;entry.priority=std::min(entry.priority,priority);entry.used=std::chrono::steady_clock::now();
+    if(priority==ResourcePriority::Selected)entry.pressureLevel=0;
+    if(!entry.descriptor&&(!entry.current||entry.current->level>generatedRequiredLevel(entry))) {
+        entry.floatGenerator=std::move(generator);impl_->requestDescriptor(entry);entry.floatGenerator={};
+    }
+    return impl_->prepared(entry);
+}
+std::optional<PreparedTexture> TextureStreamer::cachedGeneratedFloat(const std::string& key,std::uint32_t width,std::uint32_t height,bool mipmapped,std::uint32_t edge,ResourcePriority priority) {
+    const auto variant="generated-float16:"+std::to_string(width)+"x"+std::to_string(height)+(mipmapped?":mips":":single");
+    const auto found=impl_->entries.find(key+'\0'+variant);if(found==impl_->entries.end())return {};
+    auto& entry=found->second;entry.edge=std::max(entry.wanted?entry.edge:0u,std::max(1u,edge));entry.wanted=true;
+    entry.priority=std::min(entry.priority,priority);entry.used=std::chrono::steady_clock::now();if(priority==ResourcePriority::Selected)entry.pressureLevel=0;
+    if(!entry.descriptor&&(!entry.current||entry.current->level>generatedRequiredLevel(entry)))return {};
+    return impl_->prepared(entry);
+}
 void TextureStreamer::beginFrame() { impl_->framePins.clear(); for(auto& [key,entry]:impl_->entries) { (void)key; entry.wanted=false;entry.edge=0;entry.priority=ResourcePriority::Background; } }
 void TextureStreamer::advance(std::size_t bytes,double milliseconds) {
-    for(auto& [key,entry]:impl_->entries)if(entry.generated&&!entry.wanted){(void)key;entry.pending.reset();entry.descriptor={};entry.generatedSource={};}
+    for(auto& [key,entry]:impl_->entries)if(entry.generated&&!entry.wanted){(void)key;if(entry.floatGenerated){entry.floatCancellation.request_stop();entry.retryFloat|=entry.descriptor&&entry.descriptor.state()!=ResourceState::Ready;}entry.pending.reset();entry.descriptor={};entry.generatedSource={};}
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double,std::milli>(milliseconds));
     std::vector<Entry*> ordered; for(auto& [key,entry]:impl_->entries){(void)key;ordered.push_back(&entry);}
     std::stable_sort(ordered.begin(),ordered.end(),[](const auto* a,const auto* b){return a->priority<b->priority;});

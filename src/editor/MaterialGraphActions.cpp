@@ -14,9 +14,9 @@ constexpr std::array addableNodeKinds{MaterialNodeKind::UV,MaterialNodeKind::Tex
     MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power,
     MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,MaterialNodeKind::HueShift,MaterialNodeKind::Grunge,
     MaterialNodeKind::Levels,MaterialNodeKind::Invert,MaterialNodeKind::Blend,MaterialNodeKind::Grayscale,MaterialNodeKind::ToColor,MaterialNodeKind::Noise,
-    MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::HeightToNormal,MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaSplit,MaterialNodeKind::AlphaMerge};
+    MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::HeightToNormal,MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaSplit,MaterialNodeKind::AlphaMerge,MaterialNodeKind::Resize};
 bool polymorphicImage(MaterialNodeKind kind) {
-    return kind==MaterialNodeKind::Levels||kind==MaterialNodeKind::Invert||kind==MaterialNodeKind::Blend||kind==MaterialNodeKind::BrightnessContrast||kind==MaterialNodeKind::Sharpen;
+    return kind==MaterialNodeKind::Levels||kind==MaterialNodeKind::Invert||kind==MaterialNodeKind::Blend||kind==MaterialNodeKind::BrightnessContrast||kind==MaterialNodeKind::Sharpen||kind==MaterialNodeKind::Resize;
 }
 [[noreturn]] void invalid(const char* message){throw std::runtime_error(std::string("Material graph action: ")+message);}
 
@@ -82,18 +82,44 @@ MaterialValueType endpointType(const MaterialGraph& graph,MaterialGraphEndpoint 
     if(pin==pins.end())invalid("connection endpoint is unavailable for this shader model.");
     return pin->type;
 }
+struct AuthoringConnection {
+    MaterialGraph graph;MaterialLinkId link{};MaterialGraphConnectionKind kind{MaterialGraphConnectionKind::Direct};
+};
+AuthoringConnection prepareAuthoringConnection(const MaterialGraph& graph,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
+    std::string diagnostic;
+    if(!materialCanConnect(graph,from,fromPin,to,toPin,&diagnostic))throw std::runtime_error(diagnostic);
+    AuthoringConnection result{graph};result.link=connectMaterialNodes(result.graph,from,fromPin,to,toPin);
+    const auto sourceType=materialOutputType(result.graph,from,fromPin),destinationType=endpointType(result.graph,{to,toPin,true});
+    if((sourceType==MaterialValueType::Color||sourceType==MaterialValueType::Color4)&&destinationType==MaterialValueType::Scalar) {
+        const auto source=findMaterialNode(result.graph,from)->position,target=findMaterialNode(result.graph,to)->position;
+        removeMaterialLink(result.graph,result.link);
+        const auto grayscale=addMaterialNode(result.graph,MaterialNodeKind::Grayscale,
+            {std::min(target[0]-260,(source[0]+target[0])*.5f),(source[1]+target[1])*.5f}).id;
+        findMaterialNode(result.graph,grayscale)->image.grayMode=MaterialGrayscaleMode::Red;
+        connectMaterialNodes(result.graph,from,fromPin,grayscale,MaterialPin::Left);
+        result.link=connectMaterialNodes(result.graph,grayscale,MaterialPin::Value,to,toPin);result.kind=MaterialGraphConnectionKind::RedChannel;
+    }
+    validateMaterialGraph(result.graph);return result;
+}
 MaterialNodeId createConnected(MaterialGraph& graph,MaterialGraphEndpoint endpoint,MaterialGraphNodeChoice choice,Vec2 position,MaterialValueType type) {
     const auto id=addMaterialNode(graph,choice.kind,position).id;auto& node=*findMaterialNode(graph,id);
     if(node.kind==MaterialNodeKind::Texture2D)node.texture.role=choice.textureRole;
     if(endpoint.input && ((polymorphicImage(node.kind)&&(type==MaterialValueType::Color||type==MaterialValueType::Color4)) ||
         ((node.kind==MaterialNodeKind::Multiply||node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||node.kind==MaterialNodeKind::Power)&&(type==MaterialValueType::Color||type==MaterialValueType::Vector2))))node.left.type=type;
-    if(endpoint.input)connectMaterialNodes(graph,id,choice.pin,endpoint.node,endpoint.pin);
-    else connectMaterialNodes(graph,endpoint.node,endpoint.pin,id,choice.pin);
+    if(endpoint.input)connectMaterialGraphAuthoring(graph,id,choice.pin,endpoint.node,endpoint.pin);
+    else connectMaterialGraphAuthoring(graph,endpoint.node,endpoint.pin,id,choice.pin);
     return id;
 }
 }
 
 std::span<const MaterialNodeKind> materialGraphNodeKinds() {return addableNodeKinds;}
+MaterialGraphConnection inspectMaterialGraphConnection(const MaterialGraph& graph,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
+    try {return {prepareAuthoringConnection(graph,from,fromPin,to,toPin).kind,{}};}
+    catch(const std::exception& error){return {MaterialGraphConnectionKind::Invalid,error.what()};}
+}
+MaterialLinkId connectMaterialGraphAuthoring(MaterialGraph& graph,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
+    auto result=prepareAuthoringConnection(graph,from,fromPin,to,toPin);const auto link=result.link;graph=std::move(result.graph);return link;
+}
 
 std::string copyMaterialGraphSelection(const MaterialGraph& graph,std::span<const MaterialNodeId> selected) {
     validateMaterialGraph(graph);const auto nodes=copyableSelection(graph,selected);if(nodes.empty())return {};

@@ -32,7 +32,9 @@ public:
     // Last submitted presentation, in screen coordinates. This is transient UI
     // geometry for diagnostics and headless interaction checks, never asset data.
     struct NodePresentation {MaterialNodeId id{};Vec2 minimum{},maximum{},titleCenter{};};
-    struct PinPresentation {MaterialNodeId node{};MaterialPin pin{};bool input{};Vec2 center{},minimum{},maximum{};bool active{true};};
+    enum class PinCompatibility {Neutral,Compatible,Conversion,Rejected};
+    struct PinPresentation {MaterialNodeId node{};MaterialPin pin{};bool input{};Vec2 center{},minimum{},maximum{};bool active{true};
+        MaterialValueType type{MaterialValueType::Scalar};Vec4 color{};bool redConversion{};PinCompatibility compatibility{PinCompatibility::Neutral};};
     struct FieldPresentation {MaterialNodeId node{};MaterialPin pin{};Vec2 minimum{},maximum{};};
     struct ComboPresentation {MaterialNodeId node{};std::string label;Vec2 minimum{},maximum{};};
     struct ControlPresentation {MaterialNodeId node{};std::string label;Vec2 minimum{},maximum{};};

@@ -18,7 +18,13 @@ std::vector<MaterialNodeId> pasteMaterialGraphSelection(MaterialGraph&,std::stri
 std::vector<MaterialNodeId> duplicateMaterialGraphSelection(MaterialGraph&,std::span<const MaterialNodeId>,Vec2 offset={32,32});
 std::size_t deleteMaterialGraphSelection(MaterialGraph&,std::span<const MaterialNodeId>);
 
-struct MaterialGraphEndpoint {MaterialNodeId node{};MaterialPin pin{};bool input{};};
+struct MaterialGraphEndpoint {MaterialNodeId node{};MaterialPin pin{};bool input{};bool operator==(const MaterialGraphEndpoint&) const=default;};
+enum class MaterialGraphConnectionKind { Invalid,Direct,RedChannel };
+struct MaterialGraphConnection {MaterialGraphConnectionKind kind{MaterialGraphConnectionKind::Invalid};std::string diagnostic;};
+// New authoring links expose fixed Color/RGBA-to-Scalar conversions as a Red
+// Grayscale node. Existing serialized direct conversions remain untouched.
+MaterialGraphConnection inspectMaterialGraphConnection(const MaterialGraph&,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin);
+MaterialLinkId connectMaterialGraphAuthoring(MaterialGraph&,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin);
 // Shared authoring catalog for search and pin-drag creation. Output is unique.
 std::span<const MaterialNodeKind> materialGraphNodeKinds();
 

@@ -246,6 +246,57 @@ void rgbScalarConnectionHistory() {
         materialInputLink(graph,out,MaterialPin::Metallic)->id==metalLink&&materialInputLink(graph,out,MaterialPin::Metallic)->fromPin==MaterialPin::RGB,
         "Save/reopen rewrote RGB-to-scalar connections.");
 }
+void explicitChannelAuthoringAndResize() {
+    Project project;MaterialDocument document(project.root);require(document.create("Explicit channel connections"),"Could not create connection fixture.");
+    MaterialNodeId output{},color{},levels{},resize{},uv{},texture{};
+    require(document.edit("Configure connection sources",[&](auto& asset) {
+        asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output).id;
+        color=addMaterialNode(asset.graph,MaterialNodeKind::Color,{-600,0}).id;
+        findMaterialNode(asset.graph,color)->color={.21f,.47f,.83f,.35f};
+        levels=addMaterialNode(asset.graph,MaterialNodeKind::Levels,{-300,200}).id;
+        resize=addMaterialNode(asset.graph,MaterialNodeKind::Resize,{-300,400}).id;
+        uv=addMaterialNode(asset.graph,MaterialNodeKind::UV).id;texture=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D).id;
+    }),"Could not configure typed connections.");
+    const auto& graph=document.definition().graph;
+    require(inspectMaterialGraphConnection(graph,color,MaterialPin::RGB,output,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::RedChannel&&
+        inspectMaterialGraphConnection(graph,color,MaterialPin::RGBA,output,MaterialPin::Metallic).kind==MaterialGraphConnectionKind::RedChannel,
+        "Cross-family scalar authoring did not expose its Red conversion.");
+    require(inspectMaterialGraphConnection(graph,color,MaterialPin::RGB,levels,MaterialPin::Left).kind==MaterialGraphConnectionKind::Direct&&
+        inspectMaterialGraphConnection(graph,color,MaterialPin::RGBA,resize,MaterialPin::Left).kind==MaterialGraphConnectionKind::Direct,
+        "A polymorphic image input was treated as a fixed Scalar socket.");
+    require(inspectMaterialGraphConnection(graph,uv,MaterialPin::UV,output,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::Invalid&&
+        inspectMaterialGraphConnection(graph,color,MaterialPin::RGB,texture,MaterialPin::UV).kind==MaterialGraphConnectionKind::Invalid,
+        "Mapping links accepted numeric coercion.");
+    const auto before=serializeMaterialAsset(document.definition());MaterialNodeId red{};
+    require(document.edit("Connect explicit Red channel",[&](auto& asset) {
+        connectMaterialGraphAuthoring(asset.graph,color,MaterialPin::RGBA,output,MaterialPin::Roughness);
+        const auto* link=materialInputLink(asset.graph,output,MaterialPin::Roughness);red=link->fromNode;
+    }),"Explicit channel connection failed.");
+    const auto& connected=document.definition().graph;const auto* node=findMaterialNode(connected,red);
+    require(node&&node->kind==MaterialNodeKind::Grayscale&&node->image.grayMode==MaterialGrayscaleMode::Red&&
+        materialInputLink(connected,red,MaterialPin::Left)->fromNode==color&&connected.links.size()==2&&
+        evaluateMaterialUniform(connected,red,MaterialPin::Value).value[0]==.21f,
+        "Visible conversion did not preserve the exact former first-component behavior.");
+    const auto after=serializeMaterialAsset(document.definition());
+    require(document.undo()&&serializeMaterialAsset(document.definition())==before&&document.redo()&&serializeMaterialAsset(document.definition())==after,
+        "Conversion node and both wires did not form one exact undo/redo command.");
+    require(document.edit("Resize an RGB image",[&](auto& asset) {
+        connectMaterialGraphAuthoring(asset.graph,color,MaterialPin::RGB,resize,MaterialPin::Left);
+        auto& settings=findMaterialNode(asset.graph,resize)->resize;settings.width=320;settings.height=192;settings.filter=MaterialResizeFilter::Area;
+    }),"Could not author Resize settings.");
+    require(materialOutputType(document.definition().graph,resize,MaterialPin::Value)==MaterialValueType::Color,
+        "Resize failed to preserve the connected RGB family.");
+    const std::array selection{resize};auto copy=document.definition().graph;
+    const auto pasted=pasteMaterialGraphSelection(copy,copyMaterialGraphSelection(copy,selection),{500,500});
+    const auto& settings=findMaterialNode(copy,pasted.front())->resize;
+    require(settings.width==320&&settings.height==192&&settings.filter==MaterialResizeFilter::Area,
+        "Resize clipboard lost dimensions or filtering.");
+    auto full=graphWithOutput();const auto source=addMaterialNode(full,MaterialNodeKind::Color).id;
+    while(full.nodes.size()<MaterialGraph::MaximumNodes)addMaterialNode(full,MaterialNodeKind::Scalar);
+    const auto stable=serializeMaterialGraph(full);
+    require(inspectMaterialGraphConnection(full,source,MaterialPin::RGB,materialOutputNode(full).id,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::Invalid&&
+        serializeMaterialGraph(full)==stable,"A full graph offered an impossible visible conversion.");
+}
 void animatedNodeHistory() {
     Project project;MaterialDocument document(project.root);require(document.create("Animated node history"),"Could not create animation document.");
     const auto before=serializeMaterialAsset(document.definition());std::vector<MaterialNodeId> nodes;
@@ -368,6 +419,6 @@ void requestedImageAndChannelActions() {
 
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();explicitChannelAuthoringAndResize();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

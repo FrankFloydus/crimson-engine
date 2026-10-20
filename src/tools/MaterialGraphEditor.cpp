@@ -119,6 +119,7 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::RGBASplit:aliases="rgba split unpack separate channels red green blue alpha node";break;
     case MaterialNodeKind::AlphaSplit:aliases="alpha split separate rgb opacity channel node";break;
     case MaterialNodeKind::AlphaMerge:aliases="alpha merge combine rgb opacity channel node";break;
+    case MaterialNodeKind::Resize:aliases="resize resample resolution image width height scale filter node";break;
     case MaterialNodeKind::Time:aliases="time seconds clock runtime input node";break;
     default:break;
     }
@@ -152,21 +153,18 @@ ImVec4 nodeColor(MaterialNodeKind kind) {
     case MaterialNodeKind::Noise:case MaterialNodeKind::BrightnessContrast:case MaterialNodeKind::Sharpen:case MaterialNodeKind::HeightToNormal:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::RGBAMerge:case MaterialNodeKind::RGBASplit:case MaterialNodeKind::AlphaSplit:case MaterialNodeKind::AlphaMerge:
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
-    case MaterialNodeKind::Texture2D:return {.23f,.48f,.65f,1};
+    case MaterialNodeKind::Texture2D:case MaterialNodeKind::Resize:return {.23f,.48f,.65f,1};
     case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:case MaterialNodeKind::Panner:case MaterialNodeKind::Time:return {.22f,.58f,.54f,1};
     default:return {.49f,.44f,.37f,1};
     }
 }
-ImVec4 pinColor(MaterialValueType type,MaterialPin pin=MaterialPin::Value) {
-    if(pin==MaterialPin::R || pin==MaterialPin::X)return {.95f,.3f,.3f,1};
-    if(pin==MaterialPin::G || pin==MaterialPin::Y)return {.3f,.85f,.4f,1};
-    if(pin==MaterialPin::B)return {.3f,.5f,1,1};
+ImVec4 pinColor(MaterialValueType type) {
     switch(type) {
     case MaterialValueType::Mapping:return {.3f,.8f,.72f,1};
     case MaterialValueType::Normal:return {.7f,.47f,.94f,1};
     case MaterialValueType::Vector2:return {.9f,.72f,.3f,1};
-    case MaterialValueType::Color4:
-    case MaterialValueType::Color:return ImGui::GetStyleColorVec4(ImGuiCol_SliderGrabActive);
+    case MaterialValueType::Color4:return {.37f,.48f,.98f,1};
+    case MaterialValueType::Color:return {.27f,.64f,.94f,1};
     default:return ImGui::GetStyleColorVec4(ImGuiCol_Text);
     }
 }
@@ -274,7 +272,10 @@ struct MaterialGraphEditor::State {
     bool moving{},scalarEditing{},frameContent{true},syncPositions{true},suppressUpdate{},blockGesture{},creationGesture{};
     ImGuiID creationItem{};
     ImVec2 addPosition{};
-    std::optional<Pin> addFrom,contextPin;
+    std::optional<Pin> addFrom,contextPin,dragFrom;
+    bool cancelledConnectionGesture{};
+    std::uint64_t connectionRevision{};
+    std::map<std::tuple<MaterialNodeId,MaterialPin,bool>,MaterialGraphConnection> connectionTargets;
     std::optional<MaterialGraphPreviewTarget> preview;
     std::map<std::pair<MaterialNodeId,MaterialPin>,HdrColorEditorState> colorEditors;
     std::map<MaterialNodeId,Vec3> scaleBaselines;
@@ -428,6 +429,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         }
     }
     const bool escape=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+    if(escape&&s.dragFrom)s.cancelledConnectionGesture=true;
     if(escape && (s.moving || s.scalarEditing)){document.cancel();cancelInteraction();}
     if(!ImGui::IsMouseDown(ImGuiMouseButton_Left))s.blockGesture=false;
     const bool cancel=escape || s.suppressUpdate || s.blockGesture;s.suppressUpdate=false;
@@ -474,6 +476,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     grid(canvasMinimum,{canvasMinimum.x+canvasSize.x,canvasMinimum.y+canvasSize.y});
     const auto graph=document.definition().graph; // Drawing a slider can replace the document snapshot.
     const auto& output=materialOutputNode(graph).output;
+    if(cancel||s.cancelledConnectionGesture||!ImGui::IsMouseDown(ImGuiMouseButton_Left)){s.dragFrom.reset();s.connectionTargets.clear();}
+    if(s.connectionRevision!=document.revision()){s.connectionTargets.clear();s.connectionRevision=document.revision();}
     std::optional<State::Pin> disconnect;
     for(const auto& node:graph.nodes) {
         const auto inputs=visibleInputs(graph,node,output);
@@ -530,7 +534,12 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     if(changed)set(n,selected);return changed;
                 });
             };
-            if(node.kind==MaterialNodeKind::Levels) {
+            if(node.kind==MaterialNodeKind::Resize) {
+                parameter("Width","Change resize width",[](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
+                parameter("Height","Change resize height",[](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});
+                option("Filter","Change resize filter","Nearest\0Linear\0Area\0",[](const auto& n){return static_cast<int>(n.resize.filter);},
+                    [](auto& n,int filter){n.resize.filter=static_cast<MaterialResizeFilter>(filter);});
+            } else if(node.kind==MaterialNodeKind::Levels) {
                 parameter("Input black","Change input black",[](auto& n){return ImGui::DragFloat("Input black",&n.image.inputBlack,.005f,0,1,"%.3f");});
                 parameter("Input white","Change input white",[](auto& n){return ImGui::DragFloat("Input white",&n.image.inputWhite,.005f,0,1,"%.3f");});
                 parameter("Midtones","Change midtones",[](auto& n){return ImGui::DragFloat("Midtones",&n.image.gamma,.01f,.01f,100,"%.3f");});
@@ -675,6 +684,26 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             const float x=ImGui::GetCursorPosX(),y=ImGui::GetCursorPosY();
             const auto drawPin=[&](const MaterialPinDefinition& definition,bool input) {
                 const bool active=!input || node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin,output.tessellation.enabled);
+                bool redConversion=false;
+                if(input&&definition.type==MaterialValueType::Scalar)if(const auto* wire=materialInputLink(graph,node.id,definition.pin)) {
+                    const auto type=materialOutputType(graph,wire->fromNode,wire->fromPin);
+                    redConversion=type==MaterialValueType::Color||type==MaterialValueType::Color4;
+                }
+                auto compatibility=PinCompatibility::Neutral;
+                const State::Pin endpoint{node.id,definition.pin,input};
+                if(s.dragFrom&&endpoint!=*s.dragFrom) {
+                    if(!active||input==s.dragFrom->input)compatibility=PinCompatibility::Rejected;
+                    else {
+                        const auto key=std::tuple{node.id,definition.pin,input};
+                        auto found=s.connectionTargets.find(key);
+                        if(found==s.connectionTargets.end()) {
+                            auto from=*s.dragFrom,to=endpoint;if(from.input)std::swap(from,to);
+                            found=s.connectionTargets.emplace(key,inspectMaterialGraphConnection(graph,from.node,from.pin,to.node,to.pin)).first;
+                        }
+                        compatibility=found->second.kind==MaterialGraphConnectionKind::Invalid?PinCompatibility::Rejected:
+                            found->second.kind==MaterialGraphConnectionKind::RedChannel?PinCompatibility::Conversion:PinCompatibility::Compatible;
+                    }
+                }
                 const auto id=s.pin(node.id,definition.pin,input);
                 ed::BeginPin(id,input?ed::PinKind::Input:ed::PinKind::Output);
                 ImGui::PushID(static_cast<int>(id.Get()));
@@ -690,9 +719,14 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 ed::PinRect(lo,hi);ed::PinPivotRect(center,center);
                 auto* draw=ImGui::GetWindowDrawList();
                 draw->AddText({lo.x+(input?18.f:0.f),lo.y+ImGui::GetStyle().FramePadding.y},ImGui::GetColorU32(active?ImGuiCol_Text:ImGuiCol_TextDisabled),definition.name);
-                auto color=pinColor(definition.type,definition.pin);if(!active)color.w=.3f;
+                auto color=pinColor(definition.type);if(!active)color.w=.3f;
+                if(compatibility==PinCompatibility::Rejected)color.w*=.2f;
+                else if(compatibility!=PinCompatibility::Neutral)draw->AddCircle(center,5,
+                    ImGui::GetColorU32(compatibility==PinCompatibility::Conversion?ImGuiCol_PlotHistogram:ImGuiCol_Text),0,1);
                 draw->AddCircleFilled(center,3,ImGui::ColorConvertFloat4ToU32(color));
-                s.presentation.pins.push_back({node.id,definition.pin,input,point(center),point(lo),point(hi),active});
+                if(redConversion)draw->AddText({hi.x+3,lo.y+ImGui::GetStyle().FramePadding.y},ImGui::GetColorU32(ImGuiCol_PlotHistogram),"R");
+                s.presentation.pins.push_back({node.id,definition.pin,input,point(center),point(lo),point(hi),active,definition.type,
+                    {color.x,color.y,color.z,color.w},redConversion,compatibility});
                 ImGui::PopID();
                 ed::EndPin();
                 if(!active && ImGui::IsMouseHoveringRect(lo,hi)) {
@@ -702,6 +736,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     else if(definition.pin==MaterialPin::Height)ImGui::SetTooltip("Enable Tessellation in the Output material properties. Existing connections are retained.");
                     else ImGui::SetTooltip("Unavailable for this shader model. Existing connections are retained.");
                     ed::Resume();
+                } else if(redConversion&&ImGui::IsMouseHoveringRect(lo,{hi.x+ImGui::CalcTextSize("R").x+6,hi.y})) {
+                    ed::Suspend();ImGui::SetTooltip("Reads the Red channel (R) from RGB/RGBA.");ed::Resume();
                 }
             };
             if(row<inputs.size()) {
@@ -753,16 +789,19 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto* target=findMaterialNode(graph,link.toNode);if(!target)continue;
         const auto inputs=visibleInputs(graph,*target,output);
         if(std::none_of(inputs.begin(),inputs.end(),[&](const auto& p){return p.pin==link.toPin;}))continue;
-        auto color=pinColor(materialOutputType(graph,link.fromNode,link.fromPin),link.fromPin);
+        auto color=pinColor(materialOutputType(graph,link.fromNode,link.fromPin));
         if(target->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,link.toPin,output.tessellation.enabled))color.w=.3f;
         ed::Link(s.link(link.id),s.pin(link.fromNode,link.fromPin,false),s.pin(link.toNode,link.toPin,true),color,2);
     }
     if(disconnect)s.breakLinks(document,disconnect);
-    const bool createAllowed=editable && !cancel && !io.KeyAlt && !document.transactionActive();
+    const bool createAllowed=editable && !cancel && !s.cancelledConnectionGesture && !io.KeyAlt && !document.transactionActive();
     bool dragCreate{};
     if(ed::BeginCreate(ImGui::GetStyleColorVec4(ImGuiCol_Text),2)) {
         ed::PinId first,second;
         if(ed::QueryNewLink(&first,&second)) {
+            if(const auto origin=s.pinLookup.find(first.Get());origin!=s.pinLookup.end())if(s.dragFrom!=origin->second) {
+                s.dragFrom=origin->second;s.connectionTargets.clear();
+            }
             if(!createAllowed)ed::RejectNewItem();
             else {
                 const auto a=s.pinLookup.find(first.Get()),b=s.pinLookup.find(second.Get());
@@ -771,8 +810,11 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     try {
                         if(from.input || !to.input)throw std::runtime_error("Connect an output to an input.");
                         if(findMaterialNode(graph,to.node)->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,to.pin,output.tessellation.enabled))throw std::runtime_error("This input is unavailable for the current material settings.");
-                        auto candidate=document.definition().graph;connectMaterialNodes(candidate,from.node,from.pin,to.node,to.pin);
-                        if(ed::AcceptNewItem()) {
+                        const auto connection=inspectMaterialGraphConnection(document.definition().graph,from.node,from.pin,to.node,to.pin);
+                        if(connection.kind==MaterialGraphConnectionKind::Invalid)throw std::runtime_error(connection.diagnostic);
+                        if(connection.kind==MaterialGraphConnectionKind::RedChannel){ed::Suspend();ImGui::SetTooltip("Insert Grayscale: Red channel (R).");ed::Resume();}
+                        if(ed::AcceptNewItem(connection.kind==MaterialGraphConnectionKind::RedChannel?ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogram):pinColor(materialOutputType(graph,from.node,from.pin)))) {
+                            auto candidate=document.definition().graph;connectMaterialGraphAuthoring(candidate,from.node,from.pin,to.node,to.pin);
                             if(document.edit("Connect nodes",[&](auto& asset){asset.graph=std::move(candidate);}))s.status.clear();else s.status=document.status();
                         }
                     } catch(const std::exception& error) {
@@ -785,6 +827,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         ed::PinId origin;
         if(ed::QueryNewNode(&origin)) {
             const auto found=s.pinLookup.find(origin.Get());
+            if(found!=s.pinLookup.end()&&s.dragFrom!=found->second){s.dragFrom=found->second;s.connectionTargets.clear();}
             try {
                 if(!createAllowed || found==s.pinLookup.end() || materialGraphNodeChoices(document.definition().graph,found->second).empty())ed::RejectNewItem();
                 else if(ed::AcceptNewItem()) {
@@ -794,6 +837,9 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         }
     }
     ed::EndCreate();
+    // The vendor completes creation on mouse release. Keep Escape latched
+    // through that release instead of reopening search after its key-up frame.
+    if(!ImGui::IsMouseDown(ImGuiMouseButton_Left))s.cancelledConnectionGesture=false;
     if(editable && !document.transactionActive() && ed::BeginDelete()) {
         std::vector<MaterialNodeId> eraseNodes;std::vector<MaterialLinkId> eraseLinks;
         ed::LinkId link;while(ed::QueryDeletedLink(&link))if(ed::AcceptDeletedItem())

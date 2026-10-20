@@ -2,6 +2,7 @@
 #include "CacheIO.h"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
@@ -18,6 +19,24 @@ void validate(std::uint32_t width,std::uint32_t height,std::span<const std::uint
         throw std::runtime_error("Texture mip input dimensions or pixels are invalid.");
 }
 std::uint64_t checksum(std::span<const std::uint8_t> bytes) { auto result=detail::HashSeed; detail::hash(result,bytes.data(),bytes.size()); return result; }
+std::uint16_t half(float value) {
+    if(!std::isfinite(value)||std::abs(value)>65504.f)throw std::runtime_error("Generated float texture contains a value outside the finite RGBA16F range.");
+    const auto bits=std::bit_cast<std::uint32_t>(value);const auto sign=static_cast<std::uint16_t>((bits>>16)&0x8000u);
+    auto exponent=static_cast<int>((bits>>23)&255u)-112;auto mantissa=bits&0x7fffffu;
+    if(exponent<=0) {
+        if(exponent < -10)return sign;
+        mantissa|=0x800000u;const auto shift=static_cast<unsigned>(14-exponent);
+        return static_cast<std::uint16_t>(sign|((mantissa+((1u<<(shift-1))-1u)+((mantissa>>shift)&1u))>>shift));
+    }
+    mantissa+=0xfffu+((mantissa>>13)&1u);
+    if(mantissa&0x800000u){mantissa=0;++exponent;}
+    return static_cast<std::uint16_t>(sign|(static_cast<unsigned>(exponent)<<10)|(mantissa>>13));
+}
+TextureMip packFloatMip(const FloatImage& image,std::stop_token token) {
+    TextureMip result{image.width,image.height,std::vector<std::uint8_t>(image.rgba.size()*2),ImagePixelFormat::RGBA16F};
+    for(std::size_t i=0;i<image.rgba.size();++i){if((i&65535u)==0&&token.stop_requested())throw std::runtime_error("Generated float mip request canceled.");const auto value=half(image.rgba[i]);result.rgba[i*2]=static_cast<std::uint8_t>(value);result.rgba[i*2+1]=static_cast<std::uint8_t>(value>>8);}
+    return result;
+}
 }
 std::uint64_t textureContentKey(std::span<const std::uint8_t> bytes,TextureRole role) {
     auto key=detail::HashSeed; detail::hash(key,TextureCacheVersion); detail::hash(key,role); detail::hash(key,bytes.data(),bytes.size()); return key;
@@ -60,12 +79,45 @@ std::vector<TextureMip> generateTextureMips(std::uint32_t width,std::uint32_t he
     return result;
 }
 TextureMipCache generatedTextureMipCache(std::uint64_t key,TextureMip image) {
+    if(image.format!=ImagePixelFormat::RGBA8)throw std::runtime_error("Generated RGBA8 texture received an incompatible pixel format.");
     TextureMipCache result;result.key=key;result.role=TextureRole::Data;
     result.memory=generateTextureMips(image.width,image.height,image.rgba,TextureRole::Data);
     for(const auto& mip:result.memory)result.levels.push_back({mip.width,mip.height,0,mip.rgba.size(),checksum(mip.rgba)});
     return result;
 }
+TextureMipCache generatedFloatTextureMipCache(std::uint64_t key,FloatImage image,std::stop_token token) {
+    if(!image.width||!image.height||image.width>4096||image.height>4096||std::uint64_t(image.width)*image.height*4!=image.rgba.size())
+        throw std::runtime_error("Generated float texture requires dimensions 1-4096 and complete RGBA pixels.");
+    TextureMipCache result;result.key=key;result.role=TextureRole::Data;result.format=ImagePixelFormat::RGBA16F;
+    while(true) {
+        if(token.stop_requested())throw std::runtime_error("Generated float mip request canceled.");
+        result.memory.push_back(packFloatMip(image,token));
+        if(image.width==1&&image.height==1)break;
+        FloatImage next{std::max(1u,image.width/2),std::max(1u,image.height/2),{}};
+        next.rgba.resize(std::size_t(next.width)*next.height*4);
+        for(std::uint32_t y=0;y<next.height;++y) {
+            if(token.stop_requested())throw std::runtime_error("Generated float mip request canceled.");
+            const double y0=double(y)*image.height/next.height,y1=double(y+1)*image.height/next.height;
+            for(std::uint32_t x=0;x<next.width;++x) {
+                const double x0=double(x)*image.width/next.width,x1=double(x+1)*image.width/next.width;
+                std::array<double,4> sum{};double weight{};
+                for(auto sy=static_cast<std::uint32_t>(std::floor(y0));sy<std::min(image.height,static_cast<std::uint32_t>(std::ceil(y1)));++sy)
+                    for(auto sx=static_cast<std::uint32_t>(std::floor(x0));sx<std::min(image.width,static_cast<std::uint32_t>(std::ceil(x1)));++sx) {
+                        const auto area=(std::min(x1,double(sx+1))-std::max(x0,double(sx)))*(std::min(y1,double(sy+1))-std::max(y0,double(sy)));
+                        const auto first=(std::size_t(sy)*image.width+sx)*4;weight+=area;
+                        for(std::size_t c=0;c<4;++c)sum[c]+=double(image.rgba[first+c])*area;
+                    }
+                const auto first=(std::size_t(y)*next.width+x)*4;
+                for(std::size_t c=0;c<4;++c)next.rgba[first+c]=static_cast<float>(sum[c]/weight);
+            }
+        }
+        image=std::move(next);
+    }
+    for(const auto& mip:result.memory)result.levels.push_back({mip.width,mip.height,0,mip.rgba.size(),checksum(mip.rgba)});
+    return result;
+}
 TextureMipCache generatedTextureThumbnail(const TextureMipCache& linear) {
+    if(linear.format!=ImagePixelFormat::RGBA8)throw std::runtime_error("Generated display thumbnails require RGBA8 source pixels.");
     if(linear.memory.size()!=linear.levels.size()||linear.memory.empty())throw std::runtime_error("Generated thumbnail requires resident linear mip pixels.");
     TextureMipCache result;result.key=linear.key;result.role=TextureRole::Data;result.memory=linear.memory;
     for(auto& mip:result.memory) {
@@ -83,7 +135,7 @@ TextureMipCache writeTextureMipCache(const std::filesystem::path& file,std::uint
     if (levels.empty() || levels.size()>32) throw std::runtime_error("Texture mip cache has no valid levels.");
     TextureMipCache descriptor{file,key,role,{}}; std::uint64_t offset=HeaderBytes+EntryBytes*levels.size();
     for (std::size_t i=0;i<levels.size();++i) {
-        const auto& mip=levels[i]; validate(mip.width,mip.height,mip.rgba);
+        const auto& mip=levels[i];if(mip.format!=ImagePixelFormat::RGBA8)throw std::runtime_error("Persistent texture mip cache only accepts RGBA8 source pixels.");validate(mip.width,mip.height,mip.rgba);
         if (i && (mip.width!=std::max(1u,levels[i-1].width/2) || mip.height!=std::max(1u,levels[i-1].height/2)))
             throw std::runtime_error("Texture mip chain dimensions are inconsistent.");
         descriptor.levels.push_back({mip.width,mip.height,offset,mip.rgba.size(),checksum(mip.rgba)}); offset+=mip.rgba.size();

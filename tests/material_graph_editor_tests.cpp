@@ -861,15 +861,22 @@ void boundedTextureLabelsAndScalarMapGestures() {
         const auto before=ui.snapshot();const auto from=ui.pin(source,sourcePin,false),to=ui.pin(output,targetPin,true);
         ui.drag(reversed?to:from,reversed?from:to);
         const auto* link=materialInputLink(ui.document.definition().graph,output,targetPin);
-        require(link&&link->fromNode==source&&link->fromPin==sourcePin,
-            "A texture pin drag could not connect to a PBR scalar input or silently changed its selected channel.");
+        require(link,"A texture pin drag could not connect to a PBR scalar input.");
+        if(sourcePin==MaterialPin::RGB) {
+            const auto* gray=findMaterialNode(ui.document.definition().graph,link->fromNode);
+            const auto* input=gray?materialInputLink(ui.document.definition().graph,gray->id,MaterialPin::Left):nullptr;
+            require(gray&&gray->kind==MaterialNodeKind::Grayscale&&gray->image.grayMode==MaterialGrayscaleMode::Red&&
+                input&&input->fromNode==source&&input->fromPin==sourcePin,
+                "An RGB-to-Scalar drag did not expose its Red-channel conversion.");
+        } else require(link->fromNode==source&&link->fromPin==sourcePin,"A scalar channel drag changed its selected channel.");
         ui.oneUndo(before);checkBounds();
     };
     connect(roughness,MaterialPin::RGB,MaterialPin::Roughness);
     connect(metallic,MaterialPin::RGB,MaterialPin::Metallic,true);
     const auto links=ui.document.definition().graph.links.size();
     connect(metallic,MaterialPin::RGB,MaterialPin::Roughness);
-    require(ui.document.definition().graph.links.size()==links,"Replacing an occupied roughness input retained an extra incoming wire.");
+    require(std::count_if(ui.document.definition().graph.links.begin(),ui.document.definition().graph.links.end(),[&](const auto& wire){return wire.toNode==output&&wire.toPin==MaterialPin::Roughness;})==1&&
+        ui.document.definition().graph.links.size()==links+1,"Replacing an occupied roughness input did not retain one incoming wire and its explicit conversion.");
     connect(roughness,MaterialPin::G,MaterialPin::Roughness);
     connect(metallic,MaterialPin::B,MaterialPin::Metallic);
     require(ui.editor.status().empty(),"Valid scalar texture connections left an editor diagnostic.");
@@ -1363,10 +1370,10 @@ void requestedImageAndChannelControls() {
         blend=addMaterialNode(asset.graph,MaterialNodeKind::Blend,{-250,220}).id;
         connectMaterialNodes(asset.graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);
     })&&ui.document.save(),"Could not configure image authoring controls.");ui.frame(24);
-    const std::array<std::pair<const char*,MaterialNodeKind>,13> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
+    const std::array<std::pair<const char*,MaterialNodeKind>,14> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
         {"image blend",MaterialNodeKind::Blend},{"luminance",MaterialNodeKind::Grayscale},{"to color",MaterialNodeKind::ToColor},{"procedural clouds",MaterialNodeKind::Noise},
         {"brightness contrast",MaterialNodeKind::BrightnessContrast},{"unsharp",MaterialNodeKind::Sharpen},{"height normal",MaterialNodeKind::HeightToNormal},
-        {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge}}};
+        {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge},{"resample",MaterialNodeKind::Resize}}};
     for(const auto& [alias,kind]:searches) {
         const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
         const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
@@ -1406,8 +1413,9 @@ void requestedImageAndChannelControls() {
     require(ui.editor.status().empty(),"Image/channel controls left an editor diagnostic.");
 }
 void imageNodeParameterTransactions() {
-    const std::array<std::pair<MaterialNodeKind,const char*>,5> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
-        {MaterialNodeKind::BrightnessContrast,"Brightness"},{MaterialNodeKind::Sharpen,"Amount"},{MaterialNodeKind::HeightToNormal,"Strength"}}};
+    const std::array<std::pair<MaterialNodeKind,const char*>,7> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
+        {MaterialNodeKind::BrightnessContrast,"Brightness"},{MaterialNodeKind::Sharpen,"Amount"},{MaterialNodeKind::HeightToNormal,"Strength"},
+        {MaterialNodeKind::Resize,"Width"},{MaterialNodeKind::Resize,"Height"}}};
     for(const auto& [kind,label]:cases) {
         GraphUi ui;MaterialNodeId id{};
         require(ui.document.edit("Image parameter fixture",[&](auto& asset){asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});id=addMaterialNode(asset.graph,kind,{-100,0}).id;})&&ui.document.save(),"Could not configure image parameter fixture.");ui.frame(24);
@@ -1441,7 +1449,65 @@ void imageNodeParameterTransactions() {
         }
     }
 }
+void typedPinColorsConversionsAndResize() {
+    GraphUi ui;MaterialNodeId output{},color{},vector{},levels{},multiply{},resize{},normal{},uv{};
+    require(ui.document.edit("Typed socket fixture",[&](auto& asset) {
+        asset.graph={};auto& graph=asset.graph;output=addMaterialNode(graph,MaterialNodeKind::Output,{650,-100}).id;
+        color=addMaterialNode(graph,MaterialNodeKind::Color,{-800,-250}).id;findMaterialNode(graph,color)->color={.2f,.5f,.8f,.6f};
+        vector=addMaterialNode(graph,MaterialNodeKind::Vector2,{-800,160}).id;
+        levels=addMaterialNode(graph,MaterialNodeKind::Levels,{-400,-160}).id;
+        multiply=addMaterialNode(graph,MaterialNodeKind::Multiply,{0,150}).id;
+        resize=addMaterialNode(graph,MaterialNodeKind::Resize,{-400,320}).id;
+        normal=addMaterialNode(graph,MaterialNodeKind::Texture2D,{-800,440}).id;findMaterialNode(graph,normal)->texture.role=MaterialTextureRole::Normal;
+        uv=addMaterialNode(graph,MaterialNodeKind::UV,{0,400}).id;
+        connectMaterialNodes(graph,color,MaterialPin::RGB,levels,MaterialPin::Left);
+        connectMaterialNodes(graph,color,MaterialPin::RGB,multiply,MaterialPin::Left);
+        connectMaterialNodes(graph,color,MaterialPin::RGB,resize,MaterialPin::Left);
+        // Deliberately retain one pre-existing implicit Red conversion.
+        connectMaterialNodes(graph,color,MaterialPin::RGB,output,MaterialPin::Roughness);
+    })&&ui.document.save(),"Could not configure typed socket fixture.");ui.frame(24);
+    const auto presented=[&](MaterialNodeId id,MaterialPin semantic,bool input) {
+        for(const auto& pin:ui.editor.presentation().pins)if(pin.node==id&&pin.pin==semantic&&pin.input==input)return pin;
+        throw std::runtime_error("Typed pin presentation is missing.");
+    };
+    const auto scalar=presented(color,MaterialPin::R,false),rgb=presented(color,MaterialPin::RGB,false),rgba=presented(color,MaterialPin::RGBA,false);
+    require(scalar.type==MaterialValueType::Scalar&&rgb.type==MaterialValueType::Color&&rgba.type==MaterialValueType::Color4&&scalar.color!=rgb.color&&rgb.color!=rgba.color,
+        "Pin color or presentation failed to identify the actual scalar/RGB/RGBA types.");
+    for(const auto semantic:{MaterialPin::G,MaterialPin::B,MaterialPin::A})require(presented(color,semantic,false).color==scalar.color,
+        "A scalar channel socket used its channel name as a type color.");
+    for(const auto semantic:{MaterialPin::X,MaterialPin::Y})require(presented(vector,semantic,false).color==scalar.color,
+        "A scalar vector component did not use the scalar type color.");
+    for(const auto id:{levels,multiply,resize})require(presented(id,MaterialPin::Left,true).type==MaterialValueType::Color&&
+        presented(id,MaterialPin::Left,true).color==rgb.color&&presented(id,MaterialPin::Value,false).type==MaterialValueType::Color&&
+        presented(id,MaterialPin::Value,false).color==rgb.color,"Polymorphic Image/Math sockets did not follow resolved connected types.");
+    const auto legacy=presented(output,MaterialPin::Roughness,true);
+    require(legacy.type==MaterialValueType::Scalar&&legacy.color==scalar.color&&legacy.redConversion&&
+        presented(normal,MaterialPin::Normal,false).type==MaterialValueType::Normal&&presented(uv,MaterialPin::UV,false).type==MaterialValueType::Mapping,
+        "Legacy Red conversion badge or strict Normal/Mapping pin types were missing.");
+    const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.frame(3);
+    require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.dirty(),"Displaying typed pins rewrote an existing implicit conversion.");
+    auto& io=ImGui::GetIO();const auto origin=ui.pin(color,MaterialPin::RGBA,false);
+    ui.move(origin);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move(ui.emptyPoint());ui.frame(3);
+    require(presented(output,MaterialPin::Metallic,true).compatibility==MaterialGraphEditor::PinCompatibility::Conversion&&
+        presented(output,MaterialPin::BaseColor,true).compatibility==MaterialGraphEditor::PinCompatibility::Compatible&&
+        presented(output,MaterialPin::Normal,true).compatibility==MaterialGraphEditor::PinCompatibility::Rejected&&
+        presented(output,MaterialPin::Normal,true).color[3]<.5f,"Wiring did not distinguish compatible, explicit-conversion and rejected targets.");
+    ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+    require(ui.snapshot()==stable&&!ui.popup(),"Cancelling connection highlighting changed authored data or opened search.");
+    const auto before=ui.snapshot();ui.drag(ui.pin(color,MaterialPin::RGBA,false),ui.pin(output,MaterialPin::Metallic,true));
+    const auto& graph=ui.document.definition().graph;const auto* wire=materialInputLink(graph,output,MaterialPin::Metallic);
+    const auto* gray=wire?findMaterialNode(graph,wire->fromNode):nullptr;const auto* source=gray?materialInputLink(graph,gray->id,MaterialPin::Left):nullptr;
+    require(gray&&gray->kind==MaterialNodeKind::Grayscale&&gray->image.grayMode==MaterialGrayscaleMode::Red&&source&&
+        source->fromNode==color&&source->fromPin==MaterialPin::RGBA&&!presented(output,MaterialPin::Metallic,true).redConversion,
+        "New RGBA-to-Scalar drag did not create a visible exact Red conversion.");ui.oneUndo(before);
+    const auto filter=std::find_if(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& combo){return combo.node==resize&&combo.label=="Filter";});
+    require(filter!=ui.editor.presentation().combos.end(),"Resize filter was absent from the common node controls.");
+    const ImVec2 filterPoint{(filter->minimum[0]+filter->maximum[0])*.5f,(filter->minimum[1]+filter->maximum[1])*.5f};
+    const auto beforeFilter=ui.snapshot();ui.click(filterPoint);require(ui.popup()&&!ui.document.transactionActive(),"Opening Resize filters started an authored edit.");
+    ui.click(ui.popupItem(2));require(findMaterialNode(ui.document.definition().graph,resize)->resize.filter==MaterialResizeFilter::Area,
+        "Resize filter selection did not choose Area.");ui.oneUndo(beforeFilter);
+}
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();requestedImageAndChannelControls();imageNodeParameterTransactions();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

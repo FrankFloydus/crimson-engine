@@ -13,6 +13,7 @@
 #include "resources/CacheIO.h"
 #include "MaterialGraphReferences.h"
 #include "GrungeGenerator.h"
+#include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include "ContentStorage.h"
 #include "QuaderSceneBundle.h"
 #include "ModelMaterialSlots.h"
@@ -759,6 +760,7 @@ void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
         });
     };
     expired(modelInterest_,modelResources_);expired(materialInterest_,materialResources_);
+    std::erase_if(resizeImageSources_,[&](const auto& entry){return now-entry.second.used>resources_->config().idleGrace;});
     std::erase_if(preparedParticleMaterials_,[&](const auto& entry){return !materialInterest_.contains(entry.first);});
     for(auto iterator=materialCatalogResources_.begin();iterator!=materialCatalogResources_.end();) {
         if(auto snapshot=iterator->second.snapshot()) {
@@ -1323,6 +1325,7 @@ std::uint8_t AssetLibrary::requiredGraphUvs(const std::shared_ptr<const Material
         std::uint8_t required{};const auto& output=materialOutputNode(*graph).output;
         for(const auto nodeId:materialGraphOrder(*graph,output.shading,output.blend)) {
             const auto* node=findMaterialNode(*graph,nodeId);
+            if(node->kind==MaterialNodeKind::Resize){required|=1;continue;}
             if(node->kind!=MaterialNodeKind::Grunge && (node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty()))continue;
             const auto mapping=materialTextureMapping(*graph,nodeId);
             if(mapping.mode==MaterialUvMode::UV0)required|=1;
@@ -1369,7 +1372,16 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     for(auto& binding:packet->sources) {
         const auto& sampler=binding.sampler;const auto slot=binding.slot;
         std::string resolved;
-        if(binding.grunge) {
+        if(binding.resize) {
+            const auto texture=preparedResizeTexture(*binding.resize,textureEdge,priority,sourceVersions);
+            packet->textures[slot]=texture.handle;packet->leases[slot]=texture.lease;
+            packet->sourceFingerprints[slot]=texture.sourceFingerprint;packet->textureSignatures[slot]=texture.signature;
+            result.complete &=texture.complete;result.sourceReady &=texture.sourceReady;
+            if(!texture.sourceReady||!texture.complete)result.diagnostic=texture.diagnostic.empty()?"Generating Resize image...":texture.diagnostic;
+            if(!bgfx::isValid(texture.handle)&&!texture.diagnostic.empty()&&texture.diagnostic!="Loading Resize image inputs...") {
+                if(texture.diagnostic!="Generating Resize image...")throw std::runtime_error(texture.diagnostic);
+            }
+        } else if(binding.grunge) {
             if(!textureStreamer_)throw std::runtime_error("Generated material textures require the resource owner.");
             const auto settings=*binding.grunge;
             const auto key=std::to_string(grungeTextureKey(settings,GrungeTextureEdge));
@@ -1410,12 +1422,80 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
         if(sampler.minFilter==ModelFilter::Nearest||sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::NearestMipmapLinear)flags|=BGFX_SAMPLER_MIN_POINT;
         if(sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::LinearMipmapNearest)flags|=BGFX_SAMPLER_MIP_POINT;
         if(sampler.magFilter==ModelFilter::Nearest)flags|=BGFX_SAMPLER_MAG_POINT;
-        packet->flags[slot]=flags;if(!binding.grunge)binding.image.id=resolved;
+        packet->flags[slot]=flags;if(!binding.grunge&&!binding.resize)binding.image.id=resolved;
         streaming::detail::hash(packet->signature,flags);streaming::detail::hash(packet->signature,packet->textures[slot].idx);
         streaming::detail::hash(packet->signature,packet->textureSignatures[slot]);streaming::detail::hash(packet->signature,packet->sourceFingerprints[slot]);
     }
     for(const auto& row:packet->uniforms)streaming::detail::hash(packet->signature,row);
     result.graph=std::move(packet);return result;
+}
+PreparedTexture AssetLibrary::preparedResizeTexture(const MaterialGraphResizeBinding& binding,std::uint32_t textureEdge,ResourcePriority priority,std::unordered_map<std::string,std::uint64_t>& versions) const {
+    if(!resources_||!textureStreamer_)throw std::runtime_error("Resize images require the asynchronous resource owner.");
+    if(!binding.graph)throw std::runtime_error("Resize image has no immutable graph definition.");
+    const auto* node=findMaterialNode(*binding.graph,binding.node);
+    if(!node||node->kind!=MaterialNodeKind::Resize)throw std::runtime_error("Resize image references a missing Resize node.");
+    const auto sources=materialResizeImageSources(*binding.graph,binding.node);
+    struct Input {std::string original,resolved;ResizeImageSource* source;std::uint64_t fingerprint;};
+    std::vector<Input> inputs;inputs.reserve(sources.size());bool ready=true;
+    auto key=binding.definitionKey;streaming::detail::hash(key,node->resize.width);streaming::detail::hash(key,node->resize.height);streaming::detail::hash(key,node->resize.filter);
+    for(const auto& original:sources) {
+        const auto resolved=references_.resolve(original);
+        if(resolved.empty())throw std::runtime_error("Resize input image is unavailable: "+original);
+        const bool builtin=resolved==GrayTextureId||resolved==NeutralNormalTextureId;
+        auto* image=findMutable(resolved);
+        if(!builtin&&(!image||image->hdr))throw std::runtime_error("Resize input image is unavailable or unsupported: "+original);
+        const auto file=builtin?std::filesystem::path{}:resolveAssetPath(projectRoot_,resolved);
+        auto& source=resizeImageSources_[resolved];source.used=std::chrono::steady_clock::now();
+        const bool moved=!source.file.empty()&&source.file!=file;
+        if(source.file!=file){source.file=file;source.fingerprint={};source.pixels={};source.reloadPixels=moved;}
+        if(!source.fingerprint) {
+            ResourceRequestOptions config;config.variant="resize-input-fingerprint-v1";config.priority=priority;config.forceReload=moved;if(!builtin)config.dependencies={file};
+            auto builtinKey=streaming::detail::HashSeed;streaming::detail::hash(builtinKey,resolved.data(),resolved.size());
+            source.fingerprint=resources_->request<streaming::TextureMipCache>(AssetRef<streaming::TextureMipCache>{resolved},[builtin,builtinKey](std::stop_token token) {
+                if(token.stop_requested())throw std::runtime_error("Resize input fingerprint request canceled.");
+                auto data=std::make_shared<streaming::TextureMipCache>();return ResourceLoadResult<streaming::TextureMipCache>{data,sizeof(*data),builtin?builtinKey:0,{}};
+            },std::move(config));
+        }
+        if(source.fingerprint.state()==ResourceState::Failed)throw std::runtime_error("Resize input "+original+": "+source.fingerprint.diagnostic());
+        const auto descriptor=source.fingerprint.snapshot();
+        if(!descriptor||source.fingerprint.state()!=ResourceState::Ready){ready=false;continue;}
+        const auto [existing,inserted]=versions.emplace(resolved,descriptor.fingerprint());
+        if(!inserted&&existing->second!=descriptor.fingerprint())ready=false;
+        streaming::detail::hash(key,original.data(),original.size());streaming::detail::hash(key,resolved.data(),resolved.size());
+        streaming::detail::hash(key,descriptor.fingerprint());streaming::detail::hash(key,descriptor.revision());
+        inputs.push_back({original,resolved,&source,descriptor.fingerprint()});
+    }
+    if(!ready){PreparedTexture waiting;waiting.diagnostic="Loading Resize image inputs...";return waiting;}
+    const auto contentKey="material-resize-v1:"+std::to_string(key);
+    if(auto cached=textureStreamer_->cachedGeneratedFloat(contentKey,node->resize.width,node->resize.height,true,textureEdge,priority)) {
+        for(auto& input:inputs)input.source->pixels={};
+        return *cached;
+    }
+    auto images=std::make_shared<std::unordered_map<std::string,std::shared_ptr<const DecodedImage>>>();
+    for(auto& input:inputs) {
+        auto& source=*input.source;const bool builtin=input.resolved==GrayTextureId||input.resolved==NeutralNormalTextureId;
+        if(!source.pixels) {
+            ResourceRequestOptions config;config.variant="source";config.priority=priority;config.forceReload=source.reloadPixels;source.reloadPixels=false;if(!builtin)config.dependencies={source.file};
+            const auto file=source.file;const auto resolved=input.resolved;const auto fingerprint=input.fingerprint;
+            source.pixels=resources_->request<DecodedImage>(AssetRef<DecodedImage>{resolved},[file,resolved,builtin,fingerprint](std::stop_token token) {
+                if(token.stop_requested())throw std::runtime_error("Resize input image decode canceled.");
+                auto pixels=std::make_shared<DecodedImage>(builtin?DecodedImage{1,1,resolved==NeutralNormalTextureId?std::vector<std::uint8_t>{128,128,255,255}:std::vector<std::uint8_t>{128,128,128,255}}:decodeManagedImage(file));
+                return ResourceLoadResult<DecodedImage>{pixels,pixels->rgba.size(),builtin?fingerprint:0,{}};
+            },std::move(config));
+        }
+        if(source.pixels.state()==ResourceState::Failed)throw std::runtime_error("Resize input "+input.original+": "+source.pixels.diagnostic());
+        const auto pixels=source.pixels.snapshot();
+        if(!pixels||source.pixels.state()!=ResourceState::Ready){ready=false;continue;}
+        if(pixels.fingerprint()!=input.fingerprint){source.pixels={};source.reloadPixels=true;ready=false;continue;}
+        images->emplace(input.original,pixels.shared());
+    }
+    if(!ready){PreparedTexture waiting;waiting.diagnostic="Loading Resize image inputs...";return waiting;}
+    const auto graph=binding.graph;const auto resizeNode=binding.node;
+    return textureStreamer_->requestGeneratedFloat(contentKey,[graph,resizeNode,images](std::stop_token token) {
+        return bakeMaterialResizeImage(*graph,resizeNode,[images](const std::string& id) {
+            const auto found=images->find(id);if(found==images->end())throw std::runtime_error("Resize source snapshot is unavailable: "+id);return found->second;
+        },token);
+    },node->resize.width,node->resize.height,true,textureEdge,priority);
 }
 std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMaterial(const std::string& id) const {
     std::string resolved;

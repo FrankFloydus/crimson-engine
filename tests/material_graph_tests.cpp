@@ -2,6 +2,7 @@
 #include "material_fixtures.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
+#include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -544,7 +545,7 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==9&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema9 nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==10&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema10 nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
@@ -645,7 +646,7 @@ void imageAdjustmentsAndGrunge() {
             "Prior Grunge style conversion lost authored values or layer defaults.");
         require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
             "Grunge style conversion changed links or persistent identities.");
-        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==9,"Legacy Grunge did not write the current schema.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==10,"Legacy Grunge did not write the current schema.");
         for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
         for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
         rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
@@ -727,10 +728,119 @@ void imageNodeFoundation() {
     const auto noise=node(graph,MaterialNodeKind::Noise),h2n=node(graph,MaterialNodeKind::HeightToNormal);connectMaterialNodes(graph,noise,MaterialPin::Value,h2n,MaterialPin::Left);require(!materialExpressionUniform(graph,noise,MaterialPin::Value)&&!materialExpressionUniform(graph,h2n,MaterialPin::Normal),"Spatial procedural nodes were classified as uniform.");
     auto a=findMaterialNode(graph,noise)->image;const auto n0=sampleMaterialNoise({.17f,-.23f,.61f},a);require(n0==sampleMaterialNoise({.17f,-.23f,.61f},a),"Noise is not deterministic.");a.seed=314;require(std::abs(n0-sampleMaterialNoise({.17f,-.23f,.61f},a))>.0001f,"Noise seed did not change the field.");require(near(sampleMaterialNoise({.17f,-.23f,.61f},a,100),.5f),"Unresolved Clouds did not converge to its mean.");a.noisePattern=MaterialNoisePattern::Spots;const auto spot=sampleMaterialNoise({.17f,-.23f,.61f},a,100);require(spot>0&&spot<.1f,"Unresolved Spots did not converge to its measured mean.");
     connectMaterialNodes(graph,sharpen,MaterialPin::Value,out,MaterialPin::BaseColor);
-    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":9")!=std::string::npos,"New nodes did not write graph schema 9.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
+    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":10")!=std::string::npos,"New nodes did not write graph schema 10.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
     auto bad=graph;findMaterialNode(bad,levels)->image.inputWhite=0;rejects([&]{validateMaterialGraph(bad);},"Levels accepted an empty input interval.");
     const auto vector=node(graph,MaterialNodeKind::Vector2);rejects([&]{connectMaterialNodes(graph,vector,MaterialPin::XY,invert,MaterialPin::Left);},"Vector2 connected to an image node.");
     auto& settings=findMaterialNode(graph,blend)->image;const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);settings.contrast=.2f;require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==topology,"A numeric image setting changed topology identity.");require(materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==values,"An inactive image branch affected active material values.");
+}
+void resizeImageBaking() {
+    static_assert(static_cast<unsigned>(MaterialNodeKind::Resize)==33);
+    auto graph=blank();const auto texture=node(graph,MaterialNodeKind::Texture2D),levels=node(graph,MaterialNodeKind::Levels),resize=node(graph,MaterialNodeKind::Resize);
+    auto* source=findMaterialNode(graph,texture);source->texture.image.id=canonicalAssetId("assets/textures/resize.png");source->texture.role=MaterialTextureRole::Data;
+    findMaterialNode(graph,levels)->image.gamma=2;
+    findMaterialNode(graph,resize)->resize={5,1,MaterialResizeFilter::Linear};
+    connectMaterialNodes(graph,texture,MaterialPin::RGBA,levels,MaterialPin::Left);connectMaterialNodes(graph,levels,MaterialPin::Value,resize,MaterialPin::Left);
+    require(materialOutputType(graph,resize,MaterialPin::Value)==MaterialValueType::Color4,"Resize lost the upstream RGBA type.");
+    auto pixels=std::make_shared<DecodedImage>(DecodedImage{2,1,{0,0,0,0,255,255,255,255}});
+    const auto resolve=[&](const std::string&)->std::shared_ptr<const DecodedImage>{return pixels;};
+    auto image=bakeMaterialResizeImage(graph,resize,resolve);
+    require(image.width==5&&image.height==1&&near(image.rgba[8],.5f)&&near(image.rgba[11],.5f),"Resize applied Levels after upsampling or coupled alpha to RGB.");
+    require(materialResizeImageSources(graph,resize)==std::vector<std::string>{canonicalAssetId("assets/textures/resize.png")},"Resize dependency extraction lost its source image.");
+    const auto before=serializeMaterialGraph(graph);std::string diagnostic;
+    const auto uv=node(graph,MaterialNodeKind::UV);findMaterialNode(graph,uv)->uv.mode=MaterialUvMode::UV1;
+    const auto candidateBefore=serializeMaterialGraph(graph);
+    require(!materialCanConnect(graph,uv,MaterialPin::UV,texture,MaterialPin::UV,&diagnostic)&&!diagnostic.empty()&&serializeMaterialGraph(graph)==candidateBefore,
+        "Context-dependent Resize connection changed the graph or lacked a diagnostic.");
+    const auto time=node(graph,MaterialNodeKind::Time);
+    require(!materialCanConnect(graph,time,MaterialPin::Value,levels,MaterialPin::Left,&diagnostic),"Resize accepted Time input.");
+    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==10,"Resize did not write graph schema 10.");
+    require(serializeMaterialGraph(parseMaterialGraph(before))==before,"Resize settings or typed input failed round trip.");
+    auto malformed=serialized;for(auto& n:malformed["nodes"])if(n["id"]==resize)n["resize"]["width"]=1.5;
+    rejects([&]{parseMaterialGraph(malformed.dump());},"Resize accepted a fractional width.");
+    malformed=serialized;for(auto& n:malformed["nodes"])if(n["id"]==resize)n["resize"]["filter"]=.5;
+    rejects([&]{parseMaterialGraph(malformed.dump());},"Resize accepted a fractional filter.");
+    malformed=serialized;malformed["version"]=9;rejects([&]{parseMaterialGraph(malformed.dump());},"Schema 9 accepted a schema 10 Resize node.");
+    std::stop_source cancellation;cancellation.request_stop();
+    rejects([&]{bakeMaterialResizeImage(graph,resize,resolve,cancellation.get_token());},"Resize ignored cancellation.");
+
+    auto linearGraph=blank();const auto tex=node(linearGraph,MaterialNodeKind::Texture2D),size=node(linearGraph,MaterialNodeKind::Resize);
+    findMaterialNode(linearGraph,tex)->texture.image.id=canonicalAssetId("assets/textures/linear.png");
+    findMaterialNode(linearGraph,size)->resize={1,1,MaterialResizeFilter::Linear};
+    connectMaterialNodes(linearGraph,tex,MaterialPin::RGBA,size,MaterialPin::Left);
+    pixels=std::make_shared<DecodedImage>(DecodedImage{1,1,{128,64,255,0}});
+    image=bakeMaterialResizeImage(linearGraph,size,resolve);
+    require(std::abs(image.rgba[0]-.2158605f)<1e-6f&&std::abs(image.rgba[1]-.05126946f)<1e-6f&&image.rgba[2]==1&&image.rgba[3]==0,
+        "Color Resize did not decode sRGB before filtering or discarded transparent RGB.");
+    findMaterialNode(linearGraph,tex)->texture.role=MaterialTextureRole::Data;
+    image=bakeMaterialResizeImage(linearGraph,size,resolve);require(near(image.rgba[0],128/255.f)&&image.rgba[3]==0,"Linear Data Resize was gamma decoded.");
+    const auto assigned=findMaterialNode(linearGraph,tex)->texture.image.id;findMaterialNode(linearGraph,tex)->texture.image.id.clear();
+    image=bakeMaterialResizeImage(linearGraph,size,{});require(image.rgba==std::vector<float>{1,1,1,1},"Unassigned Resize source differed from the shader's white Texture 2D default.");
+    findMaterialNode(linearGraph,tex)->texture.image.id=assigned;
+
+    pixels=std::make_shared<DecodedImage>();pixels->width=8;pixels->height=4;pixels->rgba.resize(8*4*4);
+    for(unsigned y=0;y<4;++y)for(unsigned x=0;x<8;++x){const auto i=(y*8+x)*4;pixels->rgba[i]=pixels->rgba[i+1]=pixels->rgba[i+2]=x%2?255:0;pixels->rgba[i+3]=255;}
+    findMaterialNode(linearGraph,size)->resize={3,2,MaterialResizeFilter::Area};image=bakeMaterialResizeImage(linearGraph,size,resolve);
+    require(image.width==3&&image.height==2&&near(image.rgba[0],.375f)&&near(image.rgba[4],.5f)&&near(image.rgba[8],.625f),"Area Resize lost fractional source-pixel coverage on a nonsquare image.");
+    pixels=std::make_shared<DecodedImage>(DecodedImage{2,1,{0,0,0,255,255,255,255,255}});
+    findMaterialNode(linearGraph,size)->resize={5,1,MaterialResizeFilter::Nearest};image=bakeMaterialResizeImage(linearGraph,size,resolve);
+    require(image.rgba[0]==0&&image.rgba[4]==0&&image.rgba[8]==1&&image.rgba[12]==1&&image.rgba[16]==1,"Nearest Resize did not select source texel centers.");
+
+    const auto inner=node(linearGraph,MaterialNodeKind::Resize);findMaterialNode(linearGraph,inner)->resize={3,1,MaterialResizeFilter::Nearest};
+    connectMaterialNodes(linearGraph,tex,MaterialPin::RGBA,inner,MaterialPin::Left);connectMaterialNodes(linearGraph,inner,MaterialPin::Value,size,MaterialPin::Left);
+    findMaterialNode(linearGraph,size)->resize={6,1,MaterialResizeFilter::Linear};image=bakeMaterialResizeImage(linearGraph,size,resolve);
+    require(near(image.rgba[0],0)&&near(image.rgba[4],.25f)&&near(image.rgba[8],.75f)&&near(image.rgba[12],1),"Nested Resize did not use the declared intermediate lattice.");
+
+    auto constant=blank();const auto c=node(constant,MaterialNodeKind::Color),r=node(constant,MaterialNodeKind::Resize);
+    findMaterialNode(constant,c)->color={-2,4,.25f,0};findMaterialNode(constant,r)->resize={4,3,MaterialResizeFilter::Area};
+    connectMaterialNodes(constant,c,MaterialPin::RGBA,r,MaterialPin::Left);image=bakeMaterialResizeImage(constant,r,{});
+    for(std::size_t i=0;i<image.rgba.size();i+=4)require(image.rgba[i]==-2&&image.rgba[i+1]==4&&image.rgba[i+2]==.25f&&image.rgba[i+3]==0,"Resize clipped float/HDR values or premultiplied independent alpha.");
+    const auto fallback=node(constant,MaterialNodeKind::Resize);findMaterialNode(constant,fallback)->resize={2,3,MaterialResizeFilter::Linear};findMaterialNode(constant,fallback)->left={MaterialValueType::Scalar,{-3,-3,-3,-3}};
+    image=bakeMaterialResizeImage(constant,fallback,{});require(image.width==2&&image.height==3&&image.rgba[0]==-3&&image.rgba[3]==1,"Unconnected Resize failed to bake its typed fallback.");
+
+    auto large=blank();const auto bitmap=node(large,MaterialNodeKind::Texture2D),big=node(large,MaterialNodeKind::Resize);
+    findMaterialNode(large,bitmap)->texture.image.id=canonicalAssetId("assets/textures/256.png");findMaterialNode(large,bitmap)->texture.role=MaterialTextureRole::Data;
+    findMaterialNode(large,big)->resize={2048,2048,MaterialResizeFilter::Linear};connectMaterialNodes(large,bitmap,MaterialPin::RGBA,big,MaterialPin::Left);
+    pixels=std::make_shared<DecodedImage>();pixels->width=pixels->height=256;pixels->rgba.resize(256*256*4);
+    for(unsigned y=0;y<256;++y)for(unsigned x=0;x<256;++x){const auto i=(y*256+x)*4;pixels->rgba[i]=static_cast<std::uint8_t>(x);pixels->rgba[i+1]=static_cast<std::uint8_t>(y);pixels->rgba[i+2]=127;pixels->rgba[i+3]=255;}
+    image=bakeMaterialResizeImage(large,big,resolve);const auto center=(1024u*2048+1024)*4;
+    require(image.width==2048&&image.height==2048&&std::abs(image.rgba[center]-(127.5625f/255))<1e-6f&&image.rgba[center+3]==1,"256-to-2K Resize did not produce a real filtered image.");
+}
+void resizeMappingsAndSpatialBranches() {
+    auto graph=blank();const auto uv=node(graph,MaterialNodeKind::UV),texture=node(graph,MaterialNodeKind::Texture2D),resize=node(graph,MaterialNodeKind::Resize);
+    findMaterialNode(graph,texture)->texture.image.id=canonicalAssetId("assets/textures/wrap.png");findMaterialNode(graph,texture)->texture.role=MaterialTextureRole::Data;
+    findMaterialNode(graph,uv)->uv.offset={.5f,0,0};findMaterialNode(graph,resize)->resize={2,1,MaterialResizeFilter::Linear};
+    connectMaterialNodes(graph,uv,MaterialPin::UV,texture,MaterialPin::UV);connectMaterialNodes(graph,texture,MaterialPin::R,resize,MaterialPin::Left);
+    auto source=std::make_shared<DecodedImage>(DecodedImage{2,1,{0,0,0,255,255,255,255,255}});
+    const auto resolve=[&](const std::string&)->std::shared_ptr<const DecodedImage>{return source;};
+    auto image=bakeMaterialResizeImage(graph,resize,resolve);require(image.rgba[0]==1&&image.rgba[4]==0,"Resize ignored authored Repeat addressing or UV0 offset.");
+    findMaterialNode(graph,texture)->texture.sampler.wrapU=ModelWrap::Mirror;image=bakeMaterialResizeImage(graph,resize,resolve);
+    require(image.rgba[0]==1&&image.rgba[4]==1,"Resize ignored Mirror addressing.");
+    findMaterialNode(graph,texture)->texture.sampler.wrapU=ModelWrap::Clamp;
+    findMaterialNode(graph,uv)->uv.offset={0,0,0};
+    const auto normal=node(graph,MaterialNodeKind::HeightToNormal);findMaterialNode(graph,normal)->image.radius=.25f;
+    connectMaterialNodes(graph,texture,MaterialPin::R,normal,MaterialPin::Left);connectMaterialNodes(graph,normal,MaterialPin::RGB,resize,MaterialPin::Left);
+    image=bakeMaterialResizeImage(graph,resize,resolve);
+    require(std::abs(image.rgba[0]-(.5f-.005f/std::sqrt(1.0001f)))<1e-6f&&near(image.rgba[1],.5f),"Resize did not evaluate complete upstream Height-to-Normal RGB differences.");
+    require(!materialCanConnect(graph,normal,MaterialPin::Normal,resize,MaterialPin::Left),"Resize accepted a decoded surface Normal.");
+    const auto levels=node(graph,MaterialNodeKind::Levels),sharpen=node(graph,MaterialNodeKind::Sharpen);
+    findMaterialNode(graph,levels)->image.gamma=2;findMaterialNode(graph,sharpen)->image.radius=1.f/3;findMaterialNode(graph,resize)->resize={3,1,MaterialResizeFilter::Linear};
+    source=std::make_shared<DecodedImage>(DecodedImage{3,1,{0,0,0,255,64,64,64,255,255,255,255,255}});
+    connectMaterialNodes(graph,texture,MaterialPin::R,levels,MaterialPin::Left);connectMaterialNodes(graph,levels,MaterialPin::Value,sharpen,MaterialPin::Left);connectMaterialNodes(graph,sharpen,MaterialPin::Value,resize,MaterialPin::Left);
+    image=bakeMaterialResizeImage(graph,resize,resolve);const float adjusted=std::sqrt(64/255.f);
+    require(std::abs(image.rgba[4]-std::clamp(3*adjusted-1,0.f,1.f))<1e-6f,"Sharpen sampled only a terminal texture and skipped upstream Levels.");
+    std::string diagnostic;
+    const auto panner=node(graph,MaterialNodeKind::Panner);findMaterialNode(graph,panner)->panner.speed={1,0};
+    require(!materialCanConnect(graph,panner,MaterialPin::UV,texture,MaterialPin::UV,&diagnostic)&&!diagnostic.empty(),"Resize accepted moving Panner coordinates.");
+    findMaterialNode(graph,panner)->panner.speed={0,0};
+    require(materialCanConnect(graph,panner,MaterialPin::UV,texture,MaterialPin::UV),"Resize rejected a static zero-speed UV0 Panner.");
+
+    auto many=blank();MaterialNodeId previous{};for(unsigned i=0;i<13;++i) {
+        const auto t=node(many,MaterialNodeKind::Texture2D);findMaterialNode(many,t)->texture.image.id=canonicalAssetId("assets/textures/bake"+std::to_string(i)+".png");
+        if(!previous)previous=t;else{const auto add=node(many,MaterialNodeKind::Add);connectMaterialNodes(many,previous,findMaterialNode(many,previous)->kind==MaterialNodeKind::Texture2D?MaterialPin::RGB:MaterialPin::Value,add,MaterialPin::Left);connectMaterialNodes(many,t,MaterialPin::RGB,add,MaterialPin::Right);previous=add;}
+    }
+    const auto boundary=node(many,MaterialNodeKind::Resize);connectMaterialNodes(many,previous,MaterialPin::Value,boundary,MaterialPin::Left);
+    connectMaterialNodes(many,boundary,MaterialPin::Value,materialOutputNode(many).id,MaterialPin::BaseColor);
+    require(materialResizeImageSources(many,boundary).size()==13,"CPU Resize sources incorrectly consumed the renderer's 12 sampler budget.");
 }
 void exactColdModelSurface() {
     ModelMaterial original;original.baseColor={.3f,.5f,.7f,1};original.metallic=.4f;original.roughness=.8f;
@@ -773,5 +883,5 @@ void exactColdModelSurface() {
     require(!materialGraphFixedSurface(changed),"Animated graph uniforms were frozen by the fixed lowering.");
 }
 }
-int main(int argc,char** argv){try{imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+int main(int argc,char** argv){try{resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

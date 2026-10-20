@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <span>
+#include <stop_token>
 #include <vector>
 
 namespace crimson {
@@ -17,11 +18,13 @@ struct TextureMipCache {
     std::vector<MipInfo> levels;
     // Immutable in-memory source for generated images; no file/catalog entry.
     std::vector<TextureMip> memory;
+    ImagePixelFormat format{ImagePixelFormat::RGBA8};
 };
 inline constexpr std::uint32_t TextureCacheVersion = 1;
 std::vector<TextureMip> generateTextureMips(std::uint32_t width, std::uint32_t height,
     std::span<const std::uint8_t> rgba, TextureRole);
 TextureMipCache generatedTextureMipCache(std::uint64_t sourceKey,TextureMip image);
+TextureMipCache generatedFloatTextureMipCache(std::uint64_t sourceKey,FloatImage image,std::stop_token={});
 TextureMipCache generatedTextureThumbnail(const TextureMipCache& linear);
 std::size_t textureMipCacheBytes(const TextureMipCache&);
 TextureMipCache writeTextureMipCache(const std::filesystem::path&, std::uint64_t sourceKey,

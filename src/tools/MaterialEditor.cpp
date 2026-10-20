@@ -427,7 +427,12 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             }
         }
         if(materialNodeImageOperation(node.kind) || node.kind==MaterialNodeKind::Noise) {
-            if(node.kind==MaterialNodeKind::Levels) {
+            if(node.kind==MaterialNodeKind::Resize) {
+                ImGui::SeparatorText("Resize");
+                control("Change resize width",[](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
+                control("Change resize height",[](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});
+                control("Change resize filter",[](auto& n){int value=static_cast<int>(n.resize.filter);const bool changed=ImGui::Combo("Filter",&value,"Nearest\0Linear\0Area\0");if(changed)n.resize.filter=static_cast<MaterialResizeFilter>(value);return changed;});
+            } else if(node.kind==MaterialNodeKind::Levels) {
                 ImGui::SeparatorText("Levels");
                 control("Change input black",[](auto& n){return ImGui::DragFloat("Input black",&n.image.inputBlack,.005f,0,1,"%.3f");});
                 control("Change input white",[](auto& n){return ImGui::DragFloat("Input white",&n.image.inputWhite,.005f,0,1,"%.3f");});
@@ -476,7 +481,7 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 if(input.type==MaterialValueType::Mapping || input.type==MaterialValueType::Normal || materialInputLink(document_.definition().graph,selected,input.pin))continue;
                 if(!heading){ImGui::SeparatorText("Default inputs");heading=true;}
                 ImGui::PushID(static_cast<int>(input.pin));
-                const bool dynamic=(node.kind==MaterialNodeKind::Levels||node.kind==MaterialNodeKind::Invert||node.kind==MaterialNodeKind::Blend||node.kind==MaterialNodeKind::BrightnessContrast||node.kind==MaterialNodeKind::Sharpen)&&
+                const bool dynamic=(node.kind==MaterialNodeKind::Levels||node.kind==MaterialNodeKind::Invert||node.kind==MaterialNodeKind::Blend||node.kind==MaterialNodeKind::BrightnessContrast||node.kind==MaterialNodeKind::Sharpen||node.kind==MaterialNodeKind::Resize)&&
                     (input.pin==MaterialPin::Left||input.pin==MaterialPin::Right);
                 if(dynamic)control("Change image input type",[&](auto& n) {
                     auto value=materialInputDefault(n,input.pin);int type=value.type==MaterialValueType::Color4?2:value.type==MaterialValueType::Color?1:0;

@@ -23,10 +23,10 @@ This guide applies when adding or modifying Material Editor nodes. The CPU mater
 
 ## Typed pins and textures
 
-- A central presentation definition supplies names, category accents, pin colors and preview capability. Scalar/math and radial masks use green, constants/vectors ochre, textures blue, mapping and runtime inputs teal, and Output neutral brown. Use literal R/G/B accents for channel pins and retain readable type/semantic labels.
+- A central presentation definition supplies names, category accents, pin colors and preview capability. Node accents describe categories; connector colors describe resolved value types consistently across nodes. R/G/B/A and X/Y components are Scalar connectors, including Height. Polymorphic inputs follow their resolved source family. While wiring, highlight validated compatible targets, distinguish a conversion and dim incompatible targets; do not imply that every differently colored connection is invalid.
 - Keep custom node names and search aliases when display names change. Use **Scalar (1D)**, **Vector2**, **Constant**, **Multiply**, **Add**, **Lerp**, **Power**, **Clamp**, **Desaturation**, **Contrast**, **ContrastRGB**, **HueShift**, **Grunge**, **Texture 2D**, **UV**, **Panner**, **Time**, **Particle Color**, **Radial Gradient** and the model-specific Output name. The former Saturate name is a search alias for Clamp; preserve its existing numeric kind and authored names.
 - Texture **Sample Type** is Color, Linear Data or Normal. Filtering/wrapping belong to Sampler properties, not Sample Type. Roughness/metallic/AO are linear channel data; normal decoding and strength retain their specialized semantics.
-- RGB/Color expressions can connect to scalar inputs such as Roughness, Metallic or Clamp. The conversion takes the first component (R), not luminance or alpha; keep the authored source pin and perform conversion at the receiving input. Explicit R/G/B/A connections retain their selected channel. Mapping and Normal remain strict types, and Vector2 compatibility and Multiply inference are unchanged.
+- New editor RGB/RGBA-to-fixed-Scalar connections insert an explicit Grayscale node in Red mode, in the same undo transaction as both links. This preserves the established R conversion. Existing implicit links remain valid and display a small R conversion badge without rewriting loaded materials. Explicit R/G/B/A connections retain their selected channel. Mapping and Normal remain strict types, and Vector2 compatibility and Multiply inference are unchanged.
 - Texture fields include adjacent picker, thumbnail/name, clear and drop behavior. Borrow AssetLibrary thumbnail resources only for UI submission. Never serialize GPU or ImGui handles.
 - Keep node titles and texture names within the node's content width. Ellipsize long text on one line without splitting UTF-8 characters, expose the full name on hover, and keep pin columns aligned to the node edges. Asset names must not resize the node independently of its pin layout.
 - Canvas drops convert screen position to graph position exactly once. A batch creates its first node at that position and offsets later nodes by 32 graph units. Validate the entire operation before mutation; one drop is one undo command.
@@ -51,7 +51,7 @@ This guide applies when adding or modifying Material Editor nodes. The CPU mater
 - Panner consumes and returns Mapping. Disconnected Coordinate uses UV0, with UV1 available in properties. Speed defaults to zero; disconnected Time uses game seconds. Fractional Part wraps only `time * speed`, before adding the displacement, and never wraps the source coordinates. Connected mappings preserve UV set, triplanar mode and the existing normal reconstruction contract. Time and Speed inputs must be uniform expressions.
 - Time exposes Ignore Pause and an optional nonnegative Period. Period zero stops its output at zero. Scene materials animate in Edit mode; Play time starts at zero and advances with accepted fixed ticks. Material and particle previews use their own transient clocks; thumbnails evaluate at zero. Elapsed time is never serialized or published as a material edit.
 - Runtime-dependent mapping rows are evaluated at submission. Shader topology and authored material signatures remain stable as time advances. Color, shadow and particle passes use one world-frame context; asynchronous picking retains the displayed frame's context. Only time-dependent Mask coverage invalidates cached shadow silhouettes.
-- Graph schema v8 adds optional Height/tessellation values, defaulting older graphs to disabled tessellation, retains the existing image-adjustment/Grunge kinds, and stores independent Grunge layer values without a Style field. Native material files remain v6; graph readers accept schemas 1–9 and convert older Grunge style settings to layer values in memory. Save writes only the current representation. Preserve node/pin kind values, IDs, links and history. The Clamp display rename does not change its saved kind or operation.
+- Graph schema v10 adds Resize after the schema9 image/channel kinds and the schema8 Height/tessellation values. Native material files remain v6; graph readers accept schemas 1–10 and convert older Grunge style settings to layer values in memory. Save writes only the current representation. Preserve node/pin kind values, IDs, links and history. Loading never rewrites a file.
 
 ## Common materials and particle attributes
 
@@ -80,7 +80,9 @@ For each new node, cover CPU typing/validation, persistence and undo/redo, unifo
 ## Image and channel node foundation
 
 See [Image and channel nodes](MATERIAL_IMAGE_NODES.md) for the thirteen added nodes,
-explicit Color4/RGBA contract, artist controls, spatial sampling and graph schema9.
+explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema10 also adds [Resize](MATERIAL_RESIZE.md).
 Preserve all four independently wired split outputs, transparent RGB, disconnected
 defaults and per-output previews. Image adjustments preserve alpha. Noise Detail
 amount is Clouds-only; never expose it as material roughness.
+
+Resize exposes Width, Height and Filter inline and in Properties, using the same transaction and Escape cancellation rules. It preserves Scalar/RGB/RGBA type and materializes supported static UV0 branches into cached linear float images. Reject runtime or surface-dependent inputs rather than silently baking a different result. See [Resize](MATERIAL_RESIZE.md) for the sampling, cache and memory contract.

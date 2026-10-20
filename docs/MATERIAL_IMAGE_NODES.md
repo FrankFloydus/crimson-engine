@@ -6,6 +6,8 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
+Current graph schema10 additionally provides [Resize](MATERIAL_RESIZE.md) for a cached intermediate image with explicit pixel dimensions. Pin colors represent resolved types. New RGB/RGBA-to-fixed-Scalar wires insert an explicit Red conversion; older implicit conversions display an R badge and remain unchanged.
+
 ## Artist workflow
 
 Connect a Texture 2D or Noise source through an adjustment, then to a material
@@ -21,7 +23,7 @@ Do not interpret a packed roughness or metallic map as sRGB color.
 | Node | Input/output contract | Primary controls |
 | --- | --- | --- |
 | Levels | Scalar, RGB or RGBA; same resolved output family, alpha preserved | Input Black/White, Gamma, Output Black/White |
-| Invert | `1-clamp(RGB,0,1)`; same resolved family, alpha preserved | Source/default |
+| Invert | `1-RGB`; same resolved family, alpha preserved | Source/default |
 | Blend | Base, Top and scalar Mask; scalar/RGB/RGBA resolution | Mode, Opacity, disconnected inputs |
 | Grayscale | Explicit color/data channel conversion to one scalar | Conversion method |
 | To Color | Broadcast a scalar into RGB; RGBA output is opaque | Scalar source/default |
@@ -84,8 +86,8 @@ this change does not claim to solve that separate displacement limitation.
 
 ## Storage, ownership and validation
 
-Graph schema 9 appends the new kinds, Color4 and RGBA pin without renumbering old
-identities. Readers retain schemas 1–8 and supply defaults without rewriting
+Graph schema 9 introduced these kinds, Color4 and RGBA pin without renumbering old
+identities. The current schema10 writer adds Resize; readers retain schemas 1–10 and supply defaults without rewriting
 loaded files. Native material files remain v6, generated material ABI remains 32,
 and the existing twelve-sampler and uniform budgets remain in force.
 
