@@ -27,6 +27,7 @@ void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     drawToneMappingControl(environment_.toneMapping);
     drawToneMappingParameterControls(environment_.toneMapping,environment_.toneMappingParameters);
     drawGlowControls(environment_.glow);
+    drawBloomControls(environment_.bloom);
     ImGui::Checkbox("Show background",&showBackground_);
     if(ImGui::MenuItem("Reset environment")){environment_=EnvironmentSettings{};showBackground_=true;}
     ImGui::PopItemWidth();

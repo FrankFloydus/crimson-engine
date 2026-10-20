@@ -104,6 +104,31 @@ The optional `toneMappingParameters` JSON object writes `reinhardWhite`, `acesWh
 
 `ToneMapping.cpp` is the CPU reference for `tone_mapping.sh`. The CPU computes normalization and curve coefficients through `toneMappingUniforms`; Renderer binds `u_toneCurve` and `u_toneShoulder` for every presentation, including alternating Scene/Game views. These uniforms do not enter material shaders or the generated-material ABI. Curve edits require no material compilation or environment preprocessing. Default parameters preserve the existing Reinhard/ACES/AgX output and the single final sRGB encoding.
 
+## Glow and Bloom
+
+The Environment Inspector's **Post-processing** section provides independent **Glow** and **Bloom** effects. Material and Particle Editor **Environment** menus expose the same controls for their own transient previews. Both default off and remain independent of Environment Lighting.
+
+Glow selects visible Lit emission and Unlit radiance from meshes and particles, with their actual cutout/transparent coverage and fog attenuation. Bloom selects the complete visible HDR frame, including the visible sun, bright reflections, strongly lit surfaces and emission. A directional light needs a visible procedural-sky sun or HDRI highlight to produce a sun-disk halo. Foreground geometry covers that source normally. Neither effect illuminates nearby surfaces; use scene lights or GI for that.
+
+| Effect | Main controls | Foldouts |
+| --- | --- | --- |
+| Glow | Enabled, Intensity .8, Blend Mode Additive, Spread 1, Tint white, Core/Halo Balance .5 | Advanced: Saturation 1, Emission Threshold 1, Threshold Softness .5 |
+| Bloom | Enabled, Intensity .1, Spread 1, Highlight Threshold 1, Tint white | Levels: seven contributions; Advanced: Threshold Softness .5, Anamorphic Stretch 0, Quality High |
+
+Intensity ranges 0…10 and Spread 0…8; either zero bypasses the effect, including every Glow blend mode. Core/Halo Balance runs from a compact core at 0 toward a broad halo at 1. Tint is an sRGB color multiplier; white preserves source color. Saturation ranges 0…2. Thresholds are measured after exposure in HDR units (0…100000); softness 0…1 controls their gradual onset. Anamorphic Stretch runs from vertical (−1) through circular (0) to horizontal (+1). Low/High quality makes the prefilter's quality/cost tradeoff explicit.
+
+**Bloom → Levels** exposes Level 1 through Level 7, tightest to widest. Each slider ranges 0…1. The renderer normalizes their sum, so the sliders adjust the light-spread profile while Intensity adjusts its overall strength. All zero disables Bloom work. Defaults are .20, .25, .20, .15, .10, .06 and .04. Level tuning and quality remain authored even while Bloom is disabled.
+
+Spread changes the filtered image's base extent; it does not separate a sparse set of blur samples. With Spread 1 and zero Anamorphic Stretch, Glow and High Bloom use a half-resolution base and Low Bloom uses quarter resolution. Below Spread 1 the base can grow up to full resolution, so a tighter halo can cost more memory and GPU time. Wider halos and anamorphic shapes retain progressively prefiltered source reductions of at most 2:1 per axis.
+
+The shared multiscale filter replaces the old large Gaussian kernel. It uses up to five source prefilters, seven weighted levels and six reconstruction passes, at most eighteen compute dispatches per active effect. Low Bloom at default Spread 1 adds one source prefilter. The source filters use thirteen sample positions; reconstruction keeps its nine-position tent at fixed one-texel spacing to avoid separated ghost copies of tiny highlights. Both effects read the original frame and compose once during presentation before SMAA; grid/tools compose afterward. Bloom always adds in linear HDR before tone mapping. Glow never becomes a Bloom input, Bloom never becomes a Glow input, and neither enters GI donors. FP32 targets preserve Crimson's supported HDR range.
+
+**Glow → Blend Mode** selects Additive, Screen, Soft Light, Replace or Mix. Additive is the default. Mix reveals a **Mix** slider (0…1, default .5); its authored value is retained in other modes. Additive adds Glow in HDR before tone mapping. Mix crossfades the exposed scene HDR and Glow, and Replace selects Glow in that same HDR domain. Screen and Soft Light apply bounded blend equations to separately tone-mapped Glow and linear display color after editor-matte composition, preserving existing scene values above one separately. These are Crimson's color-space rules; familiar blend names do not promise identical output to another renderer. Bloom remains additive and has no blend-mode selector. Changing blend modes adds no filtering pass or resource.
+
+Old saved scene-wide Glow settings convert once in memory into Bloom, retaining Enabled, Strength, Size and Threshold. The current serializer writes both effects and marks Glow's source as Emission. Load does not rewrite files or mark the scene dirty, and no scene version changes. Complete settings support normal undo/redo, duplication, Play isolation and cancellation. Browser thumbnails omit both effects.
+
+[The Glow/Bloom checkpoint](GLOW_BLOOM_CHECKPOINT.md) records the primary references, DX11/DX12 quality checks, before/after GPU timings, memory costs and reproduction commands. Wide halos are cheaper than the former wide Gaussian; the richer narrow filter has a small measured cost increase.
+
 ## Dynamic global illumination
 
 Only ordinary point/directional lights and eligible Lit emission/environment diffuse light supply donors. Private actor light sources and darkness attenuation are absent. **GI Energy** remains a per-scene-light multiplier in [0,16], default 1. It changes diffuse donor energy independently of direct light, specular or shadows.
@@ -167,7 +192,7 @@ Optional GI/AO use detached readable depth and publish before separate Backgroun
 
 Workers compile/prepare CPU data only. Main-thread concrete GPU owners publish complete replacements, retain submitted frame leases and account for pending/retired allocations. Replaced shadow atlases remain owned through retirement; high-water capacity/padding can keep memory above active maps. Thumbnail shadows have a separate owner. All GPU owners/readbacks retire before bgfx shutdown; ResourceManager is constructed before GPU owners.
 
-Preserve linear HDR accumulation, the existing GGX/Smith/Schlick/Fresnel-Lambert response and roughness floor .045. Exposure and optional Glow precede the selected Linear/ACES/AgX/legacy Reinhard mapper; the solid editor matte/grid remain exposure independent. Apply the final sRGB encode once, then optional display-space Debanding and ImGui. Glow is a screen-space halo, not scene illumination.
+Preserve linear HDR accumulation, the existing GGX/Smith/Schlick/Fresnel-Lambert response and roughness floor .045. Exposure, Bloom and HDR Glow blend modes precede the selected Linear/ACES/AgX/legacy Reinhard mapper; Screen/Soft Light follow the mapper in linear presentation space; the solid editor matte/grid remain exposure independent. Apply the final sRGB encode once, then optional display-space Debanding and ImGui. Glow and Bloom are image-space halos and do not add scene illumination.
 
 Smooth shading normals may point away from the eye on a visible triangle. Direct lighting keeps positive `N·L` contributions and clamps signed `N·V` for specular evaluation, avoiding a black cutoff as the camera crosses the shading normal's horizon. Environment diffuse and SSGI receiver weights use the integrated specular response from the existing BRDF LUT for their energy split; they do not use raw view Fresnel to extinguish rough diffuse light. Keep these equations shared across embedded and generated surfaces, including the preview sphere. The LUT data and preprocessing equations are unchanged.
 
@@ -183,9 +208,9 @@ rotation/sign adjustment. Normalized derivatives keep frame conditioning stable
 with camera distance; the bitangent follows `B = cross(N, T) * sign`. Color,
 alpha coverage, depth, picking and shadow passes use the same coordinates;
 ordinary UV, UV1 and triplanar mappings keep their existing behavior.
-Material generation v28 retains this UV interface without additional material
-samplers or mesh subdivision, and adds the PointShadow prior-world varying and
-motion-prepass output. The 27-float/108-byte vertex layout is unchanged. Nonlinear primitives retain their original
+Material generation v29 retains this UV interface without additional material
+samplers or mesh subdivision. It retains the PointShadow prior-world varying and
+motion-prepass output while adding the optional fifth visible-emission output. The 27-float/108-byte vertex layout is unchanged. Nonlinear primitives retain their original
 LOD geometry until a chart-aware simplifier is available.
 
 Imported glTF/GLB and Quader native material sidecars are editable under their shared assigned identities. Imported origin is provenance, not a read-only flag. Existing glTF sidecars are not overwritten by promotion; exact-content imports preserve their native graphs. Quader Sync Materials governs source overwrite, independently of its Sync Lights setting. Preserve model slot overrides, factors, texture roles/channels, UV/tangent compatibility and reference-aware deletion policy.

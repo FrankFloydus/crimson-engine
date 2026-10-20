@@ -575,7 +575,17 @@ void legacyEnvironmentGlowPersistence(){
         environment.background==EnvironmentBackground{} && environment.fog==FogSettings{} && !environment.debanding,
         "Legacy environment gained procedural lighting, a visible/custom background or fog.");
     require(environment.ssgi==SsgiSettings{}&&environment.ssao==SsaoSettings{},"Legacy environment without GI must load disabled defaults.");
+    const auto oldGlow=nlohmann::json{{"version",1},{"glow",{{"enabled",true},{"strength",2.75f},{"radius",3.25f},{"threshold",.5f}}}}.dump();
+    writeFileAtomically(file,oldGlow);library.loadEnvironment(environment);
+    require(environment.glow==GlowSettings{} && environment.bloom.enabled && environment.bloom.strength==2.75f &&
+        environment.bloom.radius==3.25f && environment.bloom.threshold==.5f && read(file)==oldGlow,
+        "Legacy scene-wide Glow did not convert into Bloom in memory without rewriting its file.");
+    environment=EnvironmentSettings{};
     environment.glow={true,2.25f,3.5f,4.75f};environment.source=EnvironmentSource::ProceduralSky;
+    environment.glow.tint={.4f,.6f,.8f};environment.glow.coreHalo=.75f;environment.glow.saturation=1.3f;environment.glow.softKnee=.25f;
+    environment.glow.blendMode=GlowBlendMode::SoftLight;environment.glow.mix=.35f;
+    environment.bloom={true,.4f,1.25f,.75f};environment.bloom.tint={.7f,.8f,.9f};environment.bloom.anamorphic=.3f;
+    environment.bloom.softKnee=.7f;environment.bloom.quality=BloomQuality::Low;environment.bloom.levels={0,.2f,.4f,.6f,.8f,1,0};
     environment.procedural={{.1f,.2f,.3f},{.3f,.4f,.5f},{.6f,.7f,.8f},{.8f,.6f,.4f},.7f,.4f,1.5f,45.f,.6f};
     environment.background={false,true,{.12f,.23f,.34f}};environment.fog={true,{.4f,.5f,.6f},.025f};
     environment.fog.mode=FogMode::Depth;environment.fog.depthBegin=15;environment.fog.depthEnd=0;
@@ -604,6 +614,8 @@ void legacyEnvironmentGlowPersistence(){
     require(reopened==environment,"Restoring extended fog after legacy load lost authored settings.");
     auto invalid=environment;invalid.glow.radius=9;library.saveEnvironment(invalid);
     require(read(file)==saved,"Invalid Glow settings replaced the saved legacy environment file.");
+    invalid=environment;invalid.bloom.levels[6]=1.1f;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid Bloom level replaced the saved legacy environment file.");
     invalid=environment;invalid.fog.density=-.1f;library.saveEnvironment(invalid);
     require(read(file)==saved,"Invalid fog density replaced the saved legacy environment file.");
     invalid=environment;invalid.procedural.sunHaloExtent=invalid.procedural.sunDiameter*.5f;library.saveEnvironment(invalid);

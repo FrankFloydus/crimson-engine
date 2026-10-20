@@ -363,7 +363,7 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     const auto baseline=main();
     settings.environment.glow={true,1,1,1};const auto glowing=main();
     check(renderer.glowStatus().empty(),renderer.glowStatus());
-    check(renderer.glowResidentBytes()==64u*65u*32u,"Glow did not account for its two half-resolution FP32 targets.");
+    check(renderer.glowResidentBytes()>127u*129u*16u,"Glow did not account for its visible-emission source and FP32 pyramid targets.");
     check(component(glowing,78,64,0)>component(baseline,78,64,0)+5,"Bright additive particles with zero HDR coverage produced no halo outside their sprite.");
     check(std::abs(component(glowing,78,64,1)-component(baseline,78,64,1))<=1,"Red Glow changed an unrelated color channel or editor matte.");
     settings.environment.glow.enabled=false;check(main().rgba==baseline.rgba,"Disabling Glow did not restore the exact original image.");
@@ -392,12 +392,14 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     settings.environment.glow.enabled=false;check(main().rgba==empty.rgba,"Empty-background color contributed to Glow extraction.");
     scene.particles=particles;settings.environment.glow.enabled=true;
     renderer.resizeViewport(128,128);renderer.resizeGameViewport(128,128);renderer.resizeParticlePreview(128,128);
+    renderer.render(scene);tick();const auto singleViewGlowBytes=renderer.glowResidentBytes();
+    check(singleViewGlowBytes>128u*128u*16u,"Glow source/pyramid allocations were not counted for an active view.");
     renderer.render(scene);renderer.renderGame(scene);renderer.renderParticlePreview(settings,particles,materials);
     const auto mainImage=copy(renderer.viewportTexture(),128,128,MainReadbackView);
     const auto gameImage=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
     const auto previewImage=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(mainImage.rgba==gameImage.rgba && mainImage.rgba==previewImage.rgba,"Scene, Game and particle preview did not share the same Glow result.");
-    check(renderer.glowResidentBytes()==3u*64u*64u*32u,"Resized/independent Glow targets were not owned or counted correctly.");
+    check(renderer.glowResidentBytes()==3u*singleViewGlowBytes,"Resized/independent Glow source/pyramids were not owned or counted correctly.");
     // The full supported linear radiance remains finite through extraction and blur.
     particles[0].color[0]=MaxParticleRadiance;renderer.renderGame(scene);
     const auto maximum=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
@@ -413,7 +415,7 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     const auto surface=[&] {renderer.renderMaterialPreview(settings,material,bindings,MaterialPreviewMesh::Sphere,transform,false);return copy(renderer.materialPreviewTexture(),128,128,MaterialReadbackView);};
     settings.environment.glow.enabled=false;const auto materialOff=surface();settings.environment.glow.enabled=true;const auto materialOn=surface();
     check(component(materialOn,80,64,0)>component(materialOff,80,64,0)+3,"Material preview bypassed shared Glow post-processing.");
-    check(renderer.glowResidentBytes()==4u*64u*64u*32u,"Material preview Glow memory was not counted.");
+    check(renderer.glowResidentBytes()==4u*singleViewGlowBytes,"Material preview Glow memory was not counted.");
     // Thumbnail rendering has no Glow views, even if handed enabled scene settings.
     const auto thumbnail=[&](std::uint64_t signature) {
         check(renderer.renderThumbnail("glow-off-thumbnail",signature,scene,128),renderer.thumbnailStatus());
@@ -423,9 +425,9 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     const auto thumbnailOn=thumbnail(1);settings.environment.glow.enabled=false;const auto thumbnailOff=thumbnail(2);
     check(thumbnailOn.rgba==thumbnailOff.rgba,"Asset thumbnail rendering inherited view Glow settings.");settings.environment.glow.enabled=true;
     renderer.releaseGameViewport();renderer.releaseParticlePreview();renderer.releaseMaterialPreview();
-    check(renderer.glowResidentBytes()==64u*64u*32u,"Released preview/Game targets retained Glow allocations.");
+    check(renderer.glowResidentBytes()==singleViewGlowBytes,"Released preview/Game targets retained Glow allocations.");
     renderer.resizeViewport(128,96);check(renderer.glowResidentBytes()==0,"Viewport resize retained old Glow scratch.");
-    renderer.render(scene);check(renderer.glowResidentBytes()==64u*48u*32u,"Glow scratch did not follow viewport resize.");
+    renderer.render(scene);check(renderer.glowResidentBytes()>128u*96u*16u&&renderer.glowResidentBytes()<singleViewGlowBytes,"Glow source/pyramids did not follow viewport resize.");
     renderer.resizeViewport(128,128);renderer.setAppearance({});
 }
 

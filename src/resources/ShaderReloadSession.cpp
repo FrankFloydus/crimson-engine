@@ -75,7 +75,7 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,20> definitions{{
+    constexpr std::array<Pair,18> definitions{{
         {RendererProgram::SmaaEdges,"vs_smaa","fs_smaa_edges"},
         {RendererProgram::SmaaWeights,"vs_smaa","fs_smaa_weights"},
         {RendererProgram::SmaaBlend,"vs_smaa","fs_smaa_blend"},
@@ -89,10 +89,11 @@ void ShaderReloadSession::pump() {
         {RendererProgram::Particle,"vs_particle","fs_particle"},{RendererProgram::Sky,"vs_present","fs_sky"},
         {RendererProgram::PointShadow,"vs_point_shadow","fs_point_shadow"},
         {RendererProgram::CollisionOverlay,"vs_collision_overlay","fs_collision_overlay"},
-        {RendererProgram::DirectionalShadow,"vs_directional_shadow","fs_directional_shadow"},
-        {RendererProgram::GlowExtract,"vs_present","fs_glow_extract"},{RendererProgram::GlowBlur,"vs_present","fs_glow_blur"}}};
+        {RendererProgram::DirectionalShadow,"vs_directional_shadow","fs_directional_shadow"}}};
     std::vector<RendererShaderPair> pairs; pairs.reserve(definitions.size());
     for (const auto& pair:definitions) pairs.push_back({pair.program,ready.at(pair.vertex)->bytes,ready.at(pair.fragment)->bytes});
+    pairs.push_back({RendererProgram::GlowDownsample,{},ready.at("cs_glow_bloom_downsample")->bytes});
+    pairs.push_back({RendererProgram::GlowUpsample,{},ready.at("cs_glow_bloom_upsample")->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }

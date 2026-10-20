@@ -989,7 +989,7 @@ void environmentToneMappingStorageAndRuntime() {
     const auto environment=document.createEnvironment(),actor=addControlledActor(document);
     require(environment && actor,document.status());
     require(resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"New environment changed legacy appearance.");
-    const GlowSettings authoredGlow{true,2.25f,3.5f,.65f};
+    const GlowSettings authoredGlow{true,2.25f,3.5f,.65f,{.4f,.6f,.8f},.75f,1.4f,.25f,GlowBlendMode::Screen,.25f};
     const ToneMappingParameters authoredTone{4,2.5f,24,1.7f};
     auto record=*document.scene().find(environment);record.environment->environment.toneMapping=ToneMapping::AgX;
     record.environment->environment.toneMappingParameters=authoredTone;
@@ -1046,7 +1046,7 @@ void environmentToneMappingStorageAndRuntime() {
     require(resolveEnvironment(runtime.scene()).environment.toneMappingParameters==runtimeTone,"Canceled Play tone mapping tuning changed committed parameters.");
     near(position(runtime.scene(),actor),{8,0,3});
 
-    const GlowSettings runtimeGlow{true,4.25f,1.5f,2.5f};
+    const GlowSettings runtimeGlow{true,4.25f,1.5f,2.5f,{.8f,.4f,.2f},.3f,.6f,.85f,GlowBlendMode::Mix,.8f};
     const auto beforeGlowHistory=runtime.history().size();
     require(runtime.begin("Glow during Play"),runtime.status());
     require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)
@@ -1079,6 +1079,45 @@ void environmentToneMappingStorageAndRuntime() {
         resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX && resolveEnvironment(runtime.scene()).environment.toneMappingParameters==authoredTone &&
         !runtime.history().canUndo() && !runtime.dirty(),
         "Starting Play again retained runtime Glow, tone mapping or history.");
+}
+void environmentBloomRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto environment=document.createEnvironment(),actor=addControlledActor(document);
+    BloomSettings authored{true,.3f,2.5f,.75f};authored.tint={.6f,.8f,1};authored.softKnee=.8f;
+    authored.anamorphic=-.25f;authored.quality=BloomQuality::Low;authored.levels={.1f,.2f,0,.4f,0,.6f,.7f};
+    auto record=*document.scene().find(environment);record.environment->environment.bloom=authored;
+    require(document.updateEntity(environment,record) && document.save("Bloom runtime"),document.status());
+    const auto records=document.scene().records();const auto history=document.history().size();
+    const auto selection=document.selection();const bool dirty=document.dirty();
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(resolveEnvironment(runtime.scene()).environment.bloom==authored && !runtime.dirty() && !runtime.history().canUndo(),
+        "Play clone lost Bloom tuning or inherited authored history.");
+    BloomSettings live=authored;live.strength=.7f;live.radius=4;live.threshold=2;live.tint={1,.4f,.2f};
+    live.softKnee=.2f;live.anamorphic=.5f;live.quality=BloomQuality::High;live.levels={0,0,0,0,0,0,1};
+    require(runtime.begin("Bloom during Play"),runtime.status());
+    require(runtime.update([&](auto& values,auto&){for(auto& entity:values)if(entity.id==environment)
+        entity.environment->environment.bloom.levels[0]=.9f;}),runtime.status());
+    pose(runtime,actor,{8,0,3});
+    require(runtime.update([&](auto& values,auto&){for(auto& entity:values)if(entity.id==environment)
+        entity.environment->environment.bloom=live;}) && runtime.commit(),runtime.status());
+    require(runtime.history().size()==1 && extractScene(runtime.scene()).environment.environment.bloom==live,
+        "Bloom gesture did not form one runtime command or extraction lost artistic controls/levels.");
+    require(runtime.undo() && resolveEnvironment(runtime.scene()).environment.bloom==authored,
+        "Runtime Bloom undo did not restore authored controls and seven levels.");near(position(runtime.scene(),actor),{8,0,3});
+    require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.bloom==live,
+        "Runtime Bloom redo lost its controls.");near(position(runtime.scene(),actor),{8,0,3});
+    const auto committedHistory=runtime.history().size();
+    require(runtime.begin("Cancel Bloom") && runtime.update([&](auto& values,auto&){for(auto& entity:values)if(entity.id==environment) {
+        entity.environment->environment.bloom.enabled=false;entity.environment->environment.bloom.levels.fill(0);
+    }}),runtime.status());
+    pose(runtime,actor,{9,0,4});runtime.cancel();
+    require(resolveEnvironment(runtime.scene()).environment.bloom==live && runtime.history().size()==committedHistory,
+        "Canceled Bloom controls changed the committed values or history.");near(position(runtime.scene(),actor),{9,0,4});
+    same(records,document.scene().records());
+    require(document.history().size()==history && document.dirty()==dirty && document.selection().ids==selection.ids &&
+        document.selection().primary==selection.primary,"Runtime Bloom changed the authored scene state.");
+    require(runtime.resetTransientFrom(document) && resolveEnvironment(runtime.scene()).environment.bloom==authored &&
+        !runtime.history().canUndo() && !runtime.dirty(),"Restarting Play retained runtime Bloom edits.");
 }
 void environmentAmbientLightRuntime() {
     TempProject project;SceneDocument document(project.root);
@@ -1189,4 +1228,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentBloomRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

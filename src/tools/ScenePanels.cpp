@@ -62,6 +62,12 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentFogSkyAffect, EnvironmentFogAerialPerspective, EnvironmentFogSunScatter,
     EnvironmentToneMapping, EnvironmentReinhardWhite, EnvironmentAcesWhite, EnvironmentAgxWhite, EnvironmentAgxContrast,
     EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
+    EnvironmentGlowTint,EnvironmentGlowCoreHalo,EnvironmentGlowSaturation,EnvironmentGlowSoftKnee,
+    EnvironmentGlowBlendMode,EnvironmentGlowMix,
+    EnvironmentBloomEnabled,EnvironmentBloomStrength,EnvironmentBloomSize,EnvironmentBloomThreshold,EnvironmentBloomTint,
+    EnvironmentBloomSoftKnee,EnvironmentBloomAnamorphic,EnvironmentBloomQuality,
+    EnvironmentBloomLevel1,EnvironmentBloomLevel2,EnvironmentBloomLevel3,EnvironmentBloomLevel4,
+    EnvironmentBloomLevel5,EnvironmentBloomLevel6,EnvironmentBloomLevel7,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
@@ -770,8 +776,23 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         });
         field(Edit::EnvironmentDebanding,"Toggle debanding",ImGui::Checkbox("Debanding",&value.debanding));
         drawGlowControls(value.glow,[&](GlowControl control,bool changed) {
-            constexpr std::array<Edit,4> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold};
-            constexpr std::array<const char*,4> labels{"Toggle glow","Change glow strength","Change glow size","Change glow threshold"};
+            constexpr std::array<Edit,10> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold,
+                Edit::EnvironmentGlowTint,Edit::EnvironmentGlowCoreHalo,Edit::EnvironmentGlowSaturation,Edit::EnvironmentGlowSoftKnee,
+                Edit::EnvironmentGlowBlendMode,Edit::EnvironmentGlowMix};
+            constexpr std::array<const char*,10> labels{"Toggle glow","Change glow intensity","Change glow spread","Change glow threshold",
+                "Change glow tint","Change glow core/halo balance","Change glow saturation","Change glow threshold softness",
+                "Change glow blend mode","Change glow mix"};
+            const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
+        });
+        drawBloomControls(value.bloom,[&](BloomControl control,bool changed) {
+            constexpr std::array<Edit,15> properties{Edit::EnvironmentBloomEnabled,Edit::EnvironmentBloomStrength,Edit::EnvironmentBloomSize,Edit::EnvironmentBloomThreshold,
+                Edit::EnvironmentBloomTint,Edit::EnvironmentBloomSoftKnee,Edit::EnvironmentBloomAnamorphic,Edit::EnvironmentBloomQuality,
+                Edit::EnvironmentBloomLevel1,Edit::EnvironmentBloomLevel2,Edit::EnvironmentBloomLevel3,Edit::EnvironmentBloomLevel4,
+                Edit::EnvironmentBloomLevel5,Edit::EnvironmentBloomLevel6,Edit::EnvironmentBloomLevel7};
+            constexpr std::array<const char*,15> labels{"Toggle bloom","Change bloom intensity","Change bloom spread","Change bloom threshold",
+                "Change bloom tint","Change bloom threshold softness","Change bloom anamorphic stretch","Change bloom quality",
+                "Change bloom level 1","Change bloom level 2","Change bloom level 3","Change bloom level 4",
+                "Change bloom level 5","Change bloom level 6","Change bloom level 7"};
             const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
         });
         if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());

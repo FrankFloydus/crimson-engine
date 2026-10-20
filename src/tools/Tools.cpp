@@ -189,6 +189,7 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     changed |= drawToneMappingControl(environment.toneMapping);
     changed |= drawToneMappingParameterControls(environment.toneMapping,environment.toneMappingParameters);
     changed |= drawGlowControls(environment.glow);
+    changed |= drawBloomControls(environment.bloom);
     if (!renderer.environmentStatus().empty()) ImGui::TextWrapped("%s", renderer.environmentStatus().c_str());
     if (!renderer.glowStatus().empty()) ImGui::TextWrapped("%s", renderer.glowStatus().c_str());
     ImGui::Spacing();
@@ -346,14 +347,77 @@ bool drawGlowControls(GlowSettings& glow, const GlowControlEdit& edit) {
     ImGui::PushID("Glow");
     if (ImGui::CollapsingHeader("Glow",ImGuiTreeNodeFlags_DefaultOpen)) {
         field(GlowControl::Enabled,ImGui::Checkbox("Enabled##glow",&glow.enabled));
-        help("Adds a halo around bright colors.");
+        help("Adds an artistic halo around visible material and particle emission.");
         ImGui::BeginDisabled(!glow.enabled);
-        field(GlowControl::Strength,ImGui::SliderFloat("Strength",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-        field(GlowControl::Size,ImGui::SliderFloat("Size",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(GlowControl::Strength,ImGui::SliderFloat("Intensity",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        help("Overall halo intensity. Zero disables Glow in every blend mode.");
+        int blendMode=static_cast<int>(glow.blendMode);const char* blendModes[]{"Additive","Screen","Soft Light","Replace","Mix"};
+        const bool modeChanged=ImGui::Combo("Blend Mode",&blendMode,blendModes,5);
+        if(modeChanged)glow.blendMode=static_cast<GlowBlendMode>(blendMode);
+        field(GlowControl::BlendMode,modeChanged);
+        constexpr std::array<const char*,5> blendHelp{"Adds the halo to scene lighting.","Brightens with a soft screen blend.",
+            "Uses the halo to shape image contrast.","Shows the halo in place of scene lighting.","Crossfades scene lighting and the halo."};
+        help(blendHelp[static_cast<std::size_t>(glow.blendMode)]);
+        if(glow.blendMode==GlowBlendMode::Mix) {
+            field(GlowControl::Mix,ImGui::SliderFloat("Mix",&glow.mix,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            help("Zero keeps the scene; one shows the halo.");
+        }
+        field(GlowControl::Size,ImGui::SliderFloat("Spread",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp));
         help("Screen-space halo spread. Zero disables the halo.");
+        field(GlowControl::Tint,ImGui::ColorEdit3("Tint",glow.tint.data(),ImGuiColorEditFlags_Float));
+        help("White preserves the emission color.");
+        field(GlowControl::CoreHalo,ImGui::SliderFloat("Core/Halo Balance",&glow.coreHalo,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        help("Lower favors a tight core; higher favors a broad, soft halo.");
         if (ImGui::TreeNode("Advanced")) {
-            field(GlowControl::Threshold,ImGui::DragFloat("Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-            help("Minimum brightness after exposure that contributes to glow.");
+            field(GlowControl::Saturation,ImGui::SliderFloat("Saturation",&glow.saturation,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            field(GlowControl::Threshold,ImGui::DragFloat("Emission Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            help("Emission brightness after exposure that starts contributing to Glow.");
+            field(GlowControl::SoftKnee,ImGui::SliderFloat("Threshold Softness",&glow.softKnee,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            ImGui::TreePop();
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::PopID();
+    return changed;
+}
+
+bool drawBloomControls(BloomSettings& bloom, const BloomControlEdit& edit) {
+    bool changed=false;
+    const auto field=[&](BloomControl control,bool updated) {
+        changed|=updated;
+        if(edit)edit(control,updated);
+    };
+    ImGui::PushID("Bloom");
+    if(ImGui::CollapsingHeader("Bloom",ImGuiTreeNodeFlags_DefaultOpen)) {
+        field(BloomControl::Enabled,ImGui::Checkbox("Enabled##bloom",&bloom.enabled));
+        help("Scatters visible HDR highlights, including the sun, reflections and emission.");
+        ImGui::BeginDisabled(!bloom.enabled);
+        field(BloomControl::Strength,ImGui::SliderFloat("Intensity",&bloom.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        help("Overall highlight-scattering intensity. Zero disables Bloom.");
+        field(BloomControl::Size,ImGui::SliderFloat("Spread",&bloom.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        help("Screen-space highlight spread. Zero disables Bloom.");
+        field(BloomControl::Threshold,ImGui::DragFloat("Highlight Threshold",&bloom.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        help("Scene brightness after exposure that starts contributing to Bloom.");
+        field(BloomControl::Tint,ImGui::ColorEdit3("Tint",bloom.tint.data(),ImGuiColorEditFlags_Float));
+        help("White preserves the highlight color.");
+        if(ImGui::TreeNodeEx("Levels",ImGuiTreeNodeFlags_DefaultOpen)) {
+            constexpr std::array<const char*,BloomLevelCount> labels{"Level 1","Level 2","Level 3","Level 4","Level 5","Level 6","Level 7"};
+            for(std::size_t level=0;level<bloom.levels.size();++level) {
+                const auto control=static_cast<BloomControl>(static_cast<int>(BloomControl::Level1)+static_cast<int>(level));
+                field(control,ImGui::SliderFloat(labels[level],&bloom.levels[level],0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+                help("Relative contribution: Level 1 is tightest and Level 7 widest. Weights normalize together; all zero disables Bloom.");
+            }
+            ImGui::TreePop();
+        }
+        if(ImGui::TreeNode("Advanced")) {
+            field(BloomControl::SoftKnee,ImGui::SliderFloat("Threshold Softness",&bloom.softKnee,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            field(BloomControl::Anamorphic,ImGui::SliderFloat("Anamorphic Stretch",&bloom.anamorphic,-1,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            help("Negative stretches vertically; positive stretches horizontally.");
+            int quality=static_cast<int>(bloom.quality);const char* qualities[]{"Low","High"};
+            const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,2);
+            if(qualityChanged)bloom.quality=static_cast<BloomQuality>(quality);
+            field(BloomControl::Quality,qualityChanged);
+            help("High improves stability around small, bright highlights.");
             ImGui::TreePop();
         }
         ImGui::EndDisabled();

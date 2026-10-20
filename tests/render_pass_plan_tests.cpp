@@ -44,7 +44,8 @@ void error(const RenderPassPlan& plan,const RenderResourceTable& table,Error exp
 }
 RenderPassPlanConfig fullConfig(RenderViewPurpose purpose=RenderViewPurpose::Scene) {
     RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
-    config.glow=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=purpose==RenderViewPurpose::Scene;
+    config.glowBaseWidth=config.glowBaseHeight=config.bloomBaseWidth=config.bloomBaseHeight=32;
+    config.glow=true;config.bloom=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=purpose==RenderViewPurpose::Scene;
     config.worldShadows=true;config.collisionOverlays=true;config.ssgi=true;config.ssao=true;return config;
 }
 RenderTextureView texture(std::uint32_t id,std::uint32_t width=64,std::uint32_t height=64,std::uint16_t format=1) {
@@ -65,6 +66,30 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
            resource==Resource::SsgiTraceScratch || resource==Resource::SsgiTemporalScratch ||
            resource==Resource::SsgiFilterA || resource==Resource::SsgiFilterB || resource==Resource::SsgiFilterC) {
             binding.textures[0].layers=2;binding.textures[0].range.layerCount=2;
+        }
+    }
+    for(bool bloom:{false,true}) {
+        const auto& config=plan.config;
+        if(!(bloom?config.bloom:config.glow))continue;
+        const auto first_prefilter=bloom?Resource::BloomPrefilter0:Resource::GlowPrefilter0;
+        const auto first_down=bloom?Resource::BloomDown0:Resource::GlowDown0;
+        const auto first_up=bloom?Resource::BloomUp0:Resource::GlowUp0;
+        const unsigned base_width=bloom?config.bloomBaseWidth:config.glowBaseWidth,base_height=bloom?config.bloomBaseHeight:config.glowBaseHeight;
+        unsigned width=64,height=64;
+        const auto set_extent=[&](Resource resource,unsigned w,unsigned h) {
+            auto& image=table.bindings[index(resource)].textures[0];image.width=w;image.height=h;
+        };
+        const unsigned prefilters=bloom?config.bloomPrefilters:config.glowPrefilters;
+        for(unsigned i=0;i<prefilters;++i) {
+            width=std::max(base_width,(width+1)/2);height=std::max(base_height,(height+1)/2);
+            set_extent(static_cast<Resource>(unsigned(first_prefilter)+i),width,height);
+        }
+        width=base_width;height=base_height;
+        const unsigned levels=bloom?config.bloomLevels:config.glowLevels;
+        for(unsigned i=0;i<levels;++i) {
+            set_extent(static_cast<Resource>(unsigned(first_down)+i),width,height);
+            if(i<std::max(1u,levels-1))set_extent(static_cast<Resource>(unsigned(first_up)+i),width,height);
+            width=(width+1)/2;height=(height+1)/2;
         }
     }
     if(plan.config.ssgi) {
@@ -89,15 +114,17 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true}) {
+        for(bool glow:{false,true})for(bool bloom:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true}) {
             const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=world || purpose==RenderViewPurpose::Thumbnail;
             config.glow=glow && purpose!=RenderViewPurpose::Thumbnail;
+            config.bloom=bloom && purpose!=RenderViewPurpose::Thumbnail;
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions && world;config.ssgi=gi && world;config.ssao=ao && world;
             config.smaa=smaa;
+            config.glowBaseWidth=config.glowBaseHeight=config.bloomBaseWidth=config.bloomBaseHeight=32;
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported profile has an invalid structural plan.");
             check(bool(validateRenderPassPlan(plan,concrete(plan))),"A supported profile has invalid concrete resource bindings.");
             for(const auto kind:{Kind::ModelDeformation,Kind::LightAssignment,Kind::Background,Kind::Opaque,Kind::Transparent,Kind::ToneMap,Kind::Encode})
@@ -119,7 +146,7 @@ void profiles() {
     const auto scene=buildRenderPassPlan(fullConfig());
     check(scene.find(Kind::PointShadowUpdates)->physicalView==1 && scene.find(Kind::PointShadowUpdates)->lastPhysicalView()==96,"Active point-shadow range changed.");
     check(scene.find(Kind::Background)->physicalView==114 && scene.find(Kind::Opaque)->physicalView==115 && scene.find(Kind::Transparent)->physicalView==128,"Scene split-stage layout changed.");
-    check(scene.find(Kind::GlowExtract)->physicalView==136 && scene.find(Kind::ToneMap)->physicalView==144 && scene.find(Kind::Encode)->physicalView==159,"Scene post order changed.");
+    check(scene.find(Kind::GlowDown0)->physicalView==136 && scene.find(Kind::ToneMap)->physicalView==144 && scene.find(Kind::Encode)->physicalView==159,"Scene post order changed.");
     const auto game=buildRenderPassPlan(fullConfig(RenderViewPurpose::Game));
     check(game.find(Kind::Background)->physicalView==370 && game.find(Kind::Opaque)->physicalView==371 && game.find(Kind::Transparent)->physicalView==384,"Game split-stage layout changed.");
     check(game.find(Kind::CollisionOverlays)->physicalView==408 && game.find(Kind::Encode)->physicalView==415,"Game overlays no longer follow tone mapping.");
@@ -129,7 +156,7 @@ void attachmentAndDependencyContracts() {
     const auto correct=buildRenderPassPlan(fullConfig());
     auto value=correct;erase(value,Kind::LightAssignment);error(value,Error::MissingProducer,"Opaque shading accepted missing light assignment.");
     value=correct;erase(value,Kind::Background);error(value,Error::UndefinedLoad,"Opaque attachments loaded without background initialization.");
-    value=correct;erase(value,Kind::GlowHorizontal);error(value,Error::MissingProducer,"Vertical blur read unproduced horizontal data.");
+    value=correct;erase(value,Kind::GlowDown1);error(value,Error::MissingProducer,"Glare pyramid read an unproduced downsample level.");
     value=correct;erase(value,Kind::ToneMap);error(value,Error::UndefinedLoad,"Grid loaded an undefined display-linear composite.");
     value=correct;erase(value,Kind::Picking);error(value,Error::MissingProducer,"Picking readback accepted unproduced IDs.");
     value=correct;erase(value,Kind::ModelDeformation);error(value,Error::MissingProducer,"Shadow/color accepted missing deformed geometry.");
@@ -199,7 +226,7 @@ void concreteHazards() {
     table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textures[0].format++;error(plan,table,Error::IncompatibleAlias,"One physical capture allocation accepted incompatible descriptors.");
     table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textures[0].generation++;error(plan,table,Error::StaleVersion,"A generation tag hid the same live physical handle in two logical bindings.");
     table=correct;table.bindings[index(Resource::Composite)].textures=table.bindings[index(Resource::SceneHdr)].textures;error(plan,table,Error::FeedbackLoop,"Tone mapping sampled its own attached output.");
-    table=correct;table.bindings[index(Resource::PickColor)].textures=table.bindings[index(Resource::GlowA)].textures;error(plan,table,Error::IncompatibleAlias,"Unrelated picking and Glow allocations aliased silently.");
+    table=correct;table.bindings[index(Resource::PickColor)].textures=table.bindings[index(Resource::GlowUp0)].textures;error(plan,table,Error::IncompatibleAlias,"Unrelated picking and Glow allocations aliased silently.");
     table=correct;table.bindings[index(Resource::SsaoVisibility)].textures[0].range.firstTexel=1040;error(plan,table,Error::IncompatibleAlias,"GI and AO shared an overlapping packed atlas texel.");
     table=correct;table.bindings[index(Resource::SsgiTemporalScratch)].textures=table.bindings[index(Resource::SsgiHistoryPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote its spatial feedback allocation.");
     table=correct;table.bindings[index(Resource::SsgiHistoryCurrent)].textures=table.bindings[index(Resource::SsgiTemporalScratch)].textures;error(plan,table,Error::FeedbackLoop,"Early reconstruction sampled and overwrote temporal scratch.");
@@ -225,6 +252,80 @@ void concreteHazards() {
     table=correct;table.bindings[index(Resource::Display)].textureCount=0;
     check(bool(validateRenderPassBindings(plan,table,Kind::SsgiTrace)),"Before-dispatch validation required an unallocated later display output.");
     check(validateRenderPassBindings(plan,table,Kind::Encode).error==Error::MissingBinding,"Final recording boundary accepted an absent display output.");
+}
+void glarePyramidContracts() {
+    for(unsigned levels=1;levels<=7;++levels)for(bool glow:{false,true}) {
+        auto config=fullConfig();config.glow=glow;config.bloom=!glow;
+        config.glowLevels=config.bloomLevels=static_cast<std::uint8_t>(levels);
+        const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
+        check(bool(validateRenderPassPlan(plan,resources)),"An effective glare level count has invalid bindings.");
+        const auto down=glow?Kind::GlowDown0:Kind::BloomDown0;
+        const auto last=glow?Kind::GlowUp0:Kind::BloomUp0;
+        unsigned down_count=0,up_count=0;
+        for(const auto& entry:plan.passes()) {
+            if(entry.kind>=down && entry.kind<=static_cast<Kind>(unsigned(down)+6))++down_count;
+            if(entry.kind>=static_cast<Kind>(unsigned(last)-5) && entry.kind<=last)++up_count;
+        }
+        check(down_count==levels && up_count==std::max(1u,levels-1),"Unused glare levels retained dispatches or a needed scale disappeared.");
+        check(plan.find(down)->execution==RenderPassExecution::Compute &&
+            plan.find(last)->physicalView==plan.find(down)->physicalView &&
+            plan.find(last)->physicalView<plan.find(Kind::ToneMap)->physicalView,"Glare pyramid escaped ordered compute before tone mapping.");
+        const auto source=glow?Resource::GlowEmissionSource:Resource::SceneHdr;
+        check(std::any_of(plan.find(down)->uses().begin(),plan.find(down)->uses().end(),[&](const auto& item){return item.resource==source && item.access==Access::SampledRead;}),"Bloom/Glow selected the wrong original source.");
+        auto broken=plan;erase(broken,down);error(broken,Error::MissingProducer,"A glare chain accepted an absent original-source extraction.");
+        if(levels>1) {
+            broken=plan;erase(broken,static_cast<Kind>(unsigned(down)+levels-1));
+            error(broken,Error::MissingProducer,"Reconstruction read a missing coarse glare level.");
+        }
+        const auto output=glow?Resource::GlowUp0:Resource::BloomUp0;
+        const auto input=glow?Resource::GlowDown0:Resource::BloomDown0;
+        auto bad=resources;bad.bindings[index(output)].textures=bad.bindings[index(input)].textures;
+        error(plan,bad,Error::FeedbackLoop,"Glare reconstruction sampled its own output allocation.");
+        broken=plan;erase(broken,last);error(broken,Error::MissingProducer,"Tone mapping accepted unpublished glare.");
+    }
+    for(unsigned prefilters=0;prefilters<=5;++prefilters)for(bool bloom:{false,true}) {
+        auto config=fullConfig();config.glow=!bloom;config.bloom=bloom;
+        const auto base=static_cast<std::uint16_t>(32u>>prefilters);
+        config.glowBaseWidth=config.glowBaseHeight=config.bloomBaseWidth=config.bloomBaseHeight=base;
+        config.glowPrefilters=config.bloomPrefilters=static_cast<std::uint8_t>(prefilters);
+        const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
+        check(bool(validateRenderPassPlan(plan,resources)),"A bounded glare prefilter chain has invalid concrete extents.");
+        const auto first=bloom?Kind::BloomPrefilter0:Kind::GlowPrefilter0;
+        for(unsigned i=0;i<5;++i)check(plan.has(static_cast<Kind>(unsigned(first)+i))==(i<prefilters),"Glare prefix includes disabled stages or skips a required source reduction.");
+        if(prefilters) {
+            auto broken=plan;erase(broken,first);error(broken,Error::MissingProducer,"A glare prefix read an unproduced reduced source.");
+            auto bad=resources;
+            const auto resource=bloom?Resource::BloomPrefilter0:Resource::GlowPrefilter0;
+            --bad.bindings[index(resource)].textures[0].width;
+            error(plan,bad,Error::InvalidTexture,"An incorrect prefilter extent silently increased the source reduction ratio.");
+            bad=resources;const auto down=bloom?Resource::BloomDown0:Resource::GlowDown0;
+            ++bad.bindings[index(down)].textures[0].height;
+            error(plan,bad,Error::InvalidTexture,"A stale artistic base allocation was accepted.");
+        }
+        if(prefilters) {
+            auto missing=plan;
+            if(bloom)--missing.config.bloomPrefilters;else --missing.config.glowPrefilters;
+            error(missing,Error::UnexpectedPass,"An undeclared glare prefix remained in the plan.");
+        }
+    }
+    auto maximum=fullConfig();maximum.glowPrefilters=maximum.bloomPrefilters=5;
+    maximum.glowBaseWidth=maximum.glowBaseHeight=maximum.bloomBaseWidth=maximum.bloomBaseHeight=1;
+    maximum.smaa=true;
+    const auto maximum_plan=buildRenderPassPlan(maximum);
+    check(maximum_plan.count<=RenderPassPlan::MaximumPasses && bool(validateRenderPassPlan(maximum_plan,concrete(maximum_plan))),"Maximum dual-effect glare chains exceed the fixed plan capacity.");
+    auto config=fullConfig();config.bloomLevels=0;error(buildRenderPassPlan(config),Error::InvalidPass,"Active Bloom accepted zero levels.");
+    config.bloomLevels=8;error(buildRenderPassPlan(config),Error::InvalidPass,"Bloom accepted an eighth unsupported scale.");
+    config=fullConfig();config.glow=false;config.bloom=false;
+    const auto off=buildRenderPassPlan(config);
+    for(const auto& entry:off.passes())for(const auto& item:entry.uses())
+        check(item.resource<Resource::GlowEmissionSource || item.resource>Resource::BloomUp5,"Disabled glare retained emission or pyramid dependencies.");
+    config=fullConfig();const auto full=buildRenderPassPlan(config);
+    const auto* opaque=full.find(Kind::Opaque);const auto* transparent=full.find(Kind::Transparent);
+    for(const auto* entry:{opaque,transparent})
+        check(std::any_of(entry->uses().begin(),entry->uses().end(),[](const auto& item){return item.resource==Resource::GlowEmissionSource && item.access==Access::ColorAttachment && item.load==Load::Load;}),"Visible emission lost opaque or transparent coverage publication.");
+    config.glow=false;const auto bloom_only=buildRenderPassPlan(config);
+    for(const auto& entry:bloom_only.passes())for(const auto& item:entry.uses())
+        check(item.resource!=Resource::GlowEmissionSource,"Bloom alone retained the optional emission target.");
 }
 void spatialAntiAliasingContracts() {
     check(SceneSettings{}.antiAliasing==AntiAliasing::Off && valid_anti_aliasing(AntiAliasing::Off) && valid_anti_aliasing(AntiAliasing::Smaa) &&
@@ -285,7 +386,7 @@ void ownershipAndOrderFailures() {
 }
 int main() {
     static_assert(std::is_trivially_copyable_v<RenderPassPlan> && std::is_trivially_copyable_v<RenderResourceTable>);
-    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();spatialAntiAliasingContracts();ownershipAndOrderFailures(); }
+    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();ownershipAndOrderFailures(); }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
     std::cout<<"Render pass/resource contracts passed.\n";return 0;
 }

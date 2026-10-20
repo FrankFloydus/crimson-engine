@@ -9,7 +9,6 @@
 #include <SDL3/SDL_init.h>
 
 #include <cmath>
-#include "glow_kernel.sh"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -372,113 +371,6 @@ void pointLightProfileContract() {
     near(broad,alphaSquared+.25/4,1e-6);
     require(broad>alphaSquared&&pointLightSpecularAlphaSquared(alphaSquared,0,1)==1,
         "Source Radius failed to broaden and bound GGX roughness.");
-}
-
-double glowDisplayCode(double hdr) {
-    // The scene's Reinhard presentation followed by its one sRGB encoding.
-    const double mapped=hdr/(1+hdr);
-    return 255*(mapped<=.0031308 ? 12.92*mapped : 1.055*std::pow(mapped,1/2.4)-.055);
-}
-
-void glowGaussianKernelContract() {
-    using namespace crimson::glow_rendering;
-    std::vector<float> sizes{.01f,.1f,.5f,1.f,1.69f,8.f};
-    for(unsigned i=1;i<=800;++i)sizes.push_back(static_cast<float>(i)*.01f);
-    // Just below/at/above each support-size change catches the worst tail,
-    // including tiny kernels whose normalized central sample is nearly one.
-    for(unsigned edge=2;edge<=195;++edge) {
-        const float size=static_cast<float>(edge)/(7.5f*3.25f);
-        for(const float offset:{-0.000001f,0.f,0.000001f})
-            if(size+offset>0 && size+offset<=8)sizes.push_back(size+offset);
-    }
-    constexpr double BrightMeshImpulse=60000.0*100.0*10.0;
-    for(const float size:sizes) {
-        const float sigma=glowKernelSigma(size);
-        const int radius=glowKernelRadius(sigma);
-        require(std::isfinite(sigma) && sigma>=.25f && radius>=2 && radius<=195,
-            "Glow Size escaped its finite Gaussian support/tap bound.");
-        near(sigma,std::max(.25f,3.25f*size));
-        std::vector<double> weights(static_cast<std::size_t>(radius*2+1));
-        double total=0,previous=1;
-        for(int offset=-radius;offset<=radius;++offset) {
-            const double weight=glowKernelWeight(static_cast<float>(offset),sigma);
-            require(std::isfinite(weight) && weight>=0 && weight<=1,"Glow kernel weight is nonfinite or negative.");
-            near(weight,glowKernelWeight(static_cast<float>(-offset),sigma),0);
-            near(weight,std::exp(-.5*std::pow(static_cast<double>(offset)/sigma,2)),2e-7);
-            if(offset>=0) {
-                require(weight<=previous,"Glow kernel introduced a separated bright lobe.");
-                previous=weight;
-            }
-            weights[static_cast<std::size_t>(offset+radius)]=weight;
-            total+=weight;
-        }
-        double normalizedSum=0,mean=0,variance=0;
-        for(int offset=-radius;offset<=radius;++offset) {
-            auto& weight=weights[static_cast<std::size_t>(offset+radius)];
-            weight/=total;normalizedSum+=weight;mean+=offset*weight;variance+=offset*offset*weight;
-        }
-        near(normalizedSum,1,1e-12);near(normalizedSum*normalizedSum,1,1e-12);near(mean,0,1e-12);
-        // A sampled Gaussian at sigma >= 1 agrees with the continuous variance;
-        // this protects Size/core width against narrowing the blur to hide its edge.
-        if(sigma>=1)near(variance,static_cast<double>(sigma)*sigma,1e-5*static_cast<double>(sigma)*sigma);
-        const double edgeHdr=BrightMeshImpulse*weights.back()*weights[static_cast<std::size_t>(radius)];
-        require(glowDisplayCode(edgeHdr)<1,
-            "Glow's last supported tap still creates a visible cutoff for a bright mesh sample.");
-        const int oldRadius=std::min(64,static_cast<int>(std::ceil(8.f*size)));
-        double oldTotal=0;
-        for(int offset=-oldRadius;offset<=oldRadius;++offset)
-            oldTotal+=std::exp(-.5*std::pow(static_cast<double>(offset)/sigma,2));
-        require(oldTotal/total>.98 && oldTotal/total<=1.0000001,
-            "Extending Glow tails unexpectedly changed central energy instead of preserving its Gaussian.");
-    }
-    near(glowKernelRadius(glowKernelSigma(8)),195,0);
-    const float sigma=glowKernelSigma(1.69f);
-    const int oldRadius=static_cast<int>(std::ceil(8.f*1.69f));
-    double oldTotal=0;
-    for(int offset=-oldRadius;offset<=oldRadius;++offset)
-        oldTotal+=std::exp(-.5*std::pow(static_cast<double>(offset)/sigma,2));
-    const double oldEdge=15000*std::exp(-.5*std::pow(static_cast<double>(oldRadius)/sigma,2))/(oldTotal*oldTotal);
-    require(glowDisplayCode(oldEdge)>200,
-        "The bright-impulse regression no longer exercises the old square Glow cutoff.");
-}
-
-void glowGaussianContours() {
-    using namespace crimson::glow_rendering;
-    for(const float size:{.5f,1.f,1.69f,8.f}) {
-        const float sigma=glowKernelSigma(size);
-        const int radius=glowKernelRadius(sigma);
-        std::vector<double> weights(static_cast<std::size_t>(radius+1));
-        double total=0;
-        for(int i=0;i<=radius;++i) {
-            weights[static_cast<std::size_t>(i)]=glowKernelWeight(static_cast<float>(i),sigma);
-            total+=weights[static_cast<std::size_t>(i)]*(i==0?1:2);
-        }
-        const auto sample=[&](double x) {
-            x=std::abs(x);const auto index=static_cast<int>(std::floor(x));const double blend=x-index;
-            const double a=index<=radius?weights[static_cast<std::size_t>(index)]/total:0;
-            const double b=index+1<=radius?weights[static_cast<std::size_t>(index+1)]/total:0;
-            return a*(1-blend)+b*blend;
-        };
-        // Model the final bilinear upsample of an isolated HDR impulse. Equal
-        // brightness contours should remain circular; separable compact-tail
-        // windows can pass endpoint tests while turning these contours box-shaped.
-        for(const double width:{2.,3.,4.,5.}) {
-            const double axisRadius=width*sigma,target=sample(axisRadius)*sample(0);
-            for(const double impulse:{15000.,60000000.}) {
-                const double display=glowDisplayCode(impulse*target);
-                if(display<1 || display>254)continue;
-                double lower=0,upper=2.*radius;
-                for(unsigned step=0;step<60;++step) {
-                    const double middle=(lower+upper)*.5;
-                    const double diagonal=sample(middle/std::sqrt(2.));
-                    if(diagonal*diagonal>target)lower=middle;else upper=middle;
-                }
-                const double diagonalRadius=(lower+upper)*.5;
-                require(std::abs(diagonalRadius/axisRadius-1)<.025,
-                    "Glow's HDR contour became square despite a continuous support edge.");
-            }
-        }
-    }
 }
 
 void checkSphere(uint32_t segments, uint32_t rings, float radius) {
@@ -966,8 +858,6 @@ int main() {
     run("point-light radius bounds inverse-square influence with smooth finite falloff", pointLightRadiusContract);
     run("player-world near falloff bounds wall hotspots without a hard ring or ordinary-light change", pointLightNearFalloffContract);
     run("finite point profiles retain quartic defaults, bounded falloff and angular source broadening", pointLightProfileContract);
-    run("Glow Gaussian retains energy and width with an HDR-invisible support edge", glowGaussianKernelContract);
-    run("Glow isolated HDR impulse contours stay circular through bilinear upsampling", glowGaussianContours);
     run("grid depth survives eye-crossing clips and retains foreground occlusion", gridDepthSurvivesEyeCrossing);
     run("collision depth corrects D24/subpixel precision and retains foreground occlusion", collisionDepthContract);
     run("collision wires retain surface-plane depth, raster bounds and convex/concave corners", collisionWirePlaneContract);
