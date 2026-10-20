@@ -48,14 +48,25 @@ void draw_material_atomic_controls(const MaterialNode& node,Parameter&& paramete
         using namespace material_procedural;
         std::string names;for(const auto pattern:patterns){names+=pattern_name(pattern);names+='\0';}names+='\0';
         option("Pattern","Change procedural pattern",names.c_str(),[](const auto& n){const auto p=std::find(patterns.begin(),patterns.end(),n.procedural.settings.pattern);return static_cast<int>(p-patterns.begin());},[](auto& n,int v){const auto seed=n.procedural.settings.seed;n.procedural.settings=default_settings(patterns.at(static_cast<std::size_t>(v)));n.procedural.settings.seed=seed;});
-        option("Resolution","Change procedural resolution","1K\0" "2K\0" "4K\0Custom\0",[](const auto& n){return n.procedural.width==n.procedural.height?(n.procedural.width==4096?2:n.procedural.width==2048?1:n.procedural.width==1024?0:3):3;},[](auto& n,int v){if(v<3)n.procedural.width=n.procedural.height=1024u<<v;});
+        const auto preset=[](const auto& n){return n.procedural.width==n.procedural.height?(n.procedural.width==4096?2:n.procedural.width==2048?1:n.procedural.width==1024?0:3):3;};
+        // Choosing Custom only expands controls; it must not invent a new
+        // authored resolution or create an undo command. Each panel owns its
+        // transient disclosure in the current ImGui ID scope.
+        auto* storage=ImGui::GetStateStorage();const ImGuiID customId=ImGui::GetID("Procedural custom resolution");
+        option("Resolution","Change procedural resolution","1K\0" "2K\0" "4K\0Custom\0",[=](const auto& n){return storage->GetBool(customId,false)?3:preset(n);},[=](auto& n,int v){storage->SetBool(customId,v==3);if(v<3)n.procedural.width=n.procedural.height=1024u<<v;});
+        if(storage->GetBool(customId,false)||preset(node)==3) {
+            parameter("Width (px)","Change procedural width",[](auto& n){int v=static_cast<int>(n.procedural.width);const bool changed=ImGui::DragInt("Width (px)",&v,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.procedural.width=static_cast<unsigned>(v);return changed;});
+            parameter("Height (px)","Change procedural height",[](auto& n){int v=static_cast<int>(n.procedural.height);const bool changed=ImGui::DragInt("Height (px)",&v,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.procedural.height=static_cast<unsigned>(v);return changed;});
+        }
         const auto active=controls(node.procedural.settings.pattern);
         if(active.seed)parameter("Seed","Change procedural seed",[](auto& n){int v=static_cast<int>(n.procedural.settings.seed);const bool changed=ImGui::DragInt("Seed",&v,1,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.procedural.settings.seed=static_cast<unsigned>(v);return changed;});
         if(active.scale) {
-            if(node.procedural.settings.pattern==Pattern::DirectionalScratches)parameter("Scale","Change procedural scale",[](auto& n){int v=static_cast<int>(n.procedural.settings.scale);const bool changed=ImGui::DragInt("Scale",&v,1,1,32,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.procedural.settings.scale=static_cast<float>(v);return changed;});
-            else parameter("Scale","Change procedural scale",[](auto& n){return ImGui::DragFloat("Scale",&n.procedural.settings.scale,.05f,1,n.procedural.settings.pattern==Pattern::GaussianNoise?64.f:32.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+            const bool clouds=node.procedural.settings.pattern==Pattern::Clouds1||node.procedural.settings.pattern==Pattern::Clouds2;
+            const char* label=clouds?"Scale":node.procedural.settings.pattern==Pattern::ParabolicGradient?"Tiling":"Density";
+            if(node.procedural.settings.pattern==Pattern::DirectionalScratches)parameter(label,"Change procedural density",[=](auto& n){int v=static_cast<int>(n.procedural.settings.scale);const bool changed=ImGui::DragInt(label,&v,1,1,32,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.procedural.settings.scale=static_cast<float>(v);ImGui::SetItemTooltip("Higher values create more, finer scratches.");return changed;});
+            else parameter(label,clouds?"Change procedural scale":"Change procedural density",[=](auto& n){const bool changed=ImGui::DragFloat(label,&n.procedural.settings.scale,.05f,clouds?1.f/32:1.f,n.procedural.settings.pattern==Pattern::GaussianNoise?64.f:32.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);ImGui::SetItemTooltip(clouds?"Higher values enlarge the noise features.":"Higher values create more, finer features.");return changed;});
         }
-        if(active.disorder)parameter("Variation","Change procedural variation",[](auto& n){const bool changed=ImGui::SliderFloat("Variation",&n.procedural.settings.disorder,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);ImGui::SetItemTooltip("Morphs the pattern arrangement. 0 and 1 match; Seed chooses a new pattern.");return changed;});
+        if(active.disorder)parameter("Variation","Change procedural variation",[](auto& n){const bool changed=ImGui::SliderFloat("Variation",&n.procedural.settings.disorder,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);ImGui::SetItemTooltip(n.procedural.settings.pattern==Pattern::WhiteNoise?"Shifts the noise arrangement; Seed chooses a new pattern.":"Morphs the pattern arrangement. 0 and 1 match; Seed chooses a new pattern.");return changed;});
         if(active.detailBalance)parameter("Detail balance","Change procedural detail",[](auto& n){return ImGui::SliderFloat("Detail balance",&n.procedural.settings.detailBalance,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
         if(active.patternSize) {
             const bool scratches=node.procedural.settings.pattern==Pattern::DirectionalScratches;
@@ -70,7 +81,7 @@ void draw_material_atomic_controls(const MaterialNode& node,Parameter&& paramete
             parameter("Width randomness","Change width randomness",[](auto& n){return ImGui::SliderFloat("Width randomness",&n.procedural.settings.patternSizeRandom[0],0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
             parameter("Length randomness","Change length randomness",[](auto& n){return ImGui::SliderFloat("Length randomness",&n.procedural.settings.patternSizeRandom[1],0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
         }
-        if(active.nonSquareExpansion)parameter("Keep square tiles","Change pattern cells",[](auto& n){return ImGui::Checkbox("Keep square tiles",&n.procedural.settings.nonSquareExpansion);});
+        if(active.nonSquareExpansion)parameter("Keep square tiles","Change pattern cells",[](auto& n){const bool square=n.procedural.width==n.procedural.height;ImGui::BeginDisabled(square);const bool changed=ImGui::Checkbox("Keep square tiles",&n.procedural.settings.nonSquareExpansion);ImGui::EndDisabled();if(square&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Only affects rectangular images.");return changed;});
         if(active.contribution)parameter("Contribution","Change pattern contribution",[](auto& n){return ImGui::SliderFloat("Contribution",&n.procedural.settings.contribution,0,2,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
         if(active.fibersAngleSpread)parameter("Angle spread","Change fiber angle spread",[](auto& n){return ImGui::SliderFloat("Angle spread",&n.procedural.settings.fibersAngleSpread,0,360,"%.1f",ImGuiSliderFlags_AlwaysClamp);});
         if(active.threads)parameter("Threads","Change fiber threads",[](auto& n){return ImGui::SliderFloat("Threads",&n.procedural.settings.threads,3,32,"%.1f",ImGuiSliderFlags_AlwaysClamp);});

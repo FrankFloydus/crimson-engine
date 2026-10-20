@@ -73,6 +73,91 @@ void gaussian() {
     const auto result=constant.bake();
     for(std::size_t i=0;i<result.rgba.size();i+=4){near(result.rgba[i],200/255.f,1e-6f,"Blur lost transparent RGB or constant energy.");near(result.rgba[i+1],64/255.f,1e-6f,"Non-square Blur normalization failed.");near(result.rgba[i+3],0,1e-6f,"Blur premultiplied independent alpha.");}
 }
+void fractionalBroadBlurResponse() {
+    Fixture fixture(1024,1,MaterialNodeKind::Blur,MaterialPin::RGBA);
+    std::fill(fixture.image->rgba.begin(),fixture.image->rgba.end(),0);
+    fixture.image->rgba[0]=255;fixture.image->rgba[1]=127;fixture.image->rgba[2]=63;fixture.image->rgba[3]=191;
+    for(const float radius:{13.1f,20.f,100.f}) {
+        fixture.node().atomic.amount=radius/1024;const auto first=fixture.bake();
+        fixture.node().atomic.amount=(radius+.1f)/1024;const auto next=fixture.bake();
+        double difference=0,energy=0,variance=0;
+        for(unsigned x=0;x<1024;++x) {
+            const auto pixel=x*4;const int distance=std::min(x,1024-x);
+            difference+=std::abs(first.rgba[pixel]-next.rgba[pixel]);energy+=next.rgba[pixel];variance+=distance*distance*next.rgba[pixel];
+            near(next.rgba[pixel+1],next.rgba[pixel]*127/255,2e-8f,"Fractional broad blur changed RGB channel proportions.");
+            near(next.rgba[pixel+3],next.rgba[pixel]*191/255,2e-8f,"Fractional broad blur changed straight-alpha convolution.");
+        }
+        check(difference>1e-5,"Broad Blur Amount changes still produce identical pixels.");
+        near(static_cast<float>(energy),1,2e-6f,"Fractional broad blur failed impulse energy normalization.");
+        near(static_cast<float>(variance),((radius+.1f)/3)*((radius+.1f)/3),.001f,"Fractional box variance does not follow the authored blur amount.");
+    }
+}
+double imageDifference(const FloatImage& first,const FloatImage& second) {
+    check(first.width==second.width&&first.height==second.height,"Property test changed the image extent unexpectedly.");
+    double sum=0;for(std::size_t i=0;i<first.rgba.size();++i)sum+=std::abs(first.rgba[i]-second.rgba[i]);return sum/first.rgba.size();
+}
+FloatImage previewFixture(const Fixture& fixture) {
+    return bakeMaterialGraphImagePreview(fixture.graph,{fixture.root,MaterialPin::Value},[&](const std::string&)->std::shared_ptr<const DecodedImage>{return fixture.image;},{fixture.image->width,fixture.image->height,0});
+}
+void atomicPropertyPixels() {
+    // Test pixels and expected direction/identity behavior, not just signatures.
+    // Asymmetric images avoid hiding a real effect behind rotational symmetry,
+    // uniform inputs, clipping or an unrelated inactive material output.
+    for(const auto kind:{MaterialNodeKind::MaskAdjust,MaterialNodeKind::HistogramScan}) {
+        Fixture fixture(31,19,kind);fixture.node().atomic.coverage=.5f;fixture.node().atomic.contrast=0;
+        const auto identity=previewFixture(fixture);
+        for(std::size_t i=0;i<identity.rgba.size();i+=4)near(identity.rgba[i],fixture.image->rgba[i]/255.f,1e-6f,"Neutral mask controls do not preserve the source.");
+        fixture.node().atomic.coverage=.62f;const auto covered=previewFixture(fixture);
+        check(imageDifference(identity,covered)>.01,"Mask Coverage did not alter actual output pixels.");
+        for(std::size_t i=0;i<identity.rgba.size();i+=4)check(covered.rgba[i]+1e-6f>=identity.rgba[i],"Higher Coverage removed white mask coverage.");
+        fixture.node().atomic.coverage=.5f;fixture.node().atomic.contrast=.7f;const auto contrasted=previewFixture(fixture);
+        check(imageDifference(identity,contrasted)>.01,"Mask Contrast did not alter actual output pixels.");
+        for(std::size_t i=0;i<identity.rgba.size();i+=4)check(std::abs(contrasted.rgba[i]-.5f)+1e-6f>=std::abs(identity.rgba[i]-.5f),"Higher mask Contrast moved values toward neutral gray.");
+        fixture.node().atomic.coverage=0;const auto empty=previewFixture(fixture);fixture.node().atomic.coverage=1;const auto full=previewFixture(fixture);
+        for(std::size_t i=0;i<empty.rgba.size();i+=4){near(empty.rgba[i],0,0,"Zero Coverage must produce a black mask.");near(full.rgba[i],1,0,"Full Coverage must produce a white mask.");}
+    }
+    Fixture warp(43,29,MaterialNodeKind::DirectionalWarp,MaterialPin::RGBA);warp.node().atomic.amount=.023f;warp.node().right={MaterialValueType::Scalar,{.7f,.7f,.7f,.7f}};
+    const auto firstWarp=warp.bake();warp.node().atomic.amount=.051f;
+    check(imageDifference(firstWarp,warp.bake())>.01,"Warp Amount did not alter the completed source image.");
+    warp.node().atomic.amount=.023f;warp.node().atomic.angle=71;
+    check(imageDifference(firstWarp,warp.bake())>.01,"Warp Angle did not rotate the sampling displacement.");
+    warp.node().right={MaterialValueType::Scalar,{0,0,0,0}};const auto zeroMask=warp.bake();warp.node().atomic.amount=0;const auto zeroAmount=warp.bake();
+    check(imageDifference(zeroMask,zeroAmount)==0,"Zero Warp mask does not match zero Amount identity.");
+    const auto mask=addMaterialNode(warp.graph,MaterialNodeKind::HistogramScan).id;findMaterialNode(warp.graph,mask)->atomic.contrast=1;
+    connectMaterialNodesData(warp.graph,warp.texture,MaterialPin::R,mask,MaterialPin::Left);connectMaterialNodesData(warp.graph,mask,MaterialPin::Value,warp.root,MaterialPin::Right);
+    warp.node().atomic.amount=.051f;const auto masked=warp.bake();double changed=0;
+    for(std::size_t i=0;i<masked.rgba.size();i+=4)for(unsigned channel=0;channel<4;++channel) {
+        if(warp.image->rgba[i]<128)near(masked.rgba[i+channel],zeroAmount.rgba[i+channel],0,"Warp resampled a pixel excluded by a zero mask.");
+        else changed+=std::abs(masked.rgba[i+channel]-zeroAmount.rgba[i+channel]);
+    }
+    check(changed>1,"Warp zero-mask shortcut also bypassed pixels with nonzero masks.");
+    Fixture transform(43,29,MaterialNodeKind::ImageTransform,MaterialPin::RGBA);const auto unmapped=previewFixture(transform);
+    const auto defaultMapping=transform.node().uv;
+    transform.node().uv.scale={1.37f,.71f,1};check(imageDifference(unmapped,previewFixture(transform))>.01,"Image Transform Scale is ignored by node preview pixels.");
+    transform.node().uv=defaultMapping;transform.node().uv.offset={.13f,.21f,0};check(imageDifference(unmapped,previewFixture(transform))>.01,"Image Transform Offset is ignored by node preview pixels.");
+    transform.node().uv=defaultMapping;transform.node().uv.rotation[2]=37;check(imageDifference(unmapped,previewFixture(transform))>.01,"Image Transform Rotation is ignored by node preview pixels.");
+    Fixture direction(37,23,MaterialNodeKind::DirectionSelect,MaterialPin::RGB);direction.node().atomic.direction=0;const auto positiveX=previewFixture(direction);
+    for(unsigned axis=1;axis<6;++axis) {direction.node().atomic.direction=axis;check(imageDifference(positiveX,previewFixture(direction))>.01,"Direction Select axis did not change the normal component mask.");}
+    direction.node().atomic.direction=0;direction.node().atomic.bothDirections=true;const auto both=previewFixture(direction);
+    check(imageDifference(positiveX,both)>.01,"Direction Select Both directions did not include negative normals.");
+    direction.node().atomic.direction=1;check(imageDifference(both,previewFixture(direction))==0,"Both directions incorrectly depends on the axis sign.");
+    for(const bool height:{true,false}) {
+        Fixture fixture(43,29,height?MaterialNodeKind::HeightOcclusion:MaterialNodeKind::NormalOcclusion,height?MaterialPin::R:MaterialPin::RGB);
+        for(unsigned y=0;y<29;++y)for(unsigned x=0;x<43;++x) {
+            const auto i=(y*43+x)*4;
+            if(height)fixture.image->rgba[i]=static_cast<unsigned char>(120+53*std::sin(x*.23)+37*std::cos(y*.31)+19*std::sin((x+y)*.17));
+            else {const double nx=.35*std::sin(y*.43)+.2*std::cos(x*.13),ny=.3*std::cos(x*.37)+.25*std::sin(y*.19),nz=std::sqrt(1-nx*nx-ny*ny);fixture.image->rgba[i]=static_cast<unsigned char>((nx+1)*127.5);fixture.image->rgba[i+1]=static_cast<unsigned char>((ny+1)*127.5);fixture.image->rgba[i+2]=static_cast<unsigned char>((nz+1)*127.5);}
+        }
+        fixture.node().atomic.radius=.08f;fixture.node().atomic.depth=.08f;fixture.node().atomic.strength=.8f;const auto baseSettings=fixture.node().atomic;
+        const auto baseline=fixture.bake();fixture.node().atomic.strength=1.6f;const auto stronger=fixture.bake();
+        check(imageDifference(baseline,stronger)>1e-5,"Occlusion Strength did not change a non-flat image.");
+        for(std::size_t i=0;i<baseline.rgba.size();i+=4)check(stronger.rgba[i]<=baseline.rgba[i]+1e-6f,"Higher Occlusion Strength brightened visibility.");
+        fixture.node().atomic=baseSettings;fixture.node().atomic.depth=.19f;check(imageDifference(baseline,fixture.bake())>1e-5,"Occlusion Depth did not change a non-flat image.");
+        fixture.node().atomic=baseSettings;fixture.node().atomic.radius=.19f;check(imageDifference(baseline,fixture.bake())>1e-5,"Occlusion Radius did not change a non-flat image.");
+        if(!height){fixture.node().atomic=baseSettings;fixture.node().image.normalFlipY=true;check(imageDifference(baseline,fixture.bake())>1e-5,"Normal Occlusion Flip Y did not change normal interpretation.");}
+        for(unsigned field=0;field<3;++field) {fixture.node().atomic=baseSettings;if(field==0)fixture.node().atomic.strength=0;else if(field==1)fixture.node().atomic.radius=0;else fixture.node().atomic.depth=0;const auto clear=fixture.bake();for(std::size_t i=0;i<clear.rgba.size();i+=4)near(clear.rgba[i],1,0,"A zero Occlusion control did not clear the effect.");}
+    }
+}
 void warpAndCompletedTransform() {
     Fixture warp(4,2,MaterialNodeKind::DirectionalWarp);warp.node().atomic.amount=.25f;warp.node().atomic.angle=0;warp.node().right={MaterialValueType::Scalar,{1,1,1,1}};
     const auto output=warp.bake();for(unsigned y=0;y<2;++y)for(unsigned x=0;x<4;++x)near(output.rgba[(y*4+x)*4],warp.image->rgba[(y*4+(x+1)%4)*4]/255.f,1e-6f,"Warp angle0 did not move +U with repeat addressing.");
@@ -230,17 +315,17 @@ void nodeImagePreviews() {
     near(linear.rgba[0],.2158605f,1e-6f,"Preview failed Color-role decoding or applied display encoding inside the canonical evaluator.");
 
     MaterialGraph procedural;addMaterialNode(procedural,MaterialNodeKind::Output);const auto pattern=addMaterialNode(procedural,MaterialNodeKind::ProceduralTexture).id;
-    auto* node=findMaterialNode(procedural,pattern);node->procedural.settings=material_procedural::default_settings(material_procedural::Pattern::Clouds1);node->procedural.settings.scale=5;node->procedural.width=node->procedural.height=1024;
+    auto* node=findMaterialNode(procedural,pattern);node->procedural.settings=material_procedural::default_settings(material_procedural::Pattern::Clouds1);node->procedural.settings.scale=.2f;node->procedural.width=node->procedural.height=1024;
     const MaterialImagePreviewOptions tile{128,128,64ull*1024*1024};
     const auto generated=bakeMaterialGraphImagePreview(procedural,{pattern,MaterialPin::Value},{},tile,{},&metrics);
     check(metrics.evaluatedPixels>=1024*1024,"Procedural preview did not evaluate its authored source lattice.");
-    // Scale5's lowest Clouds1 band still exists in a 1K source. Reevaluation
+    // Scale .2's lowest Clouds1 band still exists in a 1K source. Reevaluation
     // with a 128px footprint drops it and loses nonlinear-clamp energy.
     float largestEarlyDifference=0;
     for(unsigned py:{3u,29u,64u,110u})for(unsigned px:{0u,17u,43u,81u,127u}) {
         double sum=0;for(unsigned y=py*8;y<(py+1)*8;++y)for(unsigned x=px*8;x<(px+1)*8;++x)
             sum+=material_procedural::sample({(x+.5f)/1024,(y+.5f)/1024},node->procedural.settings,1.f/1024,1);
-        const float actual=generated.rgba[(py*128+px)*4];near(actual,static_cast<float>(sum/64),4e-5f,"Clouds1 Scale5 preview differs from area-filtered actual 1K source samples.");
+        const float actual=generated.rgba[(py*128+px)*4];near(actual,static_cast<float>(sum/64),4e-5f,"Clouds1 Scale .2 preview differs from area-filtered actual 1K source samples.");
         const float early=material_procedural::sample({(px+.5f)/128,(py+.5f)/128},node->procedural.settings,1.f/128,1);
         largestEarlyDifference=std::max(largestEarlyDifference,std::abs(actual-early));
     }
@@ -276,6 +361,6 @@ void benchmark(const std::filesystem::path& file) {
 }
 }
 int main(int argc,char** argv) {
-    try{morphology();gaussian();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
+    try{morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

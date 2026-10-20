@@ -562,18 +562,26 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 const auto fallback=[&](auto& n)->auto& {return pin==MaterialPin::Left?n.left:pin==MaterialPin::Right?n.right:n.alpha;};
                 ImGui::PushID(static_cast<int>(pin));
                 if(!adjustment && !(node.kind==MaterialNodeKind::Power&&pin==MaterialPin::Right))
-                    control("Change input default type",[&](auto& n){auto& value=fallback(n);int type=value.type==MaterialValueType::Color?1:value.type==MaterialValueType::Vector2?2:0;
-                        const bool changed=ImGui::Combo("Type",&type,"Scalar\0Color\0Vector2\0");if(changed)value.type=type==0?MaterialValueType::Scalar:type==1?MaterialValueType::Color:MaterialValueType::Vector2;return changed;});
+                    control("Change input default type",[&](auto& n){auto& value=fallback(n);int type=value.type==MaterialValueType::Color?1:value.type==MaterialValueType::Vector2?2:value.type==MaterialValueType::Color4?3:0;
+                        const bool changed=ImGui::Combo("Type",&type,"Scalar\0Color\0Vector2\0RGBA\0");
+                        if(changed) {
+                            const auto previous=value.type;
+                            value.type=type==0?MaterialValueType::Scalar:type==1?MaterialValueType::Color:type==2?MaterialValueType::Vector2:MaterialValueType::Color4;
+                            if(previous==MaterialValueType::Scalar&&value.type!=MaterialValueType::Scalar)value.value={value.value[0],value.value[0],value.value[0],value.type==MaterialValueType::Color4?1.f:value.value[0]};
+                            else if(previous==MaterialValueType::Color&&value.type==MaterialValueType::Color4)value.value[3]=1;
+                        }return changed;});
                 auto candidate=document_.definition();auto* edited=findMaterialNode(candidate.graph,selected);
                 auto& value=fallback(*edited);
-                if(value.type==MaterialValueType::Color) {
+                if(value.type==MaterialValueType::Color||value.type==MaterialValueType::Color4) {
                     Vec3 rgb{value.value[0],value.value[1],value.value[2]};
+                    float alpha=value.value[3];
                     ImGui::BeginDisabled(!editable);
-                    const auto change=drawHdrColorControl(label,rgb,nullptr,pin==MaterialPin::Left?colorEditor_:pin==MaterialPin::Right?emissionEditor_:alphaEditor_);
+                    auto change=drawHdrColorControl(label,rgb,nullptr,pin==MaterialPin::Left?colorEditor_:pin==MaterialPin::Right?emissionEditor_:alphaEditor_);
+                    if(value.type==MaterialValueType::Color4)change.include(ImGui::DragFloat("Alpha",&alpha,.01f,0,0,"%.3f"));
                     ImGui::EndDisabled();
                     if(editable && !canceled && (change.activated || change.changed) && !document_.transactionActive())propertyEditing_=document_.begin("Change input default");
                     if(editable && !canceled && change.changed && propertyEditing_) {
-                        value.value={rgb[0],rgb[1],rgb[2],value.value[3]};
+                        value.value={rgb[0],rgb[1],rgb[2],alpha};
                         document_.update([&](auto& asset){asset=std::move(candidate);});
                     }
                     if(change.deactivated && propertyEditing_)finish();

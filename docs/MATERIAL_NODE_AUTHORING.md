@@ -82,7 +82,7 @@ For each new node, cover CPU typing/validation, persistence and undo/redo, unifo
 ## Image and channel node foundation
 
 See [Image and channel nodes](MATERIAL_IMAGE_NODES.md) for the thirteen added nodes,
-explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 11 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations described there.
+explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 12 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations described there.
 Preserve all four independently wired split outputs, transparent RGB, disconnected
 defaults and per-output previews. Image adjustments preserve alpha. Noise Detail
 amount is Clouds-only; never expose it as material roughness.
@@ -90,3 +90,9 @@ amount is Clouds-only; never expose it as material roughness.
 Resize exposes Width, Height and Filter inline and in Properties, using the same transaction and Escape cancellation rules. It preserves Scalar/RGB/RGBA type and materializes supported static UV0 branches into cached linear float images. Reject runtime or surface-dependent inputs rather than silently baking a different result. See [Resize](MATERIAL_RESIZE.md) for the sampling, cache and memory contract.
 
 New image operations reuse the same mixed-input, direct-wire, transaction and per-output preview rules. Keep expensive spatial kernels behind the canonical static-image boundary. Image Transform samples the whole completed image; runtime mapping edits must not alter its content key. Image Input retains override/Base/Constant precedence and prunes disabled work while preserving authored references. Normal Map decodes processed linear RGB with a common source mapping into the strict Normal type. Procedural Texture family selection uses canonical per-family defaults, preserves seed/resolution and displays only active controls.
+
+Clouds Scale is feature size; other procedural frequency controls are named
+Density or Tiling. Custom sizing is a transient disclosure until dimensions
+change. Disconnected RGBA arithmetic defaults expose RGB and Alpha in both
+inline and Properties controls. See the [property audit](MATERIAL_NODE_PROPERTY_AUDIT.md)
+for pixel-based validation and intentional input-dependent behavior.

@@ -6,7 +6,7 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema 11 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations below. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
+Current graph schema 12 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations below. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 
@@ -78,6 +78,27 @@ material. Cyclic families such as Clouds 1 have the same arrangement at 0 and 1;
 intermediate values morph it, while Seed chooses a different distribution.
 The original source equations and phase behavior are retained.
 
+Clouds 1 and Clouds 2 expose **Scale** as feature size: 1 retains the default,
+2 makes larger structures, and 4 larger again. The range is 1/32–32. Integer
+periodic lattices and continuous blends preserve tiling; coarse bands clamp
+at one cell. Other procedural sources expose **Density** for their frequency
+control (Parabolic Gradient uses **Tiling**): higher values add smaller, more
+numerous details. Detail below the
+authored raster's resolution is filtered toward its mean.
+
+Graph schema 12 converts earlier Clouds frequency values to reciprocal Scale
+in memory, preserving existing authored materials. Saving emits the current
+representation; merely loading does not rewrite or dirty assets. Other pattern
+settings, native material v6, shader generator v33 and uniform ABI 32 retain
+their existing contracts. `material_procedural::algorithm_revision = 2`
+invalidates generated sources and their display images.
+
+Resolution **Custom** opens Width (px) and Height (px), each in 1–4096. Merely
+opening those controls retains the current resolution and document history.
+**Keep square tiles** applies to rectangular Directional Scratches sources and
+is inactive on square images. The [property audit](MATERIAL_NODE_PROPERTY_AUDIT.md)
+records the control matrix, corrected semantics and intentional dependencies.
+
 CPU generation prepares immutable stamp geometry and compiles each family's
 recipe once, then evaluates cell-oriented batches over bounded row tiles.
 This sequential path retains the original cell accumulation order and uses no
@@ -103,6 +124,14 @@ takes about 16.6 seconds on this machine, and an exact preview needs the
 completed source. Reusing that result avoids duplicate source generation.
 Total material publication also includes host conversion, mips and upload;
 per-frame GPU cost and FPS were not measured by this CPU benchmark.
+
+The 2026-10-21 [property audit](MATERIAL_NODE_PROPERTY_AUDIT.md#validation-and-measured-cost)
+repeated these measurements after the Scale and fractional Blur corrections.
+Default Clouds 1/2 at 4K measured 2.630/3.897 seconds. Broad RGBA Blur measured
+1.861 seconds at 2K and 7.225 seconds at 4K, approximately 7–9% above the prior
+run, with the same 128/512 MiB temporary-image allocation. Directional Scratches
+at 4K remained expensive at 17.39 seconds. The audit records comparison scope
+and the final 15 passing focused checks.
 
 The separate warm DX12 Normal-decoding fixture measured 48 unique completed
 GPU view samples per phase, in forward and reverse variant order on the same
@@ -174,7 +203,7 @@ this change does not claim to solve that separate displacement limitation.
 ## Storage, ownership and validation
 
 Graph schema 9 introduced these kinds, Color4 and RGBA pin without renumbering old
-identities. The current schema 11 writer retains Resize and adds the reusable image operations; readers retain schemas 1–11 and supply defaults without rewriting
+identities. The current schema 12 writer retains Resize and adds the reusable image operations; readers retain schemas 1–12 and supply defaults without rewriting
 loaded files. Native material files remain v6, generated material ABI remains 32,
 and the existing twelve-sampler and uniform budgets remain in force.
 
@@ -187,7 +216,7 @@ remain parameter updates when topology is unchanged.
 Canonical hosts use `material_procedural::PreparedPattern::render()` for a full
 scalar raster, reserving `memory_bytes()` and `render_scratch_bytes()` beside
 the output. Pass cancellation to preparation and rendering. Include
-`material_procedural::algorithm_revision` (currently 1) in generated-image keys.
+`material_procedural::algorithm_revision` (currently 2) in generated-image keys.
 `MaterialGraphImageBake.h` exposes `validateMaterialGraphImagePreview`,
 `materialGraphImagePreviewSources` and `bakeMaterialGraphImagePreview`; the
 preview options select display extent and preparation allowance, leaving

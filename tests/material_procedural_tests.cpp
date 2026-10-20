@@ -69,6 +69,12 @@ void identities_and_defaults() {
     invalid.patternSize[0]=0;rejects([&]{validate(invalid);},"Zero scratch width was accepted.");
     invalid=default_settings(Pattern::GaussianNoise);invalid.scale=64;validate(invalid);
     invalid.scale=64.01f;rejects([&]{validate(invalid);},"Gaussian scale upper bound was lost.");
+    for(const auto pattern:{Pattern::Clouds1,Pattern::Clouds2}) {
+        invalid=default_settings(pattern);invalid.scale=1.f/32;validate(invalid);
+        invalid.scale=32;validate(invalid);
+        invalid.scale=1.f/33;rejects([&]{validate(invalid);},"Cloud feature Scale accepted values below 1/32.");
+        invalid.scale=32.01f;rejects([&]{validate(invalid);},"Cloud feature Scale accepted values above 32.");
+    }
     invalid=default_settings(Pattern::Clouds2);invalid.disorder=std::numeric_limits<float>::quiet_NaN();
     rejects([&]{validate(invalid);},"Nonfinite procedural setting was accepted.");
 }
@@ -303,8 +309,8 @@ void clouds1_resolved_controls() {
     check(difference(first,varied)>.01,"Resolved Clouds 1 variation did not change its distribution.");
     settings.disorder=1;const auto repeated=render(settings);
     check(difference(first,repeated)<.0001,"Clouds 1 variation lost the original full-cycle endpoint behavior.");
-    settings.disorder=0;settings.scale=2;const auto smaller=render(settings);
-    check(difference(first,smaller)>.01,"Clouds 1 Scale 1 and 2 do not produce distinct feature scales.");
+    settings.disorder=0;settings.scale=2;const auto larger=render(settings);
+    check(difference(first,larger)>.01,"Clouds 1 Scale 1 and 2 do not produce distinct feature scales.");
     // The original periodic phase is retained, without a claim of Adobe
     // algorithm or pixel parity. Intermediate controls must still be visible.
     for(const Vec2 uv:{Vec2{.137f,.271f},Vec2{.317f,.571f},Vec2{.731f,.331f}}) {
@@ -312,6 +318,73 @@ void clouds1_resolved_controls() {
         const float middle=sample(uv,settings,1.f/1024);
         PreparedPattern prepared(settings,1.f/1024);
         check(std::abs(middle-prepared.sample(uv))<3e-6f,"Clouds 1 prepared variation differs from its original oracle.");
+    }
+}
+double normalized_gradient(const std::vector<float>& pixels,unsigned edge) {
+    const double average=mean(pixels);double variance{},gradient{};
+    for(unsigned y=0;y<edge;++y)for(unsigned x=0;x<edge;++x) {
+        const double value=pixels[std::size_t(y)*edge+x];
+        const double dx=value-pixels[std::size_t(y)*edge+(x+1)%edge];
+        const double dy=value-pixels[std::size_t((y+1)%edge)*edge+x];
+        variance+=(value-average)*(value-average);gradient+=dx*dx+dy*dy;
+    }
+    check(variance>pixels.size()*1e-5,"Cloud Scale test received an essentially flat image.");
+    return gradient/variance;
+}
+void cloud_feature_size() {
+    constexpr unsigned edge=512;
+    const auto render=[](const Settings& settings) {
+        PreparedPattern prepared(settings,1.f/1024);
+        std::vector<float> pixels(std::size_t(edge)*edge);prepared.render(edge,edge,pixels);return pixels;
+    };
+    for(const auto pattern:{Pattern::Clouds1,Pattern::Clouds2}) {
+        auto settings=default_settings(pattern);settings.seed=19;
+        const auto original=render(settings);
+        settings.scale=2;const auto twice=render(settings);
+        settings.scale=4;const auto four=render(settings);
+        const double initial_gradient=normalized_gradient(original,edge);
+        const double twice_gradient=normalized_gradient(twice,edge);
+        const double four_gradient=normalized_gradient(four,edge);
+        check(twice_gradient<initial_gradient*.8&&four_gradient<twice_gradient*.8,
+              "Increasing cloud Scale must enlarge structures, not increase their frequency.");
+        const auto [minimum,maximum]=std::minmax_element(original.begin(),original.end());
+        check(*maximum-*minimum>.1f,"Default Clouds field has no useful image contrast.");
+        for(float boundary:{1.f,2.f,4.f,8.f,16.f}) {
+            settings.scale=boundary*.999f;const auto below=render(settings);
+            settings.scale=boundary;const auto exact=render(settings);
+            settings.scale=boundary*1.001f;const auto above=render(settings);
+            check(difference(below,exact)<.002&&difference(exact,above)<.002,
+                  "Cloud feature Scale jumps at an integer/dyadic boundary.");
+        }
+        // Legacy schema11 frequency f was a complete-field linear blend
+        // between floor(f) and ceil(f). The reciprocal representation must
+        // retain that same blend, including fractional authored frequencies.
+        constexpr float frequency=2.375f,fraction=frequency-2;
+        settings.scale=1.f/2;const auto legacy_low=render(settings);
+        settings.scale=1.f/3;const auto legacy_high=render(settings);
+        settings.scale=1.f/frequency;const auto migrated=render(settings);
+        for(std::size_t i=0;i<migrated.size();++i)
+            check(std::abs(migrated[i]-(legacy_low[i]+fraction*(legacy_high[i]-legacy_low[i])))<3e-6f,
+                  "Reciprocal cloud Scale changed the legacy fractional frequency blend.");
+        // Exercise both ends, fractional sizes and clamped one-cell bands
+        // through the prepared scalar and compiled raster implementations.
+        for(float scale:{1.f/32,.375f,1.01f,1.99f,2.f,7.5f,16.f,32.f}) {
+            settings.scale=scale;
+            for(const auto budget:{std::size_t(0),std::size_t(64u*1024u*1024u)}) {
+                PreparedPattern field(settings,1.f/128,1,budget);
+                constexpr unsigned width=17,height=13;
+                std::vector<float> pixels(width*height);field.render(width,height,pixels);
+                for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+                    const Vec2 uv{(float(x)+.5f)/width,(float(y)+.5f)/height};
+                    const float reference=sample(uv,settings,1.f/128);
+                    check(std::abs(reference-field.sample(uv))<3e-6f&&
+                          std::abs(reference-pixels[std::size_t(y)*width+x])<3e-6f,
+                          "Cloud feature Scale differs between scalar, prepared and batch paths.");
+                    check(std::abs(reference-field.sample({uv[0]+1,uv[1]-1}))<.001f,
+                          "Cloud feature enlargement broke periodic texture boundaries.");
+                }
+            }
+        }
     }
 }
 void benchmark(const char* destination,unsigned budget_ms) {
@@ -375,7 +448,7 @@ int main(int argc,char** argv) {
             benchmark(argv[2],budget);return 0;
         }
         identities_and_defaults();deterministic_reference_samples();periodicity_and_sampling();
-        meaningful_controls();scratch_coverage();prepared_reference_parity();prepared_cancellation_and_concurrency();batch_reference_parity();clouds1_resolved_controls();
+        meaningful_controls();scratch_coverage();prepared_reference_parity();prepared_cancellation_and_concurrency();batch_reference_parity();clouds1_resolved_controls();cloud_feature_size();
         std::cout<<"Material procedural checks passed.\n";return 0;
     } catch(const std::exception& error) {
         std::cerr<<error.what()<<'\n';return 1;

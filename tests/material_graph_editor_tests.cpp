@@ -1753,11 +1753,14 @@ void atomicNodeCatalogAndTransactions() {
             ui.oneUndo(before);require(ui.document.undo(),"Could not remove searched atomic node.");ui.frame(2);
         }
     }
-    const std::array<std::pair<MaterialNodeKind,const char*>,9> gestures{{
+    const std::array<std::pair<MaterialNodeKind,const char*>,16> gestures{{
         {MaterialNodeKind::Blur,"Amount"},{MaterialNodeKind::GrowShrink,"Amount"},
-        {MaterialNodeKind::MaskAdjust,"Coverage"},{MaterialNodeKind::HistogramScan,"Contrast"},
-        {MaterialNodeKind::DirectionalWarp,"Angle"},{MaterialNodeKind::HeightOcclusion,"Depth"},
-        {MaterialNodeKind::NormalOcclusion,"Radius"},{MaterialNodeKind::DecodeNormal,"Strength"},
+        {MaterialNodeKind::MaskAdjust,"Coverage"},{MaterialNodeKind::MaskAdjust,"Contrast"},
+        {MaterialNodeKind::HistogramScan,"Coverage"},{MaterialNodeKind::HistogramScan,"Contrast"},
+        {MaterialNodeKind::DirectionalWarp,"Amount"},{MaterialNodeKind::DirectionalWarp,"Angle"},
+        {MaterialNodeKind::HeightOcclusion,"Strength"},{MaterialNodeKind::HeightOcclusion,"Radius"},{MaterialNodeKind::HeightOcclusion,"Depth"},
+        {MaterialNodeKind::NormalOcclusion,"Strength"},{MaterialNodeKind::NormalOcclusion,"Radius"},{MaterialNodeKind::NormalOcclusion,"Depth"},
+        {MaterialNodeKind::DecodeNormal,"Strength"},
         {MaterialNodeKind::ProceduralTexture,"Scale"}
     }};
     for(const auto& [kind,label]:gestures) {
@@ -1797,6 +1800,12 @@ void proceduralFamilyControlsAndResolution() {
     const auto has=[&](const char* label) {
         return std::any_of(ui.editor.presentation().controls.begin(),ui.editor.presentation().controls.end(),[&](const auto& item){return item.node==id&&item.label==label;});
     };
+    const auto control=[&](const char* label) {
+        for(const auto& item:ui.editor.presentation().controls)if(item.node==id&&item.label==label) {
+            const float labelWidth=(ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemInnerSpacing.x)*ui.editor.presentation().zoom;
+            return ImVec2{item.minimum[0]+(item.maximum[0]-item.minimum[0]-labelWidth)*.55f,(item.minimum[1]+item.maximum[1])*.5f};
+        }throw std::runtime_error(std::string("Missing procedural control: ")+label);
+    };
     const auto choose=[&](Pattern pattern) {
         const auto before=ui.snapshot();ui.click(combo("Pattern"));require(ui.popup()&&!ui.document.transactionActive(),"Opening pattern choices dirtied the document.");
         const auto row=std::find(patterns.begin(),patterns.end(),pattern)-patterns.begin();ui.click(ui.popupItem(static_cast<int>(row)));
@@ -1806,14 +1815,26 @@ void proceduralFamilyControlsAndResolution() {
             "Pattern switch did not install family defaults while retaining seed and authored raster resolution.");
         ui.oneUndo(before);
     };
-    choose(Pattern::Moisture);require(has("Width")&&has("Height")&&!has("Length")&&has("Contribution"),"Moisture size controls have scratch labels or missing contribution.");
+    choose(Pattern::Clouds1);require(has("Scale")&&!has("Density"),"Cloud feature scaling lost its artist-facing label.");
+    choose(Pattern::Moisture);require(has("Width")&&has("Height")&&!has("Length")&&has("Contribution")&&has("Density")&&!has("Scale"),"Moisture size/density controls have misleading labels or missing contribution.");
     choose(Pattern::MessyFibers);require(has("Threads")&&has("Angle spread")&&!has("Width"),"Fiber controls expose unused dimensions.");
-    choose(Pattern::ParabolicGradient);require(!has("Seed")&&!has("Variation")&&has("Angle"),"Parabola exposes meaningless random controls.");
+    choose(Pattern::ParabolicGradient);require(!has("Seed")&&!has("Variation")&&has("Angle")&&has("Tiling")&&!has("Scale"),"Parabola exposes meaningless random controls or misleading scaling.");
     choose(Pattern::GaussianNoise);require(findMaterialNode(ui.document.definition().graph,id)->procedural.settings.scale==32,"Gaussian source creation lost its scale default.");
     choose(Pattern::DirectionalScratches);require(has("Width")&&has("Length")&&has("Keep square tiles")&&!has("Height"),"Directional scratch controls are incomplete.");
     const auto before=ui.snapshot();ui.click(combo("Resolution"));ui.click(ui.popupItem(2));
     require(findMaterialNode(ui.document.definition().graph,id)->procedural.width==4096&&findMaterialNode(ui.document.definition().graph,id)->procedural.height==4096,
         "4K control did not author a real 4096 raster.");ui.oneUndo(before);
+    const auto square=ui.snapshot();const auto squareRevision=ui.document.revision();ui.click(control("Keep square tiles"));
+    require(ui.snapshot()==square&&ui.document.revision()==squareRevision&&!ui.document.transactionActive(),"Square-only images allowed changing an inactive rectangular-image control.");
+    const auto beforeCustom=ui.snapshot();const auto beforeCustomRevision=ui.document.revision();ui.click(combo("Resolution"));ui.click(ui.popupItem(3));ui.frame(3);
+    require(has("Width (px)")&&has("Height (px)"),"Choosing Custom did not expose editable image dimensions.");
+    require(ui.snapshot()==beforeCustom&&ui.document.revision()==beforeCustomRevision&&!ui.document.transactionActive(),"Choosing Custom invented a new raster size or dirtied the document.");
+    const auto widthStart=control("Width (px)");ui.drag(widthStart,{widthStart.x-48,widthStart.y});
+    require(findMaterialNode(ui.document.definition().graph,id)->procedural.width<4096&&findMaterialNode(ui.document.definition().graph,id)->procedural.height==4096,"Custom Width changed the wrong dimension or failed to change.");ui.oneUndo(beforeCustom);
+    const auto beforeHeight=ui.snapshot();const auto heightStart=control("Height (px)");ui.drag(heightStart,{heightStart.x-73,heightStart.y});
+    require(findMaterialNode(ui.document.definition().graph,id)->procedural.height<4096,"Custom Height did not change the authored raster.");ui.oneUndo(beforeHeight);
+    const auto rectangle=ui.snapshot();ui.click(control("Keep square tiles"));
+    require(!findMaterialNode(ui.document.definition().graph,id)->procedural.settings.nonSquareExpansion,"Rectangular-image correction did not respond after custom dimensions changed.");ui.oneUndo(rectangle);
     const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.click(combo("Pattern"));ui.key(ImGuiKey_Escape);ui.frame(3);
     require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Canceling the pattern dropdown changed authored material content.");
 }
