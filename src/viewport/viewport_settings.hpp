@@ -16,6 +16,8 @@ namespace quader {
 
 class ViewportSettings;
 
+enum class ViewportAntiAliasing { Off, Smaa };
+
 /**
  * Represents a Viewport Setting Color value used by the viewport input, layout, and camera layer.
  */
@@ -243,10 +245,14 @@ public:
     bool bool_value(ViewportBoolSettingId id) const;
     bool set_bool_value(ViewportBoolSettingId id, bool value);
 
+    ViewportAntiAliasing anti_aliasing() const { return anti_aliasing_; }
+    bool set_anti_aliasing(ViewportAntiAliasing value);
+
   private:
     std::array<ViewportSettingColor, kViewportColorSettingCount> colors_{};
     std::array<float, kViewportFloatSettingCount> floats_{};
     std::array<bool, kViewportBoolSettingCount> bools_{};
+    ViewportAntiAliasing anti_aliasing_ = ViewportAntiAliasing::Smaa;
 };
 
 } // namespace quader

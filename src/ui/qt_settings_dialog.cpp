@@ -1049,6 +1049,8 @@ struct QtSettingsDialog::Impl {
   std::array<bool, kViewportColorSettingCount> dirty_colors{};
   std::array<bool, kViewportFloatSettingCount> dirty_floats{};
   std::array<bool, kViewportBoolSettingCount> dirty_bools{};
+  bool anti_aliasing_dirty = false;
+  ViewportAntiAliasing anti_aliasing_target_baseline = ViewportAntiAliasing::Smaa;
   bool interface_scale_dirty = false;
   float interface_scale_target_baseline = 1.0f;
   bool vsync_dirty = false;
@@ -1069,6 +1071,8 @@ struct QtSettingsDialog::Impl {
   QLabel *interface_scale_label = nullptr;
   QSpinBox *interface_scale_spin_box = nullptr;
   QCheckBox *vsync_check_box = nullptr;
+  QLabel *anti_aliasing_label = nullptr;
+  QComboBox *anti_aliasing_combo = nullptr;
   QLabel *default_material_preview = nullptr;
   QLabel *default_material_path = nullptr;
   QPushButton *default_material_browse = nullptr;
@@ -1123,6 +1127,7 @@ struct QtSettingsDialog::Impl {
     dirty_colors.fill(false);
     dirty_floats.fill(false);
     dirty_bools.fill(false);
+    anti_aliasing_dirty = false;
     interface_scale_dirty = false;
     vsync_dirty = false;
     default_material_dirty = false;
@@ -1132,7 +1137,7 @@ struct QtSettingsDialog::Impl {
 
   [[nodiscard]] bool has_pending_changes() const {
     return interface_scale_dirty || vsync_dirty || locale_dirty ||
-           default_material_dirty ||
+           default_material_dirty || anti_aliasing_dirty ||
            std::any_of(session_dirty.begin(), session_dirty.end(),
                        [](bool dirty) { return dirty; }) ||
            std::any_of(dirty_colors.begin(), dirty_colors.end(),
@@ -1154,6 +1159,18 @@ struct QtSettingsDialog::Impl {
       clear_dirty();
       refresh_action_state();
       return;
+    }
+
+    const auto target_anti_aliasing = target_viewport_settings->anti_aliasing();
+    const bool anti_aliasing_changed_externally =
+        !force && transaction_active && target_anti_aliasing != anti_aliasing_target_baseline;
+    if (!force && !anti_aliasing_changed_externally && anti_aliasing_dirty) {
+      anti_aliasing_dirty = draft_viewport_settings.anti_aliasing() != target_anti_aliasing;
+    }
+    if (force || anti_aliasing_changed_externally || !anti_aliasing_dirty) {
+      (void)draft_viewport_settings.set_anti_aliasing(target_anti_aliasing);
+      anti_aliasing_target_baseline = target_anti_aliasing;
+      anti_aliasing_dirty = false;
     }
 
     for (const ViewportColorSettingDescriptor &descriptor :
@@ -1397,6 +1414,10 @@ struct QtSettingsDialog::Impl {
     }
 
     bool viewport_changed = false;
+    if (anti_aliasing_dirty) {
+      viewport_changed = target_viewport_settings->set_anti_aliasing(
+          draft_viewport_settings.anti_aliasing());
+    }
     for (const ViewportColorSettingDescriptor &descriptor :
          viewport_color_settings()) {
       const std::size_t id = static_cast<std::size_t>(descriptor.id);
@@ -2008,6 +2029,23 @@ struct QtSettingsDialog::Impl {
                          (void)controller.preview_vsync_enabled(enabled);
                        }
                      });
+    if (current_product_release() != kInternalFullRelease) {
+      anti_aliasing_label = new QLabel(form->parentWidget());
+      anti_aliasing_combo = new QComboBox(form->parentWidget());
+      anti_aliasing_combo->setObjectName(QStringLiteral("settingsAntiAliasing"));
+      anti_aliasing_combo->addItem(QString(), static_cast<int>(ViewportAntiAliasing::Off));
+      anti_aliasing_combo->addItem(QStringLiteral("SMAA"), static_cast<int>(ViewportAntiAliasing::Smaa));
+      anti_aliasing_label->setBuddy(anti_aliasing_combo);
+      form->addRow(anti_aliasing_label, anti_aliasing_combo);
+      QObject::connect(anti_aliasing_combo, &QComboBox::currentIndexChanged, &owner,
+                       [this](int index) {
+        if (refreshing || viewport_settings == nullptr || index < 0) return;
+        const auto value = static_cast<ViewportAntiAliasing>(anti_aliasing_combo->itemData(index).toInt());
+        (void)draft_viewport_settings.set_anti_aliasing(value);
+        anti_aliasing_dirty = value != target_viewport_settings->anti_aliasing();
+        refresh_action_state();
+      });
+    }
   }
 
   void create_undo_group(const OptionsPageWidgets &page) {
@@ -2664,6 +2702,14 @@ struct QtSettingsDialog::Impl {
     interface_scale_spin_box->setToolTip(interface_scale_help);
     vsync_check_box->setText(qtext(
         localization, "ui.settings.vsync", "VSync (synchronize with display)"));
+    if (anti_aliasing_combo != nullptr) {
+      anti_aliasing_label->setText(qtext(localization, "ui.settings.anti_aliasing", "Anti-aliasing"));
+      anti_aliasing_combo->setItemText(0, qtext(localization, "ui.settings.anti_aliasing.off", "Off"));
+      const QSignalBlocker blocker(anti_aliasing_combo);
+      anti_aliasing_combo->setCurrentIndex(anti_aliasing_combo->findData(
+          static_cast<int>(draft_viewport_settings.anti_aliasing())));
+      anti_aliasing_combo->setEnabled(viewport_settings != nullptr);
+    }
     vsync_check_box->setToolTip(qtext(
         localization, "ui.settings.vsync.help",
         "Synchronizes presentation with the display refresh rate. Disable to "

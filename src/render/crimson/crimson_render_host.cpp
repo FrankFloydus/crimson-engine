@@ -262,15 +262,19 @@ public:
         settings.float_value(ViewportFloatSettingId::ShadedGroundFill),
         settings.float_value(ViewportFloatSettingId::ShadedSkyFill), 1.0f};
     const auto &old = state_->frame.light;
+    const auto anti_aliasing = settings.anti_aliasing() == ViewportAntiAliasing::Smaa
+        ? crimson::AntiAliasing::Smaa : crimson::AntiAliasing::Off;
     if (state_->configured_settings && old.key_direction_view == light.key_direction_view &&
         old.key_intensity == light.key_intensity && old.diffuse_wrap == light.diffuse_wrap &&
         old.ground_fill == light.ground_fill && old.sky_fill == light.sky_fill &&
         state_->frame.clear_color.red == color.r && state_->frame.clear_color.green == color.g &&
-        state_->frame.clear_color.blue == color.b) return;
+        state_->frame.clear_color.blue == color.b &&
+        state_->frame.anti_aliasing == anti_aliasing) return;
     state_->instance_style = InstanceEditStyle::from_settings(settings);
     const auto background = state_->instance_style.resolve_background_color(color, state_->instance_context);
     state_->frame.clear_color = {background.r, background.g, background.b, 1.0f};
     state_->frame.light = light;
+    state_->frame.anti_aliasing = anti_aliasing;
     state_->dirty = true;
     state_->configured_settings = true;
     ++state_->settings_apply_count;

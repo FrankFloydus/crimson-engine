@@ -1983,6 +1983,28 @@ TEST(ViewportSettingsTests,
   std::filesystem::remove(path);
 }
 
+TEST(ViewportSettingsTests, SmaaPreferenceDefaultsPersistsAndRejectsUnknownModes) {
+  const auto path = std::filesystem::temp_directory_path() / "quader_anti_aliasing_preferences.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    file << "[Viewport]\n";
+  }
+  auto settings = ViewportSettings::load(path);
+  EXPECT_EQ(settings.anti_aliasing(), ViewportAntiAliasing::Smaa);
+  EXPECT_FALSE(settings.set_anti_aliasing(static_cast<ViewportAntiAliasing>(99)));
+  ASSERT_TRUE(settings.set_anti_aliasing(ViewportAntiAliasing::Off));
+  ASSERT_TRUE(settings.save(path));
+  EXPECT_EQ(ViewportSettings::load(path).anti_aliasing(), ViewportAntiAliasing::Off);
+  ASSERT_TRUE(settings.reset_to_defaults());
+  EXPECT_EQ(settings.anti_aliasing(), ViewportAntiAliasing::Smaa);
+  {
+    std::ofstream file(path, std::ios::trunc);
+    file << "QVertexWorks.Quader.Viewport.AntiAliasing=unknown\n";
+  }
+  EXPECT_EQ(ViewportSettings::load(path).anti_aliasing(), ViewportAntiAliasing::Smaa);
+  std::filesystem::remove(path);
+}
+
 TEST(ViewportSettingsTests,
      WireframeOnShadedColorDefaultsBlackAndPersistsIndependently) {
   const std::filesystem::path path =
@@ -9363,6 +9385,21 @@ TEST(ViewportWorkspaceServiceTests,
     EXPECT_FLOAT_EQ(effective.color(ViewportColorSettingId::GridMinor).r, 0.4f);
   }
   EXPECT_EQ(workspace.control(kFirst, QuaderViewportControl::ShowGrid), default_grid);
+}
+
+TEST(ViewportWorkspaceServiceTests, AntiAliasingChangesReachEveryPaneWithoutChangingControlOverrides) {
+  ViewportWorkspaceService workspace;
+  ViewportSettings defaults;
+  (void)workspace.update_control_defaults(defaults, 1u);
+  ASSERT_TRUE(workspace.set_control(ViewportPaneId::Perspective, QuaderViewportControl::ShowGrid, false));
+  ASSERT_TRUE(defaults.set_anti_aliasing(ViewportAntiAliasing::Off));
+  ASSERT_TRUE(workspace.update_control_defaults(defaults, 2u));
+  for (const auto pane : {ViewportPaneId::Perspective, ViewportPaneId::Top,
+                         ViewportPaneId::Front, ViewportPaneId::Side}) {
+    EXPECT_EQ(workspace.effective_settings(pane).anti_aliasing(), ViewportAntiAliasing::Off);
+  }
+  EXPECT_FALSE(workspace.control(ViewportPaneId::Perspective, QuaderViewportControl::ShowGrid));
+  EXPECT_FALSE(workspace.update_control_defaults(defaults, 3u));
 }
 
 TEST(ViewportWorkspaceServiceTests,

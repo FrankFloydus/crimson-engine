@@ -42,6 +42,7 @@ bool valid_control(QuaderViewportControl control) {
 
 bool settings_equal(const ViewportSettings &left,
                      const ViewportSettings &right) {
+  if (left.anti_aliasing() != right.anti_aliasing()) return false;
   for (std::size_t index = 0; index < kViewportBoolSettingCount; ++index) {
     const auto setting = static_cast<ViewportBoolSettingId>(index);
     if (left.bool_value(setting) != right.bool_value(setting)) {

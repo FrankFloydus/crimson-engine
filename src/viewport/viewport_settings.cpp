@@ -490,6 +490,10 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
 
       const std::string key = QStr::trim_ascii_whitespace(split->before);
       const std::string value = QStr::trim_ascii_whitespace(split->after);
+      if (key == full_key("AntiAliasing")) {
+        if (value == "off") settings.anti_aliasing_ = ViewportAntiAliasing::Off;
+        else if (value == "smaa") settings.anti_aliasing_ = ViewportAntiAliasing::Smaa;
+      }
       for (const ViewportColorSettingDescriptor &descriptor : kColorSettings) {
         if (key == full_key(descriptor.key)) {
           if (const std::optional<ViewportSettingColor> parsed =
@@ -577,6 +581,8 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
     }
 
     file << "[Viewport]\n";
+    file << full_key("AntiAliasing") << '='
+         << (anti_aliasing_ == ViewportAntiAliasing::Smaa ? "smaa" : "off") << '\n';
     for (const ViewportColorSettingDescriptor& descriptor : kColorSettings) {
       file << full_key(descriptor.key) << '='
            << color_to_hex(colors_[index(descriptor.id)]) << '\n';
@@ -595,7 +601,7 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
 }
 
 bool ViewportSettings::reset_to_defaults() {
-  bool changed = false;
+  bool changed = set_anti_aliasing(ViewportAntiAliasing::Smaa);
   for (const ViewportColorSettingDescriptor &descriptor : kColorSettings) {
     if (!setting_available(descriptor.id)) {
       continue;
@@ -691,6 +697,13 @@ bool ViewportSettings::set_bool_value(ViewportBoolSettingId id, bool value) {
     return false;
   }
   bools_[index(id)] = value;
+  return true;
+}
+
+bool ViewportSettings::set_anti_aliasing(ViewportAntiAliasing value) {
+  if ((value != ViewportAntiAliasing::Off && value != ViewportAntiAliasing::Smaa) ||
+      anti_aliasing_ == value) return false;
+  anti_aliasing_ = value;
   return true;
 }
 

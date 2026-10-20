@@ -150,7 +150,7 @@ private:
     Front, BackCulled, DoubleSided, Texture, Camera, Pose,
     SameGeneration, Rejected, Normal, Circular, Quad,
     Alpha, AlphaSwap, AlphaRepeat, Minified, MinifiedCamera, MinifiedRetained, Reinitialized,
-    AtomicBaseline, AtomicRejected, AtomicRetry
+    AtomicBaseline, AtomicRejected, AtomicRetry, SmaaOff, SmaaOn, SmaaOddExtent
   };
 
   static constexpr std::array<std::array<int, 3>, 4> kImageColors{{
@@ -242,7 +242,11 @@ private:
   }
 
   bool has_texture() const {
-    return step_ >= Step::Texture;
+    return step_ >= Step::Texture && !smaa_geometry_step();
+  }
+
+  bool smaa_geometry_step() const {
+    return step_ == Step::SmaaOff || step_ == Step::SmaaOn || step_ == Step::SmaaOddExtent;
   }
 
   bool alpha_step() const {
@@ -346,6 +350,15 @@ private:
     instance_.surface = 1u;
     instance_.transform_revision = candidate_generation;
     instance_.double_sided = step_ == Step::DoubleSided;
+    if (smaa_geometry_step()) {
+      constexpr float kAngle = 0.463647609f;
+      const float cosine = std::cos(kAngle) * 0.7f;
+      const float sine = std::sin(kAngle) * 0.7f;
+      instance_.world_from_local.values = {
+          cosine, sine, 0, 0, -sine, cosine, 0, 0,
+          0, 0, 1, 0, 0, 0, 0, 1};
+      surface_.solid_color = {1, 1, 1, 1};
+    }
     if (step_ == Step::Pose || step_ == Step::SameGeneration || reject) {
       instance_.world_from_local.values[12] = -0.2f;
     }
@@ -433,6 +446,8 @@ private:
                      .diffuse_wrap = 0, .ground_fill = 0, .sky_fill = 0, .enabled = 1};
     }
     const bool atomic = step_ == Step::AtomicBaseline || step_ == Step::AtomicRejected || step_ == Step::AtomicRetry;
+    if (atomic || step_ == Step::AlphaRepeat || step_ == Step::SmaaOn || step_ == Step::SmaaOddExtent)
+      frame.anti_aliasing = crimson::AntiAliasing::Smaa;
     if (atomic) {
       if (atomic_target_.value == 0u && !accept(renderer_.create_target(required, atomic_target_))) return false;
       auto editor = std::make_shared<crimson::shared::EditorFrame>();
@@ -464,6 +479,24 @@ private:
         if (step_ == Step::AtomicBaseline) atomic_baseline_frame_generation_ = frame_generation_;
         if (step_ == Step::AtomicRetry) scene_generation_ = atomic_pending_generation_;
       }
+    } else if (step_ == Step::SmaaOn || step_ == Step::SmaaOddExtent) {
+      if (atomic_target_.value == 0u && !accept(renderer_.create_target(required, atomic_target_))) return false;
+      if (!accept(renderer_.resize_target(atomic_target_, required)) ||
+          !accept(renderer_.prepare_view(target_, frame))) return false;
+      if (!smaa_rejection_checked_) {
+        auto changed = frame;
+        changed.anti_aliasing = crimson::AntiAliasing::Off;
+        if (renderer_.prepare_view(target_, changed).ok()) {
+          fail("Changing SMAA after epoch preparation was not rejected");
+          return false;
+        }
+        smaa_rejection_checked_ = true;
+        if (!accept(renderer_.prepare_view(target_, frame))) return false;
+      }
+      if (!accept(renderer_.prepare_view(atomic_target_, frame)) ||
+          !accept(renderer_.render_view(target_, frame)) ||
+          !accept(renderer_.render_view(atomic_target_, frame)) ||
+          !accept(renderer_.submit())) return false;
     } else if (!accept(renderer_.render_view(target_, frame)) || !accept(renderer_.submit())) {
       return false;
     }
@@ -527,6 +560,7 @@ private:
     if (!sample(pixels, 0.03f, 0.03f, clear, label)) {
       return false;
     }
+    if (smaa_geometry_step()) return sample(pixels, 0.5f, 0.5f, {255, 255, 255}, label);
     if (step_ == Step::BackCulled) {
       return sample(pixels, 0.5f, 0.5f, clear, label) &&
              sample(pixels, 0.3f, 0.3f, clear, label);
@@ -622,6 +656,37 @@ private:
       return false;
     }
     if (step_ == Step::AtomicBaseline) atomic_baseline_image_ = offscreen;
+    if (step_ == Step::SmaaOff) smaa_baseline_image_ = offscreen;
+    if (step_ == Step::SmaaOn) {
+      if (offscreen.size() != smaa_baseline_image_.size()) {
+        fail("SMAA comparison unexpectedly changed target extent");
+        return false;
+      }
+      std::size_t changed_pixels = 0u;
+      std::size_t fractional_pixels = 0u;
+      for (int y = 0; y < offscreen.height(); ++y) {
+        for (int x = 0; x < offscreen.width(); ++x) {
+          const auto before = smaa_baseline_image_.pixelColor(x, y);
+          const auto after = offscreen.pixelColor(x, y);
+          if (std::abs(before.red() - after.red()) > 2 ||
+              std::abs(before.green() - after.green()) > 2 ||
+              std::abs(before.blue() - after.blue()) > 2) ++changed_pixels;
+          if (after.red() > 30 && after.red() < 245) ++fractional_pixels;
+        }
+      }
+      const auto area = static_cast<std::size_t>(offscreen.width()) * offscreen.height();
+      if (changed_pixels < 10u || changed_pixels > area / 8u || fractional_pixels < 10u) {
+        fail("SMAA did not smooth diagonal edges locally while preserving constant regions");
+        return false;
+      }
+      std::cout << "SMAA changed_pixels=" << changed_pixels
+                << "; fractional_edge_pixels=" << fractional_pixels << std::endl;
+    }
+    if (step_ == Step::SmaaOddExtent &&
+        (offscreen.width() != 385 || offscreen.height() != 289)) {
+      fail("SMAA odd-extent resize did not publish the requested physical target");
+      return false;
+    }
     if (step_ == Step::AtomicRejected && offscreen != atomic_baseline_image_) {
       fail("A rejected later-pane preflight changed the prior accepted target's copied pixels");
       return false;
@@ -708,7 +773,16 @@ private:
       }
       next(Step::AtomicRetry, false);
       break;
-    case Step::AtomicRetry: next(Step::Normal); break;
+    case Step::AtomicRetry: next(Step::SmaaOff); break;
+    case Step::SmaaOff: next(Step::SmaaOn, false); break;
+    case Step::SmaaOn:
+      widget_->setFixedColorBufferSize(QSize(385, 289));
+      next(Step::SmaaOddExtent, false);
+      break;
+    case Step::SmaaOddExtent:
+      widget_->setFixedColorBufferSize({});
+      next(Step::Normal);
+      break;
     case Step::Normal: next(Step::Circular); break;
     case Step::Circular: next(Step::Quad); break;
     case Step::Quad: next(Step::Alpha); break;
@@ -781,9 +855,11 @@ private:
   std::uint64_t render_count_ = 0u;
   std::uint64_t atomic_pending_generation_ = 0u, atomic_baseline_frame_generation_ = 0u;
   QImage atomic_baseline_image_;
+  QImage smaa_baseline_image_;
   std::uint32_t root_count_ = 0u, release_count_ = 0u;
   Step step_ = Step::Front;
   bool stage_needed_ = true, rejection_checked_ = false, atomic_rejection_checked_ = false;
+  bool smaa_rejection_checked_ = false;
   std::string error_;
 };
 

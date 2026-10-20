@@ -1012,6 +1012,53 @@ TEST_F(PublicReleaseUiTests, AdvancedSelectionDisappearsOnlyFromDiscoverySurface
   palette.reject();
 }
 
+TEST_F(PublicReleaseUiTests, AntiAliasingPreferenceUsesApplyCancelAndPersists) {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto path = std::filesystem::temp_directory_path() / "quader_public_smaa_preferences.ini";
+  std::size_t commits = 0u;
+  dialog.set_context(ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        if (change.kind == QtSettingsChangeKind::ViewportCommit) {
+          ++commits;
+          EXPECT_TRUE(viewport_settings.save(path));
+        }
+      });
+  auto *combo = dialog.findChild<QComboBox *>(QStringLiteral("settingsAntiAliasing"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(combo, nullptr);
+  ASSERT_NE(apply, nullptr);
+  EXPECT_EQ(combo->count(), 2);
+  EXPECT_EQ(combo->itemText(0), QStringLiteral("Off"));
+  EXPECT_EQ(combo->itemText(1), QStringLiteral("SMAA"));
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(ViewportAntiAliasing::Smaa));
+  combo->setCurrentIndex(0);
+  EXPECT_EQ(viewport_settings.anti_aliasing(), ViewportAntiAliasing::Smaa);
+  dialog.reject();
+  EXPECT_EQ(commits, 0u);
+  EXPECT_EQ(viewport_settings.anti_aliasing(), ViewportAntiAliasing::Smaa);
+  dialog.show();
+  QCoreApplication::processEvents();
+  combo->setCurrentIndex(0);
+  ASSERT_TRUE(apply->isEnabled());
+  apply->click();
+  EXPECT_EQ(commits, 1u);
+  EXPECT_EQ(viewport_settings.anti_aliasing(), ViewportAntiAliasing::Off);
+  EXPECT_EQ(ViewportSettings::load(path).anti_aliasing(), ViewportAntiAliasing::Off);
+  combo->setCurrentIndex(1);
+  dialog.reject();
+  EXPECT_EQ(viewport_settings.anti_aliasing(), ViewportAntiAliasing::Off);
+  std::filesystem::remove(path);
+}
+
 TEST_F(PublicReleaseUiTests, ContextHintsRespectPublicAvailabilityAndCurrentBindings) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
