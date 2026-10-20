@@ -58,7 +58,7 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
         catch(const std::exception& error){++report.failed;report.diagnostics.push_back(id+": "+error.what());}
     }
     struct Stage {ShaderBinary binary;bool cached{};};
-    report.topologies=graphs.size();std::map<std::string,Stage> vertices,fragments;
+    report.topologies=graphs.size();std::map<std::string,Stage> vertices,generatedStages;
     ShaderCacheReadSession cache(config);
     const auto loadVertex=[&](const std::string& name)->Stage& {
         if(const auto found=vertices.find(name);found!=vertices.end())return found->second;
@@ -67,36 +67,44 @@ ProjectMaterialCacheReport prepareProjectMaterialCache(const std::filesystem::pa
         if(cached)++report.cacheHits;else binary=compileShader(config,name);
         ++report.stages;return vertices.emplace(name,Stage{std::move(*binary),cached}).first->second;
     };
-    const auto loadFragment=[&](const ShaderCompileRecipe& recipe)->Stage& {
+    const auto loadGenerated=[&](const ShaderCompileRecipe& recipe)->Stage& {
         // Generated recipe names describe individual compiler inputs. Coverage
         // passes and different materials can therefore share the same stage.
-        if(const auto found=fragments.find(recipe.name);found!=fragments.end())return found->second;
+        if(const auto found=generatedStages.find(recipe.name);found!=generatedStages.end())return found->second;
         auto binary=cache.find(recipe);
         const bool cached=binary.has_value();
         if(cached)++report.cacheHits;else binary=compileShader(config,recipe);
-        ++report.stages;return fragments.emplace(recipe.name,Stage{std::move(*binary),cached}).first->second;
+        ++report.stages;return generatedStages.emplace(recipe.name,Stage{std::move(*binary),cached}).first->second;
     };
     for(const auto& [key,shader]:graphs) {
         try {
             for(const auto& variant:shader.variants) {
                 auto& vertex=loadVertex(variant.vertexName);
                 const auto recipe=materialGraphShaderRecipe(config,shader,variant);
-                auto& fragment=loadFragment(recipe);
+                auto& fragment=loadGenerated(recipe);
+                const auto domainRecipe=variant.tessellation?materialGraphDomainShaderRecipe(config,shader,variant):ShaderCompileRecipe{};
+                Stage* domain=variant.tessellation?&loadGenerated(domainRecipe):nullptr;
                 std::string diagnostic;
-                if(!preflightGeneratedShaderPair(vertex.binary.bytes,fragment.binary.bytes,embeddedVertex(variant.pass),variant.manifest,diagnostic)) {
+                const auto preflight=[&] {
+                    return preflightGeneratedShaderPair(vertex.binary.bytes,fragment.binary.bytes,embeddedVertex(variant.pass),variant.manifest,diagnostic)&&
+                        (!domain||preflightGeneratedTessellationDomain(domain->binary.bytes,embeddedVertex(variant.pass),variant.domainManifest,diagnostic));
+                };
+                if(!preflight()) {
                     // The disk envelope is only a quick cache check. Repair a
                     // structurally valid artifact rejected by full ABI/DXBC
                     // validation here, so startup does not rediscover it later.
-                    if(!vertex.cached&&!fragment.cached)throw std::runtime_error("Shader preflight: "+diagnostic);
+                    if(!vertex.cached&&!fragment.cached&&(!domain||!domain->cached))throw std::runtime_error("Shader preflight: "+diagnostic);
                     if(!cache.unchanged())throw std::runtime_error("Shader inputs changed before cache repair.");
                     std::vector<ShaderBinary> rejected;
                     if(vertex.cached)rejected.push_back(vertex.binary);
                     if(fragment.cached)rejected.push_back(fragment.binary);
+                    if(domain&&domain->cached)rejected.push_back(domain->binary);
                     cache.discard(rejected);
                     vertex.binary=compileShader(config,variant.vertexName);vertex.cached=false;
                     fragment.binary=compileShader(config,recipe);fragment.cached=false;
+                    if(domain){domain->binary=compileShader(config,domainRecipe);domain->cached=false;}
                     diagnostic.clear();
-                    if(!preflightGeneratedShaderPair(vertex.binary.bytes,fragment.binary.bytes,embeddedVertex(variant.pass),variant.manifest,diagnostic))
+                    if(!preflight())
                         throw std::runtime_error("Fresh shader preflight after cache repair: "+diagnostic);
                 }
             }

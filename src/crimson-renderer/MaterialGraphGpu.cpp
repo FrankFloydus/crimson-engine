@@ -2,11 +2,6 @@
 #include "resources/ResourceManager.h"
 #include "assets/MaterialAsset.h"
 #include "resources/CacheIO.h"
-#include "vs_model.h"
-#include "vs_pick.h"
-#include "vs_point_shadow.h"
-#include "vs_directional_shadow.h"
-#include "vs_particle.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -16,24 +11,31 @@
 
 namespace crimson {
 namespace {
-std::span<const std::uint8_t> vertex(MaterialGraphPass pass) {
-    switch(pass) {
-    case MaterialGraphPass::Model:return cc_vs_model;
-    case MaterialGraphPass::Picking:return cc_vs_pick;
-    case MaterialGraphPass::PointShadow:return cc_vs_point_shadow;
-    case MaterialGraphPass::Particle:return cc_vs_particle;
-    case MaterialGraphPass::DirectionalShadow:return cc_vs_directional_shadow;
-    }
-    throw std::runtime_error("Invalid material graph pass.");
-}
-std::vector<GraphProgramBinary> graph_binaries(std::span<const ShaderBinary* const> binaries) {
-    if(binaries.size()%2)throw std::runtime_error("Incomplete material graph shader bundle.");
-    std::vector<GraphProgramBinary> result;result.reserve(binaries.size()/2);
-    for(std::size_t i=0;i<binaries.size();i+=2)result.push_back({binaries[i]->bytes,binaries[i+1]->bytes,binaries[i]->fingerprint,binaries[i+1]->fingerprint});
+using StageSet=std::array<ShaderBinary,3>; // Conventional vertex, fragment, optional domain.
+std::uint64_t binaryFingerprint(std::span<const std::uint8_t> bytes) {
+    std::uint64_t result=14695981039346656037ull;
+    for(const auto byte:bytes){result^=byte;result*=1099511628211ull;}
     return result;
 }
-void preflightBundle(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {preflight_graph_programs(variants,graph_binaries(binaries));}
-std::shared_ptr<MaterialGraphProgramsVersion> createBundle(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {return create_graph_programs(variants,graph_binaries(binaries));}
+std::vector<GraphProgramBinary> graph_binaries(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {
+    if(binaries.size()!=variants.size()*3)throw std::runtime_error("Incomplete material graph shader bundle.");
+    std::vector<GraphProgramBinary> result;result.reserve(variants.size());
+    for(std::size_t i=0;i<variants.size();++i) {
+        const auto* vs=binaries[3*i];const auto* fs=binaries[3*i+1];
+        if(!vs||!fs)throw std::runtime_error("Incomplete material graph shader pair.");
+        GraphProgramBinary program{vs->bytes,fs->bytes,vs->fingerprint,fs->fingerprint};
+        if(variants[i].tessellation) {
+            const auto* ds=binaries[3*i+2];
+            if(!ds)throw std::runtime_error("Incomplete material tessellation domain stage.");
+            program.hull=material_tessellation_hull_shader();program.domain=ds->bytes;
+            program.hull_fingerprint=binaryFingerprint(program.hull);program.domain_fingerprint=ds->fingerprint;
+        }
+        result.push_back(program);
+    }
+    return result;
+}
+void preflightBundle(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {preflight_graph_programs(variants,graph_binaries(variants,binaries));}
+std::shared_ptr<MaterialGraphProgramsVersion> createBundle(std::span<const MaterialGraphShaderVariant> variants,std::span<const ShaderBinary* const> binaries) {return create_graph_programs(variants,graph_binaries(variants,binaries));}
 }
 struct MaterialGraphPrograms::Impl {
     struct ForegroundInterest {};
@@ -43,8 +45,8 @@ struct MaterialGraphPrograms::Impl {
         ~OptimizationInterest(){cancellation->request_stop();}
     };
     struct Batch {
-        std::vector<ResourceHandle<ShaderBinary>> jobs; // Vertex/fragment pairs in pass order.
-        std::vector<std::optional<std::array<ShaderBinary,2>>> cached;
+        std::vector<ResourceHandle<ShaderBinary>> jobs; // Three slots per pass; domain is optional.
+        std::vector<std::optional<StageSet>> cached;
         std::vector<std::filesystem::path> sourceFiles;
         std::uint64_t sourceState{};
         std::shared_ptr<ForegroundInterest> foreground;
@@ -100,8 +102,10 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
     auto& owner=*impl_;auto& inputs=*owner.inputs;
     auto& entry=owner.entries[shader.topologyKey];
     const auto now=std::chrono::steady_clock::now();entry.used=now;
+    const std::string capabilityDiagnostic=shader.tessellation.enabled&&!bgfx::isTessellationSupported()?
+        "Hardware tessellation requires Direct3D 12; this backend renders the base mesh.":"";
     const auto current=[&]{return entry.current&&entry.currentEpoch==(*owner.sourceEpoch);};
-    const auto pending=[&](bool active) {return MaterialGraphProgramResult{entry.current,current()?std::string{}:"Compiling material graph...",current(),active};};
+    const auto pending=[&](bool active) {return MaterialGraphProgramResult{entry.current,current()?capabilityDiagnostic:"Compiling material graph...",current(),active};};
     const auto interactivePass=[](const auto& variant){return variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle;};
     try {
         const auto* caps=bgfx::getCaps();
@@ -123,31 +127,34 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
                 vertexOptions.dependencyValidation=DependencyValidation::FileState;
                 vertexOptions.variant="material-vertex-"+std::to_string((*owner.sourceEpoch));
                 vertexOptions.dependencies=dependencies;
-                batch.jobs[2*i]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-vertex:"+vertexName},
+                batch.jobs[3*i]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-vertex:"+vertexName},
                     [config,vertexName](std::stop_token stop){auto binary=std::make_shared<ShaderBinary>(compileShader(config,vertexName,stop));
                         return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};},std::move(vertexOptions));
-                auto recipe=materialGraphShaderRecipe(config,shader,variant);
-                if(!batch.background&&interactivePass(variant))recipe.optimization=ShaderCompileOptimization::Interactive;
-                ResourceRequestOptions options;options.priority=jobPriority;options.dependencyValidation=DependencyValidation::FileState;
-                options.variant="material-graph-"+std::to_string((*owner.sourceEpoch))+(batch.background?"-optimized-"+std::to_string(batch.attempt):
-                    recipe.optimization==ShaderCompileOptimization::Interactive?"-interactive":"-optimized");
-                options.dependencies=dependencies;options.retainLoader=!batch.background;
-                const auto cancellation=batch.cancellation;
-                batch.jobs[2*i+1]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-shader:"+recipe.name},
-                    [config,recipe,cancellation](std::stop_token stop) {
-                        std::shared_ptr<ShaderBinary> binary;
-                        if(cancellation) {
-                            std::stop_source combined;
-                            std::stop_callback resourceStop{stop,[&]{combined.request_stop();}};
-                            std::stop_callback backgroundStop{cancellation->get_token(),[&]{combined.request_stop();}};
-                            binary=std::make_shared<ShaderBinary>(compileShader(config,recipe,combined.get_token()));
-                        } else binary=std::make_shared<ShaderBinary>(compileShader(config,recipe,stop));
-                        return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};},std::move(options));
+                const auto requestGenerated=[&](ShaderCompileRecipe recipe,std::size_t slot) {
+                    if(!batch.background&&interactivePass(variant))recipe.optimization=ShaderCompileOptimization::Interactive;
+                    ResourceRequestOptions options;options.priority=jobPriority;options.dependencyValidation=DependencyValidation::FileState;
+                    options.variant="material-graph-"+std::to_string((*owner.sourceEpoch))+(batch.background?"-optimized-"+std::to_string(batch.attempt):
+                        recipe.optimization==ShaderCompileOptimization::Interactive?"-interactive":"-optimized");
+                    options.dependencies=dependencies;options.retainLoader=!batch.background;
+                    const auto cancellation=batch.cancellation;
+                    batch.jobs[3*i+slot]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-shader:"+recipe.name},
+                        [config,recipe,cancellation](std::stop_token stop) {
+                            std::shared_ptr<ShaderBinary> binary;
+                            if(cancellation) {
+                                std::stop_source combined;
+                                std::stop_callback resourceStop{stop,[&]{combined.request_stop();}};
+                                std::stop_callback backgroundStop{cancellation->get_token(),[&]{combined.request_stop();}};
+                                binary=std::make_shared<ShaderBinary>(compileShader(config,recipe,combined.get_token()));
+                            } else binary=std::make_shared<ShaderBinary>(compileShader(config,recipe,stop));
+                            return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};},std::move(options));
+                };
+                requestGenerated(materialGraphShaderRecipe(config,shader,variant),1);
+                if(variant.tessellation)requestGenerated(materialGraphDomainShaderRecipe(config,shader,variant),2);
             }
         };
         const auto begin=[&](bool background) {
             auto batch=std::make_unique<Impl::Batch>();batch->background=background;
-            batch->cached.resize(entry.variants.size());batch->jobs.resize(entry.variants.size()*2);
+            batch->cached.resize(entry.variants.size());batch->jobs.resize(entry.variants.size()*3);
             if(!inputs.cacheRead||inputs.cacheReadEpoch!=(*owner.sourceEpoch)) {
                 inputs.cacheRead=std::make_unique<ShaderCacheReadSession>(owner.config);inputs.cacheReadEpoch=(*owner.sourceEpoch);
             }
@@ -162,10 +169,15 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
                     if(!vs)return false;
                     auto recipe=materialGraphShaderRecipe(owner.config,shader,variant);recipe.optimization=optimization;
                     auto fs=cache.find(recipe);if(!fs)return false;
-                    std::array<ShaderBinary,2> pair{*vs,std::move(*fs)};
-                    const std::array<const ShaderBinary*,2> binaries{&pair[0],&pair[1]};
-                    try {preflightBundle(std::span{&variant,1},binaries);batch->cached[i]=std::move(pair);return true;}
-                    catch(const std::exception&) {cache.discard(pair);return false;}
+                    StageSet stages{*vs,std::move(*fs),{}};
+                    if(variant.tessellation) {
+                        auto domainRecipe=materialGraphDomainShaderRecipe(owner.config,shader,variant);domainRecipe.optimization=optimization;
+                        auto ds=cache.find(domainRecipe);if(!ds)return false;
+                        stages[2]=std::move(*ds);
+                    }
+                    const std::array<const ShaderBinary*,3> binaries{&stages[0],&stages[1],variant.tessellation?&stages[2]:nullptr};
+                    try {preflightBundle(std::span{&variant,1},binaries);batch->cached[i]=std::move(stages);return true;}
+                    catch(const std::exception&) {cache.discard(stages);return false;}
                 };
                 if(readPair(ShaderCompileOptimization::Full))continue;
                 if(!background&&interactivePass(variant)) {batch->interactive=true;(void)readPair(ShaderCompileOptimization::Interactive);}
@@ -189,7 +201,13 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
         if(entry.epoch!=(*owner.sourceEpoch)) {
             if(shader.nodePreview ? (shader.variants.size()!=1 || shader.variants.front().pass!=MaterialGraphPass::Model) : shader.variants.size()!=5)
                 throw std::runtime_error("Material graph pass bundle does not match its material/preview contract.");
-            entry.batch.reset();entry.variants=shader.variants;entry.failed=false;entry.error.clear();entry.priority=priority;
+            entry.batch.reset();entry.variants=shader.variants;
+            // Native hull/domain execution is a DX12 capability. Other current
+            // backends retain their ordinary graph programs without compiling
+            // unsupported stages or replacing displacement with parallax.
+            if(bgfx::getRendererType()!=bgfx::RendererType::Direct3D12)
+                for(auto& variant:entry.variants)variant.tessellation=false;
+            entry.failed=false;entry.error.clear();entry.priority=priority;
             if(!begin(false))return pending(true);
             entry.epoch=(*owner.sourceEpoch);
         } else if(entry.batch&&!entry.batch->background&&priority<entry.priority) {
@@ -202,13 +220,14 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
             now>=entry.optimizeAfter&&now-inputs.lastEdit>=quietInterval&&!inputs.foregroundBusy()) {
             if(!begin(true))return pending(true);
         }
-        if(!entry.batch)return {entry.current,entry.error,current(),false};
+        if(!entry.batch)return {entry.current,entry.error.empty()?capabilityDiagnostic:entry.error,current(),false};
         auto& batch=*entry.batch;
         std::vector<ResourceSnapshot<ShaderBinary>> snapshots;
         std::vector<const ShaderBinary*> pointers;
         bool ready=true,active=false;
         for(std::size_t i=0;i<batch.jobs.size();++i) {
-            if(batch.cached[i/2]) {pointers.push_back(&(*batch.cached[i/2])[i%2]);continue;}
+            if(i%3==2&&!entry.variants[i/3].tessellation) {pointers.push_back(nullptr);continue;}
+            if(batch.cached[i/3]) {pointers.push_back(&(*batch.cached[i/3])[i%3]);continue;}
             const auto& job=batch.jobs[i];const auto state=job.state();
             if(state==ResourceState::Failed)throw std::runtime_error(job.diagnostic());
             active|=state==ResourceState::Queued||state==ResourceState::Loading||state==ResourceState::Preparing;
@@ -221,11 +240,11 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
             ++(*owner.sourceEpoch);inputs.cacheRead.reset();inputs.interruptOptimizations();return pending(true);
         }
         for(std::size_t i=0;i<entry.variants.size();++i)if(!batch.cached[i])
-            preflightBundle(std::span{&entry.variants[i],1},std::span{pointers}.subspan(2*i,2));
+            preflightBundle(std::span{&entry.variants[i],1},std::span{pointers}.subspan(3*i,3));
         auto candidate=createBundle(entry.variants,pointers);candidate->optimized=!batch.interactive;
         entry.current=candidate;entry.currentEpoch=(*owner.sourceEpoch);owner.versions->push_back(candidate);
         entry.optimizeAfter=now+quietInterval;entry.batch.reset();entry.error.clear();entry.failed=false;
-        return {std::move(candidate),{},true,false};
+        return {std::move(candidate),capabilityDiagnostic,true,false};
     } catch(const std::exception& error) {
         entry.error=(entry.batch&&entry.batch->background?"Material optimization: ":"")+std::string(error.what());entry.failed=true;entry.batch.reset();
         return {entry.current,entry.error,current(),false};

@@ -149,7 +149,7 @@ ImVec4 pinColor(MaterialValueType type,MaterialPin pin=MaterialPin::Value) {
 std::vector<MaterialPinDefinition> visibleInputs(const MaterialGraph& graph,const MaterialNode& node,const MaterialOutputNode& output) {
     auto result=materialNodeInputs(graph,node,output.shading,output.blend);
     if(node.kind==MaterialNodeKind::Output)for(const auto& pin:materialNodeInputs(graph,node,output.shading,output.blend,true))
-        if((pin.pin==MaterialPin::Opacity || pin.pin==MaterialPin::OpacityMask) &&
+        if((pin.pin==MaterialPin::Opacity || pin.pin==MaterialPin::OpacityMask || pin.pin==MaterialPin::Height) &&
             std::none_of(result.begin(),result.end(),[&](const auto& existing){return existing.pin==pin.pin;}))result.push_back(pin);
     return result;
 }
@@ -178,6 +178,7 @@ void setInputDefault(MaterialNode& node,MaterialPin pin,const MaterialValue& val
     case MaterialPin::Roughness:node.output.roughness=value.value[0];break;case MaterialPin::Metallic:node.output.metallic=value.value[0];break;
     case MaterialPin::Specular:node.output.specular=value.value[0];break;case MaterialPin::Occlusion:node.output.occlusion=value.value[0];break;
     case MaterialPin::Opacity:node.output.opacity=value.value[0];break;case MaterialPin::OpacityMask:node.output.opacityMask=value.value[0];break;
+    case MaterialPin::Height:node.output.height=value.value[0];break;
     default:break;
     }
 }
@@ -620,7 +621,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         for(std::size_t row=0;row<std::max(inputs.size(),outputs.size());++row) {
             const float x=ImGui::GetCursorPosX(),y=ImGui::GetCursorPosY();
             const auto drawPin=[&](const MaterialPinDefinition& definition,bool input) {
-                const bool active=!input || node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin);
+                const bool active=!input || node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin,output.tessellation.enabled);
                 const auto id=s.pin(node.id,definition.pin,input);
                 ed::BeginPin(id,input?ed::PinKind::Input:ed::PinKind::Output);
                 ImGui::PushID(static_cast<int>(id.Get()));
@@ -645,13 +646,14 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     ed::Suspend();
                     if(definition.pin==MaterialPin::OpacityMask)ImGui::SetTooltip("Requires Blend Mode: Masked. Works with Lit or Unlit.");
                     else if(definition.pin==MaterialPin::Opacity)ImGui::SetTooltip("Requires Blend Mode: Translucent or Additive.");
+                    else if(definition.pin==MaterialPin::Height)ImGui::SetTooltip("Enable Tessellation in the Output material properties. Existing connections are retained.");
                     else ImGui::SetTooltip("Unavailable for this shader model. Existing connections are retained.");
                     ed::Resume();
                 }
             };
             if(row<inputs.size()) {
                 const auto& definition=inputs[row];drawPin(definition,true);
-                const bool active=node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin);
+                const bool active=node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin,output.tessellation.enabled);
                 if(active && !materialInputLink(graph,node.id,definition.pin) && definition.type!=MaterialValueType::Normal && definition.type!=MaterialValueType::Mapping &&
                     !(node.kind==MaterialNodeKind::Panner&&definition.pin==MaterialPin::Time)) {
                     ImGui::SetCursorPos({x+ImGui::CalcTextSize(definition.name).x+24,y});ImGui::SetNextItemWidth(100);ImGui::PushID(static_cast<int>(definition.pin));
@@ -697,7 +699,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto inputs=visibleInputs(graph,*target,output);
         if(std::none_of(inputs.begin(),inputs.end(),[&](const auto& p){return p.pin==link.toPin;}))continue;
         auto color=pinColor(materialOutputType(graph,link.fromNode,link.fromPin),link.fromPin);
-        if(target->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,link.toPin))color.w=.3f;
+        if(target->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,link.toPin,output.tessellation.enabled))color.w=.3f;
         ed::Link(s.link(link.id),s.pin(link.fromNode,link.fromPin,false),s.pin(link.toNode,link.toPin,true),color,2);
     }
     if(disconnect)s.breakLinks(document,disconnect);
@@ -713,7 +715,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     auto from=a->second,to=b->second;if(from.input)std::swap(from,to);
                     try {
                         if(from.input || !to.input)throw std::runtime_error("Connect an output to an input.");
-                        if(findMaterialNode(graph,to.node)->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,to.pin))throw std::runtime_error("This input is unavailable for the current blend mode.");
+                        if(findMaterialNode(graph,to.node)->kind==MaterialNodeKind::Output && !materialPinActive(output.shading,output.blend,to.pin,output.tessellation.enabled))throw std::runtime_error("This input is unavailable for the current material settings.");
                         auto candidate=document.definition().graph;connectMaterialNodes(candidate,from.node,from.pin,to.node,to.pin);
                         if(ed::AcceptNewItem()) {
                             if(document.edit("Connect nodes",[&](auto& asset){asset.graph=std::move(candidate);}))s.status.clear();else s.status=document.status();

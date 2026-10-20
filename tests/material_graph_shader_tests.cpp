@@ -194,11 +194,26 @@ void runtimeUniformChecks() {
     materialOutputNode(material.graph).output.blend=MaterialBlend::Opaque;
     check(!generateMaterialGraphShader(material).dynamicCoverage,"Animated opaque color invalidated static shadows.");
 }
+void tessellatedCoverageNormalChecks() {
+    auto material=fixture();materialOutputNode(material.graph).output.tessellation.enabled=true;
+    const auto generated=generateMaterialGraphShader(material);
+    for(const auto& variant:generated.variants) {
+        if(variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle)continue;
+        check(variant.tessellation&&!variant.domainSource.empty()&&variant.source.find("#define CC_GRAPH_TESSELLATION 1")!=std::string::npos,
+            "Tessellated coverage lost its domain stage or deformation-normal guard.");
+        check(variant.source.find("uniform mat4 u_modelNormalMatrix;")!=std::string::npos&&variant.source.find("uniform vec4 u_modelOptions;")!=std::string::npos&&
+            variant.source.find("#include \"material_graph_depth.sh\"")!=std::string::npos,
+            "Tessellated world-triplanar coverage lost the shared deformed-normal shader inputs.");
+        for(const auto& expected:{std::pair{"u_modelNormalMatrix",ShaderUniformKind::Mat4},std::pair{"u_modelOptions",ShaderUniformKind::Vec4}})
+            check(std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding){return binding.name==expected.first&&binding.kind==expected.second&&binding.count==1;}),
+                "Tessellated depth/picking manifest omits its deformation-normal matrix/options contract.");
+    }
+}
 void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v30")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v31")!=std::string::npos,
             "Generated material identity does not invalidate pre-emission-publication bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
@@ -397,6 +412,13 @@ std::map<std::filesystem::path,std::filesystem::file_time_type> cacheTimes(const
     return result;
 }
 void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+    {
+        std::ifstream input(source/"material_graph_depth.sh");check(bool(input),"Tessellated coverage template is unavailable.");
+        const std::string depth{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
+        check(depth.find("#if CC_GRAPH_TESSELLATION")!=std::string::npos&&
+            depth.find("context.normal = ccGraphTessellatedNormal(v_worldPosition, v_localPosition, context.normal, u_modelOptions.w, context.displacementFrame)")!=std::string::npos,
+            "Depth/picking coverage does not consume the shared displaced smooth-normal frame.");
+    }
     const auto root=std::filesystem::temp_directory_path()/("crimson-graph-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-graph-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
     const ShaderCompileConfig config{compiler,source,include,root};
@@ -681,7 +703,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        cpuChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

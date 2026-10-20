@@ -1349,6 +1349,8 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     packet->programs=programs.programs;packet->uniforms=generated.uniforms;packet->sources=generated.textures;
     packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
     packet->dynamicCoverage=generated.dynamicCoverage;
+    packet->dynamicHeight=generated.dynamicHeight;
+    packet->tessellation=generated.tessellation;
     const auto& output=materialOutputNode(graph).output;
     packet->shading=generated.nodePreview?MaterialShading::Unlit:output.shading;
     packet->blend=generated.nodePreview?MaterialBlend::Opaque:output.blend;
@@ -1356,6 +1358,12 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     packet->nodePreview=generated.nodePreview;
     packet->signature=programs.programs->signature;
     streaming::detail::hash(packet->signature,packet->receiveFog);
+    streaming::detail::hash(packet->signature,packet->dynamicHeight);
+    streaming::detail::hash(packet->signature,packet->tessellation.enabled);
+    streaming::detail::hash(packet->signature,packet->tessellation.amount);
+    streaming::detail::hash(packet->signature,packet->tessellation.midpoint);
+    streaming::detail::hash(packet->signature,packet->tessellation.maxFactor);
+    streaming::detail::hash(packet->signature,packet->tessellation.heightLod);
     streaming::detail::hash(packet->signature,generated.runtimeDefinitionSignature);
     std::unordered_map<std::string,std::uint64_t> sourceVersions;
     for(auto& binding:packet->sources) {

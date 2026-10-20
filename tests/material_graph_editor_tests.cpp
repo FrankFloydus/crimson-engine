@@ -930,6 +930,45 @@ void inlineDefaultsAndOpacityActivation() {
     require(hasField(output,MaterialPin::Opacity)&&!hasField(output,MaterialPin::OpacityMask),"Translucent output activated the wrong coverage default.");
 }
 
+void heightInputActivationAndFallback() {
+    GraphUi ui;MaterialNodeId output{},scalar{};
+    require(ui.document.edit("Height UI fixture",[&](auto& asset) {
+        asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{350,-140}).id;
+        scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-250,-100}).id;
+        materialOutputNode(asset.graph).output.height=.35f;
+    })&&ui.document.save(),"Could not configure Height UI fixture.");ui.frame(5);
+    const auto active=[&] {
+        for(const auto& pin:ui.editor.presentation().pins)if(pin.node==output&&pin.input&&pin.pin==MaterialPin::Height)return pin.active;
+        throw std::runtime_error("Output did not retain a visible Height pin.");
+    };
+    const auto field=[&] {
+        return std::any_of(ui.editor.presentation().fields.begin(),ui.editor.presentation().fields.end(),[&](const auto& item){return item.node==output&&item.pin==MaterialPin::Height;});
+    };
+    require(!active()&&!field(),"Disabled tessellation exposed an active Height fallback.");
+    const auto disabled=ui.snapshot();ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(output,MaterialPin::Height,true));
+    require(ui.snapshot()==disabled&&!materialInputLink(ui.document.definition().graph,output,MaterialPin::Height),"A graph gesture connected disabled Height.");
+    require(ui.document.edit("Enable tessellation",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.enabled=true;}),"Could not enable tessellation.");ui.frame(3);
+    require(active()&&field(),"Enabling tessellation failed to expose the Height fallback.");
+    for(const auto& item:ui.editor.presentation().fields)if(item.node==output&&item.pin==MaterialPin::Height) {
+        const ImVec2 p{item.minimum[0]+25,(item.minimum[1]+item.maximum[1])*.5f};const auto before=ui.snapshot();
+        ui.drag(p,{p.x+20,p.y});require(materialOutputNode(ui.document.definition().graph).output.height>.35f,"Height inline value could not be edited.");
+        ui.oneUndo(before);break;
+    }
+    const auto fallback=materialOutputNode(ui.document.definition().graph).output.height;
+    ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(output,MaterialPin::Height,true));
+    const auto* link=materialInputLink(ui.document.definition().graph,output,MaterialPin::Height);
+    require(link&&link->fromNode==scalar&&!field()&&materialOutputNode(ui.document.definition().graph).output.height==fallback,
+        "Connecting Height did not hide and retain its authored fallback.");
+    const auto identity=link->id;
+    require(ui.document.edit("Disable tessellation",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.enabled=false;}),"Could not disable tessellation.");ui.frame(3);
+    require(!active()&&!field()&&materialInputLink(ui.document.definition().graph,output,MaterialPin::Height)->id==identity,"Disabling tessellation lost Height wiring.");
+    require(ui.document.undo(),"Could not undo tessellation disable.");ui.frame(3);
+    ui.move(ui.pin(output,MaterialPin::Height,true));ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(output,MaterialPin::Height,true));
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt,false);ui.frame(3);
+    require(active()&&field()&&!materialInputLink(ui.document.definition().graph,output,MaterialPin::Height)&&materialOutputNode(ui.document.definition().graph).output.height==fallback,
+        "Disconnecting Height did not restore the exact retained fallback.");
+}
+
 void inlineComboPopupCoordinates() {
     GraphUi ui;MaterialNodeId mapping{},texture{},grunge{};
     require(ui.document.edit("Dropdown fixture",[&](auto& asset) {
@@ -1315,5 +1354,5 @@ void grungeGeneratedImagePresentation() {
     require(retained.expired()&&ui.editor.presentation().images.empty(),"Deleting Grunge retained its generated image lease or presentation.");
 }
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

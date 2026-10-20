@@ -312,6 +312,25 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             if(ImGui::IsItemHovered())ImGui::SetTooltip("Apply the scene's distance and height fog to this material.");
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr)
                 control("Change occlusion strength",[](auto& n){return ImGui::SliderFloat("AO strength",&n.output.occlusionStrength,0,1,"%.3f");});
+            control("Toggle material tessellation",[](auto& n){return ImGui::Checkbox("Tessellation",&n.output.tessellation.enabled);});
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Subdivide and displace mesh geometry from Height. Requires Direct3D 12.");
+            if(materialOutputNode(document_.definition().graph).output.tessellation.enabled) {
+                control("Change displacement amount",[](auto& n){return ImGui::DragFloat("Displacement Amount",&n.output.tessellation.amount,.001f,0,0,"%.3f");});
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Mesh-local displacement before object scaling. Negative values reverse the relief.");
+                control("Change displacement midpoint",[](auto& n){return ImGui::SliderFloat("Midpoint",&n.output.tessellation.midpoint,0,1,"%.3f");});
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Height at which displacement is zero. Height is bounded to 0-1.");
+                control("Change tessellation factor",[](auto& n) {
+                    int factor=static_cast<int>(n.output.tessellation.maxFactor);
+                    const bool changed=ImGui::SliderInt("Tessellation Factor",&factor,1,64);
+                    if(changed)n.output.tessellation.maxFactor=static_cast<unsigned>(factor);return changed;
+                });
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Uniform subdivision per triangle edge. Higher values increase GPU work.");
+                if(ImGui::TreeNodeEx("Advanced##Tessellation",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    control("Change displacement texture LOD",[](auto& n){return ImGui::SliderFloat("Height Texture LOD",&n.output.tessellation.heightLod,0,16,"%.2f");});
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("Explicit texture mip level for displacement. Higher levels smooth height detail.");
+                    ImGui::TreePop();
+                }
+            }
             ImGui::TreePop();
         }
         if(ImGui::TreeNodeEx("Default inputs",ImGuiTreeNodeFlags_SpanAvailWidth)) {
@@ -329,6 +348,8 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 control("Change default opacity",[](auto& n){return ImGui::SliderFloat("Opacity",&n.output.opacity,0,1,"%.3f");});
             if(materialPinActive(output.shading,output.blend,MaterialPin::OpacityMask) && disconnected(MaterialPin::OpacityMask))
                 control("Change default opacity mask",[](auto& n){return ImGui::SliderFloat("Opacity Mask",&n.output.opacityMask,0,1,"%.3f");});
+            if(output.tessellation.enabled && disconnected(MaterialPin::Height))
+                control("Change default height",[](auto& n){return ImGui::SliderFloat("Height",&n.output.height,0,1,"%.3f");});
             ImGui::TreePop();
         }
     } else {

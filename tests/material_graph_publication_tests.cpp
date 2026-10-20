@@ -406,6 +406,34 @@ void profileProject(const fs::path& project,const fs::path& rendererBin,const fs
     writeProfile(root,output,report);
 }
 
+void unsupportedHeightChecks(const fs::path& compiler,const fs::path& sources,const fs::path& include) {
+    TemporaryProject temporary;
+    const ShaderCompileConfig config{compiler,sources,include,temporary.root/"cache"};
+    auto material=fixture();materialOutputNode(material.graph).output.tessellation.enabled=true;
+    const auto shader=generateMaterialGraphShader(material);
+    check(std::any_of(shader.variants.begin(),shader.variants.end(),[](const auto& pass){return pass.tessellation;}),
+        "Unsupported-backend fixture did not enable native material stages.");
+    ResourceManager resources;
+    {
+        MaterialGraphPrograms programs(resources,config);MaterialGraphProgramResult result;
+        waitFor([&] {
+            resources.pump();result=programs.request(shader);bgfx::frame();
+            if(!result.current&&!result.compiling)throw std::runtime_error(result.diagnostic);
+            return result.current;
+        },"Unsupported-backend height fallback did not publish.");
+        requireComplete(result);
+        check(result.diagnostic.find("requires Direct3D 12")!=std::string::npos,
+            "Unsupported hardware tessellation silently rendered an undisplaced material.");
+        MaterialGraphPrograms reopened(resources,config);
+        const auto warm=reopened.request(shader);requireComplete(warm);
+        check(warm.diagnostic==result.diagnostic,"Warm unsupported-backend hydration lost its capability diagnostic.");
+        for(const auto& file:fs::directory_iterator(config.cacheDirectory))
+            check(!file.path().filename().string().starts_with("graph-domain-stage-"),
+                "Noop fallback compiled or requested unsupported domain stages.");
+    }
+    resources.stop();
+}
+
 void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs::path& include) {
     TemporaryProject temporary;
     const auto copiedSources=temporary.root/"shaders";
@@ -674,7 +702,7 @@ int main(int argc,char** argv) {
         if(profile)profileProject(argv[2],argv[3],argv[4],argc==6&&std::string(argv[5])=="--cold");
         else if(engine)profileEngine(argv[2],argv[3],argv[4]);
         else if(edit)profileProject(argv[2],argv[3],argv[4],false,true);
-        else {preparedSignatureChecks();publicationChecks(argv[1],argv[2],argv[3]);}
+        else {preparedSignatureChecks();publicationChecks(argv[1],argv[2],argv[3]);unsupportedHeightChecks(argv[1],argv[2],argv[3]);}
         bgfx::shutdown();initialized=false;
         std::cout<<"Headless material shader publication, epoch, recovery and lease checks passed.\n";return 0;
     } catch(const std::exception& error) {

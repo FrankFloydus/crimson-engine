@@ -135,10 +135,63 @@ void optimizationPolicyChecks(const ShaderCompileConfig& config) {
             "Discarding an interactive stage removed its separate optimized artifact.");
     }
 }
+void nativeDomainChecks(const ShaderCompileConfig& config) {
+    ShaderCompileRecipe recipe;
+    recipe.name="native-domain-cache";recipe.stage=ShaderStage::Domain;recipe.raw=true;
+    recipe.varyingDefinition=config.sourceDirectory/"model.varying.def.sc";recipe.contract="native-domain-test-v1";
+    recipe.source=R"(
+struct Control { float3 position : TEXCOORD0; };
+struct Constants { float edges[3] : SV_TessFactor; float inside : SV_InsideTessFactor; };
+[domain("tri")]
+float4 main(Constants constants,float3 barycentric : SV_DomainLocation,const OutputPatch<Control,3> patch) : SV_Position {
+    return float4(patch[0].position*barycentric.x+patch[1].position*barycentric.y+patch[2].position*barycentric.z,1.0);
+}
+)";
+    const auto before=shaderCompilerMetrics();
+    auto invalid=recipe;invalid.raw=false;
+    bool rejected=false;try{(void)compileShader(config,invalid);}catch(const std::exception&){rejected=true;}
+    require(rejected&&shaderCompilerMetrics().compilerInvocations==before.compilerInvocations,
+        "A non-native domain recipe reached shaderc.");
+    invalid=recipe;invalid.source="#include \"untracked.hlsl\"\n"+recipe.source;
+    rejected=false;try{(void)compileShader(config,invalid);}catch(const std::exception&){rejected=true;}
+    require(rejected&&shaderCompilerMetrics().compilerInvocations==before.compilerInvocations,
+        "Raw generated HLSL accepted an uncertifiable include dependency.");
+    std::stop_source canceled;canceled.request_stop();
+    rejected=false;try{(void)compileShader(config,recipe,canceled.get_token());}catch(const std::exception&){rejected=true;}
+    require(rejected&&shaderCompilerMetrics().compilerInvocations==before.compilerInvocations,
+        "A canceled native domain request started a compiler process.");
+    const auto binary=compileShader(config,recipe);
+    require(binary.bytes.size()>16&&binary.bytes[0]=='D'&&binary.bytes[1]=='S'&&binary.bytes[2]=='H'&&binary.bytes[3]==11&&!binary.vertex,
+        "Native SM5 domain recipe did not publish a domain binary.");
+    ShaderCacheReadSession cache(config);const auto cached=cache.find(recipe);
+    require(cached&&cached->bytes==binary.bytes&&cached->fingerprint==binary.fingerprint&&cache.unchanged(),
+        "A raw domain artifact did not hydrate from its coherent persistent cache.");
+    auto interactive=recipe;interactive.optimization=ShaderCompileOptimization::Interactive;
+    require(!cache.find(interactive),"An optimized domain artifact was reused as interactive bytecode.");
+    const auto quick=compileShader(config,interactive);
+    require(quick.fingerprint!=binary.fingerprint&&ShaderCacheReadSession(config).find(interactive).has_value(),
+        "Native domain optimization policies shared an identity or failed to persist.");
+    auto changed=recipe;changed.source+="\n// A different generated height evaluator.\n";
+    require(!ShaderCacheReadSession(config).find(changed),"Changed native domain source reused stale code.");
+    const auto modified=compileShader(config,changed);
+    require(modified.fingerprint!=binary.fingerprint,"Native domain source was absent from its cache identity.");
+    const auto warmBefore=shaderCompilerMetrics();
+    require(compileShader(config,recipe).bytes==binary.bytes&&compileShader(config,interactive).bytes==quick.bytes&&
+        shaderCompilerMetrics().compilerInvocations==warmBefore.compilerInvocations,
+        "Unchanged raw domain requests started compiler processes.");
+    cache.discard(std::span{&*cached,1});
+    require(!ShaderCacheReadSession(config).find(recipe)&&ShaderCacheReadSession(config).find(interactive).has_value(),
+        "Discarding a rejected optimized domain artifact removed another optimization policy.");
+    (void)compileShader(config,recipe);
+    for(const auto& file:std::filesystem::directory_iterator(config.cacheDirectory))
+        require(file.path().extension()!=".tmp"&&file.path().extension()!=".hlsl"&&file.path().extension()!=".d",
+            "Native domain compilation left staging files behind.");
+}
 void run(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
     Temp temp;
     runtimePathChecks(temp.root/"runtime selection");
     embeddedBaselineChecks(temp.root/"embedded baseline");
+    nativeDomainChecks({compiler,source,include,temp.root/"native domain policies"});
     optimizationPolicyChecks({compiler,source,include,temp.root/"optimization policies"});
     const auto directory=temp.root/"shader source with spaces", cache=temp.root/"compiled cache";
     std::filesystem::create_directories(directory);

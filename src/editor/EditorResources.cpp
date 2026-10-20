@@ -18,6 +18,18 @@
 namespace crimson {
 namespace {
 using streaming::detail::hash;
+std::string materialPreparationKey(const std::string& id,std::span<const AssetRef<MaterialAsset>> overrides) {
+    while(!overrides.empty()&&overrides.back().empty())overrides=overrides.first(overrides.size()-1);
+    auto key=id+std::string(1,'\0');
+    for(const auto& material:overrides){key+=material.id;key+='\0';}
+    return key;
+}
+float displacementExtent(std::span<const ModelMaterial> materials) {
+    float extent{};
+    for(const auto& material:materials)if(material.graph&&!material.graph->empty())
+        extent=std::max(extent,materialTessellationDisplacementExtent(materialOutputNode(*material.graph).output.tessellation));
+    return extent;
+}
 bool coherent(const AssetLibrary& assets,std::span<const ModelMaterial> materials,std::span<const ModelMaterialTextures> bindings) {
     if (materials.size()!=bindings.size()) return false;
     std::unordered_map<std::string,uint64_t> versions;
@@ -138,6 +150,7 @@ EditorResources::EditorResources(AssetLibrary& assets,Renderer& renderer,Resourc
 void EditorResources::beginFrame() {
     for(auto& [id,pose]:poses_)pose.wanted=false;
     framePins_.clear(); externalModels_.clear(); status_.clear();
+    displacementExtents_.clear();
     for (auto& [id,entry]:entries_) { (void)id; entry.wanted=false; }
 }
 void EditorResources::endFrame() {
@@ -192,9 +205,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     // Geometry identity remains shared. Immutable binding packets are keyed by
     // the complete slot assignment so instances cannot overwrite each other.
     // Canonicalize trailing inherited slots; embedded separators retain slot order.
-    while(!materialOverrides.empty()&&materialOverrides.back().empty())materialOverrides=materialOverrides.first(materialOverrides.size()-1);
-    auto key=id+std::string(1,'\0');
-    for(const auto& material:materialOverrides){key+=material.id;key+='\0';}
+    const auto key=materialPreparationKey(id,materialOverrides);
     auto& entry=entries_[key];entry.sourceId=id;entry.wanted=true; entry.used=std::chrono::steady_clock::now();
     entry.failed=false;
     const auto retain=[&](std::shared_ptr<const PreparedEditorModel> model) {
@@ -211,6 +222,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         const auto presentedPose=presentation?pose(*presentation,asset):std::shared_ptr<const ModelPose>{};
         const auto fov=verticalFov(camera,renderer_,priority,aspect);
         bool refined=true;
+        auto materials=assets_.resolvedModelMaterials(*asset,materialOverrides);
         if (asset->stream) {
             if (entry.geometryRevision!=revision) { entry.geometry.clear(); entry.geometryRevision=revision; }
             renderer_.configureModelStream(asset->id,revision,*asset->stream);
@@ -219,7 +231,9 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
                 desired[primitive]=static_cast<uint32_t>(asset->stream->primitives[primitive].levels.size()-1);
             for (const auto& draw:asset->draws) if (draw.primitive<desired.size()) {
                 const auto& primitive=asset->stream->primitives[draw.primitive];
-                const auto level=selected || !asset->animations.empty() ? 0 : shadowTexelWorld>0?directional_shadow::chooseLod(primitive.levels,world*draw.transform,shadowTexelWorld):
+                const bool tessellated=bgfx::isTessellationSupported()&&primitive.material<materials.size()&&materials[primitive.material].graph&&
+                    materialOutputNode(*materials[primitive.material].graph).output.tessellation.enabled;
+                const auto level=selected || tessellated || !asset->animations.empty() ? 0 : shadowTexelWorld>0?directional_shadow::chooseLod(primitive.levels,world*draw.transform,shadowTexelWorld):
                     streaming::chooseModelLod(primitive.levels,world*draw.transform,primitive.bounds,camera.eye(),fov,height,1.0f);
                 desired[draw.primitive]=std::min(desired[draw.primitive],level);
             }
@@ -231,7 +245,6 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
             }
             if (!renderer_.modelStreamReady(asset->id,revision)) return retain(entry.current);
         } else if (!renderer_.prepareModel(*asset)) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; return retain(entry.current); }
-        auto materials=assets_.resolvedModelMaterials(*asset,materialOverrides);
         if (!assets_.modelMaterialsReady(*asset,materialOverrides)) {
             const auto error=assets_.modelMaterialsDiagnostic(*asset,materialOverrides);
             if (!error.empty()) { entry.diagnostic=error; entry.failed=true; }
@@ -278,7 +291,37 @@ std::shared_ptr<const ModelPose> EditorResources::pose(const ExtractedModel& mod
 }
 Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {
     if(!asset)return {};
-    const auto value=pose(model,asset);return value?value->bounds:asset->bounds;
+    const auto value=pose(model,asset);
+    auto bounds=value?value->bounds:asset->bounds;
+    const auto key=materialPreparationKey(model.assetId,model.materialOverrides);
+    auto [cached,inserted]=displacementExtents_.try_emplace(key);
+    if(inserted)try {
+        // Unknown material metadata cannot establish a safe displaced bound.
+        // Admit it conservatively while the normal resource path resolves it.
+        if(assets_.modelMaterialsReady(*asset,model.materialOverrides)) {
+            auto extent=displacementExtent(assets_.resolvedModelMaterials(*asset,model.materialOverrides));
+            if(const auto previous=entries_.find(key);previous!=entries_.end()&&previous->second.current)
+                extent=std::max(extent,displacementExtent(previous->second.current->materials));
+            cached->second=extent;
+        }
+    } catch(const std::exception&) { /* Normal preparation supplies the actionable material diagnostic. */ }
+    if(!cached->second)return {};
+    const auto extent=*cached->second;
+    if(!bounds.valid||extent==0)return bounds;
+    Vec3 margin{extent,extent,extent};
+    // A pose bound already includes every transformed/deformed primitive. The
+    // maximum affine row sum bounds any normalized local displacement under
+    // nonuniform scale, reflection and shear, without touching authored meshes.
+    for(std::size_t index=0;index<asset->draws.size();++index) {
+        const auto& transform=value&&index<value->drawTransforms.size()?value->drawTransforms[index]:asset->draws[index].transform;
+        for(unsigned axis=0;axis<3;++axis) {
+            float stretch{};
+            for(unsigned component=0;component<3;++component)stretch+=std::abs(transform.at(axis,component));
+            margin[axis]=std::max(margin[axis],extent*stretch);
+        }
+    }
+    bounds.minimum=bounds.minimum-margin;bounds.maximum=bounds.maximum+margin;
+    return bounds;
 }
 std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(const ExtractedScene& scene,std::uint16_t resolution,
     ResourcePriority priority,std::span<const ShadowCamera> cameras,std::optional<Vec3> priorityOrigin) {
@@ -348,7 +391,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
 void EditorResources::invalidate(const std::string& id) {
     for(auto& [key,entry]:entries_)if(entry.sourceId==id) {entry.geometry.clear();entry.geometryRevision=0;}
 }
-void EditorResources::clear() { entries_.clear();poses_.clear(); framePins_.clear(); externalModels_.clear(); status_.clear(); }
+void EditorResources::clear() { entries_.clear();poses_.clear();displacementExtents_.clear(); framePins_.clear(); externalModels_.clear(); status_.clear(); }
 bool EditorResources::failed(const std::string& id) const {
     const auto found=entries_.find(id+std::string(1,'\0')); return found!=entries_.end() && found->second.failed;
 }

@@ -68,6 +68,9 @@ private:
     ResourceManager& resources_;
     std::filesystem::path root_;
     std::unordered_map<std::string,Entry> entries_;
+    // Shared by Scene/Game/shadow admission within a frame. Includes the last
+    // coherent packet while a changed material is still compiling.
+    std::unordered_map<std::string,std::optional<float>> displacementExtents_;
     struct PoseEntry {
         std::weak_ptr<const ModelAsset> source;
         std::shared_ptr<const ModelPose> value;

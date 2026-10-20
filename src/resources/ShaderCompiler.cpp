@@ -248,14 +248,40 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& 
 }
 
 namespace {
+char stageMagic(ShaderStage stage) {
+    switch(stage) {
+    case ShaderStage::Vertex:return 'V';
+    case ShaderStage::Fragment:return 'F';
+    case ShaderStage::Compute:return 'C';
+    case ShaderStage::Domain:return 'D';
+    }
+    throw std::runtime_error("Generated shader stage is invalid.");
+}
+const wchar_t* stageName(ShaderStage stage) {
+    switch(stage) {
+    case ShaderStage::Vertex:return L"vertex";
+    case ShaderStage::Fragment:return L"fragment";
+    case ShaderStage::Compute:return L"compute";
+    case ShaderStage::Domain:return L"domain";
+    }
+    throw std::runtime_error("Generated shader stage is invalid.");
+}
 std::string recipeIdentity(const ShaderCompileRecipe& recipe) {
     if(recipe.name.empty() || recipe.name.size()>128 || recipe.name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
         throw std::runtime_error("Generated shader recipe has an invalid name.");
     if(recipe.source.empty() || recipe.source.size()>2*1024*1024) throw std::runtime_error("Generated shader source is empty or exceeds its limit.");
+    (void)stageMagic(recipe.stage);
+    if(recipe.stage==ShaderStage::Domain&&!recipe.raw)throw std::runtime_error("Domain shaders require native raw HLSL.");
+    // Native shaderc bypasses its dependency preprocessor. Our generated native
+    // inputs deliberately contain everything they need; reject includes rather
+    // than publishing an artifact whose real dependencies cannot be certified.
+    if(recipe.raw&&std::regex_search(recipe.source,std::regex(R"((^|\n)\s*#\s*include\b)")))
+        throw std::runtime_error("Raw generated HLSL must be self-contained and cannot include files.");
     std::uint64_t hash=14695981039346656037ull;
     const auto add=[&](const std::string& value){for(unsigned char ch:value){hash^=ch;hash*=1099511628211ull;}hash^=0xff;hash*=1099511628211ull;};
     add(recipe.name);add(recipe.source);add(recipe.contract);add(std::to_string(static_cast<unsigned>(recipe.stage)));add(resourcePathKey(recipe.varyingDefinition));
     for(const auto& directory:recipe.includeDirectories)add(resourcePathKey(directory));
+    if(recipe.raw)add("native-raw-hlsl-v1");
     // Preserve existing optimized cache identities. An interactive binary is a
     // different compiler result, never a substitute for the optimized artifact.
     switch(recipe.optimization) {
@@ -333,7 +359,7 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
     auto fingerprint=recipeFingerprint(config,identity,dependencies);
     std::filesystem::create_directories(config.cacheDirectory);
     auto target=config.cacheDirectory/(identity+"-"+std::to_string(fingerprint)+".bin");
-    if(auto bytes=cachedBinary(target,recipe.stage==ShaderStage::Compute?'C':recipe.stage==ShaderStage::Vertex?'V':'F')) {
+    if(auto bytes=cachedBinary(target,stageMagic(recipe.stage))) {
         if(token.stop_requested()||fingerprintFileStates(dependencies)!=dependencyState)
             throw std::runtime_error("Generated shader dependencies changed while reading their cache.");
         metrics.workerCacheHits.fetch_add(1,std::memory_order_relaxed);
@@ -342,12 +368,12 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
     {std::error_code ignored;std::filesystem::remove(target,ignored);}
     static std::atomic_uint64_t sequence{};
     const auto stage=config.cacheDirectory/(identity+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
-    const auto source=std::filesystem::path(stage.wstring()+L".sc");
+    const auto source=std::filesystem::path(stage.wstring()+(recipe.raw?L".hlsl":L".sc"));
     const auto dependencyFile=std::filesystem::path(stage.wstring()+L".d");
     const auto clean=[&]{std::error_code ignored;std::filesystem::remove(stage,ignored);std::filesystem::remove(source,ignored);std::filesystem::remove(dependencyFile,ignored);};
     try {
         writeFileAtomically(source,recipe.source);
-        const auto type=recipe.stage==ShaderStage::Vertex?L"vertex":recipe.stage==ShaderStage::Compute?L"compute":L"fragment";
+        const auto type=stageName(recipe.stage);
         std::wstring includeArguments;
         const auto addDirectory=[&](const std::filesystem::path& directory){if(!directory.empty())includeArguments+=L" -i "+quoted(directory);};
         for(const auto& directory:recipe.includeDirectories)addDirectory(directory);
@@ -356,11 +382,12 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
         // selects D3DCOMPILE_SKIP_OPTIMIZATION in the pinned compiler.
         const auto optimization=recipe.optimization==ShaderCompileOptimization::Interactive?L"":L" -O 3";
         const auto command=L"-f "+quoted(source)+L" -o "+quoted(stage)+L" --platform windows --type "+type+
-            L" --profile s_5_0"+optimization+L" --depends --varyingdef "+quoted(recipe.varyingDefinition)+includeArguments;
+            L" --profile s_5_0"+optimization+(recipe.raw?L" --raw":L" --depends")+L" --varyingdef "+quoted(recipe.varyingDefinition)+includeArguments;
         const auto initial=fingerprintFiles(dependencies);
         runCompiler(config.compiler,command,token);
         if(token.stop_requested() || fingerprintFiles(dependencies)!=initial)throw std::runtime_error("Generated shader dependencies changed during compilation.");
         const auto discover=[&] {
+            if(recipe.raw)return dependencies;
             auto actual=parseShaderDependencyFile(dependencyFile);
             std::erase_if(actual,[&](const auto& file){return resourcePathKey(file)==resourcePathKey(source);});
             for(auto& file:actual)if(file.is_relative()) {
@@ -443,7 +470,7 @@ std::optional<ShaderBinary> ShaderCacheReadSession::find(const ShaderCompileReci
         const auto key=recipeFingerprint(config_,identity,fingerprint(dependencies));
         const auto target=config_.cacheDirectory/(identity+"-"+std::to_string(key)+".bin");
         if(!std::filesystem::is_regular_file(target))return {};
-        auto bytes=cachedBinary(target,recipe.stage==ShaderStage::Compute?'C':recipe.stage==ShaderStage::Vertex?'V':'F');if(!bytes)return {};
+        auto bytes=cachedBinary(target,stageMagic(recipe.stage));if(!bytes)return {};
         if(fingerprintFileStates(dependencies)!=before)return {};
         artifacts_[recipe.name+"-"+std::to_string(key)]=target;
         metrics.cacheOnlyHits.fetch_add(1,std::memory_order_relaxed);

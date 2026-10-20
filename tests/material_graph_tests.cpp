@@ -122,6 +122,68 @@ void signaturesAndDormantReferences() {
     rewriteMaterialGraphTextures(graph,[](const auto&,MaterialTextureRole role){return std::string(role==MaterialTextureRole::Normal?NeutralNormalTextureId:GrayTextureId);});
     require(findMaterialNode(graph,texture)->texture.image.id==GrayTextureId&&findMaterialNode(graph,normal)->texture.image.id==NeutralNormalTextureId,"Graph reference replacement lost role-correct dormant defaults.");
 }
+void heightTessellationPersistence() {
+    const Aabb original{{-1,-2,-3},{1,2,3},true};
+    MaterialTessellation boundsSettings;
+    require(materialTessellationBounds(original,boundsSettings).minimum==original.minimum,
+        "Disabled displacement changed original mesh bounds.");
+    boundsSettings.enabled=true;boundsSettings.amount=-2;boundsSettings.midpoint=.25f;
+    const auto expanded=materialTessellationBounds(original,boundsSettings);
+    auto affine=math::scaling({2,.5f,-3});affine.at(0,1)=1.25f;
+    const auto transformed=math::transformBounds(expanded,affine);
+    // Endpoint heights and all normal octants must fit after reflection,
+    // nonuniform scaling and shear; these are the extremal permitted offsets.
+    for(unsigned corner=0;corner<8;++corner)for(const float height:{0.f,1.f})for(unsigned normal=0;normal<8;++normal) {
+        Vec3 vertex{corner&1?1.f:-1.f,corner&2?2.f:-2.f,corner&4?3.f:-3.f};
+        const auto direction=math::normalized(Vec3{normal&1?1.f:-1.f,normal&2?1.f:-1.f,normal&4?1.f:-1.f});
+        const auto point=math::transformPoint(affine,vertex+direction*((height-.25f)*-2));
+        for(unsigned axis=0;axis<3;++axis)require(point[axis]>=transformed.minimum[axis]-1e-5f&&point[axis]<=transformed.maximum[axis]+1e-5f,
+            "Derived bounds clipped permitted displaced geometry after an affine transform.");
+    }
+    auto graph=blank();const auto out=materialOutputNode(graph).id;
+    const auto initialTopology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    require(!materialOutputNode(graph).output.tessellation.enabled&&near(materialInputDefault(materialOutputNode(graph),MaterialPin::Height).value[0],.5f),
+        "New materials must have disabled tessellation and a neutral Height fallback.");
+    const auto image=node(graph,MaterialNodeKind::Texture2D);findMaterialNode(graph,image)->texture.role=MaterialTextureRole::Data;
+    findMaterialNode(graph,image)->texture.image.id=canonicalAssetId("assets/textures/height.png");
+    rejects([&]{connectMaterialNodes(graph,image,MaterialPin::R,out,MaterialPin::Height);},"Disabled Height accepted a new connection.");
+    materialOutputNode(graph).output.tessellation.enabled=true;
+    require(!materialGraphFixedSurface(graph)&&materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)!=initialTopology,
+        "Enabling tessellation failed to select a graph shader topology.");
+    const auto link=connectMaterialNodes(graph,image,MaterialPin::RGB,out,MaterialPin::Height);
+    require(materialOutputType(graph,image,MaterialPin::RGB)==MaterialValueType::Color,"Height changed its authored RGB source pin.");
+    const auto enabledTopology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    const auto values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    auto& settings=materialOutputNode(graph).output.tessellation;settings.amount=-.35f;settings.midpoint=.2f;settings.maxFactor=16;settings.heightLod=2;
+    materialOutputNode(graph).output.height=.75f;
+    require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==enabledTopology&&
+        materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)!=values,"Displacement controls compiled a new topology or failed to update values.");
+    const auto expected=settings;const auto before=serializeMaterialGraph(graph);const auto loaded=parseMaterialGraph(before);
+    require(serializeMaterialGraph(loaded)==before&&materialOutputNode(loaded).output.tessellation==expected&&materialInputLink(loaded,out,MaterialPin::Height)->id==link,
+        "Tessellation settings or Height links failed to round trip.");
+    materialOutputNode(graph).output.tessellation.enabled=false;
+    const auto dormant=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    require(std::find(dormant.begin(),dormant.end(),image)==dormant.end()&&materialInputLink(graph,out,MaterialPin::Height)->id==link&&
+        materialGraphTextureReferences(graph)==std::vector<std::string>{canonicalAssetId("assets/textures/height.png")}&&materialGraphFixedSurface(graph),
+        "Disabled tessellation prepared Height work, discarded dependencies or prevented the ordinary fixed path.");
+    auto legacy=nlohmann::json::parse(serializeMaterialGraph(blank()));legacy["version"]=7;
+    legacy["nodes"][0]["output"].erase("height");legacy["nodes"][0]["output"].erase("tessellation");
+    const auto old=parseMaterialGraph(legacy.dump());
+    require(!materialOutputNode(old).output.tessellation.enabled&&near(materialOutputNode(old).output.height,.5f),"Older graphs implicitly enabled displacement.");
+    for(const auto factor:{nlohmann::json(0),nlohmann::json(65),nlohmann::json(-1),nlohmann::json(2.5),nlohmann::json("8")}) {
+        auto invalid=nlohmann::json::parse(before);invalid["nodes"][0]["output"]["tessellation"]["maxFactor"]=factor;
+        rejects([&]{parseMaterialGraph(invalid.dump());},"Malformed tessellation factor was accepted.");
+    }
+    for(const auto pair:{std::pair{"midpoint",-1.f},std::pair{"midpoint",2.f},std::pair{"heightLod",-1.f},std::pair{"heightLod",17.f}}) {
+        auto invalid=nlohmann::json::parse(before);invalid["nodes"][0]["output"]["tessellation"][pair.first]=pair.second;
+        rejects([&]{parseMaterialGraph(invalid.dump());},"Invalid displacement range was accepted.");
+    }
+    Project project;MaterialAsset asset;asset.id="assets/materials/height.crimson-material";asset.name="Height";asset.graph=loaded;
+    saveMaterialAsset(project.root,asset);const auto disk=read(materialAssetPath(project.root,asset.id));
+    const auto reopened=loadMaterialAsset(project.root,asset.id);
+    require(materialOutputNode(reopened.graph).output.tessellation==expected&&read(materialAssetPath(project.root,asset.id))==disk,
+        "Native material reopen changed displacement settings or rewrote authored bytes.");
+}
 void receiveFogPersistence() {
     Project project;auto material=createMaterialAsset(project.root,"Black exterior");
     require(materialOutputNode(material.graph).output.receiveFog&&material.surface.receiveFog&&ModelMaterial{}.receiveFog,
@@ -482,7 +544,7 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==7&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Schema 7 nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==8&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Schema 8 nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
@@ -583,7 +645,7 @@ void imageAdjustmentsAndGrunge() {
             "Prior Grunge style conversion lost authored values or layer defaults.");
         require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
             "Grunge style conversion changed links or persistent identities.");
-        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==7,"Legacy Grunge did not write the current schema.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==8,"Legacy Grunge did not write the current schema.");
         for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
         for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
         rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
@@ -674,5 +736,5 @@ void exactColdModelSurface() {
     require(!materialGraphFixedSurface(changed),"Animated graph uniforms were frozen by the fixed lowering.");
 }
 }
-int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

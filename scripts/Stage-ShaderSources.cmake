@@ -8,7 +8,7 @@ endif()
 file(MAKE_DIRECTORY "${destination}")
 # copy_directory leaves removed programs behind. Retire stale engine sources
 # so a rebuilt deployment contains only the current shader family.
-file(GLOB staged_sources LIST_DIRECTORIES false "${destination}/*.sc" "${destination}/*.sh")
+file(GLOB staged_sources LIST_DIRECTORIES false "${destination}/*.sc" "${destination}/*.sh" "${destination}/*.hlsl")
 foreach(staged IN LISTS staged_sources)
     get_filename_component(name "${staged}" NAME)
     if(NOT EXISTS "${CC_SHADER_SOURCE}/${name}")

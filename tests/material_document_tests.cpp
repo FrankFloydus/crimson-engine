@@ -65,6 +65,35 @@ void publicationAndHistory(){
     document.cancel();require(same(document.definition(),valid) && document.revision()==version && !document.dirty(),"Cancel published a shared revision or changed data.");
     require(!document.load("assets/materials/missing.crimson-material") && same(document.definition(),valid),"Failed load replaced the working material.");
 }
+void displacementTransactions() {
+    Project project;MaterialDocument document(project.root);require(document.create("Displaced material"),"Could not create displacement material.");
+    MaterialNodeId height{};
+    require(document.edit("Enable displacement",[&](auto& asset) {
+        auto& root=materialOutputNode(asset.graph);root.output.tessellation.enabled=true;root.output.height=.7f;
+        height=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(asset.graph,height)->texture.role=MaterialTextureRole::Data;
+        findMaterialNode(asset.graph,height)->texture.image.id="assets/textures/displacement.png";
+        connectMaterialNodes(asset.graph,height,MaterialPin::R,materialOutputNode(asset.graph).id,MaterialPin::Height);
+    }),"Could not author Height and enable tessellation in one document transaction.");
+    const auto enabled=document.definition();const auto revision=document.revision();
+    require(document.begin("Displacement gesture")&&document.update([](auto& asset){materialOutputNode(asset.graph).output.tessellation.amount=.4f;})&&
+        document.update([](auto& asset){materialOutputNode(asset.graph).output.tessellation.amount=-.6f;}),"Displacement gesture could not update signed amount.");
+    document.cancel();require(same(document.definition(),enabled)&&document.revision()==revision,"Canceled displacement gesture changed authored state or published a revision.");
+    require(document.edit("Displacement controls",[](auto& asset) {
+        auto& t=materialOutputNode(asset.graph).output.tessellation;t.amount=.25f;t.midpoint=.3f;t.maxFactor=12;t.heightLod=1.5f;
+    }),"Displacement controls did not use the document command path.");
+    const auto displaced=document.definition();
+    require(document.undo()&&same(document.definition(),enabled)&&document.redo()&&same(document.definition(),displaced),"Displacement controls failed exact undo/redo.");
+    require(!document.edit("Invalid subdivision",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.maxFactor=65;})&&same(document.definition(),displaced),
+        "Rejected displacement edit changed its working material.");
+    require(document.save()&&document.load(document.assetId())&&same(document.definition(),displaced),"Displacement material failed save/reopen.");
+    require(document.edit("Disable tessellation",[](auto& asset){materialOutputNode(asset.graph).output.tessellation.enabled=false;}),"Could not disable tessellation.");
+    const auto& graph=document.definition().graph;const auto output=materialOutputNode(graph).id;const auto references=document.historicalTextureReferences();
+    require(materialInputLink(graph,output,MaterialPin::Height)&&materialOutputNode(graph).output.height==.7f&&
+        std::find(references.begin(),references.end(),canonicalAssetId("assets/textures/displacement.png"))!=references.end(),
+        "Disabled tessellation discarded the Height connection or fallback.");
+    require(document.undo()&&same(document.definition(),displaced),"Undoing disable failed to restore tessellation.");
+}
 void identityAndExternalAuthority(){
     Project project;MaterialDocument document(project.root);require(document.create("Original"),"Create failed.");
     const auto sourceId=document.assetId(),sourceText=text(materialAssetPath(project.root,sourceId));
@@ -383,5 +412,5 @@ void usageBlendAndHdrTransactions() {
 }
 int main(int argc,char** argv){try{if(argc==4&&std::string(argv[1])=="--verify-material"){verifyActualMaterial(argv[2],argv[3]);return 0;}
     require(argc==1,"Expected --verify-material <project root> <material id>, or no arguments.");
-    publicationAndHistory();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+    publicationAndHistory();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
