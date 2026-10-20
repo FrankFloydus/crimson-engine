@@ -503,18 +503,21 @@ The collapsed **Global Illumination** section provides:
 | Control | Default | Effect |
 | --- | --- | --- |
 | Enabled | Off | Enables SSGI independently of environment Lighting |
-| Strength | 1 | Indirect-light amount, from 0 to 4; zero bypasses GI |
-| Bounces | 1 | One to four diffuse bounces; additional bounces increase GPU work |
-| Max Distance (m) | 3 | Search distance per bounce, from 0.1 to 20 m |
+| Intensity | 1 | Reflected-light brightness, from 0 to 4; zero bypasses GI |
+| Reach (m) | 3 | Distance visible surfaces can exchange light per bounce, from 0.1 to 20 m |
 | Quality | Medium | Low/Medium/High ray/step presets or Custom |
+| Use Defaults | — | Restores the recommended GI tuning in one undoable edit, keeping Enabled unchanged |
+| Advanced → Bounces | 1 | One to four diffuse reflections; additional bounces increase noise and GPU work |
+| Advanced → Stability | 0.90 | History reuse, from 0 to 0.98; higher values reduce flicker and respond more slowly |
 | Advanced → Samples Per Pixel | 4 at Medium | Rays per half-resolution pixel, from 1 to 16; editing selects Custom |
 | Advanced → Ray Steps | 16 at Medium | Marching steps per ray segment, from 8 to 64; editing selects Custom |
 | Advanced → Ray Bias (m) | 0.02 | Origin offset from the receiver, from 0.001 to 0.5 m |
 | Advanced → Thickness (m) | 0.1 | Depth hit tolerance, from 0.01 to 2 m; excess tolerance can leak through thin surfaces |
-| Advanced → Temporal Stability | 0.85 | History reuse, from 0 to 0.98; higher values smooth noise and respond more slowly |
-| Advanced → Denoise Radius (px) | 3 | Spatial-filter radius in half-resolution pixels, from 0 to 4 |
-| Advanced → Denoise Strength | 1 | Spatial-filter amount, from 0 to 1; zero preserves unfiltered samples |
+| Advanced → Denoise Radius (px) | 4 | Spatial-filter radius in half-resolution pixels, from 0 to 4 |
+| Advanced → Smoothing | 1 | Spatial-filter amount, from 0 to 1; zero preserves unfiltered samples |
 | Advanced → Radiance Clamp | 10 | HDR sample brightness limit, from 0 to 100; zero disables the clamp |
+
+Use **Use Defaults** to apply the calibrated tuning to an existing Environment; loading preserves its saved values. Medium retains four rays and sixteen steps. High is a more expensive option for difficult small bright sources. The [SSGI quality and cost audit](docs/SSGI_QUALITY_AUDIT.md) records the research, controlled comparisons and GPU measurements behind these choices.
 
 The separate collapsed **Screen Space Ambient Occlusion** section adds contact shading from nearby visible geometry. **Enabled** defaults off. **Strength** defaults to 1 with a 0–2 range; **Radius (m)** defaults to 0.5 with a 0.05–5 m range; **Quality** defaults to Medium with Low/Medium/High choices. SSAO attenuates indirect lighting and can be used independently of SSGI . Zero Strength bypasses its work.
 

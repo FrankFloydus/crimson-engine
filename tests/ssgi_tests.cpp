@@ -75,7 +75,7 @@ void historyOwnershipAndDiscontinuities() {
     nextCamera=camera;nextCamera.nearPlane*=2;check(!reusable(101,identity,nextCamera,settings),"Depth-convention change retained GI history.");
     nextCamera=camera;nextCamera.position[0]=std::numeric_limits<float>::quiet_NaN();check(!reusable(101,identity,nextCamera,settings),"Nonfinite camera retained GI history.");
     auto nextSettings=settings;nextSettings.maxDistance+=1;check(!reusable(101,identity,camera,nextSettings),"GI tuning retained an incompatible history.");
-    nextSettings=settings;nextSettings.quality=SsgiQuality::High;check(!reusable(101,identity,camera,nextSettings),"GI ray budget change retained an incompatible history.");
+    nextSettings=settings;nextSettings.quality=SsgiQuality::Low;check(!reusable(101,identity,camera,nextSettings),"GI ray budget change retained an incompatible history.");
     nextSettings=settings;nextSettings.thickness*=2;check(!reusable(101,identity,camera,nextSettings),"GI hit thickness change retained an incompatible history.");
     nextSettings=settings;nextSettings.temporalStability=.5f;check(!reusable(101,identity,camera,nextSettings),"Temporal tuning retained an incompatible history.");
     nextSettings=settings;nextSettings.bounces=4;check(!reusable(101,identity,camera,nextSettings),"GI path-length change retained an incompatible history.");
@@ -83,7 +83,7 @@ void historyOwnershipAndDiscontinuities() {
         nextSettings=settings;nextSettings.*member*=.5f;check(!reusable(101,identity,camera,nextSettings),"GI sampling/denoise tuning retained incompatible radiance history.");
     }
     for(const auto member:{&SsgiSettings::rays,&SsgiSettings::steps,&SsgiSettings::denoiseRadius}) {
-        nextSettings=settings;++(nextSettings.*member);check(!reusable(101,identity,camera,nextSettings),"GI sampling/denoise budget retained incompatible radiance history.");
+        nextSettings=settings;nextSettings.*member+=member==&SsgiSettings::denoiseRadius?-1:1;check(!reusable(101,identity,camera,nextSettings),"GI sampling/denoise budget retained incompatible radiance history.");
     }
     nextSettings=settings;nextSettings.strength=3;check(reusable(101,identity,camera,nextSettings),"Output-only GI strength adjustment discarded unscaled history.");
 }

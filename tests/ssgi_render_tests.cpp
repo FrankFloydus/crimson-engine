@@ -6,12 +6,14 @@
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
+#include "resources/ShaderCompiler.h"
 
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <lodepng.h>
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -21,7 +23,11 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <memory>
+#include <optional>
+#include <set>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -42,7 +48,11 @@ struct Temporary {
 };
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle value{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}};
-struct Options {bool benchmark{};unsigned warmup{48},samples{120};fs::path artifacts;};
+struct Options {
+    bool benchmark{},ssgiAudit{},ssgiBenchmarkOnly{};unsigned warmup{120},samples{300};
+    std::uint16_t benchmarkWidth{1920},benchmarkHeight{1080};fs::path artifacts,ssgiShaderDirectory;
+    SsgiSettings auditSettings=[] {SsgiSettings value;value.enabled=true;return value;}();
+};
 struct ComRelease {void operator()(IUnknown* value)const{if(value)value->Release();}};
 void printAdapter(ID3D11Device* device) {
     IDXGIDevice* rawDevice{};
@@ -120,9 +130,122 @@ void equivalent(const DecodedImage& a,const DecodedImage& b,const char* reason,u
     check(maximum<=tolerance,std::string(reason)+"; maximum RGBA error="+std::to_string(maximum));
 }
 
+double linearLuminance(const DecodedImage& image,std::size_t pixel) {
+    constexpr std::array weights{.2126,.7152,.0722};double result{};
+    for(unsigned channel=0;channel<3;++channel) {
+        const double encoded=image.rgba[pixel*4+channel]/255.;
+        result+=weights[channel]*(encoded<=.04045?encoded/12.92:std::pow((encoded+.055)/1.055,2.4));
+    }
+    return result;
+}
+std::vector<std::size_t> verticalReceiverPixels(unsigned width,unsigned height,const Camera& camera) {
+    std::vector<std::size_t> result;
+    for(unsigned y=1;y+1<height;++y)for(unsigned x=1;x+1<width;++x) {
+        const auto ray=camera.screenRay(float(x)+.5f,float(y)+.5f,{0,0,float(width),float(height)});
+        if(!ray||ray->direction[2]>=-.0001f)continue;
+        const float distance=-ray->origin[2]/ray->direction[2];if(distance<=0)continue;
+        const auto position=ray->origin+ray->direction*distance;
+        // A dense interior patch of the vertical receiver: no silhouette,
+        // emissive cube overlap, material texture or direct lighting.
+        if(position[0]>=-.35f&&position[0]<=1.1f&&position[1]>=.2f&&position[1]<=1.8f)
+            result.push_back(std::size_t(y)*width+x);
+    }
+    check(result.size()>=256,"SSGI vertical receiver has too few interior pixels.");return result;
+}
+double receiverMean(const DecodedImage& image,std::span<const std::size_t> pixels) {
+    double result{};for(const auto pixel:pixels)result+=linearLuminance(image,pixel);return result/pixels.size();
+}
+nlohmann::json bandingMetrics(std::span<const DecodedImage> images,std::span<const std::size_t> pixels) {
+    check(images.size()>=2&&!pixels.empty(),"SSGI noise measurement has no useful samples.");
+    const unsigned width=images.front().width,height=images.front().height;
+    std::vector<double> mean(std::size_t(width)*height),frameMean(images.size());
+    std::vector<bool> mask(mean.size());for(const auto pixel:pixels)mask[pixel]=true;
+    double average{};
+    for(std::size_t frame=0;frame<images.size();++frame) {
+        check(images[frame].width==width&&images[frame].height==height,"SSGI noise images changed dimensions mid-sequence.");
+        for(const auto pixel:pixels){const double value=linearLuminance(images[frame],pixel);mean[pixel]+=value/images.size();frameMean[frame]+=value/pixels.size();}
+        average+=frameMean[frame]/images.size();
+    }
+    double temporalVariance{},globalVariance{};
+    for(std::size_t frame=0;frame<images.size();++frame) {
+        globalVariance+=(frameMean[frame]-average)*(frameMean[frame]-average)/images.size();
+        for(const auto pixel:pixels){const double delta=linearLuminance(images[frame],pixel)-mean[pixel];temporalVariance+=delta*delta/(pixels.size()*images.size());}
+    }
+    // Remove each pixel's time mean (the physical lighting gradient) and each
+    // frame's global mean (whole-patch flicker, reported separately). Remaining
+    // long-range covariance measures moving coherent bands rather than biasing
+    // the result toward an artificially dark or over-smoothed image.
+    nlohmann::json directions=nlohmann::json::array();double largestCovariance{},largestLongRangeCovariance{};
+    constexpr std::array<std::array<int,2>,12> offsets{{{8,0},{0,8},{8,8},{8,-8},
+        {16,0},{0,16},{16,16},{16,-16},{24,0},{0,24},{24,24},{24,-24}}};
+    for(const auto offset:offsets) {
+        double covariance{},aVariance{},bVariance{};std::size_t pairs{};
+        for(const auto pixel:pixels) {
+            const int x=int(pixel%width)+offset[0],y=int(pixel/width)+offset[1];
+            if(x<0||y<0||x>=int(width)||y>=int(height))continue;
+            const auto neighbor=std::size_t(y)*width+unsigned(x);if(!mask[neighbor])continue;
+            for(std::size_t frame=0;frame<images.size();++frame) {
+                const double frameDelta=frameMean[frame]-average;
+                const double a=linearLuminance(images[frame],pixel)-mean[pixel]-frameDelta;
+                const double b=linearLuminance(images[frame],neighbor)-mean[neighbor]-frameDelta;
+                covariance+=a*b;aVariance+=a*a;bVariance+=b*b;++pairs;
+            }
+        }
+        const double normalizedCovariance=pairs?covariance/pairs:0;
+        largestCovariance=std::max(largestCovariance,normalizedCovariance);
+        // Eight-pixel pairs overlap the half-resolution reconstruction filter.
+        // Longer offsets distinguish broad bands from intended local smoothing.
+        if(std::max(std::abs(offset[0]),std::abs(offset[1]))>=16)
+            largestLongRangeCovariance=std::max(largestLongRangeCovariance,normalizedCovariance);
+        directions.push_back({{"dx",offset[0]},{"dy",offset[1]},{"pairs",pairs},
+            {"covariance",normalizedCovariance},{"correlation",aVariance>0&&bVariance>0?covariance/std::sqrt(aVariance*bVariance):0}});
+    }
+    const double normalization=std::max(average,.000001);
+    return {{"width",width},{"height",height},{"frames",images.size()},{"receiver_pixels",pixels.size()},
+        {"mean_linear",average},{"temporal_rms",std::sqrt(temporalVariance)},
+        {"relative_temporal_rms",std::sqrt(temporalVariance)/normalization},
+        {"global_rms",std::sqrt(globalVariance)},{"relative_global_rms",std::sqrt(globalVariance)/normalization},
+        {"coherent_rms",std::sqrt(largestCovariance)},{"relative_coherent_rms",std::sqrt(largestCovariance)/normalization},
+        {"long_range_rms",std::sqrt(largestLongRangeCovariance)},
+        {"relative_long_range_rms",std::sqrt(largestLongRangeCovariance)/normalization},
+        {"spatial_covariance",std::move(directions)}};
+}
+nlohmann::json ssgiSettingsJson(const SsgiSettings& settings) {
+    const auto budget=ssgiQualityBudget(settings);
+    return {{"strength",settings.strength},{"maxDistance",settings.maxDistance},{"bounces",settings.bounces},
+        {"quality",static_cast<int>(settings.quality)},{"rays",budget.rays},{"steps",budget.steps},
+        {"thickness",settings.thickness},{"rayBias",settings.rayBias},{"temporalStability",settings.temporalStability},
+        {"denoiseRadius",settings.denoiseRadius},{"denoiseStrength",settings.denoiseStrength},{"radianceClamp",settings.radianceClamp}};
+}
+nlohmann::json timingSummary(std::vector<double> values) {
+    if(values.empty())return {{"samples",0},{"median_ms",nullptr},{"p95_ms",nullptr}};
+    std::sort(values.begin(),values.end());const auto count=values.size();
+    const double median=(values[(count-1)/2]+values[count/2])*.5;
+    const auto p95=std::min(count-1,(count*95+99)/100-1);
+    return {{"samples",count},{"median_ms",median},{"p95_ms",values[p95]},
+        {"minimum_ms",values.front()},{"maximum_ms",values.back()}};
+}
+void overrideSsgiPrograms(Renderer& renderer,const ShaderCompileConfig& config,const fs::path& sourceDirectory) {
+    if(sourceDirectory.empty())return;
+    check(fs::is_directory(sourceDirectory),"The SSGI shader override directory is unavailable.");
+    std::array<ShaderBinary,4> programs;constexpr std::array names{"cs_ssgi_trace","cs_ssgi_temporal","cs_ssgi_filter","cs_ssgi_publish"};
+    for(std::size_t stage=0;stage<programs.size();++stage) {
+        const auto path=sourceDirectory/(std::string(names[stage])+".sc");std::ifstream input(path,std::ios::binary);
+        check(bool(input),"Cannot read SSGI shader override: "+path.string());
+        const std::string source{std::istreambuf_iterator<char>{input},std::istreambuf_iterator<char>{}};
+        ShaderCompileRecipe recipe;recipe.name=names[stage];recipe.source=source;recipe.stage=ShaderStage::Compute;
+        recipe.varyingDefinition=config.sourceDirectory/"varying.def.sc";recipe.includeDirectories={sourceDirectory,config.sourceDirectory,config.includeDirectory};
+        recipe.contract="ssgi-audit-override-v1";programs[stage]=compileShader(config,recipe);
+    }
+    check(renderer.reloadPrograms({}, {}, {}, {},programs[0].bytes,programs[1].bytes,programs[2].bytes,programs[3].bytes),
+        "SSGI shader override failed preflight/publication: "+renderer.shaderStatus());
+    std::cout<<"SSGI shader override: "<<sourceDirectory.string()<<'\n';
+}
+
 void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options& options) {
     // Resource workers precede every GPU owner and are stopped before draining.
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);TestGpuContext context;
+    overrideSsgiPrograms(renderer,config,options.ssgiShaderDirectory);
     if(auto* device=context.d3d11Device())printAdapter(device);
     else {
         const auto* caps=bgfx::getCaps();
@@ -163,6 +286,246 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
         renderer.drainPending(frame);throw std::runtime_error("SSGI readback timed out.");
     };
     const auto mesh=quad();check(renderer.prepareModel(*mesh),renderer.modelStatus());
+    const auto screenSpaceBenchmark=[&] {
+        // A large diffuse floor/wall plus a small six-face emitter exercises
+        // visible-surface hits, misses and temporal/filter work over most of
+        // each viewport. Both cameras render the same immutable scene.
+        auto surfaceMaterials=mesh->materials,emitterMaterials=mesh->materials;
+        emitterMaterials[0].emissive={32,4,.5f};std::vector<ModelMaterialTextures> textures(1);
+        std::array<RenderModelInstance,8> instances;
+        for(std::size_t index=0;index<instances.size();++index) {
+            auto& instance=instances[index];instance.entityId=9700+index;instance.model.asset=mesh;instance.forceFullDetail=true;
+            instance.materials=index<2?&surfaceMaterials:&emitterMaterials;instance.textures=&textures;
+            instance.lightingScopes.directReceiverMask=lighting_scope::World;
+        }
+        constexpr float pi=3.14159265359f,halfSize=.25f;constexpr Vec3 center{-.8f,.5f,-.2f};
+        instances[0].model.transform=math::rotation(math::axisAngle({1,0,0},-pi*.5f))*math::scaling({3,3,1});
+        instances[1].model.transform=math::translation({0,1.25f,-1.5f})*math::scaling({2.5f,1.25f,1});
+        constexpr std::array<Vec3,6> offsets{{{0,0,halfSize},{0,0,-halfSize},{halfSize,0,0},{-halfSize,0,0},{0,halfSize,0},{0,-halfSize,0}}};
+        constexpr std::array<Vec3,6> axes{{{0,1,0},{0,1,0},{0,1,0},{0,1,0},{1,0,0},{1,0,0}}};
+        constexpr std::array angles{0.f,pi,pi*.5f,-pi*.5f,-pi*.5f,pi*.5f};
+        for(std::size_t face=0;face<6;++face)instances[face+2].model.transform=math::translation(center+offsets[face])*
+            math::rotation(math::axisAngle(axes[face],angles[face]))*math::scaling({halfSize,halfSize,1});
+        SceneSettings gameSettings;gameSettings.camera.position={3.4f,4.7f,6.3f};gameSettings.camera.target={0,.45f,-.4f};
+        gameSettings.camera.fov=48;gameSettings.camera.fovAxis=CameraFovAxis::Vertical;gameSettings.camera.nearPlane=.1f;gameSettings.camera.farPlane=32;
+        gameSettings.environment.enabled=false;gameSettings.environment.ambientLight.source=AmbientLightSource::Disabled;
+        gameSettings.environment.toneMapping=ToneMapping::Linear;gameSettings.environment.background.overrideColor=true;
+        gameSettings.environment.background.color={};gameSettings.environment.debanding=false;gameSettings.environment.ssgi=options.auditSettings;
+        SceneSettings sceneSettings=gameSettings;sceneSettings.camera.position={-3.4f,4.7f,6.3f};
+        RenderScene gameScene{gameSettings,{}},sceneScene{sceneSettings,{}};
+        gameScene.sceneMode=sceneScene.sceneMode=true;gameScene.instances=sceneScene.instances=instances;
+        gameScene.giWorldId=sceneScene.giWorldId=9700;gameScene.giEnvironmentId=sceneScene.giEnvironmentId=9701;
+        gameScene.giCameraId=9702;sceneScene.giCameraId=9703;
+        width=options.benchmarkWidth;height=options.benchmarkHeight;renderer.resizeGameViewport(width,height);
+        bgfx::setDebug(BGFX_DEBUG_PROFILER);
+        const auto* caps=bgfx::getCaps();
+        check(width<=caps->limits.maxTextureSize&&height<=caps->limits.maxTextureSize,"SSGI benchmark dimensions exceed the active backend texture limit.");
+        nlohmann::json report{{"schema",1},{"backend",bgfx::getRendererName(bgfx::getRendererType())},
+            {"vendor_id",caps->vendorId},{"device_id",caps->deviceId},{"width",width},{"height",height},
+            {"settings",ssgiSettingsJson(options.auditSettings)},{"warmup_frames",options.warmup},
+            {"requested_unique_gpu_samples",options.samples},{"shader_directory",options.ssgiShaderDirectory.empty()?"embedded":options.ssgiShaderDirectory.string()},
+            {"fixture","static diffuse wall/floor and six-face emissive cube; eight fallback material instances per view"},
+            {"limitations","Synthetic offscreen scene with a hidden 320x240 primary presentation; no editor UI, asset traversal, textured material complexity, shadows or animation. GPU timestamps measure elapsed intervals, not active GPU utilization; measured throughput is not the user's editor FPS."},
+            {"phases",nlohmann::json::array()}};
+        for(const bool dual:{false,true}) {
+            renderer.resizeViewport(dual?width:1,dual?height:1);
+            for(const bool enabled:{false,true}) {
+                gameSettings.environment.ssgi.enabled=sceneSettings.environment.ssgi.enabled=enabled;
+                const auto submit=[&] {
+                    if(dual)renderer.render(sceneScene);renderer.renderGame(gameScene);
+                    check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());
+                    // Match DX11's conditional primary-present path to DX12's
+                    // unconditional one without changing the offscreen workload.
+                    bgfx::touch(ToolsView);tick();
+                };
+                std::cout<<"Warming SSGI benchmark "<<width<<'x'<<height<<" views="<<(dual?2:1)
+                    <<" enabled="<<enabled<<" warmup="<<options.warmup<<" unique_samples="<<options.samples<<std::endl;
+                for(unsigned i=0;i<options.warmup;++i)submit();
+                const auto* warmed=bgfx::getStats();
+                const auto& gameMeshes=renderer.meshInstancingStats(RenderViewPurpose::Game);
+                const auto& sceneMeshes=renderer.meshInstancingStats(RenderViewPurpose::Scene);
+                const auto submittedModels=gameMeshes.instancedInstances+gameMeshes.fallbackDraws+
+                    (dual?sceneMeshes.instancedInstances+sceneMeshes.fallbackDraws:0);
+                check(renderer.modelResidentBytes()>0&&warmed->numDraw>0&&submittedModels>=instances.size()*(dual?2u:1u),
+                    "SSGI benchmark geometry was not submitted.");
+                if(enabled)check(renderer.ssgiResidentBytes()>0&&warmed->numCompute>=5u*(dual?2u:1u),"SSGI benchmark effect work was bypassed.");
+                const auto firstSubmittedFrame=frame+1;std::set<std::uint32_t> completed;
+                std::vector<double> gpu,lightingEffects,depthPrepass,cpuWall,cpuFrame,cpuBackend;
+                nlohmann::json rawGpu=nlohmann::json::array();const auto begin=Clock::now();
+                const auto deadline=begin+std::chrono::minutes{3};unsigned submitted{};
+                const auto viewElapsed=[&](const bgfx::Stats& stats,std::uint16_t requested)->std::optional<double> {
+                    for(unsigned index=0;index<stats.numViews;++index) {
+                        const auto& view=stats.viewStats[index];
+                        if(view.view==requested&&view.gpuFrameNum==stats.gpuFrameNum&&view.gpuTimeEnd>=view.gpuTimeBegin)
+                            return double(view.gpuTimeEnd-view.gpuTimeBegin)*1000./stats.gpuTimerFreq;
+                    }
+                    return {};
+                };
+                while(gpu.size()<options.samples&&submitted<options.samples*4+64&&Clock::now()<deadline) {
+                    const auto cpuBegin=Clock::now();submit();++submitted;
+                    cpuWall.push_back(std::chrono::duration<double,std::milli>(Clock::now()-cpuBegin).count());
+                    const auto* stats=bgfx::getStats();
+                    if(stats->cpuTimerFreq>0) {
+                        if(stats->cpuTimeFrame>=0)cpuFrame.push_back(double(stats->cpuTimeFrame)*1000./stats->cpuTimerFreq);
+                        if(stats->cpuTimeEnd>=stats->cpuTimeBegin)cpuBackend.push_back(double(stats->cpuTimeEnd-stats->cpuTimeBegin)*1000./stats->cpuTimerFreq);
+                    }
+                    if(stats->gpuFrameNum<firstSubmittedFrame||stats->gpuTimerFreq<=0||stats->gpuTimeEnd<=stats->gpuTimeBegin||
+                        !completed.insert(stats->gpuFrameNum).second)continue;
+                    const double elapsed=double(stats->gpuTimeEnd-stats->gpuTimeBegin)*1000./stats->gpuTimerFreq;gpu.push_back(elapsed);
+                    nlohmann::json sample{{"gpu_frame",stats->gpuFrameNum},{"frame_elapsed_ms",elapsed}};
+                    const auto collectViews=[&](std::uint16_t gameView,std::uint16_t sceneView,std::vector<double>& destination,const char* field) {
+                        const auto gameTime=viewElapsed(*stats,gameView),sceneTime=dual?viewElapsed(*stats,sceneView):std::optional<double>{0};
+                        if(gameTime&&sceneTime){const auto total=*gameTime+*sceneTime;destination.push_back(total);sample[field]=total;}
+                    };
+                    collectViews(GameLightingEffectsView,SceneLightingEffectsView,lightingEffects,"lighting_effects_elapsed_sum_ms");
+                    collectViews(GameDepthPrepassView,SceneDepthPrepassView,depthPrepass,"depth_prepass_elapsed_sum_ms");
+                    rawGpu.push_back(std::move(sample));
+                }
+                const double wallMilliseconds=std::chrono::duration<double,std::milli>(Clock::now()-begin).count();
+                check(gpu.size()==options.samples,"SSGI benchmark could not collect the requested unique completed GPU timestamp pairs.");
+                const auto* stats=bgfx::getStats();unsigned gaps{};std::uint32_t previous{};
+                for(const auto completedFrame:completed){if(previous&&completedFrame>previous+1)gaps+=completedFrame-previous-1;previous=completedFrame;}
+                nlohmann::json phase{{"views",dual?2:1},{"enabled",enabled},{"submitted_measurement_frames",submitted},
+                    {"unique_gpu_frames",completed.size()},{"first_gpu_frame",*completed.begin()},{"last_gpu_frame",*completed.rbegin()},
+                    {"gpu_frame_gaps",gaps},{"wall_measurement_ms",wallMilliseconds},{"throughput_fps",submitted*1000./wallMilliseconds},
+                    {"gpu_frame_elapsed",timingSummary(std::move(gpu))},{"lighting_effects_elapsed_sum",timingSummary(std::move(lightingEffects))},
+                    {"depth_prepass_elapsed_sum",timingSummary(std::move(depthPrepass))},{"cpu_submit_and_frame_wall",timingSummary(std::move(cpuWall))},
+                    {"cpu_bgfx_frame_interval",timingSummary(std::move(cpuFrame))},{"cpu_render_backend_submit",timingSummary(std::move(cpuBackend))},
+                    {"ssgi_owner_bytes",renderer.ssgiResidentBytes()},{"environment_owner_bytes",renderer.environmentResidentBytes()},
+                    {"draws",stats->numDraw},{"computes",stats->numCompute},{"gpu_samples",std::move(rawGpu)}};
+                phase["driver_gpu_memory_bytes"]=stats->gpuMemoryUsed>=0?nlohmann::json(stats->gpuMemoryUsed):nlohmann::json(nullptr);
+                std::cout<<"SSGI benchmark result: views="<<(dual?2:1)<<" enabled="<<enabled
+                    <<" median_ms="<<phase["gpu_frame_elapsed"]["median_ms"]<<" p95_ms="<<phase["gpu_frame_elapsed"]["p95_ms"]
+                    <<" samples="<<completed.size()<<" throughput_fps="<<phase["throughput_fps"]<<std::endl;
+                report["phases"].push_back(std::move(phase));
+            }
+        }
+        if(!options.artifacts.empty()) {
+            fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"ssgi-benchmark.json");
+            check(bool(output),"Cannot create SSGI benchmark report.");output<<report.dump(2)<<'\n';output.flush();
+            check(bool(output),"Cannot write SSGI benchmark report.");
+        }
+        auto summary=report;for(auto& phase:summary["phases"])phase.erase("gpu_samples");
+        std::cout<<"SSGI_BENCHMARK_JSON "<<summary.dump()<<std::endl;bgfx::setDebug(BGFX_DEBUG_NONE);
+    };
+    if(options.ssgiBenchmarkOnly) {
+        screenSpaceBenchmark();resources.stop();renderer.drainPending(frame);std::cout<<"SSGI benchmark completed.\n";return;
+    }
+    const auto verticalSourceAudit=[&] {
+        SceneSettings settings;settings.camera.position={2.5f,2.f,4.2f};settings.camera.target={0,1,0};
+        settings.camera.fov=47;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.1f;settings.camera.farPlane=32;
+        settings.exposure=.25f;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+        settings.environment.toneMapping=ToneMapping::Linear;settings.environment.debanding=false;
+        settings.environment.background.overrideColor=true;settings.environment.background.color={};
+        settings.environment.ssgi=options.auditSettings;
+        auto receiverMaterials=mesh->materials,emitterMaterials=mesh->materials;
+        emitterMaterials[0].emissive={32,4,.5f};std::vector<ModelMaterialTextures> textures(1);
+        std::array<RenderModelInstance,7> instances;
+        for(std::size_t index=0;index<instances.size();++index) {
+            auto& instance=instances[index];instance.entityId=8800+index;instance.model.asset=mesh;instance.forceFullDetail=true;
+            instance.materials=index?&emitterMaterials:&receiverMaterials;instance.textures=&textures;
+            instance.lightingScopes.directReceiverMask=lighting_scope::World;
+        }
+        instances[0].model.transform=math::translation({0,1,0})*math::scaling({1.4f,1.05f,1});
+        constexpr Vec3 center{-.8f,.95f,.48f};constexpr float halfSize=.18f,pi=3.14159265359f;
+        constexpr std::array<Vec3,6> faceOffsets{{{0,0,halfSize},{0,0,-halfSize},{halfSize,0,0},{-halfSize,0,0},{0,halfSize,0},{0,-halfSize,0}}};
+        constexpr std::array<Vec3,6> axes{{{0,1,0},{0,1,0},{0,1,0},{0,1,0},{1,0,0},{1,0,0}}};
+        constexpr std::array angles{0.f,pi,pi*.5f,-pi*.5f,-pi*.5f,pi*.5f};
+        for(std::size_t face=0;face<6;++face)instances[face+1].model.transform=math::translation(center+faceOffsets[face])*
+            math::rotation(math::axisAngle(axes[face],angles[face]))*math::scaling({halfSize,halfSize,1});
+        RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;
+        scene.giWorldId=8800;scene.giCameraId=8801;scene.giEnvironmentId=8802;
+        const auto draw=[&]{renderer.renderGame(scene);check(renderer.ssgiStatus().empty(),renderer.ssgiStatus());};
+        const auto warm=[&](unsigned count){for(unsigned i=0;i<count;++i){draw();tick();}};
+        nlohmann::json report{{"shader_directory",options.ssgiShaderDirectory.empty()?"embedded":options.ssgiShaderDirectory.string()},
+            {"settings",ssgiSettingsJson(settings.environment.ssgi)},{"exposure",settings.exposure},
+            {"starting_bgfx_frame",frame},{"cases",nlohmann::json::array()}};
+        const Camera camera=settings.camera;
+        const auto measure=[&](const char* name,unsigned requestedWidth,unsigned requestedHeight,bool moving,const Camera* cameraOverride=nullptr) {
+            const Camera& referenceCamera=cameraOverride?*cameraOverride:camera;
+            width=static_cast<std::uint16_t>(requestedWidth);height=static_cast<std::uint16_t>(requestedHeight);
+            renderer.resizeGameViewport(width,height);settings.camera=referenceCamera;++scene.giWorldId;warm(96);
+            const auto pixels=verticalReceiverPixels(width,height,referenceCamera);std::vector<DecodedImage> images;images.reserve(32);
+            nlohmann::json readbackFrames=nlohmann::json::array();
+            for(unsigned sample=0;sample<32;++sample) {
+                if(moving) {
+                    const float phase=float(sample)*6.28318530718f/32.f;
+                    const Vec3 displacement{.025f*std::sin(phase),.008f*std::sin(phase*2),0};
+                    settings.camera.position=referenceCamera.position+displacement;settings.camera.target=referenceCamera.target+displacement;
+                }
+                const auto frameBeforeDraw=frame;draw();images.push_back(read(renderer.gameViewportTexture(),draw));
+                readbackFrames.push_back({{"frame_before_draw",frameBeforeDraw},{"frame_after_readback",frame}});
+                if(!options.artifacts.empty()) {
+                    const std::string imageName=std::string(name)+"-"+(sample<10?"0":"")+std::to_string(sample)+".png";
+                    saveComparison(options.artifacts,imageName.c_str(),images.back());
+                }
+            }
+            auto metrics=bandingMetrics(images,pixels);metrics["name"]=name;metrics["readback_frames"]=std::move(readbackFrames);
+            const double mean=metrics.at("mean_linear").get<double>();
+            check(mean>.00001,"The bright cube supplied no measurable indirect light to the vertical receiver.");
+            if(!options.ssgiAudit&&!cameraOverride) {
+                // Fixed exposure, source energy and geometry make these
+                // measured default-quality bounds independent of scene taste.
+                // Energy bounds prevent erasing the signal to pass noise tests.
+                check(mean>=.005&&mean<=.010,std::string(name)+" lost or amplified the reference indirect-light energy.");
+                check(metrics.at("relative_temporal_rms").get<double>()<=(moving?.14:.12),
+                    std::string(name)+" exceeded the default indirect-light temporal noise bound.");
+                // A fixed screen patch observes different world positions as
+                // the camera pans. Rank coherent sampling noise on stationary
+                // geometry; retain the separate motion energy/temporal bounds.
+                if(!moving)check(metrics.at("relative_long_range_rms").get<double>()<=.05,
+                    std::string(name)+" developed coherent indirect-light bands beyond the reconstruction footprint.");
+            }
+            std::cout<<"SSGI vertical audit "<<name<<": mean="<<mean<<", temporal_rms="<<metrics.at("temporal_rms")
+                <<", relative_temporal_rms="<<metrics.at("relative_temporal_rms")<<", coherent_rms="<<metrics.at("coherent_rms")
+                <<", relative_coherent_rms="<<metrics.at("relative_coherent_rms")
+                <<", relative_long_range_rms="<<metrics.at("relative_long_range_rms")<<'\n';
+            report["cases"].push_back(std::move(metrics));
+        };
+        measure("vertical-static",217,163,false);measure("vertical-camera-motion",217,163,true);
+        measure("vertical-resized",321,241,false);
+        const auto pixels=verticalReceiverPixels(width,height,settings.camera);
+        emitterMaterials[0].emissive={};const auto removedAtFrame=frame;
+        const double originalMean=report["cases"].back().at("mean_linear").get<double>();
+        nlohmann::json decay=nlohmann::json::array();double removedMean{};
+        for(const unsigned elapsed:{16u,32u,64u}) {
+            while(frame-removedAtFrame<elapsed){draw();tick();}
+            const auto frameBeforeDraw=frame;draw();const auto removed=read(renderer.gameViewportTexture(),draw);
+            removedMean=receiverMean(removed,pixels);
+            decay.push_back({{"completed_frames_before_capture",frameBeforeDraw-removedAtFrame},
+                {"frame_before_draw",frameBeforeDraw},{"frame_after_readback",frame},{"mean_linear",removedMean}});
+            if(!options.ssgiAudit) {
+                const double maximum=elapsed==16?originalMean*.20:elapsed==32?originalMean*.05:
+                    std::max(originalMean*.01,.5/255./12.92);
+                check(removedMean<=maximum,"Default SSGI retained excessive light after "+std::to_string(elapsed)+" extinguished-source frames.");
+            }
+            if(!options.artifacts.empty()) {
+                const auto name="vertical-source-removed-"+std::to_string(elapsed)+".png";
+                saveComparison(options.artifacts,name.c_str(),removed);
+            }
+        }
+        report["source_removal"]=std::move(decay);report["removed_source_mean_linear"]=removedMean;
+        emitterMaterials[0].emissive={32,4,.5f};
+        settings.environment.ssgi.strength=0;warm(4);draw();const auto zero=read(renderer.gameViewportTexture(),draw);
+        check(receiverMean(zero,pixels)==0,"Zero-strength GI retained light on the isolated vertical receiver.");
+        report["zero_strength_mean_linear"]=receiverMean(zero,pixels);
+        // The primary camera is too distant for most rays to cross its near
+        // plane. A close, oblique view keeps the cube visible while many wall
+        // hemisphere rays exit the camera frustum before their range ends.
+        // Its different physical irradiance is deliberately not compared to
+        // the primary view's fixed mean/noise bounds.
+        settings.environment.ssgi.strength=options.auditSettings.strength;
+        Camera closeCamera=camera;closeCamera.position={.65f,1.4f,1.1f};closeCamera.target={-.1f,.95f,0};
+        closeCamera.fov=75;measure("vertical-near-camera",217,163,true,&closeCamera);
+        if(!options.artifacts.empty()) {
+            fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"ssgi-audit.json");
+            check(bool(output),"Cannot create the SSGI audit metrics report.");output<<report.dump(2)<<'\n';output.flush();
+            check(bool(output),"Cannot write the SSGI audit metrics report.");
+        }
+    };
+    if(options.ssgiAudit) {
+        verticalSourceAudit();resources.stop();renderer.drainPending(frame);std::cout<<"SSGI vertical audit passed.\n";return;
+    }
     std::vector<ModelMaterial> floorMaterials=mesh->materials,wallMaterials=mesh->materials,blueMaterials=mesh->materials;
     std::vector<ModelMaterialTextures> textures(1);wallMaterials[0].emissive={3.f,.015f,.005f};blueMaterials[0].emissive={.005f,.015f,3.f};
     RenderModelInstance floor;floor.entityId=1;floor.model.asset=mesh;floor.materials=&floorMaterials;floor.textures=&textures;floor.forceFullDetail=true;
@@ -520,48 +883,67 @@ point.castShadows=true;
         settings=savedSettings;wallMaterials[0]=savedWall;scene.instances=instances;++scene.giWorldId;
     }
 
-    if(options.benchmark) {
-        width=1920;height=1080;renderer.resizeViewport(width,height);renderer.resizeGameViewport(width,height);
-        settings.environment.ssgi.quality=editorSettings.environment.ssgi.quality=SsgiQuality::Medium;
-        const auto measure=[&](bool both,bool enabled,int bounces) {
-            settings.environment.ssgi.enabled=editorSettings.environment.ssgi.enabled=enabled;
-            settings.environment.ssgi.bounces=editorSettings.environment.ssgi.bounces=bounces;
-            const auto submit=[&]{if(both)renderer.render(editorScene);draw();tick();};
-            for(unsigned i=0;i<options.warmup;++i)submit();
-            std::vector<double> samples;std::uint32_t lastGpuFrame{};
-            for(unsigned i=0;i<options.samples;++i){submit();const auto* stats=bgfx::getStats();
-                if(stats->gpuFrameNum&&stats->gpuFrameNum!=lastGpuFrame&&stats->gpuTimerFreq>0&&stats->gpuTimeEnd>=stats->gpuTimeBegin) {
-                    samples.push_back(double(stats->gpuTimeEnd-stats->gpuTimeBegin)*1000/stats->gpuTimerFreq);lastGpuFrame=stats->gpuFrameNum;}}
-            std::sort(samples.begin(),samples.end());
-            std::cout<<"SSGI benchmark 1920x1080 quality=Medium views="<<(both?"Scene+Game":"Game")<<" GI="<<(enabled?"on":"off")
-                <<" bounces="<<bounces<<" samples="<<samples.size()<<" ssgi_owner_bytes="<<renderer.ssgiResidentBytes()
-                <<" environment_resources_bytes="<<renderer.environmentResidentBytes();
-            const auto* stats=bgfx::getStats();
-            if(stats->gpuMemoryUsed>=0)std::cout<<" driver_gpu_memory_used="<<stats->gpuMemoryUsed;
-            if(samples.empty())std::cout<<" GPU_median_ms=N/A GPU_p95_ms=N/A\n";
-            else std::cout<<" GPU_median_ms="<<samples[samples.size()/2]<<" GPU_p95_ms="<<samples[std::min(samples.size()-1,samples.size()*95/100)]<<'\n';
-        };
-        // Release the previously exercised Scene owner before the single-view
-        // measurement so resident bytes identify the requested live views.
-        renderer.resizeViewport(1,1);
-        for(unsigned i=0;i<6;++i){draw();tick();}
-        measure(false,false,1);measure(false,true,1);measure(false,true,2);measure(false,true,4);
-        renderer.resizeViewport(width,height);measure(true,false,1);measure(true,true,1);measure(true,true,2);measure(true,true,4);
-    }
+    verticalSourceAudit();
+    if(options.benchmark)screenSpaceBenchmark();
     resources.stop();renderer.drainPending(frame);
     std::cout<<"SSGI render checks passed.\n";
 }
 }
 int main(int argc,char** argv) {
     try {
-        check(argc>=4,"Pass shaderc, shader source and shader include directories, optionally --benchmark --warmup N --samples N --artifacts DIRECTORY.");
+        check(argc>=4,"Pass shaderc, shader source and shader include directories, optionally --ssgi-benchmark-only --benchmark-size WxH (or --width W --height H) --warmup N --samples N --artifacts DIRECTORY, --ssgi-audit or --ssgi-shader-dir DIRECTORY.");
         Options options;
         for(int i=4;i<argc;++i){const std::string_view option=argv[i];
             if(option=="--benchmark")options.benchmark=true;
+            else if(option=="--ssgi-benchmark-only")options.ssgiBenchmarkOnly=true;
+            else if(option=="--benchmark-size") {
+                check(i+1<argc,"Missing SSGI benchmark dimensions.");const std::string dimensions=argv[++i];const auto separator=dimensions.find('x');
+                check(separator!=std::string::npos,"SSGI benchmark dimensions must use WIDTHxHEIGHT.");
+                const auto width=std::stoul(dimensions.substr(0,separator)),height=std::stoul(dimensions.substr(separator+1));
+                check(width>=32&&height>=32&&width<=8192&&height<=8192,"SSGI benchmark dimensions must be between 32 and 8192 pixels.");
+                options.benchmarkWidth=static_cast<std::uint16_t>(width);options.benchmarkHeight=static_cast<std::uint16_t>(height);
+            }
+            else if(option=="--width"||option=="--height") {
+                check(i+1<argc,"Missing SSGI benchmark dimension.");const auto dimension=std::stoul(argv[++i]);
+                check(dimension>=32&&dimension<=8192,"SSGI benchmark dimensions must be between 32 and 8192 pixels.");
+                if(option=="--width")options.benchmarkWidth=static_cast<std::uint16_t>(dimension);
+                else options.benchmarkHeight=static_cast<std::uint16_t>(dimension);
+            }
+            else if(option=="--ssgi-audit")options.ssgiAudit=true;
             else if(option=="--artifacts"){check(i+1<argc,"Missing SSGI artifact directory.");options.artifacts=fs::absolute(argv[++i]).lexically_normal();}
+            else if(option=="--ssgi-shader-dir"){check(i+1<argc,"Missing SSGI shader override directory.");options.ssgiShaderDirectory=fs::absolute(argv[++i]).lexically_normal();}
+            else if(option=="--ssgi-quality") {
+                check(i+1<argc,"Missing SSGI audit quality.");const std::string_view quality=argv[++i];
+                if(quality=="low")options.auditSettings.quality=SsgiQuality::Low;
+                else if(quality=="medium")options.auditSettings.quality=SsgiQuality::Medium;
+                else if(quality=="high")options.auditSettings.quality=SsgiQuality::High;
+                else if(quality=="custom")options.auditSettings.quality=SsgiQuality::Custom;
+                else throw std::runtime_error("Unknown SSGI audit quality.");
+            }
+            else if(option=="--ssgi-rays"||option=="--ssgi-steps"||option=="--ssgi-bounces"||option=="--ssgi-radius") {
+                check(i+1<argc,"Missing integer SSGI audit setting.");const int value=std::stoi(argv[++i]);auto& settings=options.auditSettings;
+                const auto budget=ssgiQualityBudget(settings);
+                if(option=="--ssgi-rays"){settings.rays=value;settings.steps=int(budget.steps);settings.quality=SsgiQuality::Custom;}
+                else if(option=="--ssgi-steps"){settings.steps=value;settings.rays=int(budget.rays);settings.quality=SsgiQuality::Custom;}
+                else if(option=="--ssgi-bounces")settings.bounces=value;
+                else settings.denoiseRadius=value;
+            }
+            else if(option=="--ssgi-strength"||option=="--ssgi-reach"||option=="--ssgi-thickness"||option=="--ssgi-stability"||
+                    option=="--ssgi-bias"||option=="--ssgi-smoothing"||option=="--ssgi-clamp") {
+                check(i+1<argc,"Missing numeric SSGI audit setting.");const float value=std::stof(argv[++i]);auto& settings=options.auditSettings;
+                if(option=="--ssgi-strength")settings.strength=value;
+                else if(option=="--ssgi-reach")settings.maxDistance=value;
+                else if(option=="--ssgi-thickness")settings.thickness=value;
+                else if(option=="--ssgi-stability")settings.temporalStability=value;
+                else if(option=="--ssgi-bias")settings.rayBias=value;
+                else if(option=="--ssgi-smoothing")settings.denoiseStrength=value;
+                else settings.radianceClamp=value;
+            }
             else if(option=="--warmup"||option=="--samples") {check(i+1<argc,"Missing SSGI frame count.");const auto count=std::stoul(argv[++i]);
                 check(count>0&&count<=10000,"SSGI frame count is out of range.");if(option=="--warmup")options.warmup=unsigned(count);else options.samples=unsigned(count);}
             else throw std::runtime_error("Unknown SSGI option: "+std::string(option));}
+        check(validSsgiSettings(options.auditSettings)&&effectiveSsgi(options.auditSettings),"SSGI audit settings must be valid and produce nonzero indirect light.");
+        check(!options.ssgiAudit||(!options.benchmark&&!options.ssgiBenchmarkOnly),"Choose either the SSGI quality audit or the benchmark workload.");
         Temporary temporary;ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary.path};Sdl sdl;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson SSGI checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());std::cout<<std::fixed<<std::setprecision(3);exercise(window.get(),config,options);return 0;

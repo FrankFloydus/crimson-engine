@@ -626,18 +626,28 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         field(Edit::EnvironmentGiEnabled,"Toggle global illumination",ImGui::Checkbox("Enabled",&gi.enabled));
         ImGui::BeginDisabled(!gi.enabled);
         field(Edit::EnvironmentGiStrength,"Change global illumination strength",
-            ImGui::SliderFloat("Strength",&gi.strength,0,4,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-        field(Edit::EnvironmentGiBounces,"Change global illumination bounces",
-            ImGui::SliderInt("Bounces",&gi.bounces,1,4,"%d",ImGuiSliderFlags_AlwaysClamp));
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Additional diffuse bounces increase GPU work.");
+            ImGui::SliderFloat("Intensity",&gi.strength,0,4,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Brightness of reflected light.");
         field(Edit::EnvironmentGiDistance,"Change global illumination distance",
-            ImGui::DragFloat("Max Distance (m)",&gi.maxDistance,.05f,.1f,20,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Maximum search distance per bounce. Offscreen surfaces remain unavailable.");
+            ImGui::DragFloat("Reach (m)",&gi.maxDistance,.05f,.1f,20,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("How far visible surfaces can exchange light per bounce. Offscreen surfaces remain unavailable.");
         int quality=static_cast<int>(gi.quality);const char* qualities[]{"Low","Medium","High","Custom"};
         const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,4);
         if(qualityChanged)gi.quality=static_cast<SsgiQuality>(quality);
         field(Edit::EnvironmentGiQuality,"Change screen-space GI quality",qualityChanged);
+        if(ImGui::Button("Use Defaults") && (!document.transactionActive() || finishScenePanelEdit(document))) {
+            const bool enabled=gi.enabled;gi=SsgiSettings{};gi.enabled=enabled;
+            document.edit("Restore global illumination defaults",
+                changeEntity(record.id,[environment](auto& entity){entity.environment=environment;}));
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Restore the recommended GI tuning. Keeps Enabled unchanged.");
         if(ImGui::TreeNode("Advanced")) {
+            field(Edit::EnvironmentGiBounces,"Change global illumination bounces",
+                ImGui::SliderInt("Bounces",&gi.bounces,1,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Additional diffuse reflections increase noise and GPU work.");
+            field(Edit::EnvironmentGiTemporal,"Change global illumination temporal stability",
+                ImGui::SliderFloat("Stability",&gi.temporalStability,0,.98f,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Higher values reduce flicker and respond more slowly to lighting changes.");
             auto budget=ssgiQualityBudget(gi);int rays=static_cast<int>(budget.rays);
             const bool raysChanged=ImGui::SliderInt("Samples Per Pixel",&rays,1,16,"%d",ImGuiSliderFlags_AlwaysClamp);
             if(raysChanged){gi.rays=rays;gi.steps=static_cast<int>(budget.steps);gi.quality=SsgiQuality::Custom;}
@@ -653,13 +663,10 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             field(Edit::EnvironmentGiThickness,"Change global illumination thickness",
                 ImGui::DragFloat("Thickness (m)",&gi.thickness,.005f,.01f,2,"%.3f",ImGuiSliderFlags_AlwaysClamp));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Depth hit tolerance. Higher values can leak through thin walls.");
-            field(Edit::EnvironmentGiTemporal,"Change global illumination temporal stability",
-                ImGui::SliderFloat("Temporal Stability",&gi.temporalStability,0,.98f,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("History reuse. Higher values reduce noise and respond more slowly to changes.");
             field(Edit::EnvironmentGiDenoiseRadius,"Change global illumination denoise radius",
                 ImGui::SliderInt("Denoise Radius (px)",&gi.denoiseRadius,0,4,"%d",ImGuiSliderFlags_AlwaysClamp));
             field(Edit::EnvironmentGiDenoiseStrength,"Change global illumination denoise strength",
-                ImGui::SliderFloat("Denoise Strength",&gi.denoiseStrength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+                ImGui::SliderFloat("Smoothing",&gi.denoiseStrength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Spatial noise filtering. Zero preserves unfiltered samples.");
             field(Edit::EnvironmentGiRadianceClamp,"Change global illumination radiance clamp",
                 ImGui::DragFloat("Radiance Clamp",&gi.radianceClamp,.1f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp));
