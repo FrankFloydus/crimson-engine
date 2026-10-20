@@ -368,12 +368,21 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             controls.enabled=factors[i]!=0;controls.maxFactor=std::max(1u,factors[i]);
             packets[i]=prepare(benchmarkMaterial,varyingHeight.handle);
         }
-        nlohmann::json report{{"schema",1},{"backend",bgfx::getRendererName(bgfx::getRendererType())},{"width",1920},{"height",1080},
+        const auto* capabilities=bgfx::getCaps();
+        nlohmann::json report{{"schema",1},{"backend",bgfx::getRendererName(bgfx::getRendererType())},
+            {"gpu_vendor_id",capabilities->vendorId},{"gpu_device_id",capabilities->deviceId},{"width",1920},{"height",1080},
             {"base_triangles",512},{"height","64x64 linear RGBA8 data: 0.5+0.5*sin(2*pi*u)*sin(2*pi*v); amount 0.02; midpoint 0.5; one bilinear SampleLevel LOD-0 fetch per domain invocation"},
-            {"height_texture_bytes",HeightEdge*HeightEdge*4},{"warmup",options.warmup},{"requested_samples",options.samples},
+            {"height_texture_bytes",HeightEdge*HeightEdge*4},{"common_warmup_seconds",3},
+            {"phase_order","off,4,8,16,16,8,4,off"},{"warmup",options.warmup},{"requested_samples",options.samples},
             {"scope","Game opaque PBR pass with one directional and one point light; excludes presentation, uploads and shadow work; timestamp elapsed, not active GPU execution"},
             {"phases",nlohmann::json::array()}};
-        for(unsigned i=0;i<factors.size();++i) {
+        // Exercise both directions after a sustained common warmup. Keep every
+        // phase's raw samples: a cold first baseline must not imply a speedup.
+        bindings[0].graph=packets.back();
+        const auto settleUntil=Clock::now()+std::chrono::seconds{3};
+        while(Clock::now()<settleUntil){renderer.renderGame(scene);tick();}
+        constexpr std::array phaseOrder{0u,1u,2u,3u,3u,2u,1u,0u};
+        for(const auto i:phaseOrder) {
             bindings[0].graph=packets[i];const auto submit=[&]{renderer.renderGame(scene);tick();};
             for(unsigned w=0;w<options.warmup;++w)submit();const auto firstSubmitted=frame+1;
             std::set<std::uint32_t> completed;std::vector<double> timings;nlohmann::json raw=nlohmann::json::array();
@@ -392,7 +401,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const Options
             }
             check(timings.size()==options.samples,"Could not collect unique coherent post-warmup height GPU samples.");
             std::sort(timings.begin(),timings.end());const auto percentile=[&](double p){return timings[std::min(timings.size()-1,std::size_t(std::ceil(p*timings.size())-1))];};
-            nlohmann::json phase{{"factor",factors[i]},{"first_submitted_frame",firstSubmitted},{"submissions",submissions},{"unique_completed_frames",completed.size()},
+            nlohmann::json phase{{"phase_index",report["phases"].size()},{"factor",factors[i]},{"first_submitted_frame",firstSubmitted},{"submissions",submissions},{"unique_completed_frames",completed.size()},
                 {"median_ms",percentile(.5)},{"p95_ms",percentile(.95)},{"samples",std::move(raw)}};
             std::cout<<"Height opaque PBR factor="<<factors[i]<<" median_ms="<<phase["median_ms"]<<" p95_ms="<<phase["p95_ms"]<<'\n';report["phases"].push_back(std::move(phase));
         }
