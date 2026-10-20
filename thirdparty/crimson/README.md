@@ -160,7 +160,7 @@ do not suppress it or claim a completely clean validation run while it remains.
 Crimson and Quader are authored proprietary projects used under the user's
 authorization. bgfx is the existing Crimson dependency, using the existing vcpkg
 baseline `d0c191d142b7bc048141ddfb618aa9ae5dba0233`, bgfx.cmake
-`1.129.8940-496`, maintained port revision `12`. The authoritative overlay and
+`1.129.8940-496`, maintained port revision `14`. The authoritative overlay and
 original source archive SHA-512 live in the renderer submodule's
 `cmake/vcpkg-ports/bgfx` and `renderer-manifest.json`. Changes belong in that recipe and
 patch, never extracted build sources. Its BSD-2-Clause notice is retained in
