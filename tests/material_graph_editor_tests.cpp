@@ -1449,6 +1449,69 @@ void imageNodeParameterTransactions() {
         }
     }
 }
+void mixedImageInputsAndResolvedOutputs() {
+    GraphUi ui;MaterialNodeId source{},levels{},invert{},resize{},output{};
+    require(ui.document.edit("Mixed input fixture",[&](auto& asset) {
+        auto& graph=asset.graph;graph={};
+        source=addMaterialNode(graph,MaterialNodeKind::Color,{-700,0}).id;
+        levels=addMaterialNode(graph,MaterialNodeKind::Levels,{-350,0}).id;
+        invert=addMaterialNode(graph,MaterialNodeKind::Invert,{0,0}).id;
+        resize=addMaterialNode(graph,MaterialNodeKind::Resize,{350,0}).id;
+        output=addMaterialNode(graph,MaterialNodeKind::Output,{700,0}).id;
+        materialOutputNode(graph).output.tessellation.enabled=true;
+        connectMaterialNodes(graph,source,MaterialPin::R,levels,MaterialPin::Left);
+        connectMaterialNodes(graph,levels,MaterialPin::Value,invert,MaterialPin::Left);
+        connectMaterialNodes(graph,invert,MaterialPin::Value,resize,MaterialPin::Left);
+        connectMaterialNodes(graph,resize,MaterialPin::Value,output,MaterialPin::Height);
+    })&&ui.document.save(),"Could not configure mixed input presentation.");ui.frame(24);
+    const auto presented=[&](MaterialNodeId id,MaterialPin semantic,bool input) {
+        for(const auto& pin:ui.editor.presentation().pins)if(pin.node==id&&pin.pin==semantic&&pin.input==input)return pin;
+        throw std::runtime_error("Mixed image fixture pin was absent.");
+    };
+    const auto gray=presented(source,MaterialPin::R,false).color;
+    const auto color=presented(source,MaterialPin::RGB,false).color;
+    const auto rgba=presented(source,MaterialPin::RGBA,false).color;
+    const auto verify=[&](MaterialValueType type,Vec4 resultColor) {
+        for(const auto id:{levels,invert,resize}) {
+            const auto input=presented(id,MaterialPin::Left,true),result=presented(id,MaterialPin::Value,false);
+            require(input.mixedImage&&input.color==gray&&input.alternateColor==color,
+                "An adaptable input lost its two accepted image families after wiring or history changes.");
+            require(!result.mixedImage&&result.type==type&&result.color==resultColor,
+                "A connected image branch retained stale output colors instead of its resolved type.");
+        }
+        const auto height=presented(output,MaterialPin::Height,true);
+        require(!height.mixedImage&&height.type==MaterialValueType::Scalar&&height.color==gray,
+            "A mixed source changed the fixed Height socket's presentation contract.");
+    };
+    verify(MaterialValueType::Scalar,gray);
+    const auto socket=presented(levels,MaterialPin::Left,true);
+    bool grayGeometry=false,colorGeometry=false;
+    const auto grayPacked=ImGui::ColorConvertFloat4ToU32({gray[0],gray[1],gray[2],gray[3]});
+    const auto colorPacked=ImGui::ColorConvertFloat4ToU32({color[0],color[1],color[2],color[3]});
+    const float radius=4*ui.editor.presentation().zoom+1;
+    for(const auto* list:ImGui::GetDrawData()->CmdLists)for(const auto& vertex:list->VtxBuffer) {
+        const float x=vertex.pos.x-socket.center[0],y=vertex.pos.y-socket.center[1];
+        if(x*x+y*y<=radius*radius){grayGeometry|=vertex.col==grayPacked;colorGeometry|=vertex.col==colorPacked;}
+    }
+    require(grayGeometry&&colorGeometry,"The mixed input was reported but its actual draw data did not contain both type colors.");
+    const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.frame(3);
+    require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.dirty(),
+        "Mixed input presentation changed authored material data.");
+    const auto nodes=ui.document.definition().graph.nodes.size();
+    ui.drag(ui.pin(source,MaterialPin::RGB,false),ui.pin(levels,MaterialPin::Left,true));
+    require(ui.document.definition().graph.nodes.size()==nodes,"Wiring a mixed input inserted an unnecessary conversion node.");
+    verify(MaterialValueType::Color,color);
+    require(ui.document.undo(),"Mixed input rewire did not undo.");ui.frame(2);verify(MaterialValueType::Scalar,gray);
+    require(ui.document.redo(),"Mixed input rewire did not redo.");ui.frame(2);verify(MaterialValueType::Color,color);
+    ui.drag(ui.pin(source,MaterialPin::RGBA,false),ui.pin(levels,MaterialPin::Left,true));
+    verify(MaterialValueType::Color4,rgba);
+    auto& io=ImGui::GetIO();io.AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(levels,MaterialPin::Left,true));
+    io.AddKeyEvent(ImGuiMod_Alt,false);ui.frame(2);
+    require(!materialInputLink(ui.document.definition().graph,levels,MaterialPin::Left),"Mixed input disconnection did not remove its link.");
+    const auto fallback=findMaterialNode(ui.document.definition().graph,levels)->left.type;
+    verify(fallback,fallback==MaterialValueType::Scalar?gray:fallback==MaterialValueType::Color?color:rgba);
+    require(ui.document.undo(),"Mixed input disconnection did not undo.");ui.frame(2);verify(MaterialValueType::Color4,rgba);
+}
 void typedPinColorsConversionsAndResize() {
     GraphUi ui;MaterialNodeId output{},color{},vector{},levels{},multiply{},resize{},normal{},uv{};
     require(ui.document.edit("Typed socket fixture",[&](auto& asset) {
@@ -1477,9 +1540,14 @@ void typedPinColorsConversionsAndResize() {
         "A scalar channel socket used its channel name as a type color.");
     for(const auto semantic:{MaterialPin::X,MaterialPin::Y})require(presented(vector,semantic,false).color==scalar.color,
         "A scalar vector component did not use the scalar type color.");
-    for(const auto id:{levels,multiply,resize})require(presented(id,MaterialPin::Left,true).type==MaterialValueType::Color&&
-        presented(id,MaterialPin::Left,true).color==rgb.color&&presented(id,MaterialPin::Value,false).type==MaterialValueType::Color&&
-        presented(id,MaterialPin::Value,false).color==rgb.color,"Polymorphic Image/Math sockets did not follow resolved connected types.");
+    for(const auto id:{levels,multiply,resize}) {
+        const auto input=presented(id,MaterialPin::Left,true),result=presented(id,MaterialPin::Value,false);
+        require(input.type==MaterialValueType::Color&&result.type==MaterialValueType::Color&&result.color==rgb.color&&!result.mixedImage,
+            "Polymorphic Image/Math results did not retain resolved connected types.");
+        if(id==multiply)require(!input.mixedImage&&input.color==rgb.color,"Numeric arithmetic was mislabeled as a mixed image input.");
+        else require(input.mixedImage&&input.color==scalar.color&&input.alternateColor==rgb.color,
+            "An adaptable image input did not show both grayscale and color capabilities.");
+    }
     const auto legacy=presented(output,MaterialPin::Roughness,true);
     require(legacy.type==MaterialValueType::Scalar&&legacy.color==scalar.color&&legacy.redConversion&&
         presented(normal,MaterialPin::Normal,false).type==MaterialValueType::Normal&&presented(uv,MaterialPin::UV,false).type==MaterialValueType::Mapping,
@@ -1509,5 +1577,5 @@ void typedPinColorsConversionsAndResize() {
 }
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

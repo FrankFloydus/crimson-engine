@@ -34,7 +34,8 @@ public:
     struct NodePresentation {MaterialNodeId id{};Vec2 minimum{},maximum{},titleCenter{};};
     enum class PinCompatibility {Neutral,Compatible,Conversion,Rejected};
     struct PinPresentation {MaterialNodeId node{};MaterialPin pin{};bool input{};Vec2 center{},minimum{},maximum{};bool active{true};
-        MaterialValueType type{MaterialValueType::Scalar};Vec4 color{};bool redConversion{};PinCompatibility compatibility{PinCompatibility::Neutral};};
+        MaterialValueType type{MaterialValueType::Scalar};Vec4 color{};bool redConversion{};PinCompatibility compatibility{PinCompatibility::Neutral};
+        bool mixedImage{};Vec4 alternateColor{};};
     struct FieldPresentation {MaterialNodeId node{};MaterialPin pin{};Vec2 minimum{},maximum{};};
     struct ComboPresentation {MaterialNodeId node{};std::string label;Vec2 minimum{},maximum{};};
     struct ControlPresentation {MaterialNodeId node{};std::string label;Vec2 minimum{},maximum{};};

@@ -719,14 +719,25 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 ed::PinRect(lo,hi);ed::PinPivotRect(center,center);
                 auto* draw=ImGui::GetWindowDrawList();
                 draw->AddText({lo.x+(input?18.f:0.f),lo.y+ImGui::GetStyle().FramePadding.y},ImGui::GetColorU32(active?ImGuiCol_Text:ImGuiCol_TextDisabled),definition.name);
-                auto color=pinColor(definition.type);if(!active)color.w=.3f;
-                if(compatibility==PinCompatibility::Rejected)color.w*=.2f;
+                const bool mixedImage=input&&materialGraphInputMixedImage(node,definition.pin);
+                auto color=pinColor(mixedImage?MaterialValueType::Scalar:definition.type);
+                auto alternate=pinColor(MaterialValueType::Color);
+                if(!active){color.w=.3f;alternate.w=.3f;}
+                if(compatibility==PinCompatibility::Rejected){color.w*=.2f;alternate.w*=.2f;}
                 else if(compatibility!=PinCompatibility::Neutral)draw->AddCircle(center,5,
                     ImGui::GetColorU32(compatibility==PinCompatibility::Conversion?ImGuiCol_PlotHistogram:ImGuiCol_Text),0,1);
                 draw->AddCircleFilled(center,3,ImGui::ColorConvertFloat4ToU32(color));
+                if(mixedImage) {
+                    // Accepted image families are an input capability. Keep
+                    // both halves visible even after one family is connected.
+                    draw->PathLineTo(center);
+                    draw->PathArcTo(center,3,-IM_PI*.5f,IM_PI*.5f,8);
+                    draw->PathFillConvex(ImGui::ColorConvertFloat4ToU32(alternate));
+                }
                 if(redConversion)draw->AddText({hi.x+3,lo.y+ImGui::GetStyle().FramePadding.y},ImGui::GetColorU32(ImGuiCol_PlotHistogram),"R");
                 s.presentation.pins.push_back({node.id,definition.pin,input,point(center),point(lo),point(hi),active,definition.type,
-                    {color.x,color.y,color.z,color.w},redConversion,compatibility});
+                    {color.x,color.y,color.z,color.w},redConversion,compatibility,mixedImage,
+                    mixedImage?Vec4{alternate.x,alternate.y,alternate.z,alternate.w}:Vec4{}});
                 ImGui::PopID();
                 ed::EndPin();
                 if(!active && ImGui::IsMouseHoveringRect(lo,hi)) {
@@ -738,6 +749,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     ed::Resume();
                 } else if(redConversion&&ImGui::IsMouseHoveringRect(lo,{hi.x+ImGui::CalcTextSize("R").x+6,hi.y})) {
                     ed::Suspend();ImGui::SetTooltip("Reads the Red channel (R) from RGB/RGBA.");ed::Resume();
+                } else if(mixedImage&&ImGui::IsMouseHoveringRect(lo,hi)) {
+                    ed::Suspend();ImGui::SetTooltip("Accepts grayscale or color.");ed::Resume();
                 }
             };
             if(row<inputs.size()) {

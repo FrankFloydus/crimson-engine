@@ -297,6 +297,69 @@ void explicitChannelAuthoringAndResize() {
     require(inspectMaterialGraphConnection(full,source,MaterialPin::RGB,materialOutputNode(full).id,MaterialPin::Roughness).kind==MaterialGraphConnectionKind::Invalid&&
         serializeMaterialGraph(full)==stable,"A full graph offered an impossible visible conversion.");
 }
+void mixedImageInputCapabilities() {
+    auto graph=graphWithOutput();const auto scalar=addMaterialNode(graph,MaterialNodeKind::Scalar).id;
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id;
+    const auto vector=addMaterialNode(graph,MaterialNodeKind::Vector2).id;
+    const auto mapping=addMaterialNode(graph,MaterialNodeKind::UV).id;
+    const auto normal=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,normal)->texture.role=MaterialTextureRole::Normal;
+    for(const auto kind:{MaterialNodeKind::Levels,MaterialNodeKind::Invert,MaterialNodeKind::Blend,
+        MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::Resize,
+        MaterialNodeKind::Desaturation,MaterialNodeKind::Contrast,MaterialNodeKind::ContrastRGB,
+        MaterialNodeKind::HueShift,MaterialNodeKind::Grayscale}) {
+        const auto node=addMaterialNode(graph,kind).id;
+        for(const auto pin:{MaterialPin::Left,MaterialPin::Right}) {
+            const bool expected=pin==MaterialPin::Left||kind==MaterialNodeKind::Blend;
+            require(materialGraphInputMixedImage(*findMaterialNode(graph,node),pin)==expected,
+                "Image capability metadata confused an image input with an adjustment strength.");
+            if(!expected)continue;
+            for(const auto source:std::array{MaterialGraphEndpoint{scalar,MaterialPin::Value,false},
+                MaterialGraphEndpoint{color,MaterialPin::RGB,false},MaterialGraphEndpoint{color,MaterialPin::RGBA,false}}) {
+                require(materialCanConnect(graph,source.node,source.pin,node,pin),
+                    "A mixed image socket does not accept all advertised Scalar/RGB/RGBA families.");
+                connectMaterialNodes(graph,source.node,source.pin,node,pin);
+                const auto type=materialOutputType(graph,source.node,source.pin);
+                require(materialGraphInputMixedImage(*findMaterialNode(graph,node),pin),
+                    "Connecting a source changed an image input's accepted-family metadata.");
+                if(kind==MaterialNodeKind::Grayscale)require(materialOutputType(graph,node,MaterialPin::Value)==MaterialValueType::Scalar,
+                    "A mixed Grayscale input changed its fixed scalar output family.");
+                else if(kind==MaterialNodeKind::Contrast)require(materialOutputType(graph,node,MaterialPin::Value)==MaterialValueType::Scalar&&
+                    materialOutputType(graph,node,MaterialPin::RGB)==MaterialValueType::Color,
+                    "Mixed Contrast input metadata changed its fixed scalar/RGB output families.");
+                else if(materialNodeImageAdjustment(kind))require(materialOutputType(graph,node,MaterialPin::RGB)==MaterialValueType::Color,
+                    "An image adjustment's mixed input changed its RGB output family.");
+                else if(kind==MaterialNodeKind::Blend)require(materialOutputType(graph,node,MaterialPin::Value)==
+                    (pin==MaterialPin::Left?type:MaterialValueType::Color4),
+                    "Mixed Blend input metadata changed its combined resolved output family.");
+                else require(materialOutputType(graph,node,MaterialPin::Value)==type,
+                    "Mixed input metadata replaced an image node's resolved output family.");
+            }
+            for(const auto source:std::array{MaterialGraphEndpoint{vector,MaterialPin::XY,false},
+                MaterialGraphEndpoint{mapping,MaterialPin::UV,false},MaterialGraphEndpoint{normal,MaterialPin::Normal,false}})
+                require(!materialCanConnect(graph,source.node,source.pin,node,pin),
+                    "Mixed image capability advertised non-image numeric or surface families.");
+        }
+        require(!materialGraphInputMixedImage(*findMaterialNode(graph,node),MaterialPin::Alpha),
+            "An image mask was mislabeled as accepting mixed image families.");
+    }
+    for(const auto kind:{MaterialNodeKind::Output,MaterialNodeKind::ToColor,MaterialNodeKind::HeightToNormal,
+        MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaMerge,MaterialNodeKind::AlphaSplit,
+        MaterialNodeKind::Texture2D,MaterialNodeKind::UV,MaterialNodeKind::Panner,MaterialNodeKind::Multiply,
+        MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Power,MaterialNodeKind::Clamp}) {
+        MaterialNode node;node.kind=kind;
+        for(const auto pin:{MaterialPin::Left,MaterialPin::Right,MaterialPin::Alpha,MaterialPin::Height,
+            MaterialPin::BaseColor,MaterialPin::Roughness,MaterialPin::Normal,MaterialPin::UV,MaterialPin::R,
+            MaterialPin::G,MaterialPin::B,MaterialPin::A,MaterialPin::ScaleXY,MaterialPin::OffsetXY,
+            MaterialPin::Time,MaterialPin::Speed})
+            require(!materialGraphInputMixedImage(node,pin),
+                "Fixed semantic or Vector2-capable numeric sockets were mislabeled as mixed images.");
+    }
+    const auto stable=serializeMaterialGraph(graph);
+    for(const auto& node:graph.nodes)for(const auto pin:{MaterialPin::Left,MaterialPin::Right,MaterialPin::Alpha})
+        (void)materialGraphInputMixedImage(node,pin);
+    require(serializeMaterialGraph(graph)==stable,"Accepted-family presentation changed authored graph data.");
+}
 void animatedNodeHistory() {
     Project project;MaterialDocument document(project.root);require(document.create("Animated node history"),"Could not create animation document.");
     const auto before=serializeMaterialAsset(document.definition());std::vector<MaterialNodeId> nodes;
@@ -419,6 +482,6 @@ void requestedImageAndChannelActions() {
 
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();explicitChannelAuthoringAndResize();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();explicitChannelAuthoringAndResize();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

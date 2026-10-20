@@ -113,6 +113,11 @@ MaterialNodeId createConnected(MaterialGraph& graph,MaterialGraphEndpoint endpoi
 }
 
 std::span<const MaterialNodeKind> materialGraphNodeKinds() {return addableNodeKinds;}
+bool materialGraphInputMixedImage(const MaterialNode& node,MaterialPin pin) {
+    if(node.kind==MaterialNodeKind::Blend)return pin==MaterialPin::Left||pin==MaterialPin::Right;
+    if(pin!=MaterialPin::Left)return false;
+    return polymorphicImage(node.kind)||materialNodeImageAdjustment(node.kind)||node.kind==MaterialNodeKind::Grayscale;
+}
 MaterialGraphConnection inspectMaterialGraphConnection(const MaterialGraph& graph,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
     try {return {prepareAuthoringConnection(graph,from,fromPin,to,toPin).kind,{}};}
     catch(const std::exception& error){return {MaterialGraphConnectionKind::Invalid,error.what()};}

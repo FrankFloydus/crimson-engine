@@ -27,6 +27,9 @@ MaterialGraphConnection inspectMaterialGraphConnection(const MaterialGraph&,Mate
 MaterialLinkId connectMaterialGraphAuthoring(MaterialGraph&,MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin);
 // Shared authoring catalog for search and pin-drag creation. Output is unique.
 std::span<const MaterialNodeKind> materialGraphNodeKinds();
+// Accepted image families, independent of the input's currently resolved type.
+// Fixed semantic sockets with implicit channel conversions are not mixed images.
+bool materialGraphInputMixedImage(const MaterialNode&,MaterialPin);
 
 struct MaterialGraphNodeChoice {
     MaterialNodeKind kind{};
