@@ -32,7 +32,7 @@ namespace {
 using namespace crimson;
 namespace fs=std::filesystem;
 using Clock=std::chrono::steady_clock;
-constexpr std::uint16_t ReadView=254;
+constexpr std::uint16_t ReadView=DiagnosticReadbackView;
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Temporary {
     fs::path path=fs::temp_directory_path()/("crimson-ssgi-"+std::to_string(Clock::now().time_since_epoch().count()));

@@ -30,7 +30,7 @@
 
 namespace {
 using namespace crimson;
-constexpr std::uint16_t Size=128,ReadView=254;
+constexpr std::uint16_t Size=128,ReadView=DiagnosticReadbackView;
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};

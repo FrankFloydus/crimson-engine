@@ -220,8 +220,9 @@ private:
 
 // Keep readbacks after the renderer's offscreen passes and the small number of
 // native platform windows opened by this fixture. Numeric view order is used.
-constexpr bgfx::ViewId MainReadbackView=252,ParticleReadbackView=253,MaterialReadbackView=254;
-static_assert(MainReadbackView>FirstPlatformView);
+constexpr bgfx::ViewId MainReadbackView=DiagnosticReadbackView-2,ParticleReadbackView=DiagnosticReadbackView-1,MaterialReadbackView=DiagnosticReadbackView;
+static_assert(ToolsView<MainReadbackView && MainReadbackView<ParticleReadbackView &&
+    ParticleReadbackView<MaterialReadbackView && MaterialReadbackView<FirstPlatformView);
 
 template<class Tick>
 DecodedImage readTarget(bgfx::TextureHandle source,std::uint16_t width,std::uint16_t height,bgfx::ViewId view,

@@ -272,7 +272,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
                 require(bgfx::isValid(staging),"Cannot allocate room image readback.");
                 auto destination=std::make_shared<std::vector<std::uint8_t>>(Width*Height*4);
                 captureDestinations.push_back(destination);auto& pixels=*destination;
-                bgfx::blit(254,staging,0,0,target,0,0,Width,Height);
+                bgfx::blit(DiagnosticReadbackView,staging,0,0,target,0,0,Width,Height);
                 const auto readyFrame=bgfx::readTexture(staging,pixels.data());
                 require(readyFrame!=UINT32_MAX,"Room image readback is unsupported.");
                 // On timeout, drain outstanding writes before pixels is freed.

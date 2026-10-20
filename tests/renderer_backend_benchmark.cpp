@@ -36,7 +36,7 @@ using namespace crimson;
 namespace fs=std::filesystem;
 using Json=nlohmann::json;
 using Clock=std::chrono::steady_clock;
-constexpr std::uint16_t ReadView=254;
+constexpr std::uint16_t ReadView=DiagnosticReadbackView;
 constexpr float Pi=3.14159265358979323846f;
 void check(bool value,const std::string& text) { if(!value)throw std::runtime_error(text); }
 double ms(Clock::time_point a,Clock::time_point b=Clock::now()) { return std::chrono::duration<double,std::milli>(b-a).count(); }

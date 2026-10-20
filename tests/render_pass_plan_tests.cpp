@@ -13,10 +13,18 @@ using Kind=RenderPassKind;
 using Resource=RenderResource;
 using Access=RenderResourceAccess;
 using Error=RenderPassPlanError;
+using Load=RenderAttachmentLoad;
+using Store=RenderAttachmentStore;
+constexpr std::size_t index(Resource resource) { return static_cast<std::size_t>(resource); }
 void check(bool condition,const char* message) { if(!condition)throw std::runtime_error(message); }
 RenderPass& pass(RenderPassPlan& plan,Kind kind) {
     for(std::size_t i=0;i<plan.count;++i)if(plan.entries[i].kind==kind)return plan.entries[i];
     throw std::runtime_error("Test requested a missing pass.");
+}
+RenderResourceUse& use(RenderPassPlan& plan,Kind kind,Resource resource) {
+    auto& entry=pass(plan,kind);
+    for(auto& value:entry.resources)if(value.resource==resource)return value;
+    throw std::runtime_error("Test requested a missing resource use.");
 }
 void erase(RenderPassPlan& plan,Kind kind) {
     for(std::size_t i=0;i<plan.count;++i)if(plan.entries[i].kind==kind) {
@@ -24,219 +32,194 @@ void erase(RenderPassPlan& plan,Kind kind) {
     }
     throw std::runtime_error("Test tried to erase a missing pass.");
 }
-void error(const RenderPassPlan& plan,Error expected,const char* message) { check(validateRenderPassPlan(plan).error==expected,message); }
+void error(const RenderPassPlan& plan,Error expected,const char* message) {
+    check(validateRenderPassPlan(plan).error==expected,message);
+}
+void error(const RenderPassPlan& plan,const RenderResourceTable& table,Error expected,const char* message) {
+    const auto result=validateRenderPassPlan(plan,table);
+    if(result.error!=expected) {
+        std::cerr<<message<<" Actual error: "<<renderPassPlanErrorText(result.error)<<" resource "<<unsigned(result.resource)<<" pass "<<unsigned(result.passIndex)<<'\n';
+        throw std::runtime_error(message);
+    }
+}
+RenderPassPlanConfig fullConfig(RenderViewPurpose purpose=RenderViewPurpose::Scene) {
+    RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
+    config.glow=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=purpose==RenderViewPurpose::Scene;
+    config.worldShadows=true;config.collisionOverlays=true;config.ssgi=true;config.ssao=true;return config;
+}
+RenderTextureView texture(std::uint32_t id,std::uint32_t width=64,std::uint32_t height=64,std::uint16_t format=1) {
+    RenderTextureView result;result.physicalId=id;result.generation=7;result.format=format;result.width=width;result.height=height;return result;
+}
+RenderResourceTable concrete(const RenderPassPlan& plan) {
+    auto table=makeRenderResourceTable(plan);
+    std::array<bool,RenderPassPlan::ResourceCount> needed{};
+    for(const auto& entry:plan.passes())for(const auto value:entry.uses())needed[index(value.resource)]=true;
+    for(std::size_t i=0;i<needed.size();++i)if(needed[i]) {
+        const auto resource=static_cast<Resource>(i);
+        if(resource==Resource::PreparedScene || resource==Resource::DeformedGeometry ||
+           resource==Resource::EnvironmentLighting || resource==Resource::ShadowAtlas)continue;
+        auto& binding=table.bindings[i];binding.textureCount=1;
+        if(resource==Resource::SsgiSourcesPrevious || resource==Resource::SsgiSourcesCurrent)binding.textureCount=3;
+        if(resource==Resource::SsgiHistoryPrevious || resource==Resource::SsgiHistoryCurrent || resource==Resource::SsgiTraceScratch ||
+           resource==Resource::SsgiFilterA || resource==Resource::SsgiFilterB)binding.textureCount=2;
+        for(unsigned lane=0;lane<binding.textureCount;++lane)binding.textures[lane]=texture(static_cast<std::uint32_t>(i*4+lane+1));
+    }
+    if(plan.config.ssgi) {
+        table.bindings[index(Resource::SsgiSourcesCurrent)].textures=table.bindings[index(Resource::SsgiSourcesPrevious)].textures;
+        table.bindings[index(Resource::SsgiFilterB)].textures=table.bindings[index(Resource::SsgiTraceScratch)].textures;
+    }
+    auto atlas=texture(500,64,64,4);
+    auto& lighting=table.bindings[index(Resource::ClusteredLighting)];lighting.textures[0]=atlas;
+    lighting.textures[0].range.texelCount=1024;
+    if(plan.config.ssgi) {
+        auto& gi=table.bindings[index(Resource::SsgiIrradiance)];gi.textures[0]=atlas;
+        gi.textures[0].range.firstTexel=1024;gi.textures[0].range.texelCount=17;
+    }
+    if(plan.config.ssao) {
+        auto& ao=table.bindings[index(Resource::SsaoVisibility)];ao.textures[0]=atlas;
+        ao.textures[0].range.firstTexel=1041;ao.textures[0].range.texelCount=5;
+    }
+    return table;
+}
 
 void profiles() {
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true}) {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true}) {
+            const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
-            config.worldShadows=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game || purpose==RenderViewPurpose::Thumbnail;
-
+            config.worldShadows=world || purpose==RenderViewPurpose::Thumbnail;
             config.glow=glow && purpose!=RenderViewPurpose::Thumbnail;
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
-            config.collisionOverlays=collisions&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
-            config.ssgi=gi&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
-            const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported view profile has an invalid plan.");
-            check(plan.has(Kind::SceneColor) && plan.has(Kind::ModelDeformation) && plan.has(Kind::LightAssignment) && plan.has(Kind::ToneMap) && plan.has(Kind::Encode),"View lost a mandatory rendering stage.");
-            check(plan.has(Kind::GlowExtract)==config.glow && plan.has(Kind::GlowHorizontal)==config.glow && plan.has(Kind::GlowVertical)==config.glow,"Glow feature did not add exactly the complete chain.");
-            check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::Picking)==config.picking && plan.has(Kind::PickReadback)==config.picking,"Grid or picking did not follow the view profile.");
-            check(plan.has(Kind::ThumbnailReadback)==config.thumbnailReadback,"Thumbnail readback escaped its isolated profile.");
-            check(plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Collision overlays escaped their active view profile.");
-            check(plan.has(Kind::DepthPrepass)==config.ssgi,"GI depth prepass does not match its enabled state.");
+            config.collisionOverlays=collisions && world;config.ssgi=gi && world;config.ssao=ao && world;
+            const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported profile has an invalid structural plan.");
+            check(bool(validateRenderPassPlan(plan,concrete(plan))),"A supported profile has invalid concrete resource bindings.");
+            for(const auto kind:{Kind::ModelDeformation,Kind::LightAssignment,Kind::Background,Kind::Opaque,Kind::Transparent,Kind::ToneMap,Kind::Encode})
+                check(plan.has(kind),"A view lost a mandatory stage.");
+            check(plan.find(Kind::Background)->physicalView<plan.find(Kind::Opaque)->physicalView &&
+                plan.find(Kind::Opaque)->physicalView<plan.find(Kind::Transparent)->physicalView,"Color queues share or reverse physical execution views.");
+            check(plan.has(Kind::DepthPrepass)==(config.ssgi || config.ssao),"Depth prepass does not follow active effects.");
             for(const auto kind:{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish})
-                check(plan.has(kind)==config.ssgi,"GI feature did not add exactly its complete chain.");
-            const auto& display=plan.bindings[static_cast<std::size_t>(Resource::Display)];
-            check(display.owner==RenderResourceOwner::ViewTargets && display.view==config.view && !display.initiallyAvailable,"View output is not produced by its own target owner.");
-            const auto& shadow=plan.bindings[static_cast<std::size_t>(Resource::ShadowAtlas)];
-            check(shadow.initiallyAvailable,"Persistent cached shadows require a false transient producer.");
-            check(shadow.owner==(purpose==RenderViewPurpose::Thumbnail?RenderResourceOwner::ThumbnailWorldShadows:RenderResourceOwner::ActiveWorldShadows),"Thumbnail shadows share the active world's owner.");
-            for(std::size_t i=1;i<plan.count;++i)check(plan.entries[i-1].physicalView<=plan.entries[i].physicalView,"View plan does not follow GPU execution order.");
+                check(plan.has(kind)==config.ssgi,"GI does not contain exactly the complete enabled chain.");
+            check(plan.has(Kind::SsaoEvaluate)==config.ssao && plan.has(Kind::SsaoPublish)==config.ssao,"AO does not contain exactly its enabled chain.");
+            check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Overlay work escaped its profile.");
+            check(plan.has(Kind::Picking)==config.picking && plan.has(Kind::PickReadback)==config.picking && plan.has(Kind::ThumbnailReadback)==config.thumbnailReadback,"Readbacks escaped their profile.");
+            check(plan.bindings[index(Resource::ShadowAtlas)].owner==(purpose==RenderViewPurpose::Thumbnail?RenderResourceOwner::ThumbnailWorldShadows:RenderResourceOwner::ActiveWorldShadows),"Thumbnail shadows share the active world owner.");
         }
-    }
-    RenderPassPlanConfig scene;scene.view.purpose=RenderViewPurpose::Scene;scene.worldShadows=true;scene.glow=true;scene.grid=true;scene.picking=true;
-    const auto scenePlan=buildRenderPassPlan(scene);
-    check(scenePlan.find(Kind::PointShadowUpdates)->physicalView==1 && scenePlan.find(Kind::PointShadowUpdates)->lastPhysicalView()==96,"Active world point shadow range changed.");
-    check(scenePlan.find(Kind::DirectionalShadowUpdates)->physicalView==97 && scenePlan.find(Kind::DirectionalShadowUpdates)->lastPhysicalView()==100,"Scene directional range changed.");
-    check(scenePlan.find(Kind::SceneColor)->physicalView==108 && scenePlan.find(Kind::GlowExtract)->physicalView==109 && scenePlan.find(Kind::GlowVertical)->physicalView==111,"Scene HDR/Glow order changed.");
-    check(scenePlan.find(Kind::ToneMap)->physicalView==112 && scenePlan.find(Kind::Grid)->physicalView==113 && scenePlan.find(Kind::Encode)->physicalView==114,"Scene display composition order changed.");
-    check(scenePlan.find(Kind::Picking)->physicalView==122 && scenePlan.find(Kind::PickReadback)->physicalView==123,"Picking is no longer after the encoded Scene view.");
-
-    RenderPassPlanConfig game;game.view.purpose=RenderViewPurpose::Game;game.worldShadows=true;game.glow=true;
-    const auto gamePlan=buildRenderPassPlan(game);
-    check(gamePlan.find(Kind::DirectionalShadowUpdates)->physicalView==101 && gamePlan.find(Kind::SceneColor)->physicalView==241,"Game shadow or HDR slots changed.");
-    check(gamePlan.find(Kind::ToneMap)->physicalView==245 && gamePlan.find(Kind::Encode)->physicalView==246,"Game encoding is no longer before editor tools.");
-    RenderPassPlanConfig thumbnail;thumbnail.view={RenderViewPurpose::Thumbnail,24};thumbnail.worldShadows=true;thumbnail.thumbnailReadback=true;
-    const auto thumbPlan=buildRenderPassPlan(thumbnail);
-    check(thumbPlan.find(Kind::PointShadowUpdates)->physicalView==124 && thumbPlan.find(Kind::PointShadowUpdates)->lastPhysicalView()==219,"Thumbnail point shadow range changed.");
-    check(thumbPlan.find(Kind::DirectionalShadowUpdates)->physicalView==220 && thumbPlan.find(Kind::Encode)->physicalView==230 && thumbPlan.find(Kind::ThumbnailReadback)->physicalView==231,"Thumbnail composition/readback range changed.");
-    check(FirstPlatformView==248&&ToolsView==247&&256-FirstPlatformView==8,"Native platform-window headroom changed.");
+    const auto scene=buildRenderPassPlan(fullConfig());
+    check(scene.find(Kind::PointShadowUpdates)->physicalView==1 && scene.find(Kind::PointShadowUpdates)->lastPhysicalView()==96,"Active point-shadow range changed.");
+    check(scene.find(Kind::Background)->physicalView==114 && scene.find(Kind::Opaque)->physicalView==115 && scene.find(Kind::Transparent)->physicalView==128,"Scene split-stage layout changed.");
+    check(scene.find(Kind::GlowExtract)->physicalView==136 && scene.find(Kind::ToneMap)->physicalView==144 && scene.find(Kind::Encode)->physicalView==159,"Scene post order changed.");
+    const auto game=buildRenderPassPlan(fullConfig(RenderViewPurpose::Game));
+    check(game.find(Kind::Background)->physicalView==370 && game.find(Kind::Opaque)->physicalView==371 && game.find(Kind::Transparent)->physicalView==384,"Game split-stage layout changed.");
+    check(game.find(Kind::CollisionOverlays)->physicalView==408 && game.find(Kind::Encode)->physicalView==415,"Game overlays no longer follow tone mapping.");
+    check(RendererViewCapacity==512 && ExternalFrameViewLimit==248 && ToolsView==496 && FirstPlatformView==504 && PlatformTerminalView==511,"Shared view capacity or external/native-window headroom changed.");
 }
-
-
-void dependencyAndAccessFailures() {
-    RenderPassPlanConfig config;config.glow=true;config.grid=true;config.picking=true;config.worldShadows=true;config.prepareEnvironment=true;
-    const auto correct=buildRenderPassPlan(config);
-    auto missingLight=correct;erase(missingLight,Kind::LightAssignment);error(missingLight,Error::MissingProducer,"Scene shading accepted missing cluster assignment.");
-    auto missingScene=correct;erase(missingScene,Kind::SceneColor);error(missingScene,Error::MissingProducer,"Glow accepted missing scene HDR.");
-    auto missingBlur=correct;erase(missingBlur,Kind::GlowHorizontal);error(missingBlur,Error::MissingProducer,"Vertical blur read unproduced horizontal output.");
-    auto missingTone=correct;erase(missingTone,Kind::ToneMap);error(missingTone,Error::MissingProducer,"Grid accepted missing tone-mapped composite.");
-    auto missingPick=correct;erase(missingPick,Kind::Picking);error(missingPick,Error::MissingProducer,"Picking readback accepted unproduced IDs.");
-    auto missingEncode=correct;erase(missingEncode,Kind::Encode);error(missingEncode,Error::MissingPass,"Scene plan accepted a missing final encode.");
-    auto missingDeformation=correct;erase(missingDeformation,Kind::ModelDeformation);error(missingDeformation,Error::MissingProducer,"Shadow/color accepted missing GPU deformation output.");
-    auto missingShadow=correct;erase(missingShadow,Kind::PointShadowUpdates);error(missingShadow,Error::MissingPass,"Shadow update contract disappeared behind persistent initialization.");
-    auto sampledDepth=correct;pass(sampledDepth,Kind::Grid).resources[0].access=Access::Read;error(sampledDepth,Error::InvalidAccess,"Write-only scene depth became a sampled shader input.");
-    auto feedback=correct;pass(feedback,Kind::ToneMap).resources[0].access=Access::ReadWrite;error(feedback,Error::InvalidAccess,"Tone mapping accepted HDR feedback.");
-    auto writeImported=correct;pass(writeImported,Kind::SceneColor).resources[0].access=Access::Write;error(writeImported,Error::InvalidAccess,"Scene rendering may mutate the immutable prepared frame.");
-    auto omittedRead=correct;--pass(omittedRead,Kind::Encode).resourceCount;error(omittedRead,Error::InvalidAccess,"Encode accepted an incomplete resource contract.");
-    auto duplicated=correct;auto& encode=pass(duplicated,Kind::Encode);encode.resources[encode.resourceCount++]=encode.resources[0];error(duplicated,Error::DuplicateResourceUse,"Duplicate access may hide a feedback dependency.");
-    auto invalidResource=correct;pass(invalidResource,Kind::Encode).resources[0].resource=Resource::Count;error(invalidResource,Error::InvalidResource,"Invalid resource index was accepted.");
+void attachmentAndDependencyContracts() {
+    const auto correct=buildRenderPassPlan(fullConfig());
+    auto value=correct;erase(value,Kind::LightAssignment);error(value,Error::MissingProducer,"Opaque shading accepted missing light assignment.");
+    value=correct;erase(value,Kind::Background);error(value,Error::UndefinedLoad,"Opaque attachments loaded without background initialization.");
+    value=correct;erase(value,Kind::GlowHorizontal);error(value,Error::MissingProducer,"Vertical blur read unproduced horizontal data.");
+    value=correct;erase(value,Kind::ToneMap);error(value,Error::UndefinedLoad,"Grid loaded an undefined display-linear composite.");
+    value=correct;erase(value,Kind::Picking);error(value,Error::MissingProducer,"Picking readback accepted unproduced IDs.");
+    value=correct;erase(value,Kind::ModelDeformation);error(value,Error::MissingProducer,"Shadow/color accepted missing deformed geometry.");
+    value=correct;erase(value,Kind::Encode);error(value,Error::MissingPass,"Plan omitted final display encoding.");
+    value=correct;use(value,Kind::Opaque,Resource::SceneHdr).load=Load::Clear;error(value,Error::InvalidLoadStore,"Opaque rendering accepted a second HDR clear.");
+    value=correct;use(value,Kind::Opaque,Resource::SceneDepth).store=Store::Discard;error(value,Error::InvalidLoadStore,"Opaque rendering discarded depth needed by later stages.");
+    value=correct;use(value,Kind::Transparent,Resource::SceneDepth).access=Access::DepthAttachmentWrite;error(value,Error::InvalidAccess,"Transparent rendering may overwrite opaque depth.");
+    value=correct;use(value,Kind::Grid,Resource::SceneDepth).access=Access::SampledRead;error(value,Error::InvalidAccess,"Write-only scene depth became a shader input.");
+    value=correct;use(value,Kind::Opaque,Resource::PreparedScene).access=Access::Write;error(value,Error::InvalidAccess,"Color may mutate its prepared frame.");
+    value=correct;--pass(value,Kind::Encode).resourceCount;error(value,Error::InvalidAccess,"Encode accepted an incomplete contract.");
+    value=correct;auto& encode=pass(value,Kind::Encode);encode.resources[encode.resourceCount++]=encode.resources[0];error(value,Error::DuplicateResourceUse,"Duplicate resource use hid a dependency.");
+    value=correct;pass(value,Kind::Encode).resources[0].resource=Resource::Count;error(value,Error::InvalidResource,"Invalid resource index was accepted.");
+    const auto& transparent=*correct.find(Kind::Transparent);
+    check(std::none_of(transparent.uses().begin(),transparent.uses().end(),[](const auto& item){return item.resource==Resource::SsgiSourcesCurrent;}),"Transparent stages can attach opaque GI donor MRTs.");
 }
-void collisionComposition() {
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool grid:{false,true}) {
-        RenderPassPlanConfig config;config.view.purpose=purpose;config.grid=grid&&purpose==RenderViewPurpose::Scene;config.collisionOverlays=true;
-        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Collision composition has an invalid pass order.");
-        const auto& overlays=*correct.find(Kind::CollisionOverlays);
-        check(overlays.physicalView>=correct.find(Kind::ToneMap)->physicalView && overlays.physicalView<correct.find(Kind::Encode)->physicalView,
-            "Collision overlay escaped display-linear composition.");
-        check(overlays.resources[1]==RenderResourceUse{Resource::SceneDepth,Access::DepthRead},"Collision overlay lost its shared scene-depth test.");
-        auto writesDepth=correct;pass(writesDepth,Kind::CollisionOverlays).resources[1].access=Access::DepthWrite;
-        error(writesDepth,Error::InvalidAccess,"Collision overlay may replace the scene depth buffer.");
-        auto missingTone=correct;erase(missingTone,Kind::ToneMap);error(missingTone,Error::MissingProducer,"Collision overlay accepted unproduced display-linear color.");
+void effectTopology() {
+    const auto correct=buildRenderPassPlan(fullConfig());
+    auto value=correct;erase(value,Kind::DepthPrepass);error(value,Error::MissingProducer,"Effects read missing depth/scope data.");
+    value=correct;erase(value,Kind::SsgiTrace);error(value,Error::MissingProducer,"Temporal reprojection accepted missing trace/metadata.");
+    value=correct;erase(value,Kind::SsgiTemporal);error(value,Error::MissingProducer,"GI filtering accepted missing current history.");
+    value=correct;erase(value,Kind::SsgiFilterHorizontal);error(value,Error::MissingProducer,"Vertical GI filtering accepted missing filter scratch.");
+    value=correct;erase(value,Kind::SsgiPublish);error(value,Error::MissingProducer,"Opaque shading accepted unpublished indirect lighting.");
+    value=correct;erase(value,Kind::SsaoEvaluate);error(value,Error::MissingProducer,"AO publication accepted missing scratch.");
+    value=correct;erase(value,Kind::SsaoPublish);error(value,Error::MissingProducer,"Opaque shading accepted unpublished AO.");
+    const auto& temporal=*correct.find(Kind::SsgiTemporal);
+    check(std::none_of(temporal.uses().begin(),temporal.uses().end(),[](const auto& item){return item.resource==Resource::ReadableSceneDepth || item.resource==Resource::ReceiverScopes || item.resource==Resource::SsgiSourcesPrevious;}),"Temporal pass declares depth/donor inputs it does not bind.");
+    for(const auto kind:{Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical}) {
+        const auto& entry=*correct.find(kind);
+        check(std::any_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::SsgiMetadataCurrent;}),"Bilateral filter omitted current metadata.");
+        check(std::none_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::ReadableSceneDepth || item.resource==Resource::ReceiverScopes;}),"Filter declares unbound raw depth/scope inputs.");
     }
-    for(const auto purpose:{RenderViewPurpose::Thumbnail,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview}) {
-        RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.collisionOverlays=true;
-        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"Collision overlays escaped into asset previews.");
+    for(const auto kind:{Kind::SsgiPublish,Kind::SsaoPublish}) {
+        const auto& entry=*correct.find(kind);
+        check(std::none_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::ClusteredLighting;}),"Publication hides disjoint atlas writes behind whole-atlas ReadWrite.");
     }
 }
-
-void ssgiDependencies() {
-    constexpr std::array chain{Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish};
-    const auto uses=[](const RenderPass& entry,Resource resource,Access access) {
-        return std::find(entry.uses().begin(),entry.uses().end(),RenderResourceUse{resource,access})!=entry.uses().end();
-    };
-    const auto position=[](const RenderPassPlan& plan,Kind kind) {
-        for(std::size_t i=0;i<plan.count;++i)if(plan.entries[i].kind==kind)return i;
-        throw std::runtime_error("GI test requested a missing pass position.");
-    };
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool shadows:{false,true}) {
-        RenderPassPlanConfig config;config.view={purpose,901};config.ssgi=true;
-        config.worldShadows=shadows;config.glow=true;config.prepareEnvironment=true;config.collisionOverlays=true;
-        config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
-        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"A supported GI combination has an invalid plan.");
-        const auto& depth=*correct.find(Kind::DepthPrepass);const auto& trace=*correct.find(Kind::SsgiTrace);const auto& temporal=*correct.find(Kind::SsgiTemporal);
-        const auto& publish=*correct.find(Kind::SsgiPublish);const auto& color=*correct.find(Kind::SceneColor);
-        check(depth.physicalView<trace.physicalView&&publish.physicalView<color.physicalView,"GI escaped the detached-depth/pre-color slots.");
-        for(std::size_t i=0;i<chain.size();++i) {
-            check(correct.find(chain[i])->physicalView==renderViewPassSlots(purpose).lightingEffects,"GI consumed an extra native-window view slot.");
-            if(i)check(position(correct,chain[i])==position(correct,chain[i-1])+1,"Same-view GI compute dispatches are not consecutive.");
-        }
-        check(uses(trace,Resource::ReadableSceneDepth,Access::Read)&&uses(trace,Resource::ReceiverScopes,Access::Read)&&
-            uses(trace,Resource::SsgiSources,Access::Read)&&uses(trace,Resource::SsgiTraceScratch,Access::Write),"GI trace lost current geometry or coherent previous radiance.");
-        check(uses(temporal,Resource::SsgiHistory,Access::ReadWrite)&&uses(temporal,Resource::SsgiTraceScratch,Access::Read)&&
-            uses(temporal,Resource::SsgiTemporalScratch,Access::Write),"GI history update lost its explicit input/output contract.");
-        check(uses(publish,Resource::ClusteredLighting,Access::ReadWrite)&&uses(publish,Resource::SsgiFilterB,Access::Read)&&
-            uses(publish,Resource::SsgiIrradiance,Access::Write)&&uses(color,Resource::SsgiIrradiance,Access::Read)&&
-            uses(color,Resource::SsgiSources,Access::Write),"GI publication/capture lost its packed-atlas or immutable source contract.");
-        for(const auto resource:{Resource::SsgiSources,Resource::SsgiHistory,Resource::SsgiTraceScratch,Resource::SsgiTemporalScratch,Resource::SsgiFilterA,Resource::SsgiFilterB,Resource::SsgiIrradiance}) {
-            const auto& binding=correct.bindings[static_cast<std::size_t>(resource)];
-            check(binding.owner==RenderResourceOwner::ViewTargets&&binding.view==config.view,"GI resources crossed camera or target ownership.");
-            check(binding.initiallyAvailable==(resource==Resource::SsgiSources||resource==Resource::SsgiHistory),"GI treated retained scratch as coherent current-frame data.");
-            auto wrongView=correct;wrongView.bindings[static_cast<std::size_t>(resource)].view.purpose=purpose==RenderViewPurpose::Scene?RenderViewPurpose::Game:RenderViewPurpose::Scene;
-            error(wrongView,Error::InvalidOwner,"Scene and Game GI histories share an owner.");
-            auto wrongInstance=correct;++wrongInstance.bindings[static_cast<std::size_t>(resource)].view.instanceId;
-            error(wrongInstance,Error::InvalidOwner,"Two GI camera instances share a history or scratch binding.");
-            auto falseState=correct;falseState.bindings[static_cast<std::size_t>(resource)].initiallyAvailable=!binding.initiallyAvailable;
-            error(falseState,Error::InvalidExternalState,"GI coherent import/scratch availability was accepted incorrectly.");
-        }
-        for(const auto kind:{Kind::DepthPrepass,Kind::SsgiTrace,Kind::SsgiTemporal,Kind::SsgiFilterHorizontal,Kind::SsgiFilterVertical,Kind::SsgiPublish}) {
-            auto missing=correct;erase(missing,kind);check(!bool(validateRenderPassPlan(missing)),"A missing GI producer was accepted.");
-        }
-        for(std::size_t i=1;i<chain.size();++i) {
-            auto reversed=correct;std::swap(pass(reversed,chain[i-1]),pass(reversed,chain[i]));
-            check(!bool(validateRenderPassPlan(reversed)),"A reversed same-view GI compute dependency was accepted.");
-        }
-        auto attachmentOnly=correct;pass(attachmentOnly,Kind::SsgiTrace).resources[0].access=Access::DepthRead;
-        error(attachmentOnly,Error::InvalidAccess,"GI shader reads were mistaken for an attached depth test.");
-        auto destructivePublish=correct;
-        for(auto& use:pass(destructivePublish,Kind::SsgiPublish).resources)if(use.resource==Resource::ClusteredLighting)use.access=Access::Write;
-        error(destructivePublish,Error::InvalidAccess,"GI publication may discard unrelated light/BRDF/ambient atlas contents.");
-        auto currentSourceFeedback=correct;
-        for(auto& use:pass(currentSourceFeedback,Kind::SsgiTrace).resources)if(use.resource==Resource::SsgiSources)use.access=Access::ReadWrite;
-        error(currentSourceFeedback,Error::InvalidAccess,"GI tracing may overwrite its previous-frame source input.");
-        auto disabledConfig=config;disabledConfig.ssgi=false;const auto disabled=buildRenderPassPlan(disabledConfig);
-        check(bool(validateRenderPassPlan(disabled)),"Disabling GI left an invalid baseline plan.");
-        check(correct.count-disabled.count==6,"Disabled GI retained dispatches or an unnecessary depth prepass.");
-        check(!disabled.has(Kind::DepthPrepass),"GI retained its readable prepass after disabling.");
-        for(const auto kind:chain)check(!disabled.has(kind),"Disabled GI retained a compute dispatch.");
-        for(const auto& entry:disabled.passes())for(const auto use:entry.uses())
-            check(use.resource<Resource::SsgiSources,"Disabled GI retained a source/history/scratch/irradiance dependency.");
+void concreteHazards() {
+    const auto plan=buildRenderPassPlan(fullConfig());const auto correct=concrete(plan);
+    auto table=correct;table.bindings[index(Resource::SceneHdr)].view.instanceId++;error(plan,table,Error::InvalidOwner,"A view accepted another view's HDR allocation.");
+    table=correct;table.bindings[index(Resource::SsgiHistoryPrevious)].owner=RenderResourceOwner::Environment;error(plan,table,Error::InvalidOwner,"History escaped its camera target owner.");
+    table=correct;table.bindings[index(Resource::SceneHdr)].initialized=true;error(plan,table,Error::InvalidExternalState,"A current HDR target pretended to be coherent imported content.");
+    table=correct;table.bindings[index(Resource::Composite)].textureCount=0;error(plan,table,Error::MissingBinding,"A recording accepted an absent composite allocation.");
+    table=correct;table.bindings[index(Resource::PickReadback)].textureCount=0;error(plan,table,Error::MissingBinding,"Picking accepted an absent staging texture destination.");
+    table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textureCount=1;error(plan,table,Error::InvalidTexture,"Capture MRT bundle omitted two actual physical lanes.");
+    table=correct;table.bindings[index(Resource::SceneDepth)].textures[0].range.firstMip=1;error(plan,table,Error::InvalidTexture,"A subresource escaped its allocation mip range.");
+    table=correct;table.bindings[index(Resource::SceneHdr)].readEnabled=false;error(plan,table,Error::DisabledRead,"An ordinary texture bypassed its read dependency.");
+    table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textures[0].format++;error(plan,table,Error::IncompatibleAlias,"One physical capture allocation accepted incompatible descriptors.");
+    table=correct;table.bindings[index(Resource::SsgiSourcesCurrent)].textures[0].generation++;error(plan,table,Error::StaleVersion,"A generation tag hid the same live physical handle in two logical bindings.");
+    table=correct;table.bindings[index(Resource::Composite)].textures=table.bindings[index(Resource::SceneHdr)].textures;error(plan,table,Error::FeedbackLoop,"Tone mapping sampled its own attached output.");
+    table=correct;table.bindings[index(Resource::PickColor)].textures=table.bindings[index(Resource::GlowA)].textures;error(plan,table,Error::IncompatibleAlias,"Unrelated picking and Glow allocations aliased silently.");
+    table=correct;table.bindings[index(Resource::SsaoVisibility)].textures[0].range.firstTexel=1040;error(plan,table,Error::IncompatibleAlias,"GI and AO shared an overlapping packed atlas texel.");
+    table=correct;table.bindings[index(Resource::SsgiHistoryCurrent)].textures=table.bindings[index(Resource::SsgiHistoryPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote the same history allocation.");
+    table=correct;table.bindings[index(Resource::SsgiMetadataCurrent)].textures=table.bindings[index(Resource::SsgiMetadataPrevious)].textures;error(plan,table,Error::StaleVersion,"Temporal compute read previous metadata after trace overwrote its physical storage.");
+    table=correct;table.bindings[index(Resource::SsgiSourcesPrevious)].initialized=false;error(plan,table,Error::MissingProducer,"An enabled source read accepted uninitialized first-frame capture.");
+    table=correct;
+    for(const auto resource:{Resource::SsgiSourcesPrevious,Resource::SsgiHistoryPrevious,Resource::SsgiMetadataPrevious}) {
+        table.bindings[index(resource)].initialized=false;table.bindings[index(resource)].readEnabled=false;
     }
+    check(bool(validateRenderPassPlan(plan,table)),"Actual first-frame shader guards did not permit undefined previous inputs.");
+    // Subresource overlap is evaluated by mip/layer/aspect and linear interval,
+    // not a whole-allocation boolean or row-rounded atlas rectangle.
+    table=correct;
+    auto metadata=texture(900,64,64,5);metadata.mipLevels=2;metadata.layers=2;
+    table.bindings[index(Resource::SsgiMetadataCurrent)].textures[0]=metadata;
+    metadata.range.firstMip=1;metadata.range.firstLayer=1;
+    table.bindings[index(Resource::SsgiMetadataPrevious)].textures[0]=metadata;
+    check(bool(validateRenderPassPlan(plan,table)),"Disjoint metadata mip/layer views were treated as whole-texture feedback.");
+    table=correct;table.bindings[index(Resource::Display)].textureCount=0;
+    check(bool(validateRenderPassBindings(plan,table,Kind::SsgiTrace)),"Before-dispatch validation required an unallocated later display output.");
+    check(validateRenderPassBindings(plan,table,Kind::Encode).error==Error::MissingBinding,"Final recording boundary accepted an absent display output.");
+}
+void ownershipAndOrderFailures() {
+    const auto correct=buildRenderPassPlan(fullConfig());
+    auto value=correct;value.bindings[index(Resource::SceneHdr)].view.instanceId++;error(value,Error::InvalidOwner,"Logical HDR belongs to another view.");
+    value=correct;value.bindings[index(Resource::ShadowAtlas)].owner=RenderResourceOwner::ThumbnailWorldShadows;error(value,Error::InvalidOwner,"Active view uses thumbnail shadow ownership.");
+    value=correct;value.bindings[index(Resource::SceneHdr)].initiallyAvailable=true;error(value,Error::InvalidExternalState,"Current HDR was marked imported.");
+    value=correct;value.bindings[index(Resource::EnvironmentLighting)].initiallyAvailable=false;error(value,Error::InvalidExternalState,"Environment lost its explicit persistent import.");
+    value=correct;std::swap(pass(value,Kind::EnvironmentPreparation),pass(value,Kind::LightAssignment));error(value,Error::PhysicalOrder,"Same-view preparation order was reversed.");
+    value=correct;pass(value,Kind::Encode).physicalView=ToolsView;error(value,Error::InvalidPhysicalView,"Encode escaped its reserved view band.");
+    value=correct;pass(value,Kind::PointShadowUpdates).viewCount=97;error(value,Error::InvalidPhysicalView,"Point shadow work exceeded its reserved face range.");
+    value=correct;pass(value,Kind::Opaque).execution=RenderPassExecution::Compute;error(value,Error::InvalidExecution,"Raster color work claimed to be compute.");
+    value=correct;
+    const auto delayed=pass(value,Kind::EnvironmentPreparation);erase(value,Kind::EnvironmentPreparation);
+    std::size_t position=0;while(value.entries[position].kind!=Kind::Opaque)++position;
+    std::move_backward(value.entries.begin()+position+1,value.entries.begin()+value.count,value.entries.begin()+value.count+1);
+    value.entries[position+1]=delayed;value.entries[position+1].physicalView=value.entries[position].physicalView;++value.count;
+    error(value,Error::PhysicalOrder,"Compute submitted after raster in one view was accepted despite bgfx compute-first execution.");
+    value=correct;value.entries[value.count++]=*correct.find(Kind::Encode);error(value,Error::DuplicatePass,"A stage was recorded twice in its plan.");
+    value=correct;value.count=static_cast<std::uint8_t>(value.entries.size()+1);error(value,Error::CapacityExceeded,"Corrupt pass count exceeded bounded storage.");
     for(const auto purpose:{RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
         RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.ssgi=true;
-        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"GI escaped into an independent preview or a single-frame thumbnail.");
+        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"GI escaped into an unsupported preview profile.");
+        unsupported.ssgi=false;unsupported.ssao=true;error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"AO escaped into an unsupported preview profile.");
     }
-}
-
-void ssaoDependencies() {
-    constexpr std::array chain{Kind::SsaoEvaluate,Kind::SsaoPublish};
-    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool ssgi:{false,true}) {
-        RenderPassPlanConfig config;config.view={purpose,912};config.ssao=true;config.ssgi=ssgi;
-        config.worldShadows=true;config.glow=true;config.prepareEnvironment=true;
-        config.collisionOverlays=true;config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
-        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"SSAO has an invalid combined pass chain.");
-        for(const auto kind:chain) {
-            check(correct.find(kind)->physicalView==renderViewPassSlots(purpose).lightingEffects,"SSAO consumed extra native-window views.");
-            auto missing=correct;erase(missing,kind);check(!bool(validateRenderPassPlan(missing)),"An SSAO producer is optional while its consumer remains.");
-        }
-        auto reversed=correct;std::swap(pass(reversed,chain[0]),pass(reversed,chain[1]));
-        check(!bool(validateRenderPassPlan(reversed)),"SSAO same-view dispatch dependencies may reverse.");
-        check(correct.has(Kind::DepthPrepass),"SSAO lost readable receiver depth.");
-        auto disabled=config;disabled.ssao=false;const auto baseline=buildRenderPassPlan(disabled);
-        check(bool(validateRenderPassPlan(baseline))&&correct.count-baseline.count==(ssgi?2:3),"Disabled SSAO retained compute or depth work.");
-    }
-    for(const auto purpose:{RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
-        RenderPassPlanConfig config;config.view.purpose=purpose;config.ssao=true;
-        error(buildRenderPassPlan(config),Error::UnsupportedFeature,"SSAO escaped into an isolated preview.");
-    }
-}
-
-void ownershipAndOrderFailures() {
-    RenderPassPlanConfig config;config.view={RenderViewPurpose::Scene,4};config.worldShadows=true;config.prepareEnvironment=true;
-    const auto correct=buildRenderPassPlan(config);
-    auto wrongView=correct;wrongView.bindings[static_cast<std::size_t>(Resource::Display)].view={RenderViewPurpose::Game,4};error(wrongView,Error::InvalidOwner,"Scene plan may write the Game target owner.");
-    auto wrongInstance=correct;++wrongInstance.bindings[static_cast<std::size_t>(Resource::SceneHdr)].view.instanceId;error(wrongInstance,Error::InvalidOwner,"Two isolated camera instances share a target binding.");
-    auto wrongOwner=correct;wrongOwner.bindings[static_cast<std::size_t>(Resource::ShadowAtlas)].owner=RenderResourceOwner::ThumbnailWorldShadows;error(wrongOwner,Error::InvalidOwner,"Active and thumbnail worlds share shadow storage.");
-    auto falseProducer=correct;falseProducer.bindings[static_cast<std::size_t>(Resource::SceneHdr)].initiallyAvailable=true;error(falseProducer,Error::InvalidExternalState,"Allocated HDR memory was mistaken for valid current-frame content.");
-    auto lostPersistent=correct;lostPersistent.bindings[static_cast<std::size_t>(Resource::EnvironmentLighting)].initiallyAvailable=false;error(lostPersistent,Error::InvalidExternalState,"External coherent IBL data lost persistent initialization.");
-    auto reversed=correct;std::swap(reversed.entries[0],reversed.entries[1]);error(reversed,Error::PhysicalOrder,"Environment and light compute dependency may reverse inside view zero.");
-    auto numericOrder=correct;std::swap(numericOrder.entries[2],numericOrder.entries[3]);error(numericOrder,Error::PhysicalOrder,"Shadow ranges violated numeric execution order.");
-    auto movedEncode=correct;pass(movedEncode,Kind::Encode).physicalView=PickReadView;error(movedEncode,Error::InvalidPhysicalView,"Plan silently remapped the D3D11 backend's view IDs.");
-    auto tooManyViews=correct;pass(tooManyViews,Kind::PointShadowUpdates).viewCount=97;error(tooManyViews,Error::InvalidPhysicalView,"Point shadow range overlaps directional views.");
-    auto duplicate=correct;duplicate.entries[duplicate.count++]=duplicate.entries[0];error(duplicate,Error::DuplicatePass,"A duplicated environment pass was accepted.");
-    auto oversized=correct;oversized.count=static_cast<std::uint8_t>(RenderPassPlan::MaximumPasses+1);error(oversized,Error::CapacityExceeded,"Corrupt pass count escaped validation.");
-
-    for(const auto purpose:{RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::Thumbnail}) {
-        RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.grid=true;
-        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"A view gained an unsolicited grid path.");
-    }
-    RenderPassPlanConfig thumb;thumb.view.purpose=RenderViewPurpose::Thumbnail;thumb.glow=true;
-    error(buildRenderPassPlan(thumb),Error::UnsupportedFeature,"Thumbnails gained post-processing-dependent cache content.");
-    RenderPassPlanConfig preview;preview.view.purpose=RenderViewPurpose::ParticlePreview;preview.worldShadows=true;
-    error(buildRenderPassPlan(preview),Error::UnsupportedFeature,"Preview acquired the active world's shadows.");
-    preview.worldShadows=false;preview.picking=true;error(buildRenderPassPlan(preview),Error::UnsupportedFeature,"Picking escaped the Scene view.");
-    RenderPassPlanConfig invalid;invalid.view.purpose=static_cast<RenderViewPurpose>(255);
-    error(buildRenderPassPlan(invalid),Error::InvalidViewPurpose,"Unknown camera purpose was accepted.");
-    RenderPassPlanConfig overfull;overfull.prepareEnvironment=overfull.glow=overfull.grid=overfull.picking=
-        overfull.thumbnailReadback=overfull.worldShadows=overfull.ssao=true;
-    error(buildRenderPassPlan(overfull),Error::UnsupportedFeature,"Unsupported over-capacity profile escaped safe construction.");
+    auto invalid=fullConfig();invalid.view.purpose=static_cast<RenderViewPurpose>(255);error(buildRenderPassPlan(invalid),Error::InvalidViewPurpose,"Unknown view purpose was accepted.");
 }
 }
-
 int main() {
-    try {
-        static_assert(std::is_trivially_copyable_v<RenderPassPlan>,"Pass plans must remain fixed-size CPU values.");
-        profiles();dependencyAndAccessFailures();collisionComposition();ssgiDependencies();ssaoDependencies();ownershipAndOrderFailures();
-        std::cout<<"Renderer pass-plan checks passed.\n";return 0;
-    } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
+    static_assert(std::is_trivially_copyable_v<RenderPassPlan> && std::is_trivially_copyable_v<RenderResourceTable>);
+    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();ownershipAndOrderFailures(); }
+    catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
+    std::cout<<"Render pass/resource contracts passed.\n";return 0;
 }

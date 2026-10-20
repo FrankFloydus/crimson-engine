@@ -72,7 +72,7 @@ void exercise(SDL_Window* window,const fs::path& artifacts){
     const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle target){Texture staging{bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.value),"SSAO readback allocation failed.");DecodedImage image{width,height,std::vector<std::uint8_t>(std::size_t(width)*height*4)};
-        bgfx::blit(254,staging.value,0,0,target,0,0,width,height);const auto ready=bgfx::readTexture(staging.value,image.rgba.data());check(ready!=UINT32_MAX,"SSAO readback unsupported.");
+        bgfx::blit(DiagnosticReadbackView,staging.value,0,0,target,0,0,width,height);const auto ready=bgfx::readTexture(staging.value,image.rgba.data());check(ready!=UINT32_MAX,"SSAO readback unsupported.");
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return image;}renderer.drainPending(frame);throw std::runtime_error("SSAO readback timed out.");};
     const auto model=quad();check(renderer.prepareModel(*model),renderer.modelStatus());auto materials=model->materials;std::vector<ModelMaterialTextures> textures(1);
     RenderModelInstance floor;floor.entityId=1;floor.model={model,math::rotation(math::axisAngle({1,0,0},-1.57079632679f))*math::scaling({3,3,1})};floor.materials=&materials;floor.textures=&textures;floor.forceFullDetail=true;

@@ -1,11 +1,13 @@
 #include "crimson-renderer/Renderer.h"
 #include "GpuTestBackend.h"
 #include "crimson-renderer/RenderFrame.h"
+#include "crimson-renderer/RenderPassPlan.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
+#include "resources/ShaderCompiler.h"
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
 #include <d3d11.h>
@@ -13,6 +15,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -26,7 +29,7 @@ namespace {
 using namespace crimson;
 using Clock=std::chrono::steady_clock;
 namespace fs=std::filesystem;
-constexpr std::uint16_t ReadView=254;
+constexpr std::uint16_t ReadView=DiagnosticReadbackView;
 void check(bool value,const std::string& text){if(!value)throw std::runtime_error(text);}
 struct Temporary {
     fs::path path=fs::temp_directory_path()/("crimson-forward-plus-"+std::to_string(Clock::now().time_since_epoch().count()));
@@ -69,6 +72,91 @@ double energy(const DecodedImage& image){double result{};for(std::size_t i=0;i<i
 double centerBrightness(const DecodedImage& image){double result{};for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x)for(unsigned c=0;c<3;++c)
     result+=image.rgba[(std::size_t(int(image.height/2)+y)*image.width+std::size_t(int(image.width/2)+x))*4+c];return result/27;}
 
+template<class Read>
+void verifyPassScheduling(Renderer& renderer,const ShaderCompileConfig& config,const RenderScene& scene,Read&& read) {
+    struct Program {bgfx::ProgramHandle handle{BGFX_INVALID_HANDLE};~Program(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+    struct Uniform {bgfx::UniformHandle handle{BGFX_INVALID_HANDLE};~Uniform(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+    struct Target {bgfx::FrameBufferHandle handle{BGFX_INVALID_HANDLE};~Target(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};
+    const auto compile=[&](const char* name,ShaderStage stage,const char* source) {
+        ShaderCompileRecipe recipe;recipe.name=name;recipe.stage=stage;recipe.source=source;
+        recipe.varyingDefinition=config.sourceDirectory/"varying.def.sc";
+        recipe.includeDirectories={config.sourceDirectory};recipe.contract="pass-scheduling-identity512-v1";
+        return compileShader(config,recipe);
+    };
+    const auto vertex=compile("vs_pass_schedule",ShaderStage::Vertex,
+        "$input a_position\n#include <bgfx_shader.sh>\nvoid main(){gl_Position=vec4(a_position,1.0);}\n");
+    const auto producerFragment=compile("fs_pass_schedule_producer",ShaderStage::Fragment,
+        "#include <bgfx_shader.sh>\nuniform vec4 u_passScheduleSeed;\nvoid main(){gl_FragColor=u_passScheduleSeed;}\n");
+    const auto consumerFragment=compile("fs_pass_schedule_consumer",ShaderStage::Fragment,
+        "#include <bgfx_shader.sh>\nSAMPLER2D(s_passScheduleInput,0);\n"
+        "void main(){vec3 value=texelFetch(s_passScheduleInput,ivec2(gl_FragCoord.xy),0).rgb;"
+        "gl_FragColor=vec4(value.r,1.0-value.g,value.b,1.0);}\n");
+    const auto compute=compile("cs_pass_schedule",ShaderStage::Compute,
+        "#include <bgfx_compute.sh>\nSAMPLER2D(s_passScheduleInput,0);\nIMAGE2D_WO(s_passScheduleOutput,rgba8,1);\n"
+        "NUM_THREADS(8,8,1)\nvoid main(){ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);"
+        "if(any(greaterThanEqual(pixel,ivec2(2,2))))return;"
+        "vec4 value=texelFetch(s_passScheduleInput,pixel,0);imageStore(s_passScheduleOutput,pixel,vec4(value.brg,1.0));}\n");
+    const auto shader=[](const ShaderBinary& binary) {
+        const auto handle=bgfx::createShader(bgfx::copy(binary.bytes.data(),static_cast<std::uint32_t>(binary.bytes.size())));
+        check(bgfx::isValid(handle),"Scheduling fixture shader publication failed.");return handle;
+    };
+    Program producer{bgfx::createProgram(shader(vertex),shader(producerFragment),true)};
+    Program consumer{bgfx::createProgram(shader(vertex),shader(consumerFragment),true)};
+    Program transform{bgfx::createProgram(shader(compute),true)};
+    check(bgfx::isValid(producer.handle)&&bgfx::isValid(consumer.handle)&&bgfx::isValid(transform.handle),"Scheduling fixture program publication failed.");
+    Uniform seed{bgfx::createUniform("u_passScheduleSeed",bgfx::UniformType::Vec4)};
+    Uniform input{bgfx::createUniform("s_passScheduleInput",bgfx::UniformType::Sampler)};
+    check(bgfx::isValid(seed.handle)&&bgfx::isValid(input.handle),"Scheduling fixture uniform allocation failed.");
+    constexpr auto sampling=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|
+        BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+    Texture rasterSource{bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT|sampling)};
+    Texture computeOutput{bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_COMPUTE_WRITE|sampling)};
+    Texture rasterOutput{bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT|sampling)};
+    check(bgfx::isValid(rasterSource.handle)&&bgfx::isValid(computeOutput.handle)&&bgfx::isValid(rasterOutput.handle),"Scheduling fixture texture allocation failed.");
+    Target first{bgfx::createFrameBuffer(1,&rasterSource.handle,false)},last{bgfx::createFrameBuffer(1,&rasterOutput.handle,false)};
+    check(bgfx::isValid(first.handle)&&bgfx::isValid(last.handle),"Scheduling fixture framebuffer allocation failed.");
+    bgfx::VertexLayout layout;layout.begin().add(bgfx::Attrib::Position,3,bgfx::AttribType::Float).end();
+    constexpr std::array<Vec3,3> corners{{{-1,-1,0},{3,-1,0},{-1,3,0}}};
+    const auto raster=[&](bgfx::ViewId view,bgfx::FrameBufferHandle target,bgfx::ProgramHandle program) {
+        bgfx::setViewMode(view,bgfx::ViewMode::Sequential);bgfx::setViewFrameBuffer(view,target);
+        bgfx::setViewRect(view,0,0,2,2);bgfx::setViewClear(view,BGFX_CLEAR_COLOR,0xff00ffffu);
+        bgfx::setViewTransform(view,nullptr,nullptr);
+        bgfx::TransientVertexBuffer vertices;
+        check(bgfx::getAvailTransientVertexBuffer(3,layout)==3,"Scheduling fixture transient geometry is unavailable.");
+        bgfx::allocTransientVertexBuffer(&vertices,3,layout);std::memcpy(vertices.data,corners.data(),sizeof corners);
+        bgfx::setVertexBuffer(0,&vertices);bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);bgfx::submit(view,program);
+    };
+    check(bgfx::getCaps()->limits.maxViews==RendererViewCapacity,"Scheduling fixture received the wrong compiled view capacity.");
+    constexpr std::array<std::array<std::uint8_t,3>,2> seeds{{{17,93,201},{231,52,86}}};
+    for(const bool game:{false,true}) {
+        const auto base=game?GameSceneView:SceneView,transparent=game?GameTransparentView:SceneTransparentView;
+        const auto firstView=static_cast<bgfx::ViewId>(base+1),computeView=static_cast<bgfx::ViewId>(base+2),lastView=static_cast<bgfx::ViewId>(base+3);
+        check(base<firstView&&firstView<computeView&&computeView<lastView&&lastView<transparent,
+            "Raster/compute/raster insertion range overlaps an implemented view.");
+        if(game)check(firstView>255,"The Game scheduling witness no longer exercises the high view bits.");
+        for(const auto& color:seeds) {
+            // Ordinary Scene and Game work coexist with the inserted dependent
+            // stages. The second seed must replace the first in this same frame.
+            renderer.render(scene);renderer.renderGame(scene);
+            const Vec4 value{color[0]/255.f,color[1]/255.f,color[2]/255.f,1};
+            bgfx::setUniform(seed.handle,value.data());raster(firstView,first.handle,producer.handle);
+            bgfx::setViewMode(computeView,bgfx::ViewMode::Sequential);bgfx::setViewFrameBuffer(computeView,BGFX_INVALID_HANDLE);
+            bgfx::setViewRect(computeView,0,0,2,2);bgfx::setViewClear(computeView,BGFX_CLEAR_NONE);
+            bgfx::setTexture(0,input.handle,rasterSource.handle,static_cast<std::uint32_t>(sampling));
+            bgfx::setImage(1,computeOutput.handle,0,bgfx::Access::Write,bgfx::TextureFormat::RGBA8);
+            bgfx::dispatch(computeView,transform.handle,1,1,1);
+            bgfx::setTexture(0,input.handle,computeOutput.handle,static_cast<std::uint32_t>(sampling));raster(lastView,last.handle,consumer.handle);
+            const auto image=read(rasterOutput.handle,2,2);
+            const std::array<int,4> expected{color[2],255-color[0],color[1],255};
+            for(std::size_t pixel=0;pixel<4;++pixel)for(unsigned channel=0;channel<4;++channel)
+                check(std::abs(int(image.rgba[pixel*4+channel])-expected[channel])<=1,
+                    std::string(game?"Game":"Scene")+" raster/compute/raster scheduling lost its current-frame producer at channel "+std::to_string(channel));
+        }
+        for(const auto view:{firstView,computeView,lastView}){bgfx::resetView(view);bgfx::setViewMode(view,bgfx::ViewMode::Sequential);}
+    }
+    std::cout<<"Scene/Game raster -> compute -> raster dependencies and same-frame high-view readback passed.\n";
+}
+
 void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& benchmarkDirectory,bool movingCamera){
     // Readback storage must outlive Renderer, including exceptional shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
@@ -106,6 +194,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     SceneSettings settings;settings.camera.position={0,0,10};settings.camera.target={};settings.camera.fov=55;settings.camera.nearPlane=.1f;settings.camera.farPlane=64;
     settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;settings.environment.background.color={};
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);
+    if(benchmarkDirectory.empty())verifyPassScheduling(renderer,config,scene,read);
     const auto capture=[&](LocalLightMode mode){scene.localLightMode=mode;renderer.renderGame(scene);check(renderer.clusteredLightingStatus().empty(),renderer.clusteredLightingStatus());return read(renderer.gameViewportTexture());};
     const auto compare=[&](const std::string& label){const auto reference=capture(LocalLightMode::AllLightsReference),clustered=capture(LocalLightMode::Clustered);equivalent(clustered,reference,label);return clustered;};
 

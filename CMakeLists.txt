@@ -867,6 +867,8 @@ if(BUILD_TESTING)
     target_link_libraries(forward_plus_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng d3d11)
     add_test(NAME forward_plus_render_core COMMAND forward_plus_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(forward_plus_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
+    add_test(NAME forward_plus_render_dx11_core COMMAND forward_plus_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    set_tests_properties(forward_plus_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11" RUN_SERIAL TRUE TIMEOUT 300)
 
     add_executable(ssgi_tests tests/ssgi_tests.cpp)
     target_link_libraries(ssgi_tests PRIVATE crimson-camera)

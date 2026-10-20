@@ -30,7 +30,7 @@
 
 namespace {
 using namespace crimson;
-constexpr std::uint16_t ImageSize=128,ReadbackView=254;
+constexpr std::uint16_t ImageSize=128,ReadbackView=DiagnosticReadbackView;
 void check(bool condition,const std::string& message) {if (!condition) throw std::runtime_error(message);}
 struct Temp {
     std::filesystem::path path=std::filesystem::temp_directory_path()/

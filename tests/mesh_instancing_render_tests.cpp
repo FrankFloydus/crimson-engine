@@ -66,7 +66,7 @@ void exercise(SDL_Window* window,const std::filesystem::path& output) {
         Texture staging{bgfx::createTexture2D(Width,Height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.value),"Instance readback allocation failed.");
         DecodedImage image{Width,Height,std::vector<std::uint8_t>(std::size_t(Width)*Height*4)};
-        bgfx::blit(254,staging.value,0,0,renderer.viewportTexture(),0,0,Width,Height);
+        bgfx::blit(DiagnosticReadbackView,staging.value,0,0,renderer.viewportTexture(),0,0,Width,Height);
         const auto ready=bgfx::readTexture(staging.value,image.rgba.data());
         check(ready!=UINT32_MAX,"Instance readback is unavailable.");
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return image;}

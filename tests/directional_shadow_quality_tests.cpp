@@ -27,7 +27,7 @@
 namespace {
 using namespace crimson;
 namespace fs=std::filesystem;
-constexpr std::uint16_t Size=256,ReadView=254;
+constexpr std::uint16_t Size=256,ReadView=DiagnosticReadbackView;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Sdl {Sdl(){require(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
 struct Texture {bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}};

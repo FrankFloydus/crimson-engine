@@ -179,7 +179,7 @@ int screenLightingEditorDiagnostic(int argc,char** argv) {
     const auto read=[&](unsigned view,const std::string& name) {
         const auto staging=bgfx::createTexture2D(Width,Height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK);
         require(bgfx::isValid(staging),"Cannot allocate saved-project GI readback.");auto pixels=std::make_shared<std::vector<std::uint8_t>>(Width*Height*4);destinations.push_back(pixels);
-        bgfx::blit(254,staging,0,0,view?renderer.gameViewportTexture():renderer.viewportTexture(),0,0,Width,Height);
+        bgfx::blit(DiagnosticReadbackView,staging,0,0,view?renderer.gameViewportTexture():renderer.viewportTexture(),0,0,Width,Height);
         const auto ready=bgfx::readTexture(staging,pixels->data());require(ready!=UINT32_MAX,"Saved-project GI readback is unsupported.");
         unsigned waited{};while(static_cast<std::int32_t>(frame-ready)<0&&waited++<120)tick(submittedGi,submittedAo);
         if(static_cast<std::int32_t>(frame-ready)<0){renderer.drainPending(frame);bgfx::destroy(staging);throw std::runtime_error("Saved-project GI readback timed out.");}

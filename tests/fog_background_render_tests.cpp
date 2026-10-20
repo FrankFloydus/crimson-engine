@@ -139,7 +139,7 @@ void exercise(SDL_Window* window) {
             BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.value),"Fog background readback allocation failed.");
         DecodedImage image{Width,Height,std::vector<std::uint8_t>(std::size_t(Width)*Height*4)};
-        bgfx::blit(254,staging.value,0,0,target,0,0,Width,Height);
+        bgfx::blit(DiagnosticReadbackView,staging.value,0,0,target,0,0,Width,Height);
         const auto ready=bgfx::readTexture(staging.value,image.rgba.data());
         check(ready!=UINT32_MAX,"Fog background readback is unsupported.");
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return image;}
