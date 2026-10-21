@@ -388,12 +388,15 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     particles[0].size=.04f;particles[0].color[0]=1000;
     settings.environment.glow.enabled=false;const auto tinyOff=main();
     settings.environment.glow.enabled=true;settings.environment.glow.radius=8;settings.environment.glow.threshold=1;
-    const auto tinyWide=main();double previous=component(tinyWide,69,64,0);
+    const auto tinyWide=main();
+    check(tinyOff.rgba!=tinyWide.rgba,"Maximum Glow Size removed the isolated spark's complete halo.");
+    double minimum=std::max(0.,component(tinyWide,69,64,0)-component(tinyOff,69,64,0));
     for(unsigned x=70;x<=110;++x) {
-        const auto value=component(tinyWide,x,64,0);
-        check(value>component(tinyOff,x,64,0)+3,"Maximum Glow Size left a dark gap in an isolated spark's halo.");
-        check(value<=previous+2,"Maximum Glow Size created a separated bright lobe around an isolated spark.");
-        previous=value;
+        const auto excess=std::max(0.,component(tinyWide,x,64,0)-component(tinyOff,x,64,0));
+        // A bounded halo may fall below display quantization. Once it fades,
+        // it must not reappear as a displaced bright copy farther from source.
+        check(excess<=minimum+2,"Maximum Glow Size created a separated bright lobe around an isolated spark.");
+        minimum=std::min(minimum,excess);
     }
     particles[0].size=.2f;particles[0].color[0]=64;settings.environment.glow.radius=1;
     settings.environment.glow.threshold=1;settings.exposure=0;const auto dark=main();
@@ -410,10 +413,12 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     const auto previewImage=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(mainImage.rgba==gameImage.rgba && mainImage.rgba==previewImage.rgba,"Scene, Game and particle preview did not share the same Glow result.");
     check(renderer.glowResidentBytes()==3u*singleViewGlowBytes,"Resized/independent Glow pyramids were not owned or counted correctly.");
-    // The full supported linear radiance remains finite through extraction and blur.
+    // Supported extreme radiance retains a bright source and a bounded halo.
     particles[0].color[0]=MaxParticleRadiance;renderer.renderGame(scene);
     const auto maximum=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
-    check(component(maximum,78,64,0)>=254,"FP32 Glow overflowed supported HDR particle radiance.");particles[0].color[0]=64;
+    check(component(maximum,64,64,0)>=254&&component(maximum,78,64,0)<254&&
+        component(maximum,78,64,0)+1>=component(gameImage,78,64,0),
+        "Supported HDR particle lost its source/halo or saturated the nearby background.");particles[0].color[0]=64;
 
     renderer.resizeMaterialPreview(128,128);check(renderer.publishMaterialPreviewEnvironment(lighting),renderer.environmentStatus());
     const auto sphere=materialPreviewGeometry();renderer.configureModelStream(sphere->id,1,*sphere->stream);

@@ -4,6 +4,7 @@
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
 #include <crimson/renderer/forward/GlowGpu.h>
+#include <crimson/renderer/forward/ToneMapping.h>
 #include "cs_glow_downsample.h"
 #include "cs_glow_upsample.h"
 #include <SDL3/SDL.h>
@@ -31,7 +32,7 @@ using Json=nlohmann::json;
 using Clock=std::chrono::steady_clock;
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 struct Sdl {Sdl(){check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());}~Sdl(){SDL_Quit();}};
-struct Options {bool benchmark{},levelResponseOnly{};unsigned warmup{240},samples{600};fs::path artifacts;};
+struct Options {bool benchmark{},levelResponseOnly{},hdrSourceOnly{},referenceUnbounded{};unsigned warmup{240},samples{600};fs::path artifacts;};
 struct Texture {bgfx::TextureHandle value{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}};
 struct Program {bgfx::ProgramHandle value{BGFX_INVALID_HANDLE};~Program(){if(bgfx::isValid(value))bgfx::destroy(value);}};
 double linear(unsigned value) {const double v=value/255.;return v<=.04045?v/12.92:std::pow((v+.055)/1.055,2.4);}
@@ -206,9 +207,154 @@ void exercise(SDL_Window* window,const Options& options) {
                 for(unsigned i=0;i<120;++i){tick();reconstruction.advance(frame);if(picking::frameReady(frame,ready))return *values;}
                 renderer.drainPending(frame);throw std::runtime_error("FP32 glare readback timed out.");
             };
+            if(!options.levelResponseOnly) {
+                constexpr std::uint16_t w=257,h=193;
+                constexpr double sourceCap=12.;
+                GlowSettings authored;authored.enabled=true;authored.strength=.74f;authored.radius=1.3f;
+                authored.anamorphic=.12f;authored.threshold=1;authored.quality=GlowQuality::High;
+                authored.levels={.39f,.27f,.31f,.24f,.30f,.29f,.36f};
+                double gain{};for(const float level:authored.levels)gain+=level;
+                const double outputBound=sourceCap*gain*authored.strength;
+                Json report{{"space","linear FP32 Glow; previews use the CPU ACES white=1 reference and one sRGB encoding"},
+                    {"width",w},{"height",h},{"exposure",1},{"reference_unbounded",options.referenceUnbounded},
+                    {"strength",authored.strength},{"spread",authored.radius},{"anamorphic",authored.anamorphic},
+                    {"threshold",authored.threshold},{"levels",authored.levels},{"conditioned_source_cap",sourceCap},
+                    {"maximum_linear_glow",outputBound},{"cases",Json::array()},{"linearity",Json::array()}};
+                std::vector<std::string> failures;
+                const auto require=[&](bool passed,const std::string& message){if(!passed)failures.push_back(message);};
+                const auto capture=[&](const std::vector<float>& pixels,const GlowSettings& settings) {
+                    Texture input{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,
+                        BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,
+                        bgfx::copy(pixels.data(),std::uint32_t(pixels.size()*sizeof(float))))};
+                    check(bgfx::isValid(input.value),"HDR Glow source allocation failed.");
+                    check(reconstruction.prepare(w,h,settings),reconstruction.status());
+                    check(reconstruction.execute(input.value,1,SceneGlowExtractView),reconstruction.status());
+                    return readFloat(reconstruction.texture(),reconstruction.width(),reconstruction.height());
+                };
+                // Match glowBilinear in presentation, including half-texel
+                // centers and edge clamping; the source image stays native size.
+                const auto nativeGlow=[&](const std::vector<float>& filtered) {
+                    const int fw=reconstruction.width(),fh=reconstruction.height();
+                    std::vector<float> result(std::size_t(w)*h*4);
+                    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+                        const double sx=(x+.5)*fw/w-.5,sy=(y+.5)*fh/h-.5;
+                        const int ix=int(std::floor(sx)),iy=int(std::floor(sy));
+                        const double fx=sx-ix,fy=sy-iy;
+                        const auto at=[&](int px,int py,unsigned channel){return filtered[
+                            (std::size_t(std::clamp(py,0,fh-1))*fw+std::clamp(px,0,fw-1))*4+channel];};
+                        for(unsigned c=0;c<3;++c)result[(std::size_t(y)*w+x)*4+c]=float(
+                            (at(ix,iy,c)*(1-fx)+at(ix+1,iy,c)*fx)*(1-fy)+
+                            (at(ix,iy+1,c)*(1-fx)+at(ix+1,iy+1,c)*fx)*fy);
+                    }
+                    return result;
+                };
+                const auto encode=[](float value) {
+                    value=std::clamp(value,0.f,1.f);
+                    const float srgb=value<=.0031308f?value*12.92f:1.055f*std::pow(value,1.f/2.4f)-.055f;
+                    return std::uint8_t(std::lround(std::clamp(srgb,0.f,1.f)*255));
+                };
+                struct SourceCase {const char* name;std::array<float,3> color;bool disk;};
+                const std::array<SourceCase,3> sources{{
+                    {"white-48000-disk",{48000,48000,48000},true},
+                    {"orange-emissive-rectangle",{5.58f,.757f,0},false},
+                    {"finite-extreme-1e11-disk",{1e11f,1e11f,1e11f},true}}};
+                constexpr std::array<unsigned,4> coverage{0,50,90,100};
+                for(const auto& source:sources) {
+                    std::vector<std::size_t> support;
+                    // Scan columns so every later mask removes a nested set of
+                    // the exact same fixed source pixels, with no camera motion.
+                    for(unsigned x=0;x<w;++x)for(unsigned y=0;y<h;++y) {
+                        const int dx=int(x)-int(w/2),dy=int(y)-int(h/2);
+                        if(source.disk?dx*dx+dy*dy<=16:(std::abs(dx)<=20&&std::abs(dy)<=15))
+                            support.push_back(std::size_t(y)*w+x);
+                    }
+                    std::vector<bool> originalSupport(std::size_t(w)*h);
+                    for(const auto p:support)originalSupport[p]=true;
+                    std::vector<float> previous,full,fullSource;double previousEnergy{};
+                    for(const unsigned covered:coverage) {
+                        const auto removed=(support.size()*covered+99)/100;
+                        std::vector<float> pixels(std::size_t(w)*h*4);
+                        for(std::size_t i=removed;i<support.size();++i)for(unsigned c=0;c<3;++c)
+                            pixels[support[i]*4+c]=source.color[c];
+                        const auto filtered=capture(pixels,authored),glare=nativeGlow(filtered);
+                        DecodedImage preview{w,h,std::vector<std::uint8_t>(std::size_t(w)*h*4)},
+                            sourcePreview=preview,glowPreview=preview;
+                        double peak{},energy{},outsideEnergy{},coveredEnergy{},increase{},minimum{};
+                        std::array<double,3> channelEnergy{};
+                        std::size_t clipped{},whiteClipped{},outsideClipped{},occludedClipped{};bool finite=true;
+                        for(std::size_t p=0;p<std::size_t(w)*h;++p) {
+                            const auto index=p*4;
+                            const Vec3 mapped=toneMap({pixels[index]+glare[index],pixels[index+1]+glare[index+1],
+                                pixels[index+2]+glare[index+2]},ToneMapping::ACES);
+                            const Vec3 mappedSource=toneMap({pixels[index],pixels[index+1],pixels[index+2]},ToneMapping::ACES);
+                            const Vec3 mappedGlow=toneMap({glare[index],glare[index+1],glare[index+2]},ToneMapping::ACES);
+                            const std::array<float,3> display{mapped[0],mapped[1],mapped[2]},
+                                displaySource{mappedSource[0],mappedSource[1],mappedSource[2]},
+                                displayGlow{mappedGlow[0],mappedGlow[1],mappedGlow[2]};
+                            bool anyClipped=false,allClipped=true;
+                            for(unsigned c=0;c<3;++c) {
+                                const double value=glare[index+c];finite&=std::isfinite(value);
+                                peak=std::max(peak,value);minimum=std::min(minimum,value);energy+=value;channelEnergy[c]+=value;
+                                if(!originalSupport[p])outsideEnergy+=value;
+                                if(originalSupport[p]&&pixels[index]==0)coveredEnergy+=value;
+                                if(!previous.empty())increase=std::max(increase,value-previous[index+c]);
+                                anyClipped|=display[c]>=.98f;allClipped&=display[c]>=.98f;
+                                preview.rgba[index+c]=encode(display[c]);sourcePreview.rgba[index+c]=encode(displaySource[c]);
+                                glowPreview.rgba[index+c]=encode(displayGlow[c]);
+                            }
+                            preview.rgba[index+3]=sourcePreview.rgba[index+3]=glowPreview.rgba[index+3]=255;
+                            if(anyClipped){++clipped;if(!originalSupport[p])++outsideClipped;
+                                if(originalSupport[p]&&pixels[index]==0)++occludedClipped;}
+                            if(allClipped)++whiteClipped;
+                        }
+                        const std::string label=std::string(source.name)+"-covered-"+std::to_string(covered);
+                        const double tolerance=std::max(1e-7,peak*.00005);
+                        require(finite&&minimum>=-1e-7,label+": Glow contains negative/nonfinite radiance.");
+                        require(previous.empty()||increase<=tolerance,label+": hiding nested source pixels increased a Glow pixel.");
+                        require(previous.empty()||energy<=previousEnergy+std::max(1e-6,previousEnergy*.00005),
+                            label+": hiding source pixels increased total linear Glow energy.");
+                        require(covered==100?peak<=1e-8:energy>0,label+": covered/visible source produced the wrong zero/nonzero response.");
+                        if(!options.referenceUnbounded)require(peak<=outputBound*1.0005+1e-6,
+                            label+": Glow exceeded the conditioned source cap times authored linear gains.");
+                        report["cases"].push_back({{"source",source.name},{"covered_percent",covered},{"source_pixels",support.size()},
+                            {"removed_pixels",removed},{"remaining_pixels",support.size()-removed},
+                            {"filter_width",reconstruction.width()},{"filter_height",reconstruction.height()},
+                            {"linear_peak",peak},{"linear_energy",energy},{"channel_energy",channelEnergy},
+                            {"outside_original_emitter_energy",outsideEnergy},{"over_occluded_emitter_energy",coveredEnergy},
+                            {"maximum_increase_from_less_covered",increase},{"componentwise_tolerance",tolerance},
+                            {"aces_clipped_pixels",clipped},{"aces_white_clipped_pixels",whiteClipped},
+                            {"aces_clipped_outside_original_emitter_pixels",outsideClipped},
+                            {"aces_clipped_over_occluded_emitter_pixels",occludedClipped},{"finite",finite}});
+                        save(options.artifacts,(label+"-composite.png").c_str(),preview);
+                        save(options.artifacts,(label+"-source.png").c_str(),sourcePreview);
+                        save(options.artifacts,(label+"-glow.png").c_str(),glowPreview);
+                        if(covered==0){full=glare;fullSource=pixels;}
+                        previous=glare;previousEnergy=energy;
+                    }
+                    auto halfSettings=authored;for(auto& level:halfSettings.levels)level*=.5f;
+                    const auto half=nativeGlow(capture(fullSource,halfSettings));double error{},referencePeak{};
+                    for(std::size_t i=0;i<half.size();++i)if(i%4<3) {
+                        error=std::max(error,std::abs(double(half[i])-full[i]*.5));referencePeak=std::max(referencePeak,double(full[i])*.5);
+                    }
+                    const double tolerance=std::max(1e-8,referencePeak*.0005);
+                    require(error<=tolerance,std::string(source.name)+": halving all level gains did not halve linear Glow.");
+                    report["linearity"].push_back({{"source",source.name},{"maximum_absolute_error",error},{"tolerance",tolerance}});
+                }
+                report["passed"]=failures.empty();report["failures"]=failures;
+                if(!options.artifacts.empty()) {
+                    fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-hdr-source.json");
+                    check(bool(output),"Cannot write HDR Glow source report.");output<<report.dump(2)<<'\n';
+                }
+                std::cout<<"GLOW_HDR_SOURCE_JSON "<<report.dump()<<std::endl;
+                check(failures.empty(),"HDR Glow source failed "+std::to_string(failures.size())+" checks; first: "+
+                    (failures.empty()?std::string{}:failures.front()));
+                reconstruction.disable();
+                for(unsigned i=0;i<4;++i){tick();reconstruction.advance(frame);}
+                check(reconstruction.resident_bytes()==0,"HDR Glow source fixture retained retired filter allocations.");
+            }
             // Read the filter's linear FP32 output. Display encoding and tone
             // mapping can conceal coefficient changes around bright sources.
-            {
+            if(!options.hdrSourceOnly) {
                 constexpr std::uint16_t w=129,h=97;
                 GlowSettings levels;levels.enabled=true;levels.strength=1;levels.threshold=0;levels.levels.fill(0);
                 check(!reconstruction.prepare(w,h,levels)&&!reconstruction.active()&&reconstruction.resident_bytes()==0,
@@ -309,23 +455,30 @@ void exercise(SDL_Window* window,const Options& options) {
                 check(failures.empty(),"Linear Glow level response failed "+std::to_string(failures.size())+" checks; first: "+
                     (failures.empty()?std::string{}:failures.front()));
             }
-            if(!options.levelResponseOnly)for(const auto extent:std::array<std::array<std::uint16_t,2>,2>{{{129,97},{1,1}}}) {
+            if(!options.levelResponseOnly&&!options.hdrSourceOnly)for(const auto extent:std::array<std::array<std::uint16_t,2>,2>{{{129,97},{1,1}}}) {
                 const auto w=extent[0],h=extent[1];constexpr std::array<float,4> radiance{1e11f,5e10f,1e10f,0};
                 std::vector<float> pixels(std::size_t(w)*h*4);for(std::size_t i=0;i<pixels.size();++i)pixels[i]=radiance[i%4];
                 Texture input{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,
                     bgfx::copy(pixels.data(),std::uint32_t(pixels.size()*sizeof(float))))};check(bgfx::isValid(input.value),"FP32 glare source allocation failed.");
                 GlowSettings flatGlow;flatGlow.enabled=true;flatGlow.strength=.8f;flatGlow.threshold=0;
                 check(reconstruction.prepare(w,h,flatGlow),reconstruction.status());
-                check(reconstruction.execute(input.value,256,SceneGlowExtractView),reconstruction.status());
-                const auto values=readFloat(reconstruction.texture(),reconstruction.width(),reconstruction.height());
-                for(std::size_t i=0;i<values.size();++i) {
-                    check(std::isfinite(values[i])&&values[i]>=0,"Glow produced negative/nonfinite FP32 HDR radiance.");
-                    if(i%4<3) {const double expected=double(radiance[i%4])*256*.8;
-                        check(std::abs(values[i]-expected)/expected<.002,"Glow changed constant-field energy or overflowed exposure×HDR.");}
+                // High exposure must reach the extracted-source ceiling, while
+                // low exposure must recover the original extreme constant field
+                // accurately before the ceiling. This rejects unstable inverse
+                // compression and premature clamping of unexposed HDR radiance.
+                for(const float exposure:{256.f,1e-12f}) {
+                    check(reconstruction.execute(input.value,exposure,SceneGlowExtractView),reconstruction.status());
+                    const auto values=readFloat(reconstruction.texture(),reconstruction.width(),reconstruction.height());
+                    for(std::size_t i=0;i<values.size();++i) {
+                        check(std::isfinite(values[i])&&values[i]>=0,"Glow produced negative/nonfinite FP32 HDR radiance.");
+                        if(i%4<3) {const double expected=std::min(double(radiance[i%4])*exposure,12.)*flatGlow.strength;
+                            check(std::abs(values[i]-expected)<=std::max(1e-8,expected*.002),
+                                "Glow failed bounded extraction or accurate low-exposure HDR recovery.");}
+                    }
                 }
             }
         }
-        if(options.levelResponseOnly){resources.stop();renderer.drainPending(frame);return;}
+        if(options.levelResponseOnly||options.hdrSourceOnly){resources.stop();renderer.drainPending(frame);return;}
         constexpr std::uint16_t W=257,H=257;renderer.resizeViewport(W,H);renderer.resizeGameViewport(W,H);
         const auto read=[&](bgfx::TextureHandle texture) {
             Texture staging{bgfx::createTexture2D(W,H,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
@@ -427,11 +580,17 @@ void exercise(SDL_Window* window,const Options& options) {
         check(backdropResponse>1,"Soft Light Glow did not blend against the visible gray matte around a zero-coverage additive particle.");
         glow.tint={};check(maximumDifference(grayBackdrop,capture())<=1,"Black Soft Light Glow changed uncovered gray matte.");
         glow.tint={1,1,1};glow.blendMode=GlowBlendMode::Additive;appearance.backgroundSrgb={};gameSettings.environment.background.color={};renderer.setAppearance(appearance);
-        // Fallback material colors are bounded to 1e6. Generated particle
-        // graphs cover 1e11 in native_resource_tests; the FP32 test above
-        // independently verifies transport at radiance 1e11 and exposure 256.
-        sparkMaterial.baseColor[0]=1e6f;const auto hdrSpark=capture();
-        check(hdrSpark.rgba[(std::size_t(128)*W+155)*4]>=250,"Maximum supported fallback particle radiance overflowed the FP32 Glow chain.");
+        // Extreme source radiance must retain its bright particle while the
+        // conditioned Glow remains visible without whitening nearby background.
+        // The direct FP32 cases above verify bounded high-exposure extraction
+        // and accurate recovery of radiance 1e11 at low exposure independently.
+        sparkMaterial.baseColor[0]=1e6f;glow.enabled=false;const auto hdrSparkBase=capture();
+        glow.enabled=true;const auto hdrSpark=capture();
+        check(hdrSparkBase.rgba[(std::size_t(128)*W+128)*4]>=250&&hdrSpark.rgba[(std::size_t(128)*W+128)*4]>=250,
+            "Bounded Glow changed the extreme particle's visible HDR source.");
+        check(maximumDifference(hdrSparkBase,hdrSpark)>5,"Extreme HDR particle lost its conditioned Glow.");
+        check(hdrSpark.rgba[(std::size_t(128)*W+155)*4]<250,
+            "Extreme HDR particle saturated nearby background through Glow.");
         save(options.artifacts,"glow-hdr-particle.png",hdrSpark);game.particles={};game.particleMaterials={};game.instances=std::span(&instances[2],1);
         surfaceMaterials[0].baseColor={0,0,0,1};surfaceMaterials[0].emissive={};
         instances[0].model.transform=math::translation({0,0,.3f})*math::scaling({.3f,.3f,1});
@@ -551,11 +710,15 @@ int main(int argc,char** argv) {
     try {Options options;for(int i=1;i<argc;++i){const std::string_view option=argv[i];
         const auto value=[&] {check(i+1<argc,"Missing option value.");return std::string(argv[++i]);};
         if(option=="--benchmark")options.benchmark=true;else if(option=="--level-response-only")options.levelResponseOnly=true;
+        else if(option=="--hdr-source-only")options.hdrSourceOnly=true;
+        else if(option=="--reference-unbounded")options.referenceUnbounded=true;
         else if(option=="--artifacts")options.artifacts=value();
         else if(option=="--warmup")options.warmup=std::stoul(value());else if(option=="--samples")options.samples=std::stoul(value());
         else throw std::runtime_error("Unknown argument: "+std::string(option));}
         check(!options.benchmark||!options.artifacts.empty(),"Benchmark requires --artifacts.");
-        check(!options.benchmark||!options.levelResponseOnly,"Benchmark and level-response-only are mutually exclusive.");
+        check(unsigned(options.benchmark)+unsigned(options.levelResponseOnly)+unsigned(options.hdrSourceOnly)<=1,
+            "Benchmark, level-response-only and hdr-source-only are mutually exclusive.");
+        check(!options.referenceUnbounded||options.hdrSourceOnly,"Reference-unbounded requires --hdr-source-only.");
         Sdl sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson Glow regression",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());exercise(window.get(),options);return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
