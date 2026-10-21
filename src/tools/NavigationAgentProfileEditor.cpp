@@ -1,9 +1,11 @@
 #include "NavigationAgentProfileEditor.h"
 #include "DocumentEditorMenu.h"
+#include "PropertyReset.h"
 #include "assets/AssetLibrary.h"
 #include "resources/Paths.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <algorithm>
 #include <cstdio>
 
 namespace crimson {
@@ -193,7 +195,15 @@ void NavigationAgentProfileEditor::draw(AssetLibrary& assets) {
             auto value=document_.definition().traversal;
             ImGui::BeginDisabled(!document_.editable());
             const auto field=[&](const char* label,float AgentTraversalSettings::* member,float speed,float minimum,float maximum,const char* format) {
-                const bool changed=ImGui::DragFloat(label,&(value.*member),speed,minimum,maximum,format,ImGuiSliderFlags_AlwaysClamp);
+                const bool changed=resettableProperty(value.*member,AgentTraversalSettings{}.*member,[&]{
+                    return ImGui::DragFloat(label,&(value.*member),speed,minimum,maximum,format,ImGuiSliderFlags_AlwaysClamp);
+                });
+                if(changed && propertyResetClicked()) {
+                    // Capsule dimensions must stay valid when resetting one
+                    // dimension beside an independently authored other one.
+                    if(member==&AgentTraversalSettings::height)value.radius=std::min(value.radius,value.height*.5f);
+                    if(member==&AgentTraversalSettings::radius)value.height=std::max(value.height,value.radius*2);
+                }
                 if(!canceled && (ImGui::IsItemActivated() || changed) && !document_.transactionActive())document_.begin(std::string("Change ")+label);
                 if(!canceled && changed)document_.update([&](auto& profile){profile.traversal=value;});
                 if(ImGui::IsItemDeactivated() || (changed && !ImGui::IsItemActive()))document_.commit();

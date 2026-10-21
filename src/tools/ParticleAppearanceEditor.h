@@ -27,6 +27,7 @@ struct ParticleGradientEditorState {
     Vec2 barMinimum{},barMaximum{};
     std::array<Vec2,3> colorChannelMinimum{},colorChannelMaximum{};
     Vec2 colorOpacityMinimum{},colorOpacityMaximum{};
+    Vec2 positionMinimum{},positionMaximum{},resetMinimum{},resetMaximum{};
     std::shared_ptr<ParticleGradientWidgetState> widget;
     void cancel();
     size_t cachedColorEditors() const;

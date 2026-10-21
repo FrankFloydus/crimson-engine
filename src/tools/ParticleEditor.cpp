@@ -2,6 +2,7 @@
 #include "MaterialEditor.h"
 #include "DocumentEditorMenu.h"
 #include "ParticleEmissionEditor.h"
+#include "PropertyReset.h"
 #include "Tools.h"
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
@@ -356,8 +357,9 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
         ImGui::PushID(title);
         control("Change random range",[&](auto& emitter) {
             auto displayed=launch?editableLaunch(emitter):emitter;
-            auto& values=displayed.*field;float pair[2]{values.minimum,values.maximum};
-            const bool changed=ImGui::DragFloat2(title,pair,.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            auto& values=displayed.*field;Vec2 pair{values.minimum,values.maximum};
+            const auto defaults=ParticleEmitterDefinition{}.*field;
+            const bool changed=resettableProperty(pair,Vec2{defaults.minimum,defaults.maximum},[&]{return ImGui::DragFloat2(title,pair.data(),.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
             if(changed) {
                 // Moving one end beyond the other keeps the range usable while dragging.
                 if(pair[0]>pair[1]) {
@@ -375,11 +377,13 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
     const auto subsectionFlags=ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth;
     if(ImGui::CollapsingHeader("Emitter Update",ImGuiTreeNodeFlags_DefaultOpen)) {
         if(ImGui::TreeNodeEx("Timing & emission",subsectionFlags)) {
-            control("Enable emitter",[](auto& emitter){return ImGui::Checkbox("Enabled",&emitter.enabled);});
+            control("Enable emitter",[](auto& emitter){return resettableProperty(emitter.enabled,ParticleEmitterDefinition{}.enabled,[&]{return ImGui::Checkbox("Enabled",&emitter.enabled);});});
             tooltip("Disabling stops emission; live particles finish.");
             control("Change emitter timing",[&](auto& emitter) {
                 int mode=emitter.finiteDuration?(emitter.loop?2:1):0;
-                const bool changed=ImGui::Combo("Playback",&mode,"Continuous\0One shot\0Looping\0");
+                const ParticleEmitterDefinition defaults;
+                const int defaultMode=defaults.finiteDuration?(defaults.loop?2:1):0;
+                const bool changed=resettableProperty(mode,defaultMode,[&]{return ImGui::Combo("Playback",&mode,"Continuous\0One shot\0Looping\0");},"Continuous");
                 if(changed) {
                     if(mode!=0 && particleDurationLowerBound(emitter)>MaximumParticleTime) {
                         message_="A retained legacy emission event prevents a finite cycle within the supported duration.";return false;
@@ -390,9 +394,9 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
                 }
                 return changed;
             });
-            control("Change emitter delay",[](auto& emitter){return ImGui::DragFloat("Delay (s)",&emitter.delay,.01f,0,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            control("Change emitter delay",[](auto& emitter){return resettableProperty(emitter.delay,ParticleEmitterDefinition{}.delay,[&]{return ImGui::DragFloat("Delay (s)",&emitter.delay,.01f,0,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             tooltip("Delay before the first emission cycle.");
-            control("Change emission rate",[](auto& emitter){return ImGui::DragFloat("Rate (particles/s)",&emitter.rate,.5f,0,MaximumParticleRate,"%.1f",ImGuiSliderFlags_AlwaysClamp);});
+            control("Change emission rate",[](auto& emitter){return resettableProperty(emitter.rate,ParticleEmitterDefinition{}.rate,[&]{return ImGui::DragFloat("Rate (particles/s)",&emitter.rate,.5f,0,MaximumParticleRate,"%.1f",ImGuiSliderFlags_AlwaysClamp);});});
             control("Change emission explosiveness",[&](auto& emitter){return drawParticleExplosiveness(emitter,message_);});
             tooltip("0: steady emission. 1: emit the cycle's particles at its start. Count remains Rate x Duration.");
             if(document_.definition().emitter.finiteDuration || document_.definition().emitter.explosiveness>0) {
@@ -401,7 +405,7 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
             }
             control("Change particle capacity",[](auto& emitter) {
                 int capacity=static_cast<int>(emitter.capacity);
-                const bool changed=ImGui::DragInt("Capacity",&capacity,1,1,static_cast<int>(MaximumParticleCapacity),"%d",ImGuiSliderFlags_AlwaysClamp);
+                const bool changed=resettableProperty(capacity,static_cast<int>(ParticleEmitterDefinition{}.capacity),[&]{return ImGui::DragInt("Capacity",&capacity,1,1,static_cast<int>(MaximumParticleCapacity),"%d",ImGuiSliderFlags_AlwaysClamp);});
                 if(changed)emitter.capacity=static_cast<uint32_t>(capacity);return changed;
             });
             tooltip("Maximum live particles. Changes clear the live pool.");
@@ -410,15 +414,15 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
         if(ImGui::TreeNodeEx("Simulation",subsectionFlags)) {
             control("Change simulation space",[](auto& emitter) {
                 int mode=static_cast<int>(emitter.space);
-                const bool changed=ImGui::Combo("Simulation space",&mode,"World\0Local\0");
+                const bool changed=resettableProperty(mode,static_cast<int>(ParticleEmitterDefinition{}.space),[&]{return ImGui::Combo("Simulation space",&mode,"World\0Local\0");},"World");
                 if(changed)emitter.space=static_cast<ParticleSpace>(mode);return changed;
             });
             tooltip("Local particles follow the emitter. World particles detach.");
             assetControl("Change particle pre-process",[](auto& asset) {
-                return ImGui::DragFloat("Pre-process (s)",&asset.preprocessSeconds,.05f,0,MaximumParticlePreprocessSeconds,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+                return resettableProperty(asset.preprocessSeconds,ParticleEffectAsset{}.preprocessSeconds,[&]{return ImGui::DragFloat("Pre-process (s)",&asset.preprocessSeconds,.05f,0,MaximumParticlePreprocessSeconds,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
             });
             tooltip("Simulation time elapsed before the first frame.");
-            assetControl("Change particle seed",[](auto& asset){return ImGui::InputScalar("Seed",ImGuiDataType_U64,&asset.defaultSeed);});
+            assetControl("Change particle seed",[](auto& asset){return resettableProperty(asset.defaultSeed,ParticleEffectAsset{}.defaultSeed,[&]{return ImGui::InputScalar("Seed",ImGuiDataType_U64,&asset.defaultSeed);});});
             tooltip("Seed for repeatable variation.");
             ImGui::TreePop();
         }
@@ -427,7 +431,7 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
         if(ImGui::TreeNodeEx("Shape",subsectionFlags)) {
             control("Change emission shape",[](auto& emitter) {
                 int shape=static_cast<int>(emitter.shape);
-                const bool changed=ImGui::Combo("Shape",&shape,"Point\0Cone\0Sphere\0Box\0");
+                const bool changed=resettableProperty(shape,static_cast<int>(ParticleEmitterDefinition{}.shape),[&]{return ImGui::Combo("Shape",&shape,"Point\0Cone\0Sphere\0Box\0");},"Point");
                 if(changed) {
                     emitter.shape=static_cast<ParticleShape>(shape);
                     if(emitter.shape==ParticleShape::Cone || emitter.shape==ParticleShape::Sphere) {
@@ -446,34 +450,34 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
             });
             const auto shape=document_.definition().emitter.shape;
             if(shape==ParticleShape::Cone || shape==ParticleShape::Sphere)
-                control("Change emission radius",[](auto& emitter){return ImGui::DragFloat("Radius (m)",&emitter.radius,.01f,0,MaximumParticleShapeSize,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                control("Change emission radius",[](auto& emitter){return resettableProperty(emitter.radius,ParticleEmitterDefinition{}.radius,[&]{return ImGui::DragFloat("Radius (m)",&emitter.radius,.01f,0,MaximumParticleShapeSize,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             if(shape==ParticleShape::Box)
-                control("Change emission box",[](auto& emitter){return ImGui::DragFloat3("Dimensions XYZ (m)",emitter.boxSize.data(),.01f,0,MaximumParticleShapeSize,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                control("Change emission box",[](auto& emitter){return resettableProperty(emitter.boxSize,ParticleEmitterDefinition{}.boxSize,[&]{return ImGui::DragFloat3("Dimensions XYZ (m)",emitter.boxSize.data(),.01f,0,MaximumParticleShapeSize,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             ImGui::TreePop();
         }
         if(ImGui::TreeNodeEx("Initial velocity",subsectionFlags)) {
             launchControl("Change launch direction",[](auto& emitter) {
                 const auto before=emitter.direction;
-                const bool changed=ImGui::DragFloat3("Direction XYZ",emitter.direction.data(),.01f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+                const bool changed=resettableProperty(emitter.direction,editableLaunch(ParticleEmitterDefinition{}).direction,[&]{return ImGui::DragFloat3("Direction XYZ",emitter.direction.data(),.01f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
                 if(changed && math::length(emitter.direction)<1e-6)emitter.direction=before;
                 return changed;
             });
             tooltip("Launch direction in emitter coordinates.");
             launchControl("Change speed variation",[](auto& emitter) {
                 int mode=emitter.speedRange.enabled?1:0;
-                const bool changed=ImGui::Combo("Speed mode",&mode,"Constant\0Random range\0");
+                const bool changed=resettableProperty(mode,ParticleEmitterDefinition{}.speedRange.enabled?1:0,[&]{return ImGui::Combo("Speed mode",&mode,"Constant\0Random range\0");},"Constant");
                 if(changed)emitter.speedRange.enabled=mode!=0;return changed;
             });
             if(editableLaunch(document_.definition().emitter).speedRange.enabled)
                 range("Speed min/max (m/s)",&ParticleEmitterDefinition::speedRange,0,MaximumParticleSpeed,true);
-            else launchControl("Change launch speed",[](auto& emitter){return ImGui::DragFloat("Speed (m/s)",&emitter.speed,.05f,0,MaximumParticleSpeed,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-            launchControl("Change direction spread",[](auto& emitter){return ImGui::SliderFloat("Spread (degrees)",&emitter.directionSpread,0,180,"%.1f");});
+            else launchControl("Change launch speed",[](auto& emitter){return resettableProperty(emitter.speed,editableLaunch(ParticleEmitterDefinition{}).speed,[&]{return ImGui::DragFloat("Speed (m/s)",&emitter.speed,.05f,0,MaximumParticleSpeed,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+            launchControl("Change direction spread",[](auto& emitter){return resettableProperty(emitter.directionSpread,ParticleEmitterDefinition{}.directionSpread,[&]{return ImGui::SliderFloat("Spread (degrees)",&emitter.directionSpread,0,180,"%.1f");});});
             tooltip("Half-angle around the launch direction.");
-            launchControl("Change direction flatness",[](auto& emitter){return ImGui::SliderFloat("Flatness",&emitter.directionFlatness,0,1,"%.2f");});
+            launchControl("Change direction flatness",[](auto& emitter){return resettableProperty(emitter.directionFlatness,ParticleEmitterDefinition{}.directionFlatness,[&]{return ImGui::SliderFloat("Flatness",&emitter.directionFlatness,0,1,"%.2f");});});
             tooltip("0: round spread. 1: flat fan.");
             launchControl("Change outward launch",[](auto& emitter) {
                 bool outward=emitter.directionMode==ParticleDirectionMode::Outward;
-                const bool changed=ImGui::Checkbox("Outward from shape",&outward);
+                const bool changed=resettableProperty(outward,ParticleEmitterDefinition{}.directionMode==ParticleDirectionMode::Outward,[&]{return ImGui::Checkbox("Outward from shape",&outward);});
                 if(changed)emitter.directionMode=outward?ParticleDirectionMode::Outward:ParticleDirectionMode::RandomCone;
                 return changed;
             });
@@ -486,11 +490,11 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
         if(ImGui::TreeNodeEx("Lifetime",subsectionFlags)) {
             control("Change lifetime variation",[](auto& emitter) {
                 int mode=emitter.lifetimeRange.enabled?1:0;
-                const bool changed=ImGui::Combo("Mode##lifetime",&mode,"Constant\0Random range\0");
+                const bool changed=resettableProperty(mode,ParticleEmitterDefinition{}.lifetimeRange.enabled?1:0,[&]{return ImGui::Combo("Mode##lifetime",&mode,"Constant\0Random range\0");},"Constant");
                 if(changed)emitter.lifetimeRange.enabled=mode!=0;return changed;
             });
             if(document_.definition().emitter.lifetimeRange.enabled)range("Lifetime min/max (s)",&ParticleEmitterDefinition::lifetimeRange,.001f,MaximumParticleTime);
-            else control("Change lifetime",[](auto& emitter){return ImGui::DragFloat("Lifetime (s)",&emitter.lifetime,.01f,.001f,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            else control("Change lifetime",[](auto& emitter){return resettableProperty(emitter.lifetime,ParticleEmitterDefinition{}.lifetime,[&]{return ImGui::DragFloat("Lifetime (s)",&emitter.lifetime,.01f,.001f,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             ImGui::TreePop();
         }
     }
@@ -499,7 +503,7 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
             const auto behavior=[&](const char* title,ParticleBehavior ParticleEmitterDefinition::* member,const auto& fields) {
                 if(!(document_.definition().emitter.*member).present)return;
                 ImGui::PushID(title);ImGui::Separator();
-                control("Enable particle behavior",[&](auto& emitter){return ImGui::Checkbox(title,&(emitter.*member).enabled);});
+                control("Enable particle behavior",[&](auto& emitter){return resettableProperty((emitter.*member).enabled,(ParticleEmitterDefinition{}.*member).enabled,[&]{return ImGui::Checkbox(title,&(emitter.*member).enabled);});});
                 ImGui::SameLine();
                 if(ImGui::SmallButton("Remove"))edit("Remove particle behavior",[&](auto& asset){(asset.emitter.*member).present=false;});
                 if((document_.definition().emitter.*member).present) {
@@ -508,13 +512,13 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
                 ImGui::PopID();
             };
             behavior("Gravity",&ParticleEmitterDefinition::gravityBehavior,[&] {
-                control("Change gravity",[](auto& emitter){return ImGui::DragFloat3("Gravity XYZ (m/s²)",emitter.gravity.data(),.05f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                control("Change gravity",[](auto& emitter){return resettableProperty(emitter.gravity,ParticleEmitterDefinition{}.gravity,[&]{return ImGui::DragFloat3("Gravity XYZ (m/s²)",emitter.gravity.data(),.05f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             });
             behavior("Acceleration",&ParticleEmitterDefinition::accelerationBehavior,[&] {
-                control("Change acceleration",[](auto& emitter){return ImGui::DragFloat3("Acceleration XYZ (m/s²)",emitter.acceleration.data(),.05f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                control("Change acceleration",[](auto& emitter){return resettableProperty(emitter.acceleration,ParticleEmitterDefinition{}.acceleration,[&]{return ImGui::DragFloat3("Acceleration XYZ (m/s²)",emitter.acceleration.data(),.05f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             });
             behavior("Drag",&ParticleEmitterDefinition::dragBehavior,[&] {
-                control("Change drag",[](auto& emitter){return ImGui::DragFloat("Drag (1/s)",&emitter.drag,.01f,0,MaximumParticleDrag,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                control("Change drag",[](auto& emitter){return resettableProperty(emitter.drag,ParticleEmitterDefinition{}.drag,[&]{return ImGui::DragFloat("Drag (1/s)",&emitter.drag,.01f,0,MaximumParticleDrag,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
                 tooltip("Velocity damping per second.");
             });
             if(ImGui::Button("Add behavior"))ImGui::OpenPopup("Add particle behavior");
@@ -541,14 +545,14 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
         if(ImGui::TreeNodeEx("Orientation",ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth)) {
             control("Change particle billboard mode",[](auto& emitter) {
                 int mode=static_cast<int>(emitter.billboardMode);
-                const bool changed=ImGui::Combo("Billboard",&mode,"Disabled\0Enabled\0Y-Billboard\0");
+                const bool changed=resettableProperty(mode,static_cast<int>(ParticleEmitterDefinition{}.billboardMode),[&]{return ImGui::Combo("Billboard",&mode,"Disabled\0Enabled\0Y-Billboard\0");},"Disabled");
                 if(changed)emitter.billboardMode=static_cast<ParticleBillboardMode>(mode);
                 return changed;
             });
             tooltip("Disabled uses the particle's orientation. Enabled faces the camera. Y-Billboard constrains facing around world Y.");
             ImGui::BeginDisabled(document_.definition().emitter.billboardMode!=ParticleBillboardMode::Disabled);
             control("Change particle orientation",[](auto& emitter) {
-                return ImGui::DragFloat3("Orientation XYZ (degrees)",emitter.orientation.data(),.5f,-MaximumParticleRotation,MaximumParticleRotation,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+                return resettableProperty(emitter.orientation,ParticleEmitterDefinition{}.orientation,[&]{return ImGui::DragFloat3("Orientation XYZ (degrees)",emitter.orientation.data(),.5f,-MaximumParticleRotation,MaximumParticleRotation,"%.1f",ImGuiSliderFlags_AlwaysClamp);});
             });
             tooltip("Orientation in emitter coordinates. World particles use the emitter's frame at birth; local particles follow its current frame.");
             ImGui::EndDisabled();ImGui::TreePop();
@@ -586,7 +590,7 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
             appearanceControl(owner,command.c_str(),[&](auto& emitter) {
                 ParticleAppearanceEdit changes;auto& track=emitter.*member;auto& value=emitter.*constant;
                 int mode=static_cast<int>(track.mode);
-                const bool changed=ImGui::Combo("Mode",&mode,"Constant\0Random range\0Curve\0");changes.include(changed);
+                const bool changed=resettableProperty(mode,static_cast<int>((ParticleEmitterDefinition{}.*member).mode),[&]{return ImGui::Combo("Mode",&mode,"Constant\0Random range\0Curve\0");},"Constant");changes.include(changed);
                 if(changed) {
                     track.mode=static_cast<ParticleAppearanceMode>(mode);
                     if(track.mode==ParticleAppearanceMode::RandomRange && !track.range)track.range=ParticleAppearanceRange{value,value};
@@ -594,10 +598,11 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
                     curveEditors_[stateIndex].cancel();
                 }
                 if(track.mode==ParticleAppearanceMode::Constant)
-                    changes.include(ImGui::DragFloat(valueLabel,&value,.01f,constantMinimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                    changes.include(resettableProperty(value,ParticleEmitterDefinition{}.*constant,[&]{return ImGui::DragFloat(valueLabel,&value,.01f,constantMinimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
                 if(track.mode==ParticleAppearanceMode::RandomRange && track.range) {
-                    float bounds[2]{track.range->minimum,track.range->maximum};
-                    const bool rangeChanged=ImGui::DragFloat2("Minimum / maximum",bounds,.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);changes.include(rangeChanged);
+                    Vec2 bounds{track.range->minimum,track.range->maximum};
+                    const auto defaultValue=ParticleEmitterDefinition{}.*constant;
+                    const bool rangeChanged=resettableProperty(bounds,Vec2{defaultValue,defaultValue},[&]{return ImGui::DragFloat2("Minimum / maximum",bounds.data(),.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);});changes.include(rangeChanged);
                     if(rangeChanged) {
                         if(bounds[0]>bounds[1]) {
                             if(bounds[0]!=track.range->minimum)bounds[1]=bounds[0];else bounds[0]=bounds[1];
@@ -606,7 +611,7 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
                     }
                 }
                 if(track.mode==ParticleAppearanceMode::Curve)
-                    changes.merge(drawParticleCurveEditor(track.curve,curveEditors_[stateIndex],minimum,maximum,value,valueLabel));
+                    changes.merge(drawParticleCurveEditor(track.curve,curveEditors_[stateIndex],minimum,maximum,ParticleEmitterDefinition{}.*constant,valueLabel));
                 return changes;
             });
             ImGui::TreePop();ImGui::PopID();
@@ -621,7 +626,7 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
             appearanceControl(colorOwner,"Edit particle color / opacity",[&](auto& emitter) {
                 ParticleAppearanceEdit changes;
                 int mode=static_cast<int>(emitter.colorMode);
-                const bool changed=ImGui::Combo("Mode",&mode,"Constant\0Gradient\0");changes.include(changed);
+                const bool changed=resettableProperty(mode,static_cast<int>(ParticleEmitterDefinition{}.colorMode),[&]{return ImGui::Combo("Mode",&mode,"Constant\0Gradient\0");},"Constant");changes.include(changed);
                 if(changed) {
                     emitter.colorMode=static_cast<ParticleColorMode>(mode);
                     if(emitter.colorMode==ParticleColorMode::Gradient && emitter.colorGradient.stops.empty()) {
@@ -631,10 +636,11 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
                     gradientEditor_.cancel();colorEditor_.cancel();
                 }
                 if(emitter.colorMode==ParticleColorMode::Constant) {
-                    const auto colorChanges=drawHdrColorControl("Color",emitter.color,&emitter.opacity,colorEditor_,false,MaximumParticleColor);
+                    const auto defaults=ParticleEmitterDefinition{};
+                    const auto colorChanges=drawHdrColorControl("Color",emitter.color,&emitter.opacity,colorEditor_,false,MaximumParticleColor,"Opacity",defaults.color,defaults.opacity);
                     changes.merge({colorChanges.changed,colorChanges.activated,colorChanges.active,colorChanges.deactivated});
                 } else changes.merge(drawParticleGradientEditor(emitter.colorGradient,gradientEditor_,
-                    {emitter.color[0],emitter.color[1],emitter.color[2],emitter.opacity}));
+                    {ParticleEmitterDefinition{}.color[0],ParticleEmitterDefinition{}.color[1],ParticleEmitterDefinition{}.color[2],ParticleEmitterDefinition{}.opacity}));
                 return changes;
             });
             scalar("Brightness","Multiplier",&ParticleEmitterDefinition::intensity,&ParticleEmitterDefinition::intensityTrack,1,0,100000,0);
@@ -683,7 +689,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             return DocumentEditorMenuState{isOpen(),isOpen(),canUndo(),canRedo(),document_.undoLabel(),document_.redoLabel()};
         },[&] {
             ImGui::SetNextItemWidth(ImGui::GetFontSize()*14);
-            ImGui::Checkbox("Specular AA",&preview_.environment.specularAA);
+            resettableProperty(preview_.environment.specularAA,EnvironmentSettings{}.specularAA,[&]{return ImGui::Checkbox("Specular AA",&preview_.environment.specularAA);});
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce sparkling specular highlights from undersampled surface normals.");
             drawToneMappingControl(preview_.environment.toneMapping);
             drawToneMappingParameterControls(preview_.environment.toneMapping,preview_.environment.toneMappingParameters);

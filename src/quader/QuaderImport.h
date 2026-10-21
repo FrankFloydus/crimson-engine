@@ -21,7 +21,7 @@ struct QuaderImportedMesh {
 struct QuaderImportedLight {
     std::string sourceKey,name;
     Mat4 local;
-    Vec3 color{1,1,1};
+    Vec3 color{1,1,1}; // Authored sRGB, converted from the reader's linear RGB.
     float intensity{},radius{};
     bool point{},castShadows{},visible{true};
     std::string parentKey;

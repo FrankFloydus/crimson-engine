@@ -26,7 +26,8 @@ inline std::uint8_t materialGraphRequiredUvs(const MaterialGraph& graph) {
         if(node->kind==MaterialNodeKind::Noise||node->kind==MaterialNodeKind::RadialGradient) {
             const auto* mapping=materialInputLink(graph,id,MaterialPin::UV);
             demandMapping(mapping?resolveMaterialUvMapping(graph,mapping->fromNode):MaterialUvMapping{});
-        } else if(node->kind==MaterialNodeKind::Grunge||node->kind==MaterialNodeKind::Texture2D||
+        } else if(node->kind==MaterialNodeKind::Grunge||
+            (node->kind==MaterialNodeKind::Texture2D&&!node->texture.image.empty())||
             (node->kind==MaterialNodeKind::ImageInput&&node->atomic.enabled&&!node->texture.image.empty()))
             demandMapping(materialTextureMapping(graph,id));
         for(const auto& pin:materialNodeInputs(graph,*node,output.shading,output.blend))

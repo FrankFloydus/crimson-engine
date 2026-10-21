@@ -2,6 +2,7 @@
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
 #include "resources/Paths.h"
+#include "tools/PropertyReset.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
@@ -98,40 +99,55 @@ void EditorPreferences::draw(std::optional<GraphicsBackend> activeBackend) {
     if (focusRequested_) { ImGui::SetNextWindowFocus(); focusRequested_=false; }
     if (ImGui::Begin("Preferences",&open_,ImGuiWindowFlags_NoDocking)) {
         auto candidate=values_; auto& appearance=candidate.appearance; bool changed=false;
+        const EditorPreferenceValues defaults;
         ImGui::SeparatorText("Viewport");
-        changed|=ImGui::ColorEdit3("Background",appearance.backgroundSrgb.data());
+        changed|=resettableProperty(appearance.backgroundSrgb,defaults.appearance.backgroundSrgb,[&]{return ImGui::ColorEdit3("Background",appearance.backgroundSrgb.data());});
         ImGui::SeparatorText("Grid");
-        changed|=ImGui::ColorEdit4("Major line color",appearance.gridMajorSrgb.data());
-        changed|=ImGui::DragFloat("Major line width",&appearance.gridMajorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
-        changed|=ImGui::ColorEdit4("Minor line color",appearance.gridMinorSrgb.data());
-        changed|=ImGui::DragFloat("Minor line width",&appearance.gridMinorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        changed|=resettableProperty(appearance.gridMajorSrgb,defaults.appearance.gridMajorSrgb,[&]{return ImGui::ColorEdit4("Major line color",appearance.gridMajorSrgb.data());});
+        changed|=resettableProperty(appearance.gridMajorWidth,defaults.appearance.gridMajorWidth,[&]{return ImGui::DragFloat("Major line width",&appearance.gridMajorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        changed|=resettableProperty(appearance.gridMinorSrgb,defaults.appearance.gridMinorSrgb,[&]{return ImGui::ColorEdit4("Minor line color",appearance.gridMinorSrgb.data());});
+        changed|=resettableProperty(appearance.gridMinorWidth,defaults.appearance.gridMinorWidth,[&]{return ImGui::DragFloat("Minor line width",&appearance.gridMinorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
         ImGui::SeparatorText("Rendering");
         int antiAliasing=candidate.antiAliasing==AntiAliasing::Smaa?1:0;
-        if(ImGui::Combo("Antialiasing",&antiAliasing,"Off\0SMAA\0")) {
+        if(resettableProperty(antiAliasing,defaults.antiAliasing==AntiAliasing::Smaa?1:0,[&]{return ImGui::Combo("Antialiasing",&antiAliasing,"Off\0SMAA\0");},"SMAA")) {
             candidate.antiAliasing=antiAliasing?AntiAliasing::Smaa:AntiAliasing::Off;changed=true;
         }
-        if(ImGui::BeginCombo("Renderer (restart required)",graphicsBackendName(candidate.graphicsBackend))) {
+        changed|=resettableProperty(candidate.graphicsBackend,defaults.graphicsBackend,[&]{
+          bool selectedBackend=false;
+          const bool open=ImGui::BeginCombo("Renderer (restart required)",graphicsBackendName(candidate.graphicsBackend));
+          const auto item=GImGui->LastItemData;
+          if(open) {
             for(const auto backend:{GraphicsBackend::Direct3D12,GraphicsBackend::Direct3D11}) {
                 const bool selected=backend==candidate.graphicsBackend;
-                if(ImGui::Selectable(graphicsBackendName(backend),selected)) {candidate.graphicsBackend=backend;changed=true;}
+                if(ImGui::Selectable(graphicsBackendName(backend),selected)) {candidate.graphicsBackend=backend;selectedBackend=true;}
                 if(selected)ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
-        }
+          }
+          GImGui->LastItemData=item;
+          return selectedBackend;
+        },graphicsBackendName(defaults.graphicsBackend));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
             if(activeBackend)ImGui::SetTooltip("Active: %s. The selected renderer applies on the next launch.",graphicsBackendName(*activeBackend));
             else ImGui::SetTooltip("The selected renderer applies on the next launch.");
         }
         const auto resolutionLabel=std::to_string(candidate.pointShadowResolution);
-        if (ImGui::BeginCombo("Shadow resolution",resolutionLabel.c_str())) {
+        changed|=resettableProperty(candidate.pointShadowResolution,defaults.pointShadowResolution,[&]{
+          bool selectedResolution=false;
+          const bool open=ImGui::BeginCombo("Shadow resolution",resolutionLabel.c_str());
+          const auto item=GImGui->LastItemData;
+          if(open) {
             for (const auto resolution:PointShadowResolutions) {
                 const bool selected=resolution==candidate.pointShadowResolution;
                 const auto label=std::to_string(resolution);
-                if (ImGui::Selectable(label.c_str(),selected)) { candidate.pointShadowResolution=resolution;changed=true; }
+                if (ImGui::Selectable(label.c_str(),selected)) { candidate.pointShadowResolution=resolution;selectedResolution=true; }
                 if (selected) ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
-        }
+          }
+          GImGui->LastItemData=item;
+          return selectedResolution;
+        });
         if (changed) setValues(candidate);
         if (!status_.empty()) ImGui::TextWrapped("%s",status_.c_str());
         if (ImGui::Button("Close")) open_=false;

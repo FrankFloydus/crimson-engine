@@ -77,8 +77,8 @@ bool drawToneMappingControl(ToneMapping&);
 enum class ToneMappingParameterControl { ReinhardWhite, AcesWhite, AgxWhite, AgxContrast };
 using ToneMappingParameterEdit = std::function<void(ToneMappingParameterControl,bool)>;
 bool drawToneMappingParameterControls(ToneMapping, ToneMappingParameters&, const ToneMappingParameterEdit& edit = {});
-enum class GlowControl { Enabled, Strength, Size, Threshold, Tint, Saturation, SoftKnee, BlendMode, Mix,
-    Anamorphic, Quality, Level1, Level2, Level3, Level4, Level5, Level6, Level7 };
+enum class GlowControl { Enabled, Strength, Size, Threshold, Tint, Saturation, HdrScale, BlendMode, Mix,
+    Anamorphic, Quality, Level1, Level2, Level3, Level4, Level5, Level6, Level7, HdrLuminanceCap };
 using GlowControlEdit = std::function<void(GlowControl,bool)>;
 bool drawGlowControls(GlowSettings&, const GlowControlEdit& edit = {});
 enum class SsrControl { Enabled,Strength,Quality,Distance,Roughness,Tolerance,Bias };

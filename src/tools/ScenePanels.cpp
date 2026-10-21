@@ -1,3 +1,4 @@
+#include "PropertyReset.h"
 #include "ScenePanels.h"
 #include "SceneInspectorSections.h"
 #include "GameplayTagControls.h"
@@ -62,10 +63,10 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentFogSkyAffect, EnvironmentFogAerialPerspective, EnvironmentFogSunScatter,
     EnvironmentToneMapping, EnvironmentReinhardWhite, EnvironmentAcesWhite, EnvironmentAgxWhite, EnvironmentAgxContrast,
     EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
-    EnvironmentGlowTint,EnvironmentGlowSaturation,EnvironmentGlowSoftKnee,EnvironmentGlowBlendMode,EnvironmentGlowMix,
+    EnvironmentGlowTint,EnvironmentGlowSaturation,EnvironmentGlowHdrScale,EnvironmentGlowBlendMode,EnvironmentGlowMix,
     EnvironmentGlowAnamorphic,EnvironmentGlowQuality,
     EnvironmentGlowLevel1,EnvironmentGlowLevel2,EnvironmentGlowLevel3,EnvironmentGlowLevel4,
-    EnvironmentGlowLevel5,EnvironmentGlowLevel6,EnvironmentGlowLevel7,
+    EnvironmentGlowLevel5,EnvironmentGlowLevel6,EnvironmentGlowLevel7,EnvironmentGlowHdrLuminanceCap,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
@@ -322,13 +323,13 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     auto color=directional ? record->directional->color : record->point->color;
     auto intensity=directional ? record->directional->intensity : record->point->intensity;
     bool value=enabled;
-    const bool enabledChanged=ImGui::Checkbox("Enabled",&value);
+    const bool enabledChanged=resettableProperty(value,directional?SceneDirectionalLight{}.enabled:ScenePointLight{}.enabled,[&]{return ImGui::Checkbox("Enabled",&value);});
     propertyEdit(document,state,directional ? Edit::DirectionEnabled : Edit::PointEnabled,"Enable light",enabledChanged,
         changeEntity(id,[directional,value](auto& entity){if (directional) entity.directional->enabled=value; else entity.point->enabled=value;}));
-    const bool colorChanged=ImGui::ColorEdit3("Color",color.data(),ImGuiColorEditFlags_Float);
+    const bool colorChanged=resettableProperty(color,directional?SceneDirectionalLight{}.color:ScenePointLight{}.color,[&]{return ImGui::ColorEdit3("Color",color.data(),ImGuiColorEditFlags_Float);});
     propertyEdit(document,state,directional ? Edit::DirectionColor : Edit::PointColor,"Change light color",colorChanged,
         changeEntity(id,[directional,color](auto& entity){if (directional) entity.directional->color=color; else entity.point->color=color;}));
-    const bool intensityChanged=ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+    const bool intensityChanged=resettableProperty(intensity,directional?SceneDirectionalLight{}.intensity:ScenePointLight{}.intensity,[&]{return ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
     propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
         changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
     auto indirectEnergy=directional ? record->directional->indirectEnergy : record->point->indirectEnergy;
@@ -337,68 +338,68 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
         changeEntity(id,[directional,indirectEnergy](auto& entity){if(directional)entity.directional->indirectEnergy=indirectEnergy;else entity.point->indirectEnergy=indirectEnergy;}));
     if(directional) {
         auto light=*record->directional;
-        const bool shadows=ImGui::Checkbox("Cast Shadows",&light.castShadows);
+        const bool shadows=resettableProperty(light.castShadows,SceneDirectionalLight{}.castShadows,[&]{return ImGui::Checkbox("Cast Shadows",&light.castShadows);});
         propertyEdit(document,state,Edit::DirectionShadows,"Toggle directional shadows",shadows,
             changeEntity(id,[v=light.castShadows](auto& entity){entity.directional->castShadows=v;}));
         ImGui::BeginDisabled(!light.castShadows);
-        const bool distance=ImGui::DragFloat("Shadow Distance (m)",&light.shadowDistance,.5f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool distance=resettableProperty(light.shadowDistance,SceneDirectionalLight{}.shadowDistance,[&]{return ImGui::DragFloat("Shadow Distance (m)",&light.shadowDistance,.5f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::DirectionDistance,"Change directional shadow distance",distance,
             changeEntity(id,[v=light.shadowDistance](auto& entity){entity.directional->shadowDistance=v;}));
-        const bool depth=ImGui::DragFloat("Depth Bias (m)",&light.shadowDepthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);
+        const bool depth=resettableProperty(light.shadowDepthBias,SceneDirectionalLight{}.shadowDepthBias,[&]{return ImGui::DragFloat("Depth Bias (m)",&light.shadowDepthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::DirectionDepthBias,"Change directional shadow depth bias",depth,
             changeEntity(id,[v=light.shadowDepthBias](auto& entity){entity.directional->shadowDepthBias=v;}));
-        const bool normal=ImGui::DragFloat("Normal Bias (texels)",&light.shadowNormalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool normal=resettableProperty(light.shadowNormalBias,SceneDirectionalLight{}.shadowNormalBias,[&]{return ImGui::DragFloat("Normal Bias (texels)",&light.shadowNormalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::DirectionNormalBias,"Change directional shadow normal bias",normal,
             changeEntity(id,[v=light.shadowNormalBias](auto& entity){entity.directional->shadowNormalBias=v;}));
-        const bool angular=ImGui::DragFloat("Shadow Angular Diameter (\u00b0)",&light.shadowAngularDiameter,.01f,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool angular=resettableProperty(light.shadowAngularDiameter,SceneDirectionalLight{}.shadowAngularDiameter,[&]{return ImGui::DragFloat("Shadow Angular Diameter (\u00b0)",&light.shadowAngularDiameter,.01f,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::DirectionAngularDiameter,"Change directional shadow angular diameter",angular,
             changeEntity(id,[v=light.shadowAngularDiameter](auto& entity){entity.directional->shadowAngularDiameter=v;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Apparent light size. Larger values soften shadows with distance from the caster; zero gives hard shadows.");
         ImGui::EndDisabled();
     } else {
         auto radius=record->point->radius;
-        const bool changed=ImGui::DragFloat("Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool changed=resettableProperty(radius,ScenePointLight{}.radius,[&]{return ImGui::DragFloat("Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::PointRadius,"Change point light radius",changed,
             changeEntity(id,[radius](auto& entity){entity.point->radius=radius;}));
         auto attenuation=record->point->attenuation;
-        const bool attenuationChanged=ImGui::SliderFloat("Attenuation",&attenuation,-10,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool attenuationChanged=resettableProperty(attenuation,ScenePointLight{}.attenuation,[&]{return ImGui::SliderFloat("Attenuation",&attenuation,-10,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::PointAttenuation,"Change point light attenuation",attenuationChanged,
             changeEntity(id,[attenuation](auto& entity){entity.point->attenuation=attenuation;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Distance decay: 0 has no distance decay, 1 is inverse distance, and 2 is inverse square. Range Falloff still fades the range boundary.");
         auto nearFalloff=record->point->nearFalloffRadius;
-        const bool nearChanged=ImGui::DragFloat("Near Falloff Radius (m)",&nearFalloff,.05f,0,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool nearChanged=resettableProperty(nearFalloff,ScenePointLight{}.nearFalloffRadius,[&]{return ImGui::DragFloat("Near Falloff Radius (m)",&nearFalloff,.05f,0,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::PointNearFalloff,"Change point light near falloff",nearChanged,
             changeEntity(id,[nearFalloff](auto& entity){entity.point->nearFalloffRadius=nearFalloff;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Smooth brightness near the light. Zero retains inverse-square falloff.");
         auto specular=record->point->specularStrength;
-        const bool specularChanged=ImGui::SliderFloat("Specular Scale",&specular,0,1,"%.2f");
+        const bool specularChanged=resettableProperty(specular,ScenePointLight{}.specularStrength,[&]{return ImGui::SliderFloat("Specular Scale",&specular,0,1,"%.2f");});
         propertyEdit(document,state,Edit::PointSpecular,"Change point light specular scale",specularChanged,
             changeEntity(id,[specular](auto& entity){entity.point->specularStrength=specular;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scale this light's shiny highlights without changing diffuse illumination.");
         auto exponent=record->point->rangeFalloffExponent;
-        const bool exponentChanged=ImGui::SliderFloat("Range Falloff",&exponent,.25f,8,"%.2f");
+        const bool exponentChanged=resettableProperty(exponent,ScenePointLight{}.rangeFalloffExponent,[&]{return ImGui::SliderFloat("Range Falloff",&exponent,.25f,8,"%.2f");});
         propertyEdit(document,state,Edit::PointFalloffExponent,"Change point light range falloff",exponentChanged,
             changeEntity(id,[exponent](auto& entity){entity.point->rangeFalloffExponent=exponent;}));
         auto softness=record->point->edgeSoftness;
-        const bool softnessChanged=ImGui::SliderFloat("Edge Softness",&softness,.05f,1,"%.2f");
+        const bool softnessChanged=resettableProperty(softness,ScenePointLight{}.edgeSoftness,[&]{return ImGui::SliderFloat("Edge Softness",&softness,.05f,1,"%.2f");});
         propertyEdit(document,state,Edit::PointEdgeSoftness,"Change point light edge softness",softnessChanged,
             changeEntity(id,[softness](auto& entity){entity.point->edgeSoftness=softness;}));
         auto sourceRadius=record->point->sourceRadius;
-        const bool sourceRadiusChanged=ImGui::DragFloat("Source Radius (m)",&sourceRadius,.05f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool sourceRadiusChanged=resettableProperty(sourceRadius,ScenePointLight{}.sourceRadius,[&]{return ImGui::DragFloat("Source Radius (m)",&sourceRadius,.05f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::PointSourceRadius,"Change point light source radius",sourceRadiusChanged,
             changeEntity(id,[sourceRadius](auto& entity){entity.point->sourceRadius=sourceRadius;}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Larger source sizes soften shadows and broaden specular highlights. Zero retains a punctual source.");
         auto shadows=record->point->castShadows;
-        const bool shadowChanged=ImGui::Checkbox("Cast Shadows",&shadows);
+        const bool shadowChanged=resettableProperty(shadows,ScenePointLight{}.castShadows,[&]{return ImGui::Checkbox("Cast Shadows",&shadows);});
         propertyEdit(document,state,Edit::PointShadows,"Toggle point shadows",shadowChanged,
             changeEntity(id,[shadows](auto& entity){entity.point->castShadows=shadows;}));
         ImGui::BeginDisabled(!shadows);
         auto depthBias=record->point->shadowDepthBias;
-        const bool depthChanged=ImGui::DragFloat("Depth Bias (m)",&depthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);
+        const bool depthChanged=resettableProperty(depthBias,ScenePointLight{}.shadowDepthBias,[&]{return ImGui::DragFloat("Depth Bias (m)",&depthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::PointDepthBias,"Change point shadow depth bias",depthChanged,
             changeEntity(id,[depthBias](auto& entity){entity.point->shadowDepthBias=depthBias;}));
         auto normalBias=record->point->shadowNormalBias;
-        const bool normalChanged=ImGui::DragFloat("Normal Bias (texels)",&normalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        const bool normalChanged=resettableProperty(normalBias,ScenePointLight{}.shadowNormalBias,[&]{return ImGui::DragFloat("Normal Bias (texels)",&normalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);});
         propertyEdit(document,state,Edit::PointNormalBias,"Change point shadow normal bias",normalChanged,
             changeEntity(id,[normalBias](auto& entity){entity.point->shadowNormalBias=normalBias;}));
         ImGui::EndDisabled();
@@ -499,24 +500,30 @@ void modelAnimationControls(SceneDocument& document,PanelsState& state,const Ent
         const auto clipName=current<0?std::string("Bind Pose"):std::size_t(current)<model->animations.size()?
             (model->animations[current].name.empty()?"Clip "+std::to_string(std::int64_t(current)+1):model->animations[current].name):
             "Missing clip "+std::to_string(std::int64_t(current)+1);
-        bool changed=false;
-        if(ImGui::BeginCombo("Clip",clipName.c_str())) {
-            if(ImGui::Selectable("Bind Pose",current<0)){changed=current!=-1;animation.clip=-1;}
+        const bool changed=resettableProperty(animation.clip,SceneModelAnimation{}.clip,[&] {
+        bool updated=false;
+        const bool open=ImGui::BeginCombo("Clip",clipName.c_str());
+        const auto item=ImGui::GetCurrentContext()->LastItemData;
+        if(open) {
+            if(ImGui::Selectable("Bind Pose",current<0)){updated=current!=-1;animation.clip=-1;}
             for(std::size_t index=0;index<model->animations.size();++index) {
                 ImGui::PushID(static_cast<int>(index));
                 const auto& clip=model->animations[index];const auto name=clip.name.empty()?"Clip "+std::to_string(index+1):clip.name;
                 if(ImGui::Selectable(name.c_str(),current==static_cast<std::int32_t>(index))) {
-                    changed=current!=static_cast<std::int32_t>(index);animation.clip=static_cast<std::int32_t>(index);
+                    updated=current!=static_cast<std::int32_t>(index);animation.clip=static_cast<std::int32_t>(index);
                 }
                 ImGui::PopID();
             }
             ImGui::EndCombo();
         }
+        ImGui::GetCurrentContext()->LastItemData=item;
+        return updated;
+        },"Bind Pose");
         field(Edit::ModelAnimationClip,"Choose model animation",changed);
-        field(Edit::ModelAnimationPlaying,"Toggle model animation playback",ImGui::Checkbox("Playing",&animation.playing));
-        field(Edit::ModelAnimationLoop,"Toggle model animation loop",ImGui::Checkbox("Loop",&animation.loop));
-        field(Edit::ModelAnimationSpeed,"Change model animation speed",ImGui::DragFloat("Speed",&animation.speed,.01f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-        field(Edit::ModelAnimationStart,"Change model animation start",ImGui::DragFloat("Start Time (s)",&animation.startTime,.05f,0,1e9f,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+        field(Edit::ModelAnimationPlaying,"Toggle model animation playback",resettableProperty(animation.playing,SceneModelAnimation{}.playing,[&]{return ImGui::Checkbox("Playing",&animation.playing);}));
+        field(Edit::ModelAnimationLoop,"Toggle model animation loop",resettableProperty(animation.loop,SceneModelAnimation{}.loop,[&]{return ImGui::Checkbox("Loop",&animation.loop);}));
+        field(Edit::ModelAnimationSpeed,"Change model animation speed",resettableProperty(animation.speed,SceneModelAnimation{}.speed,[&]{return ImGui::DragFloat("Speed",&animation.speed,.01f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+        field(Edit::ModelAnimationStart,"Change model animation start",resettableProperty(animation.startTime,SceneModelAnimation{}.startTime,[&]{return ImGui::DragFloat("Start Time (s)",&animation.startTime,.05f,0,1e9f,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Changing Clip or Start Time restarts playback. Playing and Speed retain the current time.");
         ImGui::TreePop();
     }
@@ -559,19 +566,19 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
     }
     int source=static_cast<int>(value.source);
     const char* sources[]{"HDRI / IBL","Procedural Sky"};
-    const bool sourceChanged=ImGui::Combo("Source",&source,sources,2);
+    const bool sourceChanged=resettableProperty(source,static_cast<int>(EnvironmentSettings{}.source),[&]{return ImGui::Combo("Source",&source,sources,2);},sources[static_cast<int>(EnvironmentSettings{}.source)]);
     if(sourceChanged)value.source=static_cast<EnvironmentSource>(source);
     field(Edit::EnvironmentSource,"Change environment source",sourceChanged);
-    field(Edit::EnvironmentEnabled,"Toggle environment lighting",ImGui::Checkbox("Lighting",&value.enabled));
-    field(Edit::EnvironmentSpecularAA,"Toggle specular antialiasing",ImGui::Checkbox("Specular AA",&value.specularAA));
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce sparkling specular highlights from undersampled surface normals.");
+    field(Edit::EnvironmentEnabled,"Toggle environment lighting",resettableProperty(value.enabled,EnvironmentSettings{}.enabled,[&]{return ImGui::Checkbox("Lighting",&value.enabled);}));
     field(Edit::EnvironmentIntensity,"Change environment intensity",
-        ImGui::SliderFloat("Intensity",&value.intensity,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        resettableProperty(value.intensity,EnvironmentSettings{}.intensity,[&]{return ImGui::SliderFloat("Intensity",&value.intensity,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+    field(Edit::EnvironmentSpecularAA,"Toggle specular antialiasing",resettableProperty(value.specularAA,EnvironmentSettings{}.specularAA,[&]{return ImGui::Checkbox("Specular AA",&value.specularAA);}));
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce specular shimmer by filtering undersampled normals. Highlights may broaden.");
     if(value.source==EnvironmentSource::Hdri) {
         if(ImGui::CollapsingHeader("HDRI",ImGuiTreeNodeFlags_DefaultOpen)) {
             field(Edit::EnvironmentImage,"Assign environment image",drawEnvironmentImageField(value,assets));
             field(Edit::EnvironmentRotation,"Rotate environment",
-                ImGui::SliderFloat("Rotation",&value.rotation,-180,180,"%.1f deg",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(value.rotation,EnvironmentSettings{}.rotation,[&]{return ImGui::SliderFloat("Rotation",&value.rotation,-180,180,"%.1f deg",ImGuiSliderFlags_AlwaysClamp);}));
         }
     } else if(ImGui::CollapsingHeader("Procedural Sky",ImGuiTreeNodeFlags_DefaultOpen)) {
         auto& sky=value.procedural;
@@ -579,18 +586,18 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         ImGui::PushID("Procedural");
         if(ImGui::CollapsingHeader("Sky",ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::PushID("Sky");
-            field(Edit::EnvironmentSkyTop,"Change sky top color",ImGui::ColorEdit3("Top Color",sky.skyTop.data(),ImGuiColorEditFlags_Float));
-            field(Edit::EnvironmentSkyHorizon,"Change sky horizon color",ImGui::ColorEdit3("Horizon Color",sky.skyHorizon.data(),ImGuiColorEditFlags_Float));
+            field(Edit::EnvironmentSkyTop,"Change sky top color",resettableProperty(sky.skyTop,ProceduralSkySettings{}.skyTop,[&]{return ImGui::ColorEdit3("Top Color",sky.skyTop.data(),ImGuiColorEditFlags_Float);}));
+            field(Edit::EnvironmentSkyHorizon,"Change sky horizon color",resettableProperty(sky.skyHorizon,ProceduralSkySettings{}.skyHorizon,[&]{return ImGui::ColorEdit3("Horizon Color",sky.skyHorizon.data(),ImGuiColorEditFlags_Float);}));
             field(Edit::EnvironmentSkyCurve,"Change sky curve",
-                ImGui::DragFloat("Curve",&sky.skyCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(sky.skyCurve,ProceduralSkySettings{}.skyCurve,[&]{return ImGui::DragFloat("Curve",&sky.skyCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             ImGui::PopID();
         }
         if(ImGui::CollapsingHeader("Ground",ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::PushID("Ground");
-            field(Edit::EnvironmentGroundBottom,"Change ground bottom color",ImGui::ColorEdit3("Bottom Color",sky.groundBottom.data(),ImGuiColorEditFlags_Float));
-            field(Edit::EnvironmentGroundHorizon,"Change ground horizon color",ImGui::ColorEdit3("Horizon Color",sky.groundHorizon.data(),ImGuiColorEditFlags_Float));
+            field(Edit::EnvironmentGroundBottom,"Change ground bottom color",resettableProperty(sky.groundBottom,ProceduralSkySettings{}.groundBottom,[&]{return ImGui::ColorEdit3("Bottom Color",sky.groundBottom.data(),ImGuiColorEditFlags_Float);}));
+            field(Edit::EnvironmentGroundHorizon,"Change ground horizon color",resettableProperty(sky.groundHorizon,ProceduralSkySettings{}.groundHorizon,[&]{return ImGui::ColorEdit3("Horizon Color",sky.groundHorizon.data(),ImGuiColorEditFlags_Float);}));
             field(Edit::EnvironmentGroundCurve,"Change ground curve",
-                ImGui::DragFloat("Curve",&sky.groundCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(sky.groundCurve,ProceduralSkySettings{}.groundCurve,[&]{return ImGui::DragFloat("Curve",&sky.groundCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             ImGui::PopID();
         }
         if(ImGui::CollapsingHeader("Sun",ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -610,13 +617,15 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
                 ImGui::EndCombo();
             }
             field(Edit::EnvironmentSun,"Assign sky sun",sunChanged);
-            field(Edit::EnvironmentSunDiameter,"Change sun diameter",
-                ImGui::DragFloat("Size (deg)",&sky.sunDiameter,.01f,0,std::nextafter(2*sky.sunHaloExtent,0.f),"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            const bool diameterChanged=resettableProperty(sky.sunDiameter,ProceduralSkySettings{}.sunDiameter,[&]{return ImGui::DragFloat("Size (deg)",&sky.sunDiameter,.01f,0,std::nextafter(2*sky.sunHaloExtent,0.f),"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+            if(propertyResetClicked() && sky.sunDiameter>=2*sky.sunHaloExtent)sky.sunHaloExtent=ProceduralSkySettings{}.sunHaloExtent;
+            field(Edit::EnvironmentSunDiameter,"Change sun diameter",diameterChanged);
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Angular diameter in degrees.");
-            field(Edit::EnvironmentSunHaloExtent,"Change sun halo extent",
-                ImGui::DragFloat("Halo Extent",&sky.sunHaloExtent,.1f,std::nextafter(sky.sunDiameter*.5f,180.f),180,"%.2f deg",ImGuiSliderFlags_AlwaysClamp));
+            const bool haloChanged=resettableProperty(sky.sunHaloExtent,ProceduralSkySettings{}.sunHaloExtent,[&]{return ImGui::DragFloat("Halo Extent",&sky.sunHaloExtent,.1f,std::nextafter(sky.sunDiameter*.5f,180.f),180,"%.2f deg",ImGuiSliderFlags_AlwaysClamp);});
+            if(propertyResetClicked() && sky.sunDiameter>=2*sky.sunHaloExtent)sky.sunDiameter=ProceduralSkySettings{}.sunDiameter;
+            field(Edit::EnvironmentSunHaloExtent,"Change sun halo extent",haloChanged);
             field(Edit::EnvironmentSunHaloCurve,"Change sun halo curve",
-                ImGui::DragFloat("Halo Curve",&sky.sunHaloCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(sky.sunHaloCurve,ProceduralSkySettings{}.sunHaloCurve,[&]{return ImGui::DragFloat("Halo Curve",&sky.sunHaloCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             ImGui::PopID();
         }
         ImGui::PopID();
@@ -631,16 +640,16 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
     }
     if(ImGui::CollapsingHeader("Global Illumination")) {
         ImGui::PushID("GI");auto& gi=value.ssgi;
-        field(Edit::EnvironmentGiEnabled,"Toggle global illumination",ImGui::Checkbox("Enabled",&gi.enabled));
+        field(Edit::EnvironmentGiEnabled,"Toggle global illumination",resettableProperty(gi.enabled,SsgiSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&gi.enabled);}));
         ImGui::BeginDisabled(!gi.enabled);
         field(Edit::EnvironmentGiStrength,"Change global illumination strength",
-            ImGui::SliderFloat("Intensity",&gi.strength,0,4,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(gi.strength,SsgiSettings{}.strength,[&]{return ImGui::SliderFloat("Intensity",&gi.strength,0,4,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Brightness of reflected light.");
         field(Edit::EnvironmentGiDistance,"Change global illumination distance",
-            ImGui::DragFloat("Reach (m)",&gi.maxDistance,.05f,.1f,20,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(gi.maxDistance,SsgiSettings{}.maxDistance,[&]{return ImGui::DragFloat("Reach (m)",&gi.maxDistance,.05f,.1f,20,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("How far visible surfaces can exchange light per bounce. Offscreen surfaces remain unavailable.");
         int quality=static_cast<int>(gi.quality);const char* qualities[]{"Low","Medium","High","Custom"};
-        const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,4);
+        const bool qualityChanged=resettableProperty(quality,static_cast<int>(SsgiSettings{}.quality),[&]{return ImGui::Combo("Quality",&quality,qualities,4);});
         if(qualityChanged)gi.quality=static_cast<SsgiQuality>(quality);
         field(Edit::EnvironmentGiQuality,"Change screen-space GI quality",qualityChanged);
         if(ImGui::Button("Use Defaults") && (!document.transactionActive() || finishScenePanelEdit(document))) {
@@ -651,34 +660,34 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Restore the recommended GI tuning. Keeps Enabled unchanged.");
         if(ImGui::TreeNode("Advanced")) {
             field(Edit::EnvironmentGiBounces,"Change global illumination bounces",
-                ImGui::SliderInt("Bounces",&gi.bounces,1,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.bounces,SsgiSettings{}.bounces,[&]{return ImGui::SliderInt("Bounces",&gi.bounces,1,4,"%d",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Additional diffuse reflections increase noise and GPU work.");
             field(Edit::EnvironmentGiTemporal,"Change global illumination temporal stability",
-                ImGui::SliderFloat("Stability",&gi.temporalStability,0,.98f,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.temporalStability,SsgiSettings{}.temporalStability,[&]{return ImGui::SliderFloat("Stability",&gi.temporalStability,0,.98f,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Higher values reduce flicker and respond more slowly to lighting changes.");
             auto budget=ssgiQualityBudget(gi);int rays=static_cast<int>(budget.rays);
-            const bool raysChanged=ImGui::SliderInt("Samples Per Pixel",&rays,1,16,"%d",ImGuiSliderFlags_AlwaysClamp);
+            const bool raysChanged=resettableProperty(rays,SsgiSettings{}.rays,[&]{return ImGui::SliderInt("Samples Per Pixel",&rays,1,16,"%d",ImGuiSliderFlags_AlwaysClamp);});
             if(raysChanged){gi.rays=rays;gi.steps=static_cast<int>(budget.steps);gi.quality=SsgiQuality::Custom;}
             field(Edit::EnvironmentGiRays,"Change global illumination samples",raysChanged);
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Rays traced per half-resolution pixel. Editing selects Custom quality.");
             budget=ssgiQualityBudget(gi);int steps=static_cast<int>(budget.steps);
-            const bool stepsChanged=ImGui::SliderInt("Ray Steps",&steps,8,64,"%d",ImGuiSliderFlags_AlwaysClamp);
+            const bool stepsChanged=resettableProperty(steps,SsgiSettings{}.steps,[&]{return ImGui::SliderInt("Ray Steps",&steps,8,64,"%d",ImGuiSliderFlags_AlwaysClamp);});
             if(stepsChanged){gi.steps=steps;gi.rays=static_cast<int>(budget.rays);gi.quality=SsgiQuality::Custom;}
             field(Edit::EnvironmentGiSteps,"Change global illumination ray steps",stepsChanged);
             field(Edit::EnvironmentGiBias,"Change global illumination ray bias",
-                ImGui::DragFloat("Ray Bias (m)",&gi.rayBias,.001f,.001f,.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.rayBias,SsgiSettings{}.rayBias,[&]{return ImGui::DragFloat("Ray Bias (m)",&gi.rayBias,.001f,.001f,.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Offsets ray origins from the receiver to reduce self-intersection.");
             field(Edit::EnvironmentGiThickness,"Change global illumination thickness",
-                ImGui::DragFloat("Thickness (m)",&gi.thickness,.005f,.01f,2,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.thickness,SsgiSettings{}.thickness,[&]{return ImGui::DragFloat("Thickness (m)",&gi.thickness,.005f,.01f,2,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Depth hit tolerance. Higher values can leak through thin walls.");
             field(Edit::EnvironmentGiDenoiseRadius,"Change global illumination denoise radius",
-                ImGui::SliderInt("Filter Extent",&gi.denoiseRadius,0,4,"%d",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.denoiseRadius,SsgiSettings{}.denoiseRadius,[&]{return ImGui::SliderInt("Filter Extent",&gi.denoiseRadius,0,4,"%d",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Spatial filter extent: 0 disables it; 1 through 4 reach up to 1, 2, 3 or 7 half-resolution pixels. Higher values smooth larger noise patterns.");
             field(Edit::EnvironmentGiDenoiseStrength,"Change global illumination denoise strength",
-                ImGui::SliderFloat("Smoothing",&gi.denoiseStrength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.denoiseStrength,SsgiSettings{}.denoiseStrength,[&]{return ImGui::SliderFloat("Smoothing",&gi.denoiseStrength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Spatial noise filtering. Zero preserves unfiltered samples.");
             field(Edit::EnvironmentGiRadianceClamp,"Change global illumination radiance clamp",
-                ImGui::DragFloat("Radiance Clamp",&gi.radianceClamp,.1f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(gi.radianceClamp,SsgiSettings{}.radianceClamp,[&]{return ImGui::DragFloat("Radiance Clamp",&gi.radianceClamp,.1f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Limits bright HDR donor samples to reduce fireflies. Zero disables the clamp.");
             ImGui::TreePop();
         }
@@ -689,15 +698,15 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
     }
     if(ImGui::CollapsingHeader("Screen Space Ambient Occlusion")) {
         ImGui::PushID("SSAO");auto& ao=value.ssao;
-        field(Edit::EnvironmentSsaoEnabled,"Toggle screen-space ambient occlusion",ImGui::Checkbox("Enabled",&ao.enabled));
+        field(Edit::EnvironmentSsaoEnabled,"Toggle screen-space ambient occlusion",resettableProperty(ao.enabled,SsaoSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&ao.enabled);}));
         ImGui::BeginDisabled(!ao.enabled);
         field(Edit::EnvironmentSsaoStrength,"Change screen-space ambient occlusion strength",
-            ImGui::SliderFloat("Strength",&ao.strength,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(ao.strength,SsaoSettings{}.strength,[&]{return ImGui::SliderFloat("Strength",&ao.strength,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         field(Edit::EnvironmentSsaoRadius,"Change screen-space ambient occlusion radius",
-            ImGui::DragFloat("Radius (m)",&ao.radius,.01f,.05f,5,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(ao.radius,SsaoSettings{}.radius,[&]{return ImGui::DragFloat("Radius (m)",&ao.radius,.01f,.05f,5,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("World-space radius used to find nearby screen-space occluders.");
         int quality=static_cast<int>(ao.quality);const char* qualities[]{"Low","Medium","High"};
-        const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,3);
+        const bool qualityChanged=resettableProperty(quality,static_cast<int>(SsaoSettings{}.quality),[&]{return ImGui::Combo("Quality",&quality,qualities,3);});
         if(qualityChanged)ao.quality=static_cast<SsaoQuality>(quality);
         field(Edit::EnvironmentSsaoQuality,"Change screen-space ambient occlusion quality",qualityChanged);
         ImGui::EndDisabled();
@@ -712,47 +721,49 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
     });
     if(ImGui::CollapsingHeader("Background",ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushID("Background");
-        field(Edit::EnvironmentBackgroundShow,"Toggle environment background",ImGui::Checkbox("Show Background",&value.background.show));
+        field(Edit::EnvironmentBackgroundShow,"Toggle environment background",resettableProperty(value.background.show,EnvironmentSettings{}.background.show,[&]{return ImGui::Checkbox("Show Background",&value.background.show);}));
         if(!value.background.show) {
-            field(Edit::EnvironmentBackgroundOverride,"Toggle custom background color",ImGui::Checkbox("Custom Color",&value.background.overrideColor));
+            field(Edit::EnvironmentBackgroundOverride,"Toggle custom background color",resettableProperty(value.background.overrideColor,EnvironmentSettings{}.background.overrideColor,[&]{return ImGui::Checkbox("Custom Color",&value.background.overrideColor);}));
             if(value.background.overrideColor)
-                field(Edit::EnvironmentBackgroundColor,"Change background color",ImGui::ColorEdit3("Color",value.background.color.data(),ImGuiColorEditFlags_Float));
+                field(Edit::EnvironmentBackgroundColor,"Change background color",resettableProperty(value.background.color,EnvironmentSettings{}.background.color,[&]{return ImGui::ColorEdit3("Color",value.background.color.data(),ImGuiColorEditFlags_Float);}));
         }
         ImGui::PopID();
     }
     if(ImGui::CollapsingHeader("Fog",ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushID("Fog");
         auto& fog=value.fog;
-        field(Edit::EnvironmentFogEnabled,"Toggle fog",ImGui::Checkbox("Enabled",&fog.enabled));
+        field(Edit::EnvironmentFogEnabled,"Toggle fog",resettableProperty(fog.enabled,FogSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&fog.enabled);}));
         ImGui::BeginDisabled(!fog.enabled);
         int mode=static_cast<int>(fog.mode);
         const char* modes[]{"Exponential","Depth"};
-        const bool modeChanged=ImGui::Combo("Mode",&mode,modes,2);
+        const bool modeChanged=resettableProperty(mode,static_cast<int>(FogSettings{}.mode),[&]{return ImGui::Combo("Mode",&mode,modes,2);},modes[static_cast<int>(FogSettings{}.mode)]);
         if(modeChanged)fog.mode=static_cast<FogMode>(mode);
         field(Edit::EnvironmentFogMode,"Change fog mode",modeChanged);
-        field(Edit::EnvironmentFogColor,"Change fog color",ImGui::ColorEdit3("Color",fog.color.data(),ImGuiColorEditFlags_Float));
+        field(Edit::EnvironmentFogColor,"Change fog color",resettableProperty(fog.color,FogSettings{}.color,[&]{return ImGui::ColorEdit3("Color",fog.color.data(),ImGuiColorEditFlags_Float);}));
         field(Edit::EnvironmentFogLightEnergy,"Change fog light energy",
-            ImGui::DragFloat("Light Energy",&fog.lightEnergy,.01f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(fog.lightEnergy,FogSettings{}.lightEnergy,[&]{return ImGui::DragFloat("Light Energy",&fog.lightEnergy,.01f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Brightness of the fog color.");
         field(Edit::EnvironmentFogSkyAffect,"Change fog sky affect",
-            ImGui::SliderFloat("Sky Affect",&fog.skyAffect,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(fog.skyAffect,FogSettings{}.skyAffect,[&]{return ImGui::SliderFloat("Sky Affect",&fog.skyAffect,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("How much fog covers the sky and empty background.");
         field(Edit::EnvironmentFogAerialPerspective,"Change fog aerial perspective",
-            ImGui::SliderFloat("Aerial Perspective",&fog.aerialPerspective,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(fog.aerialPerspective,FogSettings{}.aerialPerspective,[&]{return ImGui::SliderFloat("Aerial Perspective",&fog.aerialPerspective,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Blends distant fog toward the sky color.");
         field(Edit::EnvironmentFogSunScatter,"Change fog sun scatter",
-            ImGui::SliderFloat("Sun Scatter",&fog.sunScatter,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(fog.sunScatter,FogSettings{}.sunScatter,[&]{return ImGui::SliderFloat("Sun Scatter",&fog.sunScatter,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Scatters directional light into fog when looking toward its source.");
         if(fog.mode==FogMode::Exponential) {
             field(Edit::EnvironmentFogDensity,"Change fog density",
-                ImGui::DragFloat("Density",&fog.density,.0001f,0,1000,"%.4f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(fog.density,FogSettings{}.density,[&]{return ImGui::DragFloat("Density",&fog.density,.0001f,0,1000,"%.4f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Inverse meters (m^-1).");
         } else {
             const float beginMaximum=std::nextafter(fog.depthEnd>0?fog.depthEnd:std::numeric_limits<float>::max(),0.f);
-            const bool beginChanged=ImGui::DragFloat("Start (m)",&fog.depthBegin,.1f,0,beginMaximum,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-            if(beginChanged)fog.depthBegin=std::clamp(fog.depthBegin,0.f,beginMaximum);
+            const bool beginChanged=resettableProperty(fog.depthBegin,FogSettings{}.depthBegin,[&]{return ImGui::DragFloat("Start (m)",&fog.depthBegin,.1f,0,beginMaximum,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+            if(propertyResetClicked() && fog.depthEnd>0 && fog.depthEnd<=fog.depthBegin)fog.depthEnd=FogSettings{}.depthEnd;
+            else if(beginChanged)fog.depthBegin=std::clamp(fog.depthBegin,0.f,beginMaximum);
             field(Edit::EnvironmentFogDepthBegin,"Change fog start",beginChanged);
-            const bool endChanged=ImGui::DragFloat("End (m)",&fog.depthEnd,.1f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+            const bool endChanged=resettableProperty(fog.depthEnd,FogSettings{}.depthEnd,[&]{return ImGui::DragFloat("End (m)",&fog.depthEnd,.1f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+            if(propertyResetClicked() && fog.depthEnd<=fog.depthBegin)fog.depthBegin=FogSettings{}.depthBegin;
             if(endChanged && fog.depthEnd>0 && fog.depthEnd<=fog.depthBegin) {
                 fog.depthEnd=std::nextafter(fog.depthBegin,std::numeric_limits<float>::max());
                 if(fog.depthEnd==fog.depthBegin)fog.depthEnd=0;
@@ -760,39 +771,39 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             field(Edit::EnvironmentFogDepthEnd,"Change fog end",endChanged);
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("0 uses the camera far plane.");
             field(Edit::EnvironmentFogDepthCurve,"Change fog depth curve",
-                ImGui::DragFloat("Curve",&fog.depthCurve,.01f,.001f,std::numeric_limits<float>::max(),"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(fog.depthCurve,FogSettings{}.depthCurve,[&]{return ImGui::DragFloat("Curve",&fog.depthCurve,.01f,.001f,std::numeric_limits<float>::max(),"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             field(Edit::EnvironmentFogDepthOpacity,"Change fog max opacity",
-                ImGui::SliderFloat("Max Opacity",&fog.depthOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                resettableProperty(fog.depthOpacity,FogSettings{}.depthOpacity,[&]{return ImGui::SliderFloat("Max Opacity",&fog.depthOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Maximum opacity of depth fog.");
         }
-        field(Edit::EnvironmentFogHeight,"Change fog height",ImGui::DragFloat("Height (m)",&fog.height,.01f,0,0,"%.2f"));
+        field(Edit::EnvironmentFogHeight,"Change fog height",resettableProperty(fog.height,FogSettings{}.height,[&]{return ImGui::DragFloat("Height (m)",&fog.height,.01f,0,0,"%.2f");}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("World-space level. Requires nonzero Height Density.");
-        field(Edit::EnvironmentFogHeightDensity,"Change fog height density",ImGui::DragFloat("Height Density",&fog.heightDensity,.0001f,0,0,"%.4f"));
+        field(Edit::EnvironmentFogHeightDensity,"Change fog height density",resettableProperty(fog.heightDensity,FogSettings{}.heightDensity,[&]{return ImGui::DragFloat("Height Density",&fog.heightDensity,.0001f,0,0,"%.4f");}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Positive fills below Height; negative above. 0 disables height fog.");
         ImGui::EndDisabled();
         ImGui::PopID();
     }
     if(ImGui::CollapsingHeader("Post-processing",ImGuiTreeNodeFlags_DefaultOpen)) {
         field(Edit::Exposure,"Change exposure",
-            ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8,"%.2f",ImGuiSliderFlags_Logarithmic));
+            resettableProperty(environment.exposure,SceneEnvironment{}.exposure,[&]{return ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8,"%.2f",ImGuiSliderFlags_Logarithmic);}));
         field(Edit::EnvironmentToneMapping,"Change tone mapping",drawToneMappingControl(value.toneMapping));
         drawToneMappingParameterControls(value.toneMapping,value.toneMappingParameters,[&](ToneMappingParameterControl control,bool changed) {
             constexpr std::array<Edit,4> properties{Edit::EnvironmentReinhardWhite,Edit::EnvironmentAcesWhite,Edit::EnvironmentAgxWhite,Edit::EnvironmentAgxContrast};
             constexpr std::array<const char*,4> labels{"Change Reinhard white point","Change ACES white point","Change AgX white point","Change AgX contrast"};
             const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
         });
-        field(Edit::EnvironmentDebanding,"Toggle debanding",ImGui::Checkbox("Debanding",&value.debanding));
+        field(Edit::EnvironmentDebanding,"Toggle debanding",resettableProperty(value.debanding,EnvironmentSettings{}.debanding,[&]{return ImGui::Checkbox("Debanding",&value.debanding);}));
         drawGlowControls(value.glow,[&](GlowControl control,bool changed) {
-            constexpr std::array<Edit,18> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold,
-                Edit::EnvironmentGlowTint,Edit::EnvironmentGlowSaturation,Edit::EnvironmentGlowSoftKnee,Edit::EnvironmentGlowBlendMode,Edit::EnvironmentGlowMix,
+            constexpr std::array<Edit,19> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold,
+                Edit::EnvironmentGlowTint,Edit::EnvironmentGlowSaturation,Edit::EnvironmentGlowHdrScale,Edit::EnvironmentGlowBlendMode,Edit::EnvironmentGlowMix,
                 Edit::EnvironmentGlowAnamorphic,Edit::EnvironmentGlowQuality,
                 Edit::EnvironmentGlowLevel1,Edit::EnvironmentGlowLevel2,Edit::EnvironmentGlowLevel3,Edit::EnvironmentGlowLevel4,
-                Edit::EnvironmentGlowLevel5,Edit::EnvironmentGlowLevel6,Edit::EnvironmentGlowLevel7};
-            constexpr std::array<const char*,18> labels{"Toggle glow","Change glow intensity","Change glow spread","Change glow threshold",
-                "Change glow tint","Change glow saturation","Change glow threshold softness","Change glow blend mode","Change glow mix",
+                Edit::EnvironmentGlowLevel5,Edit::EnvironmentGlowLevel6,Edit::EnvironmentGlowLevel7,Edit::EnvironmentGlowHdrLuminanceCap};
+            constexpr std::array<const char*,19> labels{"Toggle glow","Change glow intensity","Change glow spread","Change glow threshold",
+                "Change glow tint","Change glow saturation","Change glow HDR scale","Change glow blend mode","Change glow mix",
                 "Change glow anamorphic stretch","Change glow quality",
                 "Change glow level 1","Change glow level 2","Change glow level 3","Change glow level 4",
-                "Change glow level 5","Change glow level 6","Change glow level 7"};
+                "Change glow level 5","Change glow level 6","Change glow level 7","Change glow HDR luminance cap"};
             const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
         });
         if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
@@ -980,13 +991,13 @@ void navigationVolumeControls(SceneDocument& document,PanelsState& state,const E
         if(state.active>=Edit::VolumeEnabled && state.active<=Edit::VolumeProfiles)finishEdit(document,state,state.active);return;
     }
     auto volume=*record.navigationVolume;
-    const bool enabled=ImGui::Checkbox("Enabled##navigation-volume",&volume.enabled);
+    const bool enabled=resettableProperty(volume.enabled,SceneNavigationVolume{}.enabled,[&]{return ImGui::Checkbox("Enabled##navigation-volume",&volume.enabled);});
     propertyEdit(document,state,Edit::VolumeEnabled,"Toggle navigation volume",enabled,changeEntity(record.id,[volume](auto& entity){entity.navigationVolume->enabled=volume.enabled;}));
-    const bool dimensions=ImGui::DragFloat3("Dimensions (m)",volume.size.data(),.1f,.001f,100000.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    const bool dimensions=resettableProperty(volume.size,SceneNavigationVolume{}.size,[&]{return ImGui::DragFloat3("Dimensions (m)",volume.size.data(),.1f,.001f,100000.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
     propertyEdit(document,state,Edit::VolumeSize,"Resize navigation volume",dimensions,changeEntity(record.id,[volume](auto& entity){entity.navigationVolume->size=volume.size;}));
     if(ImGui::TreeNodeEx("Baking",ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto bakeField=[&](const char* label,float NavigationBakeSettings::* member,Edit edit,float speed,float minimum,float maximum) {
-            const bool changed=ImGui::DragFloat(label,&(volume.bake.*member),speed,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            const bool changed=resettableProperty((volume.bake.*member),(NavigationBakeSettings{}.*member),[&]{return ImGui::DragFloat(label,&(volume.bake.*member),speed,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
             propertyEdit(document,state,edit,"Change navigation baking",changed,changeEntity(record.id,[volume](auto& entity){entity.navigationVolume->bake=volume.bake;}));
         };
         bakeField("Cell Size (m)",&NavigationBakeSettings::cellSize,Edit::VolumeCellSize,.01f,.01f,10.f);
@@ -1143,11 +1154,11 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
     if(record.navigation && section==SceneComponentKind::Navigation) {
         auto value=*record.navigation;
         if(componentHeader(state,record,SceneComponentKind::Navigation)) {
-            const bool enabled=ImGui::Checkbox("Enabled##navigation",&value.enabled);
+            const bool enabled=resettableProperty(value.enabled,SceneNavigationAgent{}.enabled,[&]{return ImGui::Checkbox("Enabled##navigation",&value.enabled);});
             propertyEdit(document,state,Edit::NavigationEnabled,"Toggle navigation agent",enabled,
                 changeEntity(record.id,[value](auto& entity){entity.navigation=value;}));
             if(record.controller)controllerProfileControls(document,record,assets,navigation);
-            const bool route=ImGui::Checkbox("Show Route",&value.showRoute);
+            const bool route=resettableProperty(value.showRoute,SceneNavigationAgent{}.showRoute,[&]{return ImGui::Checkbox("Show Route",&value.showRoute);});
             propertyEdit(document,state,Edit::CharacterRoute,"Toggle character route",route,
                 changeEntity(record.id,[v=value.showRoute](auto& entity){entity.navigation->showRoute=v;}));
         } else if(state.active==Edit::CharacterRoute || state.active==Edit::NavigationEnabled) {
@@ -1159,17 +1170,17 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
         if(componentHeader(state,record,SceneComponentKind::Controller)) {
             if(!record.navigation)controllerProfileControls(document,record,assets,navigation);
             if(drawCollisionMaskControl("Collision Layers",value.collision.layers,collisionNames,~WorldCollisionLayer,
-                                        "%s is reserved for shared level collision.")) {
+                                        "%s is reserved for shared level collision.",SceneCharacterController{}.collision.layers)) {
                 finishScenePanelEdit(document);document.edit("Change character collision layers",changeEntity(record.id,[value](auto& entity){entity.controller->collision.layers=value.collision.layers;}));
             }
             if(drawCollisionMaskControl("Collision Mask",value.collision.mask,collisionNames,~WorldCollisionLayer,
-                                        "Character Controllers always collide with %s shared level collision.")) {
+                                        "Character Controllers always collide with %s shared level collision.",SceneCharacterController{}.collision.mask)) {
                 finishScenePanelEdit(document);document.edit("Change character collision mask",changeEntity(record.id,[value](auto& entity){entity.controller->collision.mask=value.collision.mask;}));
             }
-            const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
+            const bool visible=resettableProperty(value.showCollisionInGame,SceneCharacterController{}.showCollisionInGame,[&]{return ImGui::Checkbox("Show in Game",&value.showCollisionInGame);});
             propertyEdit(document,state,Edit::CharacterCollisionVisible,"Toggle character collision display",visible,
                 changeEntity(record.id,[v=value.showCollisionInGame](auto& entity){entity.controller->showCollisionInGame=v;}));
-            const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
+            const bool color=resettableProperty(value.collisionColor,SceneCharacterController{}.collisionColor,[&]{return ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);});
             propertyEdit(document,state,Edit::CharacterCollisionColor,"Change character collision color",color,
                 changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.controller->collisionColor=v;}));
         } else if(state.active==Edit::CharacterCollisionVisible || state.active==Edit::CharacterCollisionColor) {
@@ -1400,7 +1411,10 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 if(componentHeader(state,record,SceneComponentKind::Collider)) {
                     auto value=*record.collider;
                     const auto originalMode=value.mode;
-                    if(ImGui::BeginCombo("Mode",value.mode==ColliderMode::Solid?"Solid":"Trigger")) {
+                    resettableProperty(value.mode,SceneCollider{}.mode,[&] {
+                    const bool open=ImGui::BeginCombo("Mode",value.mode==ColliderMode::Solid?"Solid":"Trigger");
+                    const auto item=ImGui::GetCurrentContext()->LastItemData;
+                    if(open) {
                         if(ImGui::Selectable("Solid",value.mode==ColliderMode::Solid))value.mode=ColliderMode::Solid;
                         ImGui::BeginDisabled(value.shape==ColliderShape::Trimesh || record.controller.has_value());
                         if(ImGui::Selectable("Trigger",value.mode==ColliderMode::Trigger))value.mode=ColliderMode::Trigger;
@@ -1409,6 +1423,9 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                             ImGui::SetTooltip("Triggers require a primitive Collider on a separate entity.");
                         ImGui::EndCombo();
                     }
+                    ImGui::GetCurrentContext()->LastItemData=item;
+                    return value.mode!=originalMode;
+                    },"Solid");
                     if(value.mode!=originalMode) {
                         value.collision=collisionFilterForMode(value.collision,value.mode);
                         finishScenePanelEdit(document);document.edit("Change collider mode",changeEntity(record.id,[value](auto& entity){entity.collider->mode=value.mode;entity.collider->collision=value.collision;}));
@@ -1416,11 +1433,11 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     if(drawCollisionMaskControl("Collision Layers",value.collision.layers,collisionNames,~WorldCollisionLayer,
                                                 value.mode==ColliderMode::Solid?
                                                 "Solid Colliders always belong to %s shared level collision.":
-                                                "%s is reserved for shared level collision.")) {
+                                                "%s is reserved for shared level collision.",collisionFilterForMode(SceneCollider{}.collision,value.mode).layers)) {
                         finishScenePanelEdit(document);document.edit("Change collider collision layers",changeEntity(record.id,[value](auto& entity){entity.collider->collision.layers=value.collision.layers;}));
                     }
                     if(drawCollisionMaskControl("Collision Mask",value.collision.mask,collisionNames,value.mode==ColliderMode::Solid?0u:AllCollisionLayers,
-                                                "Solid Colliders use every layer for shared level collision.")) {
+                                                "Solid Colliders use every layer for shared level collision.",collisionFilterForMode(SceneCollider{}.collision,value.mode).mask)) {
                         finishScenePanelEdit(document);document.edit("Change collider collision mask",changeEntity(record.id,[value](auto& entity){entity.collider->collision.mask=value.collision.mask;}));
                     }
                     static_assert(static_cast<unsigned>(Edit::ColliderColor)-static_cast<unsigned>(Edit::ColliderShape)==static_cast<unsigned>(ColliderControl::Color));
@@ -1446,15 +1463,15 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             }
             if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
                 auto shading=static_cast<int>(record.meshShading);
-                const bool shadingChanged=ImGui::Combo("Shading",&shading,"Use Mesh Normals\0Flat\0Smooth\0");
+                const bool shadingChanged=resettableProperty(shading,static_cast<int>(MeshShading::UseMeshNormals),[&]{return ImGui::Combo("Shading",&shading,"Use Mesh Normals\0Flat\0Smooth\0");},"Use Mesh Normals");
                 propertyEdit(document,state,Edit::ModelShading,"Change mesh shading",shadingChanged,
                     changeEntity(record.id,[shading](auto& entity){entity.meshShading=static_cast<MeshShading>(shading);}));
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Smooth preserves mesh hard edges and smooths tessellated relief.");
                 auto castShadows=record.castShadows,receiveShadows=record.receiveShadows;
-                const bool castChanged=ImGui::Checkbox("Cast Shadows",&castShadows);
+                const bool castChanged=resettableProperty(castShadows,ModelReference{}.castShadows,[&]{return ImGui::Checkbox("Cast Shadows",&castShadows);});
                 propertyEdit(document,state,Edit::ModelCastShadows,"Toggle model shadow casting",castChanged,
                     changeEntity(record.id,[castShadows](auto& entity){entity.castShadows=castShadows;}));
-                const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
+                const bool receiveChanged=resettableProperty(receiveShadows,ModelReference{}.receiveShadows,[&]{return ImGui::Checkbox("Receive Shadows",&receiveShadows);});
                 propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
                     changeEntity(record.id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
                 auto scopes=record.lightingScopes;
@@ -1520,7 +1537,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         state.inspectorEntity=record->id;
         drawName(document,state,*record);
         auto visible=record->visible;
-        const bool visibilityChanged=ImGui::Checkbox("Visible",&visible);
+        const bool visibilityChanged=resettableProperty(visible,true,[&]{return ImGui::Checkbox("Visible",&visible);});
         propertyEdit(document,state,Edit::Visible,"Toggle entity visibility",visibilityChanged,
             changeEntity(record->id,[visible](auto& entity){entity.visible=visible;}));
         if(ImGui::IsItemHovered())ImGui::SetTooltip("Show this entity and its descendants.");
@@ -1565,7 +1582,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     if(open) {
                         state.inspectorEntity=partId;
                         auto partVisible=part->visible;
-                        const bool partVisibilityChanged=ImGui::Checkbox("Visible",&partVisible);
+                        const bool partVisibilityChanged=resettableProperty(partVisible,true,[&]{return ImGui::Checkbox("Visible",&partVisible);});
                         propertyEdit(document,state,Edit::Visible,"Toggle visual visibility",partVisibilityChanged,
                             changeEntity(partId,[partVisible](auto& entity){entity.visible=partVisible;}));
                         drawSections(*part);

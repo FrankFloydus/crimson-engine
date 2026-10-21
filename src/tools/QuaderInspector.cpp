@@ -1,4 +1,5 @@
 #include "QuaderInspector.h"
+#include "PropertyReset.h"
 #include "ScenePanels.h"
 #include "quader/QuaderBridge.h"
 #include "scene/SceneDocument.h"
@@ -79,7 +80,7 @@ void drawQuaderInspector(SceneDocument& document,const EntityRecord& record,Quad
         for(const auto& scene:draft.catalog.scenes)if(ImGui::Selectable(scene.path.c_str(),scene.id==draft.requested.sceneId))draft.requested.sceneId=scene.id;
         ImGui::EndCombo();
     }
-    ImGui::InputFloat("Import Scale",&draft.requested.importScale,.1f,1.f,"%.4f");
+    resettableProperty(draft.requested.importScale,QuaderLink{}.importScale,[&]{return ImGui::InputFloat("Import Scale",&draft.requested.importScale,.1f,1.f,"%.4f");});
     const bool scaleEdited=ImGui::IsItemDeactivatedAfterEdit();
     auto linked=*record.quader;
     const auto updatePolicy=[&](const char* label) {
@@ -92,14 +93,14 @@ void drawQuaderInspector(SceneDocument& document,const EntityRecord& record,Quad
             draft.committed=linked;
         }
     };
-    if(ImGui::Checkbox("Auto sync on save",&linked.autoSync)) {
+    if(resettableProperty(linked.autoSync,QuaderLink{}.autoSync,[&]{return ImGui::Checkbox("Auto sync on save",&linked.autoSync);})) {
         updatePolicy("Toggle Quader auto sync");
     }
-    if(ImGui::Checkbox("Sync materials",&linked.refreshMaterials)) {
+    if(resettableProperty(linked.refreshMaterials,QuaderLink{}.refreshMaterials,[&]{return ImGui::Checkbox("Sync materials",&linked.refreshMaterials);})) {
         updatePolicy("Toggle Quader material sync");
     }
     if(ImGui::IsItemHovered())ImGui::SetTooltip("On: overwrite materials and textures from Quader on reimport. Off: import missing materials and keep existing Crimson edits. Scene Undo does not restore overwritten materials.");
-    if(ImGui::Checkbox("Sync lights",&linked.syncLights)) {
+    if(resettableProperty(linked.syncLights,QuaderLink{}.syncLights,[&]{return ImGui::Checkbox("Sync lights",&linked.syncLights);})) {
         updatePolicy("Toggle Quader light sync");
     }
     if(ImGui::IsItemHovered())ImGui::SetTooltip("On: import Quader lights. Off: exclude Quader lights and remove previously imported Quader lights on the next reimport.");

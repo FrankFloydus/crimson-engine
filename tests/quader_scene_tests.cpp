@@ -102,7 +102,7 @@ QuaderImportResult lightSyncFixture(const std::string& generation) {
     mesh.collision=makeCollisionMesh({{0,0,0},{1,0,0},{0,0,1}},{0,2,1});
     result.meshes.push_back(mesh);
     QuaderImportedLight sun;sun.sourceKey="light/sun";sun.name="Imported sun";sun.intensity=2;sun.castShadows=true;
-    result.lights.push_back(sun);
+    sun.color={.53709873f,.73535698f,1.f};result.lights.push_back(sun);
     QuaderImportedLight point;point.sourceKey="light/point";point.name="Imported point";point.point=true;point.radius=7;
     point.intensity=3;point.color={.5f,.7f,1};point.local=math::translation({4,5,6});result.lights.push_back(point);
     return result;
@@ -240,6 +240,11 @@ void independentLightSyncPolicy() {
     const auto visual=generatedId(document.scene(),owner,"mesh/floor"),collision=generatedId(document.scene(),owner,"mesh/floor/collision");
     require(sun&&point&&visual&&collision&&document.scene().find(sun)->directional&&document.scene().find(point)->point,
         "Lights Sync on did not emit both supported source light types alongside geometry/collision.");
+    const auto authoredColor=document.scene().find(sun)->directional->color;
+    require(authoredColor==initial.lights[0].color,"Scene publication encoded an already prepared Quader light color again.");
+    const auto decode=[](float value){return value<=.04045f?value/12.92f:std::pow((value+.055f)/1.055f,2.4f);};
+    require(std::abs(decode(authoredColor[0])-.25f)<1e-6f&&std::abs(decode(authoredColor[1])-.5f)<1e-6f,
+        "Prepared Quader light colors did not restore quarter/half linear radiance through the renderer's decode.");
     const auto environment=document.createEnvironment("Manual environment");auto env=*document.scene().find(environment);env.environment->sun=sun;
     require(document.updateEntity(environment,env),document.status());const auto before=snapshot(document);const auto history=document.history().size();
     link.syncLights=false;link.refreshMaterials=true;auto replacement=lightSyncFixture("generation-b");

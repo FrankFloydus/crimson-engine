@@ -40,6 +40,7 @@ struct HdrColorEditorState {
 // inside a popup; compact controls show a swatch with optional linear channels.
 // The normalized picker changes hue without discarding existing HDR strength.
 HdrColorEdit drawHdrColorControl(const char* label,Vec3& linearRgb,float* opacity,
-    HdrColorEditorState&,bool fullPicker=false,float maximum=1000000.f,const char* alphaLabel="Opacity");
+    HdrColorEditorState&,bool fullPicker=false,float maximum=1000000.f,const char* alphaLabel="Opacity",
+    const Vec3& defaultColor=HdrColorDecomposition{}.hueSrgb,float defaultOpacity=1.f);
 
 } // namespace crimson

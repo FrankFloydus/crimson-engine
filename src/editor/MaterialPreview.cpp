@@ -6,6 +6,7 @@
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "tools/Tools.h"
+#include "tools/PropertyReset.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
@@ -19,18 +20,18 @@ void MaterialPreview::setNodePreview(std::optional<MaterialGraphPreviewTarget> t
 }
 void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     ImGui::PushItemWidth(260);
-    ImGui::Checkbox("Environment lighting",&environment_.enabled);
-    ImGui::Checkbox("Specular AA",&environment_.specularAA);
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce sparkling specular highlights from undersampled surface normals.");
+    resettableProperty(environment_.enabled,EnvironmentSettings{}.enabled,[&]{return ImGui::Checkbox("Environment lighting",&environment_.enabled);});
+    resettableProperty(environment_.intensity,EnvironmentSettings{}.intensity,[&]{return ImGui::SliderFloat("Intensity",&environment_.intensity,0,10,"%.2f");});
     ImGui::TextUnformatted("HDRI");
     drawEnvironmentImageField(environment_,assets);
-    ImGui::SliderFloat("Intensity",&environment_.intensity,0,10,"%.2f");
-    ImGui::SliderFloat("Rotation",&environment_.rotation,-180,180,"%.1f deg");
+    resettableProperty(environment_.rotation,EnvironmentSettings{}.rotation,[&]{return ImGui::SliderFloat("Rotation",&environment_.rotation,-180,180,"%.1f deg");});
+    resettableProperty(environment_.specularAA,EnvironmentSettings{}.specularAA,[&]{return ImGui::Checkbox("Specular AA",&environment_.specularAA);});
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce specular shimmer by filtering undersampled normals. Highlights may broaden.");
     drawToneMappingControl(environment_.toneMapping);
     drawToneMappingParameterControls(environment_.toneMapping,environment_.toneMappingParameters);
     drawGlowControls(environment_.glow);
     drawSsrControls(environment_.ssr);
-    ImGui::Checkbox("Show background",&showBackground_);
+    resettableProperty(showBackground_,true,[&]{return ImGui::Checkbox("Show background",&showBackground_);});
     if(ImGui::MenuItem("Reset environment")){environment_=EnvironmentSettings{};showBackground_=true;}
     ImGui::PopItemWidth();
 }
@@ -144,7 +145,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane","Sprite"};
     auto selected=static_cast<int>(mesh_);
     ImGui::SetNextItemWidth(std::min(180.f,ImGui::GetContentRegionAvail().x));
-    if(ImGui::Combo("##Preview mesh",&selected,names,6))mesh_=static_cast<MaterialPreviewMesh>(selected);
+    if(resettableProperty(selected,static_cast<int>(MaterialPreviewMesh::Sphere),[&]{return ImGui::Combo("##Preview mesh",&selected,names,6);},"Sphere"))mesh_=static_cast<MaterialPreviewMesh>(selected);
     ImGui::SameLine();if(ImGui::Button("Reset view")){navigation_.reset();cancelInteraction();}
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("MMB tumble · Shift+MMB pan · Ctrl+MMB rotate environment\nWheel zoom · Double-click MMB resets view and environment rotation");
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());

@@ -130,6 +130,53 @@ void continuityAndEncoding() {
     const float gray=toneMap({.18f,.18f,.18f},ToneMapping::AgX)[0];
     check(std::abs(gray-.18f)<1e-6f && std::abs(gray-.461f)>.2f,"AgX applied an extra display transfer function.");
 }
+void extremeHdrReferences() {
+    // A real HDR sun and the supported FP32 source envelope, before low/high
+    // authored exposure. The CPU retains the original equations in double;
+    // GPU presentation readbacks use this independent reference as well.
+    constexpr std::array<Vec3,5> sources{{{129536,129024,122368},{1e10f,1e9f,1e8f},
+        {1e20f,1e19f,1e18f},{1e30f,1e29f,1e28f},{1e30f,0,0}}};
+    constexpr std::array modes{ToneMapping::Reinhard,ToneMapping::Linear,ToneMapping::ACES,ToneMapping::AgX};
+    for(const float acesWhite:{1.f,64.f})for(const float agxWhite:{2.f,64.f})for(const float contrast:{1.f,4.f}) {
+        ToneMappingParameters parameters;parameters.acesWhite=acesWhite;
+        parameters.agxWhite=agxWhite;parameters.agxContrast=contrast;
+        for(const auto source:sources)for(const float exposure:{1e-12f,1.f,256.f}) {
+            Vec3 exposed=source;for(auto& value:exposed)value*=exposure;
+            for(const auto mode:modes) {
+                const auto mapped=toneMap(exposed,mode,parameters);
+                for(const float value:mapped)
+                    check(std::isfinite(value),"Finite HDR radiance overflowed a presentation curve.");
+                if(mode==ToneMapping::Linear)
+                    check(mapped==exposed,"Extreme HDR protection clipped the Linear presentation input.");
+            }
+        }
+        // For any nonzero primary at this magnitude, the positive inset rows
+        // all reach the scalar shoulder asymptote. Neither curve may collapse
+        // such an HDR highlight to black after an intermediate inf/inf.
+        const float acesLimit=static_cast<float>((1./.983729)/toneMappingUniforms(parameters).curve[1]);
+        for(const auto input:std::array<Vec3,2>{{{1e30f,1e30f,1e30f},{1e30f,0,0}}}) {
+            close(toneMap(input,ToneMapping::ACES,parameters),
+                {acesLimit,acesLimit,.99999f*acesLimit},3e-6f);
+            close(toneMap(input,ToneMapping::AgX,parameters),{1,1,1},2e-6f);
+        }
+    }
+    // Extended Reinhard legitimately exceeds display white. Preserve that
+    // original response instead of clipping HDR to hide its quadratic overflow.
+    for(const float white:{.01f,1.f,64.f}) {
+        ToneMappingParameters parameters;parameters.reinhardWhite=white;
+        const double inverseWhiteSquared=toneMappingUniforms(parameters).curve[0];
+        const Vec3 source{1e30f,1e29f,1e28f};
+        const auto mapped=toneMap(source,ToneMapping::Reinhard,parameters);
+        for(std::size_t channel=0;channel<source.size();++channel) {
+            const double value=source[channel];
+            const double expected=value*(1.+value*inverseWhiteSquared)/(1.+value);
+            check(std::isfinite(mapped[channel])&&
+                std::abs(double(mapped[channel])-expected)<=expected*1e-6,
+                "Extended Reinhard changed or overflowed its finite HDR reference response.");
+        }
+    }
+    close(toneMap({1e30f,1e29f,1e28f},ToneMapping::Reinhard),{1,1,1},1e-7f);
+}
 void displayDebanding() {
     const Vec3 encoded{24.25f/255,45.75f/255,80.4f/255};
     Vec3 linear;
@@ -166,6 +213,6 @@ void displayDebanding() {
 }
 }
 int main() {
-    try {references();authoredCurveParameters();parameterValidationAndContinuity();continuityAndEncoding();displayDebanding();std::cout<<"Tone mapping and debanding checks passed.\n";return 0;}
+    try {references();authoredCurveParameters();parameterValidationAndContinuity();continuityAndEncoding();extremeHdrReferences();displayDebanding();std::cout<<"Tone mapping and debanding checks passed.\n";return 0;}
     catch (const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

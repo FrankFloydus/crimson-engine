@@ -387,7 +387,10 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     // Size is maximal, rather than displaced copies at widely spaced taps.
     particles[0].size=.04f;particles[0].color[0]=1000;
     settings.environment.glow.enabled=false;const auto tinyOff=main();
-    settings.environment.glow.enabled=true;settings.environment.glow.radius=8;settings.environment.glow.threshold=1;
+    settings.environment.glow.enabled=true;settings.environment.glow.radius=8;
+    // Isolate filter continuity from thresholding a single-pixel weighted
+    // source. The separate response checks cover threshold/scale behavior.
+    settings.environment.glow.threshold=0;settings.environment.glow.hdrScale=0;
     const auto tinyWide=main();
     check(tinyOff.rgba!=tinyWide.rgba,"Maximum Glow Size removed the isolated spark's complete halo.");
     double minimum=std::max(0.,component(tinyWide,69,64,0)-component(tinyOff,69,64,0));
@@ -399,7 +402,7 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
         minimum=std::min(minimum,excess);
     }
     particles[0].size=.2f;particles[0].color[0]=64;settings.environment.glow.radius=1;
-    settings.environment.glow.threshold=1;settings.exposure=0;const auto dark=main();
+    settings.environment.glow.threshold=1;settings.environment.glow.hdrScale=GlowSettings{}.hdrScale;settings.exposure=0;const auto dark=main();
     settings.environment.glow.enabled=false;check(main().rgba==dark.rgba,"Zero exposure left Glow visible or exposed the editor matte.");
     settings.exposure=1;settings.environment.glow.enabled=true;scene.particles={};const auto empty=main();
     settings.environment.glow.enabled=false;check(main().rgba==empty.rgba,"Empty-background color contributed to Glow extraction.");
@@ -641,7 +644,7 @@ void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_
     auto white=std::make_shared<TextureOwner>();const std::array<std::uint8_t,4> whitePixel{255,255,255,255};
     white->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(whitePixel.data(),4));
     check(bgfx::isValid(white->handle),"Tone fixture could not allocate the opaque particle sprite.");
-    RenderParticleMaterial particleMaterial;particleMaterial.blend=MaterialBlend::Alpha;
+    RenderParticleMaterial particleMaterial;particleMaterial.blend=MaterialBlend::Alpha;particleMaterial.shading=MaterialShading::StandardPbr;
     particleMaterial.colorTexture=white->handle;particleMaterial.pinned=white;
     RenderParticle particle{{0,0,0},2,{1,1,1,1},0};particle.billboardMode=ParticleBillboardMode::Enabled;
     std::uint64_t thumbnailSerial=100;
@@ -651,13 +654,20 @@ void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_
         throw std::runtime_error("Tone fixture thumbnail readback did not complete.");
     };
     constexpr std::array modes{ToneMapping::Reinhard,ToneMapping::Linear,ToneMapping::ACES,ToneMapping::AgX};
-    const std::array<Vec3,3> inputs{{{.18f,.18f,.18f},{4,.5f,.1f},{16,1,0}}};
+    // Finite FP32 HDRI radiance can exceed half-float range. Exercise the
+    // presentation curves beyond x*x's float overflow boundary as well as
+    // ordinary colors, through every real view and thumbnail publication.
+    const std::array<Vec3,5> inputs{{{.18f,.18f,.18f},{4,.5f,.1f},{16,1,0},{129536,129024,122368},{1e30f,1e29f,1e28f}}};
     for(const auto mode:modes) {
         settings.environment.toneMapping=mode;
         for(const auto radiance:inputs) {
-            settings.exposure=radiance[0]<1?1.f:2.5f;
+            // Low exposure makes any premature 60000 clamp observable rather
+            // than allowing both the intact and clipped source to saturate.
+            settings.exposure=radiance[0]>1e20f?1e-30f:radiance[0]>60000?1e-6f:radiance[0]<1?1.f:2.5f;
             surfaces[0].emissive=radiance;material.surface=surfaces[0];
-            particleMaterial.baseColor={radiance[0],radiance[1],radiance[2],1};
+            // Base-color packets deliberately bound authored RGB to 1e6.
+            // The renderer's finite emission path carries the HDR test field.
+            particleMaterial.baseColor={0,0,0,1};particleMaterial.emission=radiance;
             const auto expected=toneMap(radiance*settings.exposure,mode);
             const auto label=std::string(toneMappingName(mode));
             renderer.render(scene);renderer.renderGame(scene);
@@ -693,6 +703,7 @@ void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_
         scene.instances=std::span(&instance,1);
     }
 
+    particleMaterial.emission={};particleMaterial.shading=MaterialShading::Unlit;
     const auto originalCamera=settings.camera;
     settings.camera.position={3,4,5};settings.camera.target={0,0,0};scene.instances={};
     settings.environment.toneMapping=ToneMapping::Reinhard;settings.exposure=0;

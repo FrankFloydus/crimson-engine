@@ -1,4 +1,5 @@
 #include "HdrColorEditor.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -45,7 +46,8 @@ void HdrColorEditorState::cancel() {
     initialized=false;activeItem=0;
 }
 HdrColorEdit drawHdrColorControl(const char* label,Vec3& linearRgb,float* opacity,
-    HdrColorEditorState& state,bool fullPicker,float maximum,const char* alphaLabel) {
+    HdrColorEditorState& state,bool fullPicker,float maximum,const char* alphaLabel,
+    const Vec3& defaultColor,float defaultOpacity) {
     if(!state.initialized || state.synchronized!=linearRgb) {
         state.decomposition=decomposeHdrColor(linearRgb);state.synchronized=linearRgb;state.initialized=true;
     }
@@ -66,7 +68,7 @@ HdrColorEdit drawHdrColorControl(const char* label,Vec3& linearRgb,float* opacit
         static constexpr const char* labels[]{"R","G","B"};
         for(size_t component=0;component<3;++component) {
             fieldWidth(labels[component]);
-            const bool changed=ImGui::DragFloat(labels[component],&linearRgb[component],.01f,0.f,maximum,"%.4g",ImGuiSliderFlags_AlwaysClamp);
+            const bool changed=resettableProperty(linearRgb[component],defaultColor[component],[&]{return ImGui::DragFloat(labels[component],&linearRgb[component],.01f,0.f,maximum,"%.4g",ImGuiSliderFlags_AlwaysClamp);});
             channelsChanged|=changed;
             include(changed);
             const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
@@ -75,7 +77,7 @@ HdrColorEdit drawHdrColorControl(const char* label,Vec3& linearRgb,float* opacit
         }
         if(opacity) {
             fieldWidth(alphaLabel);
-            include(ImGui::SliderFloat(alphaLabel,opacity,0.f,1.f,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            include(resettableProperty(*opacity,defaultOpacity,[&]{return ImGui::SliderFloat(alphaLabel,opacity,0.f,1.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
             const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
             state.opacityMinimum={a.x,a.y};state.opacityMaximum={b.x,b.y};
         }
@@ -83,10 +85,14 @@ HdrColorEdit drawHdrColorControl(const char* label,Vec3& linearRgb,float* opacit
     const auto picker=[&] {
         // ImGui's hue control is display-referred. Keep its normalized editing
         // value separate from the linear numeric rows and preserve HDR peaks.
-        const bool changed=ImGui::ColorPicker3("##picker",state.decomposition.hueSrgb.data(),
-            ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoSidePreview|ImGuiColorEditFlags_NoSmallPreview|ImGuiColorEditFlags_NoAlpha);
+        const bool changed=resettableProperty(linearRgb,defaultColor,[&]{
+            const bool changedHue=ImGui::ColorPicker3("##picker",state.decomposition.hueSrgb.data(),
+                ImGuiColorEditFlags_NoInputs|ImGuiColorEditFlags_NoSidePreview|ImGuiColorEditFlags_NoSmallPreview|ImGuiColorEditFlags_NoAlpha);
+            if(changedHue)linearRgb=composeHdrColor(state.decomposition,maximum);
+            return changedHue;
+        });
+        channelsChanged|=propertyResetClicked();
         include(changed);
-        if(changed)linearRgb=composeHdrColor(state.decomposition,maximum);
         channels();
     };
     if(fullPicker) {
@@ -100,9 +106,17 @@ HdrColorEdit drawHdrColorControl(const char* label,Vec3& linearRgb,float* opacit
         state.disclosureMinimum={a.x,a.y};state.disclosureMaximum={b.x,b.y};
         ImGui::SameLine();
         const auto display=hdrColorDisplay({linearRgb[0],linearRgb[1],linearRgb[2],opacity?*opacity:1.f});
-        const bool open=ImGui::ColorButton("##swatch",{display[0],display[1],display[2],display[3]},
-            ImGuiColorEditFlags_NoTooltip|ImGuiColorEditFlags_AlphaPreviewHalf,
-            {std::max(ImGui::GetFrameHeight(),ImGui::GetContentRegionAvail().x),ImGui::GetFrameHeight()});
+        Vec4 value{linearRgb[0],linearRgb[1],linearRgb[2],opacity?*opacity:defaultOpacity};
+        const Vec4 defaults{defaultColor[0],defaultColor[1],defaultColor[2],defaultOpacity};
+        bool open=false;
+        const bool reset=resettableProperty(value,defaults,[&]{
+            const float height=ImGui::GetFrameHeight();
+            open=ImGui::ColorButton("##swatch",{display[0],display[1],display[2],display[3]},
+                ImGuiColorEditFlags_NoTooltip|ImGuiColorEditFlags_AlphaPreviewHalf,
+                {std::max(height,ImGui::GetContentRegionAvail().x-height-ImGui::GetStyle().ItemInnerSpacing.x),height});
+            return false;
+        });
+        if(reset){linearRgb={value[0],value[1],value[2]};if(opacity)*opacity=value[3];channelsChanged=true;include(true);}
         a=ImGui::GetItemRectMin();b=ImGui::GetItemRectMax();
         state.swatchMinimum={a.x,a.y};state.swatchMaximum={b.x,b.y};
         if(std::max({linearRgb[0],linearRgb[1],linearRgb[2]})>1.f) {

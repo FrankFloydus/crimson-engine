@@ -555,7 +555,14 @@ QuaderImportResult prepareQuaderImport(const QuaderSourceScene& scene,const Quad
     std::size_t directional{},points{};std::set<std::uint64_t> lightIds;
     if(options.syncLights)for(const auto& source:scene.lights){canceled(stop);if(source.type==2){++out.skippedSpots;continue;}require(source.type<=1,"Unsupported Quader light type.");require(lightIds.insert(source.entity).second,"Duplicate Quader light identity.");
         require(!((source.type==0&&directional>=MaximumDirectionalLights)||(source.type==1&&points>=MaximumPointLights)),"Quader scene exceeds Crimson's supported directional or point light count.");if(source.type==0)++directional;else ++points;
-        QuaderImportedLight light;light.sourceKey="light:"+std::to_string(source.entity);light.name=source.name;light.point=source.type==1;light.color=source.color;light.intensity=source.energy;
+        QuaderImportedLight light;light.sourceKey="light:"+std::to_string(source.entity);light.name=source.name;light.point=source.type==1;light.intensity=source.energy;
+        // The reader publishes linear light RGB. Scene lights retain authored
+        // sRGB colors and decode them once when packing the lighting uniforms.
+        for(std::size_t channel=0;channel<3;++channel) {
+            const auto value=source.color[channel];
+            require(std::isfinite(value)&&value>=0.f&&value<=1.f,"Quader light color must contain linear RGB values in [0, 1].");
+            light.color[channel]=value>=1.f?1.f:value<=.0031308f?12.92f*value:1.055f*std::pow(value,1.f/2.4f)-.055f;
+        }
         light.parentKey=source.parentKey;light.order=source.order;
         light.radius=std::max(.01f,scaled(source.range,options.scale));require(light.radius<=100000.f,"Quader light range exceeds Crimson's supported radius.");light.castShadows=source.castShadows;light.visible=source.visible;
         const auto direction=math::normalized(math::transformDirection(source.transform,{0,-1,0}),{0,-1,0});auto up=math::normalized(math::transformDirection(source.transform,{0,0,1}),{0,0,1});

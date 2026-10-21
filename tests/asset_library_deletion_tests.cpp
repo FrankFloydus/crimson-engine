@@ -585,7 +585,7 @@ void legacyEnvironmentGlowPersistence(){
         environment.glow.threshold==.5f && read(file)==oldGlow,"Legacy Glow tuning changed or its file was rewritten on load.");
     environment=EnvironmentSettings{};
     environment.glow={true,2.25f,3.5f,4.75f};environment.source=EnvironmentSource::ProceduralSky;
-    environment.glow.tint={.4f,.6f,.8f};environment.glow.saturation=1.3f;environment.glow.softKnee=.25f;
+    environment.glow.tint={.4f,.6f,.8f};environment.glow.saturation=1.3f;environment.glow.hdrScale=.25f;
     environment.glow.blendMode=GlowBlendMode::SoftLight;environment.glow.mix=.35f;
     environment.glow.anamorphic=.3f;environment.glow.quality=GlowQuality::Low;environment.glow.levels={0,.2f,.4f,.6f,.8f,1,0};
     environment.procedural={{.1f,.2f,.3f},{.3f,.4f,.5f},{.6f,.7f,.8f},{.8f,.6f,.4f},.7f,.4f,1.5f,45.f,.6f};

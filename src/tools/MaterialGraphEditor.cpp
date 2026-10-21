@@ -559,6 +559,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 s.presentation.images.push_back({node.id,point(minimum),point(maximum),image.available?image.textureId:0});
             }
         }
+        const auto defaults=materialPropertyDefaults(node);
         const auto editNode=[&](const char* label,MaterialNode candidate,bool changed,bool activated,bool deactivated) {
             if(!cancel && editable && (activated || changed) && !document.transactionActive())s.scalarEditing=document.begin(label);
             if(!cancel && changed && s.scalarEditing && !document.update([&](auto& asset){if(auto* target=findMaterialNode(asset.graph,node.id))*target=candidate;}))s.status=document.status();
@@ -583,63 +584,63 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 ImGui::SetNextItemWidth(labeledWidth(label));field(transaction,draw);
                 s.presentation.controls.push_back({node.id,label,point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             };
-            const auto option=[&](const char* label,const char* transaction,const char* values,const auto& get,const auto& set) {
+            const auto option=[&](const char* label,const char* transaction,const char* values,const auto& get,const auto& set,int defaultSelection=-1) {
                 ImGui::SetNextItemWidth(labeledWidth(label));choice(transaction,[&](auto& n) {
                     int selected=get(n);ImVec2 minimum,maximum;
-                    const bool changed=canvasCombo(label,selected,values,minimum,maximum);
+                    const bool changed=resettableProperty(selected,defaultSelection<0?get(defaults):defaultSelection,[&]{return canvasCombo(label,selected,values,minimum,maximum);});
                     s.presentation.combos.push_back({node.id,label,point(minimum),point(maximum)});
                     if(changed)set(n,selected);return changed;
                 });
             };
             draw_material_atomic_controls(node,parameter,option,materialInputLink(graph,node.id,MaterialPin::UV)!=nullptr);
             if(node.kind==MaterialNodeKind::Resize) {
-                parameter("Width","Change resize width",[](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
-                parameter("Height","Change resize height",[](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});
+                parameter("Width","Change resize width",[defaults](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=resettableProperty(value,static_cast<int>(defaults.resize.width),[&]{return ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
+                parameter("Height","Change resize height",[defaults](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=resettableProperty(value,static_cast<int>(defaults.resize.height),[&]{return ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});
                 option("Filter","Change resize filter","Nearest\0Linear\0Area\0",[](const auto& n){return static_cast<int>(n.resize.filter);},
                     [](auto& n,int filter){n.resize.filter=static_cast<MaterialResizeFilter>(filter);});
             } else if(node.kind==MaterialNodeKind::Levels) {
-                parameter("Input black","Change input black",[](auto& n){return ImGui::DragFloat("Input black",&n.image.inputBlack,.005f,0,1,"%.3f");});
-                parameter("Input white","Change input white",[](auto& n){return ImGui::DragFloat("Input white",&n.image.inputWhite,.005f,0,1,"%.3f");});
-                parameter("Midtones","Change midtones",[](auto& n){return ImGui::DragFloat("Midtones",&n.image.gamma,.01f,.01f,100,"%.3f");});
-                parameter("Output black","Change output black",[](auto& n){return ImGui::DragFloat("Output black",&n.image.outputBlack,.005f,0,1,"%.3f");});
-                parameter("Output white","Change output white",[](auto& n){return ImGui::DragFloat("Output white",&n.image.outputWhite,.005f,0,1,"%.3f");});
+                parameter("Input black","Change input black",[defaults](auto& n){return resettableProperty(n.image.inputBlack,defaults.image.inputBlack,[&]{return ImGui::DragFloat("Input black",&n.image.inputBlack,.005f,0,1,"%.3f");});});
+                parameter("Input white","Change input white",[defaults](auto& n){return resettableProperty(n.image.inputWhite,defaults.image.inputWhite,[&]{return ImGui::DragFloat("Input white",&n.image.inputWhite,.005f,0,1,"%.3f");});});
+                parameter("Midtones","Change midtones",[defaults](auto& n){return resettableProperty(n.image.gamma,defaults.image.gamma,[&]{return ImGui::DragFloat("Midtones",&n.image.gamma,.01f,.01f,100,"%.3f");});});
+                parameter("Output black","Change output black",[defaults](auto& n){return resettableProperty(n.image.outputBlack,defaults.image.outputBlack,[&]{return ImGui::DragFloat("Output black",&n.image.outputBlack,.005f,0,1,"%.3f");});});
+                parameter("Output white","Change output white",[defaults](auto& n){return resettableProperty(n.image.outputWhite,defaults.image.outputWhite,[&]{return ImGui::DragFloat("Output white",&n.image.outputWhite,.005f,0,1,"%.3f");});});
             } else if(node.kind==MaterialNodeKind::Blend) {
                 option("Mode","Change image blend mode","Mix\0Multiply\0Add\0Subtract\0Screen\0Overlay\0Minimum\0Maximum\0Difference\0Add/Subtract\0Soft Light\0",
                     [](const auto& n){return static_cast<int>(n.image.blendMode);},[](auto& n,int mode){n.image.blendMode=static_cast<MaterialImageBlend>(mode);});
-                parameter("Opacity","Change blend opacity",[](auto& n){return ImGui::SliderFloat("Opacity",&n.image.opacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Opacity","Change blend opacity",[defaults](auto& n){return resettableProperty(n.image.opacity,defaults.image.opacity,[&]{return ImGui::SliderFloat("Opacity",&n.image.opacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             } else if(node.kind==MaterialNodeKind::Grayscale) {
                 option("Method","Change grayscale method","Luminance\0Red\0Green\0Blue\0Alpha\0Average\0Desaturation\0Minimum\0Maximum\0",
                     [](const auto& n){return static_cast<int>(n.image.grayMode);},[](auto& n,int mode){n.image.grayMode=static_cast<MaterialGrayscaleMode>(mode);});
             } else if(node.kind==MaterialNodeKind::Noise) {
                 option("Pattern","Change noise pattern","Clouds\0Spots\0",[](const auto& n){return static_cast<int>(n.image.noisePattern);},[](auto& n,int mode){n.image.noisePattern=static_cast<MaterialNoisePattern>(mode);});
-                parameter("Seed","Change noise seed",[](auto& n){int seed=static_cast<int>(n.image.seed);const bool changed=ImGui::SliderInt("Seed",&seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)n.image.seed=static_cast<unsigned>(seed);return changed;});
-                parameter("Feature size","Change noise feature size",[](auto& n){return ImGui::DragFloat("Feature size",&n.image.featureSize,.1f,.1f,100,"%.2f");});
+                parameter("Seed","Change noise seed",[defaults](auto& n){int seed=static_cast<int>(n.image.seed);const bool changed=resettableProperty(seed,static_cast<int>(defaults.image.seed),[&]{return ImGui::SliderInt("Seed",&seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.image.seed=static_cast<unsigned>(seed);return changed;});
+                parameter("Feature size","Change noise feature size",[defaults](auto& n){return resettableProperty(n.image.featureSize,defaults.image.featureSize,[&]{return ImGui::DragFloat("Feature size",&n.image.featureSize,.1f,.1f,100,"%.2f");});});
                 ImGui::BeginDisabled(node.image.noisePattern==MaterialNoisePattern::Spots);
-                parameter("Detail amount","Change noise detail",[](auto& n){return ImGui::SliderFloat("Detail amount",&n.image.roughness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Detail amount","Change noise detail",[defaults](auto& n){return resettableProperty(n.image.roughness,defaults.image.roughness,[&]{return ImGui::SliderFloat("Detail amount",&n.image.roughness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
                 if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)){ed::Suspend();ImGui::SetTooltip("Clouds only. Adds finer layers of detail.");ed::Resume();}
                 ImGui::EndDisabled();
-                parameter("Contrast","Change noise contrast",[](auto& n){return ImGui::SliderFloat("Contrast",&n.image.noiseContrast,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Contrast","Change noise contrast",[defaults](auto& n){return resettableProperty(n.image.noiseContrast,defaults.image.noiseContrast,[&]{return ImGui::SliderFloat("Contrast",&n.image.noiseContrast,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             } else if(node.kind==MaterialNodeKind::BrightnessContrast) {
-                parameter("Brightness","Change image brightness",[](auto& n){return ImGui::SliderFloat("Brightness",&n.image.brightness,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Contrast","Change image contrast",[](auto& n){return ImGui::SliderFloat("Contrast",&n.image.contrast,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                parameter("Brightness","Change image brightness",[defaults](auto& n){return resettableProperty(n.image.brightness,defaults.image.brightness,[&]{return ImGui::SliderFloat("Brightness",&n.image.brightness,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Contrast","Change image contrast",[defaults](auto& n){return resettableProperty(n.image.contrast,defaults.image.contrast,[&]{return ImGui::SliderFloat("Contrast",&n.image.contrast,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             } else if(node.kind==MaterialNodeKind::Sharpen) {
-                parameter("Amount","Change sharpen amount",[](auto& n){return ImGui::DragFloat("Amount",&n.image.sharpen,.01f,0,4,"%.3f");});
+                parameter("Amount","Change sharpen amount",[defaults](auto& n){return resettableProperty(n.image.sharpen,defaults.image.sharpen,[&]{return ImGui::DragFloat("Amount",&n.image.sharpen,.01f,0,4,"%.3f");});});
             } else if(node.kind==MaterialNodeKind::HeightToNormal) {
-                parameter("Strength","Change height normal strength",[](auto& n){return ImGui::DragFloat("Strength",&n.image.normalStrength,.01f,0,0,"%.3f");});
-                parameter("Flip Y","Change height normal Y",[](auto& n){return ImGui::Checkbox("Flip Y",&n.image.normalFlipY);});
+                parameter("Strength","Change height normal strength",[defaults](auto& n){return resettableProperty(n.image.normalStrength,defaults.image.normalStrength,[&]{return ImGui::DragFloat("Strength",&n.image.normalStrength,.01f,0,0,"%.3f");});});
+                parameter("Flip Y","Change height normal Y",[defaults](auto& n){return resettableProperty(n.image.normalFlipY,defaults.image.normalFlipY,[&]{return ImGui::Checkbox("Flip Y",&n.image.normalFlipY);});});
             }
         }
         if(node.kind==MaterialNodeKind::Scalar) {
             ImGui::SetNextItemWidth(width);
-            field("Change scalar",[](auto& n){return ImGui::SliderFloat("##Value",&n.scalar,n.scalarRange[0],n.scalarRange[1],"%.3f");});
+            field("Change scalar",[defaults](auto& n){return resettableProperty(n.scalar,defaults.scalar,[&]{return ImGui::SliderFloat("##Value",&n.scalar,n.scalarRange[0],n.scalarRange[1],"%.3f");});});
         } else if(node.kind==MaterialNodeKind::Vector2) {
-            ImGui::SetNextItemWidth(width);field("Change vector",[](auto& n){return ImGui::DragFloat2("##XY",n.vector2.data(),.01f,0,0,"%.3f");});
+            ImGui::SetNextItemWidth(width);field("Change vector",[defaults](auto& n){return resettableProperty(n.vector2,defaults.vector2,[&]{return ImGui::DragFloat2("##XY",n.vector2.data(),.01f,0,0,"%.3f");});});
         } else if(node.kind==MaterialNodeKind::Time) {
-            field("Change time clock",[](auto& n){return ImGui::Checkbox("Ignore pause",&n.time.ignorePause);});
-            field("Toggle time period",[](auto& n){return ImGui::Checkbox("Use period",&n.time.periodEnabled);});
-            if(node.time.periodEnabled){ImGui::SetNextItemWidth(labeledWidth("Period"));field("Change time period",[](auto& n){return ImGui::DragFloat("Period",&n.time.period,.01f,0,0,"%.3f");});}
+            field("Change time clock",[defaults](auto& n){return resettableProperty(n.time.ignorePause,defaults.time.ignorePause,[&]{return ImGui::Checkbox("Ignore pause",&n.time.ignorePause);});});
+            field("Toggle time period",[defaults](auto& n){return resettableProperty(n.time.periodEnabled,defaults.time.periodEnabled,[&]{return ImGui::Checkbox("Use period",&n.time.periodEnabled);});});
+            if(node.time.periodEnabled){ImGui::SetNextItemWidth(labeledWidth("Period"));field("Change time period",[defaults](auto& n){return resettableProperty(n.time.period,defaults.time.period,[&]{return ImGui::DragFloat("Period",&n.time.period,.01f,0,0,"%.3f");});});}
         } else if(node.kind==MaterialNodeKind::Panner) {
-            field("Change panner fractional part",[](auto& n){return ImGui::Checkbox("Fractional part",&n.panner.fractionalPart);});
+            field("Change panner fractional part",[defaults](auto& n){return resettableProperty(n.panner.fractionalPart,defaults.panner.fractionalPart,[&]{return ImGui::Checkbox("Fractional part",&n.panner.fractionalPart);});});
         } else if(node.kind==MaterialNodeKind::Grunge) {
             const float edge=std::min(width,160.f);const auto origin=ImGui::GetCursorScreenPos();
             const ImVec2 imageMinimum{origin.x+(width-edge)*.5f,origin.y},imageMaximum{imageMinimum.x+edge,imageMinimum.y+edge};
@@ -664,22 +665,22 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 ImGui::SetNextItemWidth(std::max(1.f,labeledWidth(label)-std::max(0.f,ImGui::GetCursorPosX()-parameterOrigin)));field(transaction,draw);
                 s.presentation.controls.push_back({node.id,label,point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             };
-            parameter("Seed","Change grunge seed",[](auto& n){return ImGui::SliderInt("Seed",&n.grunge.seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);});
-            parameter("Tiling","Change grunge tiling",[](auto& n){return ImGui::SliderInt("Tiling",&n.grunge.tiling,1,64,"%d",ImGuiSliderFlags_AlwaysClamp);});
-            parameter("Coverage","Change grunge coverage",[](auto& n){return ImGui::SliderFloat("Coverage",&n.grunge.coverage,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-            parameter("Disorder","Change grunge disorder",[](auto& n){return ImGui::SliderFloat("Disorder",&n.grunge.disorder,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-            parameter("Detail","Change grunge detail",[](auto& n){return ImGui::SliderFloat("Detail",&n.grunge.detail,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            parameter("Seed","Change grunge seed",[defaults](auto& n){return resettableProperty(n.grunge.seed,defaults.grunge.seed,[&]{return ImGui::SliderInt("Seed",&n.grunge.seed,0,65535,"%d",ImGuiSliderFlags_AlwaysClamp);});});
+            parameter("Tiling","Change grunge tiling",[defaults](auto& n){return resettableProperty(n.grunge.tiling,defaults.grunge.tiling,[&]{return ImGui::SliderInt("Tiling",&n.grunge.tiling,1,64,"%d",ImGuiSliderFlags_AlwaysClamp);});});
+            parameter("Coverage","Change grunge coverage",[defaults](auto& n){return resettableProperty(n.grunge.coverage,defaults.grunge.coverage,[&]{return ImGui::SliderFloat("Coverage",&n.grunge.coverage,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+            parameter("Disorder","Change grunge disorder",[defaults](auto& n){return resettableProperty(n.grunge.disorder,defaults.grunge.disorder,[&]{return ImGui::SliderFloat("Disorder",&n.grunge.disorder,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+            parameter("Detail","Change grunge detail",[defaults](auto& n){return resettableProperty(n.grunge.detail,defaults.grunge.detail,[&]{return ImGui::SliderFloat("Detail",&n.grunge.detail,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
             const bool layersOpen=ImGui::TreeNodeEx("Layers",ImGuiTreeNodeFlags_SpanAvailWidth);
             s.presentation.controls.push_back({node.id,"Layers",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             if(layersOpen) {
-                parameter("Base Noisiness","Change grunge base noisiness",[](auto& n){return ImGui::SliderFloat("Base Noisiness",&n.grunge.baseNoisiness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Dirt Specks Opacity","Change grunge dirt specks opacity",[](auto& n){return ImGui::SliderFloat("Dirt Specks Opacity",&n.grunge.dirtSpecksOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Stains Opacity","Change grunge stains opacity",[](auto& n){return ImGui::SliderFloat("Stains Opacity",&n.grunge.stainsOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Scratches Opacity","Change grunge scratches opacity",[](auto& n){return ImGui::SliderFloat("Scratches Opacity",&n.grunge.scratchesOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Leaks Opacity","Change grunge leaks opacity",[](auto& n){return ImGui::SliderFloat("Leaks Opacity",&n.grunge.leaksOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Sharpen","Change grunge sharpen",[](auto& n){return ImGui::SliderFloat("Sharpen",&n.grunge.sharpen,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                parameter("Large Variation Intensity","Change grunge large variation intensity",[](auto& n){return ImGui::SliderFloat("Large Variation Intensity",&n.grunge.largeVariationIntensity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                field("Toggle grunge dirt inversion",[](auto& n){return ImGui::Checkbox("Invert Dirt",&n.grunge.invertDirt);});
+                parameter("Base Noisiness","Change grunge base noisiness",[defaults](auto& n){return resettableProperty(n.grunge.baseNoisiness,defaults.grunge.baseNoisiness,[&]{return ImGui::SliderFloat("Base Noisiness",&n.grunge.baseNoisiness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Dirt Specks Opacity","Change grunge dirt specks opacity",[defaults](auto& n){return resettableProperty(n.grunge.dirtSpecksOpacity,defaults.grunge.dirtSpecksOpacity,[&]{return ImGui::SliderFloat("Dirt Specks Opacity",&n.grunge.dirtSpecksOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Stains Opacity","Change grunge stains opacity",[defaults](auto& n){return resettableProperty(n.grunge.stainsOpacity,defaults.grunge.stainsOpacity,[&]{return ImGui::SliderFloat("Stains Opacity",&n.grunge.stainsOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Scratches Opacity","Change grunge scratches opacity",[defaults](auto& n){return resettableProperty(n.grunge.scratchesOpacity,defaults.grunge.scratchesOpacity,[&]{return ImGui::SliderFloat("Scratches Opacity",&n.grunge.scratchesOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Leaks Opacity","Change grunge leaks opacity",[defaults](auto& n){return resettableProperty(n.grunge.leaksOpacity,defaults.grunge.leaksOpacity,[&]{return ImGui::SliderFloat("Leaks Opacity",&n.grunge.leaksOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Sharpen","Change grunge sharpen",[defaults](auto& n){return resettableProperty(n.grunge.sharpen,defaults.grunge.sharpen,[&]{return ImGui::SliderFloat("Sharpen",&n.grunge.sharpen,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                parameter("Large Variation Intensity","Change grunge large variation intensity",[defaults](auto& n){return resettableProperty(n.grunge.largeVariationIntensity,defaults.grunge.largeVariationIntensity,[&]{return ImGui::SliderFloat("Large Variation Intensity",&n.grunge.largeVariationIntensity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+                field("Toggle grunge dirt inversion",[defaults](auto& n){return resettableProperty(n.grunge.invertDirt,defaults.grunge.invertDirt,[&]{return ImGui::Checkbox("Invert Dirt",&n.grunge.invertDirt);});});
                 s.presentation.controls.push_back({node.id,"Invert Dirt",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
                 ImGui::TreePop();
             }
@@ -687,11 +688,11 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             ImGui::SetNextItemWidth(width);
             choice("Change UV mapping",[&](auto& n){int mode=static_cast<int>(n.uv.mode);
                 ImVec2 minimum,maximum;
-                const bool changed=canvasCombo("##Mapping",mode,"UV0\0UV1\0Local triplanar\0World triplanar\0",minimum,maximum);
+                const bool changed=resettableProperty(mode,static_cast<int>(defaults.uv.mode),[&]{return canvasCombo("##Mapping",mode,"UV0\0UV1\0Local triplanar\0World triplanar\0",minimum,maximum);});
                 s.presentation.combos.push_back({node.id,"Mapping",point(minimum),point(maximum)});
                 if(changed)n.uv.mode=static_cast<MaterialUvMode>(mode);return changed;});
             ImGui::SetNextItemWidth(labeledWidth("Rotation"));
-            field("Rotate UV mapping",[](auto& n){return ImGui::DragFloat("Rotation",&n.uv.rotation[2],.2f,0,0,"%.1f");});
+            field("Rotate UV mapping",[defaults](auto& n){return resettableProperty(n.uv.rotation[2],defaults.uv.rotation[2],[&]{return ImGui::DragFloat("Rotation",&n.uv.rotation[2],.2f,0,0,"%.1f");});});
         } else if(node.kind==MaterialNodeKind::Texture2D || node.kind==MaterialNodeKind::ImageInput) {
             auto texture=assets.describe?assets.describe(node.texture.image.id):TexturePresentation{};
             const auto slash=node.texture.image.id.find_last_of("/\\");
@@ -722,19 +723,19 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             s.presentation.controls.push_back({node.id,"Clear",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
             ImGui::EndDisabled();ImGui::SetNextItemWidth(labeledWidth("Sample Type"));
             choice("Change texture sample type",[&](auto& n){int role=static_cast<int>(n.texture.role);ImVec2 minimum,maximum;
-                const bool changed=canvasCombo("Sample Type",role,n.kind==MaterialNodeKind::ImageInput?"Color\0Linear Data\0":"Color\0Linear Data\0Normal\0",minimum,maximum);
+                const bool changed=resettableProperty(role,static_cast<int>(defaults.texture.role),[&]{return canvasCombo("Sample Type",role,n.kind==MaterialNodeKind::ImageInput?"Color\0Linear Data\0":"Color\0Linear Data\0Normal\0",minimum,maximum);});
                 s.presentation.combos.push_back({node.id,"Sample Type",point(minimum),point(maximum)});
                 if(changed)n.texture.role=static_cast<MaterialTextureRole>(role);return changed;});
-            if(node.texture.role==MaterialTextureRole::Normal){ImGui::SetNextItemWidth(labeledWidth("Strength"));field("Change normal strength",[](auto& n){return ImGui::DragFloat("Strength",&n.texture.normalStrength,.01f);});}
+            if(node.texture.role==MaterialTextureRole::Normal){ImGui::SetNextItemWidth(labeledWidth("Strength"));field("Change normal strength",[defaults](auto& n){return resettableProperty(n.texture.normalStrength,defaults.texture.normalStrength,[&]{return ImGui::DragFloat("Strength",&n.texture.normalStrength,.01f);});});}
         } else if(node.kind==MaterialNodeKind::Color) {
             const auto color=hdrColorDisplay(node.color);
-            ImGui::BeginDisabled(!editable);
-            const bool open=ImGui::ColorButton("##Color",{color[0],color[1],color[2],color[3]},ImGuiColorEditFlags_NoTooltip,{width,28});
-            ImGui::EndDisabled();
+            bool open=false;ImGui::SetNextItemWidth(width);
+            choice("Reset constant color",[&](auto& n){return resettableProperty(n.color,defaults.color,[&]{
+                open=ImGui::ColorButton("##Color",{color[0],color[1],color[2],color[3]},ImGuiColorEditFlags_NoTooltip,{ImGui::CalcItemWidth(),28});return false;});});
             ed::Suspend();if(open)ImGui::OpenPopup("Constant color");
             if(ImGui::BeginPopup("Constant color")) {
                 auto candidate=node;Vec3 colorValue{node.color[0],node.color[1],node.color[2]};float alpha=node.color[3];
-                const auto edit=drawHdrColorControl("Color",colorValue,&alpha,s.colorEditors[{node.id,MaterialPin::RGB}],true,1000000.f,"Alpha");
+                const auto edit=drawHdrColorControl("Color",colorValue,&alpha,s.colorEditors[{node.id,MaterialPin::RGB}],true,1000000.f,"Alpha",{defaults.color[0],defaults.color[1],defaults.color[2]},defaults.color[3]);
                 candidate.color={colorValue[0],colorValue[1],colorValue[2],alpha};editNode("Change constant",candidate,edit.changed,edit.activated,edit.deactivated);
                 ImGui::EndPopup();
             }
@@ -827,18 +828,24 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     s.presentation.fields.push_back({node.id,definition.pin,point(minimum),{minimum.x+100,minimum.y+ImGui::GetFrameHeight()}});
                     if(definition.type==MaterialValueType::Color || definition.type==MaterialValueType::Color4) {
                         const auto value=materialInputDefault(node,definition.pin);const auto color=hdrColorDisplay(value.value);
-                        ImGui::BeginDisabled(!editable);const bool open=ImGui::ColorButton("##Default",{color[0],color[1],color[2],definition.type==MaterialValueType::Color4?color[3]:1},ImGuiColorEditFlags_NoTooltip|ImGuiColorEditFlags_AlphaPreviewHalf,{100,ImGui::GetFrameHeight()});ImGui::EndDisabled();
+                        bool open=false;
+                        choice("Reset input color",[&](auto& n){auto edited=value;
+                            const bool reset=resettableProperty(edited.value,materialInputDefault(defaults,definition.pin).value,[&]{
+                                open=ImGui::ColorButton("##Default",{color[0],color[1],color[2],definition.type==MaterialValueType::Color4?color[3]:1},ImGuiColorEditFlags_NoTooltip|ImGuiColorEditFlags_AlphaPreviewHalf,{ImGui::CalcItemWidth(),ImGui::GetFrameHeight()});return false;});
+                            if(reset)setMaterialInputDefault(n,definition.pin,edited);return reset;});
                         ed::Suspend();if(open)ImGui::OpenPopup("Input color");
                         if(ImGui::BeginPopup("Input color")) {
                             auto candidate=node;auto edited=value;Vec3 rgb{value.value[0],value.value[1],value.value[2]};
-                            auto edit=drawHdrColorControl("Color",rgb,nullptr,s.colorEditors[{node.id,definition.pin}],true,definition.pin==MaterialPin::AttenuationColor?1.f:1000000.f);
+                            const auto fallback=materialInputDefault(defaults,definition.pin);
+                            auto edit=drawHdrColorControl("Color",rgb,nullptr,s.colorEditors[{node.id,definition.pin}],true,definition.pin==MaterialPin::AttenuationColor?1.f:1000000.f,"Alpha",{fallback.value[0],fallback.value[1],fallback.value[2]});
                             float alpha=value.value[3];
-                            if(value.type==MaterialValueType::Color4)edit.include(ImGui::DragFloat("Alpha",&alpha,.01f,0,0,"%.3f"));
+                            if(value.type==MaterialValueType::Color4)edit.include(resettableProperty(alpha,fallback.value[3],[&]{return ImGui::DragFloat("Alpha",&alpha,.01f,0,0,"%.3f");}));
                             edited.value={rgb[0],rgb[1],rgb[2],alpha};setMaterialInputDefault(candidate,definition.pin,edited);
                             editNode("Change input color",candidate,edit.changed,edit.activated,edit.deactivated);ImGui::EndPopup();
                         }ed::Resume();
                     } else field("Change input default",[&](auto& n){
                         MaterialValue value=materialInputDefault(n,definition.pin);bool changed{};
+                        changed=resettableProperty(value.value,materialInputDefault(defaults,definition.pin).value,[&]{
                         if(value.type==MaterialValueType::Vector2)changed=ImGui::DragFloat2("##Default",value.value.data(),.01f,0,0,"%.2f");
                         else if(materialNodeImageAdjustment(n.kind)&&definition.pin==MaterialPin::Right) {
                             const bool hue=n.kind==MaterialNodeKind::HueShift;
@@ -849,10 +856,11 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                             changed=ImGui::DragFloat("##Default",&value.value[0],.001f,0,0,"%.3f m");
                             if(changed)value.value[0]=std::max(value.value[0],definition.pin==MaterialPin::Thickness?0.f:.000001f);
                         } else changed=ImGui::DragFloat("##Default",&value.value[0],.01f,0,node.kind==MaterialNodeKind::Output?1.f:0.f,"%.3f");
+                        return changed;});
                         if(definition.pin==MaterialPin::ScaleXY && ImGui::IsItemActivated())s.scaleBaselines[node.id]=n.uv.scale;
                         if(changed) {
                             const auto before=n.uv.scale;setMaterialInputDefault(n,definition.pin,value);
-                            if(definition.pin==MaterialPin::ScaleXY && n.uv.scaleLinked)for(unsigned axis=0;axis<2;++axis)if(n.uv.scale[axis]!=before[axis]) {
+                            if(definition.pin==MaterialPin::ScaleXY && n.uv.scaleLinked&&!propertyResetClicked())for(unsigned axis=0;axis<2;++axis)if(n.uv.scale[axis]!=before[axis]) {
                                 const auto baseline=s.scaleBaselines.contains(node.id)?s.scaleBaselines.at(node.id):before;const float current=n.uv.scale[axis];
                                 if(std::abs(baseline[axis])>1e-8f)n.uv.scale=baseline*(static_cast<double>(current)/baseline[axis]);
                                 else n.uv.scale=before+Vec3{current-before[axis],current-before[axis],current-before[axis]};break;

@@ -102,7 +102,14 @@ QuaderSourceScene synthetic(){
 }
 void geometryAndLights(){
     Temporary temporary;auto scene=synthetic();QuaderPrepareOptions options;options.projectRoot=temporary.root;options.scale=2;
+    scene.lights[0].color={.25f,.5f,1.f};scene.lights[1].color={.0031308f,0.f,.5f};
     auto result=prepareQuaderImport(scene,options);require(result.meshes.size()==1&&result.lights.size()==2&&result.skippedSpots==1,"Quader supported-light import scope changed.");
+    near(result.lights[0].color[0],.53709873f);near(result.lights[0].color[1],.73535698f);near(result.lights[0].color[2],1.f);
+    near(result.lights[1].color[0],.04044994f);near(result.lights[1].color[1],0.f);near(result.lights[1].color[2],.73535698f);
+    const auto decode=[](float value){return value<=.04045f?value/12.92f:std::pow((value+.055f)/1.055f,2.4f);};
+    for(std::size_t light=0;light<result.lights.size();++light)for(std::size_t channel=0;channel<3;++channel)
+        near(decode(result.lights[light].color[channel]),scene.lights[light].color[channel]);
+    require(scene.lights[0].color==Vec3{.25f,.5f,1.f}&&scene.lights[1].color==Vec3{.0031308f,0.f,.5f},"Import changed canonical source light colors.");
     require(result.meshes[0].sourceKey=="mesh:1:2:3","Quader occurrence identity lost definition/member fields.");near(result.meshes[0].local[12],4);near(result.meshes[0].local[13],6);near(result.meshes[0].local[14],8);
     require(result.meshes[0].collision&&result.preparedModels.size()==1,"Static triangle collision was not prepared as native collider data only.");
     near(result.lights[1].local[12],2);near(result.lights[1].local[13],4);near(result.lights[1].radius,8);near(result.lights[1].intensity,2);

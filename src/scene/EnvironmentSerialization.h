@@ -171,12 +171,18 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
         if (!source.is_object())throw std::runtime_error("Glow settings must be an object.");
         if (source.contains("enabled") && !source.at("enabled").is_boolean())
             throw std::runtime_error("Glow enabled must be a boolean.");
-        for(const auto* name:{"strength","radius","threshold","softKnee","saturation","anamorphic","mix"})
+        for(const auto* name:{"strength","radius","threshold","softKnee","hdrScale","luminanceCap","saturation","anamorphic","mix"})
             if(source.contains(name) && !source.at(name).is_number())
                 throw std::runtime_error("Glow tuning must be numeric.");
         glow.enabled=source.value("enabled",glow.enabled);glow.strength=source.value("strength",glow.strength);
         glow.radius=source.value("radius",glow.radius);glow.threshold=source.value("threshold",glow.threshold);
-        glow.softKnee=source.value("softKnee",glow.softKnee);glow.tint=source.value("tint",glow.tint);
+        if(source.contains("softKnee") || (!source.contains("hdrScale") && !source.contains("luminanceCap"))) {
+            const float knee=source.value("softKnee",.5f);
+            if(!std::isfinite(knee) || knee<0 || knee>1)throw std::runtime_error("Previous Glow softness is invalid.");
+            if(!source.contains("hdrScale"))glow.hdrScale=4*glow.threshold*knee;
+        }
+        glow.hdrScale=source.value("hdrScale",glow.hdrScale);
+        glow.luminanceCap=source.value("luminanceCap",glow.luminanceCap);glow.tint=source.value("tint",glow.tint);
         glow.saturation=source.value("saturation",glow.saturation);glow.anamorphic=source.value("anamorphic",glow.anamorphic);
         glow.mix=source.value("mix",glow.mix);
         if(source.contains("quality")) {
@@ -213,9 +219,13 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
                 throw std::runtime_error("Glow source is invalid.");
             currentGlow=encoded=="Scene";emissionSource=encoded=="Emission";
         }
-        // Original scene-wide Glow and the replaced emission-only Glow both
-        // defaulted to .8; the current full-scene representation defaults to .1.
-        if(!currentGlow)previousGlow.strength=.8f;
+        // Preserve omitted tuning from older representations without rewriting
+        // an authored document. New/reset profiles use the current defaults.
+        if(!source.contains("hdrScale") && !source.contains("luminanceCap")) {
+            previousGlow.strength=currentGlow?.1f:.8f;
+            previousGlow.blendMode=GlowBlendMode::Additive;
+            previousGlow.levels={.2f,.25f,.2f,.15f,.1f,.06f,.04f};
+        }
         readGlow(source,previousGlow);
         if(source.contains("coreHalo")) {
             const auto& encoded=source.at("coreHalo");
@@ -235,12 +245,14 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
     if (json.contains("bloom")) {
         // The removed separate Bloom normalized its authored levels. Convert
         // that profile once into direct gains; current Glow never normalizes.
+        previousBloom.strength=.1f;previousBloom.blendMode=GlowBlendMode::Additive;
+        previousBloom.levels={.2f,.25f,.2f,.15f,.1f,.06f,.04f};
         readGlow(json.at("bloom"),previousBloom);
         float sum=0;for(float gain:previousBloom.levels)sum+=gain;
         if(sum>0)for(float& gain:previousBloom.levels)gain/=sum;
     }
     const auto activeGlow=[](const GlowSettings& glow) {
-        return glow.enabled && glow.strength>0 && glow.radius>0 &&
+        return glow.enabled && glow.strength>0 && glow.radius>0 && glow.luminanceCap>0 &&
             !(glow.blendMode==GlowBlendMode::Mix && glow.mix==0) &&
             std::any_of(glow.levels.begin(),glow.levels.end(),[](float gain){return gain>0;});
     };
@@ -324,7 +336,7 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
             {"skyContribution",value.ambientLight.skyContribution},{"energy",value.ambientLight.energy}}},
         {"glow",{{"source","Scene"},{"enabled",value.glow.enabled},{"strength",value.glow.strength},
             {"radius",value.glow.radius},{"threshold",value.glow.threshold},{"tint",value.glow.tint},
-            {"saturation",value.glow.saturation},{"softKnee",value.glow.softKnee},
+            {"saturation",value.glow.saturation},{"hdrScale",value.glow.hdrScale},{"luminanceCap",value.glow.luminanceCap},
             {"blendMode",glowBlendModes[static_cast<std::size_t>(value.glow.blendMode)]},{"mix",value.glow.mix},
             {"anamorphic",value.glow.anamorphic},{"quality",static_cast<int>(value.glow.quality)},{"levels",value.glow.levels}}},
         {"source",static_cast<int>(value.source)},

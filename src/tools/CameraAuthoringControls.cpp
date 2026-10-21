@@ -1,4 +1,5 @@
 #include "CameraAuthoringControls.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -29,15 +30,16 @@ void drawCameraAuthoringControls(CameraAuthoringControlsState& state,EntityId ca
     state.camera=camera;
     ImGui::PushID(static_cast<int>(camera>>32));ImGui::PushID(static_cast<int>(camera));
     ImGui::PushID("Camera authoring");
+    const CameraTemplate defaults;
     auto offset=value.offset;
-    const bool offsetEdited=ImGui::DragFloat3("Offset (m)",offset.data(),.05f,0,0,"%.3f");
+    const bool offsetEdited=resettableProperty(offset,defaults.offset,[&]{return ImGui::DragFloat3("Offset (m)",offset.data(),.05f,0,0,"%.3f");});
     const bool offsetChanged=offsetEdited&&math::finite(offset);
     if(offsetChanged)value.offset=offset;
     callback(CameraAuthoringControl::Offset,offsetChanged);
 
     ImGui::BeginDisabled(!state.valid);
     auto requested=state.degrees;
-    const bool rotationEdited=ImGui::DragFloat3("Rotation (deg)",requested.data(),.25f,0,0,"%.3f");
+    const bool rotationEdited=resettableProperty(requested,Vec3{},[&]{return ImGui::DragFloat3("Rotation (deg)",requested.data(),.25f,0,0,"%.3f");});
     if(ImGui::IsItemActivated() || (rotationEdited&&!state.rotationEditing)) {
         state.rotationBaseline=value.worldBasis;
         if(const auto captured=math::affineTransformFields(value.worldBasis,&state.rotationFields))state.rotationFields=*captured;
@@ -55,21 +57,21 @@ void drawCameraAuthoringControls(CameraAuthoringControlsState& state,EntityId ca
     ImGui::EndDisabled();
 
     auto fov=value.lens.verticalFov;
-    const bool fovEdited=ImGui::DragFloat("Vertical FOV",&fov,.2f,1.f,179.f,"%.2f deg",ImGuiSliderFlags_AlwaysClamp);
+    const bool fovEdited=resettableProperty(fov,defaults.lens.verticalFov,[&]{return ImGui::DragFloat("Vertical FOV",&fov,.2f,1.f,179.f,"%.2f deg",ImGuiSliderFlags_AlwaysClamp);});
     const bool fovChanged=fovEdited&&math::finite(fov);
     if(fovChanged)value.lens.verticalFov=fov;
     callback(CameraAuthoringControl::Fov,fovChanged);
 
     auto nearPlane=value.lens.nearPlane;
     const auto nearMaximum=std::nextafter(value.lens.farPlane,0.f);
-    const bool nearEdited=ImGui::DragFloat("Near (m)",&nearPlane,.01f,.001f,nearMaximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    const bool nearEdited=resettableProperty(nearPlane,std::min(defaults.lens.nearPlane,nearMaximum),[&]{return ImGui::DragFloat("Near (m)",&nearPlane,.01f,.001f,nearMaximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
     const bool nearChanged=nearEdited&&math::finite(nearPlane)&&nearPlane<value.lens.farPlane;
     if(nearChanged)value.lens.nearPlane=nearPlane;
     callback(CameraAuthoringControl::Near,nearChanged);
 
     auto farPlane=value.lens.farPlane;
     const auto farMinimum=std::nextafter(value.lens.nearPlane,std::numeric_limits<float>::max());
-    const bool farEdited=ImGui::DragFloat("Far (m)",&farPlane,1.f,farMinimum,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+    const bool farEdited=resettableProperty(farPlane,std::max(defaults.lens.farPlane,farMinimum),[&]{return ImGui::DragFloat("Far (m)",&farPlane,1.f,farMinimum,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);});
     const bool farChanged=farEdited&&math::finite(farPlane)&&farPlane>value.lens.nearPlane;
     if(farChanged)value.lens.farPlane=farPlane;
     callback(CameraAuthoringControl::Far,farChanged);

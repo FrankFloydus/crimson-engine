@@ -1,5 +1,6 @@
 #pragma once
 #include "physics/CollisionFilter.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <array>
 #include <bit>
@@ -9,9 +10,11 @@ namespace crimson {
 // Each slot has a persistent bit identity; project names change presentation.
 inline bool drawCollisionMaskControl(const char* label,std::uint32_t& value,
     const std::array<std::string,32>& names,std::uint32_t editableBits=AllCollisionLayers,
-    const char* lockedTooltip=nullptr) {
+    const char* lockedTooltip=nullptr,std::uint32_t defaultValue=AllCollisionLayers) {
     const auto count=std::popcount(value);
     const auto preview=count==0?std::string("None"):count==32?std::string("All"):std::to_string(count)+" selected";
+    const auto defaults=(value&~editableBits)|(defaultValue&editableBits);
+    return resettableProperty(value,defaults,[&] {
     bool changed=false;
     if(ImGui::BeginCombo(label,preview.c_str(),ImGuiComboFlags_HeightLarge)) {
         for(unsigned slot=0;slot<32;++slot) {
@@ -31,6 +34,7 @@ inline bool drawCollisionMaskControl(const char* label,std::uint32_t& value,
         ImGui::EndCombo();
     }
     return changed;
+    });
 }
 inline CollisionFilter collisionFilterForMode(CollisionFilter value,ColliderMode mode) {
     if(mode==ColliderMode::Solid) {value.layers|=WorldCollisionLayer;value.mask=AllCollisionLayers;}

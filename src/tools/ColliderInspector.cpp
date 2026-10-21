@@ -1,4 +1,5 @@
 #include "ColliderInspector.h"
+#include "PropertyReset.h"
 #include "scene/SceneDocument.h"
 #include "scene/BuiltinModels.h"
 #include <imgui_internal.h>
@@ -43,6 +44,7 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
         transactions.finish(state.active);state.editing=false;
     }
     auto value=*record.collider;
+    const SceneCollider defaults;
     const auto edit=[&](ColliderControl control,const char* label,bool changed) {
         if((ImGui::IsItemActivated()||changed) && transactions.begin(control,label)) {
             state.active=control;state.activeItem=ImGui::GetItemID();state.editing=true;
@@ -59,7 +61,7 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
     ImGui::PushID("ColliderProperties");
     ImGui::BeginDisabled(canceled);
     int shape=static_cast<int>(value.shape);
-    const bool shapeChanged=ImGui::Combo("Shape",&shape,value.mode==ColliderMode::Trigger?"Cube\0Sphere\0Cylinder\0Capsule\0":"Cube\0Sphere\0Cylinder\0Capsule\0Trimesh\0");
+    const bool shapeChanged=resettableProperty(shape,static_cast<int>(defaults.shape),[&]{return ImGui::Combo("Shape",&shape,value.mode==ColliderMode::Trigger?"Cube\0Sphere\0Cylinder\0Capsule\0":"Cube\0Sphere\0Cylinder\0Capsule\0Trimesh\0");});
     if(shapeChanged)value=colliderForShape(document.scene(),record.id,value,static_cast<ColliderShape>(shape));
     edit(ColliderControl::Shape,"Change collision shape",shapeChanged);
     if(value.shape==ColliderShape::Box) {
@@ -72,7 +74,7 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
             for(unsigned axis=0;axis<3;++axis) {
                 ImGui::TableSetColumnIndex(static_cast<int>(axis));ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(labels[axis]);
                 ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);ImGui::PushID(static_cast<int>(axis));ImGui::SetNextItemWidth(-1);
-                const bool changed=ImGui::DragFloat("##size",&value.size[axis],.02f,MinimumDimension,MaximumDimension,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+                const bool changed=resettableProperty(value.size[axis],defaults.size[axis],[&]{return ImGui::DragFloat("##size",&value.size[axis],.02f,MinimumDimension,MaximumDimension,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
                 const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
                 ImGui::GetWindowDrawList()->AddRectFilled(a,{a.x+std::max(1.f,ImGui::GetFontSize()*.15f),b.y},ImGui::GetColorU32(colors[axis]));
                 edit(static_cast<ColliderControl>(static_cast<unsigned>(ColliderControl::SizeX)+axis),"Resize cube collider",changed);
@@ -82,11 +84,11 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
         }
     } else if(value.shape!=ColliderShape::Trimesh) {
         const bool capsule=value.shape==ColliderShape::Capsule;
-        const bool radius=ImGui::DragFloat("Radius (m)",&value.radius,.01f,MinimumDimension,capsule?MaximumDimension*.5f:MaximumDimension,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        const bool radius=resettableProperty(value.radius,defaults.radius,[&]{return ImGui::DragFloat("Radius (m)",&value.radius,.01f,MinimumDimension,capsule?MaximumDimension*.5f:MaximumDimension,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
         if(radius&&capsule)value.height=std::max(value.height,value.radius*2);
         edit(ColliderControl::Radius,"Resize collision radius",radius);
         if(value.shape!=ColliderShape::Sphere) {
-            const bool height=ImGui::DragFloat("Height (m)",&value.height,.02f,capsule?MinimumDimension*2:MinimumDimension,MaximumDimension,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            const bool height=resettableProperty(value.height,defaults.height,[&]{return ImGui::DragFloat("Height (m)",&value.height,.02f,capsule?MinimumDimension*2:MinimumDimension,MaximumDimension,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
             if(height&&capsule)value.radius=std::min(value.radius,value.height*.5f);
             edit(ColliderControl::Height,"Resize collision height",height);
             if(capsule&&ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Total height, including both rounded caps.");
@@ -144,9 +146,9 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
             }
         }
     }
-    const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
+    const bool visible=resettableProperty(value.showCollisionInGame,defaults.showCollisionInGame,[&]{return ImGui::Checkbox("Show in Game",&value.showCollisionInGame);});
     edit(ColliderControl::Visible,"Toggle collision display",visible);
-    const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
+    const bool color=resettableProperty(value.collisionColor,defaults.collisionColor,[&]{return ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);});
     edit(ColliderControl::Color,"Change collision color",color);
     ImGui::EndDisabled();
     ImGui::PopID();

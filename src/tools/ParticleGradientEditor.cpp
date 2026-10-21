@@ -1,5 +1,6 @@
 #include "ParticleAppearanceEditor.h"
 #include "HdrColorEditor.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_gradient/imgui_gradient.hpp>
@@ -69,6 +70,26 @@ float spacedPosition(const ImGG::Gradient& gradient,ImGG::MarkId moving,float wa
     if(!std::isfinite(distance))if(const auto* mark=gradient.find(moving))return mark->position.get();
     return chosen;
 }
+float defaultStopPosition(const ImGG::Gradient& gradient,ImGG::MarkId selected,float fallback) {
+    const auto& marks=gradient.get_marks();
+    const auto mark=std::find_if(marks.begin(),marks.end(),[&](const auto& value){return ImGG::MarkId{value}==selected;});
+    if(mark==marks.end()||marks.size()<2)return fallback;
+    const float age=static_cast<float>(std::distance(marks.begin(),mark))/static_cast<float>(marks.size()-1);
+    float lower=0,upper=1;
+    if(mark!=marks.begin()) {
+        const float previous=std::prev(mark)->position.get();
+        lower=previous+MinimumParticleKeySpacing;
+        if(lower-previous<MinimumParticleKeySpacing)lower=std::nextafter(lower,std::numeric_limits<float>::infinity());
+    }
+    if(std::next(mark)!=marks.end()) {
+        const float next=std::next(mark)->position.get();
+        upper=next-MinimumParticleKeySpacing;
+        if(next-upper<MinimumParticleKeySpacing)upper=std::nextafter(upper,-std::numeric_limits<float>::infinity());
+    }
+    // A reset keeps this stop's ordering identity. Ordinary dragging may
+    // reorder stops, but doing so here would change its default on each click.
+    return lower<=upper?std::clamp(age,lower,upper):fallback;
+}
 ParticleColorGradient authoredGradient(ParticleGradientWidgetState& state) {
     ParticleColorGradient result;
     result.interpolation=state.control.gradient().interpolation_mode()==ImGG::Interpolation::Linear?
@@ -92,6 +113,20 @@ ParticleColorGradient authoredGradient(ParticleGradientWidgetState& state) {
 uint64_t authoredIdentity(const ParticleGradientWidgetState& state,ImGG::MarkId id) {
     const auto found=state.identities.find(id.as_imgui_id());
     return found==state.identities.end()?0:found->second;
+}
+bool drawGradientResetButton(const ImGG::Gradient& value,const Vec4& resetColor,ParticleGradientEditorState& state) {
+    const auto& marks=value.get_marks();
+    const bool atDefault=value.interpolation_mode()==ImGG::Interpolation::Linear&&marks.size()==2&&
+        marks.front().position.get()==0&&marks.back().position.get()==1&&
+        authoredColor(marks.front().color)==resetColor&&authoredColor(marks.back().color)==resetColor;
+    bool modified=!atDefault;
+    const bool reset=resettableProperty(modified,false,[]{
+        ImGui::InvisibleButton("##gradient-reset-anchor",{1,ImGui::GetFrameHeight()});return false;
+    },"Default gradient");
+    const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
+    const float x=b.x+ImGui::GetStyle().ItemInnerSpacing.x,height=ImGui::GetFrameHeight();
+    state.resetMinimum={x,a.y};state.resetMaximum={x+height,a.y+height};
+    return reset;
 }
 }
 
@@ -122,7 +157,7 @@ ParticleAppearanceEdit drawParticleGradientEditor(ParticleColorGradient& gradien
     ImGui::PushID("Particle gradient");
     int interpolation=gradient.interpolation==ParticleInterpolation::Linear?0:1;
     ImGui::SetNextItemWidth(ImGui::GetFontSize()*9);
-    const bool interpolationChanged=ImGui::Combo("Interpolation",&interpolation,"Linear\0Constant\0");
+    const bool interpolationChanged=resettableProperty(interpolation,static_cast<int>(ParticleColorGradient{}.interpolation),[&]{return ImGui::Combo("Interpolation",&interpolation,"Linear\0Constant\0");},"Linear");
     edit.include(interpolationChanged);
     if(interpolationChanged)live.control.gradient().interpolation_mode()=interpolation==0?ImGG::Interpolation::Linear:ImGG::Interpolation::Constant;
 
@@ -141,7 +176,8 @@ ParticleAppearanceEdit drawParticleGradientEditor(ParticleColorGradient& gradien
         auto& editor=live.colorEditors[identity];
         Vec3 rgb{color.x,color.y,color.z};float opacity=color.w;
         ImGui::PushID(live.control.selected_mark().as_imgui_id());
-        const auto changes=drawHdrColorControl("Stop color",rgb,&opacity,editor,true,MaximumParticleColor);
+        const auto defaults=ParticleGradientStop{}.color;
+        const auto changes=drawHdrColorControl("Stop color",rgb,&opacity,editor,true,MaximumParticleColor,"Opacity",{defaults[0],defaults[1],defaults[2]},defaults[3]);
         state.colorChannelMinimum=editor.channelMinimum;state.colorChannelMaximum=editor.channelMaximum;
         state.colorOpacityMinimum=editor.opacityMinimum;state.colorOpacityMaximum=editor.opacityMaximum;
         ImGui::PopID();
@@ -151,13 +187,26 @@ ParticleAppearanceEdit drawParticleGradientEditor(ParticleColorGradient& gradien
     };
     settings.minimum_mark_count=2;settings.maximum_mark_count=MaximumParticleAppearanceKeys;
     settings.constrain_mark_position=[&](ImGG::MarkId id,float value){return spacedPosition(live.control.gradient(),id,value);};
+    settings.position_widget=[&](ImGG::MarkId id,float& age,float width) {
+        const float validDefault=defaultStopPosition(live.control.gradient(),id,age);
+        ImGui::SetNextItemWidth(width);
+        const bool changed=resettableProperty(age,validDefault,[&]{return ImGui::DragFloat("##3",&age,.0001f,0,1,"%.4f",ImGuiSliderFlags_AlwaysClamp);});
+        const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
+        state.positionMinimum={a.x,a.y};state.positionMaximum={b.x,b.y};
+        return changed;
+    };
+    settings.reset_button_widget=[&](const ImGG::Gradient& value) {
+        return drawGradientResetButton(value,resetColor,state);
+    };
     settings.reset_gradient=[&](ImGG::Gradient& value) {
         for(auto& [identity,editor]:live.colorEditors) { (void)identity;editor.cancel(); }
         live.colorEditors.clear();
         value.clear();live.identities.clear();
         value.interpolation_mode()=ImGG::Interpolation::Linear;
-        value.add_mark(ImGG::Mark{ImGG::RelativePosition{0},widgetColor(resetColor)});
-        value.add_mark(ImGG::Mark{ImGG::RelativePosition{1},widgetColor(resetColor)});
+        const auto first=value.add_mark(ImGG::Mark{ImGG::RelativePosition{0},widgetColor(resetColor)});
+        const auto last=value.add_mark(ImGG::Mark{ImGG::RelativePosition{1},widgetColor(resetColor)});
+        live.identities.emplace(first.as_imgui_id(),gradient.stops.front().id);
+        live.identities.emplace(last.as_imgui_id(),gradient.stops.back().id);
     };
     live.control.widget("Gradient",[](){return .5f;},settings);
     auto candidate=authoredGradient(live);

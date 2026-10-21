@@ -524,8 +524,14 @@ auto GradientWidget::widget(
                 ImGui::SameLine();
             }
             auto position = selected_mark->position; // Make a copy, we can't modify the position directly because we need to pass through set_mark_position() because it has some invariants to presere (sorting the marks)
-            if (position.imgui_widget("##3", gradient_size.x * 0.25f))
+            float authored_position = position.get();
+            const bool position_changed = settings.position_widget
+                ? settings.position_widget(_selected_mark, authored_position, gradient_size.x * 0.25f)
+                : position.imgui_widget("##3", gradient_size.x * 0.25f);
+            if (position_changed)
             {
+                if (settings.position_widget)
+                    position = RelativePosition{authored_position, WrapMode::Clamp};
                 _dragged_mark.reset();
                 if (settings.constrain_mark_position)
                     position = RelativePosition{settings.constrain_mark_position(_selected_mark, position.get()), WrapMode::Clamp};
@@ -538,7 +544,7 @@ auto GradientWidget::widget(
 
     if (!(settings.flags & Flag::NoResetButton))
     {
-        if (ImGui::Button("Reset"))
+        if (settings.reset_button_widget ? settings.reset_button_widget(_gradient) : ImGui::Button("Reset"))
         {
             if (settings.reset_gradient)
                 settings.reset_gradient(_gradient);

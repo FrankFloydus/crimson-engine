@@ -1,4 +1,5 @@
 #include "ParticleAppearanceEditor.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <implot.h>
@@ -97,14 +98,22 @@ ParticleAppearanceEdit drawParticleCurveEditor(ParticleScalarCurve& curve,Partic
     selectedIndex(curve,state.selected);
     ImGui::SetNextItemWidth(ImGui::GetFontSize()*7.5f);
     int interpolation=static_cast<int>(curve.interpolation);
-    const bool interpolationChanged=ImGui::Combo("##Interpolation",&interpolation,"Linear\0Constant\0");
+    const bool interpolationChanged=resettableProperty(interpolation,static_cast<int>(ParticleScalarCurve{}.interpolation),[&]{return ImGui::Combo("##Interpolation",&interpolation,"Linear\0Constant\0");},"Linear");
     edit.include(interpolationChanged);
     if(interpolationChanged)curve.interpolation=static_cast<ParticleInterpolation>(interpolation);
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Interpolation: Linear blends between keys; Constant holds the previous value.");
     ImGui::SameLine();
     if(ImGui::SmallButton("Frame"))state.fitNext=true;
     ImGui::SameLine();
-    if(ImGui::SmallButton("..."))ImGui::OpenPopup("Curve actions");
+    if(ImGui::GetContentRegionAvail().x<ImGui::GetFrameHeight()*2+ImGui::GetStyle().ItemInnerSpacing.x)ImGui::NewLine();
+    auto defaults=curve;ParticleCurveEditorState defaultState;
+    resetCurve(defaults,defaultState,resetValue);
+    const bool curveReset=resettableProperty(curve,defaults,[&]{
+        if(ImGui::SmallButton("..."))ImGui::OpenPopup("Curve actions");
+        return false;
+    },"Constant curve");
+    edit.include(curveReset);
+    if(curveReset){state.selected=curve.keys.front().id;state.dragging=0;state.fitNext=true;}
     if(ImGui::BeginPopup("Curve actions")) {
         if(ImGui::MenuItem("Add key",nullptr,false,curve.keys.size()<MaximumParticleAppearanceKeys))edit.changed|=addMidpoint(curve,state,minimum,maximum);
         if(ImGui::MenuItem("Remove key","Delete",false,curve.keys.size()>2)){removeSelected(curve,state);edit.changed=true;}
@@ -210,10 +219,11 @@ ParticleAppearanceEdit drawParticleCurveEditor(ParticleScalarCurve& curve,Partic
     const auto index=selectedIndex(curve,state.selected);
     ImGui::PushItemWidth(std::max(70.f,ImGui::GetContentRegionAvail().x*.5f-ImGui::GetStyle().ItemSpacing.x));
     float age=curve.keys[index].age;
-    const bool ageChanged=ImGui::DragFloat("Age##Selected key",&age,.002f,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);edit.include(ageChanged);
+    const float defaultAge=static_cast<float>(index)/static_cast<float>(curve.keys.size()-1);
+    const bool ageChanged=resettableProperty(age,clampedAge(curve,index,defaultAge),[&]{return ImGui::DragFloat("Age##Selected key",&age,.002f,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});edit.include(ageChanged);
     if(ageChanged)curve.keys[index].age=clampedAge(curve,index,age);
     ImGui::PopItemWidth();
-    edit.include(ImGui::DragFloat(valueLabel,&curve.keys[index].value,.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+    edit.include(resettableProperty(curve.keys[index].value,resetValue,[&]{return ImGui::DragFloat(valueLabel,&curve.keys[index].value,.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
     ImGui::PopID();return edit;
 }
 } // namespace crimson

@@ -990,7 +990,7 @@ void environmentToneMappingStorageAndRuntime() {
     require(environment && actor,document.status());
     require(resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"New environment changed legacy appearance.");
     const auto authoredGlow=[] {
-        GlowSettings glow{true,2.25f,3.5f,.65f};glow.tint={.4f,.6f,.8f};glow.saturation=1.4f;glow.softKnee=.25f;
+        GlowSettings glow{true,2.25f,3.5f,.65f};glow.tint={.4f,.6f,.8f};glow.saturation=1.4f;glow.hdrScale=.25f;
         glow.blendMode=GlowBlendMode::Screen;glow.mix=.25f;glow.anamorphic=-.4f;glow.quality=GlowQuality::Low;
         glow.levels={.1f,0,.3f,0,.5f,0,.7f};return glow;
     }();
@@ -1051,7 +1051,7 @@ void environmentToneMappingStorageAndRuntime() {
     near(position(runtime.scene(),actor),{8,0,3});
 
     const auto runtimeGlow=[] {
-        GlowSettings glow{true,4.25f,1.5f,2.5f};glow.tint={.8f,.4f,.2f};glow.saturation=.6f;glow.softKnee=.85f;
+        GlowSettings glow{true,4.25f,1.5f,2.5f};glow.tint={.8f,.4f,.2f};glow.saturation=.6f;glow.hdrScale=.85f;
         glow.blendMode=GlowBlendMode::Mix;glow.mix=.8f;glow.anamorphic=.5f;
         glow.levels={0,.8f,0,.6f,0,.4f,0};return glow;
     }();
@@ -1091,7 +1091,7 @@ void environmentToneMappingStorageAndRuntime() {
 void environmentGlowLevelsRuntime() {
     TempProject project;SceneDocument document(project.root);
     const auto environment=document.createEnvironment(),actor=addControlledActor(document);
-    GlowSettings authored{true,.3f,2.5f,.75f};authored.tint={.6f,.8f,1};authored.softKnee=.8f;
+    GlowSettings authored{true,.3f,2.5f,.75f};authored.tint={.6f,.8f,1};authored.hdrScale=.8f;
     authored.anamorphic=-.25f;authored.quality=GlowQuality::Low;authored.levels={.1f,.2f,0,.4f,0,.6f,.7f};
     auto record=*document.scene().find(environment);record.environment->environment.glow=authored;
     require(document.updateEntity(environment,record) && document.save("Glow runtime"),document.status());
@@ -1101,7 +1101,7 @@ void environmentGlowLevelsRuntime() {
     require(resolveEnvironment(runtime.scene()).environment.glow==authored && !runtime.dirty() && !runtime.history().canUndo(),
         "Play clone lost Glow tuning or inherited authored history.");
     GlowSettings live=authored;live.strength=.7f;live.radius=4;live.threshold=2;live.tint={1,.4f,.2f};
-    live.softKnee=.2f;live.anamorphic=.5f;live.quality=GlowQuality::High;live.levels={0,0,0,0,0,0,1};
+    live.hdrScale=.2f;live.anamorphic=.5f;live.quality=GlowQuality::High;live.levels={0,0,0,0,0,0,1};
     require(runtime.begin("Glow during Play"),runtime.status());
     require(runtime.update([&](auto& values,auto&){for(auto& entity:values)if(entity.id==environment)
         entity.environment->environment.glow.levels[0]=.9f;}),runtime.status());

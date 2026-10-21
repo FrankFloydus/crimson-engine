@@ -1,5 +1,6 @@
 #include "AssetBrowser.h"
 #include "AssetBrowserPaths.h"
+#include "PropertyReset.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "editor/EditorPreferences.h"
@@ -161,7 +162,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         auto previewTick=EditorPreferences::previewSizeIndex(actions.previewSize);
         ImGui::SetNextItemWidth(150);
         const auto sizeLabel=std::to_string(actions.previewSize)+" px";
-        if (ImGui::SliderInt("Preview size",&previewTick,0,static_cast<int>(BrowserPreviewSizes.size()-1),sizeLabel.c_str()))
+        if (resettableProperty(previewTick,EditorPreferences::previewSizeIndex(EditorPreferenceValues{}.browserPreviewSize),[&]{return ImGui::SliderInt("Preview size",&previewTick,0,static_cast<int>(BrowserPreviewSizes.size()-1),sizeLabel.c_str());},"128 px"))
             actions.previewSize=BrowserPreviewSizes[static_cast<size_t>(previewTick)];
         thumbnailDemand_=thumbnailPixelEdge(static_cast<uint32_t>(actions.previewSize),ImGui::GetWindowViewport()->DpiScale);
         assets.setThumbnailDemand(thumbnailDemand_);

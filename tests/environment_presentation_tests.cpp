@@ -1,5 +1,7 @@
 #include "crimson-renderer/EnvironmentPresentation.h"
 #include "crimson-renderer/Fog.h"
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -14,6 +16,11 @@ void check(bool ok,const char* message) {if(!ok)throw std::runtime_error(message
 void near(float actual,float expected,const std::source_location location=std::source_location::current()) {
     if(!std::isfinite(actual) || std::abs(actual-expected)>=2e-6f)
         throw std::runtime_error(std::string("Fog equation mismatch in ")+location.function_name()+":"+
+            std::to_string(location.line())+", actual="+std::to_string(actual)+", expected="+std::to_string(expected));
+}
+void relativeNear(float actual,double expected,const std::source_location location=std::source_location::current()) {
+    if(!std::isfinite(actual) || std::abs(double(actual)-expected)>std::max(std::abs(expected)*2e-6,2e-6))
+        throw std::runtime_error(std::string("FP32 fog radiance mismatch in ")+location.function_name()+":"+
             std::to_string(location.line())+", actual="+std::to_string(actual)+", expected="+std::to_string(expected));
 }
 void reflectionThumbnailIdentity() {
@@ -134,9 +141,59 @@ void fogLightEnergy() {
         const auto extreme=fog::premultiplied({0,0,0},opacity,extremeParams,1000,0,false);
         // The shared fog light color is bounded before applying the finite
         // optical path; maximum Energy cannot bypass its residual transmission.
-        for(std::size_t c=0;c<3;++c)near(extreme[c],60000.f*(1-std::exp(-10.f))*opacity);
+        for(std::size_t c=0;c<3;++c)relativeNear(extreme[c],1e30f*(1-std::exp(-10.f))*opacity);
         near(extreme[3],opacity);
     }
+}
+void fullPrecisionFogRadiance() {
+    // Surface, background, and refraction sources use FP32 scene HDR. Values
+    // above the GI donors' separate RGBA16F ceiling must survive until exposure.
+    const std::array<Vec3,3> sources{{{129536,129024,122368},{1e10f,1e9f,1e8f},{1e30f,1e29f,1e28f}}};
+    FogSettings settings;
+    auto params=fog::parameters(settings,1000);
+    for(const auto& source:sources) {
+        for(const float opacity:{0.f,.25f,1.f})for(const bool additive:{false,true}) {
+            const auto result=fog::premultiplied(source,opacity,params,32,0,additive);
+            for(std::size_t channel=0;channel<3;++channel)relativeNear(result[channel],double(source[channel])*opacity);
+            near(result[3],opacity);
+        }
+        const auto background=fog::background(params,source,true,32);
+        for(std::size_t channel=0;channel<3;++channel)relativeNear(background[channel],source[channel]);
+        near(background[3],1);
+    }
+    settings.enabled=true;settings.density=std::log(2.f)/32;
+    settings.color={1,1,1};settings.lightEnergy=1e10f;
+    params=fog::parameters(settings,1000);
+    for(const auto& source:sources) {
+        const auto result=fog::premultiplied(source,.25f,params,32,0,false);
+        const auto background=fog::background(params,source,true,32);
+        for(std::size_t channel=0;channel<3;++channel) {
+            const double expected=(double(source[channel])*.5+1e10*.5);
+            relativeNear(result[channel],expected*.25);
+            relativeNear(background[channel],expected);
+        }
+    }
+    // Aerial Perspective and Sun Scatter also mix FP32 sky/light radiance.
+    params.sky[1]=1;
+    for(const auto& source:sources) {
+        const auto color=fog::lightColor(params,source,{0,0,-1});
+        for(std::size_t channel=0;channel<3;++channel)relativeNear(color[channel],source[channel]);
+    }
+    params.sky[1]=0;params.sky[2]=1;params.colorDensity={0,0,0,0};
+    params.sunDirections[0]={0,0,-1,1};params.sunColors[0]={129536,1e10f,1e29f,0};
+    const auto sunlight=fog::lightColor(params,{}, {0,0,-1});
+    for(std::size_t channel=0;channel<3;++channel)
+        relativeNear(sunlight[channel],double(params.sunColors[0][channel])*std::numbers::pi_v<float>);
+
+    for(const float invalid:{std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity()}) {
+        near(fog::equations::fogFiniteRadiance(invalid),0);
+        for(const float opacity:{0.f,.25f,1.f})near(fog::equations::fogPremultipliedChannel(invalid,opacity),0);
+    }
+    near(fog::equations::fogPremultipliedChannel(std::numeric_limits<float>::max(),0),0);
+    relativeNear(fog::equations::fogPremultipliedChannel(std::numeric_limits<float>::max(),.25f),double(1e30f)*.25);
+    relativeNear(fog::equations::fogFiniteRadiance(std::numeric_limits<float>::max()),1e30f);
+    near(fog::equations::fogPremultipliedChannel(-1e30f,1),0);
 }
 void materialFogReception() {
     for(auto mode:{FogMode::Exponential,FogMode::Depth})for(float heightDensity:{0.f,.1f,-.1f}) {
@@ -234,7 +291,7 @@ void backgroundFog() {
     settings.color={1,1,1};settings.lightEnergy=std::numeric_limits<float>::max();
     settings.density=2;
     const auto bounded=fog::background(fog::parameters(settings,2048),sky,false,32);
-    for(unsigned channel=0;channel<3;++channel)near(bounded[channel],60000.f);
+    for(unsigned channel=0;channel<3;++channel)relativeNear(bounded[channel],1e30f);
     near(bounded[3],1);
 }
 void independentPresentation() {
@@ -374,7 +431,7 @@ void ambientLightControls() {
 }
 }
 int main() {
-    try {reflectionThumbnailIdentity();fogComposition();depthAndHeightFog();fogLightEnergy();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
+    try {reflectionThumbnailIdentity();fogComposition();depthAndHeightFog();fogLightEnergy();fullPrecisionFogRadiance();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
         std::cout<<"Environment presentation and fog checks passed.\n";return 0;}
     catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

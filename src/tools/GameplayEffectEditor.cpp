@@ -2,6 +2,7 @@
 #include "DocumentEditorMenu.h"
 #include "assets/AssetLibrary.h"
 #include "GameplayTagControls.h"
+#include "PropertyReset.h"
 #include "resources/Paths.h"
 #include <limits>
 #include <type_traits>
@@ -171,6 +172,8 @@ void GameplayEffectEditor::publish(AssetLibrary& assets) {
 }
 void GameplayEffectEditor::drawProperties(bool canceled) {
     auto value=document_.definition();
+    const GameplayEffectAsset defaults;
+    const EffectModifier modifierDefaults{stats::MovementSpeed,EffectModifierOperation::AddBase,{}};
     const auto instant=[&]{return value.durationPolicy==EffectDurationPolicy::Instant;};
     const auto commitValue=[&](const char* label) {
         if(canceled)return;finishInteraction();document_.edit(label,[&](auto& asset){asset=value;});
@@ -181,14 +184,16 @@ void GameplayEffectEditor::drawProperties(bool canceled) {
         if(changed)document_.update([&](auto& asset){asset=value;});
         if(ImGui::IsItemDeactivated()||(changed&&!ImGui::IsItemActive()))document_.commit();
     };
-    const auto number=[&](const char* label,double& field,double minimum=0.,double maximum=std::numeric_limits<double>::max()) {
-        const bool changed=ImGui::DragScalar(label,ImGuiDataType_Double,&field,.1f,&minimum,&maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    const auto number=[&](const char* label,double& field,double defaultValue,double minimum=0.,double maximum=std::numeric_limits<double>::max()) {
+        const bool changed=resettableProperty(field,std::clamp(defaultValue,minimum,maximum),[&]{
+            return ImGui::DragScalar(label,ImGuiDataType_Double,&field,.1f,&minimum,&maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        });
         gesture(changed,label);
     };
-    const auto check=[&](const char* label,bool& field){if(ImGui::Checkbox(label,&field))commitValue(label);};
-    const auto combo=[&](const char* label,auto& field,const char* choices) {
+    const auto check=[&](const char* label,bool& field,bool defaultValue){if(resettableProperty(field,defaultValue,[&]{return ImGui::Checkbox(label,&field);}))commitValue(label);};
+    const auto combo=[&](const char* label,auto& field,const char* choices,const auto& defaultValue) {
         auto selected=static_cast<int>(field);
-        if(ImGui::Combo(label,&selected,choices)){
+        if(resettableProperty(selected,static_cast<int>(defaultValue),[&]{return ImGui::Combo(label,&selected,choices);})){
             field=static_cast<std::remove_reference_t<decltype(field)>>(selected);
             if constexpr(std::is_same_v<std::remove_reference_t<decltype(field)>,EffectDurationPolicy>)
                 if(field==EffectDurationPolicy::HasDuration&&value.duration<=0)value.duration=1;
@@ -197,11 +202,11 @@ void GameplayEffectEditor::drawProperties(bool canceled) {
     };
     ImGui::BeginDisabled(!document_.editable());
     if(ImGui::CollapsingHeader("Duration",ImGuiTreeNodeFlags_DefaultOpen)) {
-        combo("Duration Policy",value.durationPolicy,"Instant\0Has Duration\0Infinite\0");
-        if(value.durationPolicy==EffectDurationPolicy::HasDuration)number("Duration (s)",value.duration,.001);
+        combo("Duration Policy",value.durationPolicy,"Instant\0Has Duration\0Infinite\0",defaults.durationPolicy);
+        if(value.durationPolicy==EffectDurationPolicy::HasDuration)number("Duration (s)",value.duration,defaults.duration,.001);
         if(!instant()) {
-            number("Period (s)",value.period);
-            if(value.period>0)check("Execute Periodic on Application",value.executeOnApplication);
+            number("Period (s)",value.period,defaults.period);
+            if(value.period>0)check("Execute Periodic on Application",value.executeOnApplication,defaults.executeOnApplication);
         }
     }
     if(ImGui::CollapsingHeader("Modifiers",ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -209,27 +214,35 @@ void GameplayEffectEditor::drawProperties(bool canceled) {
         for(std::size_t i=0;i<value.modifiers.size();++i) {
             ImGui::PushID(static_cast<int>(i));auto& modifier=value.modifiers[i];
             ImGui::SeparatorText(("Modifier "+std::to_string(i+1)).c_str());
-            if(drawGameplayTagControl("Attribute",modifier.attribute,attributePickers_[i],{GameplayTag{"Stats"},&nativeAttributeCatalog()}))commitValue("Change modifier attribute");
-            combo("Operation",modifier.operation,"Add Base\0Multiply Additive\0Divide Additive\0Multiply Compound\0Add Final\0Override\0");
+            if(drawGameplayTagControl("Attribute",modifier.attribute,attributePickers_[i],{GameplayTag{"Stats"},&nativeAttributeCatalog()},nativeGameplayTags(),modifierDefaults.attribute))commitValue("Change modifier attribute");
+            combo("Operation",modifier.operation,"Add Base\0Multiply Additive\0Divide Additive\0Multiply Compound\0Add Final\0Override\0",modifierDefaults.operation);
             const auto& registry=nativeEffectCalculations();const auto* calculation=registry.find(modifier.magnitude.calculation);
             const auto magnitudeName=modifier.magnitude.calculation.empty()?std::string("Literal"):calculation?calculation->name:modifier.magnitude.calculation;
-            if(ImGui::BeginCombo("Magnitude",magnitudeName.c_str())) {
+            const bool magnitudeChanged=resettableProperty(modifier.magnitude,modifierDefaults.magnitude,[&]{
+              bool selectedMagnitude=false;
+              const bool open=ImGui::BeginCombo("Magnitude",magnitudeName.c_str());
+              const auto item=GImGui->LastItemData;
+              if(open) {
                 if(ImGui::Selectable("Literal",modifier.magnitude.calculation.empty())) {
-                    modifier.magnitude.calculation.clear();modifier.magnitude.parameters.clear();commitValue("Use literal magnitude");
+                    modifier.magnitude.calculation.clear();modifier.magnitude.parameters.clear();selectedMagnitude=true;
                 }
                 for(const auto& registered:registry.definitions()) {
                     ImGui::PushID(registered.id.c_str());
                     if(ImGui::Selectable(registered.name.c_str(),modifier.magnitude.calculation==registered.id)) {
                         modifier.magnitude.calculation=registered.id;modifier.magnitude.parameters.clear();
                         for(const auto& parameter:registered.parameters)modifier.magnitude.parameters.push_back({parameter.name,parameter.defaultValue});
-                        commitValue("Select magnitude calculation");
+                        selectedMagnitude=true;
                     }
                     ImGui::PopID();
                 }
                 ImGui::EndCombo();
-            }
+              }
+              GImGui->LastItemData=item;
+              return selectedMagnitude;
+            },"Literal, 0");
+            if(magnitudeChanged)commitValue("Change magnitude");
             calculation=registry.find(modifier.magnitude.calculation);
-            if(modifier.magnitude.calculation.empty())number("Value",modifier.magnitude.literal,-std::numeric_limits<double>::max());
+            if(modifier.magnitude.calculation.empty())number("Value",modifier.magnitude.literal,modifierDefaults.magnitude.literal,-std::numeric_limits<double>::max());
             else if(calculation) {
                 ImGui::PushID("Native parameters");
                 for(const auto& metadata:calculation->parameters) {
@@ -237,7 +250,7 @@ void GameplayEffectEditor::drawProperties(bool canceled) {
                     auto found=std::find_if(modifier.magnitude.parameters.begin(),modifier.magnitude.parameters.end(),[&](const auto& parameter){return parameter.name==metadata.name;});
                     auto scalar=found==modifier.magnitude.parameters.end()?metadata.defaultValue:found->value;
                     const auto minimum=metadata.minimum.value_or(-std::numeric_limits<double>::max()),maximum=metadata.maximum.value_or(std::numeric_limits<double>::max());
-                    const bool changed=ImGui::DragScalar(metadata.name.c_str(),ImGuiDataType_Double,&scalar,.1f,&minimum,&maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+                    const bool changed=resettableProperty(scalar,metadata.defaultValue,[&]{return ImGui::DragScalar(metadata.name.c_str(),ImGuiDataType_Double,&scalar,.1f,&minimum,&maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
                     if(changed) {
                         if(found==modifier.magnitude.parameters.end())modifier.magnitude.parameters.push_back({metadata.name,scalar});else found->value=scalar;
                     }
@@ -255,7 +268,7 @@ void GameplayEffectEditor::drawProperties(bool canceled) {
         }
         if(remove){value.modifiers.erase(value.modifiers.begin()+static_cast<std::ptrdiff_t>(*remove));commitValue("Remove modifier");}
         if(ImGui::Button("Add Modifier")) {
-            value.modifiers.push_back({stats::MovementSpeed,EffectModifierOperation::AddBase,{}});commitValue("Add modifier");
+            value.modifiers.push_back(modifierDefaults);commitValue("Add modifier");
         }
     }
     if(ImGui::CollapsingHeader("Stacking",ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -264,23 +277,23 @@ void GameplayEffectEditor::drawProperties(bool canceled) {
             if(ImGui::IsItemHovered())ImGui::SetTooltip("Instant effects execute once and do not create an active stack.");
         }
         ImGui::BeginDisabled(instant());auto& stack=value.stacking;
-        combo("Type",stack.type,"None\0Aggregate by Source\0Aggregate by Target\0");
+        combo("Type",stack.type,"None\0Aggregate by Source\0Aggregate by Target\0",defaults.stacking.type);
         if(stack.type!=EffectStackingType::None) {
             const std::uint32_t zero=0,maximum=std::numeric_limits<std::uint32_t>::max();
-            const bool changed=ImGui::DragScalar("Limit",ImGuiDataType_U32,&stack.limit,1.f,&zero,&maximum,"%u",ImGuiSliderFlags_AlwaysClamp);
+            const bool changed=resettableProperty(stack.limit,defaults.stacking.limit,[&]{return ImGui::DragScalar("Limit",ImGuiDataType_U32,&stack.limit,1.f,&zero,&maximum,"%u",ImGuiSliderFlags_AlwaysClamp);});
             gesture(changed,"Change stack limit");if(ImGui::IsItemHovered())ImGui::SetTooltip("0 allows unlimited stacks.");
             if(value.durationPolicy==EffectDurationPolicy::HasDuration) {
-                combo("Duration Refresh",stack.durationRefresh,"Refresh on Successful Application\0Never Refresh\0Extend Duration\0");
-                number("Max Duration (s)",stack.maxDuration);if(ImGui::IsItemHovered())ImGui::SetTooltip("0 leaves duration uncapped.");
-                combo("Expiration",stack.expiration,"Clear Entire Stack\0Remove Single Stack and Refresh Duration\0Refresh Duration\0");
+                combo("Duration Refresh",stack.durationRefresh,"Refresh on Successful Application\0Never Refresh\0Extend Duration\0",defaults.stacking.durationRefresh);
+                number("Max Duration (s)",stack.maxDuration,defaults.stacking.maxDuration);if(ImGui::IsItemHovered())ImGui::SetTooltip("0 leaves duration uncapped.");
+                combo("Expiration",stack.expiration,"Clear Entire Stack\0Remove Single Stack and Refresh Duration\0Refresh Duration\0",defaults.stacking.expiration);
                 if(stack.durationRefresh==EffectDurationRefresh::ExtendDuration && stack.expiration!=EffectStackExpiration::ClearEntireStack) {
                     ImGui::TextDisabled("Extended duration refreshes on expiration");
                     if(ImGui::IsItemHovered())ImGui::SetTooltip("This expiration policy refreshes the duration after the extended duration ends.");
                 }
             }
-            if(value.period>0)combo("Period Reset",stack.periodReset,"Reset on Successful Application\0Never Reset\0");
-            check("Deny Overflow Application",stack.denyOverflowApplication);check("Clear Stack on Overflow",stack.clearStackOnOverflow);
-            check("Factor in Stack Count",stack.factorInStackCount);
+            if(value.period>0)combo("Period Reset",stack.periodReset,"Reset on Successful Application\0Never Reset\0",defaults.stacking.periodReset);
+            check("Deny Overflow Application",stack.denyOverflowApplication,defaults.stacking.denyOverflowApplication);check("Clear Stack on Overflow",stack.clearStackOnOverflow,defaults.stacking.clearStackOnOverflow);
+            check("Factor in Stack Count",stack.factorInStackCount,defaults.stacking.factorInStackCount);
         }
         ImGui::EndDisabled();
     }

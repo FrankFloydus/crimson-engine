@@ -46,6 +46,9 @@ struct Settings {
     size_t maximum_mark_count{std::numeric_limits<size_t>::max()};
     std::function<float(MarkId, float)> constrain_mark_position;
     std::function<void(Gradient&)> reset_gradient;
+    // Optional host property widgets; absent callbacks retain the library UI.
+    std::function<bool(MarkId,float&,float width)> position_widget;
+    std::function<bool(const Gradient&)> reset_button_widget;
     // Authored colors and interpolation remain canonical linear HDR. These
     // hooks affect only display swatches and the selected mark's popup editor.
     std::function<ColorRGBA(const ColorRGBA&)> display_color;

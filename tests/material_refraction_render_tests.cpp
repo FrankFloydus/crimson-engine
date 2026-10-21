@@ -111,6 +111,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     const auto output=[&]() -> MaterialOutputNode& {return findMaterialNode(asset.graph,outputId)->output;};
     output().shading=MaterialShading::StandardPbr;output().blend=MaterialBlend::Alpha;output().doubleSided=true;output().refraction=true;
     output().ior=1;output().roughness=0;output().baseColor={.3f,.3f,.3f};
+    output().transmission=1;output().opacity=1;output().thickness=0;output().attenuationColor={1,1,1};
     const auto prepare=[&](bgfx::TextureHandle texture=BGFX_INVALID_HANDLE){
         const auto generated=generateMaterialGraphShader(asset);MaterialGraphProgramResult published;
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{180};
@@ -146,6 +147,32 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     bindings[0].graph=prepare();scene.instances=instances;
     const auto identity=capture();check(difference(identity,baseline)<1.1,"IOR one changed the undistorted background.");
     check(renderer.refractionResidentBytes()>0,"Active glass did not allocate a snapshot.");
+    {
+        // Keep the source above the half-float range while exposing it into
+        // display midtones. A 60000 clamp in either scene capture or optical
+        // transmission must remain visible rather than saturating both images.
+        constexpr Vec3 hdrSource{129536,129024,122368};
+        std::array<Vec4,Stripes> savedColors;
+        for(unsigned i=0;i<Stripes;++i) {
+            savedColors[i]=backgrounds[i][0].baseColor;
+            backgrounds[i][0].baseColor={hdrSource[0],hdrSource[1],hdrSource[2],1};
+        }
+        const auto savedExposure=settings.exposure;settings.exposure=1e-6f;
+        scene.instances=std::span(instances.data(),Stripes);const auto hdrBaseline=capture();
+        const auto hdrRgb=centerRgb(hdrBaseline);
+        for(unsigned channel=0;channel<3;++channel) {
+            const float linear=hdrSource[channel]*settings.exposure;
+            const float expected=255*(linear<=.0031308f?linear*12.92f:1.055f*std::pow(linear,1.f/2.4f)-.055f);
+            check(std::abs(hdrRgb[channel]-expected)<1.1,
+                "FP32 refraction source lost HDR energy before low exposure; channel="+std::to_string(channel)+
+                ", expected="+std::to_string(expected)+", actual="+std::to_string(hdrRgb[channel])+".");
+        }
+        scene.instances=instances;const auto hdrIdentity=capture();
+        check(difference(hdrIdentity,hdrBaseline)<1.1,
+            "Index-matched white full transmission clipped FP32 background radiance before coverage.");
+        settings.exposure=savedExposure;
+        for(unsigned i=0;i<Stripes;++i)backgrounds[i][0].baseColor=savedColors[i];
+    }
     // The editor matte is composed after HDR presentation. Glass over an
     // empty view must transmit that matte, including its colored absorption,
     // without moving the matte into exposure/tone mapping.

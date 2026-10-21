@@ -455,12 +455,43 @@ void exercise(SDL_Window* window,const Options& options) {
                 check(failures.empty(),"Linear Glow level response failed "+std::to_string(failures.size())+" checks; first: "+
                     (failures.empty()?std::string{}:failures.front()));
             }
+            if(!options.levelResponseOnly) {
+                // Constant FP32 fields remove filter-shape uncertainty. Check
+                // the authored response independently, including exposure and
+                // repeated settings changes on the same GPU owner.
+                constexpr std::uint16_t w=9,h=7;
+                GlowSettings settings;settings.enabled=true;settings.strength=1;settings.levels={1,0,0,0,0,0,0};
+                struct Response {float source,exposure,threshold,scale,cap;};
+                for(const Response test:std::array<Response,11>{{
+                    {.75f,1,1,2,12},{1,1,1,2,12},{1.1f,1,1,2,12},{1.5f,1,1,2,12},
+                    {2,1,1,2,12},{3,1,1,2,12},{100,1,1,2,12},{100,1,1,2,3},
+                    {1.5f,2,1,2,12},{1.5f,1,1,0,12},{1,1,1,0,12}}}) {
+                    std::vector<float> pixels(std::size_t(w)*h*4);
+                    for(std::size_t i=0;i<pixels.size();++i)pixels[i]=i%4==3?1:test.source;
+                    Texture input{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,
+                        BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,bgfx::copy(pixels.data(),std::uint32_t(pixels.size()*sizeof(float))))};
+                    check(bgfx::isValid(input.value),"Glow response source allocation failed.");
+                    settings.threshold=test.threshold;settings.hdrScale=test.scale;settings.luminanceCap=test.cap;
+                    check(reconstruction.prepare(w,h,settings),reconstruction.status());
+                    check(reconstruction.execute(input.value,test.exposure,SceneGlowExtractView),reconstruction.status());
+                    const double exposed=double(test.source)*test.exposure;
+                    const double x=test.scale>0?std::clamp((exposed-test.threshold)/test.scale,0.,1.):0;
+                    const double response=test.scale>0?x*x*(3-2*x):double(exposed>test.threshold);
+                    const double expected=std::min(exposed*response,double(test.cap));
+                    const auto actual=readFloat(reconstruction.texture(),reconstruction.width(),reconstruction.height());
+                    for(std::size_t i=0;i<actual.size();++i)if(i%4<3)
+                        check(std::isfinite(actual[i])&&std::abs(actual[i]-expected)<=std::max(1e-6,expected*.002),
+                            "Glow HDR threshold/scale/cap response differs from its independent reference.");
+                }
+                settings.luminanceCap=0;
+                check(!reconstruction.prepare(w,h,settings)&&!reconstruction.active(),"Zero Glow cap retained effect work.");
+            }
             if(!options.levelResponseOnly&&!options.hdrSourceOnly)for(const auto extent:std::array<std::array<std::uint16_t,2>,2>{{{129,97},{1,1}}}) {
                 const auto w=extent[0],h=extent[1];constexpr std::array<float,4> radiance{1e11f,5e10f,1e10f,0};
                 std::vector<float> pixels(std::size_t(w)*h*4);for(std::size_t i=0;i<pixels.size();++i)pixels[i]=radiance[i%4];
                 Texture input{bgfx::createTexture2D(w,h,false,1,bgfx::TextureFormat::RGBA32F,BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,
                     bgfx::copy(pixels.data(),std::uint32_t(pixels.size()*sizeof(float))))};check(bgfx::isValid(input.value),"FP32 glare source allocation failed.");
-                GlowSettings flatGlow;flatGlow.enabled=true;flatGlow.strength=.8f;flatGlow.threshold=0;
+                GlowSettings flatGlow;flatGlow.enabled=true;flatGlow.strength=.8f;flatGlow.threshold=0;flatGlow.hdrScale=0;flatGlow.levels={1,0,0,0,0,0,0};
                 check(reconstruction.prepare(w,h,flatGlow),reconstruction.status());
                 // High exposure must reach the extracted-source ceiling, while
                 // low exposure must recover the original extreme constant field
@@ -531,8 +562,8 @@ void exercise(SDL_Window* window,const Options& options) {
         glow.strength=.6f;glow.radius=0;check(maximumDifference(base,capture())==0,"Zero Glow spread changed output.");
         glow.radius=1;gameSettings.exposure=0;const auto zeroExposure=capture();glow.enabled=false;
         check(maximumDifference(zeroExposure,capture())==0,"Zero exposure left an exposed Glow halo or matte.");gameSettings.exposure=1;
-        glow.enabled=true;glow.strength=1;glow.threshold=1;glow.softKnee=0;emitterMaterials[0].emissive={1,0,0};
-        const auto hardThreshold=capture();glow.softKnee=1;const auto softThreshold=capture();
+        glow.enabled=true;glow.strength=1;glow.threshold=1;glow.hdrScale=0;emitterMaterials[0].emissive={2,0,0};
+        const auto hardThreshold=capture();glow.hdrScale=4;const auto softThreshold=capture();
         check(maximumDifference(hardThreshold,softThreshold)>1,"Glow threshold softness did not change highlight onset.");
         // Glow collects the complete HDR scene, including nonemissive direct
         // and reflected light, rather than a separate emission-only MRT.
@@ -554,13 +585,19 @@ void exercise(SDL_Window* window,const Options& options) {
                 check(std::abs(int(desaturated.rgba[p])-int(desaturated.rgba[p+1]))<=1&&std::abs(int(desaturated.rgba[p])-int(desaturated.rgba[p+2]))<=1,
                     "Glow saturation zero left colored halo radiance.");}}
         check(neutralHaloPixels>10,"Glow saturation test contained no visible halo.");glow.saturation=1;
+        // Isolate coverage from threshold/cap and display saturation. A bright
+        // capped opaque source and an uncapped translucent source need not have
+        // a .25 halo ratio under the artistic default response.
+        const auto authoredResponse=glow;
+        glow.threshold=0;glow.hdrScale=0;glow.luminanceCap=1000;glow.strength=.01f;
         glow.enabled=false;const auto opaqueBase=capture();glow.enabled=true;const auto opaqueGlow=capture();
         const auto opaqueMetric=haloMetrics(opaqueGlow,opaqueBase);
         instances[2].blend=MaterialBlend::Alpha;instances[2].opacity=.25f;
         glow.enabled=false;const auto alphaBase=capture();glow.enabled=true;const auto alphaGlow=capture();const auto alphaMetric=haloMetrics(alphaGlow,alphaBase);
         const double alphaRatio=alphaMetric["energy"].get<double>()/opaqueMetric["energy"].get<double>();
-        check(alphaRatio>.12&&alphaRatio<.4,"Transparent material Glow did not follow visible coverage; halo energy ratio="+std::to_string(alphaRatio));
+        check(alphaRatio>.22&&alphaRatio<.29,"Transparent material Glow did not follow visible coverage; halo energy ratio="+std::to_string(alphaRatio));
         instances[2].blend=MaterialBlend::Opaque;instances[2].opacity=1;
+        glow=authoredResponse;
         emitterMaterials[0].emissive={};emitterMaterials[0].baseColor={32,4,.5f,1};instances[2].shading=MaterialShading::Unlit;
         glow.enabled=false;const auto unlitBase=capture();glow.enabled=true;
         check(maximumDifference(unlitBase,capture())>5,"Visible Unlit self-lit radiance was missing from Glow.");
@@ -629,7 +666,7 @@ void exercise(SDL_Window* window,const Options& options) {
         // Keep these coverage comparisons below presentation clipping; the
         // preceding 32-unit sun case separately covers bright HDR saturation.
         gameSettings.proceduralSun.intensity=.25f;
-        glow=GlowSettings{};glow.strength=.6f;glow.threshold=0;
+        glow=GlowSettings{};glow.strength=.6f;glow.threshold=0;glow.hdrScale=0;
         struct SunOcclusionAngle {Vec3 eye,forward,sun;float yaw,pitch;};
         const std::array<SunOcclusionAngle,2> sunAngles{{
             {{0,0,4},{0,0,-1},{0,.05f,-1},0,0},

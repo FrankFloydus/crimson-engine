@@ -48,6 +48,8 @@ public:
     ParticleEffectAsset baseline;
     float windowWidth{480};
     bool otherDocumentFocused{};
+    Vec3 hdrDefaultColor{ParticleEmitterDefinition{}.color};
+    float hdrDefaultOpacity{ParticleEmitterDefinition{}.opacity};
     explicit AppearanceUi(const fs::path& root,float width=480):document(root),windowWidth(width) {
         auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={960,1000};io.DeltaTime=1.f/60;
         io.ConfigInputTrickleEventQueue=false;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
@@ -79,7 +81,7 @@ public:
         gradientChanges=drawParticleGradientEditor(candidate.emitter.colorGradient,gradient,{1,1,1,1});
         apply("Edit color gradient",candidate,gradientChanges,canceled);ImGui::PopID();
         ImGui::Separator();candidate=document.definition();
-        hdrChanges=drawHdrColorControl("HDR color",candidate.emitter.color,&candidate.emitter.opacity,hdr);
+        hdrChanges=drawHdrColorControl("HDR color",candidate.emitter.color,&candidate.emitter.opacity,hdr,false,MaximumParticleColor,"Opacity",hdrDefaultColor,hdrDefaultOpacity);
         apply("Edit HDR color",candidate,{hdrChanges.changed,hdrChanges.activated,hdrChanges.active,hdrChanges.deactivated},canceled);
         if(document.transactionActive() && !curveChanges.active && !gradientChanges.active && !hdrChanges.active && !ImGui::IsAnyItemActive())document.commit();
         ImGui::End();
@@ -331,6 +333,92 @@ void hdrChannelAndOpacityTransactions() {
     require(ui.document.definition()==ui.baseline && !ui.document.canUndo() && !ui.document.dirty() && !ui.hdr.activeItem,
         "Escape did not restore HDR channels or retained an active/stale picker edit.");
 }
+void hdrDefaultResetTransactions() {
+    for(const int field:{0,1,2,3}) {
+        Project project;AppearanceUi ui(project.root);
+        if(field==3){ui.hdrDefaultColor={0,0,0};ui.hdrDefaultOpacity=0;ui.tick();}
+        if(field==1||field==2){ui.hdr.expanded=true;ui.tick();}
+        const bool whole=field==0||field==3;
+        const auto maximum=whole?ui.hdr.swatchMaximum:field==1?ui.hdr.channelMaximum[0]:ui.hdr.opacityMaximum;
+        const auto minimum=whole?ui.hdr.swatchMinimum:field==1?ui.hdr.channelMinimum[0]:ui.hdr.opacityMinimum;
+        const Vec2 reset{maximum[0]+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::GetFrameHeight()*.5f,
+            (minimum[1]+maximum[1])*.5f};
+        const auto revision=ui.document.revision();
+        ui.mouse(reset,false);ui.mouse(reset,true);ui.mouse(reset,false);
+        auto expected=ui.baseline;
+        if(whole){expected.emitter.color=ui.hdrDefaultColor;expected.emitter.opacity=ui.hdrDefaultOpacity;}
+        if(field==1)expected.emitter.color[0]=ParticleEmitterDefinition{}.color[0];
+        if(field==2)expected.emitter.opacity=ParticleEmitterDefinition{}.opacity;
+        require(ui.document.definition()==expected,"HDR reset changed the wrong color components, opacity or particle identities.");
+        require(!ui.document.transactionActive()&&!ui.hdrChanges.active&&ui.document.revision()==revision+1,
+            "HDR reset did not complete exactly one atomic document command.");
+        for(int frame=0;frame<4;++frame)ui.tick();
+        require(ui.document.definition()==expected&&ui.document.revision()==revision+1,
+            "HDR reset retained a stale hue/exposure state or created extra history.");
+        ui.mouse(reset,true);ui.mouse(reset,false);
+        require(ui.document.definition()==expected&&ui.document.revision()==revision+1,
+            "Clicking the disabled default reset dirtied the document.");
+        require(ui.document.undo()&&ui.document.definition()==ui.baseline&&!ui.document.canUndo()&&!ui.document.dirty(),
+            "HDR reset did not undo to the complete saved authored color.");
+        require(ui.document.redo()&&ui.document.definition()==expected,"HDR reset redo lost color, opacity or identity.");
+    }
+}
+void gradientDefaultResetTransactions() {
+    Project project;AppearanceUi ui(project.root);
+    const Vec2 reset{(ui.gradient.resetMinimum[0]+ui.gradient.resetMaximum[0])*.5f,
+        (ui.gradient.resetMinimum[1]+ui.gradient.resetMaximum[1])*.5f};
+    const auto revision=ui.document.revision();
+    ui.mouse(reset,false);ui.mouse(reset,true);ui.mouse(reset,false);
+    auto expected=ui.baseline;
+    expected.emitter.colorGradient={ParticleColorGradient{}.interpolation,
+        {{ui.baseline.emitter.colorGradient.stops.front().id,0,{1,1,1,1}},
+         {ui.baseline.emitter.colorGradient.stops.back().id,1,{1,1,1,1}}}};
+    require(ui.document.definition()==expected,"Default gradient reset changed unrelated values or replaced retained endpoint identities.");
+    require(ui.document.revision()==revision+1&&!ui.document.transactionActive(),"Default gradient reset did not form one atomic command.");
+    ui.tick();ui.mouse(reset,true);ui.mouse(reset,false);
+    require(ui.document.definition()==expected&&ui.document.revision()==revision+1,"Disabled default gradient reset changed history.");
+    require(ui.document.undo()&&ui.document.definition()==ui.baseline&&!ui.document.canUndo(),"Default gradient reset failed to undo all stops and identities.");
+    require(ui.document.redo()&&ui.document.definition()==expected,"Default gradient reset failed to redo completely.");
+
+    require(ui.document.edit("Move gradient endpoints",[](auto& effect){
+        effect.emitter.colorGradient.stops.front().age=.2f;effect.emitter.colorGradient.stops.back().age=.8f;
+    })&&ui.document.save()&&ui.document.load(ui.document.assetId()),"Could not configure gradient endpoint reset fixture.");
+    for(const size_t endpoint:{size_t{0},size_t{1}}){
+        const auto baseline=ui.document.definition();ui.tick();ui.tick();
+        const auto stop=ui.gradientPoint(endpoint);ui.mouse(stop,false);ui.mouse(stop,true);ui.mouse(stop,false);
+        const Vec2 ageReset{ui.gradient.positionMaximum[0]+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::GetFrameHeight()*.5f,
+            (ui.gradient.positionMinimum[1]+ui.gradient.positionMaximum[1])*.5f};
+        ui.mouse(ageReset,false);ui.mouse(ageReset,true);ui.mouse(ageReset,false);
+        auto bounded=baseline;bounded.emitter.colorGradient.stops[endpoint].age=static_cast<float>(endpoint);
+        require(ui.document.definition()==bounded&&!ui.document.transactionActive(),"Gradient endpoint reset did not restore normalized age while retaining valid spacing and identity.");
+        require(ui.document.undo()&&ui.document.definition()==baseline&&!ui.document.canUndo(),"Gradient endpoint reset did not undo as one command.");
+    }
+}
+void clusteredGradientResetIsIdempotent() {
+    Project project;AppearanceUi ui(project.root);
+    require(ui.document.edit("Cluster gradient stops",[](auto& effect){
+        effect.emitter.colorGradient.stops={{11,.1f,{1,1,1,1}},{22,.2f,{1,1,1,1}},
+            {33,.25f,{1,1,1,1}},{44,.9f,{1,1,1,1}}};
+    })&&ui.document.save()&&ui.document.load(ui.document.assetId()),"Could not configure clustered gradient reset fixture.");
+    const auto baseline=ui.document.definition();ui.tick();ui.tick();
+    const auto stop=ui.gradientPoint(1);ui.mouse(stop,false);ui.mouse(stop,true);ui.mouse(stop,false);
+    const Vec2 reset{ui.gradient.positionMaximum[0]+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::GetFrameHeight()*.5f,
+        (ui.gradient.positionMinimum[1]+ui.gradient.positionMaximum[1])*.5f};
+    const auto revision=ui.document.revision();
+    ui.mouse(reset,false);ui.mouse(reset,true);ui.mouse(reset,false);
+    const auto expected=ui.document.definition();const auto& stops=expected.emitter.colorGradient.stops;
+    require(stops.size()==4&&stops[1].id==22&&stops[2].id==33&&stops[1].age>.2f&&stops[1].age<.25f&&
+        stops[2].age-stops[1].age>=MinimumParticleKeySpacing,
+        "Clustered stop reset reordered identities or violated its neighbor spacing.");
+    auto restored=expected;restored.emitter.colorGradient.stops[1].age=.2f;
+    require(restored==baseline&&ui.document.revision()==revision+1&&!ui.document.transactionActive(),
+        "Clustered stop reset changed unrelated values or failed to complete one command.");
+    for(int click=0;click<3;++click){ui.tick();ui.mouse(reset,true);ui.mouse(reset,false);}
+    require(ui.document.definition()==expected&&ui.document.revision()==revision+1&&!ui.document.transactionActive(),
+        "Repeating a clustered stop reset changed its sorted index, target or history.");
+    require(ui.document.undo()&&ui.document.definition()==baseline&&!ui.document.canUndo(),
+        "Clustered stop reset did not undo as exactly one command.");
+}
 void gradientHdrPickerTransactions() {
     for(const bool cancel:{false,true}) {
         Project project;AppearanceUi ui(project.root);const auto stop=ui.gradientPoint(1);
@@ -436,7 +524,7 @@ int main() {
     try {
         curveDragOneTransaction();gradientDragOneTransaction();escapeRestoresDrafts();edgePointsMoveAndUndo();gradientLibraryMatchesRuntime();
         directInsertionRemovalAndNarrowLayout();plotNavigationAndKeyboardFocus();gradientPickerSelection();
-        hdrColorMathAndPassiveFrames();hdrChannelAndOpacityTransactions();gradientHdrPickerTransactions();gradientPickerCacheChurn();explosivenessTransactions();
+        hdrColorMathAndPassiveFrames();hdrChannelAndOpacityTransactions();hdrDefaultResetTransactions();gradientDefaultResetTransactions();clusteredGradientResetIsIdempotent();gradientHdrPickerTransactions();gradientPickerCacheChurn();explosivenessTransactions();
         std::cout<<"Particle library widget transactions, movable edges, linear HDR color/gradient compatibility and Escape checks passed.\n";return 0;
     } catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
 }

@@ -631,7 +631,7 @@ void environmentGlowHistoryAndMigration() {
     auto edited=original;edited.environment->environment.enabled=false;
     edited.environment->environment.glow={true,2.5f,3.25f,.75f};
     edited.environment->environment.glow.tint={.2f,.6f,.9f};
-    edited.environment->environment.glow.saturation=1.4f;edited.environment->environment.glow.softKnee=.2f;
+    edited.environment->environment.glow.saturation=1.4f;edited.environment->environment.glow.hdrScale=.2f;
     edited.environment->environment.glow.blendMode=GlowBlendMode::Screen;edited.environment->environment.glow.mix=.3f;
     auto& glow=edited.environment->environment.glow;glow.anamorphic=-.35f;glow.quality=GlowQuality::Low;
     glow.levels={0,.2f,.4f,0,.8f,.6f,1};
@@ -669,7 +669,8 @@ void environmentGlowHistoryAndMigration() {
     writeText(project.root/oldGlowAsset,oldGlowText);require(reopened.load(oldGlowAsset),reopened.status());
     const auto migrated=resolveEnvironment(reopened.scene()).environment;
     require(migrated.glow.enabled && migrated.glow.strength==2.75f && migrated.glow.radius==4.5f &&
-        migrated.glow.threshold==.6f && migrated.glow.levels==GlowSettings{}.levels && !reopened.dirty() &&
+        migrated.glow.threshold==.6f && migrated.glow.levels==std::array<float,GlowLevelCount>{.2f,.25f,.2f,.15f,.1f,.06f,.04f} &&
+        std::abs(migrated.glow.hdrScale-1.2f)<1e-6f && !reopened.dirty() &&
         readText(project.root/oldGlowAsset)==oldGlowText,"Legacy Glow migration lost its authored tuning or rewrote/marked the scene dirty.");
     require(reopened.save(),reopened.status());
     const auto converted=Json::parse(readText(project.root/oldGlowAsset));
@@ -690,12 +691,18 @@ void environmentGlowHistoryAndMigration() {
     sameRecords(before,reopened.scene().records());
 }
 void glowValidationAndLevelContribution() {
+    const GlowSettings defaults;
+    require(!defaults.enabled && defaults.strength==.3f && defaults.threshold==1 && defaults.hdrScale==2 &&
+        defaults.luminanceCap==12 && defaults.blendMode==GlowBlendMode::Screen &&
+        defaults.levels==std::array<float,GlowLevelCount>{0,.8f,.4f,.1f,0,0,0},
+        "New Glow defaults differ from the Godot reference profile.");
     EnvironmentSettings environment;environment.glow={true,2,3,.5f};
-    auto& glow=environment.glow;glow.tint={.3f,.5f,.7f};glow.saturation=1.5f;glow.softKnee=.25f;
+    auto& glow=environment.glow;glow.tint={.3f,.5f,.7f};glow.saturation=1.5f;glow.hdrScale=.25f;
     glow.blendMode=GlowBlendMode::Mix;glow.mix=.3f;glow.anamorphic=.6f;glow.quality=GlowQuality::Low;
     glow.levels={.1f,.2f,.3f,.4f,.5f,.6f,.7f};
     const auto json=environmentSettingsJson(environment);
     require(json.at("glow").at("source")=="Scene" && !json.contains("bloom") && !json.at("glow").contains("coreHalo") &&
+        !json.at("glow").contains("softKnee") && json.at("glow").contains("hdrScale") && json.at("glow").contains("luminanceCap") &&
         readEnvironmentSettings(json)==environment,"Current Glow representation failed its full-scene, single-effect round trip.");
     // Isolated gains must retain their amplitude instead of self-normalizing
     // every positive value to one during serialization or scene extraction.
@@ -706,11 +713,11 @@ void glowValidationAndLevelContribution() {
             "A direct Glow level gain was normalized, quantized or rejected.");
     }
     auto missingBlend=json;missingBlend["glow"].erase("blendMode");missingBlend["glow"].erase("mix");
-    require(readEnvironmentSettings(missingBlend).glow.blendMode==GlowBlendMode::Additive &&
-        readEnvironmentSettings(missingBlend).glow.mix==.5f,"Missing Glow blend tuning changed the default Additive composition.");
+    require(readEnvironmentSettings(missingBlend).glow.blendMode==GlowBlendMode::Screen &&
+        readEnvironmentSettings(missingBlend).glow.mix==.5f,"Missing current Glow blend tuning changed the default Screen composition.");
     auto missingLevels=json;missingLevels["glow"].erase("levels");
     require(readEnvironmentSettings(missingLevels).glow.levels==GlowSettings{}.levels,"Missing Glow levels did not retain defaults.");
-    for(const auto* field:{"strength","radius","threshold","softKnee","saturation"}) {
+    for(const auto* field:{"strength","radius","threshold","hdrScale","luminanceCap","softKnee","saturation"}) {
         auto bad=json;bad["glow"][field]="1";rejects([&]{readEnvironmentSettings(bad);});
         bad=json;bad["glow"][field]=-1;rejects([&]{readEnvironmentSettings(bad);});
     }
@@ -746,6 +753,15 @@ void glowValidationAndLevelContribution() {
         broken=environment;broken.glow.tint[1]=invalid;rejects([&]{environmentSettingsJson(broken);});
         broken=environment;broken.glow.mix=invalid;rejects([&]{environmentSettingsJson(broken);});
         broken=environment;broken.glow.anamorphic=invalid;rejects([&]{environmentSettingsJson(broken);});
+        broken=environment;broken.glow.hdrScale=invalid;rejects([&]{environmentSettingsJson(broken);});
+        broken=environment;broken.glow.luminanceCap=invalid;rejects([&]{environmentSettingsJson(broken);});
+    }
+    for(const auto member:{&GlowSettings::hdrScale,&GlowSettings::luminanceCap}) {
+        auto broken=environment;broken.glow.*member=member==&GlowSettings::hdrScale?400001.f:100001.f;rejects([&]{environmentSettingsJson(broken);});
+        for(float boundary:{0.f,100000.f}) {
+            auto valid=environment;valid.glow.*member=boundary;
+            require(readEnvironmentSettings(environmentSettingsJson(valid))==valid,"A valid Glow scale/cap boundary did not round trip.");
+        }
     }
 }
 void glowSingleEffectMigration() {
@@ -761,7 +777,7 @@ void glowSingleEffectMigration() {
     auto old=Json{{"glow",emission},{"bloom",bloom}};const auto original=old;
     const auto migrated=readEnvironmentSettings(old).glow;
     require(migrated.enabled && migrated.strength==.4f && migrated.radius==1.5f && migrated.threshold==.8f &&
-        migrated.tint==Vec3{.8f,.6f,.4f} && migrated.softKnee==.7f && migrated.anamorphic==-.4f &&
+        migrated.tint==Vec3{.8f,.6f,.4f} && std::abs(migrated.hdrScale-2.24f)<1e-6f && migrated.luminanceCap==12 && migrated.anamorphic==-.4f &&
         migrated.quality==GlowQuality::Low && migrated.blendMode==GlowBlendMode::Additive && old==original,
         "Active full-scene Bloom did not take precedence or migration modified its input.");
     nearLevels(migrated.levels,normalizedBloom);
@@ -771,7 +787,7 @@ void glowSingleEffectMigration() {
     auto oldInactiveBloom=old;oldInactiveBloom["bloom"]["enabled"]=false;
     const auto fromEmission=readEnvironmentSettings(oldInactiveBloom).glow;
     require(fromEmission.enabled && fromEmission.strength==2.25f && fromEmission.radius==3.5f && fromEmission.threshold==.6f &&
-        fromEmission.tint==Vec3{.3f,.5f,.7f} && fromEmission.saturation==1.4f && fromEmission.softKnee==.2f &&
+        fromEmission.tint==Vec3{.3f,.5f,.7f} && fromEmission.saturation==1.4f && std::abs(fromEmission.hdrScale-.48f)<1e-6f &&
         fromEmission.blendMode==GlowBlendMode::Screen && fromEmission.mix==.35f,
         "Inactive Bloom discarded the active emission Glow's artistic tuning.");
     nearLevels(fromEmission.levels,std::array<float,GlowLevelCount>{.1625f,.0775f,.085f,.1125f,.1875f,.1875f,.1875f});
@@ -802,6 +818,17 @@ void glowSingleEffectMigration() {
     require(onlyBloom==migrated,"Bloom-only legacy files did not migrate consistently.");
     auto oldDefaultEmission=Json{{"glow",{{"source","Emission"}}}};
     require(readEnvironmentSettings(oldDefaultEmission).glow.strength==.8f,"Old missing Glow intensity lost its previous default.");
+    const Json previousScene={{"glow",{{"source","Scene"},{"enabled",true}}}};const auto oldScene=previousScene;
+    const auto previous=readEnvironmentSettings(previousScene).glow;
+    require(previous.strength==.1f && previous.blendMode==GlowBlendMode::Additive &&
+        previous.levels==std::array<float,GlowLevelCount>{.2f,.25f,.2f,.15f,.1f,.06f,.04f} && previousScene==oldScene,
+        "Loading older Scene Glow replaced its omitted defaults or modified its source.");
+    require(readEnvironmentSettings(environmentSettingsJson(readEnvironmentSettings(previousScene))).glow==previous,
+        "Saving converted Scene Glow reapplied default conversion.");
+    auto oldThreshold=previousScene;oldThreshold["glow"]["threshold"]=2;
+    require(readEnvironmentSettings(oldThreshold).glow.hdrScale==4,"An omitted legacy knee lost its threshold-relative default.");
+    oldThreshold["glow"]["threshold"]=100000;oldThreshold["glow"]["softKnee"]=1;
+    require(readEnvironmentSettings(oldThreshold).glow.hdrScale==400000,"An extreme valid legacy knee could not convert.");
     auto sourceScene=current;sourceScene["bloom"]=bloom;sourceScene["glow"]["levels"]={0,0,.125f,0,0,0,0};
     require(readEnvironmentSettings(sourceScene).glow.levels[2]==.125f,"Current Scene gains were normalized or overridden by a legacy effect.");
     for(const Json badValue:{Json(-.1),Json(1.1),Json(".5"),Json(true),Json(nullptr)}) {

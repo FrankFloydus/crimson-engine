@@ -1,4 +1,5 @@
 #include "InspectorTransform.h"
+#include "PropertyReset.h"
 #include "scene/SceneDocument.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -64,10 +65,10 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
             ImGui::PushID(static_cast<int>(property));
             ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(labels[property]);
             if (property==2) {
-                const float width=ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::CalcTextSize("Lock proportions").x;
+                const float width=ImGui::GetFrameHeight()*2+ImGui::GetStyle().ItemInnerSpacing.x*2+ImGui::CalcTextSize("Lock proportions").x;
                 const float right=ImGui::GetCursorPosX()+ImGui::GetContentRegionAvail().x-width;
                 ImGui::SameLine(std::max(ImGui::GetItemRectMax().x-ImGui::GetWindowPos().x+ImGui::GetStyle().ItemSpacing.x,right));
-                ImGui::Checkbox("Lock proportions",&cache.scaleLinked);
+                resettableProperty(cache.scaleLinked,InspectorTransformState{}.scaleLinked,[&]{return ImGui::Checkbox("Lock proportions",&cache.scaleLinked);});
             }
             if (ImGui::BeginTable("Axes",3,ImGuiTableFlags_SizingStretchSame)) {
                 for (const auto* axis:axes) ImGui::TableSetupColumn(axis,ImGuiTableColumnFlags_WidthStretch);
@@ -78,7 +79,7 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                     ImGui::PushID(static_cast<int>(axis)); ImGui::SetNextItemWidth(-1);
                     const auto field=static_cast<unsigned>(property*3+axis);
                     auto value=property==0 ? cache.fields.position[axis] : property==1 ? cache.degrees[axis] : cache.fields.scale[axis];
-                    const bool changed=ImGui::DragFloat("##value",&value,speeds[property],0,0,"%.3f");
+                    const bool changed=resettableProperty(value,property==2?1.f:0.f,[&]{return ImGui::DragFloat("##value",&value,speeds[property],0,0,"%.3f");});
                     const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();
                     const float stripWidth=std::max(1.f,ImGui::GetFontSize()*.15f);
                     ImGui::GetWindowDrawList()->AddRectFilled({minimum.x,minimum.y},{minimum.x+stripWidth,maximum.y},ImGui::GetColorU32(axisColors[axis]));

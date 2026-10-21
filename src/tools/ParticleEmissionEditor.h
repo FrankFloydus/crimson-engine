@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/ParticleAsset.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <exception>
 #include <algorithm>
@@ -20,8 +21,10 @@ inline float particleDurationLowerBound(const ParticleEmitterDefinition& emitter
 inline bool drawParticleDuration(ParticleEmitterDefinition& emitter) {
     const auto minimum=particleDurationLowerBound(emitter);
     ImGui::BeginDisabled(minimum>MaximumParticleTime);
-    const bool changed=ImGui::DragFloat(emitter.finiteDuration?"Duration (s)":"Cycle Duration (s)",&emitter.duration,.01f,
-        std::min(minimum,MaximumParticleTime),MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    const bool changed=resettableProperty(emitter.duration,std::max(ParticleEmitterDefinition{}.duration,minimum),[&]{
+        return ImGui::DragFloat(emitter.finiteDuration?"Duration (s)":"Cycle Duration (s)",&emitter.duration,.01f,
+            std::min(minimum,MaximumParticleTime),MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    });
     ImGui::EndDisabled();return changed;
 }
 
@@ -29,7 +32,7 @@ inline bool drawParticleDuration(ParticleEmitterDefinition& emitter) {
 // attempted after an authored value change, and cannot unwind an ImGui frame.
 inline bool drawParticleExplosiveness(ParticleEmitterDefinition& emitter,std::string& diagnostic) {
     float value=emitter.explosiveness;
-    if(!ImGui::SliderFloat("Explosiveness",&value,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp))return false;
+    if(!resettableProperty(value,ParticleEmitterDefinition{}.explosiveness,[&]{return ImGui::SliderFloat("Explosiveness",&value,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}))return false;
     try {
         const bool changed=setParticleExplosiveness(emitter,value);
         diagnostic.clear();return changed;

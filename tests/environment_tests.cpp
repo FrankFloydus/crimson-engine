@@ -64,6 +64,61 @@ void constantNormalization() {
         near(level.rgba[i+3],1);
     }
 }
+void highHdrRadianceRoundTrip() {
+    using namespace crimson;
+    // Real RGBE sun radiance exceeds the FP16 range. E=145 means a scale of
+    // 512, so these values are known independently of the renderer decoder.
+    const std::string header="#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 2\n";
+    std::vector<uint8_t> bytes(header.begin(),header.end());
+    for(int i=0;i<4;++i)bytes.insert(bytes.end(),{253,252,239,145});
+    const Vec3 color{129536,129024,122368};
+    const auto decoded=ibl::decode(bytes);
+    require(decoded.width==2&&decoded.height==2,"High-HDR RGBE dimensions changed");
+    for(const auto& pixel:decoded.pixels)same(pixel,color,0);
+
+    const ibl::Settings settings{2,4,4,64,64,64};
+    const auto expected=ibl::bake(decoded,settings);
+    const auto preservesRadiance=[&](const ibl::CubeLevel& level){
+        for(size_t i=0;i<level.rgba.size();i+=4){
+            for(size_t channel=0;channel<3;++channel)
+                near(level.rgba[i+channel],color[channel],color[channel]*5e-6);
+            near(level.rgba[i+3],1,0);
+        }
+    };
+    preservesRadiance(expected.diffuse);
+    for(const auto& level:expected.specular)preservesRadiance(level);
+
+    const auto key=ibl::cacheKey(bytes,settings);
+    require(key!=ibl::cacheKey(bytes,settings,4),"Clipped-radiance cache identity was reused");
+    const auto directory=std::filesystem::temp_directory_path()/("crimson-ibl-hdr-test-"+
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove_all(path,error); } } cleanup{directory};
+    const auto path=directory/"high-radiance.ibl";
+    require(ibl::writeCache(path,key,settings,expected),"High-HDR cache write failed");
+    ibl::Bake restored;
+    require(ibl::readCache(path,key,settings,restored),"High-HDR cache was rejected or truncated");
+    require(restored.diffuse.rgba==expected.diffuse.rgba&&restored.brdf==expected.brdf,"High-HDR cache changed float values");
+    require(restored.specular.size()==expected.specular.size(),"High-HDR cache changed the mip count");
+    for(size_t i=0;i<expected.specular.size();++i)
+        require(restored.specular[i].rgba==expected.specular[i].rgba,"High-HDR cache changed a radiance mip");
+    {
+        // A stale header is rejected even if the caller supplies the current
+        // key and the payload is otherwise intact.
+        std::fstream file(path,std::ios::binary|std::ios::in|std::ios::out);
+        const uint32_t clippedVersion=4;
+        file.seekp(8);file.write(reinterpret_cast<const char*>(&clippedVersion),sizeof(clippedVersion));
+    }
+    require(!ibl::readCache(path,key,settings,restored),"Clipped-radiance cache version was accepted");
+    for(const float invalid:{-1.f,std::numeric_limits<float>::infinity(),
+                            std::numeric_limits<float>::quiet_NaN(),ibl::MaximumRadiance*2}){
+        auto corrupt=expected;corrupt.specular.front().rgba.front()=invalid;
+        // writeCache supplies a matching checksum, so rejection must come
+        // from finite/nonnegative/range validation rather than integrity alone.
+        require(ibl::writeCache(path,key,settings,corrupt),"Invalid-HDR cache fixture write failed");
+        require(!ibl::readCache(path,key,settings,restored),"Invalid-HDR cache radiance was accepted");
+        require(restored.specular.front().rgba==expected.specular.front().rgba,"Rejected HDR cache replaced last-good radiance");
+    }
+}
 void reflectionRoughness() {
     auto image=constant({0,0,0}); image.width=256; image.height=128; image.pixels.resize(256*128);
     for (uint32_t y=0;y<image.height;++y) for (uint32_t x=0;x<image.width;++x) {
@@ -183,6 +238,20 @@ void sourcePyramidConservation() {
         for (const float footprint : {0.0f,.1f,1.0f})
             same(pyramid.sample({-1,0,.0000001f},footprint),pyramid.sample({-1,0,-.0000001f},footprint),1e-4);
     }
+
+    // A small sun can hold much of an HDRI's energy despite occupying only a
+    // few pixels. Independently integrate its spherical energy before every
+    // reduction, rather than merely checking that the outputs stay finite.
+    crimson::ibl::Image hdr{17,9,std::vector<crimson::Vec3>(17*9,{.25f,.5f,1})};
+    hdr.pixels[4*17+8]={129536,129024,122368};
+    hdr.pixels[0]={64768,64512,61184};
+    const crimson::ibl::SourcePyramid pyramid(hdr);
+    for(size_t channel=0;channel<3;++channel){
+        const double expected=sphericalEnergy(hdr,channel);
+        for(const auto& level:pyramid.levels)
+            near(sphericalEnergy(level,channel),expected,expected*2e-6);
+        near(pyramid.sample({1,0,0},static_cast<float>(4*Pi))[channel],expected/(4*Pi),expected*2e-6);
+    }
 }
 
 struct EmitterSample {
@@ -301,6 +370,22 @@ void finiteExtremesAndFloor() {
     }
     auto bad=constant({invalid,std::numeric_limits<float>::infinity(),-1});
     same(bad.sample({0,0,0}),{0,0,0});
+    const auto extreme=constant({std::numeric_limits<float>::max(),crimson::ibl::MaximumRadiance,-1});
+    same(extreme.sample({1,0,0}),{crimson::ibl::MaximumRadiance,crimson::ibl::MaximumRadiance,0},0);
+    const crimson::ibl::Settings settings{1,2,2,16,16,16};
+    const auto baked=crimson::ibl::bake(extreme,settings);
+    const auto finiteBound=[&](const crimson::ibl::CubeLevel& level){
+        for(size_t i=0;i<level.rgba.size();i+=4){
+            for(size_t channel=0;channel<2;++channel){
+                const auto value=level.rgba[i+channel];
+                require(std::isfinite(value)&&value<=crimson::ibl::MaximumRadiance,"Extreme radiance escaped the FP32 arithmetic guard");
+                near(value/crimson::ibl::MaximumRadiance,1,1e-5);
+            }
+            near(level.rgba[i+2],0,0);near(level.rgba[i+3],1,0);
+        }
+    };
+    finiteBound(baked.diffuse);
+    for(const auto& level:baked.specular)finiteBound(level);
 }
 void cacheIdentityAndIntegrity() {
     const crimson::ibl::Settings settings{2,4,8,64,64,64};
@@ -346,6 +431,7 @@ int main() {
     run("D3D cubemap axes and contiguous edges",cubeConvention);
     run("managed LDR sRGB decoding and HDR radiance preservation",sourceColorDecoding);
     run("constant radiance normalization and full mip chain",constantNormalization);
+    run("RGBE sun radiance above FP16 range survives diffuse, GGX and cache",highHdrRadianceRoundTrip);
     run("roughness reflection broadening and equirectangular wrap",reflectionRoughness);
     run("source-adaptive cube sizes and unblurred native radiance features",sourceResolutionAndSharpRadiance);
     run("bounded GGX grid constant energy and cross-face reconstruction",boundedFilterEnergyAndCubeSeams);

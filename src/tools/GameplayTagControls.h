@@ -1,5 +1,6 @@
 #pragma once
 #include "gameplay/Attributes.h"
+#include "PropertyReset.h"
 #include <imgui.h>
 #include <algorithm>
 #include <array>
@@ -109,14 +110,17 @@ inline std::optional<GameplayTag> drawGameplayTagPickerPopup(GameplayTagPickerSt
     return picked;
 }
 inline bool drawGameplayTagControl(const char* label,GameplayTag& value,GameplayTagPickerState& state,
-    const GameplayTagPickerFilter& filter={},const GameplayTagRegistry& registry=nativeGameplayTags()) {
+    const GameplayTagPickerFilter& filter={},const GameplayTagRegistry& registry=nativeGameplayTags(),const GameplayTag& defaults={}) {
     ImGui::PushID(label);ImGui::TextUnformatted(label);bool changed=false;
     if(value.valid()) {
         if(drawGameplayTagChip(value)){value={};changed=true;}
         if(value.valid() && !registry.contains(value))ImGui::TextDisabled("Unregistered tag: %s",value.name().c_str());
         else if(value.valid() && !gameplayTagPickerAllows(value,registry,filter))ImGui::TextDisabled("Tag outside this field: %s",value.name().c_str());
     }
-    if(ImGui::SmallButton("Select...")){state.search.fill(0);ImGui::OpenPopup("Tag choices");}
+    changed|=resettableProperty(value,defaults,[&]{
+        if(ImGui::SmallButton("Select...")){state.search.fill(0);ImGui::OpenPopup("Tag choices");}
+        return false;
+    },defaults.valid()?defaults.name().c_str():"None");
     if(const auto picked=drawGameplayTagPickerPopup(state,registry,filter);picked && *picked!=value){value=*picked;changed=true;}
     ImGui::PopID();return changed;
 }
@@ -133,7 +137,10 @@ inline bool drawGameplayTagContainerControl(const char* label,GameplayTagContain
         first=false;ImGui::SameLine();
     }
     if(!first){ImGui::NewLine();ImGui::SetCursorPosX(start);}
-    if(ImGui::SmallButton("Add...")){state.search.fill(0);ImGui::OpenPopup("Tag choices");}
+    changed|=resettableProperty(value,GameplayTagContainer{},[&]{
+        if(ImGui::SmallButton("Add...")){state.search.fill(0);ImGui::OpenPopup("Tag choices");}
+        return false;
+    },"None");
     if(const auto picked=drawGameplayTagPickerPopup(state,registry,filter,&value)) {
         changed=(value.has(*picked,true)?value.remove(*picked):value.add(*picked)) || changed;
     }

@@ -1,4 +1,5 @@
 #include "Tools.h"
+#include "PropertyReset.h"
 #include "AssetBrowser.h"
 #include "LightingControls.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -146,25 +147,25 @@ bool materialControls(Material& material, AssetLibrary& assets) {
     sectionTitle("MATERIAL");
     ImGui::TextUnformatted(material.albedoMap.empty() ? "Albedo color" : "Albedo tint");
     ImGui::SetNextItemWidth(-1);
-    changed |= ImGui::ColorEdit3("##baseColor", material.baseColor.data(), ImGuiColorEditFlags_Float);
+    changed |= resettableProperty(material.baseColor,Material{}.baseColor,[&]{return ImGui::ColorEdit3("##baseColor", material.baseColor.data(), ImGuiColorEditFlags_Float);});
     help("Editor color is sRGB. An assigned albedo texture is multiplied by this tint in linear space.");
     changed |= textureSlot(material, assets, MaterialSlot::Albedo, "Albedo texture", "RGB / sRGB", material.albedoMap);
     ImGui::Spacing();
     ImGui::TextUnformatted(material.roughnessMap.empty() ? "Roughness" : "Roughness factor");
     ImGui::SetNextItemWidth(-1);
-    changed |= ImGui::SliderFloat("##roughness", &material.roughness, material.roughnessMap.empty() ? 0.045f : 0.0f, 1.0f, "%.3f");
+    changed |= resettableProperty(material.roughness,Material{}.roughness,[&]{return ImGui::SliderFloat("##roughness", &material.roughness, material.roughnessMap.empty() ? 0.045f : 0.0f, 1.0f, "%.3f");});
     help("Lower roughness gives narrower reflections. With a map assigned, this is its multiplier.");
     changed |= textureSlot(material, assets, MaterialSlot::Roughness, "Roughness texture", "R channel / linear", material.roughnessMap);
     ImGui::Spacing();
     ImGui::TextUnformatted(material.metallicMap.empty() ? "Metalness" : "Metalness factor");
     ImGui::SetNextItemWidth(-1);
-    changed |= ImGui::SliderFloat("##metallic", &material.metallic, 0.0f, 1.0f, "%.2f");
+    changed |= resettableProperty(material.metallic,Material{}.metallic,[&]{return ImGui::SliderFloat("##metallic", &material.metallic, 0.0f, 1.0f, "%.2f");});
     help("0 is a dielectric; 1 is a metal. With a map assigned, this is its multiplier.");
     changed |= textureSlot(material, assets, MaterialSlot::Metallic, "Metalness texture", "R channel / linear", material.metallicMap);
     ImGui::Spacing();
     ImGui::TextUnformatted("Normal strength");
     ImGui::SetNextItemWidth(-1);
-    changed |= ImGui::SliderFloat("##normalStrength", &material.normalStrength, 0.0f, 2.0f, "%.2f");
+    changed |= resettableProperty(material.normalStrength,Material{}.normalStrength,[&]{return ImGui::SliderFloat("##normalStrength", &material.normalStrength, 0.0f, 2.0f, "%.2f");});
     help("Tangent-space normals use +Y (OpenGL) green. Zero strength restores the smooth surface normal.");
     changed |= textureSlot(material, assets, MaterialSlot::Normal, "Normal texture", "RGB / linear tangent-space normal (+Y)", material.normalMap);
     ImGui::Spacing();
@@ -176,16 +177,16 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     bool changed = false;
     static ImGuiTextFilter filter;
     sectionTitle("ENVIRONMENT");
-    changed |= ImGui::Checkbox("Environment lighting##environment", &environment.enabled);
-    changed |= ImGui::Checkbox("Specular AA",&environment.specularAA);
-    help("Reduce sparkling specular highlights from undersampled surface normals.");
+    changed |= resettableProperty(environment.enabled,EnvironmentSettings{}.enabled,[&]{return ImGui::Checkbox("Environment lighting##environment", &environment.enabled);});
+    changed |= resettableProperty(environment.intensity,EnvironmentSettings{}.intensity,[&]{return ImGui::SliderFloat("Intensity##environment", &environment.intensity, 0.0f, 10.0f, "%.2f");});
     ImGui::TextUnformatted("Environment image");
     changed |= assetSlot(assets, "Environment image", "Equirectangular panorama. HDR is linear radiance; PNG/JPEG/TGA/BMP are sRGB.",
         environment.map, filter, true, "Built-in studio",
         [&](const std::string& id) { return assets.assignEnvironment(environment, id, persistLegacy); }, [&] { assets.clearEnvironment(environment,persistLegacy); });
-    changed |= ImGui::SliderFloat("Intensity##environment", &environment.intensity, 0.0f, 10.0f, "%.2f");
-    changed |= ImGui::SliderFloat("Rotation##environment", &environment.rotation, -180.0f, 180.0f, "%.1f deg");
+    changed |= resettableProperty(environment.rotation,EnvironmentSettings{}.rotation,[&]{return ImGui::SliderFloat("Rotation##environment", &environment.rotation, -180.0f, 180.0f, "%.1f deg");});
     help("Rotate environment lighting around the world Y axis.");
+    changed |= resettableProperty(environment.specularAA,EnvironmentSettings{}.specularAA,[&]{return ImGui::Checkbox("Specular AA",&environment.specularAA);});
+    help("Reduce specular shimmer by filtering undersampled normals. Highlights may broaden.");
     if(ImGui::CollapsingHeader("Ambient Light"))
         drawAmbientLightControls(environment.ambientLight,[&](AmbientLightControl,bool edited){changed|=edited;});
     changed |= drawToneMappingControl(environment.toneMapping);
@@ -201,20 +202,20 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
 void lightControls(SceneSettings& settings) {
     sectionTitle("LIGHTING");
     if (ImGui::CollapsingHeader("Directional light", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Checkbox("Enabled##directional", &settings.directional.enabled);
-        ImGui::ColorEdit3("Color##directional", settings.directional.color.data(), ImGuiColorEditFlags_Float);
-        ImGui::DragFloat3("Direction", settings.directional.direction.data(), 0.02f, -1.0f, 1.0f, "%.2f");
+        resettableProperty(settings.directional.enabled,SceneSettings{}.directional.enabled,[&]{return ImGui::Checkbox("Enabled##directional", &settings.directional.enabled);});
+        resettableProperty(settings.directional.color,SceneSettings{}.directional.color,[&]{return ImGui::ColorEdit3("Color##directional", settings.directional.color.data(), ImGuiColorEditFlags_Float);});
+        resettableProperty(settings.directional.direction,SceneSettings{}.directional.direction,[&]{return ImGui::DragFloat3("Direction", settings.directional.direction.data(), 0.02f, -1.0f, 1.0f, "%.2f");});
         help("Direction in which the light travels. The renderer normalizes this vector.");
-        ImGui::SliderFloat("Intensity##directional", &settings.directional.intensity, 0.0f, 12.0f, "%.2f");
+        resettableProperty(settings.directional.intensity,SceneSettings{}.directional.intensity,[&]{return ImGui::SliderFloat("Intensity##directional", &settings.directional.intensity, 0.0f, 12.0f, "%.2f");});
     }
     for (size_t index = 0; index < settings.points.size(); ++index) {
         ImGui::PushID(static_cast<int>(index));
         const char* title = index == 0 ? "Point light 1 - warm" : "Point light 2 - cool";
         if (ImGui::CollapsingHeader(title, ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Checkbox("Enabled", &settings.points[index].enabled);
-            ImGui::ColorEdit3("Color", settings.points[index].color.data(), ImGuiColorEditFlags_Float);
-            ImGui::DragFloat3("Position", settings.points[index].position.data(), 0.025f, -8.0f, 8.0f, "%.2f");
-            ImGui::SliderFloat("Intensity", &settings.points[index].intensity, 0.0f, 200.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+            resettableProperty(settings.points[index].enabled,SceneSettings{}.points[index].enabled,[&]{return ImGui::Checkbox("Enabled", &settings.points[index].enabled);});
+            resettableProperty(settings.points[index].color,SceneSettings{}.points[index].color,[&]{return ImGui::ColorEdit3("Color", settings.points[index].color.data(), ImGuiColorEditFlags_Float);});
+            resettableProperty(settings.points[index].position,SceneSettings{}.points[index].position,[&]{return ImGui::DragFloat3("Position", settings.points[index].position.data(), 0.025f, -8.0f, 8.0f, "%.2f");});
+            resettableProperty(settings.points[index].intensity,SceneSettings{}.points[index].intensity,[&]{return ImGui::SliderFloat("Intensity", &settings.points[index].intensity, 0.0f, 200.0f, "%.1f", ImGuiSliderFlags_Logarithmic);});
             help("Point-light intensity uses inverse-square distance attenuation.");
         }
         ImGui::PopID();
@@ -229,9 +230,9 @@ void lightControls(SceneSettings& settings) {
 
 void viewControls(SceneSettings& settings, EditorFrame& frame, bool hasModel) {
     sectionTitle("VIEW");
-    ImGui::SliderFloat("Exposure", &settings.exposure, 0.05f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+    resettableProperty(settings.exposure,SceneSettings{}.exposure,[&]{return ImGui::SliderFloat("Exposure", &settings.exposure, 0.05f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic);});
     help("Exposure affects the HDR scene before tone mapping. The editor stays at normal brightness.");
-    ImGui::SliderFloat("Field of view", &settings.camera.fov, 25.0f, 90.0f, "%.1f deg");
+    resettableProperty(settings.camera.fov,Camera{}.fov,[&]{return ImGui::SliderFloat("Field of view", &settings.camera.fov, 25.0f, 90.0f, "%.1f deg");});
     ImGui::Spacing();
     if (ImGui::Button("Reset camera", ImVec2(-1, 0))) {
         settings.camera = Camera{};
@@ -303,7 +304,7 @@ bool drawEnvironmentImageField(EnvironmentSettings& environment, AssetLibrary& a
 bool drawToneMappingControl(ToneMapping& mode) {
     int selected=static_cast<int>(mode);
     const char* names[]{"Reinhard (legacy)","Linear","ACES","AgX"};
-    const bool changed=ImGui::Combo("Tone mapping",&selected,names,4);
+    const bool changed=resettableProperty(selected,static_cast<int>(EnvironmentSettings{}.toneMapping),[&]{return ImGui::Combo("Tone mapping",&selected,names,4);},names[static_cast<int>(EnvironmentSettings{}.toneMapping)]);
     if(changed)mode=static_cast<ToneMapping>(selected);
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Maps scene brightness to the display after exposure.");
@@ -320,18 +321,18 @@ bool drawToneMappingParameterControls(ToneMapping mode,ToneMappingParameters& pa
     ImGui::PushID(static_cast<int>(mode));
     if(mode==ToneMapping::Reinhard) {
         field(ToneMappingParameterControl::ReinhardWhite,
-            ImGui::DragFloat("White Point",&parameters.reinhardWhite,.05f,0,64,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(parameters.reinhardWhite,ToneMappingParameters{}.reinhardWhite,[&]{return ImGui::DragFloat("White Point",&parameters.reinhardWhite,.05f,0,64,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scene-linear brightness mapped to white. 0 keeps the original unlimited Reinhard curve.");
     } else if(mode==ToneMapping::ACES) {
         field(ToneMappingParameterControl::AcesWhite,
-            ImGui::DragFloat("White Point",&parameters.acesWhite,.05f,1,64,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(parameters.acesWhite,ToneMappingParameters{}.acesWhite,[&]{return ImGui::DragFloat("White Point",&parameters.acesWhite,.05f,1,64,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Highlight white-point scale. Higher values retain more bright detail.");
     } else if(mode==ToneMapping::AgX) {
         field(ToneMappingParameterControl::AgxWhite,
-            ImGui::DragFloat("White Point",&parameters.agxWhite,.05f,2,64,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(parameters.agxWhite,ToneMappingParameters{}.agxWhite,[&]{return ImGui::DragFloat("White Point",&parameters.agxWhite,.05f,2,64,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scene-linear highlight limit of the AgX curve.");
         field(ToneMappingParameterControl::AgxContrast,
-            ImGui::SliderFloat("Contrast",&parameters.agxContrast,1,4,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            resettableProperty(parameters.agxContrast,ToneMappingParameters{}.agxContrast,[&]{return ImGui::SliderFloat("Contrast",&parameters.agxContrast,1,4,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("AgX contrast around middle gray. Higher values deepen shadows and strengthen highlights.");
     }
     ImGui::PopID();
@@ -344,21 +345,21 @@ bool drawSsrControls(SsrSettings& reflection,const SsrControlEdit& edit) {
     const auto field=[&](SsrControl control,bool updated){changed|=updated;if(edit)edit(control,updated);};
     ImGui::PushID("SSR");
     if(ImGui::CollapsingHeader("Reflections")) {
-        field(SsrControl::Enabled,ImGui::Checkbox("SSR",&reflection.enabled));
+        field(SsrControl::Enabled,resettableProperty(reflection.enabled,SsrSettings{}.enabled,[&]{return ImGui::Checkbox("SSR",&reflection.enabled);}));
         ImGui::BeginDisabled(!reflection.enabled);
-        field(SsrControl::Strength,ImGui::SliderFloat("Strength",&reflection.strength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(SsrControl::Strength,resettableProperty(reflection.strength,SsrSettings{}.strength,[&]{return ImGui::SliderFloat("Strength",&reflection.strength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         int quality=static_cast<int>(reflection.quality);const char* qualities[]{"Low","Medium","High"};
-        const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,3);
+        const bool qualityChanged=resettableProperty(quality,static_cast<int>(SsrSettings{}.quality),[&]{return ImGui::Combo("Quality",&quality,qualities,3);});
         if(qualityChanged)reflection.quality=static_cast<SsrQuality>(quality);
         field(SsrControl::Quality,qualityChanged);
-        field(SsrControl::Distance,ImGui::DragFloat("Max Distance (m)",&reflection.maxDistance,.1f,.001f,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(SsrControl::Distance,resettableProperty(reflection.maxDistance,SsrSettings{}.maxDistance,[&]{return ImGui::DragFloat("Max Distance (m)",&reflection.maxDistance,.1f,.001f,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Maximum reflected ray distance. Only visible opaque surfaces can supply reflections.");
-        field(SsrControl::Roughness,ImGui::SliderFloat("Max Roughness",&reflection.maxRoughness,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-        field(SsrControl::Tolerance,ImGui::DragFloat("Depth Tolerance (m)",&reflection.depthTolerance,.001f,.000001f,10,"%.4f",ImGuiSliderFlags_AlwaysClamp));
+        field(SsrControl::Roughness,resettableProperty(reflection.maxRoughness,SsrSettings{}.maxRoughness,[&]{return ImGui::SliderFloat("Max Roughness",&reflection.maxRoughness,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+        field(SsrControl::Tolerance,resettableProperty(reflection.depthTolerance,SsrSettings{}.depthTolerance,[&]{return ImGui::DragFloat("Depth Tolerance (m)",&reflection.depthTolerance,.001f,.000001f,10,"%.4f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Depth agreement required at a reflected hit. Larger values can leak through thin geometry.");
-        field(SsrControl::Bias,ImGui::DragFloat("Ray Bias (m)",&reflection.bias,.0001f,0,1,"%.4f",ImGuiSliderFlags_AlwaysClamp));
+        field(SsrControl::Bias,resettableProperty(reflection.bias,SsrSettings{}.bias,[&]{return ImGui::DragFloat("Ray Bias (m)",&reflection.bias,.0001f,0,1,"%.4f",ImGuiSliderFlags_AlwaysClamp);}));
         ImGui::EndDisabled();
     }
     ImGui::PopID();return changed;
@@ -372,44 +373,47 @@ bool drawGlowControls(GlowSettings& glow, const GlowControlEdit& edit) {
     };
     ImGui::PushID("Glow");
     if (ImGui::CollapsingHeader("Glow",ImGuiTreeNodeFlags_DefaultOpen)) {
-        field(GlowControl::Enabled,ImGui::Checkbox("Enabled##glow",&glow.enabled));
+        field(GlowControl::Enabled,resettableProperty(glow.enabled,GlowSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled##glow",&glow.enabled);}));
         help("Scatters visible HDR highlights, including the sun, reflections and emission.");
         ImGui::BeginDisabled(!glow.enabled);
-        field(GlowControl::Strength,ImGui::SliderFloat("Intensity",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(GlowControl::Strength,resettableProperty(glow.strength,GlowSettings{}.strength,[&]{return ImGui::SliderFloat("Intensity",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         help("Overall halo intensity. Zero disables Glow in every blend mode.");
         int blendMode=static_cast<int>(glow.blendMode);const char* blendModes[]{"Additive","Screen","Soft Light","Replace","Mix"};
-        const bool modeChanged=ImGui::Combo("Blend Mode",&blendMode,blendModes,5);
+        const bool modeChanged=resettableProperty(blendMode,static_cast<int>(GlowSettings{}.blendMode),[&]{return ImGui::Combo("Blend Mode",&blendMode,blendModes,5);},blendModes[static_cast<int>(GlowSettings{}.blendMode)]);
         if(modeChanged)glow.blendMode=static_cast<GlowBlendMode>(blendMode);
         field(GlowControl::BlendMode,modeChanged);
         constexpr std::array<const char*,5> blendHelp{"Adds the halo to scene lighting.","Brightens with a soft screen blend.",
             "Uses the halo to shape image contrast.","Shows the halo in place of scene lighting.","Crossfades scene lighting and the halo."};
         help(blendHelp[static_cast<std::size_t>(glow.blendMode)]);
         if(glow.blendMode==GlowBlendMode::Mix) {
-            field(GlowControl::Mix,ImGui::SliderFloat("Mix",&glow.mix,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            field(GlowControl::Mix,resettableProperty(glow.mix,GlowSettings{}.mix,[&]{return ImGui::SliderFloat("Mix",&glow.mix,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             help("Zero keeps the scene; one shows the halo.");
         }
-        field(GlowControl::Size,ImGui::SliderFloat("Spread",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(GlowControl::Size,resettableProperty(glow.radius,GlowSettings{}.radius,[&]{return ImGui::SliderFloat("Spread",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         help("Screen-space halo spread. Zero disables the halo.");
-        field(GlowControl::Threshold,ImGui::DragFloat("Highlight Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(GlowControl::Threshold,resettableProperty(glow.threshold,GlowSettings{}.threshold,[&]{return ImGui::DragFloat("Highlight Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         help("Scene brightness after exposure that starts contributing to Glow.");
-        field(GlowControl::Tint,ImGui::ColorEdit3("Tint",glow.tint.data(),ImGuiColorEditFlags_Float));
+        field(GlowControl::Tint,resettableProperty(glow.tint,GlowSettings{}.tint,[&]{return ImGui::ColorEdit3("Tint",glow.tint.data(),ImGuiColorEditFlags_Float);}));
         help("White preserves the highlight color.");
         if(ImGui::TreeNodeEx("Levels",ImGuiTreeNodeFlags_DefaultOpen)) {
             constexpr std::array<const char*,GlowLevelCount> labels{"Level 1","Level 2","Level 3","Level 4","Level 5","Level 6","Level 7"};
             for(std::size_t level=0;level<glow.levels.size();++level) {
                 const auto control=static_cast<GlowControl>(static_cast<int>(GlowControl::Level1)+static_cast<int>(level));
-                field(control,ImGui::SliderFloat(labels[level],&glow.levels[level],0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+                field(control,resettableProperty(glow.levels[level],GlowSettings{}.levels[level],[&]{return ImGui::SliderFloat(labels[level],&glow.levels[level],0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
                 help("Independent contribution: Level 1 is tightest and Level 7 widest. Zero removes this level; all zero disables Glow.");
             }
             ImGui::TreePop();
         }
         if (ImGui::TreeNode("Advanced")) {
-            field(GlowControl::Saturation,ImGui::SliderFloat("Saturation",&glow.saturation,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-            field(GlowControl::SoftKnee,ImGui::SliderFloat("Threshold Softness",&glow.softKnee,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
-            field(GlowControl::Anamorphic,ImGui::SliderFloat("Anamorphic Stretch",&glow.anamorphic,-1,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            field(GlowControl::Saturation,resettableProperty(glow.saturation,GlowSettings{}.saturation,[&]{return ImGui::SliderFloat("Saturation",&glow.saturation,0,2,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+            field(GlowControl::HdrScale,resettableProperty(glow.hdrScale,GlowSettings{}.hdrScale,[&]{return ImGui::DragFloat("HDR Scale",&glow.hdrScale,.02f,0,400000,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+            help("Transition width above Highlight Threshold. Increase for a gentler onset; zero is a hard cutoff.");
+            field(GlowControl::HdrLuminanceCap,resettableProperty(glow.luminanceCap,GlowSettings{}.luminanceCap,[&]{return ImGui::DragFloat("HDR Luminance Cap",&glow.luminanceCap,.1f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+            help("Caps extracted Glow before intensity and level gains. Lower it to limit bright halos without dimming the scene; zero disables Glow.");
+            field(GlowControl::Anamorphic,resettableProperty(glow.anamorphic,GlowSettings{}.anamorphic,[&]{return ImGui::SliderFloat("Anamorphic Stretch",&glow.anamorphic,-1,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             help("Negative stretches vertically; positive stretches horizontally.");
             int quality=static_cast<int>(glow.quality);const char* qualities[]{"Low","High"};
-            const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,2);
+            const bool qualityChanged=resettableProperty(quality,static_cast<int>(GlowSettings{}.quality),[&]{return ImGui::Combo("Quality",&quality,qualities,2);},qualities[static_cast<int>(GlowSettings{}.quality)]);
             if(qualityChanged)glow.quality=static_cast<GlowQuality>(quality);
             field(GlowControl::Quality,qualityChanged);
             help("High improves stability around small, bright highlights.");
