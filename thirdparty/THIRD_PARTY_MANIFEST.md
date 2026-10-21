@@ -14,7 +14,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Zstandard | https://github.com/facebook/zstd | vcpkg `1.5.7` | BSD-3-Clause OR GPL-2.0-only; Quader uses the BSD-3-Clause option, see `licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt` | Adaptive level-1 compression for sufficiently large binary `.qdr` geometry chunks. |
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
-| Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `aab101b4c038da83f71a16accb8279516a0247b9` (upstream version label `1.76.1`), source SHA-256 `7c464ef115a048ab77eb8e1898f1f79721a21b8364a4fda3e44a7e0e5f447c68`, Quader patch `quader-vsync9` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, retained swapchain presentation lifetimes, optional Windows presentation scaling, unclipped presentable images, shifted AO reconstruction, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
+| Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `34ff730afa710f6001e207d6ecd8f01bb5a4fd98` (upstream version label `1.78.1`), source SHA-256 `c62cffd916f3f1cf6dded17a5bb233bb923d9e1f530e327bc5c9c340c3009025`, Quader patch `quader-vsync10` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, retained swapchain presentation lifetimes, recoverable surface-loss propagation, correct same-family asynchronous queue allocation, optional Windows presentation scaling, unclipped presentable images, shifted AO reconstruction, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
 | Crimson Renderer | https://github.com/qvertexworks/crimson-renderer | Recorded Git submodule commit at `thirdparty/crimson-renderer`, with `renderer-manifest.json` | Proprietary first-party renderer, used under the author's authorization; bundled dependency notices remain separate. | Canonical renderer shared with Crimson Engine; Public on `quader-crimson` uses its borrowed Vulkan modeling recipe. The dependency and optional composition probes remain available on `main`. |
 | bgfx | https://github.com/bkaradzic/bgfx.cmake | Pinned `1.129.8940-496` archive and maintained overlay port revision `14` in the renderer submodule, see `crimson/README.md` | BSD-2-Clause, see `licenses/bgfx-BSD-2-Clause.txt` | Canonical renderer device, resource, pass and native composition mechanisms. |
 | meshoptimizer | https://github.com/zeux/meshoptimizer | Native vcpkg `1.1`, upstream tag `v1.1`, at the existing manifest baseline | MIT, exact installed notice in `licenses/meshoptimizer-MIT.txt` | Canonical renderer support for mesh detail preparation and content identity. |
@@ -89,7 +89,7 @@ If a local source snapshot is checked into a release workspace, place it at `thi
 Filament is not vendored. `tools/build_filament_sdk.ps1` builds the pinned upstream source with
 the reviewed patch under `thirdparty/filament`, producing one matching set of headers, tools,
 and Release /MD libraries. Downloads require `-AllowDownload` and must match the source digest
-before extraction. The default install is the sibling `_SOURCES/filament-main-aab101b4c038-quader-vsync9-windows`;
+before extraction. The default install is the sibling `_SOURCES/filament-main-34ff730afa71-quader-vsync10-windows`;
 `FILAMENT_SDK_ROOT` may select another validated install. The generated `quader-filament-sdk.json`
 records upstream and patch identities plus the installed header/library hashes. Native configure
 rejects missing, unpatched, or mismatched SDK artifacts. The original official SDK and unversioned
@@ -97,8 +97,11 @@ local source checkouts are never modified.
 
 The current pin includes all upstream `main` changes through the recorded commit, including
 unreleased changes. The numeric upstream version label alone is not its identity: the full SHA,
-archive digest and Quader patch revision distinguish this snapshot from the v1.76.1 release.
-The retained Apache-2.0 license text was checked against that exact commit on 2026-09-14.
+archive digest and Quader patch revision distinguish this snapshot from the v1.78.1 release.
+Material format 78 replaces the prior SDK's format 76; compile all materials with the matching
+rebuilt `matc.exe`. The retained Apache-2.0 license text was checked against the new source on
+2026-10-21. All 94 upstream license/notice files and the 31 explicitly installed BlueVK, Vulkan
+and video headers are unchanged from the previous pinned source.
 
 Updating Filament requires one atomic change to the source pin, patch, build script, CMake default
 and artifact validation, this manifest row, license evidence when applicable,

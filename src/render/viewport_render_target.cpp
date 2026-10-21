@@ -116,7 +116,8 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
           .width(width_)
           .height(height_)
           .levels(1)
-          .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+          .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE |
+                 Texture::Usage::BLIT_SRC)
           .format(Texture::InternalFormat::RGBA8)
           .build(*engine_);
   if (creation_guard.color_texture == nullptr) {

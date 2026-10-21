@@ -10464,7 +10464,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
             << " vsync=" << settings.vsync_enabled() << std::endl;
   quader::App app;
   ASSERT_TRUE(app.initialize(application, executable));
-  QMainWindow *window = nullptr;
+  QPointer<QMainWindow> window;
   for (auto *widget : QApplication::topLevelWidgets()) {
     if (widget->objectName() == QStringLiteral("quaderMainWindow")) {
       window = qobject_cast<QMainWindow *>(widget);
@@ -10548,9 +10548,14 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   observer.setInterval(5);
   QSize last_renderer_size;
   qint64 last_heartbeat_ms = -1000;
+  std::function<void()> bind_current_shell;
   QObject::connect(&observer, &QTimer::timeout, &application, [&] {
-    const QSize renderer_size(static_cast<int>(surface->renderer().width()),
-                              static_cast<int>(surface->renderer().height()));
+    bind_current_shell();
+    if (!window) return;
+    auto *renderer = surface->renderer_if_initialized();
+    if (renderer == nullptr) return;
+    const QSize renderer_size(static_cast<int>(renderer->width()),
+                              static_cast<int>(renderer->height()));
     const auto native_extent = surface->render_size_pixels();
     if (renderer_size != last_renderer_size || clock.elapsed() - last_heartbeat_ms >= 1000) {
       std::cout << "APP_BROWSER_OBSERVE qpc=" << qpc_ticks()
@@ -10558,7 +10563,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
                 << " clip=" << native_extent.x << 'x' << native_extent.y
                 << " renderer=" << renderer_size.width() << 'x' << renderer_size.height()
                 << " frame_attempts=" << frame_attempts
-                << " settings_apply=" << surface->renderer().scene_settings_apply_count()
+                << " settings_apply=" << renderer->scene_settings_apply_count()
                 << " exposed=" << surface->isExposed() << std::endl;
       last_renderer_size = renderer_size;
       last_heartbeat_ms = clock.elapsed();
@@ -10678,7 +10683,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
               << " dispatch_ms=" << (clock.nsecsElapsed() - observation.started_ns) / 1000000.0
               << " final_clip=" << final_extent.x << 'x' << final_extent.y << std::endl;
   };
-  QObject::connect(dock, &QDockWidget::visibilityChanged, &application, [&](bool visible) {
+  const auto observe_visibility = [&](bool visible) {
     if (manual_seconds > 0 &&
         (current_toggle < 0 || observations[static_cast<std::size_t>(current_toggle)].submitted_qpc >= 0)) {
       current_toggle = static_cast<int>(observations.size());
@@ -10693,10 +10698,11 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
               << " toggle=" << current_toggle << " visible=" << visible
               << " clip=" << surface->render_size_pixels().x << 'x'
               << surface->render_size_pixels().y << std::endl;
-  });
+  };
+  QObject::connect(dock, &QDockWidget::visibilityChanged, &application, observe_visibility);
   auto *observed_host = dynamic_cast<quader::QtVulkanCompositionWidget *>(clip);
   ASSERT_NE(observed_host, nullptr);
-  QObject::connect(observed_host, &QRhiWidget::frameSubmitted, &application, [&] {
+  const auto observe_submission = [&] {
     const auto submitted_qpc = qpc_ticks();
     last_submitted_qpc.store(submitted_qpc, std::memory_order_relaxed);
     if (current_toggle < 0) return;
@@ -10712,7 +10718,8 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
               << " toggle=" << current_toggle << " clip=" << extent.x << 'x' << extent.y
               << " latency_ms=" << (clock.nsecsElapsed() - observation.started_ns) / 1000000.0
               << std::endl;
-  });
+  };
+  QObject::connect(observed_host, &QRhiWidget::frameSubmitted, &application, observe_submission);
   constexpr std::array kCompositionPaneIds{
       quader::ViewportPaneId::Perspective, quader::ViewportPaneId::Top,
       quader::ViewportPaneId::Front, quader::ViewportPaneId::Side};
@@ -10753,7 +10760,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     }
     EXPECT_EQ(composed_failures, 0U);
   };
-  if (composition_smoke) {
+  const auto bind_composition_hosts = [&] {
     composition_anchor = dynamic_cast<quader::QtVulkanCompositionWidget *>(
         window->findChild<QWidget *>(QStringLiteral("viewportCompositionAnchor")));
     ASSERT_NE(composition_anchor, nullptr);
@@ -10770,6 +10777,9 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
       QObject::connect(composed_hosts[index], &QRhiWidget::renderFailed,
           &application, [&] { ++composed_failures; });
     }
+  };
+  if (composition_smoke) {
+    bind_composition_hosts();
     QTimer::singleShot(18500, &application, [&] {
       auto *menu = viewport->findChild<QMenu *>(QStringLiteral("viewportLayoutMenu_perspective"));
       ASSERT_NE(menu, nullptr);
@@ -10900,7 +10910,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
 #if defined(_WIN32)
   class AppBrowserNativeInputObserver final : public QAbstractNativeEventFilter {
   public:
-    HWND window_handle = nullptr;
+    std::atomic<HWND> window_handle = nullptr;
     UINT input_message = 0U;
     std::function<void(int, std::int64_t)> toggle;
     std::function<void(const MSG &)> key_received;
@@ -11020,6 +11030,45 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
       std::fflush(stdout);
     }
   });
+  bind_current_shell = [&] {
+    if (window && window->isVisible()) return;
+    for (auto *widget : QApplication::topLevelWidgets()) {
+      if (widget->objectName() != QStringLiteral("quaderMainWindow") || !widget->isVisible()) continue;
+      auto *root = qobject_cast<QMainWindow *>(widget);
+      auto *current_viewport = dynamic_cast<quader::QtViewportPanel *>(root->findChild<QWidget *>(
+          QStringLiteral("viewportWorkspace")));
+      ASSERT_NE(current_viewport, nullptr);
+      auto *current_surface = current_viewport->surface(quader::ViewportPaneId::Perspective);
+      ASSERT_NE(current_surface, nullptr);
+      if (current_surface->renderer_if_initialized() == nullptr) return;
+      // Project startup replaces the Home shell and its viewport observers.
+      window = root;
+      viewport = current_viewport;
+      dock = root->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+      action = root->findChild<QAction *>(QStringLiteral("panel_asset_browser"));
+      clip = root->findChild<QWidget *>(QStringLiteral("viewportSurfaceContainer_perspective"));
+      ASSERT_NE(viewport, nullptr);
+      ASSERT_NE(dock, nullptr);
+      ASSERT_NE(action, nullptr);
+      ASSERT_NE(clip, nullptr);
+      surface = current_surface;
+      browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+      observed_host = dynamic_cast<quader::QtVulkanCompositionWidget *>(clip);
+      ASSERT_NE(surface, nullptr);
+      ASSERT_NE(browser, nullptr);
+      ASSERT_NE(observed_host, nullptr);
+      QObject::connect(dock, &QDockWidget::visibilityChanged, &application, observe_visibility);
+      QObject::connect(observed_host, &QRhiWidget::frameSubmitted, &application, observe_submission);
+      if (composition_smoke) {
+        composed_submissions.fill(0U);
+        bind_composition_hosts();
+      }
+#if defined(_WIN32)
+      native_input_observer.window_handle = reinterpret_cast<HWND>(root->internalWinId());
+#endif
+      return;
+    }
+  };
   observer.start();
   EXPECT_EQ(app.run(), 0);
   input_producer.request_stop();

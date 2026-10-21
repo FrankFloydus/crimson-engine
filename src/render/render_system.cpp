@@ -32,7 +32,7 @@
 #include <unordered_map>
 #include <utility>
 
-static_assert(FILAMENT_QUADER_VSYNC_PATCH_VERSION == 9,
+static_assert(FILAMENT_QUADER_VSYNC_PATCH_VERSION == 10,
               "Quader requires the matching Filament patch revision");
 
 namespace quader {

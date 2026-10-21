@@ -8230,6 +8230,12 @@ TEST(SelectionOverlayRuntimeTests,
   }};
   constexpr std::array<std::pair<float, const char *>, 3> kScales{{
       {1.0f, "100"}, {2.0f, "200"}, {1.0f, "scale_down_100"}}};
+  // Exclude the diagnostic fill from this coplanar selection fixture. Lamina
+  // appearance has dedicated coverage in crimson_editor_composition_probe.cpp.
+  auto selection_settings = ViewportSettings::defaults();
+  auto lamina_fill = selection_settings.color(ViewportColorSettingId::LaminaFace);
+  lamina_fill.a = 0.0f;
+  ASSERT_TRUE(selection_settings.set_color(ViewportColorSettingId::LaminaFace, lamina_fill));
   for (const auto surface : {ViewportRenderSurface::Swapchain, ViewportRenderSurface::Texture}) {
     const bool texture_surface = surface == ViewportRenderSurface::Texture;
     const auto surface_label = texture_surface ? QStringLiteral("texture") : QStringLiteral("native");
@@ -8242,7 +8248,7 @@ TEST(SelectionOverlayRuntimeTests,
     QImage default_hover_overlap;
     for (const bool custom_alpha : {false, true}) {
       SCOPED_TRACE(custom_alpha ? "custom alpha" : "default alpha");
-      auto settings = ViewportSettings::defaults();
+      auto settings = selection_settings;
       if (custom_alpha) {
         auto selection = settings.color(ViewportColorSettingId::SelectionFace);
         auto hover = settings.color(ViewportColorSettingId::HoverFace);
@@ -8362,7 +8368,7 @@ TEST(SelectionOverlayRuntimeTests,
     const auto occluded_pixel = harness.overlapping_face_fill_probe_pixel(true);
     for (const bool transparent_hover : {true, false}) {
       SCOPED_TRACE(transparent_hover ? "transparent hover" : "transparent selection");
-      auto settings = ViewportSettings::defaults();
+      auto settings = selection_settings;
       const auto transparent_setting = transparent_hover
           ? ViewportColorSettingId::HoverFace : ViewportColorSettingId::SelectionFace;
       auto transparent_color = settings.color(transparent_setting);

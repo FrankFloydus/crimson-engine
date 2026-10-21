@@ -64,15 +64,19 @@ and [latest stable release API](https://docs.github.com/en/rest/releases/release
 ## Maintained renderer patch
 
 Quader uses the complete upstream Filament `main` snapshot at commit
-`aab101b4c038da83f71a16accb8279516a0247b9` (checked 2026-09-14), with the `quader-vsync9`
+`34ff730afa710f6001e207d6ecd8f01bb5a4fd98` (checked 2026-10-21), with the `quader-vsync10`
 patch in this directory. This is an unreleased source snapshot, not a released version tag.
-Its upstream version label is still `1.76.1`; the exact commit and `upstream_ref: main`
-distinguish it from the v1.76.1 release archive.
+Its upstream version label is `1.78.1`; the exact commit and `upstream_ref: main`
+distinguish it from the v1.78.1 release archive.
 The archive identity is recorded in
-[`filament-main-aab101b4c038-quader-vsync9.json`](filament-main-aab101b4c038-quader-vsync9.json).
+[`filament-main-34ff730afa71-quader-vsync10.json`](filament-main-34ff730afa71-quader-vsync10.json).
 Filament and changes to these upstream source files are licensed under Apache-2.0; see
 [`../licenses/filament-Apache-2.0.txt`](../licenses/filament-Apache-2.0.txt). The patch modifies files
 carrying the upstream license notices. This directory contains the patch and provenance only.
+The October 21 comparison found all 94 upstream `LICENSE`, `NOTICE` and `COPYING` files
+unchanged from the previous pinned source. The retained Apache-2.0 license text matches
+the new source, and all 31 explicitly installed BlueVK, Vulkan and video headers are
+byte-identical to the previous snapshot. No replacement license text is needed.
 
 For Filament-owned native swapchains, `SwapChain::CONFIG_UNSYNCHRONIZED` requests
 `VK_PRESENT_MODE_IMMEDIATE_KHR`. Each native Vulkan
@@ -85,13 +89,17 @@ is a protected virtual callback with a default empty implementation. It reports 
 after successful creation and recreation, including resize. It runs on the backend thread, so
 Quader's override publishes synchronized state and never calls the UI or Engine from the callback.
 The platform must outlive the Engine. Vulkan creation diagnostics record requested and actual modes.
-`FILAMENT_QUADER_VSYNC_PATCH_VERSION` is `9` in the public backend header. Revision 6 rebased
-revision 5 onto the pinned `main` snapshot while preserving all four extensions: VSync control,
+`FILAMENT_QUADER_VSYNC_PATCH_VERSION` is `10` in the public backend header. Revision 6 rebased
+revision 5 onto the September 14 `main` snapshot while preserving all four extensions: VSync control,
 light distance attenuation, hardware-sRGB presentation correction, and opt-in Burley/Lambert
 diffuse selection. Revision 7 introduced Vulkan swapchain replacement retention and presentation-
 semaphore lifetime tracking. Revision 8 introduced optional Windows presentation scaling.
 Revision 9 preserves hidden backing-surface pixels and corrects depth reconstruction for shifted
-AO projections. These revisions keep the same upstream source and the four existing extensions.
+AO projections. Revisions 6 through 9 used the same upstream source. Revision 10 rebases
+the complete maintained patch onto the October 21 snapshot, retaining those extensions,
+swapchain retirement, optional presentation scaling, hidden pixels and shifted AO reconstruction.
+It also preserves upstream's new recoverable surface-loss path and corrects Vulkan queue
+allocation when graphics, asynchronous work and protected work share a physical queue family.
 The patch retains upstream's `VulkanSync` constructor and swapchain `setFrameRate` implementation.
 All upstream changes through the pinned SHA are included; no backport selection is needed for
 that snapshot. Future upstream commits remain separate updates detected by the daily checker.
@@ -126,6 +134,21 @@ offscreen rendering and successful copies alone are not proof of a displayed fra
 The transition acceptance criterion below also applies to this route. Validate the integrated App
 with composed-window captures; isolated adapter proofs do not establish production behavior.
 
+### Vulkan queue creation
+
+Revision 10 retains upstream asynchronous queue selection and checks each candidate's actual
+queue capacity, including any protected queue already selected in that family. Graphics and
+asynchronous queues sharing a family use one unprotected `VkDeviceQueueCreateInfo` with two
+queues and two priorities; the asynchronous queue uses index one. A separate asynchronous
+family needs one queue at index zero. A protected request remains a separate flagged record,
+with one queue, and counts toward the physical family's total capacity. Candidates without
+enough queues are skipped in upstream enumeration order; asynchronous work is unavailable
+only when no legal candidate remains. This avoids duplicate family/flags entries and retrieving
+a queue index that was never requested. See the
+[device queue creation contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkDeviceCreateInfo.html).
+Qt-owned borrowed devices bypass this allocation path; Quader does not infer enabled optional
+features from physical-device support alone.
+
 ### Vulkan swapchain replacement lifetime
 
 Surface recreation supplies the current handle as `oldSwapchain` and retains retired handles.
@@ -142,9 +165,17 @@ presentation and earlier resources on the same queue. A persistent
 Ordinary acquisition adds no fence wait after retirement completes; repeated resizes retain
 pending generations until that proof. Suboptimal acquisition proceeds through rendering and
 presentation to consume its readiness semaphore. Capability failure or zero extent preserves the
-active bundle, and unsuccessful recreation skips update/acquire. Creation failure retains the
-fatal error contract and clears the active handle because Vulkan retires a supplied `oldSwapchain`
-even on failure; see the [creation contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkSwapchainCreateInfoKHR.html).
+active bundle, and unsuccessful recreation skips update/acquire. Zero extent returns
+`VK_NOT_READY` before changing the active handle or bundle.
+
+Initial surface creation still requires success. During recreation, revision 10 preserves
+upstream's recoverable `VkResult` contract. If `vkCreateSwapchainKHR` fails, the old handle
+has already entered the retained list and Vulkan has retired it; the active replacement
+handle becomes null, the surface is marked lost, and the wrapper propagates
+`VK_ERROR_SURFACE_LOST_KHR` without publishing a new generation or updating/acquiring images.
+Subsequent calls report the lost surface until the client destroys and recreates it.
+Retired handles and finished-drawing semaphore owners remain alive for ordered teardown.
+See the [creation contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkSwapchainCreateInfoKHR.html).
 
 GPU completion protects render/depth resources. Final teardown retains upstream's queue-idle
 fallback with semaphore owners alive; the general presentation-engine teardown limitation remains.
@@ -281,17 +312,18 @@ The script never deletes or mutates the original official SDK or an unversioned 
 
 The dependency build is Release with `/MD`; both native Quader configurations consume it. This
 dependency's build directory is separate from the canonical native `build/vs2026` tree. Default
-locations are sibling `_SOURCES/filament-main-aab101b4c038-quader-vsync9-source`,
-`_SOURCES/filament-main-aab101b4c038-quader-vsync9-build` and
-`_SOURCES/filament-main-aab101b4c038-quader-vsync9-windows` for source, build and install.
+locations are sibling `_SOURCES/filament-main-34ff730afa71-quader-vsync10-source`,
+`_SOURCES/filament-main-34ff730afa71-quader-vsync10-build` and
+`_SOURCES/filament-main-34ff730afa71-quader-vsync10-windows` for source, build and install.
 The SDK contains freshly rebuilt matching headers, libraries, and `matc.exe`; mixing an official SDK with
 patched headers would break the platform ABI. The installed `quader-filament-sdk.json` records
 the source and patch identities and the hashes of every library used by Quader plus public
 presentation headers, `LightManager.h`, and `matc.exe`. Native configure verifies those identities
 and hashes. Quader's material outputs depend on this matching compiler executable. This snapshot
-retains material format version 76 from v1.76.1, but changes upstream material variant generation
-and shaders. Recompile every material with the rebuilt `matc.exe`, including the modified
-punctual-light and diffuse shaders; an unchanged format number does not establish binary compatibility.
+uses material format version 78, replacing version 76 in the previous pinned SDK, and includes
+upstream material compiler and shader changes. Recompile every material with the rebuilt
+`matc.exe`, including the modified punctual-light and diffuse shaders; old compiled materials
+must not be mixed with the upgraded runtime.
 The install also includes BlueVK's `bluevk`, `vulkan`, and `vk_video` public header groups from
 the pinned source, which upstream's normal install omits despite exposing `VulkanPlatform.h`.
 These headers retain their Apache-2.0/Khronos notices and introduce no additional runtime DLL.

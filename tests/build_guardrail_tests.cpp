@@ -1920,12 +1920,12 @@ TEST(BuildGuardrailTests, ModelingSdkInstallAndConsumerUseRequestedConfiguration
 
 TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   const std::string filament_sha256 = joined(
-      "7c464ef115a048ab77eb8e1898f1f797",
-      "21a21b8364a4fda3e44a7e0e5f447c68");
+      "c62cffd916f3f1cf6dded17a5bb233bb",
+      "923d9e1f530e327bc5c9c340c3009025");
   const std::string third_party_manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
   const std::string filament_pin = read_source_file(
-      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync9.json");
+      "thirdparty/filament/filament-main-34ff730afa71-quader-vsync10.json");
   const std::string filament_builder = read_source_file("tools/build_filament_sdk.ps1");
   const std::string tracy_pin = read_source_file("thirdparty/tracy-0.13.1.json");
   const std::string native_verifier = read_source_file("tools/verify_native_build.ps1");
@@ -1934,7 +1934,7 @@ TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   expect_contains(filament_pin, "\"upstream_ref\": \"main\"");
   expect_contains(filament_pin,
                   "\"upstream_commit\": \"" +
-                      joined("aab101b4c038da83f71a", "16accb8279516a0247b9") + "\"");
+                      joined("34ff730afa710f6001e2", "07d6ecd8f01bb5a4fd98") + "\"");
   expect_contains(filament_builder, "if (-not $AllowDownload)");
   expect_contains(filament_builder, "Get-FileHash -LiteralPath $archive -Algorithm SHA256");
   expect_contains(filament_builder, "if ($sourceSha -ne $pin.source_sha256)");
@@ -1984,11 +1984,11 @@ TEST(BuildGuardrailTests, FilamentPatchAppliesInsideAncestorWorktree) {
 
 TEST(BuildGuardrailTests, FilamentPresentationPatchPreservesDitheringAndTargetRouting) {
   const std::string pin = read_source_file(
-      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync9.json");
+      "thirdparty/filament/filament-main-34ff730afa71-quader-vsync10.json");
   const std::string patch = read_source_file(
-      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync9.patch");
-  expect_contains(pin, "\"patch_version\": 9");
-  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 9");
+      "thirdparty/filament/filament-main-34ff730afa71-quader-vsync10.patch");
+  expect_contains(pin, "\"patch_version\": 10");
+  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 10");
   // Preserve upstream dither amplitude. Native GPU tests verify the resulting pixels;
   // this contract prevents a dependency update from replacing the presentation fix
   // with noise suppression or applying its decode to an unrelated render target.
@@ -2265,7 +2265,7 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
 
   expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
   expect_contains(root_c_make,
-                  "../_SOURCES/filament-main-aab101b4c038-quader-vsync9-windows");
+                  "../_SOURCES/filament-main-34ff730afa71-quader-vsync10-windows");
   expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "ENV{USERPROFILE}");

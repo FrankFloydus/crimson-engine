@@ -44,19 +44,21 @@ Filament evidence: [unit conversion](C:/Users/Drako/Desktop/quader-windows/_SOUR
 [exposure calculation](C:/Users/Drako/Desktop/quader-windows/_SOURCES/filament-v1.71.6-quader-vsync3-source/filament/src/Exposure.cpp:86),
 [directional uniform](C:/Users/Drako/Desktop/quader-windows/_SOURCES/filament-v1.71.6-quader-vsync3-source/filament/src/ds/ColorPassDescriptorSet.cpp:323).
 
-## Current Filament source: checked 2026-09-14
+## Current Filament source: checked 2026-10-21
 
 Quader now pins the unreleased `main` snapshot at commit
-`aab101b4c038da83f71a16accb8279516a0247b9`, with `quader-vsync9`.
-Patch revisions 7 through 9 change Vulkan presentation lifetimes, optional Windows scaling,
-occluded-image pixel ownership and shifted AO reconstruction while preserving the light extensions
-and the upstream source identity checked here.
-Its [light-unit conversion](https://github.com/google/filament/blob/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/components/LightManager.cpp),
-[photographic exposure](https://github.com/google/filament/blob/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/Exposure.cpp),
-and [directional-light exposure multiplication](https://github.com/google/filament/blob/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/ds/ColorPassDescriptorSet.cpp)
-retain the quantities above. These exact-SHA sources were compared with the previous v1.76.1
-SDK: the exposure and directional-uniform files are unchanged, and the light-manager differences
-are the maintained Quader distance-attenuation extension. Additional directional lights remain
+`34ff730afa710f6001e207d6ecd8f01bb5a4fd98`, with `quader-vsync10`.
+Patch revision 10 rebases the maintained Vulkan presentation, color and lighting extensions
+onto this source while preserving the light-unit contract.
+Its [light-unit conversion](https://github.com/google/filament/blob/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/components/LightManager.cpp),
+[photographic exposure](https://github.com/google/filament/blob/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/Exposure.cpp),
+and [directional-light exposure multiplication](https://github.com/google/filament/blob/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/ds/ColorPassDescriptorSet.cpp)
+retain the quantities above. Compared with the previous `aab101b4c038` snapshot, the
+exposure and directional-uniform files are byte-identical. The light-manager changes make
+the Builder's build method const and suppress unchanged shadow-option notifications; its
+unit-conversion calculation is unchanged. The maintained patch preserves Quader's distance-
+attenuation extension. Upstream rewrote scene/view entity caching, so this audit does not
+claim the entire scene implementation is unchanged. Additional directional lights remain
 opt-in and disabled in Quader.
 This source check does not reattribute earlier GPU calibration measurements to the upgraded SDK;
 the retained September 8 audit records the engine versions originally inspected.

@@ -1,30 +1,32 @@
 diff --git a/filament/backend/include/backend/DriverEnums.h b/filament/backend/include/backend/DriverEnums.h
+index b3e2674..a644129 100644
 --- a/filament/backend/include/backend/DriverEnums.h
 +++ b/filament/backend/include/backend/DriverEnums.h
-@@ -18,6 +18,9 @@
- 
+@@ -19,6 +19,9 @@
  #ifndef TNT_FILAMENT_BACKEND_DRIVERENUMS_H
  #define TNT_FILAMENT_BACKEND_DRIVERENUMS_H
-+
-+// Quader's pinned presentation and lighting extension; rebuild headers and libraries together.
-+#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 9
  
++// Quader's pinned presentation and lighting extension; rebuild headers and libraries together.
++#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 10
++
  #include <utils/unwindows.h> // Because we define ERROR in the FenceStatus enum.
  
-@@ -110,6 +113,9 @@
-  * because the swapchain MSAA settings must be configured before window creation.
+ #include <backend/Platform.h>
+@@ -111,6 +114,9 @@ static constexpr uint64_t SWAP_CHAIN_CONFIG_PROTECTED_CONTENT   = 0x40;
   */
  static constexpr uint64_t SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES      = 0x80;
-+
+ 
 +/** Requests immediate Vulkan presentation when supported; otherwise falls back to FIFO. */
 +static constexpr uint64_t SWAP_CHAIN_CONFIG_UNSYNCHRONIZED      = 0x100;
- 
++
  static constexpr size_t MAX_VERTEX_ATTRIBUTE_COUNT  = 16;   // This is guaranteed by OpenGL ES.
  static constexpr size_t MAX_SAMPLER_COUNT           = 62;   // Maximum needed at feature level 3.
+ static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
 diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filament/backend/include/backend/platforms/VulkanPlatform.h
+index 5a90080..740b0ba 100644
 --- a/filament/backend/include/backend/platforms/VulkanPlatform.h
 +++ b/filament/backend/include/backend/platforms/VulkanPlatform.h
-@@ -109,6 +109,10 @@
+@@ -109,6 +109,10 @@ public:
          VkExtent2D extent = {0, 0};
          uint32_t layerCount = 1;
          bool isProtected = false;
@@ -35,7 +37,7 @@ diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filam
      };
  
      struct ImageSyncData {
-@@ -119,6 +123,10 @@
+@@ -119,6 +123,10 @@ public:
  
          // Semaphore to be signaled once the image is available.
          VkSemaphore imageReadySemaphore = VK_NULL_HANDLE;
@@ -46,7 +48,7 @@ diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filam
      };
  
      VulkanPlatform();
-@@ -483,6 +491,15 @@
+@@ -512,6 +520,15 @@ public:
      virtual void setPresentationTime(int64_t presentTime) noexcept;
  
  protected:
@@ -62,7 +64,7 @@ diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filam
      struct VulkanSync : public Sync {
          explicit VulkanSync(std::shared_ptr<VulkanCmdFence> fence) noexcept
              : fenceStatus(std::move(fence)) {}
-@@ -598,6 +615,7 @@
+@@ -627,6 +644,7 @@ private:
              MiscDeviceFeatures const& requestedFeatures) noexcept;
  
      friend struct VulkanPlatformPrivate;
@@ -71,9 +73,10 @@ diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filam
  
  }// namespace filament::backend
 diff --git a/filament/backend/src/vulkan/VulkanContext.h b/filament/backend/src/vulkan/VulkanContext.h
+index 27c4d63..35a2b5f 100644
 --- a/filament/backend/src/vulkan/VulkanContext.h
 +++ b/filament/backend/src/vulkan/VulkanContext.h
-@@ -260,6 +260,10 @@
+@@ -274,6 +274,10 @@ public:
          return mGoogleDisplayTimingEnabled;
      }
  
@@ -84,7 +87,7 @@ diff --git a/filament/backend/src/vulkan/VulkanContext.h b/filament/backend/src/
  private:
      VkPhysicalDeviceMemoryProperties mMemoryProperties = {};
      VkPhysicalDeviceProperties2 mPhysicalDeviceProperties = {
-@@ -311,6 +315,9 @@
+@@ -329,6 +333,9 @@ private:
      // VK_GOOGLE_display_timing device extension
      bool mGoogleDisplayTimingEnabled = false;
  
@@ -95,9 +98,10 @@ diff --git a/filament/backend/src/vulkan/VulkanContext.h b/filament/backend/src/
      bool mAsyncPipelineCachePrewarmingEnabled = false;
      bool mParallelShaderCompileDisabled = false;
 diff --git a/filament/backend/src/vulkan/VulkanSwapChain.cpp b/filament/backend/src/vulkan/VulkanSwapChain.cpp
+index 6591059..f5b37e2 100644
 --- a/filament/backend/src/vulkan/VulkanSwapChain.cpp
 +++ b/filament/backend/src/vulkan/VulkanSwapChain.cpp
-@@ -60,17 +60,23 @@
+@@ -61,17 +61,23 @@ VulkanSwapChain::~VulkanSwapChain() {
  
      mColors = {};
      mDepth = {};
@@ -112,19 +116,19 @@ diff --git a/filament/backend/src/vulkan/VulkanSwapChain.cpp b/filament/backend/
  }
  
  void VulkanSwapChain::update() {
-+    auto const bundle = mPlatform->getSwapChainBundle(swapChain);
+-    mColors.clear();
+-
+     auto const bundle = mPlatform->getSwapChainBundle(swapChain);
 +    if (mSwapchainGeneration != 0 && bundle.generation > mSwapchainGeneration &&
 +            !mFinishedDrawing.empty()) {
 +        mRetiredDrawingSignals.push_back({mSwapchainGeneration, std::move(mFinishedDrawing)});
 +    }
 +    mSwapchainGeneration = bundle.generation;
-     mColors.clear();
--
--    auto const bundle = mPlatform->getSwapChainBundle(swapChain);
++    mColors.clear();
      size_t const swapChainCount = bundle.colors.size();
      mColors.reserve(bundle.colors.size());
      VkDevice const device = mPlatform->getDevice();
-@@ -185,12 +191,14 @@
+@@ -186,12 +192,14 @@ std::pair<bool, bool> VulkanSwapChain::acquire() {
      //     And we will first recreate the swapchain before acquiring (on tryCount == 0).
      //   - If resize is not true, then just try to acquire (on tryCount == 0)
      //       - If the acquire succeeds, then result == VK_SUCCESS, break loop
@@ -132,30 +136,34 @@ diff --git a/filament/backend/src/vulkan/VulkanSwapChain.cpp b/filament/backend/
 -    //         (on tryCount == 1), then
 +    //       - if acquire fails with VK_ERROR_OUT_OF_DATE_KHR (on tryCount == 1), then
      //           - recreate swapchain and try to acquire again (on tryCount == 1).
--
--    for (uint8_t tryCount = 0; result != VK_SUCCESS && tryCount < 2; tryCount++) {
--        if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) {
 +    // VK_SUBOPTIMAL_KHR still acquires a usable image. Render and present it so its readiness
 +    // semaphore is consumed and persistent suboptimal status cannot prevent retirement progress.
-+
+ 
+-    for (uint8_t tryCount = 0; result != VK_SUCCESS && tryCount < 2; tryCount++) {
+-        if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) {
 +    for (uint8_t tryCount = 0; result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR &&
 +            tryCount < 2; tryCount++) {
 +        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
              // Following recreates the swapchain
  
-             // Calling flush multiptle times is ok, since it's no-op if not recording.
-@@ -198,14 +206,24 @@
+             // Calling flush multiple times is ok, since it's no-op if not recording.
+@@ -199,7 +207,8 @@ std::pair<bool, bool> VulkanSwapChain::acquire() {
                  mCommands->flush();
                  mCommands->wait();
              }
--            mPlatform->recreate(swapChain);
+-            if (UTILS_LIKELY(mPlatform->recreate(swapChain) == VK_SUCCESS)) {
 +            VkResult const recreateResult = mPlatform->recreate(swapChain);
-+            if (recreateResult != VK_SUCCESS) {
++            if (UTILS_LIKELY(recreateResult == VK_SUCCESS)) {
+                 update();
+                 swapchainRecreated = true;
+             } else {
+@@ -210,13 +219,20 @@ std::pair<bool, bool> VulkanSwapChain::acquire() {
+                 //
+                 // Break here because we shouldn't attempt to acquire if we don't even have a
+                 // swapchain.
 +                result = recreateResult;
-+                break;
-+            }
-             update();
-             swapchainRecreated = true;
+                 break;
+             }
          }
          result = mPlatform->acquire(swapChain, &imageSyncData);
      }
@@ -172,6 +180,7 @@ diff --git a/filament/backend/src/vulkan/VulkanSwapChain.cpp b/filament/backend/
          FVK_LOGD << "Failed to acquire next image in the swapchain result=" << (int) result;
          return { false, swapchainRecreated };
 diff --git a/filament/backend/src/vulkan/VulkanSwapChain.h b/filament/backend/src/vulkan/VulkanSwapChain.h
+index b0413fe..14f6d8a 100644
 --- a/filament/backend/src/vulkan/VulkanSwapChain.h
 +++ b/filament/backend/src/vulkan/VulkanSwapChain.h
 @@ -31,6 +31,7 @@
@@ -182,7 +191,7 @@ diff --git a/filament/backend/src/vulkan/VulkanSwapChain.h b/filament/backend/sr
  
  using namespace bluevk;
  
-@@ -117,6 +118,14 @@
+@@ -117,6 +118,14 @@ private:
      // transitions, which are useful here.
      utils::FixedCapacityVector<fvkmemory::resource_ptr<VulkanTexture>> mColors;
      utils::FixedCapacityVector<fvkmemory::resource_ptr<VulkanSemaphore>> mFinishedDrawing;
@@ -198,9 +207,10 @@ diff --git a/filament/backend/src/vulkan/VulkanSwapChain.h b/filament/backend/sr
      VkExtent2D mExtent;
      uint32_t mLayerCount;
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
+index 1abae41..9072a9e 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-@@ -244,6 +244,12 @@
+@@ -244,6 +244,12 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
          // Request all cross-platform extensions.
          VK_KHR_SURFACE_EXTENSION_NAME,
  
@@ -213,7 +223,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
      // Request these if available.
  #if defined(__APPLE__)
          VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
-@@ -274,11 +280,22 @@
+@@ -274,11 +280,22 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
              setInsert(exts, name);
          }
      }
@@ -236,11 +246,10 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
      // We only support external image for Android for now, but nothing bars us from
      // supporting other platforms.
  #if defined(__ANDROID__)
-@@ -345,6 +362,14 @@
-         ExtensionSet const& deviceExts) noexcept {
+@@ -353,6 +370,14 @@ std::tuple<ExtensionSet, ExtensionSet> pruneExtensions(VkPhysicalDevice device,
      ExtensionSet newInstExts = instExts;
      ExtensionSet newDeviceExts = deviceExts;
-+
+ 
 +    // The backend already requires Vulkan 1.1. The remaining maintenance dependencies are
 +    // the swapchain device extension (always requested) and these enabled instance extensions.
 +    if (!setContains(newInstExts, VK_KHR_SURFACE_EXTENSION_NAME) ||
@@ -248,10 +257,35 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
 +            !setContains(newInstExts, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) {
 +        setErase(newDeviceExts, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
 +    }
- 
++
      // debugUtils and debugMarkers extensions are used mutually exclusively.
      if (setContains(newInstExts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) &&
-@@ -874,7 +899,7 @@
+             setContains(newDeviceExts, VK_EXT_DEBUG_MARKER_EXTENSION_NAME)) {
+@@ -405,7 +430,8 @@ uint32_t identifyQueueFamilyIndex(VkPhysicalDevice physicalDevice, VkQueueFlags
+ // If there is more than one virtual queue in the graphics family use the second as the Async
+ // If not, use the next available queue that has the transfer property
+ // If it does not exist either return INVALID_VK_INDEX
+-std::pair<uint32_t, uint32_t> identifyAsyncQueue(VkPhysicalDevice physicalDevice) {
++std::pair<uint32_t, uint32_t> identifyAsyncQueue(VkPhysicalDevice physicalDevice,
++        uint32_t protectedQueueFamilyIndex) {
+     uint32_t asyncQueueFamilyIndex = INVALID_VK_INDEX;
+     uint32_t asyncQueueIndex = INVALID_VK_INDEX;
+ 
+@@ -419,6 +445,13 @@ std::pair<uint32_t, uint32_t> identifyAsyncQueue(VkPhysicalDevice physicalDevice
+         VkQueueFamilyProperties props = queueFamiliesProperties[j];
+         // Async queue candidate must have the transfer property
+         if (props.queueFlags & VK_QUEUE_TRANSFER_BIT) {
++            // Quader: protected and unprotected requests share the family's total capacity.
++            // Reserve the protected slot before choosing an additional transfer queue.
++            uint32_t const requiredQueueCount = (j == graphicsQueueFamilyIndex ? 2u : 1u) +
++                    (j == protectedQueueFamilyIndex ? 1u : 0u);
++            if (props.queueCount < requiredQueueCount) {
++                continue;
++            }
+             // If this is not the same family as the graphics, use the first one
+             if (j != graphicsQueueFamilyIndex) {
+                 asyncQueueFamilyIndex = j;
+@@ -930,7 +963,7 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
  
      auto [surface, fallbackExtent] = createVkSurfaceKHR(nativeWindow, mImpl->mInstance, flags);
      // The VulkanPlatformSurfaceSwapChain now `owns` the surface.
@@ -260,11 +294,10 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
              mImpl->mPhysicalDevice, mImpl->mDevice, mImpl->mGraphicsQueue, mImpl->mInstance,
              surface, fallbackExtent, nativeWindow, flags);
      return swapchain;
-@@ -1082,6 +1107,14 @@
-     if (setContains(deviceExts, VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME)) {
+@@ -1151,6 +1184,14 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
          chainStruct(&context.mPhysicalDeviceFeatures, &globalPriorityFeatures);
      }
-+
+ 
 +    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchainMaintenanceFeatures = {
 +        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT,
 +    };
@@ -272,10 +305,11 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
 +            vkGetPhysicalDeviceFeatures2) {
 +        chainStruct(&context.mPhysicalDeviceFeatures, &swapchainMaintenanceFeatures);
 +    }
-         
++
      if (setContains(deviceExts, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME)) {
          chainStruct(&context.mPhysicalDeviceFeatures, &context.mVertexInputDynamicStateFeatures);
-@@ -1119,6 +1152,10 @@
+     }
+@@ -1198,6 +1239,10 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
      vkGetPhysicalDeviceMemoryProperties(mImpl->mPhysicalDevice, &context.mMemoryProperties);
  
      // Store the extension support in the context
@@ -286,7 +320,52 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
      if (sharedContext) {
          VulkanSharedContext const* scontext = (VulkanSharedContext const*) sharedContext;
          context.mDebugUtilsEnabled = scontext->debugUtilsEnabled;
-@@ -1268,6 +1305,15 @@
+@@ -1313,14 +1358,17 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
+     assert_invariant(mImpl->mGraphicsQueueFamilyIndex != INVALID_VK_INDEX);
+     assert_invariant(mImpl->mGraphicsQueueIndex != INVALID_VK_INDEX);
+ 
+-    const auto asyncQueueDetails= identifyAsyncQueue(getPhysicalDevice());
++    auto const asyncQueueDetails = identifyAsyncQueue(getPhysicalDevice(),
++            mImpl->mProtectedGraphicsQueueFamilyIndex);
+     mImpl->mAsyncQueueFamilyIndex = asyncQueueDetails.first;
+     mImpl->mAsyncQueueIndex = asyncQueueDetails.second;
+     bool const hasAsyncQueue = mImpl->mAsyncQueueFamilyIndex != INVALID_VK_INDEX;
+ 
+     bool const hasProtectedQueue = mImpl->mProtectedGraphicsQueueFamilyIndex != INVALID_VK_INDEX;
+ 
+-    float queuePriority[] = { 1.0f };
++    // Quader: request both unprotected graphics queues in one family record. Repeating that
++    // family with identical flags is invalid, and queue index 1 requires queueCount >= 2.
++    float queuePriority[] = { 1.0f, 1.0f };
+     VkDeviceCreateInfo deviceCreateInfo = {
+         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+     };
+@@ -1346,7 +1394,9 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
+         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+         .pNext = requiresGpuPriority ? &queuePriorityCreateInfo : nullptr,
+         .queueFamilyIndex = mImpl->mGraphicsQueueFamilyIndex,
+-        .queueCount = 1,
++        .queueCount = hasAsyncQueue &&
++                mImpl->mAsyncQueueFamilyIndex == mImpl->mGraphicsQueueFamilyIndex
++                ? mImpl->mAsyncQueueIndex + 1 : 1,
+         .pQueuePriorities = &queuePriority[0],
+     };
+     queuesCreateInfos.push_back(graphicsQueueCreateInfo);
+@@ -1356,11 +1406,12 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
+         VkDeviceQueueCreateInfo protectedQueueCreateInfo = graphicsQueueCreateInfo;
+         protectedQueueCreateInfo.queueFamilyIndex = mImpl->mProtectedGraphicsQueueFamilyIndex;
+         protectedQueueCreateInfo.flags = VK_DEVICE_QUEUE_CREATE_PROTECTED_BIT;
++        protectedQueueCreateInfo.queueCount = 1;
+         queuesCreateInfos.push_back(protectedQueueCreateInfo);
+     }
+ 
+     // Async queue
+-    if (hasAsyncQueue) {
++    if (hasAsyncQueue && mImpl->mAsyncQueueFamilyIndex != mImpl->mGraphicsQueueFamilyIndex) {
+         VkDeviceQueueCreateInfo asyncQueueCreateInfo = graphicsQueueCreateInfo;
+         asyncQueueCreateInfo.queueFamilyIndex = mImpl->mAsyncQueueFamilyIndex;
+         queuesCreateInfos.push_back(asyncQueueCreateInfo);
+@@ -1394,6 +1445,15 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
      };
      chainStruct(&deviceCreateInfo, &enabledVk11Features);
  
@@ -303,9 +382,10 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/
      deviceCreateInfo.ppEnabledExtensionNames = requestExtensions.data();
  
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
+index 7c1e075..81361b8 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cpp
-@@ -149,10 +149,12 @@
+@@ -149,10 +149,12 @@ int VulkanPlatformSwapChainBase::setFrameRate(float,
      return 0;
  }
  
@@ -319,7 +399,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
        mInstance(instance),
        mPhysicalDevice(physicalDevice),
        mSurface(surface),
-@@ -160,9 +162,12 @@
+@@ -160,9 +162,12 @@ VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext con
        mUsesRGB((flags & backend::SWAP_CHAIN_CONFIG_SRGB_COLORSPACE) != 0),
        mHasStencil((flags & backend::SWAP_CHAIN_HAS_STENCIL_BUFFER) != 0),
        mIsProtected((flags & backend::SWAP_CHAIN_CONFIG_PROTECTED_CONTENT) != 0),
@@ -333,7 +413,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
  }
  
  VulkanPlatformSurfaceSwapChain::~VulkanPlatformSurfaceSwapChain() {
-@@ -182,7 +187,18 @@
+@@ -186,7 +191,18 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
  
      VkSurfaceFormatKHR surfaceFormat = {};
      VkSurfaceCapabilitiesKHR caps;
@@ -353,7 +433,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
  
      // The general advice is to require one more than the minimum swap chain length, since the
      // absolute minimum could easily require waiting for a driver or presentation layer to release
-@@ -224,24 +240,83 @@
+@@ -235,11 +251,13 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
      FILAMENT_CHECK_POSTCONDITION(surfaceFormat.format != VK_FORMAT_UNDEFINED)
              << "Cannot find suitable swapchain format";
  
@@ -368,8 +448,9 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
 +    VkPresentModeKHR const desiredPresentMode = mUnsynchronized && supportsImmediate
 +            ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
  
-     bool const foundSuitablePresentMode = std::find(presentModes.begin(), presentModes.end(),
-                                             desiredPresentMode) != presentModes.end();
+     // We will have no present modes if the we've gotten a VK_ERROR_SURFACE_LOST_KHR.
+     if (UTILS_VERY_UNLIKELY(presentModes.empty())) {
+@@ -252,14 +270,71 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
      FILAMENT_CHECK_POSTCONDITION(foundSuitablePresentMode)
              << "Desired present mode is not supported by this device.";
  
@@ -379,7 +460,6 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
 -        mSwapChainBundle.extent = mFallbackExtent;
 -    } else {
 -        mSwapChainBundle.extent = caps.currentExtent;
--    }
 +    // Define how the last submitted image covers the native surface between a resize and
 +    // its replacement presentation. Query the selected mode only at swapchain creation.
 +    bool usePresentScaling = false;
@@ -435,8 +515,8 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
 +                }
 +            }
 +        }
-+    }
-+
+     }
+ 
 +    // Reserve retirement ownership before invoking Vulkan. oldSwapchain becomes retired even
 +    // if vkCreateSwapchainKHR fails, so it must never be acquired from or passed again afterward.
 +    if (mSwapchain != VK_NULL_HANDLE) {
@@ -444,10 +524,11 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
 +        destroyRenderResources();
 +    }
 +    mSwapChainBundle.extent = extent;
- 
++
      VkCompositeAlphaFlagBitsKHR const compositeAlpha
              = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
-@@ -250,6 +325,7 @@
+                       ? VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR
+@@ -267,6 +342,7 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
  
      VkSwapchainCreateInfoKHR const createInfo{
              .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -455,7 +536,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
              .flags = mIsProtected ? VK_SWAPCHAIN_CREATE_PROTECTED_BIT_KHR :
                  VkSwapchainCreateFlagsKHR(0),
              .surface = mSurface,
-@@ -273,15 +349,22 @@
+@@ -290,19 +366,26 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
  
              .compositeAlpha = compositeAlpha,
              .presentMode = desiredPresentMode,
@@ -467,11 +548,15 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
 -    VkResult result = vkCreateSwapchainKHR(mDevice, &createInfo, VKALLOC, &mSwapchain);
 +    VkSwapchainKHR replacement = VK_NULL_HANDLE;
 +    result = vkCreateSwapchainKHR(mDevice, &createInfo, VKALLOC, &replacement);
++    // Passing oldSwapchain retires it even on failure. Its handle stays in the retirement
++    // list for teardown, and a failed replacement must never be acquired or published.
 +    mSwapchain = result == VK_SUCCESS ? replacement : VK_NULL_HANDLE;
-+    // Preserve upstream's fatal creation-error contract. The old retired handle remains owned
-+    // for teardown; no failure path publishes an incomplete bundle or acquires a null handle.
-     FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS) << "vkCreateSwapchainKHR failed."
-                                                        << " error=" << static_cast<int32_t>(result);
+ 
+     if (UTILS_VERY_UNLIKELY(result != VK_SUCCESS)) {
+         mSurfaceLost = true;
+         LOG(ERROR) << "vkCreateSwapchainKHR failed. error=" << static_cast<int32_t>(result);
+         return VK_ERROR_SURFACE_LOST_KHR;
+     }
 +    ++mSwapchainGeneration;
 +    mSwapChainBundle.generation = mSwapchainGeneration;
  
@@ -480,7 +565,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
      mSwapChainBundle.colorFormat = surfaceFormat.format;
      mSwapChainBundle.depthFormat =
              selectDepthFormat(mContext.getAttachmentDepthStencilFormats(), mHasStencil);
-@@ -295,7 +378,11 @@
+@@ -316,7 +399,11 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
             << "swapchain-size=" << mSwapChainBundle.colors.size() << ", "
             << "identity-transform=" << (caps.currentTransform == 1) << ", "
             << "depth=" << mSwapChainBundle.depthFormat << ", "
@@ -493,7 +578,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
  
      VkSemaphoreCreateInfo const semaphoreCreateInfo = {
              .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-@@ -309,14 +396,50 @@
+@@ -330,6 +417,8 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
                  << " error=" << static_cast<int32_t>(result);
      }
  
@@ -502,7 +587,8 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
      return result;
  }
  
- VkResult VulkanPlatformSurfaceSwapChain::acquire(VulkanPlatform::ImageSyncData* outImageSyncData) {
+@@ -340,8 +429,42 @@ VkResult VulkanPlatformSurfaceSwapChain::acquire(VulkanPlatform::ImageSyncData*
+ 
      mCurrentImageReadyIndex = (mCurrentImageReadyIndex + 1) % IMAGE_READY_SEMAPHORE_COUNT;
      outImageSyncData->imageReadySemaphore = mImageReady[mCurrentImageReadyIndex];
 +    VkFence completionFence = VK_NULL_HANDLE;
@@ -545,7 +631,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
  
      // Users should be notified of a suboptimal surface, but it should not cause a cascade of
      // log messages or a loop of re-creations.
-@@ -356,6 +479,12 @@
+@@ -390,6 +513,12 @@ VkResult VulkanPlatformSurfaceSwapChain::present(uint32_t index, VkSemaphore fin
      }
  
      VkResult result = vkQueuePresentKHR(mQueue, &presentInfo);
@@ -558,7 +644,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
  
      // On Android Q and above, a suboptimal surface is always reported after screen rotation:
      // https://android-developers.googleblog.com/2020/02/handling-device-orientation-efficiently.html
-@@ -451,7 +580,9 @@
+@@ -501,7 +630,9 @@ bool VulkanPlatformSurfaceSwapChain::queryFrameTimestamps(uint64_t const frameId
  
  // Non-virtual override
  VkResult VulkanPlatformSurfaceSwapChain::recreate() {
@@ -569,11 +655,10 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
      return create();
  }
  
-@@ -471,7 +602,24 @@
+@@ -521,7 +652,24 @@ void VulkanPlatformSurfaceSwapChain::destroy() {
      // degradation is less obvious (until, of course, people complain about lag when rotating their
      // phone). If necessary, we can revisit and implement the workaround [1].
      vkQueueWaitIdle(mQueue);
--
 +    destroyRenderResources();
 +    // Final teardown retains upstream's queue-idle fallback. During normal recreation the
 +    // retired chains instead survive until a replacement acquire fence proves completion.
@@ -590,23 +675,24 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.cp
 +        mRetirementAcquireFence = VK_NULL_HANDLE;
 +    }
 +}
-+
+ 
 +void VulkanPlatformSurfaceSwapChain::destroyRenderResources() {
      VulkanPlatformSwapChainBase::destroy();
  
      for (uint32_t i = 0; i < IMAGE_READY_SEMAPHORE_COUNT; ++i) {
-@@ -479,10 +627,6 @@
-             vkDestroySemaphore(mDevice, mImageReady[i], VKALLOC);
+@@ -530,10 +678,6 @@ void VulkanPlatformSurfaceSwapChain::destroy() {
              mImageReady[i] = VK_NULL_HANDLE;
          }
--    }
+     }
 -    if (mSwapchain) {
 -        vkDestroySwapchainKHR(mDevice, mSwapchain, VKALLOC);
 -        mSwapchain = VK_NULL_HANDLE;
-     }
+-    }
  }
  
+ VulkanPlatformHeadlessSwapChain::VulkanPlatformHeadlessSwapChain(VulkanContext const& context,
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
+index a44c62e..9dbb065 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h
 @@ -31,6 +31,7 @@
@@ -617,7 +703,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h 
  
  using namespace bluevk;
  
-@@ -84,7 +85,8 @@
+@@ -84,7 +85,8 @@ protected:
  };
  
  struct VulkanPlatformSurfaceSwapChain : public VulkanPlatformSwapChainBase {
@@ -627,7 +713,7 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h 
              VkDevice device, VkQueue queue, VkInstance instance, VkSurfaceKHR surface,
              VkExtent2D fallbackExtent, void* nativeWindow, uint64_t flags);
  
-@@ -121,19 +123,29 @@
+@@ -121,19 +123,29 @@ private:
  
      VkResult create();
  
@@ -661,12 +747,14 @@ diff --git a/filament/backend/src/vulkan/platform/VulkanPlatformSwapChainImpl.h 
  
      uint32_t mArbitraryFrameId = 0;
 diff --git a/filament/include/filament/LightManager.h b/filament/include/filament/LightManager.h
+index 8e0fbeb..ec179a2 100644
 --- a/filament/include/filament/LightManager.h
 +++ b/filament/include/filament/LightManager.h
-@@ -687,6 +687,15 @@
+@@ -715,6 +715,15 @@ public:
+          */
          Builder& falloff(float radius) noexcept;
  
-         /**
++        /**
 +         * Set the distance attenuation exponent for point and spot lights.
 +         * The default, 2, preserves the upstream inverse-square calculation. Other values use
 +         * pow(max(distance, 0.0001), -exponent) inside the unchanged smooth falloff radius.
@@ -675,11 +763,10 @@ diff --git a/filament/include/filament/LightManager.h b/filament/include/filamen
 +         */
 +        Builder& distanceAttenuation(float exponent) noexcept;
 +
-+        /**
+         /**
           * Defines a spot light'st angular falloff attenuation.
           *
-          * A spot light is defined by a position, a direction and two cones, \p inner and \p outer.
-@@ -945,6 +954,14 @@
+@@ -974,6 +983,14 @@ public:
       */
      float getFalloff(Instance i) const noexcept;
  
@@ -695,12 +782,14 @@ diff --git a/filament/include/filament/LightManager.h b/filament/include/filamen
       * Dynamically updates a spot light's cone as angles
       *
 diff --git a/filament/include/filament/SwapChain.h b/filament/include/filament/SwapChain.h
+index 653e003..5c0912e 100644
 --- a/filament/include/filament/SwapChain.h
 +++ b/filament/include/filament/SwapChain.h
-@@ -253,6 +253,15 @@
+@@ -252,6 +252,15 @@ public:
+      */
      static constexpr uint64_t CONFIG_MSAA_4_SAMPLES = backend::SWAP_CHAIN_CONFIG_MSAA_4_SAMPLES;
  
-     /**
++    /**
 +     * Requests unsynchronized Vulkan presentation (VK_PRESENT_MODE_IMMEDIATE_KHR).
 +     * This can tear. If immediate presentation is unavailable, the surface uses FIFO.
 +     * The VulkanPlatform presentation callback reports the mode actually selected.
@@ -709,14 +798,14 @@ diff --git a/filament/include/filament/SwapChain.h b/filament/include/filament/S
 +    static constexpr uint64_t CONFIG_UNSYNCHRONIZED =
 +            backend::SWAP_CHAIN_CONFIG_UNSYNCHRONIZED;
 +
-+    /**
+     /**
       * Return whether createSwapChain supports the CONFIG_PROTECTED_CONTENT flag.
       * The default implementation returns false.
-      *
 diff --git a/filament/src/LightManager.cpp b/filament/src/LightManager.cpp
+index 62ba46f..4048074 100644
 --- a/filament/src/LightManager.cpp
 +++ b/filament/src/LightManager.cpp
-@@ -102,6 +102,14 @@
+@@ -106,6 +106,14 @@ float LightManager::getFalloff(Instance const i) const noexcept {
      return downcast(this)->getFalloff(i);
  }
  
@@ -732,9 +821,10 @@ diff --git a/filament/src/LightManager.cpp b/filament/src/LightManager.cpp
      downcast(this)->setSpotLightCone(i, inner, outer);
  }
 diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManager.cpp
+index de8f5a1..ce300b9 100644
 --- a/filament/src/PostProcessManager.cpp
 +++ b/filament/src/PostProcessManager.cpp
-@@ -3245,7 +3245,7 @@
+@@ -3360,7 +3360,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::rcas(
  FrameGraphId<FrameGraphTexture> PostProcessManager::upscale(FrameGraph& fg, bool const translucent,
      bool sourceHasLuminance, DynamicResolutionOptions dsrOptions,
      FrameGraphId<FrameGraphTexture> const input, filament::Viewport const& vp,
@@ -743,7 +833,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
      // The code below cannot handle sub-resources
      assert_invariant(fg.getSubResourceDescriptor(input).layer == 0);
      assert_invariant(fg.getSubResourceDescriptor(input).level == 0);
-@@ -3256,7 +3256,7 @@
+@@ -3371,7 +3371,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscale(FrameGraph& fg, bool
      }
  
      if (dsrOptions.quality == QualityLevel::LOW) {
@@ -752,7 +842,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
      }
      if (dsrOptions.quality == QualityLevel::MEDIUM) {
          return upscaleSGSR1(fg, sourceHasLuminance, dsrOptions, input, vp, outDesc);
-@@ -3268,7 +3268,7 @@
+@@ -3383,7 +3383,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
          bool const translucent,
          DynamicResolutionOptions dsrOptions, FrameGraphId<FrameGraphTexture> const input,
          filament::Viewport const& vp, FrameGraphTexture::Descriptor const& outDesc,
@@ -761,7 +851,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
  
      struct QuadBlitData {
          FrameGraphId<FrameGraphTexture> input;
-@@ -3279,7 +3279,8 @@
+@@ -3394,7 +3394,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
      // have to do it with an extra pass). Blending must then happen either during the upsacling
      // or during the RCAS pass, whichever is last
  
@@ -771,7 +861,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
  
      auto const& ppQuadBlit = fg.addPass<QuadBlitData>(dsrOptions.enabled ? "upscaling" : "compositing",
              [&](FrameGraph::Builder& builder, auto& data) {
-@@ -3309,6 +3310,8 @@
+@@ -3424,6 +3425,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
                  });
  
                  mi->setParameter("levelOfDetail", 0.0f);
@@ -780,7 +870,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
  
                  mi->setParameter("viewport", float4{
                          float(vp.left)   / inputDesc.width,
-@@ -3338,7 +3341,8 @@
+@@ -3453,7 +3456,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph&
      // if we had to take the low quality fallback, we still do the "sharpen pass"
      if (dsrOptions.sharpness > 0.0f) {
          output = rcas(fg, dsrOptions.sharpness, output, outDesc,
@@ -790,7 +880,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
      }
  
      // we rely on automatic culling of unused render passes
-@@ -3562,7 +3566,8 @@
+@@ -3677,7 +3681,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
          FrameGraphId<FrameGraphTexture> const input,
          filament::Viewport const& vp, FrameGraphTexture::Descriptor const& outDesc,
          SamplerMagFilter filterMag,
@@ -800,7 +890,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
  
      uint32_t const layer = fg.getSubResourceDescriptor(input).layer;
      float const levelOfDetail = fg.getSubResourceDescriptor(input).level;
-@@ -3608,6 +3613,8 @@
+@@ -3723,6 +3728,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
                          float(vp.height) / inputDesc.height
                  });
                  mi->setParameter("levelOfDetail", levelOfDetail);
@@ -809,7 +899,7 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
                  if (layer) {
                      mi->setParameter("layerIndex", layer);
                  }
-@@ -3916,6 +3923,8 @@
+@@ -4031,6 +4038,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugCombineArrayTexture(Fra
                  // It should be ok to not move this getMaterialInstance to inside the loop, since
                  // this is a pass meant for debug.
                  auto* mi = getMaterialInstance(driver, ma);
@@ -819,9 +909,10 @@ diff --git a/filament/src/PostProcessManager.cpp b/filament/src/PostProcessManag
                          .filterMag = filterMag,
                          .filterMin = filterMin
 diff --git a/filament/src/PostProcessManager.h b/filament/src/PostProcessManager.h
+index e2e7547..724c9af 100644
 --- a/filament/src/PostProcessManager.h
 +++ b/filament/src/PostProcessManager.h
-@@ -260,12 +260,13 @@
+@@ -260,12 +260,13 @@ public:
      FrameGraphId<FrameGraphTexture> upscale(FrameGraph& fg, bool translucent,
              bool sourceHasLuminance, DynamicResolutionOptions dsrOptions,
              FrameGraphId<FrameGraphTexture> input, Viewport const& vp,
@@ -837,7 +928,7 @@ diff --git a/filament/src/PostProcessManager.h b/filament/src/PostProcessManager
  
      FrameGraphId<FrameGraphTexture> upscaleFSR1(FrameGraph& fg,
              DynamicResolutionOptions dsrOptions, FrameGraphId<FrameGraphTexture> input,
-@@ -293,7 +294,8 @@
+@@ -293,7 +294,8 @@ public:
              FrameGraphId<FrameGraphTexture> input,
              Viewport const& vp, FrameGraphTexture::Descriptor const& outDesc,
              backend::SamplerMagFilter filterMag,
@@ -848,9 +939,10 @@ diff --git a/filament/src/PostProcessManager.h b/filament/src/PostProcessManager
      // depth blitter using shaders
      FrameGraphId<FrameGraphTexture> blitDepth(FrameGraph& fg,
 diff --git a/filament/src/components/LightManager.cpp b/filament/src/components/LightManager.cpp
+index 2444411..59a96f2 100644
 --- a/filament/src/components/LightManager.cpp
 +++ b/filament/src/components/LightManager.cpp
-@@ -53,6 +53,7 @@
+@@ -54,6 +54,7 @@ struct LightManager::BuilderDetails {
      uint8_t mChannels = 1u;
      float3 mPosition = {};
      float mFalloff = 1.0f;
@@ -858,7 +950,7 @@ diff --git a/filament/src/components/LightManager.cpp b/filament/src/components/
      LinearColor mColor = LinearColor{ 1.0f };
      float mIntensity = 100000.0f;
      FLightManager::IntensityUnit mIntensityUnit = FLightManager::IntensityUnit::LUMEN_LUX;
-@@ -129,6 +130,13 @@
+@@ -130,6 +131,13 @@ LightManager::Builder& LightManager::Builder::falloff(float const radius) noexce
      return *this;
  }
  
@@ -872,7 +964,7 @@ diff --git a/filament/src/components/LightManager.cpp b/filament/src/components/
  LightManager::Builder& LightManager::Builder::spotLightCone(float inner, float outer) noexcept {
      mImpl->mSpotInnerOuter = { inner, outer };
      return *this;
-@@ -214,6 +222,7 @@
+@@ -216,6 +224,7 @@ void FLightManager::create(const Builder& builder, Entity const entity) {
          setIntensity(i, builder->mIntensity, builder->mIntensityUnit);
  
          setFalloff(i, builder->mCastLight ? builder->mFalloff : 0);
@@ -880,7 +972,7 @@ diff --git a/filament/src/components/LightManager.cpp b/filament/src/components/
          setSunAngularRadiusRad(i, builder->mSunAngularRadiusRad);
          setSunHaloSize(i, builder->mSunHaloSize);
          setSunHaloFalloff(i, builder->mSunHaloFalloff);
-@@ -429,6 +438,14 @@
+@@ -470,6 +479,14 @@ void FLightManager::setFalloff(Instance const i, float const falloff) noexcept {
      }
  }
  
@@ -896,9 +988,10 @@ diff --git a/filament/src/components/LightManager.cpp b/filament/src/components/
      auto& manager = mManager;
      if (i && isSpotLight(i)) {
 diff --git a/filament/src/components/LightManager.h b/filament/src/components/LightManager.h
+index 6ab4102..5c46ed0 100644
 --- a/filament/src/components/LightManager.h
 +++ b/filament/src/components/LightManager.h
-@@ -129,6 +129,7 @@
+@@ -151,6 +151,7 @@ public:
      UTILS_NOINLINE void setSpotLightCone(Instance i, float inner, float outer) noexcept;
      UTILS_NOINLINE void setIntensity(Instance i, float intensity, IntensityUnit unit) noexcept;
      UTILS_NOINLINE void setFalloff(Instance i, float radius) noexcept;
@@ -906,18 +999,18 @@ diff --git a/filament/src/components/LightManager.h b/filament/src/components/Li
      UTILS_NOINLINE void setShadowCaster(Instance i, bool shadowCaster) noexcept;
      UTILS_NOINLINE void setSunAngularRadiusRad(Instance i, float angularRadiusRad) noexcept;
      UTILS_NOINLINE void setSunHaloSize(Instance i, float haloSize) noexcept;
-@@ -220,6 +221,10 @@
- 
-     float getFalloff(Instance const i) const noexcept {
+@@ -244,6 +245,10 @@ public:
          return getRadius(i);
-+    }
-+
-+    float getDistanceAttenuation(Instance const i) const noexcept {
-+        return mManager[i].distanceAttenuation;
      }
  
++    float getDistanceAttenuation(Instance const i) const noexcept {
++        return mManager[i].distanceAttenuation;
++    }
++
      SpotParams const& getSpotParams(Instance const i) const noexcept {
-@@ -275,10 +280,11 @@
+         return mManager[i].spotParams;
+     }
+@@ -297,10 +302,11 @@ private:
          SUN_HALO_FALLOFF,   // state for the directional light sun
          INTENSITY,
          FALLOFF,
@@ -930,7 +1023,7 @@ diff --git a/filament/src/components/LightManager.h b/filament/src/components/Li
              LightType,      //  1
              math::float3,   // 12
              math::float3,   // 12
-@@ -290,6 +296,7 @@
+@@ -312,6 +318,7 @@ private:
              float,          //  4
              float,          //  4
              float,          //  4
@@ -938,7 +1031,7 @@ diff --git a/filament/src/components/LightManager.h b/filament/src/components/Li
              uint8_t         //  1
      >;
  
-@@ -317,6 +324,7 @@
+@@ -339,6 +346,7 @@ private:
                  Field<SUN_HALO_FALLOFF>     sunHaloFalloff;
                  Field<INTENSITY>            intensity;
                  Field<FALLOFF>              squaredFallOffInv;
@@ -947,21 +1040,23 @@ diff --git a/filament/src/components/LightManager.h b/filament/src/components/Li
              };
          };
 diff --git a/filament/src/details/ColorGrading.cpp b/filament/src/details/ColorGrading.cpp
+index 2c86137..2a6a135 100644
 --- a/filament/src/details/ColorGrading.cpp
 +++ b/filament/src/details/ColorGrading.cpp
-@@ -811,6 +811,8 @@
-             && builder->toneMapper->isOneDimensional()
+@@ -811,6 +811,8 @@ FColorGrading::FColorGrading(FEngine& engine, const Builder& builder) {
+             && toneMapper->isOneDimensional()
              && engine.features.engine.color_grading.use_1d_lut;
-     mIsLDR = mIsOneDimensional && builder->toneMapper->isLDR();
+     mIsLDR = mIsOneDimensional && toneMapper->isLDR();
 +    // Match selectOETF: all non-linear output currently uses the sRGB transfer function.
 +    mIsOutputSRGB = builder->outputColorSpace.getTransferFunction() != Linear;
  
      Config config = {
          mIsOneDimensional ? 512u : builder->dimension,
 diff --git a/filament/src/details/ColorGrading.h b/filament/src/details/ColorGrading.h
+index 3876938..f9acc5f 100644
 --- a/filament/src/details/ColorGrading.h
 +++ b/filament/src/details/ColorGrading.h
-@@ -51,6 +51,7 @@
+@@ -51,6 +51,7 @@ public:
      uint32_t getDimension() const noexcept { return mDimension; }
      bool isOneDimensional() const noexcept { return mIsOneDimensional; }
      bool isLDR() const noexcept { return mIsLDR; }
@@ -969,7 +1064,7 @@ diff --git a/filament/src/details/ColorGrading.h b/filament/src/details/ColorGra
  
  private:
      struct Config;
-@@ -61,6 +62,7 @@
+@@ -61,6 +62,7 @@ private:
      uint32_t mDimension;
      bool mIsOneDimensional;
      bool mIsLDR;
@@ -978,9 +1073,10 @@ diff --git a/filament/src/details/ColorGrading.h b/filament/src/details/ColorGra
  #if defined(__ARM_NEON)
      static void generateDefaultLUTNeon(FEngine const& engine, void* data, Config const& config, Builder const& builder) noexcept;
 diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.cpp
+index fd59400..44df542 100644
 --- a/filament/src/details/Renderer.cpp
 +++ b/filament/src/details/Renderer.cpp
-@@ -1094,6 +1094,11 @@
+@@ -1115,6 +1115,11 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
      // is "replacing" another one. E.g. typically when the color pass ends-up drawing directly
      // here.
      auto [viewRenderTarget, attachmentMask] = getRenderTarget(view);
@@ -992,7 +1088,7 @@ diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.c
      FrameGraphId<FrameGraphTexture> const fgViewRenderTarget = fg.import("viewRenderTarget", {
              .attachments = attachmentMask,
              .viewport = DEBUG_DYNAMIC_SCALING ? svp : vp,
-@@ -1529,15 +1534,16 @@
+@@ -1546,15 +1551,16 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
          }
  
          if (scaled) {
@@ -1013,7 +1109,7 @@ diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.c
              // scaling has been applied, and offset removed
              xvp = viewport;
              xvp.left = xvp.bottom = 0;
-@@ -1547,7 +1553,8 @@
+@@ -1564,7 +1570,8 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
  
      // Debug: combine the array texture for multiview into a single image.
      if (UTILS_UNLIKELY(isRenderingMultiview && engine.debug.stereo.combine_multiview_images)) {
@@ -1023,7 +1119,7 @@ diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.c
                          .width = vp.width, .height = vp.height,
                          .format = colorGradingConfig.ldrFormat },
                          SamplerMagFilter::NEAREST, SamplerMinFilter::NEAREST);
-@@ -1577,7 +1584,8 @@
+@@ -1594,7 +1601,8 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
       * 3. MRT is needed (colorGradingConfig.asSubpass)
       * 4. Frame history is needed (hasScreenSpaceRefraction)
       * 5. Refraction is used because how clear flags work (ssReflectionsOptions.enabled)
@@ -1033,7 +1129,7 @@ diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.c
       *      - MSAA doesn't match. Note: auto-resolve could work if the SwapChain was configured
       *        this way.
       *
-@@ -1595,11 +1603,11 @@
+@@ -1612,11 +1620,11 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
       */
  
      if (mightNeedFinalBlit) {
@@ -1047,7 +1143,7 @@ diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.c
              xvp != svp ||
              (inputIsColorPass &&
                      (msaaSampleCount > 1 ||
-@@ -1609,7 +1617,8 @@
+@@ -1626,7 +1634,8 @@ void FRenderer::renderJob(DriverApi& driver, LinearAllocatorArena& arena, FView&
              input = ppm.blit(fg, blendModeTranslucent, input, xvp, {
                              .width = vp.width, .height = vp.height,
                              .format = colorGradingConfig.ldrFormat },
@@ -1058,9 +1154,10 @@ diff --git a/filament/src/details/Renderer.cpp b/filament/src/details/Renderer.c
      }
  
 diff --git a/filament/src/details/Scene.cpp b/filament/src/details/Scene.cpp
+index 93af8b3..1b68e89 100644
 --- a/filament/src/details/Scene.cpp
 +++ b/filament/src/details/Scene.cpp
-@@ -512,7 +512,7 @@
+@@ -723,7 +723,7 @@ void FScene::prepareDynamicLights(const CameraInfo& camera,
          auto const li = lcm.getInstance(entities[i]);
          lp[gpuIndex].positionFalloff      = { spheres[i].xyz, lcm.getSquaredFalloffInv(li) };
          lp[gpuIndex].direction            = directions[i];
@@ -1070,6 +1167,7 @@ diff --git a/filament/src/details/Scene.cpp b/filament/src/details/Scene.cpp
          lp[gpuIndex].spotScaleOffset      = lcm.getSpotParams(li).scaleOffset;
          lp[gpuIndex].reserved3            = {};
 diff --git a/filament/src/materials/blitArray.mat b/filament/src/materials/blitArray.mat
+index 39d3a18..cf887aa 100644
 --- a/filament/src/materials/blitArray.mat
 +++ b/filament/src/materials/blitArray.mat
 @@ -1,6 +1,8 @@
@@ -1081,7 +1179,7 @@ diff --git a/filament/src/materials/blitArray.mat b/filament/src/materials/blitA
          {
              type : sampler2dArray,
              name : color,
-@@ -38,5 +40,16 @@
+@@ -38,5 +40,16 @@ vertex {
  fragment {
      void postProcess(inout PostProcessInputs postProcess) {
          postProcess.color = textureLod(materialParams_color, vec3(variable_vertex.xy, materialParams.layerIndex), materialParams.levelOfDetail);
@@ -1099,6 +1197,7 @@ diff --git a/filament/src/materials/blitArray.mat b/filament/src/materials/blitA
      }
  }
 diff --git a/filament/src/materials/blitLow.mat b/filament/src/materials/blitLow.mat
+index d504ec0..993cbe4 100644
 --- a/filament/src/materials/blitLow.mat
 +++ b/filament/src/materials/blitLow.mat
 @@ -1,6 +1,8 @@
@@ -1110,7 +1209,7 @@ diff --git a/filament/src/materials/blitLow.mat b/filament/src/materials/blitLow
          {
              type : sampler2d,
              name : color,
-@@ -39,5 +41,16 @@
+@@ -39,5 +41,16 @@ fragment {
  #else
          postProcess.color = textureLod(materialParams_color, variable_vertex.xy, materialParams.levelOfDetail);
  #endif
@@ -1127,10 +1226,28 @@ diff --git a/filament/src/materials/blitLow.mat b/filament/src/materials/blitLow
 +        }
      }
  }
+diff --git a/filament/src/materials/utils/geometry.fs b/filament/src/materials/utils/geometry.fs
+index a1a5062..db98785 100644
+--- a/filament/src/materials/utils/geometry.fs
++++ b/filament/src/materials/utils/geometry.fs
+@@ -25,7 +25,11 @@
+ //
+ highp vec3 computeViewSpacePositionFromDepth(highp vec2 uv, highp float linearDepth,
+         highp vec2 positionParams) {
+-    return vec3((0.5 - uv) * positionParams * linearDepth, linearDepth);
++    // Account for projection translation when reconstructing positions and normals from depth.
++    highp mat4 projection = getClipFromViewMatrix();
++    highp vec2 translation = projection[3].w == 0.0 ? -projection[2].xy : projection[3].xy;
++    highp vec2 uvCenter = vec2(0.5) + 0.5 * translation;
++    return vec3((uvCenter - uv) * positionParams * linearDepth, linearDepth);
+ }
+ 
+ highp vec3 faceNormal(highp vec3 dpdx, highp vec3 dpdy) {
 diff --git a/libs/filabridge/include/private/filament/UibStructs.h b/libs/filabridge/include/private/filament/UibStructs.h
+index 8dee29d..1269783 100644
 --- a/libs/filabridge/include/private/filament/UibStructs.h
 +++ b/libs/filabridge/include/private/filament/UibStructs.h
-@@ -289,7 +289,7 @@
+@@ -290,7 +290,7 @@ struct LightsUib { // NOLINT(cppcoreguidelines-pro-type-member-init)
      static constexpr std::string_view _name{ "LightsUniforms" };
      math::float4 positionFalloff;     // { float3(pos), 1/falloff^2 }
      math::float3 direction;           // dir
@@ -1140,9 +1257,10 @@ diff --git a/libs/filabridge/include/private/filament/UibStructs.h b/libs/filabr
      math::float2 spotScaleOffset;     // { scale, offset }
      float reserved3;                  // 0
 diff --git a/shaders/src/surface_light_punctual.fs b/shaders/src/surface_light_punctual.fs
+index 9435c00..1bb88b4 100644
 --- a/shaders/src/surface_light_punctual.fs
 +++ b/shaders/src/surface_light_punctual.fs
-@@ -98,14 +98,22 @@
+@@ -98,14 +98,22 @@ float getSquareFalloffAttenuation(float distanceSquare, float falloff) {
      return smoothFactor * smoothFactor;
  }
  
@@ -1168,7 +1286,7 @@ diff --git a/shaders/src/surface_light_punctual.fs b/shaders/src/surface_light_p
  }
  
  float getAngleAttenuation(const highp vec3 lightDir, const highp vec3 l, const highp vec2 scaleOffset) {
-@@ -130,6 +138,7 @@
+@@ -130,6 +138,7 @@ Light getLight(const uint lightIndex) {
  
      highp vec4 positionFalloff = data[0];
      highp vec3 direction = data[1].xyz;
@@ -1176,7 +1294,7 @@ diff --git a/shaders/src/surface_light_punctual.fs b/shaders/src/surface_light_p
      vec4 colorIES = vec4(
          unpackHalf2x16(floatBitsToUint(data[2][0])),
          unpackHalf2x16(floatBitsToUint(data[2][1]))
-@@ -148,7 +157,7 @@
+@@ -148,7 +157,7 @@ Light getLight(const uint lightIndex) {
      light.colorIntensity.rgb = colorIES.rgb;
      light.colorIntensity.w = computePreExposedIntensity(intensity, frameUniforms.exposure);
      light.l = normalize(posToLight);
@@ -1186,9 +1304,10 @@ diff --git a/shaders/src/surface_light_punctual.fs b/shaders/src/surface_light_p
      light.NoL = saturate(dot(shading_normal, light.l));
      light.worldPosition = positionFalloff.xyz;
 diff --git a/shaders/src/surface_shading_model_standard.fs b/shaders/src/surface_shading_model_standard.fs
+index d65304e..5ee995a 100644
 --- a/shaders/src/surface_shading_model_standard.fs
 +++ b/shaders/src/surface_shading_model_standard.fs
-@@ -89,7 +89,15 @@
+@@ -95,7 +95,15 @@ vec3 specularLobe(const PixelParams pixel, const Light light, const vec3 h,
  }
  
  vec3 diffuseLobe(const PixelParams pixel, float NoV, float NoL, float LoH) {
@@ -1204,19 +1323,3 @@ diff --git a/shaders/src/surface_shading_model_standard.fs b/shaders/src/surface
  }
  
  /**
-diff --git a/filament/src/materials/utils/geometry.fs b/filament/src/materials/utils/geometry.fs
---- a/filament/src/materials/utils/geometry.fs
-+++ b/filament/src/materials/utils/geometry.fs
-@@ -25,7 +25,11 @@
- //
- highp vec3 computeViewSpacePositionFromDepth(highp vec2 uv, highp float linearDepth,
-         highp vec2 positionParams) {
--    return vec3((0.5 - uv) * positionParams * linearDepth, linearDepth);
-+    // Account for projection translation when reconstructing positions and normals from depth.
-+    highp mat4 projection = getClipFromViewMatrix();
-+    highp vec2 translation = projection[3].w == 0.0 ? -projection[2].xy : projection[3].xy;
-+    highp vec2 uvCenter = vec2(0.5) + 0.5 * translation;
-+    return vec3((uvCenter - uv) * positionParams * linearDepth, linearDepth);
- }
- 
- highp vec3 faceNormal(highp vec3 dpdx, highp vec3 dpdy) {

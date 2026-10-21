@@ -518,7 +518,7 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
         ++participant_count;
         visible_occurrence_count += kInstanceVariants.size();
       }
-      // Filament aab101b4c038 corrects reflected winding/normals for an entity,
+      // Filament 34ff730afa71 corrects reflected winding/normals for an entity,
       // but InstanceBuffer::prepare overwrites the corrected normal matrix.
       // Keep those occurrences on ordinary entity transforms with shared buffers.
       const bool per_object_transform = !(glm::determinant(
