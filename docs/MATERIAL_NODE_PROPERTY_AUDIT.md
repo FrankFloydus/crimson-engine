@@ -115,3 +115,48 @@ with `material_procedural_tests --benchmark <report.json>` and
 `material_atomic_image_bake_tests --benchmark <report.json>`. Completed images
 remain cached; these changes add no frame-rendering pass or sampler binding.
 No FPS improvement or GPU-time delta is inferred from the CPU measurements.
+
+## Numerical image preview correction
+
+The subsequent 2026-10-21 preview slice changes only flat image presentation.
+Scalar and Vector2 previews display raw clamped numerical channels; RGB/RGBA
+retain one sRGB color transform and straight-alpha checker composition. Grunge
+Value previews reuse the canonical data texture, while RGB uses its color
+display derivative. Contextual and animated renderer previews retain their
+existing rendered-material presentation. The display key advances to
+`material-node-image-v4`; graph schema 12, procedural algorithm revision 2,
+canonical image keys and shader generator/ABI stay unchanged.
+
+The diagnosis used the existing default 1024-square Clouds sources at Seed 0,
+Scale 1, then area-reduced those exact samples to 256 square. The previous
+display transfer raised Clouds 1's mean from 0.633 to 0.815 and reduced its
+displayed standard deviation from 0.090 to 0.053. Clouds 2 changed from a raw
+mean of 0.686 and deviation of 0.074 to displayed 0.845 and 0.041. Removing the
+color transfer from numerical previews restores those raw values without
+normalizing, sharpening or changing any material data.
+
+Adobe documents both color-managed and Raw views in its
+[2D View guide](https://experienceleague.adobe.com/en/docs/substance-3d-designer/using/workspace/2d-view/2d-view),
+with mode-dependent thumbnail behavior described in
+[Color Management](https://experienceleague.adobe.com/en/docs/substance-3d-designer/using/color-management/color-management).
+Crimson's correction establishes an explicit numerical display convention;
+it does not claim identical Designer noise equations or display settings.
+
+The focused resource fixture inspects actual published RGBA16F display pixels:
+Scalar 0.25/0.5/0.75, Vector2 XY, RGB 0.5 converting to approximately 0.735357,
+RGBA checker composition, raw Grunge texture reuse, and unchanged canonical
+image values/authored graph serialization. A disposable alternating CPU
+microbenchmark (nine trials of 50 images) measured the display loop including
+RGBA allocation/copy at 0.310 versus 0.038 ms for 128 square, and 1.399 versus
+0.308 ms for 256 square. These are display-conversion timings only; they exclude
+source generation, uploads, GPU work and frame rendering. Warm previews remain
+cached and no additional source samples, passes or sampler bindings are added.
+
+The final Release build and all six selected checks passed:
+`material_graph_core`, `material_atomic_image_bake_core`,
+`grunge_generator_core`, `material_graph_editor_core`,
+`float_texture_streaming_core` and `material_preview_resource_core`.
+Material-cache preparation reused eight topologies and 32 cached stages with
+zero compiler processes and zero failures. The canonical renderer remains at
+`3a54327db2812155abc65acd8e9e9fcea5cadbff`; this correction changes host preview
+presentation only.

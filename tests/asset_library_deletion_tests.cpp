@@ -1608,6 +1608,8 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
             thumbnail.sourceWidth==GrungeTextureEdge&&thumbnail.sourceHeight==GrungeTextureEdge&&
             thumbnail.sourceFingerprint==noiseBinding.graph->sourceFingerprints[noiseSlot],
             "Grunge node preview did not reuse a mip of the canonical generated 2D image.");
+        require(thumbnail.handle.idx==noiseBinding.graph->textures[noiseSlot].idx,
+            "Grunge Value preview replaced its raw data image with a color-encoded display derivative.");
         std::unordered_map<std::string,std::uint64_t> versions;
         require(preparedGraphSourcesCoherent(*noiseBinding.graph,versions)&&versions.empty(),
             "Distinct generated recipes collided under the empty managed-image identity.");
@@ -1616,6 +1618,84 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         require(!preparedGraphSourcesCoherent(managed,versions),"Managed image revision conflicts stopped blocking incoherent publication.");
         versions.clear();for(const auto& source:managed.sources)managed.sourceFingerprints[source.slot]=11;
         require(preparedGraphSourcesCoherent(managed,versions)&&versions.size()==1,"Matching shared managed image versions failed coherent publication.");
+
+        // Numeric previews inspect the authored signal directly, while RGB
+        // previews retain one display transfer. Inspect the actual published
+        // image, rather than only a cache key or a helper's isolated equation.
+        MaterialAsset transfer;transfer.id="node-preview-transfer";transfer.name="Numeric preview transfer";
+        addMaterialNode(transfer.graph,MaterialNodeKind::Output);
+        std::array<MaterialNodeId,3> scalarNodes{};
+        const std::array scalarValues{.25f,.5f,.75f};
+        for(unsigned i=0;i<scalarNodes.size();++i) {
+            scalarNodes[i]=addMaterialNode(transfer.graph,MaterialNodeKind::Scalar).id;
+            findMaterialNode(transfer.graph,scalarNodes[i])->scalar=scalarValues[i];
+        }
+        const auto transferVector=addMaterialNode(transfer.graph,MaterialNodeKind::Vector2).id;
+        findMaterialNode(transfer.graph,transferVector)->vector2={.25f,.75f};
+        const auto transferColor=addMaterialNode(transfer.graph,MaterialNodeKind::Color).id;
+        findMaterialNode(transfer.graph,transferColor)->color={.5f,.5f,.5f,.25f};
+        canonicalizeMaterialAsset(transfer);const auto transferAuthored=serializeMaterialAsset(transfer);
+        const auto transferGraph=std::make_shared<const MaterialGraph>(transfer.graph);
+        const auto displayPixels=[&](MaterialGraphPreviewTarget target) {
+            (void)resources.takePublications();
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};PreparedTexture texture;
+            do {
+                tick();texture=library.materialNodeImagePreview(transfer.id,transferGraph,target,32);
+                if(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle)&&resources.idle())break;
+                std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            }while(std::chrono::steady_clock::now()<deadline);
+            require(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle),
+                "Numeric/color preview did not publish: "+texture.diagnostic);
+            const auto publications=resources.takePublications();
+            const auto publication=std::find_if(publications.begin(),publications.end(),[&](const auto& value) {
+                return value.kind==ResourceKind::TextureMips&&value.variant=="generated-float16-mips-v1:32x32"&&
+                    value.fingerprint==texture.sourceFingerprint;
+            });
+            require(publication!=publications.end()&&publication->id.starts_with("material-node-image-v4:"),
+                "Node display used an obsolete transfer cache identity or published no pixels.");
+            ResourceRequestOptions inspect;inspect.variant=publication->variant;inspect.retainLoader=false;
+            const auto descriptor=resources.requestDerived<streaming::TextureMipCache>(publication->id,[](std::stop_token)->ResourceLoadResult<streaming::TextureMipCache> {
+                throw std::runtime_error("Inspecting display transfer scheduled another generation.");
+            },std::move(inspect));
+            const auto snapshot=descriptor.snapshot();
+            require(descriptor.state()==ResourceState::Ready&&snapshot&&snapshot->format==ImagePixelFormat::RGBA16F&&
+                !snapshot->memory.empty()&&snapshot->memory.front().width==32&&snapshot->memory.front().height==32,
+                "Display transfer inspection lost the published float image.");
+            return snapshot->memory.front();
+        };
+        const auto displayComponent=[](const DecodedImage& image,unsigned x,unsigned y,unsigned channel) {
+            std::uint16_t value{};std::memcpy(&value,image.rgba.data()+((std::size_t(y)*image.width+x)*4+channel)*2,sizeof(value));
+            const unsigned exponent=(value>>10)&31,mantissa=value&1023;
+            require(exponent!=31,"Display transfer produced a nonfinite half value.");
+            const auto decoded=exponent?std::ldexp(1.f+mantissa/1024.f,int(exponent)-15):std::ldexp(float(mantissa),-24);
+            return value&0x8000?-decoded:decoded;
+        };
+        const auto displayNear=[&](const DecodedImage& image,unsigned x,unsigned y,unsigned channel,float expected,const char* failure) {
+            require(std::abs(displayComponent(image,x,y,channel)-expected)<.0006f,failure);
+        };
+        for(unsigned i=0;i<scalarNodes.size();++i) {
+            const auto numeric=displayPixels({scalarNodes[i],MaterialPin::Value});
+            for(unsigned channel=0;channel<3;++channel)displayNear(numeric,0,0,channel,scalarValues[i],"Scalar preview applied a color transfer to numeric data.");
+            displayNear(numeric,0,0,3,1,"Scalar preview was not opaque.");
+        }
+        const auto vectorDisplay=displayPixels({transferVector,MaterialPin::XY});
+        displayNear(vectorDisplay,0,0,0,.25f,"Vector2 X preview applied a color transfer.");
+        displayNear(vectorDisplay,0,0,1,.75f,"Vector2 Y preview applied a color transfer.");
+        displayNear(vectorDisplay,0,0,2,0,"Vector2 display changed its zero blue channel.");
+        const auto rgbDisplay=displayPixels({transferColor,MaterialPin::RGB});
+        for(unsigned channel=0;channel<3;++channel)displayNear(rgbDisplay,0,0,channel,.73535698f,"RGB preview lost its single linear-to-sRGB transfer or read scalar data.");
+        const auto rgbaDisplay=displayPixels({transferColor,MaterialPin::RGBA});
+        const auto srgb=[](float value){return value<=.0031308f?12.92f*value:1.055f*std::pow(value,1.f/2.4f)-.055f;};
+        for(unsigned channel=0;channel<3;++channel) {
+            displayNear(rgbaDisplay,0,0,channel,srgb(.5f*.25f+.18f*.75f),"RGBA preview changed linear alpha/checker composition.");
+            displayNear(rgbaDisplay,8,0,channel,srgb(.5f*.25f+.32f*.75f),"RGBA preview lost the second checker level.");
+        }
+        displayNear(rgbaDisplay,0,0,3,1,"RGBA display copy retained translucent alpha.");
+        const auto unchanged=bakeMaterialGraphImagePreview(*transferGraph,{transferColor,MaterialPin::RGBA},{},{2,2,0});
+        require(unchanged.rgba[0]==.5f&&unchanged.rgba[3]==.25f&&serializeMaterialAsset(transfer)==transferAuthored,
+            "Preview transfer modified the canonical linear image or authored graph.");
+        library.releaseMaterialNodeImagePreviews(transfer.id);
+
         // Match an ordinary authored image graph, rather than exercising only
         // builtin/generated sources: explicit UV0, a managed Color PNG, and
         // independently previewable color and grayscale processing branches.

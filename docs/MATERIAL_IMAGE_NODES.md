@@ -29,6 +29,16 @@ source-resolution CPU evaluation. Inline requests are limited to visible nodes;
 edits are debounced and the last complete image remains visible while its
 replacement prepares. Layout, selection and warm frames do not regenerate images.
 
+Flat **Scalar** previews display numerical data directly: 0.25, 0.5 and 0.75
+appear at those grayscale display values, without an sRGB brightness lift.
+This applies to procedural Value outputs, masks, height and other static scalar
+branches. Vector2 likewise displays its numerical XY channels. RGB/RGBA previews
+retain the single linear-to-sRGB color conversion and straight-alpha checker
+composition. Choosing a different output can therefore change its display
+interpretation. These are preview-only transforms; source pixels, Height,
+Roughness and saved materials are unaffected. Contextual/animated outputs keep
+their existing rendered material previews.
+
 Packed channel maps should use Texture 2D **Sample Type: Linear Data**. Color
 textures decode RGB for linear material calculations; alpha remains linear.
 Do not interpret a packed roughness or metallic map as sRGB color.

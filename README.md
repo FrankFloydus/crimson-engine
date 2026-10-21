@@ -641,3 +641,9 @@ The material graph also includes **Blur**, **Grow / Shrink**, **Mask Adjust**, *
 Procedural **Variation** changes the arrangement continuously; cyclic families such as Clouds 1 return to the same arrangement at 0 and 1. Use Seed for a different distribution. Switching Pattern applies that family's defaults while retaining Resolution. Generation uses sequential cell-oriented batches with prepared stamps and bounded row scratch; it does not lower the authored resolution or add worker threads.
 
 Static image outputs have 128 px inline previews and 256 px sidebar previews. They evaluate at authored source resolution before area reduction, preserving fine pattern coverage and the effect of nonlinear adjustments. Cached image Value outputs reuse the material's generated image; other supported branches use the same source-resolution CPU evaluation. Inline work is requested only for visible nodes, edits are debounced, and the last complete image stays visible while a replacement prepares. Warm frames reuse completed results.
+
+Flat grayscale/Value previews display numerical data directly, so 0.5 appears as
+0.5 gray rather than being brightened by a color display transform. RGB/RGBA
+previews retain sRGB color presentation. This improves visibility of procedural
+patterns without changing the values used by Height, Roughness or other material
+connections.

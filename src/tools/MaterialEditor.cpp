@@ -682,7 +682,10 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
             graphAssets.generatedTexture=[&](const MaterialNode& node) {
                 MaterialGraphEditor::TexturePresentation result;
                 try {
-                    auto texture=assets.grungePreview(node.grunge,256);
+                    auto type=MaterialValueType::Scalar;
+                    if(const auto target=graph_.previewTarget();target&&target->node==node.id)
+                        type=materialOutputType(document_.definition().graph,target->node,target->pin);
+                    auto texture=assets.grungePreview(node.grunge,256,type);
                     result.available=texture.sourceReady && bgfx::isValid(texture.handle);
                     result.width=texture.width;result.height=texture.height;result.lease=std::move(texture.lease);
                     result.diagnostic=std::move(texture.diagnostic);

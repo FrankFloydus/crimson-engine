@@ -67,9 +67,10 @@ public:
     std::string materialDiagnostic(const std::string& id) const;
     std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
     ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material,std::uint32_t textureEdge=512) const;
-    // Display-encoded view of the same canonical generated image used by graph
-    // materials. The returned GPU lease is transient; no catalog asset is made.
-    PreparedTexture grungePreview(const MaterialGrungeNode&,std::uint32_t edge=1024) const;
+    // Numeric Value views reuse the canonical data image; RGB views encode its
+    // linear color for display. The transient lease never creates an asset.
+    PreparedTexture grungePreview(const MaterialGrungeNode&,std::uint32_t edge=1024,
+        MaterialValueType type=MaterialValueType::Scalar) const;
     PreparedTexture materialNodeImagePreview(const std::string& documentId,const std::shared_ptr<const MaterialGraph>&,
         MaterialGraphPreviewTarget,unsigned edge=128) const;
     void releaseMaterialNodeImagePreviews(const std::string& documentId) const;

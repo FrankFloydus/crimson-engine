@@ -93,13 +93,19 @@ FloatImage nodePreviewMipImage(const DecodedImage& source,unsigned edge,std::sto
 }
 void encodeNodeImageDisplay(FloatImage& image,MaterialValueType type,std::stop_token stop) {
     const auto encode=[](float value){value=std::clamp(value,0.f,1.f);return value<=.0031308f?12.92f*value:1.055f*std::pow(value,1.f/2.4f)-.055f;};
+    // A numeric image is inspected as data: .5 is display gray .5. Color
+    // outputs retain the linear-color transfer, on this display copy only.
+    const bool numeric=type==MaterialValueType::Scalar||type==MaterialValueType::Vector2;
     for(unsigned y=0;y<image.height;++y) {
         if(stop.stop_requested())throw std::runtime_error("Node image preview canceled.");
         for(unsigned x=0;x<image.width;++x) {
             const auto i=(std::size_t(y)*image.width+x)*4;
             const float alpha=type==MaterialValueType::Color4?std::clamp(image.rgba[i+3],0.f,1.f):1.f;
             const float checker=((x/8+y/8)&1)?.32f:.18f;
-            for(unsigned c=0;c<3;++c)image.rgba[i+c]=encode(image.rgba[i+c]*alpha+checker*(1-alpha));
+            for(unsigned c=0;c<3;++c) {
+                const float value=image.rgba[i+c]*alpha+checker*(1-alpha);
+                image.rgba[i+c]=numeric?std::clamp(value,0.f,1.f):encode(value);
+            }
             image.rgba[i+3]=1;
         }
     }
@@ -1725,7 +1731,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         inputs.push_back({original,resolved,&source,version.fingerprint()});
     }
     if(!ready)return waiting("Loading node image inputs...");
-    const auto key="material-node-image-v3:"+std::to_string(contentHash);
+    const auto key="material-node-image-v4:"+std::to_string(contentHash);
     if(state.textureKey!=key) {
         state.pendingInputs.clear();
         if(!state.textureKey.empty())textureStreamer_->forgetGenerated(state.textureKey);
@@ -1818,10 +1824,11 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         return image;
     },edge,edge,false,edge,priority));
 }
-PreparedTexture AssetLibrary::grungePreview(const MaterialGrungeNode& settings,std::uint32_t edge) const {
+PreparedTexture AssetLibrary::grungePreview(const MaterialGrungeNode& settings,std::uint32_t edge,MaterialValueType type) const {
     if(!textureStreamer_) {PreparedTexture result;result.diagnostic="Generated texture owner is unavailable.";return result;}
     const auto key=std::to_string(grungeTextureKey(settings,GrungeTextureEdge));
-    return textureStreamer_->requestGenerated(key,[settings]{return generateGrungeTexture(settings,GrungeTextureEdge);},GrungeTextureEdge,true,std::clamp(edge,1u,GrungeTextureEdge),ResourcePriority::Selected,true);
+    const bool color=type==MaterialValueType::Color||type==MaterialValueType::Color4;
+    return textureStreamer_->requestGenerated(key,[settings]{return generateGrungeTexture(settings,GrungeTextureEdge);},GrungeTextureEdge,true,std::clamp(edge,1u,GrungeTextureEdge),ResourcePriority::Selected,color);
 }
 std::unique_ptr<MaterialGraphPrograms> AssetLibrary::createMaterialNodePreviewPrograms() const {
     return graphPrograms_?graphPrograms_->createSibling():nullptr;
