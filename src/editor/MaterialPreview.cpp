@@ -27,6 +27,7 @@ void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     drawToneMappingControl(environment_.toneMapping);
     drawToneMappingParameterControls(environment_.toneMapping,environment_.toneMappingParameters);
     drawGlowControls(environment_.glow);
+    drawSsrControls(environment_.ssr);
     ImGui::Checkbox("Show background",&showBackground_);
     if(ImGui::MenuItem("Reset environment")){environment_=EnvironmentSettings{};showBackground_=true;}
     ImGui::PopItemWidth();
@@ -148,6 +149,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     if(!renderer.antiAliasingStatus().empty())ImGui::TextWrapped("%s",renderer.antiAliasingStatus().c_str());
     if(!renderer.refractionStatus().empty())ImGui::TextWrapped("%s",renderer.refractionStatus().c_str());
+    if(!renderer.ssrStatus().empty())ImGui::TextWrapped("%s",renderer.ssrStatus().c_str());
     const auto size=ImGui::GetContentRegionAvail();
     if(size.x<=0 || size.y<=0){cancelInteraction();return;}
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;

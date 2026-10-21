@@ -1282,6 +1282,56 @@ void environmentToneMappingParametersStorageAndHistory() {
     const auto invalidId="assets/scenes/tone-parameters-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
     require(!reopened.load(invalidId),"Invalid stored curve tuning replaced a working scene.");sameRecords(before,reopened.scene().records());
 }
+void environmentSsrStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    require(resolveEnvironment(document.scene()).environment.ssr==SsrSettings{},"New scenes enabled SSR or changed its defaults.");
+    const auto id=document.createEnvironment("Reflections");const auto original=*document.scene().find(id);
+    auto edited=original;auto& reflection=edited.environment->environment.ssr;
+    reflection.enabled=true;reflection.strength=.65f;reflection.quality=SsrQuality::High;reflection.maxDistance=72;
+    reflection.depthTolerance=.075f;reflection.maxRoughness=.72f;reflection.bias=.004f;
+    const auto history=document.history().size();
+    require(document.begin("Tune reflections")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment=edited.environment;})&&document.commit(),document.status());
+    require(document.history().size()==history+1&&document.history().undoLabel()=="Tune reflections","SSR gesture did not form one Environment command.");
+    require(document.undo()&&sameEnvironment(resolveEnvironment(document.scene()),*original.environment),"SSR undo lost disabled defaults.");
+    require(document.redo()&&sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"SSR redo lost authored tuning.");
+    require(document.begin("Cancel reflections")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment->environment.ssr.strength=.1f;}),document.status());
+    document.cancel();require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled SSR gesture changed committed tuning.");
+    require(document.save("Reflections"),document.status());const auto savedText=readText(project.root/document.assetId());const auto saved=Json::parse(savedText);
+    require(saved.at("version")==23,"Optional SSR tuning changed the scene schema.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&
+        sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"SSR Save/reopen changed tuning or dirty state.");
+    document.select({id});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->environment->environment.ssr==reflection,"Environment duplication lost SSR tuning.");
+    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("ssr");
+    const auto missingId="assets/scenes/ssr-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
+    require(reopened.load(missingId)&&!reopened.dirty()&&readText(project.root/missingId)==missingText&&
+        resolveEnvironment(reopened.scene()).environment.ssr==SsrSettings{},"Missing SSR changed source bytes, dirtied the scene or enabled reflections.");
+    auto settings=edited.environment->environment;settings.ssr.enabled=false;
+    require(readEnvironmentSettings(environmentSettingsJson(settings))==settings,"Disabled SSR tuning was not retained.");
+    const auto encoded=environmentSettingsJson(settings);
+    for(const auto bad:{Json(true),Json(1),Json(nullptr),Json::array()})
+        rejects([&]{auto json=encoded;json["ssr"]=bad;(void)readEnvironmentSettings(json);});
+    for(const auto bad:{Json(1),Json("true"),Json(nullptr)})
+        rejects([&]{auto json=encoded;json["ssr"]["enabled"]=bad;(void)readEnvironmentSettings(json);});
+    for(const auto bad:{Json(-1),Json(3),Json(1.5),Json(true),Json("High"),Json(nullptr)})
+        rejects([&]{auto json=encoded;json["ssr"]["quality"]=bad;(void)readEnvironmentSettings(json);});
+    for(const auto* field:{"strength","maxDistance","depthTolerance","maxRoughness","bias"})for(const auto bad:{Json(true),Json("1"),Json(nullptr)})
+        rejects([&]{auto json=encoded;json["ssr"][field]=bad;(void)readEnvironmentSettings(json);});
+    for(const float bad:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})for(int field=0;field<5;++field) {
+        auto invalid=settings;if(field==0)invalid.ssr.strength=bad;if(field==1)invalid.ssr.maxDistance=bad;
+        if(field==2)invalid.ssr.depthTolerance=bad;if(field==3)invalid.ssr.maxRoughness=bad;if(field==4)invalid.ssr.bias=bad;
+        rejects([&]{validateEnvironmentSettings(invalid);});
+    }
+    for(int field=0;field<5;++field){auto invalid=settings;if(field==0)invalid.ssr.strength=1.01f;if(field==1)invalid.ssr.maxDistance=0;
+        if(field==2)invalid.ssr.depthTolerance=0;if(field==3)invalid.ssr.maxRoughness=1.01f;if(field==4)invalid.ssr.quality=static_cast<SsrQuality>(99);
+        rejects([&]{validateEnvironmentSettings(invalid);});}
+    auto partial=encoded;partial["ssr"]=Json::object();require(readEnvironmentSettings(partial).ssr==SsrSettings{},"Partial SSR object changed defaults.");
+    auto invalid=saved;for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["ssr"]["maxDistance"]=0;
+    const auto invalidId="assets/scenes/ssr-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+    const auto before=reopened.scene().records();require(!reopened.load(invalidId),"Invalid SSR replaced a working scene.");sameRecords(before,reopened.scene().records());
+}
 void environmentSsgiStorageAndHistory() {
     TempProject project;SceneDocument document(project.root);
     const auto defaults=resolveEnvironment(document.scene()).environment;
@@ -1652,7 +1702,7 @@ int main() {
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();glowValidationAndLevelContribution();glowSingleEffectMigration();glowBlendModeStorageAndHistory();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
-        particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
         std::cout << "Scene core checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

@@ -6,6 +6,10 @@
 #include "vs_point_shadow_instanced.h"
 #include "vs_directional_shadow_instanced.h"
 #include "fs_model.h"
+#include "fs_model_reflection.h"
+#include "fs_pbr_reflection.h"
+#include "fs_particle_reflection.h"
+#include "vs_pbr.h"
 #include "vs_pick.h"
 #include "fs_pick.h"
 #include "vs_present.h"
@@ -40,6 +44,8 @@
 #include "cs_ssao_evaluate.h"
 #include "cs_ssao_publish.h"
 #include "cs_refraction_downsample.h"
+#include "cs_ssr_color.h"
+#include "cs_ssr_depth.h"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -51,6 +57,10 @@ int main() {
         const auto pair=[&](auto& vertex,auto& fragment){check(crimson::preflightShaderPair(vertex,fragment,vertex,fragment,diagnostic),diagnostic);};
         pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_collision_overlay,cc_fs_collision_overlay); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
         pair(cc_vs_particle,cc_fs_particle);
+        pair(cc_vs_model,cc_fs_model_reflection);pair(cc_vs_model_instanced,cc_fs_model_reflection);
+        pair(cc_vs_pbr,cc_fs_pbr_reflection);pair(cc_vs_particle,cc_fs_particle_reflection);
+        check(!crimson::preflightShaderPair(cc_vs_model,cc_fs_model_reflection,cc_vs_model,cc_fs_model,diagnostic),
+            "Reflection-only bindings must not replace a complete material lighting program.");
         pair(cc_vs_smaa,cc_fs_smaa_edges);pair(cc_vs_smaa,cc_fs_smaa_weights);pair(cc_vs_smaa,cc_fs_smaa_blend);
         check(!crimson::preflightShaderPair(cc_vs_smaa,cc_fs_smaa_blend,cc_vs_smaa,cc_fs_smaa_edges,diagnostic),
             "SMAA neighborhood blending must not replace the edge-detection interface.");
@@ -74,6 +84,10 @@ int main() {
         check(crimson::preflightComputeShader(cc_cs_procedural_filter,cc_cs_procedural_filter,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_model_deform,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_model_smooth_normals,cc_cs_model_smooth_normals,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssr_color,cc_cs_ssr_color,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssr_depth,cc_cs_ssr_depth,diagnostic),diagnostic);
+        check(!crimson::preflightComputeShader(cc_cs_ssr_color,cc_cs_ssr_depth,diagnostic),
+            "SSR color reduction must not replace the conservative min/max depth hierarchy interface.");
         check(!crimson::preflightComputeShader(cc_cs_model_smooth_normals,cc_cs_model_deform,diagnostic),
             "Smooth normal reconstruction must retain its own topology/output contract.");
         check(crimson::preflightComputeShader(cc_cs_ssgi_trace,cc_cs_ssgi_trace,diagnostic),diagnostic);

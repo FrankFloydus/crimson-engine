@@ -30,13 +30,17 @@ std::shared_ptr<const PreparedEnvironment> prepareEnvironmentCpu(const std::file
     constexpr std::string_view BuiltinSource="Crimson studio environment v1;512x256;linear HDR";
     const auto source=sourceId.empty() ? std::vector<uint8_t>(BuiltinSource.begin(),BuiltinSource.end()) : readSource(projectRoot,sourceId);
     auto prepared=std::make_shared<PreparedEnvironment>();
+    // Select the radiance cube from the decoded source before deriving cache
+    // identity. The same prepared cube supplies visible sky and reflections.
+    const auto image=sourceId.empty() ? studio() : ibl::decode(source);
+    prepared->settings.specularSize=ibl::source_cube_size(image.width,image.height);
     prepared->key=ibl::cacheKey(source,prepared->settings);
     std::ostringstream name; name << std::hex << std::setfill('0') << std::setw(16) << prepared->key << ".ibl";
     const auto cache=resolveAssetPath(projectRoot,"assets/cache/ibl")/name.str();
     const bool cached=ibl::readCache(cache,prepared->key,prepared->settings,prepared->data);
     bool saved=true;
     if (!cached) {
-        prepared->data=ibl::bake(sourceId.empty() ? studio() : ibl::decode(source),prepared->settings);
+        prepared->data=ibl::bake(image,prepared->settings);
         saved=ibl::writeCache(cache,prepared->key,prepared->settings,prepared->data);
     }
     prepared->status=(sourceId.empty() ? "Studio environment" : "Environment")+std::string(cached ? " loaded from cache." : " prepared and cached.");

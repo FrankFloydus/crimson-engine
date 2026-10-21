@@ -78,6 +78,78 @@ void reflectionRoughness() {
     same(wrapA,wrapB,1e-5);
 }
 
+void sourceResolutionAndSharpRadiance() {
+    using namespace crimson;
+    require(ibl::source_cube_size(512,256)==128,"Studio source cube size changed");
+    require(ibl::source_cube_size(2048,1024)==512,"2k panorama lost its source-resolution radiance cube");
+    require(ibl::source_cube_size(4096,2048)==1024,"4k panorama lost its source-resolution radiance cube");
+    require(ibl::source_cube_size(8192,4096)==2048,"8k panorama did not reach the bounded radiance size");
+    require(ibl::source_cube_size(16384,8192)==2048,"Radiance cube size exceeded its memory bound");
+    require(ibl::source_cube_size(2049,1025)==1024,"Odd source dimensions rounded down and lost detail");
+    require(ibl::source_cube_size(1,1)==1,"Tiny source radiance size is invalid");
+    bool rejected=false;try{(void)ibl::source_cube_size(0,1024);}catch(const std::invalid_argument&){rejected=true;}
+    require(rejected,"An empty source selected a usable radiance cube");
+
+    // Eight-source-pixel checker features are several native cube pixels wide,
+    // but were reduced to about one pixel in the former fixed 128-face bake.
+    // Interior feature samples must retain source radiance rather than inherit
+    // the GGX convolution used for rougher reflection levels.
+    ibl::Image image{2048,1024,std::vector<Vec3>(2048*1024)};
+    for(uint32_t y=0;y<image.height;++y)for(uint32_t x=0;x<image.width;++x){
+        const float value=((x/8+y/8)&1) ? 4.f : 0.f;
+        image.pixels[size_t(y)*image.width+x]={value,value*.5f,value*.25f};
+    }
+    ibl::Settings settings{2,ibl::source_cube_size(image.width,image.height),2,1,8,1,16};
+    const auto baked=ibl::bake(image,settings);
+    require(baked.specular.front().size==512&&baked.specular.size()==10,"Adaptive radiance cube has the wrong native mip chain");
+    unsigned bright=0,dark=0;
+    for(uint32_t y=220;y<292;++y)for(uint32_t x=220;x<292;++x){
+        const auto direction=ibl::cubeDirection(0,(x+.5f)/512,(y+.5f)/512);
+        const double sx=(std::atan2(direction[2],direction[0])/(2*Pi)+.5)*image.width;
+        const double sy=std::acos(std::clamp(double(direction[1]),-1.,1.))/Pi*image.height;
+        const double cellX=std::fmod(sx,8.),cellY=std::fmod(sy,8.);
+        if(cellX<3||cellX>5||cellY<3||cellY>5)continue;
+        const auto expected=image.sample(direction);
+        const size_t offset=(size_t(y)*512+x)*4;
+        same({baked.specular[0].rgba[offset],baked.specular[0].rgba[offset+1],baked.specular[0].rgba[offset+2]},expected,1e-5);
+        if(expected[0]>3.99f)++bright;else if(expected[0]<.01f)++dark;
+    }
+    require(bright>50&&dark>50,"Directional checker did not exercise both sharp radiance feature values");
+    for(const auto& level:baked.specular)for(size_t i=0;i<level.rgba.size();i+=4){
+        require(std::isfinite(level.rgba[i])&&level.rgba[i]>=0&&level.rgba[i]<=4.00001f,"A filtered radiance mip became nonfinite or gained energy");
+        near(level.rgba[i+1],level.rgba[i]*.5,1e-5);near(level.rgba[i+2],level.rgba[i]*.25,1e-5);near(level.rgba[i+3],1);
+    }
+}
+
+void boundedFilterEnergyAndCubeSeams() {
+    using namespace crimson;
+    const ibl::Settings settings{2,64,4,32,256,32,8};
+    const auto uniform=ibl::bake(constant({.25f,2,17}),settings);
+    for(const auto& level:uniform.specular)for(size_t i=0;i<level.rgba.size();i+=4)
+        same({level.rgba[i],level.rgba[i+1],level.rgba[i+2]},{.25f,2,17},2e-5);
+
+    // A directional radiance ramp has a continuous convolution across cube
+    // faces. Enlarging a clamped eight-face grid would expose its first/last
+    // texel centers as unrelated values along the higher-resolution seams.
+    ibl::Image image{512,256,std::vector<Vec3>(512*256)};
+    for(uint32_t y=0;y<image.height;++y)for(uint32_t x=0;x<image.width;++x){
+        const double theta=Pi*(y+.5)/image.height,phi=2*Pi*((x+.5)/image.width-.5);
+        image.pixels[size_t(y)*image.width+x]={float(2+.9*std::sin(theta)*std::cos(phi)),
+            float(2+.9*std::cos(theta)),float(2+.9*std::sin(theta)*std::sin(phi))};
+    }
+    const auto directional=ibl::bake(image,settings);
+    const auto& level=directional.specular[1];require(level.size>settings.specularFilterSize,"Seam fixture bypassed bounded-grid reconstruction");
+    const auto texel=[&](unsigned face,unsigned x,unsigned y){const size_t offset=((size_t(face)*level.size+y)*level.size+x)*4;
+        return Vec3{level.rgba[offset],level.rgba[offset+1],level.rgba[offset+2]};};
+    const unsigned last=level.size-1;
+    for(unsigned p=1;p<last;++p){
+        same(texel(0,0,p),texel(4,last,p),.055);
+        same(texel(0,last,p),texel(5,0,p),.055);
+        same(texel(4,p,0),texel(2,p,last),.055);
+        same(texel(0,p,0),texel(2,last,last-p),.055);
+    }
+}
+
 double sphericalEnergy(const crimson::ibl::Image& image,size_t channel) {
     double energy=0;
     for (uint32_t y=0;y<image.height;++y) {
@@ -239,6 +311,8 @@ void cacheIdentityAndIntegrity() {
     require(key!=crimson::ibl::cacheKey(source,settings,crimson::ibl::PreprocessVersion,crimson::ibl::BrdfVersion+1),"BRDF version missing from cache identity");
     auto revised=settings; ++revised.specularSamples;
     require(key!=crimson::ibl::cacheKey(source,revised),"Sampling settings missing from cache identity");
+    revised=settings;revised.specularFilterSize/=2;
+    require(key!=crimson::ibl::cacheKey(source,revised),"Bounded GGX grid missing from cache identity");
     const auto directory=std::filesystem::temp_directory_path()/("crimson-ibl-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove_all(path,error); } } cleanup{directory};
     const auto path=directory/"test.ibl";
@@ -247,6 +321,9 @@ void cacheIdentityAndIntegrity() {
     crimson::ibl::Bake restored;
     require(crimson::ibl::readCache(path,key,settings,restored),"Cache round trip failed");
     require(restored.diffuse.rgba==expected.diffuse.rgba && restored.brdf==expected.brdf,"Cache changed derived float values");
+    require(restored.specular.size()==expected.specular.size(),"Cache changed the radiance mip count");
+    for(size_t i=0;i<expected.specular.size();++i)
+        require(restored.specular[i].size==expected.specular[i].size&&restored.specular[i].rgba==expected.specular[i].rgba,"Cache changed sharp or GGX radiance values");
     require(!crimson::ibl::readCache(path,key+1,settings,restored),"Stale cache identity accepted");
     {
         std::fstream file(path,std::ios::binary|std::ios::in|std::ios::out);
@@ -270,6 +347,8 @@ int main() {
     run("managed LDR sRGB decoding and HDR radiance preservation",sourceColorDecoding);
     run("constant radiance normalization and full mip chain",constantNormalization);
     run("roughness reflection broadening and equirectangular wrap",reflectionRoughness);
+    run("source-adaptive cube sizes and unblurred native radiance features",sourceResolutionAndSharpRadiance);
+    run("bounded GGX grid constant energy and cross-face reconstruction",boundedFilterEnergyAndCubeSeams);
     run("spherical source mip energy, odd sizes, poles and seam continuity",sourcePyramidConservation);
     run("concentrated HDR emitter stays one lobe at production sample count",concentratedHdrEmitter);
     run("correlated Smith LUT versus independent BRDF quadrature",correlatedBrdfReference);

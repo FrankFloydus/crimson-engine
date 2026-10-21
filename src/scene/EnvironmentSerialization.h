@@ -19,7 +19,7 @@ inline void validateEnvironmentSettings(const EnvironmentSettings& value) {
         throw std::runtime_error("Environment intensity, rotation, tone mapping or Glow is invalid.");
     if (value.source!=EnvironmentSource::Hdri && value.source!=EnvironmentSource::ProceduralSky)
         throw std::runtime_error("Environment source is invalid.");
-    if (!validSsgiSettings(value.ssgi) || !validSsaoSettings(value.ssao))
+    if (!validSsgiSettings(value.ssgi) || !validSsaoSettings(value.ssao) || !validSsrSettings(value.ssr))
         throw std::runtime_error("Screen-space lighting tuning is invalid.");
     const auto& ambient=value.ambientLight;
     if (ambient.source!=AmbientLightSource::Disabled && ambient.source!=AmbientLightSource::Color && ambient.source!=AmbientLightSource::Sky)
@@ -133,6 +133,22 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
             if (source.contains(name) && !source.at(name).is_number())throw std::runtime_error("Screen-space ambient occlusion values must be numbers.");
         ao.enabled=source.value("enabled",ao.enabled);ao.strength=source.value("strength",ao.strength);ao.radius=source.value("radius",ao.radius);
         ao.quality=static_cast<SsaoQuality>(quality(source,static_cast<int>(ao.quality)));
+    }
+    if (json.contains("ssr")) {
+        const auto& source=json.at("ssr");auto& reflection=value.ssr;
+        if (!source.is_object())throw std::runtime_error("Screen-space reflection settings must be an object.");
+        if (source.contains("enabled") && !source.at("enabled").is_boolean())
+            throw std::runtime_error("Screen-space reflection enabled must be a boolean.");
+        for (const auto* name:{"strength","maxDistance","depthTolerance","maxRoughness","bias"})
+            if (source.contains(name) && !source.at(name).is_number())
+                throw std::runtime_error("Screen-space reflection values must be numbers.");
+        reflection.enabled=source.value("enabled",reflection.enabled);
+        reflection.strength=source.value("strength",reflection.strength);
+        reflection.quality=static_cast<SsrQuality>(quality(source,static_cast<int>(reflection.quality)));
+        reflection.maxDistance=source.value("maxDistance",reflection.maxDistance);
+        reflection.depthTolerance=source.value("depthTolerance",reflection.depthTolerance);
+        reflection.maxRoughness=source.value("maxRoughness",reflection.maxRoughness);
+        reflection.bias=source.value("bias",reflection.bias);
     }
     if (json.contains("ambientLight")) {
         const auto& source=json.at("ambientLight");auto& ambient=value.ambientLight;
@@ -298,6 +314,9 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
             {"denoiseRadius",value.ssgi.denoiseRadius},{"denoiseStrength",value.ssgi.denoiseStrength},{"radianceClamp",value.ssgi.radianceClamp}}},
         {"ssao",{{"enabled",value.ssao.enabled},{"strength",value.ssao.strength},{"radius",value.ssao.radius},
             {"quality",static_cast<int>(value.ssao.quality)}}},
+        {"ssr",{{"enabled",value.ssr.enabled},{"strength",value.ssr.strength},{"quality",static_cast<int>(value.ssr.quality)},
+            {"maxDistance",value.ssr.maxDistance},{"depthTolerance",value.ssr.depthTolerance},
+            {"maxRoughness",value.ssr.maxRoughness},{"bias",value.ssr.bias}}},
         {"ambientLight",{{"source",static_cast<int>(value.ambientLight.source)},{"color",value.ambientLight.color},
             {"skyContribution",value.ambientLight.skyContribution},{"energy",value.ambientLight.energy}}},
         {"glow",{{"source","Scene"},{"enabled",value.glow.enabled},{"strength",value.glow.strength},

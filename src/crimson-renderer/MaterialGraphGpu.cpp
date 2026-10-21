@@ -106,7 +106,7 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
         "Hardware tessellation requires Direct3D 12; this backend renders the base mesh.":"";
     const auto current=[&]{return entry.current&&entry.currentEpoch==(*owner.sourceEpoch);};
     const auto pending=[&](bool active) {return MaterialGraphProgramResult{entry.current,current()?capabilityDiagnostic:"Compiling material graph...",current(),active};};
-    const auto interactivePass=[](const auto& variant){return variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle||variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission;};
+    const auto interactivePass=[](const auto& variant){return variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle||variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission||variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;};
     try {
         const auto* caps=bgfx::getCaps();
         if(!caps || caps->limits.maxTextureSamplers<16)throw std::runtime_error("Material graphs require sixteen texture sampler stages.");
@@ -199,11 +199,13 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
             queue(*batch,background?ResourcePriority::Background:priority);entry.batch=std::move(batch);return true;
         };
         if(entry.epoch!=(*owner.sourceEpoch)) {
-            if(shader.nodePreview ? (shader.variants.size()!=1 || shader.variants.front().pass!=MaterialGraphPass::Model) : shader.variants.size()!=(shader.refraction?7u:5u))
+            if(shader.nodePreview ? (shader.variants.size()!=1 || shader.variants.front().pass!=MaterialGraphPass::Model) : shader.variants.size()!=5u+(shader.refraction?2u:0u)+(shader.reflection?2u:0u))
                 throw std::runtime_error("Material graph pass bundle does not match its material/preview contract.");
             if(!shader.nodePreview) {
-                constexpr std::array expected{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle,
-                    MaterialGraphPass::DirectionalShadow,MaterialGraphPass::ModelTransmission,MaterialGraphPass::ParticleTransmission};
+                std::vector expected{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle,
+                    MaterialGraphPass::DirectionalShadow};
+                if(shader.refraction){expected.push_back(MaterialGraphPass::ModelTransmission);expected.push_back(MaterialGraphPass::ParticleTransmission);}
+                if(shader.reflection){expected.push_back(MaterialGraphPass::ModelReflection);expected.push_back(MaterialGraphPass::ParticleReflection);}
                 for(std::size_t index=0;index<shader.variants.size();++index)
                     if(shader.variants[index].pass!=expected[index])throw std::runtime_error("Material graph contains missing, repeated or reordered program variants.");
             }

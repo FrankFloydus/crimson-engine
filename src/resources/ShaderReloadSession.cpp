@@ -75,7 +75,11 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,18> definitions{{
+    constexpr std::array<Pair,22> definitions{{
+        {RendererProgram::ModelReflection,"vs_model","fs_model_reflection"},
+        {RendererProgram::InstancedReflection,"vs_model_instanced","fs_model_reflection"},
+        {RendererProgram::SphereReflection,"vs_pbr","fs_pbr_reflection"},
+        {RendererProgram::ParticleReflection,"vs_particle","fs_particle_reflection"},
         {RendererProgram::SmaaEdges,"vs_smaa","fs_smaa_edges"},
         {RendererProgram::SmaaWeights,"vs_smaa","fs_smaa_weights"},
         {RendererProgram::SmaaBlend,"vs_smaa","fs_smaa_blend"},
@@ -95,6 +99,8 @@ void ShaderReloadSession::pump() {
     pairs.push_back({RendererProgram::GlowDownsample,{},ready.at("cs_glow_downsample")->bytes});
     pairs.push_back({RendererProgram::GlowUpsample,{},ready.at("cs_glow_upsample")->bytes});
     pairs.push_back({RendererProgram::ModelSmoothNormals,{},ready.at("cs_model_smooth_normals")->bytes});
+    pairs.push_back({RendererProgram::SsrColor,{},ready.at("cs_ssr_color")->bytes});
+    pairs.push_back({RendererProgram::SsrDepth,{},ready.at("cs_ssr_depth")->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }

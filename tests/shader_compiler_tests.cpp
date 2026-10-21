@@ -308,6 +308,8 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     std::filesystem::copy(source,shadowSource,std::filesystem::copy_options::recursive);
     const ShaderCompileConfig shadows{compiler,shadowSource,include,temp.root/"shadow cache"};
     const auto names=engineShaderNames();
+    for(const auto name:{"cs_ssr_color","cs_ssr_depth","fs_model_reflection","fs_pbr_reflection","fs_particle_reflection"})
+        require(std::find(names.begin(),names.end(),name)!=names.end(),"SSR programs are absent from atomic reload discovery.");
     require(std::find(names.begin(),names.end(),"vs_point_shadow")!=names.end() &&
         std::find(names.begin(),names.end(),"fs_point_shadow")!=names.end(),"Shadow stages are absent from atomic reload discovery.");
     const auto vertex=compileShader(shadows,"vs_point_shadow"),fragment=compileShader(shadows,"fs_point_shadow");
@@ -327,6 +329,7 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     const auto modelVertex=compileShader(shadows,"vs_model"),modelFragment=compileShader(shadows,"fs_model");
     const auto dependency=[](const auto& compiled,const char* name){return std::any_of(compiled.dependencies.begin(),compiled.dependencies.end(),[&](const auto& path){return path.filename()==name;});};
     require(dependency(modelFragment,"material_mapping.sh") && dependency(fragment,"material_mapping.sh"),"Shared material mapping was absent from color/caster reload dependencies.");
+    require(dependency(modelFragment,"model_material_normal.sh"),"Shared model normal evaluation was absent from color reload dependencies.");
     require(dependency(modelFragment,"directional_shadow.sh"),"Directional receiver changes do not invalidate shader reload.");
     require(dependency(modelFragment,"point_light_record.sh"),"Point record layout changes do not invalidate fragment shader reload.");
     {
@@ -421,18 +424,26 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     const auto warmGlow=compileShader(shadows,"cs_glow_downsample");
     require(warmGlow.bytes==glowFragment.bytes && warmGlow.fingerprint==glowFragment.fingerprint,
         "Warm Glow shader cache changed code or fingerprint.");
-    auto mapping=read(shadowSource/"material_mapping.sh");const auto originalMapping=mapping;
-    auto modelSource=read(shadowSource/"fs_model.sc");const auto originalModelSource=modelSource;
     const std::string originalName="u_materialUvOffset",replacementName="u_rejectedMaterialOffset";
     // Rename declaration and consumers so compilation succeeds and this tests
     // renderer uniform-contract rejection, rather than undefined shader syntax.
-    for(auto* text:{&mapping,&modelSource})
-        for(std::size_t pos=0;(pos=text->find(originalName,pos))!=std::string::npos;pos+=replacementName.size())text->replace(pos,originalName.size(),replacementName);
-    write(shadowSource/"material_mapping.sh",mapping);write(shadowSource/"fs_model.sc",modelSource);
+    // Follow the compiled dependency closure: normal evaluation is shared with
+    // the reflection pass, and further helper extraction must not leave a
+    // consumer referring to the intentionally renamed fixture declaration.
+    std::vector<std::pair<std::filesystem::path,std::string>> originalMappingSources;
+    for(const auto& path:modelFragment.dependencies) {
+        const auto relative=std::filesystem::relative(path,shadowSource);
+        if(relative.empty()||relative.is_absolute()||*relative.begin()==".."||(path.extension()!=".sc"&&path.extension()!=".sh"))continue;
+        const auto original=read(path);auto renamed=original;
+        if(renamed.find(originalName)==std::string::npos)continue;
+        for(std::size_t pos=0;(pos=renamed.find(originalName,pos))!=std::string::npos;pos+=replacementName.size())renamed.replace(pos,originalName.size(),replacementName);
+        originalMappingSources.emplace_back(path,original);write(path,renamed);
+    }
+    require(std::any_of(originalMappingSources.begin(),originalMappingSources.end(),[](const auto& item){return item.first.filename()=="material_mapping.sh";}),
+        "Mapping uniform rejection fixture did not rename its declaration.");
     const auto wrongMapping=compileShader(shadows,"fs_model");
     require(!preflightShaderPair(modelVertex.bytes,wrongMapping.bytes,modelVertex.bytes,modelFragment.bytes,diagnostic),"Changing material mapping uniforms escaped renderer contract validation.");
-    write(shadowSource/"material_mapping.sh",originalMapping);
-    write(shadowSource/"fs_model.sc",originalModelSource);
+    for(const auto& [path,original]:originalMappingSources)write(path,original);
     auto receiver=read(shadowSource/"point_shadow.sh");const auto receiverSampler=receiver.find("SAMPLER2DSHADOW(s_pointShadow, 8)");
     require(receiverSampler!=std::string::npos,"Receiver fixture cannot find shadow sampler eight.");
     receiver.replace(receiverSampler,std::string("SAMPLER2DSHADOW(s_pointShadow, 8)").size(),"SAMPLER2DSHADOW(s_pointShadow, 9)");

@@ -686,6 +686,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             drawToneMappingControl(preview_.environment.toneMapping);
             drawToneMappingParameterControls(preview_.environment.toneMapping,preview_.environment.toneMappingParameters);
             drawGlowControls(preview_.environment.glow);
+            drawSsrControls(preview_.environment.ssr);
         });
         switch(action) {
         case DocumentEditorAction::Save:save(assets);break;

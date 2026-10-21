@@ -19,11 +19,11 @@ namespace crimson {
 namespace {
 std::span<const std::uint8_t> embeddedVertex(MaterialGraphPass pass) {
     switch(pass){
-    case MaterialGraphPass::Model:case MaterialGraphPass::ModelTransmission:return cc_vs_model;
+    case MaterialGraphPass::Model:case MaterialGraphPass::ModelTransmission:case MaterialGraphPass::ModelReflection:return cc_vs_model;
     case MaterialGraphPass::Picking:return cc_vs_pick;
     case MaterialGraphPass::PointShadow:return cc_vs_point_shadow;
     case MaterialGraphPass::DirectionalShadow:return cc_vs_directional_shadow;
-    case MaterialGraphPass::Particle:case MaterialGraphPass::ParticleTransmission:return cc_vs_particle;
+    case MaterialGraphPass::Particle:case MaterialGraphPass::ParticleTransmission:case MaterialGraphPass::ParticleReflection:return cc_vs_particle;
     }
     throw std::runtime_error("Unknown material pass.");
 }

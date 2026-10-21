@@ -337,6 +337,31 @@ bool drawToneMappingParameterControls(ToneMapping mode,ToneMappingParameters& pa
     return changed;
 }
 
+bool drawSsrControls(SsrSettings& reflection,const SsrControlEdit& edit) {
+    bool changed=false;
+    const auto field=[&](SsrControl control,bool updated){changed|=updated;if(edit)edit(control,updated);};
+    ImGui::PushID("SSR");
+    if(ImGui::CollapsingHeader("Reflections")) {
+        field(SsrControl::Enabled,ImGui::Checkbox("SSR",&reflection.enabled));
+        ImGui::BeginDisabled(!reflection.enabled);
+        field(SsrControl::Strength,ImGui::SliderFloat("Strength",&reflection.strength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        int quality=static_cast<int>(reflection.quality);const char* qualities[]{"Low","Medium","High"};
+        const bool qualityChanged=ImGui::Combo("Quality",&quality,qualities,3);
+        if(qualityChanged)reflection.quality=static_cast<SsrQuality>(quality);
+        field(SsrControl::Quality,qualityChanged);
+        field(SsrControl::Distance,ImGui::DragFloat("Max Distance (m)",&reflection.maxDistance,.1f,.001f,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Maximum reflected ray distance. Only visible opaque surfaces can supply reflections.");
+        field(SsrControl::Roughness,ImGui::SliderFloat("Max Roughness",&reflection.maxRoughness,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(SsrControl::Tolerance,ImGui::DragFloat("Depth Tolerance (m)",&reflection.depthTolerance,.001f,.000001f,10,"%.4f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Depth agreement required at a reflected hit. Larger values can leak through thin geometry.");
+        field(SsrControl::Bias,ImGui::DragFloat("Ray Bias (m)",&reflection.bias,.0001f,0,1,"%.4f",ImGuiSliderFlags_AlwaysClamp));
+        ImGui::EndDisabled();
+    }
+    ImGui::PopID();return changed;
+}
+
 bool drawGlowControls(GlowSettings& glow, const GlowControlEdit& edit) {
     bool changed=false;
     const auto field=[&](GlowControl control,bool updated) {

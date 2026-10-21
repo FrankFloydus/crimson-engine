@@ -18,6 +18,7 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -43,11 +44,27 @@ std::string read(const fs::path& file) {
     return {std::istreambuf_iterator<char>(input),{}};
 }
 
-template<class Predicate> void waitFor(Predicate ready,const char* diagnostic) {
-    const auto deadline=std::chrono::steady_clock::now()+90s;
+template<class Predicate> void waitFor(Predicate ready,const char* diagnostic,std::chrono::seconds timeout=90s) {
+    const auto deadline=std::chrono::steady_clock::now()+timeout;
     while(!ready()) {
         if(std::chrono::steady_clock::now()>=deadline)throw std::runtime_error(diagnostic);
         std::this_thread::sleep_for(2ms);
+    }
+}
+
+template<class Predicate> void waitForCompilation(ResourceManager& resources,Predicate ready,const char* phase,std::chrono::seconds timeout=180s) {
+    const auto started=std::chrono::steady_clock::now();
+    const auto before=shaderCompilerMetrics();const auto initial=resources.stats();
+    const auto timeoutMessage=std::string("Timed out waiting for ")+phase+".";
+    try {waitFor(std::move(ready),timeoutMessage.c_str(),timeout);}
+    catch(const std::exception& error) {
+        const auto stats=resources.stats();const auto metrics=shaderCompilerMetrics();
+        throw std::runtime_error(std::string(error.what())+" [phase="+phase+
+            ", elapsedMs="+std::to_string(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count())+
+            ", queued="+std::to_string(stats.queued)+", running="+std::to_string(stats.running)+
+            ", completedLoads="+std::to_string(stats.loads-initial.loads)+", failedLoads="+std::to_string(stats.failures-initial.failures)+
+            ", compilerInvocations="+std::to_string(metrics.compilerInvocations-before.compilerInvocations)+
+            ", completedCompilerMs="+std::to_string((metrics.compilerNanoseconds-before.compilerNanoseconds)/1e6)+"]");
     }
 }
 
@@ -119,15 +136,22 @@ void preparedSourceCoherenceChecks() {
         "An unavailable managed fingerprint was treated as a conflicting revision.");
 }
 
-MaterialGraphProgramResult waitForResult(ResourceManager& resources,MaterialGraphPrograms& programs,const MaterialGraphShader& shader,bool optimized=true) {
+MaterialGraphProgramResult waitForResult(ResourceManager& resources,MaterialGraphPrograms& programs,const MaterialGraphShader& shader,bool optimized=true,
+    const char* phase="graph shader publication",std::chrono::seconds timeout=180s) {
     MaterialGraphProgramResult result;
-    waitFor([&] {
+    try {waitForCompilation(resources,[&] {
         resources.pump();result=programs.request(shader);bgfx::frame();
         if(optimized&&result.current&&!result.programs->optimized&&!result.diagnostic.empty())
             throw std::runtime_error(result.diagnostic);
         return (result.current&&(!optimized||result.programs->optimized)) ||
             (!result.current&&result.diagnostic!="Compiling material graph...");
-    },"Timed out waiting for graph shader publication.");
+    },phase,timeout);}
+    catch(const std::exception& error) {
+        throw std::runtime_error(std::string(error.what())+" [variants="+std::to_string(shader.variants.size())+
+            ", requestedOptimized="+std::to_string(optimized)+", current="+std::to_string(result.current)+
+            ", compiling="+std::to_string(result.compiling)+", publishedOptimized="+
+            std::to_string(result.programs&&result.programs->optimized)+", status="+result.diagnostic+"]");
+    }
     return result;
 }
 
@@ -138,6 +162,8 @@ void requireComplete(const MaterialGraphProgramResult& result) {
     for(std::size_t pass=0;pass<5;++pass)check(bgfx::isValid(result.programs->programs[pass]),"A partial graph program bundle was published.");
     check(bgfx::isValid(result.programs->programs[5])==bgfx::isValid(result.programs->programs[6]),
         "A partial optional transmission pair was published.");
+    check(bgfx::isValid(result.programs->programs[7])==bgfx::isValid(result.programs->programs[8]),
+        "A partial optional reflection pair was published.");
     for(const auto handle:result.programs->samplers)check(bgfx::isValid(handle),"Published graph has an incomplete sampler set.");
 }
 
@@ -206,9 +232,9 @@ void profileEngine(const fs::path& project,const fs::path& rendererBin,const fs:
             },std::move(options)));
         }
         const auto requestMs=milliseconds(requestsStart);
-        waitFor([&]{resources.pump();return std::all_of(jobs.begin(),jobs.end(),[](const auto& job) {
+        waitForCompilation(resources,[&]{resources.pump();return std::all_of(jobs.begin(),jobs.end(),[](const auto& job) {
             return job.state()==ResourceState::Ready||job.state()==ResourceState::Failed;
-        });},"Timed out profiling the actual engine shader startup batch.");
+        });},"actual engine shader startup batch");
         Json stages=Json::array();
         for(std::size_t index=0;index<jobs.size();++index)stages.push_back({{"name",names[index]},
             {"ready",jobs[index].state()==ResourceState::Ready},{"diagnostic",jobs[index].diagnostic()},{"loaderMs",times[index]->load()}});
@@ -407,10 +433,10 @@ void profileProject(const fs::path& project,const fs::path& rendererBin,const fs
                     return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};
                 },options));
             }
-            waitFor([&]{fullResources.pump();return std::all_of(fullJobs.begin(),fullJobs.end(),[](const auto& job) {
+            waitForCompilation(fullResources,[&]{fullResources.pump();return std::all_of(fullJobs.begin(),fullJobs.end(),[](const auto& job) {
                 if(job.state()==ResourceState::Failed)throw std::runtime_error(job.diagnostic());
                 return job.state()==ResourceState::Ready;
-            });},"Optimized-only edit profile did not finish.");
+            });},"optimized-only edit profile");
             MaterialGraphPrograms fullPrograms(fullResources,fullConfig);const auto full=fullPrograms.request(shader);requireComplete(full);
             check(full.programs->optimized,"Optimized-only edit profile did not publish its full-quality bundle.");
             editReport["optimizedOnlyFirstCurrent"]={{"elapsedMs",milliseconds(fullStart)},{"metrics",metricDifference(fullBefore)}};
@@ -418,14 +444,14 @@ void profileProject(const fs::path& project,const fs::path& rendererBin,const fs
         }
         ResourceManager resources;MaterialGraphPrograms programs(resources,editConfig);
         editBefore=shaderCompilerMetrics();editStart=Clock::now();
-        auto first=waitForResult(resources,programs,shader,false);requireComplete(first);
+        auto first=waitForResult(resources,programs,shader,false,"profile first interactive generation");requireComplete(first);
         editReport["firstCurrent"]={{"elapsedMs",milliseconds(editStart)},{"optimized",first.programs->optimized},{"metrics",metricDifference(editBefore)}};
         findMaterialNode(material.graph,factor)->scalar=.9f;const auto parameterShader=generateMaterialGraphShader(material);
         const auto parameterBefore=shaderCompilerMetrics();const auto parameterStart=Clock::now();
         const auto parameterResult=programs.request(parameterShader,ResourcePriority::Selected);
         check(parameterResult.current&&parameterResult.programs==first.programs,"Parameter edit did not reuse the current interactive packet.");
         editReport["parameterEdit"]={{"elapsedMs",milliseconds(parameterStart)},{"samePrograms",parameterResult.programs==first.programs},{"metrics",metricDifference(parameterBefore)}};
-        auto optimized=waitForResult(resources,programs,shader);requireComplete(optimized);
+        auto optimized=waitForResult(resources,programs,shader,true,"profile optimized generation");requireComplete(optimized);
         check(optimized.programs->optimized,"Project edit profiling did not finish background optimization.");
         editReport["optimizedCurrent"]={{"elapsedMs",milliseconds(editStart)},{"metrics",metricDifference(editBefore)}};
         const auto warmBefore=shaderCompilerMetrics();const auto warmStart=Clock::now();const auto warmStats=resources.stats();
@@ -450,11 +476,11 @@ void unsupportedHeightChecks(const fs::path& compiler,const fs::path& sources,co
     ResourceManager resources;
     {
         MaterialGraphPrograms programs(resources,config);MaterialGraphProgramResult result;
-        waitFor([&] {
+        waitForCompilation(resources,[&] {
             resources.pump();result=programs.request(shader);bgfx::frame();
             if(!result.current&&!result.compiling)throw std::runtime_error(result.diagnostic);
             return result.current;
-        },"Unsupported-backend height fallback did not publish.");
+        },"unsupported-backend height fallback publication");
         requireComplete(result);
         check(result.diagnostic.find("requires Direct3D 12")!=std::string::npos,
             "Unsupported hardware tessellation silently rendered an undisplaced material.");
@@ -518,7 +544,7 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
             check(!pending.current&&!pending.programs&&pending.compiling&&pending.diagnostic=="Compiling material graph...","Cold graph request did not remain pending until worker publication.");
 
             // Finish old CPU jobs but deliberately do not pump their completions.
-            waitFor([&]{const auto stats=resources.stats();return stats.queued==0&&stats.running==0;},"Initial shader compilation did not finish.");
+            waitForCompilation(resources,[&]{const auto stats=resources.stats();return stats.queued==0&&stats.running==0;},"initial cold shader CPU batch");
             auto gate=std::make_shared<WorkerGate>();
             ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;
             auto blocker=resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"publication-worker-gate"},[gate](std::stop_token stop) {
@@ -539,7 +565,16 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
             check(!pending.current&&!pending.programs,"A completed job from the previous source epoch published while its replacement was pending.");
             check(programs.residentBytes()==0,"Rejected stale jobs allocated a GPU program bundle.");
             gate->released=true;
-            auto first=waitForResult(resources,programs,shader);requireComplete(first);
+            auto first=waitForResult(resources,programs,shader,true,"initial complete optimized generation");requireComplete(first);
+            for(const auto pass:{MaterialGraphPass::ModelReflection,MaterialGraphPass::ParticleReflection})
+                check(bgfx::isValid(first.programs->programs[static_cast<std::size_t>(pass)]),
+                    "A Lit material published before its complete reflection pair was available.");
+            {
+                auto incomplete=shader;incomplete.topologyKey+="-missing-reflection";incomplete.variants.pop_back();
+                const auto rejected=programs.request(incomplete);
+                check(!rejected.current&&!rejected.compiling&&!rejected.programs&&!rejected.diagnostic.empty(),
+                    "Publication accepted a material missing one reflection receiver variant.");
+            }
             check(programs.residentBytes()==first.programs->bytes,"Initial graph program bytes were not counted once.");
             {
                 // A new owner models editor reopening. Hold the only worker so
@@ -576,14 +611,14 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                 const auto structuralPending=structuralOwner->request(structuralShader,ResourcePriority::Selected);
                 check(!structuralPending.current&&structuralPending.compiling&&!structuralPending.programs,
                     "A partially cached structural edit published an incomplete program generation.");
-                check(resources.stats().queued==queuedBefore+2,"Surface edit queued unchanged vertex, picking or shadow shaders.");
+                check(resources.stats().queued==queuedBefore+4,"Surface edit queued unchanged vertex, picking or shadow shaders.");
                 const auto structuralAfter=shaderCompilerMetrics();
-                check(structuralAfter.cacheOnlyHits==structuralBefore.cacheOnlyHits+8,
+                check(structuralAfter.cacheOnlyHits==structuralBefore.cacheOnlyHits+10,
                     "Surface edit failed to reuse cached vertices and its three unchanged coverage passes.");
-                check(structuralAfter.dependencyRequests==structuralBefore.dependencyRequests+12,
+                check(structuralAfter.dependencyRequests==structuralBefore.dependencyRequests+18,
                     "Surface edit repeated dependency walks after its cache lookup.");
                 warmGate->released=true;
-                const auto interactive=waitForResult(resources,*structuralOwner,structuralShader,false);requireComplete(interactive);
+                const auto interactive=waitForResult(resources,*structuralOwner,structuralShader,false,"structural edit interactive generation");requireComplete(interactive);
                 check(!interactive.programs->optimized,"A new surface skipped its complete interactive generation.");
                 auto parameters=structural;findMaterialNode(parameters.graph,factor)->scalar=.6f;
                 const auto parameterShader=generateMaterialGraphShader(parameters);
@@ -593,7 +628,7 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                     resources.stats().queued==parameterStats.queued&&shaderCompilerMetrics().compilerInvocations==parameterMetrics.compilerInvocations,
                     "A parameter edit replaced or recompiled an interactive complete generation.");
                 {
-                    waitFor([&]{resources.pump();return resources.idle();},"Interactive shader jobs did not retire before the optimization gate.");
+                    waitForCompilation(resources,[&]{resources.pump();return resources.idle();},"interactive shader drain before optimization gate");
                     auto optimizeGate=std::make_shared<WorkerGate>();
                     auto optimizeBlocker=resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"optimization-worker-gate"},[optimizeGate](std::stop_token stop) {
                         optimizeGate->entered=true;while(!optimizeGate->released&&!stop.stop_requested())std::this_thread::sleep_for(1ms);
@@ -606,7 +641,7 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                         "A settled interactive generation did not queue background optimization.");
                     const auto optimizeQueued=resources.stats().queued;
                     const auto secondOptimizing=secondOwner->request(structuralShader);
-                    check(secondOptimizing.current&&secondOptimizing.compiling&&optimizeQueued==2&&resources.stats().queued==optimizeQueued,
+                    check(secondOptimizing.current&&secondOptimizing.compiling&&optimizeQueued==4&&resources.stats().queued==optimizeQueued,
                         "Sibling owners duplicated the same expensive optimized shader inputs.");
                     secondOwner.reset();
                     auto superseding=structural;
@@ -624,12 +659,12 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                     check(canceled.current&&!canceled.compiling&&canceled.programs==interactive.programs,
                         "Interrupting background optimization discarded or blocked the last complete interactive generation.");
                     optimizeGate->released=true;
-                    const auto foregroundReady=waitForResult(resources,*foregroundOwner,supersedingShader,false);requireComplete(foregroundReady);
-                    waitFor([&]{resources.pump();return resources.idle();},"Canceled background shader work did not drain.");
-                    check(shaderCompilerMetrics().compilerInvocations==cancellationMetrics.compilerInvocations+2,
-                        "Superseded background optimization launched shaderc ahead of the two foreground fragment jobs.");
+                    const auto foregroundReady=waitForResult(resources,*foregroundOwner,supersedingShader,false,"superseding foreground generation");requireComplete(foregroundReady);
+                    waitForCompilation(resources,[&]{resources.pump();return resources.idle();},"canceled background shader drain");
+                    check(shaderCompilerMetrics().compilerInvocations==cancellationMetrics.compilerInvocations+4,
+                        "Superseded background optimization launched shaderc ahead of the four foreground color/reflection jobs.");
                 }
-                const auto updated=waitForResult(resources,*structuralOwner,structuralShader);requireComplete(updated);
+                const auto updated=waitForResult(resources,*structuralOwner,structuralShader,true,"structural edit optimized generation");requireComplete(updated);
                 check(updated.programs->optimized&&updated.programs!=interactive.programs&&updated.programs->signature!=interactive.programs->signature,
                     "Background optimization did not atomically replace the complete interactive generation.");
                 for(const auto pass:{MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::DirectionalShadow})
@@ -640,29 +675,29 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                 check(optimizedWarm.current&&optimizedWarm.programs->optimized&&!optimizedWarm.compiling&&
                     resources.stats().queued==optimizedBefore.queued&&shaderCompilerMetrics().compilerInvocations==optimizedMetrics.compilerInvocations,
                     "Warm material reopening preferred an interactive tier or queued optimization despite its complete optimized cache.");
-                waitFor([&]{resources.pump();return resources.idle();},"Warm-start test worker did not finish.");
+                waitForCompilation(resources,[&]{resources.pump();return resources.idle();},"warm-start shader worker drain");
             }
             {
                 auto previewOwner=programs.createSibling();
                 const auto texture=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Texture2D;});
                 const auto previewShader=generateMaterialGraphPreviewShader(material,{texture->id,MaterialPin::RGB});
-                auto preview=waitForResult(resources,*previewOwner,previewShader);
+                auto preview=waitForResult(resources,*previewOwner,previewShader,true,"independent node preview publication");
                 check(preview.current && preview.programs && bgfx::isValid(preview.programs->programs[0]),"Independent node preview did not publish a Model program.");
                 check(!bgfx::isValid(preview.programs->programs[1]),"Node preview allocated ordinary material passes.");
                 const auto revision=previewOwner->revision();programs.changed(changedFiles);
                 check(previewOwner->revision()>revision,"Node preview did not share shader-source invalidation.");
                 auto previewPending=previewOwner->request(previewShader);
                 check(!previewPending.current && previewPending.programs==preview.programs,"Node preview discarded its previous complete bundle during source invalidation.");
-                waitForResult(resources,*previewOwner,previewShader);
-                first=waitForResult(resources,programs,shader);requireComplete(first);
+                waitForResult(resources,*previewOwner,previewShader,true,"invalidated node preview publication");
+                first=waitForResult(resources,programs,shader,true,"material source reload publication");requireComplete(first);
             }
-            std::array<std::vector<std::uint8_t>,5> originalFragments;
+            std::array<std::vector<std::uint8_t>,9> originalFragments;
             for(const auto& variant:shader.variants)
                 originalFragments[static_cast<std::size_t>(variant.pass)]=compileShader(config,materialGraphShaderRecipe(config,shader,variant)).bytes;
             PreparedGraphMaterial retiredPacket;retiredPacket.programs=first.programs;
             retiredVersion=first.programs;
-            for(auto pass:{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle,MaterialGraphPass::DirectionalShadow})
-                check(bgfx::isValid(retiredPacket.program(pass)),"Packet did not pin all five program variants.");
+            for(auto pass:{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle,MaterialGraphPass::DirectionalShadow,MaterialGraphPass::ModelReflection,MaterialGraphPass::ParticleReflection})
+                check(bgfx::isValid(retiredPacket.program(pass)),"Packet did not pin all color/coverage/reflection variants.");
 
             for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Scalar)node.scalar=.2f;
             const auto parameterShader=generateMaterialGraphShader(material);
@@ -675,11 +710,11 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
             programs.changed(changedFiles);
             auto failingPending=programs.request(parameterShader);
             check(!failingPending.current&&failingPending.programs==first.programs,"Pending hot reload did not retain the complete last-good bundle.");
-            auto failed=waitForResult(resources,programs,parameterShader);
+            auto failed=waitForResult(resources,programs,parameterShader,true,"deliberately invalid graph rejection",90s);
             check(!failed.current&&!failed.compiling&&!failed.diagnostic.empty()&&failed.programs==first.programs,"Failed shader compilation replaced the last-good bundle or remained actively compiling.");
             check(programs.residentBytes()==first.programs->bytes,"Failed compilation leaked a partially published program bundle.");
             // Complete every sibling job before changing its include files again.
-            waitFor([&]{resources.pump();return resources.idle();},"Failed shader batch did not finish.");
+            waitForCompilation(resources,[&]{resources.pump();return resources.idle();},"failed shader batch drain",90s);
 
             // bgfx shares shaders by binary hash and programs by shader pair.
             // A comment-only recovery can correctly reuse all five handles.
@@ -696,14 +731,16 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
             programs.changed(recoveryFiles);
             auto recoveringPending=programs.request(parameterShader);
             check(!recoveringPending.current&&recoveringPending.programs==first.programs,"Recovery stopped retaining the previous complete shader generation.");
-            auto recovered=waitForResult(resources,programs,parameterShader);requireComplete(recovered);
+            auto recovered=waitForResult(resources,programs,parameterShader,true,"recovered complete optimized generation");requireComplete(recovered);
             check(recovered.programs!=first.programs&&recovered.programs->signature!=first.programs->signature,"Valid source recovery did not publish a new program generation.");
             for(const auto& variant:parameterShader.variants) {
                 const auto binary=compileShader(config,materialGraphShaderRecipe(config,parameterShader,variant));
                 check(binary.bytes!=originalFragments[static_cast<std::size_t>(variant.pass)],"Recovery fixture did not change a pass's compiled instructions.");
             }
-            for(std::size_t pass=0;pass<5;++pass)
-                check(recovered.programs->programs[pass].idx!=first.programs->programs[pass].idx,"Recovery mixed a previous program into the new five-pass bundle.");
+            for(const auto& variant:parameterShader.variants) {
+                const auto pass=static_cast<std::size_t>(variant.pass);
+                check(recovered.programs->programs[pass].idx!=first.programs->programs[pass].idx,"Recovery mixed a previous program into the complete color/coverage/reflection bundle.");
+            }
             check(programs.residentBytes()==first.programs->bytes+recovered.programs->bytes,"Pinned retired program bytes disappeared from residency accounting.");
 
             first.programs.reset();parameterOnly.programs.reset();failingPending.programs.reset();failed.programs.reset();recoveringPending.programs.reset();

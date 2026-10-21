@@ -454,6 +454,79 @@ void exercise(SDL_Window* window,const Options& options) {
         game.instances=std::span(&instances[0],1);glow.enabled=false;const auto coveredSunBase=capture();glow.enabled=true;const auto coveredSunGlow=capture();
         check(maximumDifference(coveredSunBase,coveredSunGlow)<=1,"Fully occluded sun continued supplying Glow.");
         save(options.artifacts,"glow-visible-sun.png",sunGlow);save(options.artifacts,"glow-covered-sun.png",coveredSunGlow);
+        // Isolate solar visibility from legitimate lighting/reflections on the
+        // occluder. The visible sky remains enabled while surface IBL is off.
+        // GI/AO and SSR still exercise the shared HDR/five-target routing.
+        auto solarOccluderMaterials=surfaceMaterials;
+        solarOccluderMaterials[0].baseColor={0,0,0,1};solarOccluderMaterials[0].emissive={};
+        solarOccluderMaterials[0].metallic=0;solarOccluderMaterials[0].roughness=.3f;
+        solarOccluderMaterials[0].doubleSided=true;solarOccluderMaterials[0].receiveFog=false;
+        RenderModelInstance solarOccluder=instances[0];solarOccluder.entityId=0x534f4c4152;
+        solarOccluder.materials=&solarOccluderMaterials;solarOccluder.shading=MaterialShading::StandardPbr;
+        game.instances=std::span(&solarOccluder,1);
+        gameSettings.environment.enabled=false;gameSettings.environment.intensity=1;
+        gameSettings.environment.ssgi.enabled=gameSettings.environment.ssao.enabled=true;
+        gameSettings.environment.ssr.quality=SsrQuality::Medium;
+        // Keep these coverage comparisons below presentation clipping; the
+        // preceding 32-unit sun case separately covers bright HDR saturation.
+        gameSettings.proceduralSun.intensity=.25f;
+        glow=GlowSettings{};glow.strength=.6f;glow.threshold=0;
+        struct SunOcclusionAngle {Vec3 eye,forward,sun;float yaw,pitch;};
+        const std::array<SunOcclusionAngle,2> sunAngles{{
+            {{0,0,4},{0,0,-1},{0,.05f,-1},0,0},
+            {{.4f,.2f,4.2f},{-.1f,.12f,-1},{.18f,.18f,-1},35,20}}};
+        constexpr float occluderHalfSize=.24f;
+        constexpr std::array<float,5> solarOffsets{0,.85f,1,1.15f,2};
+        Json solarOcclusion=Json::array();
+        const auto sceneEnergy=[](const DecodedImage& image){double energy{};
+            for(std::size_t pixel=0;pixel<image.rgba.size()/4;++pixel)energy+=luminance(image,pixel);return energy;};
+        const auto sunCapture=[&]{auto image=capture();
+            check(renderer.ssgiStatus().empty()&&renderer.ssaoStatus().empty()&&renderer.ssrStatus().empty(),
+                "Sun occlusion effect preparation failed: "+renderer.ssgiStatus()+renderer.ssaoStatus()+renderer.ssrStatus());return image;};
+        const auto setSunAngle=[&](const SunOcclusionAngle& angle,float offset){
+            gameSettings.camera.position=angle.eye;gameSettings.camera.target=angle.eye+math::normalized(angle.forward)*4.f;
+            gameSettings.proceduralSun.direction=math::normalized(angle.sun);
+            const auto orientation=math::rotation(math::axisAngle({0,1,0},angle.yaw*pi/180))*
+                math::rotation(math::axisAngle({1,0,0},angle.pitch*pi/180));
+            const auto center=angle.eye+gameSettings.proceduralSun.direction*3.f;
+            solarOccluder.model.transform=math::translation(center)*orientation*
+                math::translation({offset*occluderHalfSize,0,0})*math::scaling({occluderHalfSize,occluderHalfSize,1});
+        };
+        for(std::size_t angleIndex=0;angleIndex<sunAngles.size();++angleIndex)for(const bool ssr:{false,true}) {
+            gameSettings.environment.ssr.enabled=ssr;
+            std::array<double,solarOffsets.size()> haloEnergy{},visibleEnergy{};
+            for(std::size_t step=0;step<solarOffsets.size();++step) {
+                setSunAngle(sunAngles[angleIndex],solarOffsets[step]);
+                glow.enabled=false;const auto withoutGlow=sunCapture();glow.enabled=true;const auto withGlow=sunCapture();
+                const auto difference=maximumDifference(withoutGlow,withGlow);
+                haloEnergy[step]=haloMetrics(withGlow,withoutGlow)["energy"].get<double>();
+                visibleEnergy[step]=sceneEnergy(withoutGlow);
+                if(step==0)check(difference<=1&&visibleEnergy[step]<.001,
+                    "Fully covered solar disk/halo leaked into HDR or Glow at camera/occluder angle "+std::to_string(angleIndex)+", SSR="+std::to_string(ssr));
+                if(step+1==solarOffsets.size())check(difference>5&&visibleEnergy[step]>1,
+                    "Uncovered solar disk failed to supply the angular Glow fixture.");
+                const auto label="glow-sun-angle-"+std::to_string(angleIndex)+"-ssr-"+std::to_string(ssr)+"-step-"+std::to_string(step);
+                save(options.artifacts,(label+"-off.png").c_str(),withoutGlow);save(options.artifacts,(label+"-on.png").c_str(),withGlow);
+                solarOcclusion.push_back({{"angle",angleIndex},{"ssr",ssr},{"offset",solarOffsets[step]},
+                    {"visible_solar_energy",visibleEnergy[step]},{"glow_energy",haloEnergy[step]},{"maximum_glow_difference",difference}});
+            }
+            for(std::size_t step=1;step<solarOffsets.size();++step) {
+                check(visibleEnergy[step]>=visibleEnergy[step-1]-.001,"Solar coverage changed discontinuously as its opaque edge crossed the disk.");
+                check(haloEnergy[step]>=haloEnergy[step-1]-haloEnergy.back()*.025,
+                    "Partial solar Glow developed a discontinuous increase behind its opaque occluder.");
+            }
+            check(haloEnergy[2]>.01&&haloEnergy[2]<haloEnergy.back()*.95,
+                "Half-covered solar disk did not retain a partial halo between covered and visible limits.");
+        }
+        // Covering just the disk leaves an authored wider sky halo visible.
+        // Glow may spread that visible radiance across the dark occluder.
+        setSunAngle(sunAngles[0],0);sky.sunHaloExtent=12;sky.sunHaloCurve=.5f;
+        gameSettings.environment.ssr.enabled=true;glow.enabled=false;const auto haloOutsideDisk=sunCapture();
+        glow.enabled=true;const auto spreadOutsideDisk=sunCapture();
+        check(sceneEnergy(haloOutsideDisk)>1&&maximumDifference(haloOutsideDisk,spreadOutsideDisk)>5,
+            "Visible authored solar halo was incorrectly suppressed when only its disk was covered.");
+        save(options.artifacts,"glow-covered-disk-visible-sky-halo-off.png",haloOutsideDisk);
+        save(options.artifacts,"glow-covered-disk-visible-sky-halo-on.png",spreadOutsideDisk);
         gameSettings=emitterSettings;game.instances=std::span(&instances[2],1);
         // GI retains its opaque donor and prior-world metadata independently
         // from the full-scene HDR source consumed by Glow after lighting.
@@ -466,7 +539,7 @@ void exercise(SDL_Window* window,const Options& options) {
         sceneSettings=gameSettings;sceneSettings.environment.glow={};scene.instances=game.instances;
         const auto single=capture();renderer.render(scene);renderer.renderGame(game);const auto isolatedScene=read(renderer.viewportTexture()),isolatedGame=read(renderer.gameViewportTexture());
         check(maximumDifference(base,isolatedScene)<=1&&maximumDifference(single,isolatedGame)<=1,"Scene/Game Glow settings or resources leaked between views.");
-        Json quality{{"glow_level_1",tightMetric},{"glow_level_7",wideMetric},{"transparent_emitter_halo_ratio",alphaRatio},
+        Json quality{{"glow_level_1",tightMetric},{"glow_level_7",wideMetric},{"transparent_emitter_halo_ratio",alphaRatio},{"solar_occlusion",solarOcclusion},
             {"glow_horizontal",horizontalMetric},{"glow_vertical",verticalMetric},{"checks","disabled/zero-work, linear FP32 level response/additivity/continuity, threshold/exposure, full-scene HDR eligibility, opaque occlusion, tint, saturation, anamorphic and Scene/Game isolation"}};
         if(!options.artifacts.empty()){fs::create_directories(options.artifacts);std::ofstream output(options.artifacts/"glow-quality.json");output<<quality.dump(2)<<'\n';}
         std::cout<<"GLOW_QUALITY_JSON "<<quality.dump()<<'\n';

@@ -70,6 +70,8 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
     EnvironmentSsaoEnabled,EnvironmentSsaoStrength,EnvironmentSsaoRadius,EnvironmentSsaoQuality,
+    EnvironmentSsrEnabled,EnvironmentSsrStrength,EnvironmentSsrQuality,EnvironmentSsrDistance,
+    EnvironmentSsrTolerance,EnvironmentSsrRoughness,EnvironmentSsrBias,
     CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
     NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,
     MovementEnabled,PlayerJumpHeight,
@@ -85,7 +87,7 @@ Panel owner(Edit edit) {
     return Panel::Inspector;
 }
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
-bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentSsaoQuality; }
+bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentSsrBias; }
 bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointCasters; }
 struct PanelsState {
     SceneDocument* document{};
@@ -701,6 +703,11 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             ImGui::TextWrapped("%s",renderer.ssaoStatus().c_str());
         ImGui::PopID();
     }
+    drawSsrControls(value.ssr,[&](SsrControl control,bool changed) {
+        constexpr std::array<Edit,7> properties{Edit::EnvironmentSsrEnabled,Edit::EnvironmentSsrStrength,Edit::EnvironmentSsrQuality,
+            Edit::EnvironmentSsrDistance,Edit::EnvironmentSsrRoughness,Edit::EnvironmentSsrTolerance,Edit::EnvironmentSsrBias};
+        field(properties[static_cast<unsigned>(control)],"Change screen-space reflections",changed);
+    });
     if(ImGui::CollapsingHeader("Background",ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushID("Background");
         field(Edit::EnvironmentBackgroundShow,"Toggle environment background",ImGui::Checkbox("Show Background",&value.background.show));

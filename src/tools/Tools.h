@@ -81,6 +81,9 @@ enum class GlowControl { Enabled, Strength, Size, Threshold, Tint, Saturation, S
     Anamorphic, Quality, Level1, Level2, Level3, Level4, Level5, Level6, Level7 };
 using GlowControlEdit = std::function<void(GlowControl,bool)>;
 bool drawGlowControls(GlowSettings&, const GlowControlEdit& edit = {});
+enum class SsrControl { Enabled,Strength,Quality,Distance,Roughness,Tolerance,Bias };
+using SsrControlEdit = std::function<void(SsrControl,bool)>;
+bool drawSsrControls(SsrSettings&,const SsrControlEdit& edit = {});
 
 // Call once after creating the ImGui context. DPI is supplied by the host;
 // this does not change window/framebuffer coordinates or SDL input scaling.

@@ -9,6 +9,7 @@
 #include <map>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 namespace {
 using namespace crimson;
@@ -198,7 +199,7 @@ void tessellatedCoverageNormalChecks() {
     auto material=fixture();materialOutputNode(material.graph).output.tessellation.enabled=true;
     const auto generated=generateMaterialGraphShader(material);
     for(const auto& variant:generated.variants) {
-        if(variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle)continue;
+        if(variant.pass!=MaterialGraphPass::Picking&&variant.pass!=MaterialGraphPass::PointShadow&&variant.pass!=MaterialGraphPass::DirectionalShadow)continue;
         check(variant.tessellation&&!variant.domainSource.empty()&&variant.source.find("#define CC_GRAPH_TESSELLATION 1")!=std::string::npos,
             "Tessellated coverage lost its domain stage or deformation-normal guard.");
         check(variant.source.find("uniform mat4 u_modelNormalMatrix;")!=std::string::npos&&variant.source.find("uniform vec4 u_modelOptions;")!=std::string::npos&&
@@ -223,7 +224,7 @@ MaterialAsset refractionFixture() {
 }
 void refractionShaderChecks() {
     auto material=refractionFixture();const auto generated=generateMaterialGraphShader(material);
-    check(generated.refraction&&generated.variants.size()==7,"Enabled refraction did not publish both optional transmission variants.");
+    check(generated.refraction&&generated.variants.size()==9,"Enabled refraction did not publish both optional transmission variants.");
     auto edited=material;materialOutputNode(edited.graph).output.thickness=.1f;
     materialOutputNode(edited.graph).output.attenuationColor={.3f,.5f,.8f};
     const auto changed=generateMaterialGraphShader(edited);
@@ -251,15 +252,46 @@ void refractionShaderChecks() {
     check(transmission.tessellation&&transmission.vertexName=="vs_model"&&transmission.domainSource.find("#define CC_TESS_PASS 0")!=std::string::npos,
         "Mesh transmission no longer shares Model's displaced geometry/varyings.");
     check(!displaced.variants[6].tessellation&&displaced.variants[6].vertexName=="vs_particle","Sprite transmission incorrectly requested tessellated mesh geometry.");
+    check(displaced.variants[7].pass==MaterialGraphPass::ModelReflection&&displaced.variants[7].tessellation&&
+        displaced.variants[7].domainSource==displaced.variants[5].domainSource&&
+        displaced.variants[8].pass==MaterialGraphPass::ParticleReflection&&!displaced.variants[8].tessellation,
+        "Refractive reflection receiver disagrees with its own displaced surface or sprite geometry.");
 }
 void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
-    check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
+    check(original.variants.size()==7 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
+    check(original.reflection&&original.variants[5].pass==MaterialGraphPass::ModelReflection&&original.variants[6].pass==MaterialGraphPass::ParticleReflection,
+        "Lit material did not append both complete reflection receiver variants.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v34")!=std::string::npos,
+        const bool reflection=variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;
+        const auto binding=[&](const char* name)->const ShaderUniformContract* {
+            const auto found=std::find_if(variant.manifest.begin(),variant.manifest.end(),[&](const auto& value){return value.name==name;});
+            return found==variant.manifest.end()?nullptr:&*found;
+        };
+        check(bool(binding("u_ssrView"))==reflection&&bool(binding("s_ssrSceneColor"))==reflection,
+            "Reflection source/settings leaked into an ordinary color, transmission or coverage pass.");
+        if(reflection) {
+            check(binding("s_ssrSceneColor")->samplerSlot==12&&binding("s_prefiltered")->samplerSlot==13&&
+                binding("s_ssrDepth")->samplerSlot==14&&binding("s_brdfLut")->samplerSlot==15&&
+                !binding("s_irradiance")&&!binding("s_pointShadow")&&!binding("u_ssrCapture"),
+                "Reflection source/HiZ/BRDF bindings alias graph textures, shadow slots or capture controls.");
+            check(variant.source.find("#include \"material_graph_reflection.sh\"")!=std::string::npos,
+                "Reflection receiver selected a full-lighting or transmission fragment.");
+        }
+    }
+    for(const auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha,MaterialBlend::Additive})
+        for(const auto shading:{MaterialShading::StandardPbr,MaterialShading::Unlit}) {
+            auto candidate=material;auto& output=materialOutputNode(candidate.graph).output;output.blend=blend;output.shading=shading;
+            const auto generated=generateMaterialGraphShader(candidate);
+            const bool expected=shading==MaterialShading::StandardPbr&&blend!=MaterialBlend::Additive;
+            check(generated.reflection==expected&&generated.variants.size()==(expected?7u:5u),
+                "Reflection variants were omitted from Lit coverage or admitted for Unlit/Additive materials.");
+        }
+    for(const auto& variant:original.variants) {
+        check(variant.source.find("crimson-material-graph-generator-v35")!=std::string::npos,
             "Generated material identity does not invalidate pre-emission-publication bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
-        check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
+        check(circularInput==(variant.pass!=MaterialGraphPass::Particle&&variant.pass!=MaterialGraphPass::ParticleReflection),
             "Generated mesh/particle inputs disagree with the circular UV vertex interface.");
         const auto has=[&](const char* name,std::uint16_t count=1) {
             return std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
@@ -267,11 +299,12 @@ void cpuChecks() {
             });
         };
         const bool surface=variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle;
+        const bool reflection=variant.pass==MaterialGraphPass::ModelReflection || variant.pass==MaterialGraphPass::ParticleReflection;
         const bool readableDepth=variant.pass==MaterialGraphPass::PointShadow || variant.pass==MaterialGraphPass::DirectionalShadow;
         check(!has("u_glowSource"),"Removed emission publication remained in the generated material manifest.");
         const bool motionDepth=variant.pass==MaterialGraphPass::PointShadow;
         const auto inputLine=variant.source.substr(0,variant.source.find('\n'));
-        check((inputLine.find(", v_tangent")!=std::string::npos)==bool(surface||motionDepth),
+        check((inputLine.find(", v_tangent")!=std::string::npos)==bool(surface||reflection||motionDepth),
             "Generated readable-depth input does not carry previous rigid position through the shared vertex interface.");
         check((variant.source.find("#define CC_GRAPH_POINT_SHADOW 1")!=std::string::npos)==motionDepth,
             "Generated motion-depth output is absent or leaks into another material pass.");
@@ -281,12 +314,12 @@ void cpuChecks() {
             check(!has(name),"Removed player-fade partition uniforms remain in generated shaders.");
         check(has("u_ssgiAtlas")==surface && has("u_ssgiSettings")==surface && has("u_ssgiDraw")==bool(surface||readableDepth),
             "SSGI source, receiver or reactive-depth uniforms are absent from their engine pass contract.");
-        check(has("u_fogSky")==surface,"Fog sky controls leaked into depth passes or are missing from surface passes.");
+        check(has("u_fogSky")==bool(surface||reflection),"Fog sky controls leaked into depth passes or are missing from surface passes.");
         for(const auto name:{"u_fogSunDirection","u_fogSunColor"}) {
             const bool hasSun=std::any_of(variant.manifest.begin(),variant.manifest.end(),[&](const auto& binding) {
                 return binding.name==name&&binding.kind==ShaderUniformKind::Vec4&&binding.count==4;
             });
-            check(hasSun==surface,"Fog directional-light arrays have an incompatible engine pass contract.");
+            check(hasSun==bool(surface||reflection),"Fog directional-light arrays have an incompatible engine pass contract.");
         }
         check(std::all_of(variant.manifest.begin(),variant.manifest.end(),[](const auto& binding) {
             return binding.kind!=ShaderUniformKind::Sampler || binding.samplerSlot<16;
@@ -407,7 +440,7 @@ void passIdentityChecks() {
         check(edited.topologyKey!=original.topologyKey,"Color topology edit did not change its material bundle.");
         for(std::size_t i=0;i<original.variants.size();++i) {
             const auto& before=original.variants[i];const auto& after=edited.variants[i];
-            const bool surface=before.pass==MaterialGraphPass::Model||before.pass==MaterialGraphPass::Particle;
+            const bool surface=before.pass==MaterialGraphPass::Model||before.pass==MaterialGraphPass::Particle||before.pass==MaterialGraphPass::ModelReflection||before.pass==MaterialGraphPass::ParticleReflection;
             check((before.source!=after.source)==surface,"Color-only topology invalidated an unrelated depth shader.");
             check((materialGraphShaderRecipe(config,original,before).name!=materialGraphShaderRecipe(config,edited,after).name)==surface,
                 "Shader job identity included another pass's topology.");
@@ -645,6 +678,89 @@ void decodedNormalMappingChecks() {
     const auto normal=std::find_if(g.nodes.begin(),g.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::DecodeNormal;})->id;const auto previous=*materialInputLink(g,normal,MaterialPin::Left);
     connectMaterialNodes(g,previous.fromNode,previous.fromPin,blend,MaterialPin::Left);connectMaterialNodes(g,second,MaterialPin::RGBA,blend,MaterialPin::Right);connectMaterialNodes(g,blend,MaterialPin::Value,normal,MaterialPin::Left);
     bool rejected=false;try{(void)generateMaterialGraphShader(material);}catch(const std::exception& error){rejected=std::string(error.what()).find("different mappings")!=std::string::npos;}check(rejected,"Decoder silently accepted encoded images in different mapping bases.");
+}
+void ssrCompileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+    const auto root=std::filesystem::temp_directory_path()/("crimson-graph-ssr-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-graph-ssr-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
+    const ShaderCompileConfig config{compiler,source,include,root};
+    unsigned reflectionFragments{},domainStages{};
+    const auto compileReceivers=[&](const char* label,const MaterialAsset& material,bool compileCapture) {
+        const auto generated=generateMaterialGraphShader(material);
+        check(generated.reflection,"Focused SSR fixture omitted reflection variants.");
+        unsigned receivers{};
+        for(const auto& variant:generated.variants) {
+            const bool reflection=variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;
+            const bool capture=variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle;
+            if(!reflection&&!(compileCapture&&capture))continue;
+            const char* pass=variant.pass==MaterialGraphPass::ModelReflection?"ModelReflection":
+                variant.pass==MaterialGraphPass::ParticleReflection?"ParticleReflection":
+                variant.pass==MaterialGraphPass::Model?"ModelCapture":"ParticleCapture";
+            std::cout<<"Focused SSR "<<label<<": compiling "<<pass<<".\n"<<std::flush;
+            const auto recipe=materialGraphShaderRecipe(config,generated,variant);
+            const auto fragment=compileShader(config,recipe),vertex=compileShader(config,variant.vertexName);
+            std::string diagnostic;
+            if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+                throw std::runtime_error("Focused SSR receiver/capture: "+diagnostic);
+            if(!reflection)continue;
+            ++receivers;++reflectionFragments;
+            auto wrong=variant.manifest;
+            std::erase_if(wrong,[](const auto& binding){return binding.name=="u_ssrSettings";});
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),
+                "SSR receiver admitted missing tracing settings.");
+            wrong=variant.manifest;
+            const auto depth=std::find_if(wrong.begin(),wrong.end(),[](const auto& binding){return binding.name=="s_ssrDepth";});
+            check(depth!=wrong.end(),"SSR receiver omitted its depth sampler manifest.");
+            depth->samplerSlot=13;
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),
+                "SSR depth sampler aliased the environment slot.");
+            const auto timestamps=cacheTimes(root);const auto warm=compileShader(config,recipe);
+            check(warm.fingerprint==fragment.fingerprint&&warm.bytes==fragment.bytes&&cacheTimes(root)==timestamps,
+                "Focused SSR warm compilation changed or rewrote its cached artifact.");
+            if(variant.tessellation) {
+                std::cout<<"Focused SSR "<<label<<": compiling native "<<pass<<" domain.\n"<<std::flush;
+                const auto domain=compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant));
+                if(!preflightGeneratedTessellationDomain(domain.bytes,vertex.bytes,variant.domainManifest,diagnostic))
+                    throw std::runtime_error("Focused SSR displaced domain: "+diagnostic);
+                auto missingHeight=variant.domainManifest;
+                std::erase_if(missingHeight,[](const auto& binding){return binding.kind==ShaderUniformKind::Sampler;});
+                check(!preflightGeneratedTessellationDomain(domain.bytes,vertex.bytes,missingHeight,diagnostic),
+                    "SSR domain admitted an undeclared Height texture.");
+                ++domainStages;
+            }
+        }
+        check(receivers==2,"Focused SSR did not compile both mesh and particle receiver variants.");
+    };
+    for(const auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha}) {
+        auto material=fixture();const auto output=materialOutputNode(material.graph).id;
+        findMaterialNode(material.graph,output)->output.blend=blend;
+        if(blend==MaterialBlend::Alpha) {
+            const auto mask=*materialInputLink(material.graph,output,MaterialPin::OpacityMask);
+            connectMaterialNodes(material.graph,mask.fromNode,mask.fromPin,output,MaterialPin::Opacity);
+        }
+        compileReceivers(blend==MaterialBlend::Opaque?"Lit Opaque":blend==MaterialBlend::Mask?"Lit Mask":"Lit Alpha",material,blend==MaterialBlend::Opaque);
+    }
+    compileReceivers("Lit Glass",refractionFixture(),false);
+    auto maximum=fixture();auto& graph=maximum.graph;
+    const auto output=materialOutputNode(graph).id;
+    auto tail=materialInputLink(graph,output,MaterialPin::BaseColor)->fromNode;
+    for(unsigned slot=0;slot<9;++slot) {
+        const auto image=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+        findMaterialNode(graph,image)->texture.image.id="assets/textures/ssr-slot-"+std::to_string(slot)+".png";
+        const auto product=addMaterialNode(graph,MaterialNodeKind::Multiply).id;
+        connectMaterialNodes(graph,tail,MaterialPin::Value,product,MaterialPin::Left);
+        connectMaterialNodes(graph,image,MaterialPin::RGB,product,MaterialPin::Right);tail=product;
+    }
+    connectMaterialNodes(graph,tail,MaterialPin::Value,output,MaterialPin::BaseColor);
+    const auto height=std::find_if(graph.nodes.begin(),graph.nodes.end(),[](const auto& node){return node.kind==MaterialNodeKind::Texture2D&&node.texture.role==MaterialTextureRole::Data;});
+    check(height!=graph.nodes.end(),"Focused SSR displaced fixture omitted its linear Height source.");
+    findMaterialNode(graph,output)->output.tessellation.enabled=true;
+    connectMaterialNodes(graph,height->id,MaterialPin::R,output,MaterialPin::Height);
+    const auto displaced=generateMaterialGraphShader(maximum);
+    check(displaced.textures.size()==12&&displaced.usesNormal&&displaced.tessellation.enabled,
+        "Focused SSR fixture lost twelve textures, normal mapping or displaced geometry.");
+    compileReceivers("Twelve-texture normals and Height",maximum,false);
+    check(reflectionFragments==10&&domainStages==1,"Focused SSR compile matrix changed its intended coverage.");
+    std::cout<<"Focused SSR compiled "<<reflectionFragments<<" receiver fragments, two capture fragments and "<<domainStages<<" native domain stage.\n";
 }
 void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
     {
@@ -1003,7 +1119,10 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
+        if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        else if(argc==5&&std::string_view(argv[1])=="--ssr")ssrCompileChecks(argv[2],argv[3],argv[4]);
+        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr] <shaderc> <source-dir> <include-dir>");
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

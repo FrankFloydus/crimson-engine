@@ -16,6 +16,21 @@ void near(float actual,float expected,const std::source_location location=std::s
         throw std::runtime_error(std::string("Fog equation mismatch in ")+location.function_name()+":"+
             std::to_string(location.line())+", actual="+std::to_string(actual)+", expected="+std::to_string(expected));
 }
+void reflectionThumbnailIdentity() {
+    EnvironmentSettings environment;const ProceduralSun sun;
+    const auto inactive=thumbnailEnvironmentKey(environment,sun);
+    environment.ssr.quality=SsrQuality::High;environment.ssr.maxDistance=75;environment.ssr.depthTolerance=.1f;
+    environment.ssr.maxRoughness=.8f;environment.ssr.bias=.01f;environment.ssr.strength=.5f;
+    check(thumbnailEnvironmentKey(environment,sun)==inactive,"Inactive SSR tuning invalidated a thumbnail.");
+    environment.ssr.enabled=true;const auto active=thumbnailEnvironmentKey(environment,sun);
+    check(active!=inactive,"Enabling SSR did not invalidate a thumbnail.");
+    for(unsigned field=0;field<6;++field){auto changed=environment;
+        if(field==0)changed.ssr.strength=.75f;if(field==1)changed.ssr.quality=SsrQuality::Low;
+        if(field==2)changed.ssr.maxDistance=25;if(field==3)changed.ssr.depthTolerance=.05f;
+        if(field==4)changed.ssr.maxRoughness=.6f;if(field==5)changed.ssr.bias=.002f;
+        check(thumbnailEnvironmentKey(changed,sun)!=active,"An active SSR control did not invalidate a thumbnail.");}
+    environment.ssr.strength=0;check(thumbnailEnvironmentKey(environment,sun)==inactive,"Zero-strength SSR altered the inactive thumbnail identity.");
+}
 void fogComposition() {
     FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.density=0;
     auto params=fog::parameters(settings,1000);const Vec3 source{4,2,1};
@@ -354,7 +369,7 @@ void ambientLightControls() {
 }
 }
 int main() {
-    try {fogComposition();depthAndHeightFog();fogLightEnergy();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
+    try {reflectionThumbnailIdentity();fogComposition();depthAndHeightFog();fogLightEnergy();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
         std::cout<<"Environment presentation and fog checks passed.\n";return 0;}
     catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

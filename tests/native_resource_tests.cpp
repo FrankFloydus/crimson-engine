@@ -7,6 +7,7 @@
 #include "resources/TextureStreamer.h"
 #include "resources/StreamingModel.h"
 #include "resources/ShaderReloadSession.h"
+#include "resources/ShaderCompiler.h"
 #include "assets/AtomicFile.h"
 #include "assets/MaterialAsset.h"
 #include "assets/MaterialPreviewGeometry.h"
@@ -37,6 +38,15 @@ namespace {
 using namespace crimson;
 void check(bool success,const std::string& text) {if(!success)throw std::runtime_error(text);}
 void phase(const char* text){std::fprintf(stderr,"Native check: %s\n",text);std::fflush(stderr);}
+std::string shaderWaitDiagnostic(ResourceManager& resources,const ShaderCompilerMetrics& before,const ResourceStats& initial,
+    std::chrono::steady_clock::time_point started) {
+    const auto stats=resources.stats();const auto metrics=shaderCompilerMetrics();
+    return " [elapsedMs="+std::to_string(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count())+
+        ", queued="+std::to_string(stats.queued)+", running="+std::to_string(stats.running)+
+        ", completedLoads="+std::to_string(stats.loads-initial.loads)+", failedLoads="+std::to_string(stats.failures-initial.failures)+
+        ", compilerInvocations="+std::to_string(metrics.compilerInvocations-before.compilerInvocations)+
+        ", completedCompilerMs="+std::to_string((metrics.compilerNanoseconds-before.compilerNanoseconds)/1e6)+"]";
+}
 void cleanup(const std::filesystem::path& root) {
     const auto resolved=std::filesystem::weakly_canonical(root),temporary=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path());
     if(resolved.parent_path()!=temporary || !resolved.filename().string().starts_with("crimson-native-resources-"))throw std::runtime_error("Native test cleanup target escaped its disposable directory.");
@@ -1042,19 +1052,21 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
             writeFileAtomically(composite,candidate);
             ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);
             check(shaders.available()&&shaders.pending(),"Focused shader reload did not request a coherent candidate group: "+shaders.status());
-            const auto awaitReload=[&] {
-                const auto limit=std::chrono::steady_clock::now()+std::chrono::seconds{90};
+            const auto awaitReload=[&](std::chrono::seconds timeout,const char* reloadPhase) {
+                const auto started=std::chrono::steady_clock::now();const auto before=shaderCompilerMetrics();const auto initial=resources.stats();
+                const auto limit=started+timeout;
                 do {tick();shaders.pump();}while(shaders.pending()&&std::chrono::steady_clock::now()<limit);
-                check(!shaders.pending(),"Focused shader reload timed out: "+shaders.status());
+                check(!shaders.pending(),std::string("Focused shader reload timed out during ")+reloadPhase+": "+shaders.status()+
+                    " [revision="+std::to_string(shaders.revision())+"]"+shaderWaitDiagnostic(resources,before,initial,started));
             };
-            awaitReload();
+            awaitReload(std::chrono::seconds{180},"valid cold engine publication");
             check(shaders.revision()==1,"Valid focused shader candidates did not publish: "+shaders.status());
             const auto healthy=renderer.shaderSignature();
             check(healthy!=embedded,"The changed final encoding shader did not enter the atomic renderer program group.");
             writeFileAtomically(composite,candidate+"\nTHIS_IS_NOT_VALID_SHADER_CODE\n");
             const std::array<std::filesystem::path,1> changed{composite};shaders.changed(changed);
             check(shaders.pending(),"Changing the final encoding shader did not start shader reload.");
-            awaitReload();
+            awaitReload(std::chrono::seconds{30},"deliberately invalid encoding rejection");
             check(shaders.revision()==1&&renderer.shaderSignature()==healthy,
                 "A failed final encoding shader compilation changed the last-good renderer program group.");
             check(shaders.status().find("fs_encode")!=std::string::npos,
@@ -1154,21 +1166,29 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
         renderer.render(particleScene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);
     };
     const auto beforeReloadParticles=particleCapture();
-    phase("shader reload");ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);
+    phase("shader reload");
+    const auto reloadStarted=std::chrono::steady_clock::now();const auto reloadMetrics=shaderCompilerMetrics();const auto reloadStats=resources.stats();
+    ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);
     // This path compiles a complete cold engine group on two workers, just as
     // the focused reload fixture does. Backend validation should not fail when
-    // valid compilation takes slightly longer than thirty seconds.
-    const auto shaderDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{90};
+    // the larger reflection family needs more time for valid full optimization.
+    const auto shaderDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{180};
     do {tick();shaders.pump();}while(shaders.pending() && std::chrono::steady_clock::now()<shaderDeadline);
-    check(shaders.revision()==1,"Valid native shader candidates did not publish: "+shaders.status());
+    check(shaders.revision()==1,"Valid native shader candidates did not publish: "+shaders.status()+
+        " [pending="+std::to_string(shaders.pending())+", revision="+std::to_string(shaders.revision())+"]"+
+        shaderWaitDiagnostic(resources,reloadMetrics,reloadStats,reloadStarted));
     const auto healthy=renderer.shaderSignature();const auto healthyPixels=capture("valid-reload");
     const auto healthyParticlePixels=particleCapture();
     check(healthyParticlePixels.rgba==beforeReloadParticles.rgba,"Valid hot reload changed native particle output.");
     const auto bad=shaderConfig.sourceDirectory/"fs_model.sc";std::ifstream input(bad);std::string text(std::istreambuf_iterator<char>{input},{});input.close();
+    const auto failureStarted=std::chrono::steady_clock::now();const auto failureMetrics=shaderCompilerMetrics();const auto failureStats=resources.stats();
     text+="\nTHIS_IS_NOT_VALID_SHADER_CODE\n";writeFileAtomically(bad,text);const std::array<std::filesystem::path,1> changed{bad};shaders.changed(changed);
     const auto failureDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{30};
     do {tick();shaders.pump();}while(shaders.pending() && std::chrono::steady_clock::now()<failureDeadline);
-    check(!shaders.pending() && shaders.revision()==1 && renderer.shaderSignature()==healthy,"Failed shader reload changed published native programs.");
+    check(!shaders.pending() && shaders.revision()==1 && renderer.shaderSignature()==healthy,
+        "Failed shader reload changed published native programs: "+shaders.status()+
+        " [pending="+std::to_string(shaders.pending())+", revision="+std::to_string(shaders.revision())+"]"+
+        shaderWaitDiagnostic(resources,failureMetrics,failureStats,failureStarted));
     const auto retained=capture("failed-reload-retained");check(retained.rgba==healthyPixels.rgba,"Failed shader reload changed the rendered native image.");
     check(particleCapture().rgba==healthyParticlePixels.rgba,"Failed hot reload changed the retained native particle program.");
     check(renderer.setThumbnail("cached",1,retained) && bgfx::isValid(renderer.thumbnailTexture("cached",1)),"Native thumbnail GPU cache publication failed.");
