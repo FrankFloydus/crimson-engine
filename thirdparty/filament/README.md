@@ -64,16 +64,16 @@ and [latest stable release API](https://docs.github.com/en/rest/releases/release
 ## Maintained renderer patch
 
 Quader uses the complete upstream Filament `main` snapshot at commit
-`34ff730afa710f6001e207d6ecd8f01bb5a4fd98` (checked 2026-10-21), with the `quader-vsync10`
+`d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185` (checked 2026-10-22), with the `quader-vsync10`
 patch in this directory. This is an unreleased source snapshot, not a released version tag.
 Its upstream version label is `1.78.1`; the exact commit and `upstream_ref: main`
 distinguish it from the v1.78.1 release archive.
 The archive identity is recorded in
-[`filament-main-34ff730afa71-quader-vsync10.json`](filament-main-34ff730afa71-quader-vsync10.json).
+[`filament-main-d1ccd94d8cd1-quader-vsync10.json`](filament-main-d1ccd94d8cd1-quader-vsync10.json).
 Filament and changes to these upstream source files are licensed under Apache-2.0; see
 [`../licenses/filament-Apache-2.0.txt`](../licenses/filament-Apache-2.0.txt). The patch modifies files
 carrying the upstream license notices. This directory contains the patch and provenance only.
-The October 21 comparison found all 94 upstream `LICENSE`, `NOTICE` and `COPYING` files
+The October 22 comparison found all 94 upstream `LICENSE`, `NOTICE` and `COPYING` files
 unchanged from the previous pinned source. The retained Apache-2.0 license text matches
 the new source, and all 31 explicitly installed BlueVK, Vulkan and video headers are
 byte-identical to the previous snapshot. No replacement license text is needed.
@@ -96,10 +96,12 @@ diffuse selection. Revision 7 introduced Vulkan swapchain replacement retention 
 semaphore lifetime tracking. Revision 8 introduced optional Windows presentation scaling.
 Revision 9 preserves hidden backing-surface pixels and corrects depth reconstruction for shifted
 AO projections. Revisions 6 through 9 used the same upstream source. Revision 10 rebases
-the complete maintained patch onto the October 21 snapshot, retaining those extensions,
+the complete maintained patch onto the October 22 snapshot, retaining those extensions,
 swapchain retirement, optional presentation scaling, hidden pixels and shifted AO reconstruction.
-It also preserves upstream's new recoverable surface-loss path and corrects Vulkan queue
-allocation when graphics, asynchronous work and protected work share a physical queue family.
+It also preserves upstream's new recoverable surface-loss path. The pinned upstream commit
+includes the native graphics/asynchronous/protected queue allocation correction; that code
+replaces the temporary local correction used with the intermediate `34ff730afa71` snapshot.
+No local queue-allocation changes remain in the maintained patch.
 The patch retains upstream's `VulkanSync` constructor and swapchain `setFrameRate` implementation.
 All upstream changes through the pinned SHA are included; no backport selection is needed for
 that snapshot. Future upstream commits remain separate updates detected by the daily checker.
@@ -136,15 +138,17 @@ with composed-window captures; isolated adapter proofs do not establish producti
 
 ### Vulkan queue creation
 
-Revision 10 retains upstream asynchronous queue selection and checks each candidate's actual
-queue capacity, including any protected queue already selected in that family. Graphics and
-asynchronous queues sharing a family use one unprotected `VkDeviceQueueCreateInfo` with two
-queues and two priorities; the asynchronous queue uses index one. A separate asynchronous
-family needs one queue at index zero. A protected request remains a separate flagged record,
-with one queue, and counts toward the physical family's total capacity. Candidates without
-enough queues are skipped in upstream enumeration order; asynchronous work is unavailable
-only when no legal candidate remains. This avoids duplicate family/flags entries and retrieving
-a queue index that was never requested. See the
+The pinned upstream `d1ccd94d8cd1` implementation assigns an unprotected graphics queue first,
+then a requested protected graphics queue if capacity remains. An asynchronous queue is assigned
+only for `THREAD_PREFERRED`: it prefers a separate transfer family and otherwise uses available
+graphics-family capacity. Protected and unprotected allocations share the physical family's
+capacity while retaining separate queue-index ranges and creation flags. Device creation emits
+one record per family/flags combination with the assigned count; a shared unprotected graphics
+and asynchronous family therefore requests two queues, and a protected record requests one.
+A single-slot graphics family cannot also supply the protected queue, so protected memory is
+disabled in that case. The maintained patch leaves this upstream allocation code unchanged.
+These rules avoid duplicate family/flags records, excess queue requests and retrieval of an
+unrequested queue index. See the
 [device queue creation contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkDeviceCreateInfo.html).
 Qt-owned borrowed devices bypass this allocation path; Quader does not infer enabled optional
 features from physical-device support alone.
@@ -312,9 +316,9 @@ The script never deletes or mutates the original official SDK or an unversioned 
 
 The dependency build is Release with `/MD`; both native Quader configurations consume it. This
 dependency's build directory is separate from the canonical native `build/vs2026` tree. Default
-locations are sibling `_SOURCES/filament-main-34ff730afa71-quader-vsync10-source`,
-`_SOURCES/filament-main-34ff730afa71-quader-vsync10-build` and
-`_SOURCES/filament-main-34ff730afa71-quader-vsync10-windows` for source, build and install.
+locations are sibling `_SOURCES/filament-main-d1ccd94d8cd1-quader-vsync10-source`,
+`_SOURCES/filament-main-d1ccd94d8cd1-quader-vsync10-build` and
+`_SOURCES/filament-main-d1ccd94d8cd1-quader-vsync10-windows` for source, build and install.
 The SDK contains freshly rebuilt matching headers, libraries, and `matc.exe`; mixing an official SDK with
 patched headers would break the platform ABI. The installed `quader-filament-sdk.json` records
 the source and patch identities and the hashes of every library used by Quader plus public

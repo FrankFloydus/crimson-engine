@@ -251,7 +251,7 @@ file except through prior written authorization from Francesco Di Blasi.
   combine meshes only within the same active/ordinary class. Color edits update uniforms;
   camera moves never rebuild batches. Retain reflected winding and local origins for precision.
   Non-Vulkan backends preserve per-mesh ordering because they lack the stencil composition path.
-- The pinned Filament `34ff730afa71` computes reflected-entity raster winding and normal correction
+- The pinned Filament `d1ccd94d8cd1` computes reflected-entity raster winding and normal correction
   in `details/Scene.cpp`, but `InstanceBuffer::prepare` overwrites that normal matrix without its sign
   correction. Reflected and singular base-instance occurrences therefore use retained singleton
   entity transforms with shared compiled geometry; positive placements keep explicit batching.

@@ -23,7 +23,7 @@ index b3e2674..a644129 100644
  static constexpr size_t MAX_SAMPLER_COUNT           = 62;   // Maximum needed at feature level 3.
  static constexpr size_t MAX_VERTEX_BUFFER_COUNT     = 16;   // Max number of bound buffer objects.
 diff --git a/filament/backend/include/backend/platforms/VulkanPlatform.h b/filament/backend/include/backend/platforms/VulkanPlatform.h
-index 5a90080..740b0ba 100644
+index f1c539d..1c051bc 100644
 --- a/filament/backend/include/backend/platforms/VulkanPlatform.h
 +++ b/filament/backend/include/backend/platforms/VulkanPlatform.h
 @@ -109,6 +109,10 @@ public:
@@ -64,8 +64,8 @@ index 5a90080..740b0ba 100644
      struct VulkanSync : public Sync {
          explicit VulkanSync(std::shared_ptr<VulkanCmdFence> fence) noexcept
              : fenceStatus(std::move(fence)) {}
-@@ -627,6 +644,7 @@ private:
-             MiscDeviceFeatures const& requestedFeatures) noexcept;
+@@ -658,6 +675,7 @@ private:
+             bool requestProtectedQueue, bool requestAsyncQueue) const;
  
      friend struct VulkanPlatformPrivate;
 +    friend struct VulkanPlatformSurfaceSwapChain;
@@ -207,10 +207,10 @@ index b0413fe..14f6d8a 100644
      VkExtent2D mExtent;
      uint32_t mLayerCount;
 diff --git a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-index 1abae41..9072a9e 100644
+index 13dd518..2f02327 100644
 --- a/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
 +++ b/filament/backend/src/vulkan/platform/VulkanPlatform.cpp
-@@ -244,6 +244,12 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
+@@ -272,6 +272,12 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
          // Request all cross-platform extensions.
          VK_KHR_SURFACE_EXTENSION_NAME,
  
@@ -223,7 +223,7 @@ index 1abae41..9072a9e 100644
      // Request these if available.
  #if defined(__APPLE__)
          VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
-@@ -274,11 +280,22 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
+@@ -302,11 +308,22 @@ ExtensionSet getInstanceExtensions(ExtensionSet const& externallyRequiredExts,
              setInsert(exts, name);
          }
      }
@@ -246,7 +246,7 @@ index 1abae41..9072a9e 100644
      // We only support external image for Android for now, but nothing bars us from
      // supporting other platforms.
  #if defined(__ANDROID__)
-@@ -353,6 +370,14 @@ std::tuple<ExtensionSet, ExtensionSet> pruneExtensions(VkPhysicalDevice device,
+@@ -381,6 +398,14 @@ std::tuple<ExtensionSet, ExtensionSet> pruneExtensions(VkPhysicalDevice device,
      ExtensionSet newInstExts = instExts;
      ExtensionSet newDeviceExts = deviceExts;
  
@@ -261,40 +261,16 @@ index 1abae41..9072a9e 100644
      // debugUtils and debugMarkers extensions are used mutually exclusively.
      if (setContains(newInstExts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) &&
              setContains(newDeviceExts, VK_EXT_DEBUG_MARKER_EXTENSION_NAME)) {
-@@ -405,7 +430,8 @@ uint32_t identifyQueueFamilyIndex(VkPhysicalDevice physicalDevice, VkQueueFlags
- // If there is more than one virtual queue in the graphics family use the second as the Async
- // If not, use the next available queue that has the transfer property
- // If it does not exist either return INVALID_VK_INDEX
--std::pair<uint32_t, uint32_t> identifyAsyncQueue(VkPhysicalDevice physicalDevice) {
-+std::pair<uint32_t, uint32_t> identifyAsyncQueue(VkPhysicalDevice physicalDevice,
-+        uint32_t protectedQueueFamilyIndex) {
-     uint32_t asyncQueueFamilyIndex = INVALID_VK_INDEX;
-     uint32_t asyncQueueIndex = INVALID_VK_INDEX;
- 
-@@ -419,6 +445,13 @@ std::pair<uint32_t, uint32_t> identifyAsyncQueue(VkPhysicalDevice physicalDevice
-         VkQueueFamilyProperties props = queueFamiliesProperties[j];
-         // Async queue candidate must have the transfer property
-         if (props.queueFlags & VK_QUEUE_TRANSFER_BIT) {
-+            // Quader: protected and unprotected requests share the family's total capacity.
-+            // Reserve the protected slot before choosing an additional transfer queue.
-+            uint32_t const requiredQueueCount = (j == graphicsQueueFamilyIndex ? 2u : 1u) +
-+                    (j == protectedQueueFamilyIndex ? 1u : 0u);
-+            if (props.queueCount < requiredQueueCount) {
-+                continue;
-+            }
-             // If this is not the same family as the graphics, use the first one
-             if (j != graphicsQueueFamilyIndex) {
-                 asyncQueueFamilyIndex = j;
-@@ -930,7 +963,7 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
+@@ -893,7 +918,7 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
  
      auto [surface, fallbackExtent] = createVkSurfaceKHR(nativeWindow, mImpl->mInstance, flags);
      // The VulkanPlatformSurfaceSwapChain now `owns` the surface.
 -    VulkanPlatformSurfaceSwapChain* swapchain = new VulkanPlatformSurfaceSwapChain(mImpl->mContext,
 +    VulkanPlatformSurfaceSwapChain* swapchain = new VulkanPlatformSurfaceSwapChain(*this, mImpl->mContext,
-             mImpl->mPhysicalDevice, mImpl->mDevice, mImpl->mGraphicsQueue, mImpl->mInstance,
+             mImpl->mPhysicalDevice, mImpl->mDevice, mImpl->mGraphicsQueueHandle, mImpl->mInstance,
              surface, fallbackExtent, nativeWindow, flags);
      return swapchain;
-@@ -1151,6 +1184,14 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
+@@ -1114,6 +1139,14 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
          chainStruct(&context.mPhysicalDeviceFeatures, &globalPriorityFeatures);
      }
  
@@ -309,7 +285,7 @@ index 1abae41..9072a9e 100644
      if (setContains(deviceExts, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME)) {
          chainStruct(&context.mPhysicalDeviceFeatures, &context.mVertexInputDynamicStateFeatures);
      }
-@@ -1198,6 +1239,10 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
+@@ -1161,6 +1194,10 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
      vkGetPhysicalDeviceMemoryProperties(mImpl->mPhysicalDevice, &context.mMemoryProperties);
  
      // Store the extension support in the context
@@ -320,52 +296,7 @@ index 1abae41..9072a9e 100644
      if (sharedContext) {
          VulkanSharedContext const* scontext = (VulkanSharedContext const*) sharedContext;
          context.mDebugUtilsEnabled = scontext->debugUtilsEnabled;
-@@ -1313,14 +1358,17 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
-     assert_invariant(mImpl->mGraphicsQueueFamilyIndex != INVALID_VK_INDEX);
-     assert_invariant(mImpl->mGraphicsQueueIndex != INVALID_VK_INDEX);
- 
--    const auto asyncQueueDetails= identifyAsyncQueue(getPhysicalDevice());
-+    auto const asyncQueueDetails = identifyAsyncQueue(getPhysicalDevice(),
-+            mImpl->mProtectedGraphicsQueueFamilyIndex);
-     mImpl->mAsyncQueueFamilyIndex = asyncQueueDetails.first;
-     mImpl->mAsyncQueueIndex = asyncQueueDetails.second;
-     bool const hasAsyncQueue = mImpl->mAsyncQueueFamilyIndex != INVALID_VK_INDEX;
- 
-     bool const hasProtectedQueue = mImpl->mProtectedGraphicsQueueFamilyIndex != INVALID_VK_INDEX;
- 
--    float queuePriority[] = { 1.0f };
-+    // Quader: request both unprotected graphics queues in one family record. Repeating that
-+    // family with identical flags is invalid, and queue index 1 requires queueCount >= 2.
-+    float queuePriority[] = { 1.0f, 1.0f };
-     VkDeviceCreateInfo deviceCreateInfo = {
-         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-     };
-@@ -1346,7 +1394,9 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
-         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-         .pNext = requiresGpuPriority ? &queuePriorityCreateInfo : nullptr,
-         .queueFamilyIndex = mImpl->mGraphicsQueueFamilyIndex,
--        .queueCount = 1,
-+        .queueCount = hasAsyncQueue &&
-+                mImpl->mAsyncQueueFamilyIndex == mImpl->mGraphicsQueueFamilyIndex
-+                ? mImpl->mAsyncQueueIndex + 1 : 1,
-         .pQueuePriorities = &queuePriority[0],
-     };
-     queuesCreateInfos.push_back(graphicsQueueCreateInfo);
-@@ -1356,11 +1406,12 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
-         VkDeviceQueueCreateInfo protectedQueueCreateInfo = graphicsQueueCreateInfo;
-         protectedQueueCreateInfo.queueFamilyIndex = mImpl->mProtectedGraphicsQueueFamilyIndex;
-         protectedQueueCreateInfo.flags = VK_DEVICE_QUEUE_CREATE_PROTECTED_BIT;
-+        protectedQueueCreateInfo.queueCount = 1;
-         queuesCreateInfos.push_back(protectedQueueCreateInfo);
-     }
- 
-     // Async queue
--    if (hasAsyncQueue) {
-+    if (hasAsyncQueue && mImpl->mAsyncQueueFamilyIndex != mImpl->mGraphicsQueueFamilyIndex) {
-         VkDeviceQueueCreateInfo asyncQueueCreateInfo = graphicsQueueCreateInfo;
-         asyncQueueCreateInfo.queueFamilyIndex = mImpl->mAsyncQueueFamilyIndex;
-         queuesCreateInfos.push_back(asyncQueueCreateInfo);
-@@ -1394,6 +1445,15 @@ void VulkanPlatform::createLogicalDeviceAndQueues(const ExtensionSet& deviceExte
+@@ -1456,6 +1493,15 @@ void VulkanPlatform::createLogicalDeviceAndQueues(
      };
      chainStruct(&deviceCreateInfo, &enabledVk11Features);
  

@@ -27,7 +27,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-main-34ff730afa71-quader-vsync10.json"
+$pinPath = Join-Path $repoRoot "thirdparty/filament/filament-main-d1ccd94d8cd1-quader-vsync10.json"
 $pin = Get-Content -LiteralPath $pinPath -Raw | ConvertFrom-Json
 $patchPath = Join-Path (Split-Path $pinPath -Parent) $pin.patch_file
 $patchSha = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -565,7 +565,7 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   of the selected planar mesh; a background-wall-only fixture misses this failure. Keep non-edit
   meshes in the occluder query and verify exact CPU/Vulkan results in
   [runtime selection tests](tests/component_selection_runtime_tests.cpp) and actual surface pixels in
-  [render tests](tests/render_normal_mapping_runtime_tests.cpp). Pinned Filament `34ff730afa71`
+  [render tests](tests/render_normal_mapping_runtime_tests.cpp). Pinned Filament `d1ccd94d8cd1`
   overwrites its reflected normal correction in explicit instance buffers; base-instance reflected
   and singular placements retain singleton entity transforms sharing the geometry cache. Keep
   positive placements batched and preserve that fallback when culling is disabled.
@@ -1050,7 +1050,7 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 ## VSync and accepted presentation
 
-- The pinned Filament main snapshot `34ff730afa71` with quader-vsync10 supplies native-surface opt-in
+- The pinned Filament main snapshot `d1ccd94d8cd1` with quader-vsync10 supplies native-surface opt-in
   Immediate presentation and a backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
   headers/libraries together; CMake verifies provenance/hashes. Keep the maintained patch through
   upgrades; the installer consumes compiled artifacts, not a compiler or end-user SDK download.

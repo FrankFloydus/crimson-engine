@@ -32,8 +32,8 @@ The adapted code is from the MIT-licensed Godot sources above; no Blender code i
 ## ACES audit
 
 Quader's retained ACES mode delegates to the pinned Filament `main` snapshot at
-`34ff730afa710f6001e207d6ecd8f01bb5a4fd98`, with
-[`ACESToneMapper`](https://raw.githubusercontent.com/google/filament/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/ToneMapper.cpp).
+`d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185`, with
+[`ACESToneMapper`](https://raw.githubusercontent.com/google/filament/d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185/filament/src/ToneMapper.cpp).
 This implements an ACES 1-style fitted RRT/ODT with AP0/AP1 transforms, glow, red
 modifier, desaturation and dim-surround adjustment. It is a standard real-time
 approximation, not the reference-exact ACES transform or ACES 2. Filament's separate
@@ -42,8 +42,8 @@ Godot, Unreal and Filament need not produce identical pixels when each selects
 its own ACES approximation. Lighting calibration therefore uses neutral Linear
 output first and compares tone mapping independently.
 
-The 2026-10-21 source check found this snapshot's `ToneMapper.cpp` byte-identical to the
-previous `aab101b4c038` snapshot (SHA-256
+The 2026-10-22 source check found this snapshot's `ToneMapper.cpp` byte-identical to the
+intermediate `34ff730afa71` and earlier `aab101b4c038` snapshots (SHA-256
 `1e3212b67f2954721a4336c68fef1904204873835896e25c9ba77f9030aa42cd`). The prior
 2026-09-14 comparison established that implementation was unchanged from v1.76.1,
 retaining the scalar ACES equations previously audited in v1.71.6. This source comparison

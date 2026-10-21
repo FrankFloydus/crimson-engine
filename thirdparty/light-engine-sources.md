@@ -44,16 +44,17 @@ Filament evidence: [unit conversion](C:/Users/Drako/Desktop/quader-windows/_SOUR
 [exposure calculation](C:/Users/Drako/Desktop/quader-windows/_SOURCES/filament-v1.71.6-quader-vsync3-source/filament/src/Exposure.cpp:86),
 [directional uniform](C:/Users/Drako/Desktop/quader-windows/_SOURCES/filament-v1.71.6-quader-vsync3-source/filament/src/ds/ColorPassDescriptorSet.cpp:323).
 
-## Current Filament source: checked 2026-10-21
+## Current Filament source: checked 2026-10-22
 
 Quader now pins the unreleased `main` snapshot at commit
-`34ff730afa710f6001e207d6ecd8f01bb5a4fd98`, with `quader-vsync10`.
+`d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185`, with `quader-vsync10`.
 Patch revision 10 rebases the maintained Vulkan presentation, color and lighting extensions
 onto this source while preserving the light-unit contract.
-Its [light-unit conversion](https://github.com/google/filament/blob/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/components/LightManager.cpp),
-[photographic exposure](https://github.com/google/filament/blob/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/Exposure.cpp),
-and [directional-light exposure multiplication](https://github.com/google/filament/blob/34ff730afa710f6001e207d6ecd8f01bb5a4fd98/filament/src/ds/ColorPassDescriptorSet.cpp)
-retain the quantities above. Compared with the previous `aab101b4c038` snapshot, the
+Its [light-unit conversion](https://github.com/google/filament/blob/d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185/filament/src/components/LightManager.cpp),
+[photographic exposure](https://github.com/google/filament/blob/d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185/filament/src/Exposure.cpp),
+and [directional-light exposure multiplication](https://github.com/google/filament/blob/d1ccd94d8cd152a7a5d8933d75d2c1d03d99d185/filament/src/ds/ColorPassDescriptorSet.cpp)
+retain the quantities above. All three files are byte-identical to the intermediate
+`34ff730afa71` snapshot. Compared with the earlier `aab101b4c038` snapshot, the
 exposure and directional-uniform files are byte-identical. The light-manager changes make
 the Builder's build method const and suppress unchanged shadow-option notifications; its
 unit-conversion calculation is unchanged. The maintained patch preserves Quader's distance-

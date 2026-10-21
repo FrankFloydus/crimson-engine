@@ -1,9 +1,0 @@
-{
-  "artifact": "filament-main-34ff730afa71-quader-vsync10-windows",
-  "upstream_version": "1.78.1",
-  "upstream_ref": "main",
-  "upstream_commit": "34ff730afa710f6001e207d6ecd8f01bb5a4fd98",
-  "source_sha256": "c62cffd916f3f1cf6dded17a5bb233bb923d9e1f530e327bc5c9c340c3009025",
-  "patch_version": 10,
-  "patch_file": "filament-main-34ff730afa71-quader-vsync10.patch"
-}
