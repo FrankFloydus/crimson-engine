@@ -63,6 +63,7 @@
 #include <QPointer>
 #include <QPixmap>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSlider>
@@ -1628,6 +1629,214 @@ TEST(QtSettingsDialogTests,
       setting_color(applied_color)));
   EXPECT_FLOAT_EQ(viewport_settings.float_value(
       ViewportFloatSettingId::ActiveSelectionLineSize), 5.0f);
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     LaminaAppearanceStagesOpacityColorAndWidthAndPersistsOnlyAppliedChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-lamina-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const std::filesystem::path path =
+      std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        changes.push_back(change);
+        EXPECT_TRUE(viewport_settings.save(path));
+      });
+  auto *fill = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_LaminaFaceColor"));
+  auto *wire = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_LaminaWireColor"));
+  auto *width = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_LaminaWireLineSize"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(fill, nullptr);
+  ASSERT_NE(wire, nullptr);
+  ASSERT_NE(width, nullptr);
+  ASSERT_NE(apply, nullptr);
+  EXPECT_EQ(fill->accessibleName(), QStringLiteral("Lamina Face Fill"));
+  EXPECT_EQ(wire->accessibleName(), QStringLiteral("Lamina Wire"));
+  EXPECT_EQ(width->accessibleName(), QStringLiteral("Lamina Wire Size"));
+  EXPECT_DOUBLE_EQ(width->minimum(), 0.25);
+  EXPECT_DOUBLE_EQ(width->maximum(), 8.0);
+  const auto initial_fill = viewport_settings.color(ViewportColorSettingId::LaminaFace);
+  const auto initial_wire = viewport_settings.color(ViewportColorSettingId::LaminaWire);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      initial_fill, setting_color(QColor(255, 0, 0, 64))));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      initial_wire, setting_color(QColor(255, 0, 0, 255))));
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+      ViewportFloatSettingId::LaminaWireLineSize), 1.5f);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+      ViewportFloatSettingId::DiagnosticEdgeLineSize), 4.0f);
+  auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      fill->parentWidget()->parentWidget());
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(settings_section_title(*group), QStringLiteral("Mesh Overlays"));
+  EXPECT_TRUE(group->isAncestorOf(wire));
+  EXPECT_TRUE(group->isAncestorOf(width));
+  const QColor applied_fill(30, 80, 190, 90);
+  const QColor applied_wire(200, 70, 10, 230);
+  const auto stage = [&]() {
+    EXPECT_TRUE(accept_color_picker(dialog, *fill,
+        QStringLiteral("viewportSetting_LaminaFaceColor_dialog"), applied_fill));
+    EXPECT_TRUE(accept_color_picker(dialog, *wire,
+        QStringLiteral("viewportSetting_LaminaWireColor_dialog"), applied_wire));
+    width->setValue(3.25);
+  };
+  dialog.show();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(reject_color_picker(dialog, *fill,
+      QStringLiteral("viewportSetting_LaminaFaceColor_dialog"), applied_fill, [&]() {
+        auto *picker = dialog.findChild<QColorDialog *>(
+            QStringLiteral("viewportSetting_LaminaFaceColor_dialog"));
+        ASSERT_NE(picker, nullptr);
+        EXPECT_TRUE(picker->testOption(QColorDialog::ShowAlphaChannel));
+      }));
+  EXPECT_FALSE(apply->isEnabled());
+  stage();
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::LaminaFace), initial_fill));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::LaminaWire), initial_wire));
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+      ViewportFloatSettingId::LaminaWireLineSize), 1.5f);
+  dialog.reject();
+  EXPECT_TRUE(changes.empty());
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_DOUBLE_EQ(width->value(), 1.5);
+  stage();
+  apply->click();
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  const auto check_applied = [&](const ViewportSettings &settings) {
+    EXPECT_TRUE(viewport_setting_colors_approximately(
+        settings.color(ViewportColorSettingId::LaminaFace), setting_color(applied_fill)));
+    EXPECT_TRUE(viewport_setting_colors_approximately(
+        settings.color(ViewportColorSettingId::LaminaWire), setting_color(applied_wire)));
+    EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::LaminaWireLineSize), 3.25f);
+    EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::DiagnosticEdgeLineSize), 4.0f);
+  };
+  check_applied(viewport_settings);
+  check_applied(ViewportSettings::load(path));
+  const auto persisted = read_text_file(path);
+  EXPECT_NE(persisted.find("LaminaFaceColor="), std::string::npos);
+  EXPECT_NE(persisted.find("LaminaWireColor="), std::string::npos);
+  EXPECT_NE(persisted.find("LaminaWireLineSize="), std::string::npos);
+  ASSERT_TRUE(accept_color_picker(dialog, *fill,
+      QStringLiteral("viewportSetting_LaminaFaceColor_dialog"), QColor(10, 20, 30, 45)));
+  width->setValue(6.0);
+  dialog.reject();
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  check_applied(viewport_settings);
+  check_applied(ViewportSettings::load(path));
+}
+
+TEST(QtSettingsDialogTests,
+     LaminaAppearanceRemainsReadableAcrossScaleNarrowWidthAndContrast) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-lamina-appearance-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  const QPalette platform_palette = application.palette();
+  apply_qt_obsidian_application_theme(platform_palette);
+  QtUiScaleApplicationController scale_controller(application);
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  scale_controller.add_change_listener(dialog, [&](const QtUiScaleMetrics &metrics) {
+    dialog.apply_ui_scale(metrics);
+  });
+  dialog.set_context(ui_settings, viewport_settings, localization, editor.commands(), {});
+  auto *categories = dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
+  auto *page = dialog.findChild<QScrollArea *>(QStringLiteral("settingsPage_appearance"));
+  auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      dialog.findChild<QWidget *>(QStringLiteral("settingsGroup_overlay")));
+  auto *fill = dialog.findChild<QPushButton *>(QStringLiteral("viewportSetting_LaminaFaceColor"));
+  auto *wire = dialog.findChild<QPushButton *>(QStringLiteral("viewportSetting_LaminaWireColor"));
+  auto *width = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_LaminaWireLineSize"));
+  ASSERT_NE(categories, nullptr);
+  ASSERT_NE(page, nullptr);
+  ASSERT_NE(group, nullptr);
+  ASSERT_NE(fill, nullptr);
+  ASSERT_NE(wire, nullptr);
+  ASSERT_NE(width, nullptr);
+  for (int row = 0; row < categories->count(); ++row) {
+    if (categories->item(row)->data(Qt::UserRole).toString() == QStringLiteral("appearance"))
+      categories->setCurrentRow(row);
+  }
+  for (auto *section : settings_sections(*page)) section->set_expanded(section == group);
+  const QString output = QString::fromUtf8(qgetenv("QUADER_UI_REVIEW_DIR"));
+  dialog.show();
+  const auto review = [&](float scale, bool narrow, bool high_contrast) {
+    SCOPED_TRACE(::testing::Message() << scale << " narrow=" << narrow
+                                   << " high_contrast=" << high_contrast);
+    scale_controller.apply_factor(scale);
+    apply_qt_application_theme_for_contrast_preference(platform_palette,
+        high_contrast ? Qt::ContrastPreference::HighContrast : Qt::ContrastPreference::NoPreference);
+    dialog.resize(scale_controller.metrics().size(QSize(narrow ? 600 : 820, 600)));
+    for (int iteration = 0; iteration < 4; ++iteration) {
+      QCoreApplication::processEvents();
+      dialog.layout()->activate();
+    }
+    page->ensureWidgetVisible(width);
+    QCoreApplication::processEvents();
+    auto *form = qobject_cast<QFormLayout *>(group->content()->layout());
+    ASSERT_NE(form, nullptr);
+    for (QWidget *control : {static_cast<QWidget *>(fill), static_cast<QWidget *>(wire),
+                            static_cast<QWidget *>(width)}) {
+      EXPECT_TRUE(control->isVisible());
+      EXPECT_GE(control->width(), scale_controller.metrics().px(88));
+      auto *label = qobject_cast<QLabel *>(form->labelForField(control));
+      ASSERT_NE(label, nullptr);
+      EXPECT_EQ(label->buddy(), control);
+      EXPECT_LT(label->geometry().right(), control->geometry().left());
+      EXPECT_LE(label->fontMetrics().horizontalAdvance(label->text()), label->width());
+    }
+    width->setFocus();
+    if (!output.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(output));
+      const QString name = QStringLiteral("settings-lamina-%1%2%3")
+          .arg(static_cast<int>(scale * 100.0f))
+          .arg(narrow ? QStringLiteral("-narrow") : QString{})
+          .arg(high_contrast ? QStringLiteral("-high-contrast") : QString{});
+      EXPECT_TRUE(dialog.grab().save(QDir(output).filePath(name + QStringLiteral(".png"))));
+      EXPECT_TRUE(group->grab().save(QDir(output).filePath(name + QStringLiteral("-group.png"))));
+    }
+  };
+  review(1.0f, false, false);
+  review(2.0f, false, false);
+  review(2.0f, true, false);
+  review(1.0f, true, false);
+  review(1.0f, true, true);
   dialog.reject();
 }
 
@@ -4070,11 +4279,11 @@ TEST(QtSettingsDialogTests,
   QCoreApplication::processEvents();
 
   EXPECT_TRUE(capture_keybinding_and_choose_conflict(
-      dialog, *table, {}, QStringLiteral("Activate Move Tool"), true,
+      dialog, *table, {}, QStringLiteral("Move"), true,
       expect_conflict_identity));
   EXPECT_TRUE(capture_keybinding_and_choose_conflict(
       dialog, *table, QStringLiteral("settingsKeybindingConflictCancel"),
-      QStringLiteral("Activate Move Tool"), true,
+      QStringLiteral("Move"), true,
       expect_conflict_identity));
   auto catalog = editor.commands().keybinding_catalog();
   const QuaderKeybindingCatalogEntry *edited =
@@ -4086,7 +4295,7 @@ TEST(QtSettingsDialogTests,
 
   EXPECT_TRUE(capture_keybinding_and_choose_conflict(
       dialog, *table, QStringLiteral("settingsKeybindingConflictReplace"),
-      QStringLiteral("Activate Move Tool"), false,
+      QStringLiteral("Move"), false,
       expect_conflict_identity));
   catalog = editor.commands().keybinding_catalog();
   edited = find_keybinding_catalog_entry(catalog, edited_target);

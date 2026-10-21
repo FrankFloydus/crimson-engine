@@ -13,6 +13,7 @@
 #include "assets/asset_registry.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
+#include "editor/modeling/services/modeling_lamina_overlay_service.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
@@ -4393,6 +4394,17 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     frame = SelectionOverlayProjection::project_selection_overlay_frame(
         hover_frame, object_registry, scene, selection_mode,
         instance_edit_scope, entity_visible);
+  }
+
+  if (session != nullptr &&
+      runtime.active_tool() != quader_editor_core::ViewportInteractionTool::Cut) {
+    if (lamina_overlay_service_ == nullptr) {
+      lamina_overlay_service_ = std::make_shared<ModelingLaminaOverlayService>();
+    }
+    append_viewport_overlay_frame(
+        frame, lamina_overlay_service_->update(
+                   *session, scene, object_registry, selection_service,
+                   sdk_projection));
   }
 
   const quader_editor_core::InsertEdgeLoopToolState &insert_loop =

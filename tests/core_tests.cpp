@@ -1476,6 +1476,21 @@ TEST(AppFrameScheduleTests, PreservesSynchronizedAndIdleCadence) {
   EXPECT_EQ(schedule.next_interval_ms(false, false, 0, true), 16);
 }
 
+TEST(AppFrameScheduleTests, ComposedVsyncUsesSubmissionFeedbackWithWatchdogFallback) {
+  AppFrameSchedule schedule;
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 6, true, true), 12);
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 17, true, true), 34);
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 17, false, true), 34);
+  EXPECT_EQ(schedule.next_interval_ms(false, true, 17, true, true), 16);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, true, true), 0);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false, true), 1);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false, true), 2);
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 6, false, true), 12);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false, true), 1);
+  EXPECT_EQ(schedule.next_interval_ms(true, true, 6, true, false), 6);
+  EXPECT_EQ(schedule.next_interval_ms(true, false, 0, false, true), 1);
+}
+
 TEST(AppFrameScheduleTests, UncappedFramesYieldWhenRendererCannotProgress) {
   AppFrameSchedule schedule;
   EXPECT_EQ(schedule.next_interval_ms(true, false, 0, true), 0);
@@ -1912,8 +1927,8 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
-  ASSERT_EQ(viewport_color_settings().size(), 27u);
-  ASSERT_EQ(viewport_float_settings().size(), 35u);
+  ASSERT_EQ(viewport_color_settings().size(), 29u);
+  ASSERT_EQ(viewport_float_settings().size(), 36u);
   ASSERT_EQ(viewport_bool_settings().size(), 17u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
@@ -2733,6 +2748,7 @@ TEST(ViewportSettingsTests,
 TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
   const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
       ViewportOverlayLayer::CollisionFill,
+      ViewportOverlayLayer::DiagnosticFace,
       ViewportOverlayLayer::SelectedVisibleFace,
       ViewportOverlayLayer::SelectedFaceMask,
       ViewportOverlayLayer::WireframeBase,

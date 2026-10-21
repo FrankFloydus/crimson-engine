@@ -76,6 +76,8 @@ enum class ViewportColorSettingId {
     CollisionFill,
     Background,
     WireframeOnShaded,
+    LaminaFace,
+    LaminaWire,
     Count,
 };
 
@@ -118,6 +120,7 @@ enum class ViewportFloatSettingId {
     InstanceEditGridFade,
     Grid2DIntensity,
     Grid3DIntensity,
+    LaminaWireLineSize,
     Count,
 };
 

@@ -747,6 +747,14 @@ bool UISystem::initialize(RenderHost &render_system,
       }
       if (render_system_ != nullptr && render_system_->initialized()) {
         render_system_->complete_composited_presentation_frame();
+        // Follow Qt's actual composition cadence instead of letting the
+        // rounded millisecond watchdog drift against synchronized presentation.
+        // App coalesces this wakeup and queues the next frame after this flush.
+        if (viewport_presentation_requested_ &&
+            render_system_->presentation_is_synchronized() &&
+            needs_continuous_rendering()) {
+          viewport_presentation_requested_();
+        }
       }
     });
     composition_anchor_->show();

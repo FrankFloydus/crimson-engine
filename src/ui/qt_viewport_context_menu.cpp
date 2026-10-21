@@ -9,10 +9,12 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "core/public_command_targets.hpp"
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
+#include "ui/qt_modeling_operation_catalog.hpp"
 
 #include <QAction>
 #include <QMenu>
@@ -178,6 +180,11 @@ bool same_context_revision(const QuaderRevisionStamp &left,
 QString localized_action_label(const QuaderActionItem &action,
                                const ViewportContextMenuScope &scope,
                                const LocalizationService &localization) {
+  if (action.kind == QuaderActionKind::Tool && !action.tool_id.empty()) {
+    return qt_modeling_operation_label(
+        localization, QuaderCommandId{quader_tool_activation_command_target_id(action.tool_id)},
+        action.label);
+  }
   if (action.action_id == "duplicate_meshes") {
     return QString::fromStdString(localization.text(
         "ui.viewport.context_menu.command.duplicate_mesh_data",
@@ -242,8 +249,8 @@ QString localized_command_label(const QuaderCommandDescriptor &command,
       return QString::fromStdString(localization.text(key, label));
     }
   }
-  const std::string key = "keybindings.target." + command.id + ".label";
-  return QString::fromStdString(localization.text(key, command.label));
+  return qt_modeling_operation_label(
+      localization, QuaderCommandId{command.id}, command.label);
 }
 
 QString with_shortcut(QString label, std::string_view shortcut) {

@@ -32,6 +32,7 @@
 
 #include "viewport/viewport_settings.hpp"
 #include "assets/asset_registry.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "scene/scene_document.hpp"
 #include "math/glm_bridge.hpp"
 
@@ -3035,6 +3036,100 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
+     FaceDimensionGeometryProjectionTracksEffectiveStreamsThroughRetainedSubmission) {
+  ViewportOverlayFrame frame;
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {-8, 0, 0}, .b = {8, 4, 0}, .c = {8, 0, 20},
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = 10, .vertex_id = 1, .edge_a = 2, .edge_b = 3,
+                  .face_id = 1}});
+  StaticSelectionFrameProvider provider(frame);
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_frame;
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.selection_dimensions_visible = true;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  request.camera = dimension_test_camera();
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  expect_dimension_bounds(coordinator.submit(request, settings, target),
+                          {-8, 0, 0}, {8, 4, 20});
+
+  std::vector previews{dimension_preview(10, 100)};
+  previews.front().transform.values[12] = 1.0f;
+  auto attributes = std::make_shared<const std::vector<MeshVertex>>(
+      std::vector<MeshVertex>{
+          {.position = {-100, -100, -100}, .source_vertex_id = 4},
+          {.position = {100, 100, 100}, .source_vertex_id = 3},
+          {.position = {-100, -100, -100}, .source_vertex_id = 1},
+          {.position = {100, 100, 100}, .source_vertex_id = 2}});
+  request.selection_dimension_preview_meshes = previews;
+  for (int step = 0; step < 3; ++step) {
+    SCOPED_TRACE(step);
+    const float offset = static_cast<float>(step);
+    auto projection = std::make_shared<MeshGeometryProjection>();
+    projection->source_geometry = previews.front().mesh.geometry_payload();
+    projection->vertex_attributes = attributes;
+    projection->positions = std::make_shared<const std::vector<QVec3>>(
+        std::vector<QVec3>{{999, 999, 999}, {5 + offset, 2, 6},
+                           {2 + offset, 1, 3}, {4 + offset, 5, 4}});
+    previews.front().geometry_projection = projection;
+    previews.front().dynamic_position_payload = step == 0 ? projection->positions : nullptr;
+    ++request.tool_preview_overlay_revision;
+    const auto result = coordinator.submit(request, settings, target);
+    expect_dimension_bounds(result, {3 + offset, 1, 3}, {6 + offset, 5, 6});
+    ASSERT_TRUE(result.selection_dimension_bounds);
+    EXPECT_TRUE(result.dynamic_submitted);
+    EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame,
+        *result.selection_dimension_bounds, request.camera), 12u);
+    EXPECT_EQ(provider.build_count, 1);
+    const auto work = coordinator.work_counters();
+    EXPECT_EQ(work.selection_dimension_mapping_build_count, 2u);
+    for (int unchanged = 0; unchanged < 4; ++unchanged) {
+      EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+    }
+    EXPECT_EQ(coordinator.work_counters().selection_dimension_bounds_build_count,
+              work.selection_dimension_bounds_build_count);
+    EXPECT_EQ(coordinator.work_counters().selection_dimension_position_read_count,
+              work.selection_dimension_position_read_count);
+    EXPECT_EQ(coordinator.work_counters().selection_dimension_frame_build_count,
+              work.selection_dimension_frame_build_count);
+  }
+
+  // Equal stream lengths still require the effective authored-ID mapping.
+  auto reordered = std::make_shared<std::vector<MeshVertex>>(*attributes);
+  std::swap((*reordered)[0].source_vertex_id, (*reordered)[2].source_vertex_id);
+  auto projection = std::make_shared<MeshGeometryProjection>();
+  projection->source_geometry = previews.front().mesh.geometry_payload();
+  projection->vertex_attributes = reordered;
+  projection->positions = std::make_shared<const std::vector<QVec3>>(
+      std::vector<QVec3>{{7, 1, 3}, {10, 2, 6},
+                         {999, 999, 999}, {9, 5, 4}});
+  previews.front().mesh.share_geometry_projection(projection);
+  previews.front().geometry_projection.reset();
+  previews.front().dynamic_position_payload.reset();
+  ++request.tool_preview_overlay_revision;
+  const auto remapped = coordinator.submit(request, settings, target);
+  expect_dimension_bounds(remapped, {8, 1, 3}, {11, 5, 6});
+  ASSERT_TRUE(remapped.selection_dimension_bounds);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame,
+      *remapped.selection_dimension_bounds, request.camera), 12u);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_mapping_build_count, 3u);
+
+  request.selection_dimension_preview_meshes = {};
+  ++request.tool_preview_overlay_revision;
+  const auto cleared = coordinator.submit(request, settings, target);
+  expect_dimension_bounds(cleared, {-8, 0, 0}, {8, 4, 20});
+  ASSERT_TRUE(cleared.selection_dimension_bounds);
+  EXPECT_EQ(expect_dimension_box_edges(target.dynamic_frame,
+      *cleared.selection_dimension_bounds, request.camera), 12u);
+  EXPECT_EQ(provider.build_count, 1);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
      FaceDimensionPreviewMappingRetainsOnlySelectedAuthoredVertices) {
   ViewportOverlayFrame frame;
   frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedFaceEdge,
@@ -3792,6 +3887,72 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_TRUE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
     return line.source == ViewportOverlaySource::MeshOutline;
   }));
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     LaminaPreferencesRestyleRetainedGeometryAndFollowOverlayVisibility) {
+  StaticSelectionFrameProvider selection({});
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  ViewportOverlayFrame diagnostics;
+  diagnostics.triangles.push_back({
+      .layer = ViewportOverlayLayer::DiagnosticFace,
+      .a = {-1, -1, -2}, .b = {1, -1, -2}, .c = {0, 1, -2},
+      .color = rgba8(255, 0, 0, 64),
+      .style_role = ViewportOverlayStyleRole::LaminaFace,
+      .source = ViewportOverlaySource::Diagnostic});
+  diagnostics.lines.push_back({
+      .layer = ViewportOverlayLayer::DiagnosticEdge,
+      .start = {-1, -1, -2}, .end = {1, -1, -2},
+      .color = rgba8(255, 0, 0),
+      .style_role = ViewportOverlayStyleRole::LaminaWire,
+      .source = ViewportOverlaySource::Diagnostic});
+  auto request = submission_request(selection, scene, diagnostics, curve);
+  request.selection_overlays_visible = false;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  auto settings = ViewportSettings::defaults();
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 1u);
+  EXPECT_EQ(target.dynamic_frame.triangles.front().color, rgba8(255, 0, 0, 64));
+  ASSERT_EQ(target.dynamic_frame.lines.size(), 1u);
+  EXPECT_EQ(target.dynamic_frame.lines.front().color, rgba8(255, 0, 0));
+  EXPECT_FLOAT_EQ(target.dynamic_frame.lines.front().width_pixels, 1.5f);
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      target.dynamic_frame, {}, ViewportOverlayLayer::DiagnosticFace);
+  ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+  for (const auto &batch : plan.face_fill_batches) {
+    EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::Diagnostic);
+    EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
+    EXPECT_TRUE(batch.state.depth_culling);
+  }
+  EXPECT_LT(static_cast<int>(OverlayFaceFillClass::Diagnostic),
+            static_cast<int>(OverlayFaceFillClass::Selection));
+  EXPECT_LT(static_cast<int>(OverlayFaceFillClass::Diagnostic),
+            static_cast<int>(OverlayFaceFillClass::Hover));
+  EXPECT_LT(viewport_overlay_draw_order(ViewportOverlayLayer::DiagnosticEdge),
+            viewport_overlay_draw_order(ViewportOverlayLayer::SelectedFaceEdge));
+  const auto work = coordinator.work_counters();
+  EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::LaminaFace, {1, 0, 1, 0.5f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::LaminaWire, {0, 1, 1, 1}));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::LaminaWireLineSize, 0.75f));
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_EQ(target.dynamic_frame.triangles.front().color, rgba8(255, 0, 255, 128));
+  EXPECT_EQ(target.dynamic_frame.lines.front().color, rgba8(0, 255, 255));
+  EXPECT_FLOAT_EQ(target.dynamic_frame.lines.front().width_pixels, 0.75f);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+  request.overlays_visible = false;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_TRUE(target.dynamic_frame.triangles.empty());
+  EXPECT_TRUE(target.dynamic_frame.lines.empty());
+  request.overlays_visible = true;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  EXPECT_EQ(target.dynamic_frame.triangles.size(), 1u);
+  EXPECT_EQ(target.dynamic_frame.lines.size(), 1u);
 }
 
 } // namespace

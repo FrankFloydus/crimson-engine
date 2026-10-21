@@ -68,6 +68,7 @@ enum class OperationKind : std::uint8_t {
   AssignMaterialSlot,
   DeleteSelection,
   DefaultEdgeNormals,
+  SplitEdgesMidpoint,
 };
 
 /// Classifies a portable operation parameter's scalar representation.
@@ -120,7 +121,7 @@ inline constexpr DirtyFlags kGeometryDirty{
     .overlays = true,
 };
 
-inline constexpr std::array<OperationDescriptor, 36>
+inline constexpr std::array<OperationDescriptor, 37>
     kOperationDescriptors{{
         {OperationKind::Bridge, "bridge", "bridge", "bridge", true, false,
          kTopologyDirty,
@@ -244,6 +245,8 @@ inline constexpr std::array<OperationDescriptor, 36>
         {OperationKind::DeleteSelection, "delete_selection",
          "delete_selection", "delete_selection", false, false,
          kTopologyDirty},
+        {OperationKind::SplitEdgesMidpoint, "split_edges_midpoint", "split_edges_midpoint",
+         "split_edges_midpoint", false, false, kTopologyDirty},
     }};
 
 } // namespace detail

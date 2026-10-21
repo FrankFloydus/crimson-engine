@@ -7,8 +7,11 @@
 
 #include "render/crimson/crimson_editor_projection.hpp"
 #include "assets/mesh_collision_geometry_payload.hpp"
+#include "assets/mesh_geometry_projection.hpp"
+#include "render/overlay/overlay_face_fill_policy.hpp"
 #include "render/render_scene_snapshot.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "viewport/viewport_settings.hpp"
 #include "core/color_space.hpp"
 
 #include <gtest/gtest.h>
@@ -19,6 +22,127 @@
 
 namespace quader {
 namespace {
+
+class FaceDimensionSelectionProvider final
+    : public ViewportOverlaySelectionFrameProvider {
+public:
+  [[nodiscard]] ViewportOverlayFrame build_selection_overlay_frame() const override {
+    ++build_count;
+    ViewportOverlayFrame frame;
+    frame.triangles.push_back({.layer = ViewportOverlayLayer::SelectedVisibleFace,
+        .a = {-1, -1, -0.5f}, .b = {1, -1, 0.5f}, .c = {1, 1, 0},
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = 10, .vertex_id = 1, .edge_a = 2, .edge_b = 3,
+                    .face_id = 1}});
+    return frame;
+  }
+
+  mutable int build_count = 0;
+};
+
+TEST(CrimsonEditorProjectionTests,
+     FaceDimensionsFollowPreviewEpochWithStableSelectionAndRemainEnabled) {
+  FaceDimensionSelectionProvider provider;
+  CrimsonEditorProjection projection;
+  const auto settings = ViewportSettings::defaults();
+  ViewportOverlaySubmissionRequest request;
+  request.layer_mask = 4u;
+  request.camera.eye = {0, 0, 10};
+  request.camera.viewport_size = {800, 600};
+  request.camera.projection = ViewportOverlayProjection::Orthographic;
+  request.camera.orthographic_size = 16.0f;
+  request.selection_source.source_identity = 10u;
+  request.selection_source.content_revision = 1u;
+  request.selection_source.selection_revision = 1u;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Face;
+  request.selection_frame_provider = &provider;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Component;
+  request.style_selection_context = ViewportOverlaySelectionContext::Face;
+  request.overlays_visible = true;
+  request.selection_dimensions_visible = true;
+  const auto verify_submission = [&](const ViewportOverlaySubmissionResult &submission,
+                                     float delta) {
+    ASSERT_TRUE(submission.selection_dimension_bounds);
+    const auto &bounds = *submission.selection_dimension_bounds;
+    EXPECT_FLOAT_EQ(bounds.min.x, delta - 1.0f);
+    EXPECT_FLOAT_EQ(bounds.max.x, delta + 1.0f);
+    EXPECT_FLOAT_EQ(bounds.min.y, -1.0f);
+    EXPECT_FLOAT_EQ(bounds.max.y, 1.0f);
+    EXPECT_FLOAT_EQ(bounds.min.z, -0.5f);
+    EXPECT_FLOAT_EQ(bounds.max.z, 0.5f);
+    const auto frame = projection.frame(4u, {}, {0u, 0u, 800u, 600u},
+                                        {800u, 600u}, {}, true, 1u);
+    ASSERT_TRUE(frame);
+    std::size_t dimension_vertices = 0u;
+    for (const auto &batch : frame->batches) {
+      if (batch.primitive != crimson::shared::EditorPrimitive::Ribbon ||
+          batch.stencil.read_mask != kOverlayActiveWireStencilMask) continue;
+      for (const auto &position : batch.geometry.positions.values) {
+        for (const auto endpoint : {position.position, position.endpoint}) {
+          EXPECT_GE(endpoint[0], delta - 1.00001f);
+          EXPECT_LE(endpoint[0], delta + 1.00001f);
+          EXPECT_GE(endpoint[1], -1.00001f);
+          EXPECT_LE(endpoint[1], 1.00001f);
+          EXPECT_GE(endpoint[2], -0.50001f);
+          EXPECT_LE(endpoint[2], 0.50001f);
+        }
+        ++dimension_vertices;
+      }
+    }
+    EXPECT_GT(dimension_vertices, 0u);
+  };
+  verify_submission(projection.submit(request, settings), 0.0f);
+  auto geometry = std::make_shared<MeshGeometryPayload>();
+  geometry->vertices = {
+      {.position = {-1, -1, -0.5f}, .source_vertex_id = 1},
+      {.position = {1, -1, 0.5f}, .source_vertex_id = 2},
+      {.position = {1, 1, 0}, .source_vertex_id = 3}};
+  geometry->indices = {0u, 1u, 2u};
+  for (const float delta : {3.0f, 6.0f}) {
+    SCOPED_TRACE(delta);
+    auto preview = std::make_shared<RenderToolPreviewSceneSnapshot>();
+    auto coordinates = std::make_shared<MeshGeometryProjection>();
+    coordinates->source_geometry = geometry;
+    coordinates->positions = std::make_shared<const std::vector<QVec3>>(
+        std::vector<QVec3>{{delta - 1, -1, -0.5f}, {delta + 1, -1, 0.5f},
+                           {delta + 1, 1, 0}});
+    RenderToolPreviewMeshRecord mesh;
+    mesh.source_object_id = 10;
+    mesh.source_entity = 101u;
+    mesh.mesh.share_geometry(geometry);
+    mesh.dynamic_positions = true;
+    mesh.suppress_source = true;
+    mesh.dynamic_position_payload = coordinates->positions;
+    mesh.geometry_projection = coordinates;
+    preview->meshes.push_back(std::move(mesh));
+    projection.set_preview(preview);
+    request.selection_dimension_preview_meshes = preview->meshes;
+    const auto moved = projection.submit(request, settings);
+    EXPECT_TRUE(moved.dynamic_submitted);
+    EXPECT_FALSE(moved.selection_source_refreshed);
+    verify_submission(moved, delta);
+    const auto retained = projection.frame(4u, {}, {0u, 0u, 800u, 600u},
+                                           {800u, 600u}, {}, true, 1u);
+    const auto work = projection.counters();
+    for (int unchanged = 0; unchanged < 3; ++unchanged) {
+      projection.set_preview(preview);
+      EXPECT_TRUE(projection.submit(request, settings).camera_only);
+      EXPECT_EQ(projection.frame(4u, {}, {0u, 0u, 800u, 600u},
+                                 {800u, 600u}, {}, true, 1u), retained);
+    }
+    EXPECT_EQ(projection.counters().layer_builds, work.layer_builds);
+    EXPECT_EQ(projection.counters().position_packs, work.position_packs);
+    EXPECT_EQ(projection.counters().attribute_packs, work.attribute_packs);
+    EXPECT_EQ(projection.counters().index_packs, work.index_packs);
+    EXPECT_EQ(provider.build_count, 1);
+  }
+  projection.set_preview({});
+  request.selection_dimension_preview_meshes = {};
+  const auto canceled = projection.submit(request, settings);
+  EXPECT_TRUE(canceled.dynamic_submitted);
+  verify_submission(canceled, 0.0f);
+  EXPECT_EQ(provider.build_count, 1);
+}
 
 TEST(CrimsonEditorProjectionTests, ActiveObjectSwapMovesMaskClassAndRetainsSourceStreams) {
   auto geometry = std::make_shared<MeshGeometryPayload>();

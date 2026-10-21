@@ -133,7 +133,8 @@ std::vector<CommandDescriptor> OperationsApi::catalog() const {
       {"radial_align_vertices", "Radial Align Vertices", "Vertex"},
       {"snap_edges_to_active", "Snap Edges To Active", "Edge"},
       {"connect_edges", "Connect Edges", "Edge"},
-      {"split_edges", "Split Edges", "Edge"},
+      {"split_edges", "Disconnect Edge", "Edge"},
+      {"split_edges_midpoint", "Edge Split", "Edge"},
       {"default_edge_normals", "Set Edge Normals to Default", "Edge"},
       {"harden_edge_normals", "Harden Edge Normals", "Edge"},
       {"soften_edge_normals", "Soften Edge Normals", "Edge"},
@@ -306,6 +307,9 @@ OperationReceipt OperationsApi::execute(std::string_view id,
   }
   if (id == "split_edges") {
     return finish(split_edges());
+  }
+  if (id == "split_edges_midpoint") {
+    return finish(split_edges_midpoint());
   }
   if (id == "default_edge_normals") {
     return finish(default_edge_normals());
@@ -616,6 +620,12 @@ OperationReceipt OperationsApi::connect_edges() {
 OperationReceipt OperationsApi::split_edges() {
   MeshHandle mesh = MeshCollection(context_).first_selected();
   return mesh.valid() ? mesh.edges().selected().split()
+                      : unsupported(*context_, "No selected mesh.");
+}
+
+OperationReceipt OperationsApi::split_edges_midpoint() {
+  MeshHandle mesh = MeshCollection(context_).first_selected();
+  return mesh.valid() ? mesh.edges().selected().split_midpoint()
                       : unsupported(*context_, "No selected mesh.");
 }
 

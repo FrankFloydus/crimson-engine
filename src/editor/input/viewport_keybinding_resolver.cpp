@@ -709,7 +709,8 @@ void ViewportKeybindingResolver::resolve(
     double &linear_array_wheel_remainder,
     double &radial_array_wheel_remainder,
     ViewportRuntimeBindingToken runtime_binding,
-    std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings) {
+    std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings,
+    std::optional<QuaderInputChord> *quick_pivot_hold) {
   input.resolved_shortcuts.clear();
   input.navigation_bindings = {};
   input.transform_vertex_snap_down = false;
@@ -744,6 +745,11 @@ void ViewportKeybindingResolver::resolve(
     radial_array_wheel_remainder = 0.0;
   }
   if (!input.viewport_focused || input.text_input_active) {
+    if (quick_pivot_hold != nullptr && quick_pivot_hold->has_value()) {
+      input.quick_pivot_released = true;
+      input.quick_pivot_down = false;
+      quick_pivot_hold->reset();
+    }
     editor.commands().reset_pending_viewport_keybinding_chord();
     suppressed_chords.clear();
     if (repeat_bindings != nullptr) repeat_bindings->clear();
@@ -948,6 +954,10 @@ void ViewportKeybindingResolver::resolve(
                   }
                 }
               } else {
+                if (action == ViewportInputActionKind::QuickPivot &&
+                    quick_pivot_hold != nullptr) {
+                  *quick_pivot_hold = candidate;
+                }
                 record_material_transfer_trigger(input, action, candidate,
                                                      pointer_edge);
                 record_curve_conversion_trigger(input, action, candidate,
@@ -1046,7 +1056,21 @@ void ViewportKeybindingResolver::resolve(
 
   if (!dispatch_continues) {
     if (repeat_bindings != nullptr) repeat_bindings->clear();
+    if (quick_pivot_hold != nullptr) quick_pivot_hold->reset();
     return;
+  }
+  // A held action belongs to its accepted press, even when navigation makes
+  // that same chord mean Fly Right. Losing focus or the physical hold retires
+  // only editing; the pivot owner keeps any user-authored pivot override.
+  if (quick_pivot_hold != nullptr && quick_pivot_hold->has_value()) {
+    if (std::ranges::find(input.active_input_chords, **quick_pivot_hold) !=
+        input.active_input_chords.end()) {
+      input.quick_pivot_down = true;
+    } else {
+      input.quick_pivot_released = true;
+      input.quick_pivot_down = false;
+      quick_pivot_hold->reset();
+    }
   }
   if (repeat_bindings != nullptr) {
     const auto &navigation = input.navigation_bindings;

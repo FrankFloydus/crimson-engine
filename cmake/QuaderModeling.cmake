@@ -546,6 +546,7 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
         tests/modeling_domain/operation/qdr_document_operation_slice_quad_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_snap_vertices_to_active_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_split_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_split_edges_midpoint_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_thicken_faces_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_transform_selection_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_translate_selection_tests.cpp

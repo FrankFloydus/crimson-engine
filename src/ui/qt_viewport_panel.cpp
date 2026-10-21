@@ -964,6 +964,7 @@ void QtViewportPanel::abandon_interactions() {
   active_box_preview_ = {};
   modal_tool_dragging_ = false;
   suppressed_keybinding_chords_.clear();
+  quick_pivot_hold_.reset();
   repeated_keybinding_commands_.clear();
   command_pointer_release_suppression_ = {};
   linear_array_wheel_remainder_ = 0.0;
@@ -4083,13 +4084,14 @@ void QtViewportPanel::process_viewport_input(
       linear_array_wheel_remainder_, radial_array_wheel_remainder_,
       {.current_generation = &runtime_binding_generation_,
        .expected_generation = input_binding_generation},
-      &repeated_keybinding_commands_);
+      &repeated_keybinding_commands_, &quick_pivot_hold_);
   if (runtime_binding_generation_ != input_binding_generation) {
     // A synchronous command (for example Close Scene) rebound every runtime
     // owner while this stack still holds references to the previous scene.
     // The rebind has already abandoned Qt-owned state, so no old owner may be
     // observed again in this input frame.
     suppressed_keybinding_chords_.clear();
+    quick_pivot_hold_.reset();
     repeated_keybinding_commands_.clear();
     linear_array_wheel_remainder_ = 0.0;
     radial_array_wheel_remainder_ = 0.0;

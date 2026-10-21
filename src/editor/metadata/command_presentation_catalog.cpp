@@ -580,6 +580,8 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Group::Topology, 100u, kMenuViewportPalette),
     presentation(quader_command::kModelingSplitEdges, Domain::Edge,
                  Group::Topology, 110u, kMenuViewportPalette),
+    presentation(quader_command::kModelingSplitEdgesMidpoint, Domain::Edge,
+                 Group::Topology, 115u, kMenuViewportPalette),
     presentation(quader_command::kModelingFillHole, Domain::Edge,
                  Group::Topology, 120u, kMenuViewportPalette),
     presentation(quader_command::kModelingBridgeEdges, Domain::Edge,

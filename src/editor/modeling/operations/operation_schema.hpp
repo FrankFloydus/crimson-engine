@@ -61,6 +61,7 @@ enum class EditorOperationId {
   AssignMaterial,
   DeleteSelection,
   DefaultEdgeNormals,
+  SplitEdgesMidpoint,
 };
 
 /// Maps native preview presentation categories to portable transactions.

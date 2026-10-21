@@ -9,6 +9,7 @@
 #include "api/quader_input_types.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -29,7 +30,8 @@ public:
                       double &linear_array_wheel_remainder,
                       double &radial_array_wheel_remainder,
                       ViewportRuntimeBindingToken runtime_binding = {},
-                      std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings = nullptr);
+                      std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings = nullptr,
+                      std::optional<QuaderInputChord> *quick_pivot_hold = nullptr);
 };
 
 } // namespace quader

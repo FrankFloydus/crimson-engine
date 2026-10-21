@@ -331,6 +331,8 @@ CrimsonEditorProjection::~CrimsonEditorProjection() = default;
 ViewportOverlaySubmissionResult CrimsonEditorProjection::submit(
     ViewportOverlaySubmissionRequest request, const ViewportSettings &settings) {
   request.gpu_mesh_outlines = true;
+  request.tool_preview_overlay_identity = reinterpret_cast<std::uintptr_t>(impl_.get());
+  request.tool_preview_overlay_revision = impl_->preview_epoch;
   return impl_->coordinator.submit(std::move(request),settings,*this);
 }
 void CrimsonEditorProjection::set_active_viewports(std::uint8_t mask) {

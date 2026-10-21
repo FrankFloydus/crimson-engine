@@ -30,7 +30,7 @@ const qhc::HostActionDescriptor& require_action(std::string_view id)
 
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogLinksPanelActionsToDescriptorOnlyOperationsOrTools) {
 	const std::span<const qhc::HostActionDescriptor> actions = qhc::action_catalog();
-	EXPECT_TRUE(actions.size() == 43U);
+	EXPECT_TRUE(actions.size() == 44U);
 
 	for (const qhc::HostActionDescriptor& action : actions) {
 		EXPECT_FALSE(action.id.empty());

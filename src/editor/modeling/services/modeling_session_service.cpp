@@ -3774,12 +3774,8 @@ public:
           },
       };
     }
-    const auto &hover = runtime_.hover();
     const bool needs_geometry =
-        runtime_.active_tool() != quader_editor_core::ViewportInteractionTool::Cut &&
-        (hover.kind != quader_editor_core::SelectionHoverKind::None ||
-         hover.candidate_object_id > 0 ||
-         !runtime_.insert_edge_loop_state().preview_lines.empty());
+        runtime_.active_tool() != quader_editor_core::ViewportInteractionTool::Cut;
     const auto *projected = needs_geometry ? &selection_projection_snapshot() : nullptr;
     const quader_editor_core::KnifeStraightGuide knife_guide =
         projected_knife_straight_guide();

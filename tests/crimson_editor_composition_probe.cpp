@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "render/render_host.hpp"
 #if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
@@ -28,11 +29,13 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QImage>
+#include <QLabel>
 #include <QScreen>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
+#include <QtMath>
 
 #include <algorithm>
 #include <array>
@@ -41,6 +44,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,15 +53,122 @@
 namespace quader {
 namespace {
 
+struct ProbeLaminaDiagnostics final {
+  std::size_t triangles = 0u;
+  std::size_t lines = 0u;
+  bool face_style_correct = true;
+  bool line_style_correct = true;
+  float minimum_y = 0.0f;
+  float maximum_y = 0.0f;
+  std::size_t horizontal_triangles = 0u;
+};
+
+/** Observes the production sink's submitted bounds without replacing its render path. */
+class ProbeSceneSink final : public RenderSceneSink {
+public:
+  explicit ProbeSceneSink(std::unique_ptr<RenderSceneSink> sink) : sink_(std::move(sink)) {}
+  void shutdown() override { sink_->shutdown(); }
+  void set_project_material_resolver(const RenderProjectMaterialResolver *resolver) override {
+    sink_->set_project_material_resolver(resolver);
+  }
+  const RenderProjectMaterialResolver *project_material_resolver() const override {
+    return sink_->project_material_resolver();
+  }
+  void bind_scene(RenderSceneBindingKey binding) override { sink_->bind_scene(binding); }
+  void set_backface_culling_enabled(bool enabled) override { sink_->set_backface_culling_enabled(enabled); }
+  void sync(const SceneDocument &scene, const AssetRegistry &assets, std::uint64_t frame,
+            RenderSceneBindingKey binding, RenderInstanceEditScope scope,
+            const ViewportLocalVisibilitySnapshot *visibility) override {
+    sink_->sync(scene, assets, frame, binding, scope, visibility);
+  }
+  void sync(RenderSceneSnapshot snapshot) override { sink_->sync(std::move(snapshot)); }
+  void update_mesh_surface_grid(float spacing, const ViewportSettings &settings) override {
+    sink_->update_mesh_surface_grid(spacing, settings);
+  }
+  void sync_scene_asset_overlays(const RenderOverlaySelectedObjectSnapshot &selected,
+      const RenderOverlaySceneWireframeSnapshot &wireframe,
+      const RenderOverlayCollisionSnapshot &collision) override {
+    sink_->sync_scene_asset_overlays(selected, wireframe, collision);
+  }
+  RenderToolPreviewSceneSnapshot build_tool_preview_scene_snapshot(ToolPreviewScene preview,
+      const AssetRegistry &assets, const ViewportLocalVisibilitySnapshot *visibility) override {
+    return sink_->build_tool_preview_scene_snapshot(std::move(preview), assets, visibility);
+  }
+  ToolPreviewSubmissionResult set_tool_preview_scene(RenderToolPreviewSceneSnapshot preview) override {
+    return sink_->set_tool_preview_scene(std::move(preview));
+  }
+  const RenderToolPreviewSuppressionSnapshot &tool_preview_suppression() const noexcept override {
+    return sink_->tool_preview_suppression();
+  }
+  std::uint64_t tool_preview_submission_revision() const override {
+    return sink_->tool_preview_submission_revision();
+  }
+  bool scene_asset_overlay_sync_pending() const override { return sink_->scene_asset_overlay_sync_pending(); }
+  void perform_idle_resource_maintenance() override { sink_->perform_idle_resource_maintenance(); }
+  void set_active_overlay_viewports(std::uint8_t mask) override { sink_->set_active_overlay_viewports(mask); }
+  ViewportOverlaySubmissionResult submit_viewport_overlay(ViewportOverlaySubmissionRequest request,
+      const ViewportSettings &settings) override {
+    const auto pane = request.viewport_index;
+    if (pane < lamina_.size()) {
+      auto &diagnostics = lamina_[pane];
+      diagnostics = {};
+      if (request.volatile_modeling_overlay_frame != nullptr) {
+        for (const auto &triangle : request.volatile_modeling_overlay_frame->triangles) {
+          if (triangle.layer != ViewportOverlayLayer::DiagnosticFace) continue;
+          ++diagnostics.triangles;
+          if (diagnostics.triangles == 1u) diagnostics.minimum_y = diagnostics.maximum_y = triangle.a.y;
+          for (const auto point : {triangle.a, triangle.b, triangle.c}) {
+            diagnostics.minimum_y = std::min(diagnostics.minimum_y, point.y);
+            diagnostics.maximum_y = std::max(diagnostics.maximum_y, point.y);
+          }
+          diagnostics.horizontal_triangles += std::abs(triangle.a.y - triangle.b.y) < 0.00001f &&
+              std::abs(triangle.a.y - triangle.c.y) < 0.00001f;
+          diagnostics.face_style_correct &= triangle.style_role == ViewportOverlayStyleRole::LaminaFace;
+        }
+        for (const auto &line : request.volatile_modeling_overlay_frame->lines) {
+          if (line.layer != ViewportOverlayLayer::DiagnosticEdge) continue;
+          ++diagnostics.lines;
+          diagnostics.line_style_correct &= line.style_role == ViewportOverlayStyleRole::LaminaWire;
+        }
+      }
+    }
+    auto result = sink_->submit_viewport_overlay(std::move(request), settings);
+    if (pane < bounds_.size()) bounds_[pane] = result.selection_dimension_bounds;
+    if (pane < handles_.size()) {
+      handles_[pane].clear();
+      if (result.edge_hud_frame != nullptr) {
+        for (const auto &line : result.edge_hud_frame->lines) {
+          if (line.layer == ViewportOverlayLayer::ToolHandle) handles_[pane].push_back(line);
+        }
+      }
+    }
+    return result;
+  }
+  const std::optional<ViewportSelectionDimensionBounds> &bounds(std::size_t pane) const { return bounds_[pane]; }
+  const ProbeLaminaDiagnostics &lamina(std::size_t pane) const { return lamina_[pane]; }
+  const std::vector<ViewportOverlayLine> &handles(std::size_t pane) const { return handles_[pane]; }
+
+private:
+  std::unique_ptr<RenderSceneSink> sink_;
+  std::array<std::optional<ViewportSelectionDimensionBounds>, 4> bounds_;
+  std::array<ProbeLaminaDiagnostics, 4> lamina_;
+  std::array<std::vector<ViewportOverlayLine>, 4> handles_;
+};
+
 /** Drives the production four-pane adapter without selecting it for an app. */
 class EditorCompositionProbe final {
 public:
   EditorCompositionProbe(QApplication &application, QString output_directory,
                          std::filesystem::path resources, bool overlay_parity,
-                         QString reference_directory)
+                         QString reference_directory, bool face_dimensions, bool lamina_overlap,
+                         bool instance_preview, bool edge_gizmo)
       : application_(application), output_directory_(std::move(output_directory)),
         resources_(std::move(resources)),
         reference_directory_(std::move(reference_directory)), overlay_parity_(overlay_parity),
+        face_dimensions_(face_dimensions || instance_preview),
+        lamina_overlap_(lamina_overlap),
+        instance_preview_(instance_preview),
+        edge_gizmo_(edge_gizmo),
         editor_(QuaderApiSessionInternalAccess::from_scene_session(session_)),
 #if defined(QUADER_FILAMENT_REFERENCE_PROBE)
         host_(create_app_render_host()) {
@@ -83,7 +194,8 @@ public:
         !accept(editor_.viewports().set_layout(ViewportLayoutId::FourQuad))) {
       return 1;
     }
-    const auto created = editor_.modeling().create_box(
+    const auto created = lamina_overlap_ ? create_lamina_source()
+        : face_dimensions_ ? create_face_dimension_box() : editor_.modeling().create_box(
         {.min = {-0.6f, -0.35f, -0.45f}, .max = {0.6f, 0.35f, 0.45f}},
         "Crimson public composition box");
     if (!accept(created)) {
@@ -110,6 +222,10 @@ public:
       }
       session_.viewport_workspace().camera(pane).focus_bounds({-2, -2, -2}, {2, 2, 2});
     }
+    if (instance_preview_ && !begin_instance_preview()) return 1;
+    if (face_dimensions_ && !begin_face_dimensions()) return 1;
+    if (lamina_overlap_ && !begin_lamina_overlap()) return 1;
+    if (edge_gizmo_ && !begin_edge_gizmo()) return 1;
     create_root();
     step_clock_.start();
     settle_clock_.start();
@@ -153,6 +269,982 @@ private:
     }
     fail(status.error_message());
     return false;
+  }
+
+  QuaderApiResult<QuaderModelingObjectRef> create_lamina_source() {
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {-4, 4, 11}),
+        quader_poly::add_vertex(document, {-4, 4, 15}),
+        quader_poly::add_vertex(document, {0, 4, 15}),
+        quader_poly::add_vertex(document, {0, 4, 11})};
+    (void)quader_poly::add_face(document, vertices);
+    document.faces.front().id = 5;
+    document.next_face_id = 6;
+    return editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "SEL-20261021-5DD1BB93 face5 interface"});
+  }
+
+  bool begin_lamina_overlap() {
+    // These are the exact world-space interface faces from the supplied dump
+    // and saved peer mesh, including its noncentral coplanar split seam.
+    constexpr float kSplitZ = 12.620665788650513f;
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {-4, 4, 11}),
+        quader_poly::add_vertex(document, {0, 4, 11}),
+        quader_poly::add_vertex(document, {0, 4, kSplitZ}),
+        quader_poly::add_vertex(document, {-4, 4, kSplitZ}),
+        quader_poly::add_vertex(document, {-4, 4, 15}),
+        quader_poly::add_vertex(document, {0, 4, 15})};
+    const std::array first{vertices[0], vertices[1], vertices[2], vertices[3]};
+    const std::array second{vertices[4], vertices[3], vertices[2], vertices[5]};
+    (void)quader_poly::add_face(document, first);
+    (void)quader_poly::add_face(document, second);
+    document.faces[0].id = 6;
+    document.faces[1].id = 12;
+    document.next_face_id = 13;
+    const auto peer = editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "SEL-20261021-5DD1BB93 opposing faces6and12"});
+    if (!accept(peer)) return false;
+    lamina_peer_ = peer.value();
+    settings_.set_bool_value(ViewportBoolSettingId::ShowOverlays, true);
+    settings_.set_bool_value(ViewportBoolSettingId::BackfaceCulling, true);
+    if (std::abs(settings_.float_value(ViewportFloatSettingId::LaminaWireLineSize) - 1.5f) > 0.00001f) {
+      fail("The default lamina warning wire must remain 1.5 logical pixels wide");
+      return false;
+    }
+    (void)settings_.set_color(ViewportColorSettingId::SelectionWire, {0, 1, 0, 1});
+    (void)settings_.set_color(ViewportColorSettingId::SelectionFace, {0, 1, 0, 0.5f});
+    (void)settings_.set_color(ViewportColorSettingId::HoverWire, {0, 0, 1, 1});
+    (void)settings_.set_color(ViewportColorSettingId::HoverFace, {0, 0, 1, 0.5f});
+    (void)settings_.set_color(ViewportColorSettingId::SourceWire, {0, 1, 1, 1});
+    (void)settings_.set_color(ViewportColorSettingId::OpenEdge, {0, 1, 1, 1});
+    apply_settings();
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const bool above = pane % 2u == 0u;
+      if (!camera.restore_perspective_pose({
+              .eye = {-2, above ? 10.0f : -2.0f, pane < 2u ? 13.0f : 17.0f},
+              .target = {-2, 4, 13}, .up = {0, 0, 1}})) return false;
+      camera.focus_bounds({-4, 3.9f, 11}, {0, 4.1f, 15}, 1.6f);
+    }
+    return select_lamina_source();
+  }
+
+  bool select_lamina_source() {
+    return accept(editor_.mode().set(QuaderEditorMode::Object)) &&
+        accept(editor_.selection().select_object(object_)) &&
+        accept(editor_.mode().set(QuaderEditorMode::Edit)) &&
+        accept(editor_.selection().set_mode(QuaderSelectionMode::Face)) &&
+        accept(editor_.selection().clear()) &&
+        accept(editor_.selection().select_face(object_, 5));
+  }
+
+  QuaderTransformDragBeginRequest lamina_drag() const {
+    return {.tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::Y,
+        .pivot = {-2, 4, 13}, .screen_position = {100, 100}, .screen_pivot = {100, 100},
+        .screen_tip = {100, 120}, .has_world_direction = true, .world_direction = {0, 1, 0},
+        .ray = {.origin = {-2, 4, 20}, .direction = {0, 0, -1}},
+        .camera = {.orthographic = true, .origin = {-2, 4, 20},
+            .x_axis = {1, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1},
+            .viewport_size = {800, 600}, .orthographic_size = 8},
+        .vertex_snap_radius = 0, .grid_snap_enabled = false};
+  }
+
+  bool move_lamina_away() {
+    if (!accept(editor_.modeling().begin_transform_drag(lamina_drag()))) return false;
+    const auto begin = lamina_drag();
+    const auto moved = editor_.modeling().update_transform_drag({
+        .screen_position = {100, 50},
+        .ray = {.origin = {-2, 3.5f, 20}, .direction = {0, 0, -1}},
+        .camera = begin.camera, .vertex_snap_radius = 0, .grid_snap_enabled = false});
+    if (!accept(moved)) return false;
+    if (std::abs(moved.value().move_delta.y + 0.5f) > 0.00001f) {
+      fail("The public lamina drag did not separate the source face");
+      return false;
+    }
+    lamina_expected_ = false;
+    return true;
+  }
+
+  bool create_warped_lamina_fixture() {
+    if (!accept(editor_.scene().destroy(object_.entity)) ||
+        !accept(editor_.scene().destroy(lamina_peer_.entity))) return false;
+    constexpr std::array<QVec3, 4> kPositions{{{0, 0, 0}, {2, 0, 0}, {2, 2, 0}, {0, 2, 1}}};
+    quader_poly::Document warped;
+    std::array<quader_poly::ElementId, 4> vertices;
+    for (std::size_t index = 0u; index < vertices.size(); ++index)
+      vertices[index] = quader_poly::add_vertex(warped, kPositions[index]);
+    (void)quader_poly::add_face(warped, vertices);
+    const auto source = editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(warped)),
+        {.name = "Warped authored face must not inherit triangle lamina diagnostics"});
+    if (!accept(source)) return false;
+    object_ = source.value();
+    quader_poly::Document tetrahedron;
+    for (std::size_t index = 0u; index < vertices.size(); ++index)
+      vertices[index] = quader_poly::add_vertex(tetrahedron, kPositions[index]);
+    constexpr std::array<std::array<std::size_t, 3>, 4> kTriangles{{
+        {{0, 1, 2}}, {{0, 1, 3}}, {{0, 2, 3}}, {{1, 2, 3}}}};
+    for (const auto &indices : kTriangles) {
+      const std::array loop{vertices[indices[0]], vertices[indices[1]], vertices[indices[2]]};
+      (void)quader_poly::add_face(tetrahedron, loop);
+    }
+    const auto peer = editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(tetrahedron)),
+        {.name = "Warped face triangle witnesses share only authored edges"});
+    if (!accept(peer) || !accept(editor_.selection().clear())) return false;
+    lamina_peer_ = peer.value();
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      if (!camera.restore_perspective_pose({
+              .eye = {pane < 2u ? 1.0f : 5.0f, pane % 2u == 0u ? 6.0f : -4.0f, 4},
+              .target = {1, 1, 0.3f}, .up = {0, 0, 1}})) return false;
+      camera.focus_bounds({0, 0, 0}, {2, 2, 1}, 1.6f);
+    }
+    lamina_expected_ = false;
+    return true;
+  }
+
+  QuaderApiResult<QuaderModelingObjectRef> create_closed_lamina_box(float bottom, float top) {
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {-4, bottom, 15}),
+        quader_poly::add_vertex(document, {0, bottom, 15}),
+        quader_poly::add_vertex(document, {0, top, 15}),
+        quader_poly::add_vertex(document, {-4, top, 15}),
+        quader_poly::add_vertex(document, {-4, bottom, 11}),
+        quader_poly::add_vertex(document, {-4, top, 11}),
+        quader_poly::add_vertex(document, {0, top, 11}),
+        quader_poly::add_vertex(document, {0, bottom, 11})};
+    constexpr std::array<std::array<std::size_t, 4>, 6> kLoops{{
+        {{0, 1, 2, 3}}, {{4, 5, 6, 7}}, {{1, 7, 6, 2}},
+        {{4, 0, 3, 5}}, {{5, 3, 2, 6}}, {{4, 7, 1, 0}}}};
+    for (const auto &indices : kLoops) {
+      const std::array loop{vertices[indices[0]], vertices[indices[1]], vertices[indices[2]], vertices[indices[3]]};
+      (void)quader_poly::add_face(document, loop);
+    }
+    return editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Shared eight-vertex closed box for raised-face lamina"});
+  }
+
+  bool create_raised_face_fixture() {
+    if (!accept(editor_.scene().destroy(object_.entity)) ||
+        !accept(editor_.scene().destroy(lamina_peer_.entity))) return false;
+    const auto source = create_closed_lamina_box(0, 4);
+    if (!accept(source)) return false;
+    object_ = source.value();
+    const auto peer = create_closed_lamina_box(4, 8);
+    if (!accept(peer)) return false;
+    lamina_peer_ = peer.value();
+    constexpr std::array<QVec3, 4> kEyes{{{-2, 6, 23}, {-2, 6, 3}, {10, 6, 13}, {-14, 6, 13}}};
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      if (!camera.restore_perspective_pose({.eye = kEyes[pane], .target = {-2, 4, 13}, .up = {0, 1, 0}})) return false;
+      camera.focus_bounds({-4, 0, 11}, {0, 8, 15}, 1.4f);
+    }
+    lamina_expected_ = true;
+    return select_lamina_source();
+  }
+
+  bool verify_lamina_overlap() {
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      const auto &submitted = recorded_sink_->lamina(pane);
+      std::cout << "lamina_records; backend=" << kBackendName << "; phase=" << lamina_phase_
+                << "; pane=" << pane << "; expected=" << lamina_expected_
+                << "; triangles=" << submitted.triangles << "; lines=" << submitted.lines << std::endl;
+      const bool partial = lamina_phase_ == 28u || lamina_phase_ == 29u || lamina_phase_ >= 32u;
+      if ((lamina_expected_ && (submitted.triangles < (partial ? 1u : 6u) ||
+                               submitted.lines < (partial ? 1u : 8u))) ||
+          (!lamina_expected_ && (submitted.triangles != 0u || submitted.lines != 0u)) ||
+          !submitted.face_style_correct || !submitted.line_style_correct) {
+        fail("The native lamina publication lost its complete persistent geometry or appearance roles");
+        return false;
+      }
+      QImage image;
+      if (!verify_pane(pane, image)) return false;
+      if (lamina_phase_ == 30u || lamina_phase_ == 31u) {
+        for (int y = 0; y < image.height(); ++y) {
+          for (int x = 0; x < image.width(); ++x) {
+            const auto color = image.pixelColor(x, y);
+            if (std::abs(color.green() - color.blue()) <= 16 &&
+                color.red() > std::max(color.green(), color.blue()) + 12) {
+              fail("A warped authored face acquired red warning from its coincident render triangles");
+              return false;
+            }
+          }
+        }
+        if (lamina_phase_ == 31u && image != lamina_previous_[pane]) {
+          fail("An unchanged warped-face diagnostic frame changed GPU pixels");
+          return false;
+        }
+        lamina_previous_[pane] = image;
+        continue;
+      }
+      if (lamina_phase_ >= 32u) {
+        const bool raised = lamina_phase_ == 33u || lamina_phase_ == 34u;
+        if (raised && (submitted.minimum_y < 4.0f - 0.00001f ||
+                       submitted.maximum_y > 5.0f + 0.00001f || submitted.horizontal_triangles != 0u)) {
+          fail("A raised shared-vertex face marked a whole wall or its selected horizontal cap as lamina");
+          return false;
+        }
+        const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+        const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+        const auto wall_red = [&](float height) {
+          const QVec3 world = pane == 0u ? QVec3{-2, height, 15}
+              : pane == 1u ? QVec3{-2, height, 11}
+              : pane == 2u ? QVec3{0, height, 13} : QVec3{-4, height, 13};
+          const auto projected = camera.project_world_point(world);
+          const QPoint pixel(qRound(projected.position.x * image.width() / render_size.x),
+                             qRound(projected.position.y * image.height() / render_size.y));
+          if (!image.rect().contains(pixel)) return 256;
+          const auto color = image.pixelColor(pixel);
+          return std::abs(color.green() - color.blue()) <= 16
+              ? color.red() - std::max(color.green(), color.blue()) : -255;
+        };
+        const int lower = wall_red(2), overlap = wall_red(4.5f), upper = wall_red(6);
+        std::cout << "raised_lamina; backend=" << kBackendName << "; phase=" << lamina_phase_
+                  << "; pane=" << pane << "; diagnostic_y=" << submitted.minimum_y << ',' << submitted.maximum_y
+                  << "; lower=" << lower << "; overlap=" << overlap << "; upper=" << upper << std::endl;
+        if (lower > 12 || upper > 12 || (raised ? overlap < 12 : overlap > 12)) {
+          fail("Live raised-face lamina must cover only the Y4..5 wall overlap, preserving ordinary lower and upper walls");
+          return false;
+        }
+        if (lamina_phase_ == 32u) lamina_closed_base_[pane] = image;
+        if ((lamina_phase_ == 34u && image != lamina_previous_[pane]) ||
+            (lamina_phase_ == 35u && image != lamina_closed_base_[pane])) {
+          fail("Raised-face retention or cancellation failed to preserve the corresponding accepted wall pixels");
+          return false;
+        }
+        lamina_previous_[pane] = image;
+        continue;
+      }
+      const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+      const auto fill_color_at = [&](QVec3 world) {
+        const auto projected = camera.project_world_point(world);
+        const QPoint pixel(qRound(projected.position.x * image.width() / render_size.x),
+                           qRound(projected.position.y * image.height() / render_size.y));
+        return image.rect().contains(pixel) ? image.pixelColor(pixel) : QColor{};
+      };
+      const std::array fill_colors{
+          fill_color_at({-2.2f, 4, 11.7f}), fill_color_at({-2.2f, 4, 13.5f})};
+      if (lamina_phase_ == 18u) {
+        if (submitted.triangles <= lamina_previous_triangles_[pane] ||
+            !near_colors(fill_colors[0], lamina_previous_fill_colors_[pane][0], 2) ||
+            !near_colors(fill_colors[1], lamina_previous_fill_colors_[pane][1], 2)) {
+          fail("Adding a coincident diagnostic face accumulated red fill at an already covered pixel");
+          return false;
+        }
+        std::cout << "lamina_single_blend; backend=" << kBackendName << "; pane=" << pane
+                  << "; triangles_before=" << lamina_previous_triangles_[pane]
+                  << "; triangles_after=" << submitted.triangles
+                  << "; both_interior_colors=unchanged" << std::endl;
+      }
+      const auto score_at = [&](QVec3 world, int radius, int channel, bool neutral_red) {
+        const auto projected = camera.project_world_point(world);
+        const QPoint center(qRound(projected.position.x * image.width() / render_size.x),
+                            qRound(projected.position.y * image.height() / render_size.y));
+        int score = -255;
+        for (int y = -radius; y <= radius; ++y) {
+          for (int x = -radius; x <= radius; ++x) {
+            if (!image.rect().contains(center + QPoint(x, y))) continue;
+            const auto color = image.pixelColor(center + QPoint(x, y));
+            if (neutral_red && std::abs(color.green() - color.blue()) > 16) continue;
+            const std::array channels{color.red(), color.green(), color.blue()};
+            score = std::max(score, channels[channel] -
+                std::max(channels[(channel + 1) % 3], channels[(channel + 2) % 3]));
+          }
+        }
+        return score;
+      };
+      const int first_fill = score_at({-2.2f, 4, 11.7f}, 0, 0, true);
+      const int second_fill = score_at({-2.2f, 4, 13.5f}, 0, 0, true);
+      const int wire = score_at({-4, 4, 13.5f}, 3, 0, true);
+      std::cout << "lamina_pixels; backend=" << kBackendName << "; phase=" << lamina_phase_
+                << "; pane=" << pane << "; fill=" << first_fill << ',' << second_fill
+                << "; wire=" << wire << std::endl;
+      const bool selected_source = lamina_phase_ == 0u || lamina_phase_ == 4u ||
+          lamina_phase_ == 7u || lamina_phase_ == 10u || lamina_phase_ == 12u;
+      const bool hover_source = lamina_phase_ == 19u;
+      const bool customized = lamina_phase_ >= 21u && lamina_phase_ <= 25u;
+      if (lamina_expected_ && partial) {
+        const int overlap_fill = score_at({-1, 4, 13.5f}, 0, 0, true);
+        const int clipped_wire = score_at({0, 4, 13.5f}, 3, 0, true);
+        if (score_at({-3, 4, 13.5f}, 0, 0, true) > 12 ||
+            score_at({1, 4, 13.5f}, 0, 0, true) > 12 || wire > 12 ||
+            overlap_fill < 12 || clipped_wire < overlap_fill + 30) {
+          fail("Partial lamina warning escaped its overlapping patch or retained a nonoverlapping authored edge");
+          return false;
+        }
+      } else if (lamina_expected_ && (selected_source || hover_source)) {
+        const int channel = hover_source ? 2 : 1;
+        if (score_at({-2.2f, 4, 11.7f}, 0, channel, false) < 20 ||
+            score_at({-2.2f, 4, 13.5f}, 0, channel, false) < 20 ||
+            score_at({-4, 4, 13.5f}, 3, channel, false) < 30) {
+          fail("Normal selection or hover appearance did not cover the underlying lamina warning");
+          return false;
+        }
+      } else if (lamina_expected_ && lamina_phase_ == 1u) {
+        if (score_at({-2.2f, 4, 11.7f}, 0, 1, false) < 20 || second_fill < 12 || wire < second_fill + 30) {
+          fail("Selecting one peer face must retain red warning on its unselected neighbor");
+          return false;
+        }
+      } else if (lamina_expected_ && !customized &&
+                 (first_fill < 12 || second_fill < 12 || wire < std::max(first_fill, second_fill) + 30)) {
+        fail("Uncovered lamina GPU tint must remain red beneath its stronger boundary");
+        return false;
+      }
+      if (!lamina_expected_ && (first_fill > 12 || second_fill > 12 || wire > 12)) {
+        fail("Separated, transverse or touching surfaces retained stale red lamina pixels");
+        return false;
+      }
+      if (customized) {
+        const bool transparent_fill = lamina_phase_ >= 24u;
+        for (const auto color : fill_colors) {
+          if ((!transparent_fill && (color.blue() - color.red() < 25 || color.green() - color.red() < 10)) ||
+              (transparent_fill && std::max({color.red(), color.green(), color.blue()}) -
+                  std::min({color.red(), color.green(), color.blue()}) > 8)) {
+            fail("Live lamina fill color and opacity did not reach the GPU surface");
+            return false;
+          }
+        }
+        const auto projected = camera.project_world_point({-4, 4, 13.5f});
+        const QPoint center(qRound(projected.position.x * image.width() / render_size.x),
+                            qRound(projected.position.y * image.height() / render_size.y));
+        int wire_pixels = 0;
+        for (int y = -8; y <= 8; ++y) {
+          for (int x = -8; x <= 8; ++x) {
+            if (!image.rect().contains(center + QPoint(x, y))) continue;
+            const auto color = image.pixelColor(center + QPoint(x, y));
+            wire_pixels += color.red() > color.green() + 15 && color.red() > color.blue() + 30 &&
+                color.green() > color.blue() + 15;
+          }
+        }
+        const int wire_contrast = score_at({-4, 4, 13.5f}, 6, 0, false);
+        if (lamina_phase_ == 21u && wire_pixels < 10) {
+          fail("Live lamina wire color did not replace the default red wire");
+          return false;
+        }
+        if (lamina_phase_ == 22u &&
+            (wire_pixels * 2 <= lamina_previous_wire_pixels_[pane] * 3 ||
+             !near_colors(fill_colors[0], lamina_previous_fill_colors_[pane][0], 2) ||
+             !near_colors(fill_colors[1], lamina_previous_fill_colors_[pane][1], 2))) {
+          fail("Increasing lamina wire width failed to widen its GPU coverage independently of the fill");
+          return false;
+        }
+        if (lamina_phase_ == 23u && wire_contrast >= lamina_previous_wire_contrast_[pane] - 10) {
+          fail("Reducing lamina wire opacity did not reduce its GPU contrast");
+          return false;
+        }
+        std::cout << "lamina_preferences; phase=" << lamina_phase_ << "; pane=" << pane
+                  << "; width=" << settings_.float_value(ViewportFloatSettingId::LaminaWireLineSize)
+                  << "; wire_pixels=" << wire_pixels << "; wire_contrast=" << wire_contrast << std::endl;
+        lamina_previous_wire_pixels_[pane] = wire_pixels;
+        lamina_previous_wire_contrast_[pane] = wire_contrast;
+      }
+      if ((lamina_phase_ == 3u || lamina_phase_ == 6u || lamina_phase_ == 17u ||
+           lamina_phase_ == 25u || lamina_phase_ == 27u || lamina_phase_ == 29u) &&
+          image != lamina_previous_[pane]) {
+        fail("An unchanged lamina publication changed the accepted GPU pixels");
+        return false;
+      }
+      lamina_previous_[pane] = image;
+      lamina_previous_fill_colors_[pane] = fill_colors;
+      lamina_previous_triangles_[pane] = submitted.triangles;
+    }
+#if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
+    if (lamina_phase_ == 3u || lamina_phase_ == 6u || lamina_phase_ == 17u ||
+        lamina_phase_ == 25u || lamina_phase_ == 27u || lamina_phase_ == 29u ||
+        lamina_phase_ == 31u || lamina_phase_ == 34u) {
+      CrimsonRenderDiagnostics after;
+      if (!diagnostics(after)) return false;
+      if (after.editor_projection.position_packs != before_.editor_projection.position_packs ||
+          after.editor_projection.attribute_packs != before_.editor_projection.attribute_packs ||
+          after.editor_projection.index_packs != before_.editor_projection.index_packs ||
+          after.editor_gpu.vertex_uploads != before_.editor_gpu.vertex_uploads ||
+          after.editor_gpu.index_uploads != before_.editor_gpu.index_uploads) {
+        fail("Unchanged lamina frames repacked or uploaded editor geometry");
+        return false;
+      }
+    }
+#endif
+    return true;
+  }
+
+  void advance_lamina_overlap() {
+    bool ok = true;
+    switch (lamina_phase_) {
+    case 0:
+      ok = accept(editor_.mode().set(QuaderEditorMode::Object)) &&
+          accept(editor_.selection().select_object(lamina_peer_)) &&
+          accept(editor_.mode().set(QuaderEditorMode::Edit)) &&
+          accept(editor_.selection().set_mode(QuaderSelectionMode::Face)) &&
+          accept(editor_.selection().select_face(lamina_peer_, 6));
+      break;
+    case 1:
+      ok = accept(editor_.selection().clear()) && accept(editor_.selection().clear_hover());
+      break;
+    case 2: break;
+    case 3: ok = select_lamina_source() && accept(editor_.modeling().begin_transform_drag(lamina_drag())); break;
+    case 4: {
+      const auto begin = lamina_drag();
+      ok = accept(editor_.modeling().update_transform_drag({
+          .screen_position = {100, 50}, .ray = {.origin = {-2, 3.5f, 20}, .direction = {0, 0, -1}},
+          .camera = begin.camera, .vertex_snap_radius = 0, .grid_snap_enabled = false}));
+      lamina_expected_ = false;
+      break;
+    }
+    case 5: break;
+    case 6:
+      ok = accept(editor_.modeling().cancel_transform_drag());
+      lamina_expected_ = true;
+      break;
+    case 7: ok = move_lamina_away(); break;
+    case 8: ok = accept(editor_.modeling().commit_transform_drag()); break;
+    case 9:
+      ok = accept(editor_.history().undo());
+      lamina_expected_ = true;
+      break;
+    case 10:
+      ok = accept(editor_.history().redo());
+      lamina_expected_ = false;
+      break;
+    case 11:
+      ok = accept(editor_.history().undo());
+      lamina_expected_ = true;
+      break;
+    case 12:
+      ok = accept(editor_.mode().set(QuaderEditorMode::Object)) &&
+          accept(editor_.selection().clear()) &&
+          accept(editor_.scene().set_transform(lamina_peer_.entity, {.location = {4, 0, 0}}));
+      lamina_expected_ = false;
+      break;
+    case 13:
+      ok = accept(editor_.scene().set_transform(lamina_peer_.entity,
+          {.location = {0, 17, 9}, .rotation_euler = {1.57079632679f, 0, 0}}));
+      break;
+    case 14:
+      ok = accept(editor_.scene().set_transform(lamina_peer_.entity, {}));
+      lamina_expected_ = true;
+      break;
+    case 15:
+      settings_.set_bool_value(ViewportBoolSettingId::BackfaceCulling, false);
+      apply_settings();
+      break;
+    case 16: break;
+    case 17: {
+      const auto duplicate = create_lamina_source();
+      ok = accept(duplicate) && accept(editor_.selection().clear());
+      if (ok) lamina_duplicate_ = duplicate.value();
+      break;
+    }
+    case 18:
+      ok = select_lamina_source() && accept(editor_.selection().clear()) &&
+          accept(editor_.selection().hover_face(object_, 5));
+      break;
+    case 19: ok = accept(editor_.selection().clear_hover()); break;
+    case 20:
+      (void)settings_.set_color(ViewportColorSettingId::LaminaFace, {0, 0.5f, 1, 0.5f});
+      (void)settings_.set_color(ViewportColorSettingId::LaminaWire, {1, 0.5f, 0, 1});
+      (void)settings_.set_float_value(ViewportFloatSettingId::LaminaWireLineSize, 1.5f);
+      apply_settings();
+      break;
+    case 21:
+      (void)settings_.set_float_value(ViewportFloatSettingId::LaminaWireLineSize, 5.0f);
+      apply_settings();
+      break;
+    case 22:
+      (void)settings_.set_color(ViewportColorSettingId::LaminaWire, {1, 0.5f, 0, 0.25f});
+      apply_settings();
+      break;
+    case 23:
+      (void)settings_.set_color(ViewportColorSettingId::LaminaFace, {0, 0.5f, 1, 0});
+      apply_settings();
+      break;
+    case 24: break;
+    case 25: {
+      const auto defaults = ViewportSettings::defaults();
+      (void)settings_.set_color(ViewportColorSettingId::LaminaFace,
+                                defaults.color(ViewportColorSettingId::LaminaFace));
+      (void)settings_.set_color(ViewportColorSettingId::LaminaWire,
+                                defaults.color(ViewportColorSettingId::LaminaWire));
+      (void)settings_.set_float_value(ViewportFloatSettingId::LaminaWireLineSize, 1.5f);
+      apply_settings();
+      break;
+    }
+    case 26: break;
+    case 27:
+      ok = accept(editor_.mode().set(QuaderEditorMode::Object)) &&
+          accept(editor_.selection().clear()) &&
+          accept(editor_.scene().destroy(lamina_duplicate_.entity)) &&
+          accept(editor_.scene().set_transform(lamina_peer_.entity, {.location = {2, 0, 0}}));
+      break;
+    case 28: break;
+    case 29: ok = create_warped_lamina_fixture(); break;
+    case 30: break;
+    case 31: ok = create_raised_face_fixture(); break;
+    case 32: {
+      const auto begin = lamina_drag();
+      ok = accept(editor_.modeling().begin_transform_drag(begin));
+      if (ok) {
+        const auto moved = editor_.modeling().update_transform_drag({
+            .screen_position = {100, 200}, .ray = {.origin = {-2, 5, 20}, .direction = {0, 0, -1}},
+            .camera = begin.camera, .vertex_snap_radius = 0, .grid_snap_enabled = false});
+        ok = accept(moved);
+        if (ok && std::abs(moved.value().move_delta.y - 1.0f) > 0.00001f) {
+          fail("The public closed-box face drag did not raise its shared vertices by one world unit");
+          ok = false;
+        }
+      }
+      break;
+    }
+    case 33: break;
+    case 34: ok = accept(editor_.modeling().cancel_transform_drag()); break;
+    default: finish(); return;
+    }
+    if (ok) {
+      ++lamina_phase_;
+      next(Step::Initial);
+    }
+  }
+
+  QuaderApiResult<QuaderModelingObjectRef> create_face_dimension_box() {
+    quader_poly::Document document;
+    std::array<quader_poly::ElementId, 8> vertices;
+    constexpr float kDiagonal = 0.70710678118f;
+    for (std::size_t corner = 0u; corner < vertices.size(); ++corner) {
+      const float x = (corner & 1u) ? 0.6f : -0.6f;
+      const float y = (corner & 2u) ? 0.35f : -0.35f;
+      vertices[corner] = quader_poly::add_vertex(document,
+          {(x - y) * kDiagonal, (x + y) * kDiagonal, (corner & 4u) ? 0.45f : -0.45f});
+    }
+    constexpr std::array<std::array<std::size_t, 4>, 6> kFaces{{
+        {{0, 4, 6, 2}}, {{1, 3, 7, 5}}, {{0, 1, 5, 4}},
+        {{2, 6, 7, 3}}, {{0, 2, 3, 1}}, {{4, 5, 7, 6}}}};
+    for (std::size_t face = 0u; face < kFaces.size(); ++face) {
+      std::array<quader_poly::ElementId, 4> loop;
+      for (std::size_t index = 0u; index < loop.size(); ++index) loop[index] = vertices[kFaces[face][index]];
+      const auto id = quader_poly::add_face(document, loop);
+      if (face == 1u) face_dimension_face_ = id;
+    }
+    return editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Closed box face dimension preview"});
+  }
+
+  bool begin_edge_gizmo() {
+    settings_.set_bool_value(ViewportBoolSettingId::ShowOverlays, true);
+    settings_.set_bool_value(ViewportBoolSettingId::ShowGizmos, true);
+    for (const auto setting : {ViewportColorSettingId::SelectionWire,
+                              ViewportColorSettingId::ActiveSelection,
+                              ViewportColorSettingId::SourceWire,
+                              ViewportColorSettingId::OpenEdge}) {
+      (void)settings_.set_color(setting, {0.5f, 0.5f, 0.5f, 1});
+    }
+    apply_settings();
+    if (!accept(editor_.mode().set(QuaderEditorMode::Edit)) ||
+        !accept(editor_.selection().set_mode(QuaderSelectionMode::Edge)) ||
+        !accept(editor_.selection().clear()) ||
+        !accept(editor_.selection().select_edge(object_, 1, 2)) ||
+        !accept(editor_.tools().activate(ViewportToolId::Move))) return false;
+    const auto center = editor_.query().selection_center();
+    if (!center) return false;
+    edge_gizmo_origin_ = *center;
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      if (!accept(editor_.viewports().record_selected_tool(kPanes[pane], ViewportToolId::Move)) ||
+          !accept(editor_.viewports().set_transform_space(kPanes[pane], QuaderTransformSpace::Global))) return false;
+      auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const float offset = static_cast<float>(pane) * 0.4f;
+      if (!camera.restore_perspective_pose({.eye = *center + QVec3{5 + offset, 4, 6 - offset},
+              .target = *center + kEdgeGizmoDelta * 0.5f, .up = {0, 1, 0}})) return false;
+      camera.focus_bounds(*center - QVec3{2, 2, 2}, *center + QVec3{3, 3, 3}, 1.15f);
+    }
+    return true;
+  }
+
+  bool verify_edge_gizmo() {
+    const auto axis_hue = [](QColor color) {
+      const int red = color.red(), green = color.green(), blue = color.blue();
+      if (red > green + 30 && red > blue + 30) return 4;
+      if (green > red + 30 && green > blue + 30) return 5;
+      if (blue > red + 30 && blue > green + 30) return 6;
+      return 0;
+    };
+    const bool moved = edge_gizmo_phase_ >= 3u && edge_gizmo_phase_ != 8u;
+    const QVec3 expected = edge_gizmo_origin_ + (moved ? kEdgeGizmoDelta : QVec3{});
+    const auto center = editor_.query().selection_center();
+    const auto pivot = editor_.query().selection_transform_pivot();
+    if (!center || !pivot || length(*center - expected) > 0.0001f || length(*pivot - expected) > 0.0001f) {
+      fail("The public edge move or untouched Quick Pivot left a stale selection pivot");
+      return false;
+    }
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      const auto &handles = recorded_sink_->handles(pane);
+      std::array<std::optional<ViewportOverlayLine>, 3> axes;
+      for (const auto &line : handles) {
+        const auto color = line.color;
+        const int color_hue = axis_hue(QColor(color & 255u, (color >> 8u) & 255u, (color >> 16u) & 255u));
+        if (color_hue >= 4 && color_hue <= 6 && length(line.start - expected) < 0.0001f &&
+            length(line.end - line.start) > 0.0001f) axes[color_hue - 4] = line;
+      }
+      std::cout << "edge_gizmo_submission; backend=" << kBackendName << "; phase=" << edge_gizmo_phase_
+                << "; pane=" << pane << "; handles=" << handles.size()
+                << "; axes=" << axes[0].has_value() << ',' << axes[1].has_value() << ',' << axes[2].has_value()
+                << "; expected=" << expected.x << ',' << expected.y << ',' << expected.z << std::endl;
+      if (std::ranges::any_of(axes, [](const auto &axis) { return !axis; })) {
+        fail("The production Qt pane did not submit all Move axes from the current edge center");
+        return false;
+      }
+      QImage image;
+      if (!verify_pane(pane, image)) return false;
+      const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+      const auto projected_pixel = [&](QVec3 point) {
+        const auto projected = camera.project_world_point(point);
+        return QVec2{projected.position.x * image.width() / render_size.x,
+                     projected.position.y * image.height() / render_size.y};
+      };
+      const auto colored_pixels = [&](QVec2 point, int expected_hue) {
+        int result = 0;
+        for (int y = -3; y <= 3; ++y) {
+          for (int x = -3; x <= 3; ++x) {
+            const QPoint pixel(qRound(point.x) + x, qRound(point.y) + y);
+            if (image.rect().contains(pixel)) result += axis_hue(image.pixelColor(pixel)) == expected_hue;
+          }
+        }
+        return result;
+      };
+      const auto distance_to_line = [](QVec2 point, QVec2 start, QVec2 end) {
+        const QVec2 delta{end.x - start.x, end.y - start.y};
+        const float squared = delta.x * delta.x + delta.y * delta.y;
+        const float along = squared > 0 ? std::clamp(((point.x - start.x) * delta.x +
+            (point.y - start.y) * delta.y) / squared, 0.0f, 1.0f) : 0.0f;
+        return std::hypot(point.x - start.x - along * delta.x, point.y - start.y - along * delta.y);
+      };
+      int sampled_axes = 0, clear_old_samples = 0;
+      for (std::size_t axis = 0u; axis < axes.size(); ++axis) {
+        const auto &line = *axes[axis];
+        bool colored = false;
+        for (const float along : {0.3f, 0.5f, 0.7f}) {
+          const auto sample = line.start + (line.end - line.start) * along;
+          const auto current = projected_pixel(sample);
+          colored |= colored_pixels(current, static_cast<int>(axis) + 4) > 0;
+          if (!moved) continue;
+          const auto old = projected_pixel(sample - kEdgeGizmoDelta);
+          const bool clear = std::ranges::all_of(handles, [&](const auto &other) {
+            return distance_to_line(old, projected_pixel(other.start), projected_pixel(other.end)) > 12.0f;
+          });
+          if (!clear) continue;
+          ++clear_old_samples;
+          if (colored_pixels(old, static_cast<int>(axis) + 4) != 0) {
+            fail("The GPU retained a Move axis at the old edge center after the accepted move");
+            return false;
+          }
+        }
+        sampled_axes += colored;
+      }
+      std::cout << "edge_gizmo; backend=" << kBackendName << "; phase=" << edge_gizmo_phase_
+                << "; pane=" << pane << "; pivot=" << expected.x << ',' << expected.y << ',' << expected.z
+                << "; submitted_axes=" << axes.size() << "; colored_axes=" << sampled_axes
+                << "; clear_old_samples=" << clear_old_samples << std::endl;
+      if (sampled_axes < 3 || (moved && clear_old_samples < 2)) {
+        fail("The GPU axis colors did not follow the submitted edge gizmo origin");
+        return false;
+      }
+      if ((edge_gizmo_phase_ == 1u || edge_gizmo_phase_ == 2u ||
+           (edge_gizmo_phase_ >= 5u && edge_gizmo_phase_ <= 7u)) && image != edge_gizmo_previous_[pane]) {
+        fail("An unchanged edge gizmo or untouched Quick Pivot changed retained GPU pixels");
+        return false;
+      }
+      edge_gizmo_previous_[pane] = image;
+    }
+    return true;
+  }
+
+  void advance_edge_gizmo() {
+    bool ok = true;
+    switch (edge_gizmo_phase_) {
+    case 0: break;
+    case 1:
+      session_.pivot().begin_quick_edit(edge_gizmo_origin_);
+      session_.pivot().end_quick_edit();
+      if (session_.pivot().selection_pivot_override().valid || session_.pivot().quick_edit_active()) {
+        fail("Ending an untouched native Quick Pivot hold retained an override");
+        return;
+      }
+      break;
+    case 2:
+      ok = accept(editor_.modeling().begin_transform_preview()) &&
+          accept(editor_.modeling().update_transform_translate(kEdgeGizmoDelta));
+      break;
+    case 3: ok = accept(editor_.modeling().commit_transform_preview()); break;
+    case 4: case 5: case 6: break;
+    case 7: ok = accept(editor_.history().undo()); break;
+    case 8: ok = accept(editor_.history().redo()); break;
+    default: finish(); return;
+    }
+    if (ok) {
+      ++edge_gizmo_phase_;
+      next(Step::Initial);
+    }
+  }
+
+  bool begin_instance_preview() {
+    // Keep the explicit black capture background during instance editing too.
+    // The ordinary context tint remains enabled on the sibling occurrence.
+    (void)settings_.set_color(ViewportColorSettingId::InstanceEditBackground, {0, 0, 0, 1});
+    const auto created = editor_.modeling().create_instance_from_selection();
+    if (!accept(created)) return false;
+    const auto occurrence = created.value().occurrence.root.id;
+    const auto sibling = editor_.scene().duplicate(occurrence);
+    if (!accept(sibling) || !accept(editor_.scene().set_transform(
+            sibling.value().id, {.location = kInstanceSiblingOffset})) ||
+        !accept(editor_.modeling().enter_instance_edit(occurrence)) ||
+        !accept(editor_.selection().select_object(object_))) return false;
+    if (!editor_.modeling().instance_edit_state().active) {
+      fail("The public instance conversion did not enter its definition editing scope");
+      return false;
+    }
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const float offset = static_cast<float>(pane) * 0.15f;
+      if (!camera.restore_perspective_pose({
+              .eye = {5.15f + offset, 6.85f - offset, 0.2f},
+              .target = {-0.85f, 0.85f, 0.2f}, .up = {0, 0, 1}})) return false;
+      camera.focus_bounds({-2.5f, -1.0f, -0.7f}, {1.0f, 2.5f, 1.5f}, 1.3f);
+    }
+    std::cout << "public_instance_preview; backend=" << kBackendName
+              << "; occurrence=" << occurrence << "; sibling=" << sibling.value().id
+              << "; definition=" << created.value().definition.root.id << std::endl;
+    return true;
+  }
+
+  bool verify_instance_preview_pixels(std::size_t pane, const QImage &image) {
+    constexpr float kFaceCenter = 0.6f * 0.70710678118f;
+    const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+    const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+    for (const auto offset : {QVec3{}, kInstanceSiblingOffset}) {
+      const bool sibling = offset.x != 0.0f;
+      // A live definition edit previews only its active occurrence. Applying
+      // the edit publishes the shared geometry to every linked occurrence.
+      const bool shared_commit = face_dimension_phase_ == 8u || face_dimension_phase_ == 10u;
+      const float surface_delta = sibling && !shared_commit ? 0.0f : face_dimension_delta_;
+      for (const bool extension : {false, true}) {
+        const QVec3 point = QVec3{kFaceCenter, kFaceCenter,
+            extension ? 0.45f + (face_dimension_delta_ > 0.0f ? face_dimension_delta_ * 0.5f : 0.2f)
+                      : surface_delta} + offset;
+        const auto projected = camera.project_world_point(point);
+        if (!projected.visible) {
+          fail("The instance fixture camera lost a linked occurrence surface sample");
+          return false;
+        }
+        const QPoint center(qRound(projected.position.x * image.width() / render_size.x),
+                            qRound(projected.position.y * image.height() / render_size.y));
+        int surface_pixels = 0;
+        for (int y = -1; y <= 1; ++y) {
+          for (int x = -1; x <= 1; ++x) {
+            const auto pixel = center + QPoint(x, y);
+            if (!image.rect().contains(pixel)) continue;
+            const auto color = image.pixelColor(pixel);
+            surface_pixels += std::max({color.red(), color.green(), color.blue()}) > 24;
+          }
+        }
+        const bool expected = !extension || surface_delta > 0.0f;
+        std::cout << "instance_surface_pixels; backend=" << kBackendName
+                  << "; phase=" << face_dimension_phase_ << "; pane=" << pane
+                  << "; sibling=" << sibling << "; extension=" << extension
+                  << "; surface_delta=" << surface_delta
+                  << "; expected=" << expected << "; pixels=" << surface_pixels << std::endl;
+        if ((expected && surface_pixels < 7) || (!expected && surface_pixels != 0)) {
+          fail("A linked occurrence surface violated active preview or shared committed geometry");
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  bool begin_face_dimensions() {
+    settings_.set_bool_value(ViewportBoolSettingId::ShowOverlays, true);
+    settings_.set_bool_value(ViewportBoolSettingId::ShowDimensions, true);
+    (void)settings_.set_color(ViewportColorSettingId::SelectionWire, {0, 1, 1, 1});
+    (void)settings_.set_color(ViewportColorSettingId::SelectionFace, {0, 0, 0, 0});
+    (void)settings_.set_color(ViewportColorSettingId::BoundingBoxWire, {1, 1, 0, 1});
+    apply_settings();
+    return accept(editor_.mode().set(QuaderEditorMode::Edit)) &&
+        accept(editor_.selection().set_mode(QuaderSelectionMode::Face)) &&
+        accept(editor_.selection().clear()) &&
+        accept(editor_.selection().select_face(object_, face_dimension_face_));
+  }
+
+  QuaderTransformDragBeginRequest face_dimension_drag() const {
+    return {.tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::Z,
+        .screen_position = {100, 100}, .screen_pivot = {100, 100},
+        .screen_tip = {100, 120}, .has_world_direction = true, .world_direction = {0, 0, 1},
+        .ray = {.origin = {5, 0, 0}, .direction = {-1, 0, 0}},
+        .camera = {.orthographic = true, .origin = {5, 0, 0},
+            .x_axis = {0, 1, 0}, .y_axis = {0, 0, 1}, .z_axis = {1, 0, 0},
+            .viewport_size = {800, 600}, .orthographic_size = 8},
+        .vertex_snap_radius = 0, .grid_snap_enabled = false};
+  }
+
+  bool update_face_dimensions(float amount) {
+    const auto begin = face_dimension_drag();
+    const auto moved = editor_.modeling().update_transform_drag({
+        .screen_position = {100, 100 + amount * 100},
+        .ray = {.origin = {5, 0, amount}, .direction = {-1, 0, 0}},
+        .camera = begin.camera, .vertex_snap_radius = 0, .grid_snap_enabled = false});
+    if (!accept(moved)) return false;
+    if (std::abs(moved.value().move_delta.z - amount) > 0.00001f) {
+      fail("The public face drag did not produce its requested displacement");
+      return false;
+    }
+    face_dimension_delta_ = amount;
+    return true;
+  }
+
+  bool verify_face_dimensions() {
+    constexpr float kDiagonal = 0.70710678118f;
+    const ViewportSelectionDimensionBounds expected{
+        {(0.6f - 0.35f) * kDiagonal, (0.6f - 0.35f) * kDiagonal, -0.45f + face_dimension_delta_},
+        {(0.6f + 0.35f) * kDiagonal, (0.6f + 0.35f) * kDiagonal, 0.45f + face_dimension_delta_}};
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      const auto &bounds = recorded_sink_->bounds(pane);
+      std::cout << "face_dimension_bounds; backend=" << kBackendName << "; phase=" << face_dimension_phase_
+                << "; pane=" << pane << "; expected=" << expected.min.x << ',' << expected.min.y << ',' << expected.min.z
+                << ':' << expected.max.x << ',' << expected.max.y << ',' << expected.max.z;
+      if (bounds) {
+        std::cout << "; actual=" << bounds->min.x << ',' << bounds->min.y << ',' << bounds->min.z
+                  << ':' << bounds->max.x << ',' << bounds->max.y << ',' << bounds->max.z;
+      } else {
+        std::cout << "; actual=absent";
+      }
+      std::cout << std::endl;
+      const auto close = [](QVec3 left, QVec3 right) {
+        return std::abs(left.x - right.x) < 0.00001f && std::abs(left.y - right.y) < 0.00001f &&
+            std::abs(left.z - right.z) < 0.00001f;
+      };
+      if (!bounds || !close(bounds->min, expected.min) || !close(bounds->max, expected.max)) {
+        if (bounds) {
+          std::cerr << "face_dimension_bounds; phase=" << face_dimension_phase_ << "; pane=" << pane
+                    << "; actual=" << bounds->min.x << ',' << bounds->min.y << ',' << bounds->min.z << ':'
+                    << bounds->max.x << ',' << bounds->max.y << ',' << bounds->max.z << std::endl;
+        }
+        fail("The production Qt pane submitted dimensions at stale face coordinates");
+        return false;
+      }
+      QImage image;
+      if (!verify_pane(pane, image)) return false;
+      if (instance_preview_ && !verify_instance_preview_pixels(pane, image)) return false;
+      std::array<QVec2, 8> corners;
+      const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+      for (std::size_t corner = 0u; corner < corners.size(); ++corner) {
+        const auto projected = camera.project_world_point({
+            (corner & 1u) ? expected.max.x : expected.min.x,
+            (corner & 2u) ? expected.max.y : expected.min.y,
+            (corner & 4u) ? expected.max.z : expected.min.z});
+        corners[corner] = {projected.position.x * image.width() / render_size.x,
+                           projected.position.y * image.height() / render_size.y};
+      }
+      int yellow = 0, stale = 0;
+      for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          const auto color = image.pixelColor(x, y);
+          if (color.red() < 140 || color.green() < 130 || color.blue() + 70 > std::min(color.red(), color.green())) continue;
+          ++yellow;
+          bool current = false;
+          for (std::size_t axis = 0u; axis < 3u; ++axis) {
+            for (std::size_t corner = 0u; corner < corners.size(); ++corner) {
+              if ((corner & (1u << axis)) != 0u) continue;
+              const auto start = corners[corner], end = corners[corner | (1u << axis)];
+              const float dx = end.x - start.x, dy = end.y - start.y;
+              const float squared = dx * dx + dy * dy;
+              const float along = squared > 0 ? std::clamp(
+                  ((x + 0.5f - start.x) * dx + (y + 0.5f - start.y) * dy) / squared, 0.0f, 1.0f) : 0.0f;
+              current |= std::hypot(x + 0.5f - start.x - along * dx, y + 0.5f - start.y - along * dy) <= 4.0f;
+            }
+          }
+          if (!current) ++stale;
+        }
+      }
+      std::cout << "face_dimensions; phase=" << face_dimension_phase_ << "; pane=" << pane
+                << "; delta=" << face_dimension_delta_ << "; yellow=" << yellow << "; stale=" << stale << std::endl;
+      if ((pane == 0u && yellow < 12) || stale != 0) {
+        fail("The presented dimension cage does not follow the accepted face bounds");
+        return false;
+      }
+      if (instance_preview_ && face_dimension_phase_ == 5u && image != previous_captures_[pane]) {
+        fail("An unchanged shared definition preview changed its accepted GPU pixels");
+        return false;
+      }
+      if (instance_preview_) previous_captures_[pane] = image;
+    }
+#if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
+    if (instance_preview_) {
+      CrimsonRenderDiagnostics after;
+      if (!diagnostics(after) || after.scene_instances < 2u) {
+        fail("The public editor instance workflow did not retain both GPU occurrences");
+        return false;
+      }
+      if (face_dimension_phase_ == 5u &&
+          (after.translation.position_packs != before_.translation.position_packs ||
+           after.translation.attribute_packs != before_.translation.attribute_packs ||
+           after.translation.index_packs != before_.translation.index_packs ||
+           after.editor_projection.position_packs != before_.editor_projection.position_packs ||
+           after.editor_projection.attribute_packs != before_.editor_projection.attribute_packs ||
+           after.editor_projection.index_packs != before_.editor_projection.index_packs ||
+           after.editor_gpu.vertex_uploads != before_.editor_gpu.vertex_uploads ||
+           after.editor_gpu.index_uploads != before_.editor_gpu.index_uploads ||
+           after.frame_submissions != before_.frame_submissions)) {
+        fail("An unchanged instance preview rebuilt geometry, overlays or another shared GPU frame");
+        return false;
+      }
+    }
+#endif
+    return true;
+  }
+
+  void advance_face_dimensions() {
+    bool ok = true;
+    switch (face_dimension_phase_) {
+    case 0: ok = accept(editor_.modeling().begin_transform_drag(face_dimension_drag())); break;
+    case 1: ok = update_face_dimensions(0.3f); break;
+    case 2: ok = update_face_dimensions(0.6f); break;
+    case 3: ok = update_face_dimensions(0.9f); break;
+    case 4: break;
+    case 5:
+      ok = accept(editor_.modeling().cancel_transform_drag());
+      face_dimension_delta_ = 0.0f;
+      break;
+    case 6:
+      ok = accept(editor_.modeling().begin_transform_drag(face_dimension_drag())) && update_face_dimensions(0.6f);
+      break;
+    case 7: ok = accept(editor_.modeling().commit_transform_drag()); break;
+    case 8:
+      ok = accept(editor_.history().undo());
+      face_dimension_delta_ = 0.0f;
+      break;
+    case 9:
+      ok = accept(editor_.history().redo());
+      face_dimension_delta_ = 0.6f;
+      break;
+    default:
+      if (instance_preview_ &&
+          (!accept(editor_.mode().set(QuaderEditorMode::Object)) ||
+           !accept(editor_.modeling().exit_instance_edit()))) return;
+      finish();
+      return;
+    }
+    if (ok) {
+      ++face_dimension_phase_;
+      next(Step::Initial);
+    }
   }
 
   bool select_preview_box_vertices() {
@@ -832,11 +1924,14 @@ private:
       fail("The renderer facade could not initialize on Qt's real device");
       return false;
     }
-    sink_ = host_->create_scene_sink(resources_);
-    if (!sink_ || !panel_->initialize(*host_)) {
+    auto production_sink = host_->create_scene_sink(resources_);
+    if (!production_sink || !panel_->initialize(*host_)) {
       fail("The four-pane facade resources could not initialize");
       return false;
     }
+    auto recorded = std::make_unique<ProbeSceneSink>(std::move(production_sink));
+    recorded_sink_ = recorded.get();
+    sink_ = std::move(recorded);
     anchor_->set_render_system(host_.get());
     panel_->set_startup_presentation_blocked(false);
     initialized_ = true;
@@ -906,8 +2001,15 @@ private:
     const QImage presented = screen->grabWindow(0, origin.x(), origin.y(),
                                                widget->width(), widget->height()).toImage();
     offscreen = widget->grabFramebuffer().convertToFormat(QImage::Format_RGBA8888);
-    const QString stem = QStringLiteral("editor-%1-pane-%2-")
-        .arg(static_cast<int>(step_)).arg(index);
+    const QString stem = edge_gizmo_
+        ? QStringLiteral("edge-gizmo-%1-pane-%2-").arg(edge_gizmo_phase_).arg(index)
+        : instance_preview_
+        ? QStringLiteral("instance-preview-%1-pane-%2-").arg(face_dimension_phase_).arg(index)
+        : lamina_overlap_
+        ? QStringLiteral("lamina-overlap-%1-pane-%2-").arg(lamina_phase_).arg(index)
+        : face_dimensions_
+        ? QStringLiteral("face-dimensions-%1-pane-%2-").arg(face_dimension_phase_).arg(index)
+        : QStringLiteral("editor-%1-pane-%2-").arg(static_cast<int>(step_)).arg(index);
     const bool saved = presented.save(QDir(output_directory_).filePath(stem + QStringLiteral("presented.png"))) &&
         offscreen.save(QDir(output_directory_).filePath(stem + QStringLiteral("offscreen.png")));
     if (!saved || presented.isNull() || offscreen.isNull()) {
@@ -926,15 +2028,37 @@ private:
       fail("A pane lost its mesh or drew unrelated full-target pixels");
       return false;
     }
+    // Dimension numbers are Qt labels composed above the GPU texture. Exclude
+    // only their real visible rectangles from this scenario's texture/desktop
+    // comparison; the cage pixels remain subject to the ordinary parity checks.
+    std::vector<QRect> dimension_labels;
+    if (face_dimensions_) {
+      for (const auto *label : root_->findChildren<QLabel *>()) {
+        if (!label->isVisible() ||
+            !label->objectName().startsWith(QStringLiteral("viewportSelectionDimension"))) continue;
+        const auto local = label->mapToGlobal(QPoint{}) - global_origin;
+        dimension_labels.emplace_back(
+            QPoint(qFloor(static_cast<double>(local.x()) * presented.width() / widget->width()),
+                   qFloor(static_cast<double>(local.y()) * presented.height() / widget->height())),
+            QSize(qCeil(static_cast<double>(label->width()) * presented.width() / widget->width()),
+                  qCeil(static_cast<double>(label->height()) * presented.height() / widget->height())));
+        dimension_labels.back().adjust(-2, -2, 2, 2);
+      }
+    }
+    const auto dimension_label_at = [&](QPoint pixel) {
+      return std::ranges::any_of(dimension_labels,
+          [&](const QRect &rectangle) { return rectangle.contains(pixel); });
+    };
     // Pane controls occupy the outer strip. Compare content samples only;
     // the offscreen path contains no Qt chrome, and its pixels remain the oracle.
     for (int row = 3; row < 18; ++row) {
       for (int column = 3; column < 18; ++column) {
         const int x = column * offscreen.width() / 20;
         const int y = row * offscreen.height() / 20;
+        const QPoint presented_pixel(column * presented.width() / 20, row * presented.height() / 20);
+        if (dimension_label_at(presented_pixel)) continue;
         const QColor expected = offscreen.pixelColor(x, y);
-        const QColor actual = presented.pixelColor(
-            column * presented.width() / 20, row * presented.height() / 20);
+        const QColor actual = presented.pixelColor(presented_pixel);
         if (std::abs(expected.red() - actual.red()) > 4 ||
             std::abs(expected.green() - actual.green()) > 4 ||
             std::abs(expected.blue() - actual.blue()) > 4) {
@@ -968,6 +2092,7 @@ private:
             const QPoint presented_pixel(
                 static_cast<int>((static_cast<std::int64_t>(2 * x + 1) * presented.width()) / (2 * offscreen.width())),
                 static_cast<int>((static_cast<std::int64_t>(2 * y + 1) * presented.height()) / (2 * offscreen.height())));
+            if (dimension_label_at(presented_pixel)) continue;
             const QColor actual = presented.pixelColor(presented_pixel);
             if (!near_colors(expected, actual, 4)) {
               std::cerr << "pane=" << index << "; foreground_sample=" << x << ',' << y
@@ -987,7 +2112,9 @@ private:
       fail("Presented comparisons missed all mesh pixels");
       return false;
     }
-    QVec3 expected_center = step_ >= Step::Pose ? QVec3{0.8f, 0, 0} : QVec3{};
+    QVec3 expected_center = lamina_overlap_
+        ? (lamina_phase_ == 30u || lamina_phase_ == 31u ? QVec3{1, 1, 0.3f} : QVec3{-2, 4, 13})
+        : step_ >= Step::Pose ? QVec3{0.8f, 0, 0} : QVec3{};
     if (step_ == Step::Preview) {
       expected_center += kPreviewDelta;
     }
@@ -1009,7 +2136,7 @@ private:
         }
       }
     }
-    if (!covered && step_ != Step::Wireframe) {
+    if (!covered && step_ != Step::Wireframe && !face_dimensions_ && !edge_gizmo_) {
       fail("The GPU pane did not cover the API scene/preview center projected by its own camera");
       return false;
     }
@@ -1180,7 +2307,7 @@ private:
   void finish() {
     retire_root();
     timer_.stop();
-    if (release_count_ != 2u) {
+    if (release_count_ != (face_dimensions_ || lamina_overlap_ || edge_gizmo_ ? 1u : 2u)) {
       fail("The replacement editor root did not release its Vulkan device");
     }
     std::cout << "roots=" << root_count_ << "; releases=" << release_count_
@@ -1230,6 +2357,18 @@ private:
         !std::ranges::all_of(submitted_generations_, [this](std::uint64_t value) {
           return value == requested_generation_;
         }) || !presentation_clock_.isValid() || presentation_clock_.elapsed() < 100) {
+      return;
+    }
+    if (edge_gizmo_) {
+      if (verify_edge_gizmo()) advance_edge_gizmo();
+      return;
+    }
+    if (lamina_overlap_) {
+      if (verify_lamina_overlap()) advance_lamina_overlap();
+      return;
+    }
+    if (face_dimensions_) {
+      if (verify_face_dimensions()) advance_face_dimensions();
       return;
     }
     if (!verify_frame()) {
@@ -1474,6 +2613,15 @@ private:
   std::filesystem::path resources_;
   QString reference_directory_;
   bool overlay_parity_ = false;
+  bool face_dimensions_ = false;
+  bool lamina_overlap_ = false;
+  bool instance_preview_ = false;
+  bool edge_gizmo_ = false;
+  unsigned int edge_gizmo_phase_ = 0u;
+  QVec3 edge_gizmo_origin_;
+  static constexpr QVec3 kEdgeGizmoDelta{2.0f, -2.0f, 0.0f};
+  std::array<QImage, 4> edge_gizmo_previous_;
+  static constexpr QVec3 kInstanceSiblingOffset{-1.7f, 1.7f, 0};
   SceneSession session_;
   QuaderEditorApi editor_;
   QuaderModelingObjectRef object_;
@@ -1481,6 +2629,20 @@ private:
   std::vector<QuaderElementId> component_faces_, component_vertices_;
   std::unique_ptr<RenderHost> host_;
   std::unique_ptr<RenderSceneSink> sink_;
+  ProbeSceneSink *recorded_sink_ = nullptr;
+  QuaderElementId face_dimension_face_ = 0;
+  unsigned int face_dimension_phase_ = 0u;
+  float face_dimension_delta_ = 0.0f;
+  QuaderModelingObjectRef lamina_peer_;
+  QuaderModelingObjectRef lamina_duplicate_;
+  unsigned int lamina_phase_ = 0u;
+  bool lamina_expected_ = true;
+  std::array<QImage, 4> lamina_previous_;
+  std::array<QImage, 4> lamina_closed_base_;
+  std::array<std::array<QColor, 2>, 4> lamina_previous_fill_colors_;
+  std::array<std::size_t, 4> lamina_previous_triangles_{};
+  std::array<int, 4> lamina_previous_wire_pixels_{};
+  std::array<int, 4> lamina_previous_wire_contrast_{};
   RenderOverlaySnapshotCache snapshots_;
   ViewportSettings settings_;
   ViewportSettingColor collision_color_;
@@ -1528,10 +2690,22 @@ int main(int argc, char **argv) {
       QStringLiteral("Exercise public selection, hover, grid, wire and gizmo GPU contracts."));
   const QCommandLineOption reference_option(QStringLiteral("reference-dir"),
       QStringLiteral("Compare overlay color coverage with the same Full reference captures."), QStringLiteral("directory"));
+  const QCommandLineOption face_dimensions_option(QStringLiteral("face-dimensions"),
+      QStringLiteral("Exercise continuously visible dimensions while moving one closed-box face."));
+  const QCommandLineOption lamina_option(QStringLiteral("lamina-overlap"),
+      QStringLiteral("Exercise persistent diagnostic fill and wire on opposing coplanar faces."));
+  const QCommandLineOption instance_option(QStringLiteral("instance-preview"),
+      QStringLiteral("Convert a public mesh into linked occurrences and edit their shared face preview."));
+  const QCommandLineOption edge_gizmo_option(QStringLiteral("edge-gizmo"),
+      QStringLiteral("Verify a native edge Move gizmo after untouched Quick Pivot, commit and history."));
   parser.addOption(output_option);
   parser.addOption(resource_option);
   parser.addOption(overlay_option);
   parser.addOption(reference_option);
+  parser.addOption(face_dimensions_option);
+  parser.addOption(lamina_option);
+  parser.addOption(instance_option);
+  parser.addOption(edge_gizmo_option);
   parser.process(application);
   if (parser.value(output_option).isEmpty() || parser.value(resource_option).isEmpty()) {
     std::cerr << "--output-dir and --resource-dir are required\n";
@@ -1539,6 +2713,7 @@ int main(int argc, char **argv) {
   }
   quader::EditorCompositionProbe probe(application, parser.value(output_option),
       std::filesystem::path(parser.value(resource_option).toStdWString()),
-      parser.isSet(overlay_option), parser.value(reference_option));
+      parser.isSet(overlay_option), parser.value(reference_option), parser.isSet(face_dimensions_option),
+      parser.isSet(lamina_option), parser.isSet(instance_option), parser.isSet(edge_gizmo_option));
   return probe.run();
 }

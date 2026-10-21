@@ -988,6 +988,7 @@ bool App::render_frame(const FrameTiming &frame_timing) {
       std::size_t submitted = 0u;
       double total_ms = 0.0;
       double maximum_ms = 0.0;
+      double maximum_interval_ms = 0.0;
       double ui_refresh_ms = 0.0;
       double viewport_input_ms = 0.0;
       double scene_sync_ms = 0.0;
@@ -1003,6 +1004,8 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     diagnostics.submitted += submitted;
     diagnostics.total_ms += elapsed_ms;
     diagnostics.maximum_ms = std::max(diagnostics.maximum_ms, elapsed_ms);
+    diagnostics.maximum_interval_ms = std::max(
+        diagnostics.maximum_interval_ms, frame_timing.raw_delta_seconds * 1000.0);
     diagnostics.ui_refresh_ms +=
         std::chrono::duration<double, std::milli>(ui_refresh_end - frame_begin)
             .count();
@@ -1033,12 +1036,14 @@ bool App::render_frame(const FrameTiming &frame_timing) {
           render_system_->frame_performance_stats();
       LOG_INFO(
           "Frame diagnostics: {:.1f} app fps, {:.2f} ms average, {:.2f} ms "
-          "maximum, {} submissions, stages ui={:.2f} input={:.2f} sync={:.2f} "
+          "maximum, {:.2f} ms maximum interval, {} submissions, "
+          "stages ui={:.2f} input={:.2f} sync={:.2f} "
           "settings={:.2f} prepare={:.2f} render={:.2f} ms, renderer {:.1f} "
           "fps, CPU {:.2f} ms, GPU {:.2f} ms",
           static_cast<double>(diagnostics.frames) / sample_seconds,
           diagnostics.total_ms / static_cast<double>(diagnostics.frames),
-          diagnostics.maximum_ms, diagnostics.submitted,
+          diagnostics.maximum_ms, diagnostics.maximum_interval_ms,
+          diagnostics.submitted,
           diagnostics.ui_refresh_ms / static_cast<double>(diagnostics.frames),
           diagnostics.viewport_input_ms /
               static_cast<double>(diagnostics.frames),
@@ -1103,7 +1108,8 @@ void App::schedule_next_frame(bool submitted) {
                                    ? presentation_frame_interval_ms(ui_.main_window())
                                    : 0;
   const int interval = frame_schedule_.next_interval_ms(
-      continuous, synchronized, display_interval, submitted);
+      continuous, synchronized, display_interval, submitted,
+      render_system_->uses_composited_vulkan());
   if (frame_timer_->interval() != interval) {
     frame_timer_->setInterval(interval);
   }

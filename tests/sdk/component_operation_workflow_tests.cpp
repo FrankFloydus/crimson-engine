@@ -36,6 +36,7 @@ constexpr std::array kComponentWorkflows{
     ComponentWorkflow{"Connect vertices", OperationKind::ConnectVertices, SelectionKind::Edge, 1U},
     ComponentWorkflow{"Merge edges", OperationKind::MergeEdges, SelectionKind::Edge, 1U},
     ComponentWorkflow{"Split edges", OperationKind::SplitEdges, SelectionKind::Edge, 2U},
+    ComponentWorkflow{"Edge Split", OperationKind::SplitEdgesMidpoint, SelectionKind::Edge, 2U},
     ComponentWorkflow{"Connect edges", OperationKind::ConnectEdges, SelectionKind::Edge, 1U},
     ComponentWorkflow{"Bridge edges", OperationKind::Bridge, SelectionKind::Face, 3U},
     ComponentWorkflow{"Dissolve vertices", OperationKind::DissolveVertices, SelectionKind::Vertex, 2U},
@@ -73,6 +74,9 @@ PolygonDocument make_workflow_document(OperationKind operation, bool unrelated =
     return make_edge_key(vertex_id(first), vertex_id(second));
   };
   switch (operation) {
+  case OperationKind::SplitEdgesMidpoint:
+    selection.edges = {edge(1U, 2U)};
+    break;
   case OperationKind::ConnectVertices:
     selection.kind = SelectionKind::Vertex;
     selection.vertices = {vertex_id(1U), vertex_id(3U)};
@@ -141,6 +145,7 @@ Result<OperationResult> apply_workflow(PolygonDocument& document, OperationKind 
   case OperationKind::ConnectVertices: return document.connect_selected_vertices();
   case OperationKind::MergeEdges: return document.merge_selected_edges();
   case OperationKind::SplitEdges: return document.split_selected_edges();
+  case OperationKind::SplitEdgesMidpoint: return document.split_selected_edges_midpoint();
   case OperationKind::ConnectEdges: return document.connect_selected_edges();
   case OperationKind::Bridge: return document.bridge_selected_edges(3);
   case OperationKind::DissolveVertices: return document.dissolve_selected_vertices();
@@ -1285,6 +1290,64 @@ TEST(ModelingSdkComponentOperationWorkflowTests,
   EXPECT_FLOAT_EQ(shape.end_tension, 0.25F);
   EXPECT_EQ(session.preview_summary().object_id, source);
   ASSERT_TRUE(session.cancel_preview(preview).ok());
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     EdgeSplitFacadesPublishMidpointsAndSelectedHalvesWithUndoRedo) {
+  const auto *descriptor = operation_descriptor(OperationKind::SplitEdgesMidpoint);
+  ASSERT_NE(descriptor, nullptr);
+  EXPECT_EQ(descriptor, operation_descriptor("split_edges_midpoint"));
+  EXPECT_EQ(descriptor->parameter_count, 0U);
+  for (const int entrypoint : {0, 1, 2, 3}) {
+    SCOPED_TRACE(entrypoint);
+    const auto source = make_workflow_document(OperationKind::SplitEdgesMidpoint, false);
+    auto api = ModelingApi::create();
+    auto mesh = api.add_document(source, "Midpoint Edge Split");
+    ASSERT_TRUE(mesh.valid());
+    ASSERT_TRUE(mesh.edges().only(source.selection().edges).replace().success);
+    EXPECT_EQ(api.operations().describe("split_edges_midpoint").label, "Edge Split");
+    EXPECT_EQ(api.operations().describe("split_edges").label, "Disconnect Edge");
+    OperationReceipt receipt;
+    if (entrypoint == 0) {
+      receipt = mesh.edges().selected().split_midpoint();
+    } else if (entrypoint == 1) {
+      receipt = api.operations().split_edges_midpoint();
+    } else if (entrypoint == 2) {
+      const auto checked = api.checked().operations().split_edges_midpoint();
+      ASSERT_TRUE(checked.ok()) << checked.error_message();
+      receipt = checked.value();
+    } else {
+      receipt = api.operations().execute("split_edges_midpoint");
+    }
+    ASSERT_TRUE(receipt.success) << receipt.error.message;
+    ASSERT_TRUE(receipt.changed);
+    ASSERT_EQ(receipt.created.vertices.size(), 1U);
+    const auto midpoint = receipt.created.vertices.front();
+    const auto payload = mesh.payloads().authored_polygon();
+    ASSERT_EQ(payload.vertices.size(), 5U);
+    ASSERT_EQ(payload.faces.size(), 1U);
+    EXPECT_EQ(payload.faces.front().vertices,
+        (std::vector<VertexId>{vertex_id(1U), midpoint, vertex_id(2U), vertex_id(3U), vertex_id(4U)}));
+    const auto vertex = std::ranges::find(payload.vertices, midpoint);
+    ASSERT_NE(vertex, payload.vertices.end());
+    const auto index = static_cast<std::size_t>(vertex - payload.vertices.begin());
+    EXPECT_FLOAT_EQ(payload.positions[index].x, 1.0F);
+    EXPECT_FLOAT_EQ(payload.positions[index].y, 0.0F);
+    EXPECT_FLOAT_EQ(payload.positions[index].z, 0.0F);
+    const auto halves = mesh.edges().selected();
+    ASSERT_EQ(halves.edges().size(), 2U);
+    EXPECT_EQ(halves.edges()[0], make_edge_key(vertex_id(1U), midpoint));
+    EXPECT_EQ(halves.edges()[1], make_edge_key(midpoint, vertex_id(2U)));
+    ASSERT_TRUE(api.undo().success);
+    EXPECT_EQ(mesh.payloads().authored_polygon().vertices.size(), 4U);
+    EXPECT_EQ(mesh.payloads().authored_polygon().faces.front().vertices.size(), 4U);
+    ASSERT_EQ(mesh.edges().selected().edges().size(), 1U);
+    EXPECT_EQ(mesh.edges().selected().edges().front(), source.selection().edges.front());
+    ASSERT_TRUE(api.redo().success);
+    EXPECT_EQ(mesh.payloads().authored_polygon().vertices.size(), 5U);
+    EXPECT_EQ(mesh.payloads().authored_polygon().faces.front().vertices, payload.faces.front().vertices);
+    EXPECT_EQ(mesh.edges().selected().edges().size(), 2U);
+  }
 }
 
 } // namespace

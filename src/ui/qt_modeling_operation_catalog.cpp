@@ -7,6 +7,9 @@
 #include "ui/qt_modeling_operation_catalog.hpp"
 
 #include "core/localization_service.hpp"
+#include "core/public_command_targets.hpp"
+#include "editor/commands/modeling_command_tool_catalog.hpp"
+#include "editor/tools/viewport_tool_catalog.hpp"
 
 #include <string>
 
@@ -21,7 +24,7 @@ constexpr QtModelingOperationSpec kOperationSpecs[]{
     {Mode::Vertex, quader_command::kModelingMergeVerticesToActive, "Merge to Active", 4},
     {Mode::Edge, quader_command::kToolsActivateInsertEdgeLoop, "Insert Edge Loop", 1},
     {Mode::Edge, quader_command::kModelingConnectEdges, "Connect Edges", 6},
-    {Mode::Edge, quader_command::kModelingSplitEdges, "Split Edges", 5},
+    {Mode::Edge, quader_command::kModelingSplitEdges, "Disconnect Edge", 5},
     {Mode::Edge, quader_command::kModelingBevelEdges, "Bevel Edges", 0},
     {Mode::Edge, quader_command::kModelingPreviewBridgeEdges, "Bridge Edges", 2},
     {Mode::Edge, quader_command::kModelingFillHole, "Fill Hole", 3},
@@ -53,13 +56,25 @@ QString qt_modeling_operation_label(const LocalizationService &localization,
                                     QuaderCommandId command_id,
                                     std::string_view fallback) {
   const std::string id(command_id.string());
+  if (const auto tool_id = quader_tool_id_from_activation_command_target(id)) {
+    if (const ViewportTool *tool = find_viewport_tool(*tool_id)) {
+      return QString::fromStdString(localization.text(
+          "viewport.tool." + std::string(*tool_id) + ".label", tool->label()));
+    }
+  }
+  std::string_view canonical_fallback = fallback;
+  if (id.starts_with("modeling.")) {
+    const std::string_view action_id =
+        command_id.string().substr(std::string_view("modeling.").size());
+    if (const CommandTool *tool = find_modeling_command_tool(action_id)) {
+      canonical_fallback = tool->label();
+    }
+  }
   std::string label = localization.text(
-      "keybindings.target." + id + ".label", fallback);
+      "keybindings.target." + id + ".label", canonical_fallback);
   if (id.starts_with("modeling.")) {
     const std::string action_id = id.substr(std::string_view("modeling.").size());
     label = localization.text("modeling.action." + action_id + ".label", label);
-    label = localization.text(
-        "ui.viewport.context_menu.action." + action_id + ".label", label);
   } else if (id.starts_with("edit.")) {
     label = localization.text("ui.menu." + id, label);
   }

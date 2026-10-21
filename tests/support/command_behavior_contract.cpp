@@ -506,6 +506,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kModelingSplitEdges,
                Fixture::SingleEdgeSelection, kTopologyDomains,
                Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kModelingSplitEdgesMidpoint,
+               Fixture::SingleEdgeSelection, kTopologyDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kModelingMergeEdges,
                Fixture::EdgePairSelection, kTopologyDomains,
                Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
@@ -854,9 +857,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 237U);
+  static_assert(std::size(kContracts) == 238U);
 #else
-  static_assert(std::size(kContracts) == 236U);
+  static_assert(std::size(kContracts) == 237U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

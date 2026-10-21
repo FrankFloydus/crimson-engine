@@ -8,6 +8,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
 #include "core/localization_service.hpp"
+#include "core/public_command_targets.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
@@ -555,8 +556,8 @@ TEST(LocalizationResourceTests,
       {"mirror_selection_x", "Mirror X", "Specchia X"},
       {"mirror_selection_y", "Mirror Y", "Specchia Y"},
       {"mirror_selection_z", "Mirror Z", "Specchia Z"},
-      {"flip_horizontal", "Flip Horizontally", "Ribalta orizzontalmente"},
-      {"flip_vertical", "Flip Vertically", "Ribalta verticalmente"},
+      {"flip_horizontal", "Flip Horizontal", "Ribalta orizzontale"},
+      {"flip_vertical", "Flip Vertical", "Ribalta verticale"},
       {"bake_location", "Bake Location", "Applica posizione"},
       {"bake_rotation", "Bake Rotation", "Applica rotazione"},
       {"bake_scale", "Bake Scale", "Applica scala"},
@@ -582,7 +583,7 @@ TEST(LocalizationResourceTests,
       {"radial_align_vertices", "Radial Align", "Allinea radialmente"},
       {"snap_edges_to_active", "Snap to Edge", "Aggancia allo spigolo"},
       {"connect_edges", "Connect Edges", "Connetti spigoli"},
-      {"split_edges", "Edge Split", "Dividi spigoli"},
+      {"split_edges", "Disconnect Edge", "Disconnetti spigolo"},
       {"default_edge_normals", "Default Normals", "Normali predefinite"},
       {"harden_edge_normals", "Harden Normals", "Indurisci normali"},
       {"soften_edge_normals", "Soften Normals", "Ammorbidisci normali"},
@@ -656,7 +657,7 @@ TEST(LocalizationResourceTests,
   EXPECT_EQ(english->at("modeling.action.bake_location.label"), "Bake Location");
   EXPECT_EQ(english->at("modeling.action.bake_transforms.label"), "Bake Transforms");
   EXPECT_EQ(english->at("keybindings.target.modeling.flip_horizontal.label"),
-            "Flip Selection Horizontally");
+            "Flip Horizontal");
   EXPECT_EQ(english->at("ui.viewport.marking_menu.submenu.mirror"), "Mirror");
   EXPECT_EQ(english->at("ui.viewport.marking_menu.submenu.flip"), "Flip");
   EXPECT_EQ(english->at("ui.viewport.marking_menu.submenu.bake"), "Bake");
@@ -906,7 +907,18 @@ TEST(LocalizationResourceTests,
       EXPECT_TRUE(visible_labels.insert(localized->second).second)
           << locale << " duplicates visible command label \""
           << localized->second << "\" for " << entry.action_id;
-      if (locale == LocalizationService::kDefaultLocale) {
+      const auto tool_id =
+          quader_tool_id_from_activation_command_target(entry.target_id);
+      const ToolDescriptor *tool =
+          tool_id ? find_viewport_tool_descriptor(*tool_id) : nullptr;
+      if (tool != nullptr) {
+        EXPECT_EQ(entry.label, tool->label) << entry.action_id;
+        const std::string tool_key =
+            "viewport.tool." + std::string(tool->id) + ".label";
+        const auto tool_label = catalog.find(tool_key);
+        ASSERT_NE(tool_label, catalog.end()) << locale << " missing " << tool_key;
+        EXPECT_EQ(localized->second, tool_label->second) << entry.action_id;
+      } else if (locale == LocalizationService::kDefaultLocale) {
         EXPECT_FALSE(obscure_english_labels.contains(localized->second))
             << entry.action_id << " still renders as the generic label \""
             << localized->second << "\"";
@@ -938,9 +950,9 @@ TEST(LocalizationResourceTests,
                candidate.target_ids.end();
       });
   ASSERT_NE(align_entry, entries.end());
-  EXPECT_EQ(align_entry->label, "Activate Align Tool");
+  EXPECT_EQ(align_entry->label, "Align Tool");
   EXPECT_EQ(align_entry->localization_key,
-            "keybindings.target.tools.activate.align.label");
+            "viewport.tool.align.label");
   for (const auto &arrangement : quader_mesh_arrangement_catalog()) {
     EXPECT_TRUE(std::none_of(
         entries.begin(), entries.end(), [&](const auto &candidate) {
@@ -975,13 +987,13 @@ TEST(LocalizationResourceTests,
   const std::array<LocaleExpectation, 2> expectations{{
       {
           "en-US",
-          "Activate Align Tool",
+          "Align Tool",
           {"Align X", "Align Y", "Align Z", "Distribute"},
           {"Min", "Center", "Max"},
       },
       {
           "it-IT",
-          "Attiva strumento Allinea",
+          "Strumento Allinea",
           {"Allinea X", "Allinea Y", "Allinea Z", "Distribuisci"},
           {"Min", "Centro", "Max"},
       },

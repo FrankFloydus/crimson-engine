@@ -71,6 +71,7 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kModelingDissolveVertices, kVertex, Operand::Selection},
     {quader_command::kModelingConnectEdges, kEdge, Operand::Selection},
     {quader_command::kModelingSplitEdges, kEdge, Operand::Selection},
+    {quader_command::kModelingSplitEdgesMidpoint, kEdge, Operand::Selection},
     {quader_command::kModelingFillHole, kEdge, Operand::Selection},
     {quader_command::kModelingPreviewBridgeEdges, kEdge, Operand::Selection},
     {quader_command::kModelingBevelEdges, kEdge, Operand::Selection},

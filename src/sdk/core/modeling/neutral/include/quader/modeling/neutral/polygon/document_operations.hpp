@@ -292,6 +292,8 @@ merge_selected_vertices_by_distance(Document &document, Selection &selection,
                                                      Selection &selection);
 [[nodiscard]] OperationResult split_selected_edges(Document &document,
                                                    Selection &selection);
+[[nodiscard]] OperationResult split_selected_edges_midpoint(Document &document,
+                                                           Selection &selection);
 [[nodiscard]] OperationResult dissolve_selected_edges(Document &document,
                                                       Selection &selection);
 [[nodiscard]] OperationResult merge_selected_edges(Document &document,

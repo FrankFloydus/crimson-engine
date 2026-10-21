@@ -15,11 +15,12 @@ namespace quader {
 /** Semantic priority of mutually exclusive face tints at one visible pixel. */
 enum class OverlayFaceFillClass : std::uint8_t {
   None = 0u,
-  Selection = 1u,
-  ActiveSelection = 2u,
-  Hover = 3u,
-  FacePlaneHover = 4u,
-  RemoveSelection = 5u,
+  Diagnostic = 1u,
+  Selection = 2u,
+  ActiveSelection = 3u,
+  Hover = 4u,
+  FacePlaneHover = 5u,
+  RemoveSelection = 6u,
 };
 
 /** Mask draws choose a priority; color draws consume its coverage once. */

@@ -90,6 +90,7 @@ enum class ModelingInstantOperationId {
   HardenEdgeNormals,
   SoftenEdgeNormals,
   DefaultEdgeNormals,
+  SplitEdgesMidpoint,
 };
 
 /**

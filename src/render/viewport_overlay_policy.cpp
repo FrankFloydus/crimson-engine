@@ -29,6 +29,7 @@ bool viewport_overlay_triangle_is_two_sided(ViewportOverlayLayer layer) {
          layer == ViewportOverlayLayer::SelectedXrayFace ||
          layer == ViewportOverlayLayer::SelectedFaceMask ||
          layer == ViewportOverlayLayer::HoverFace ||
+         layer == ViewportOverlayLayer::DiagnosticFace ||
          layer == ViewportOverlayLayer::ToolPlane ||
          layer == ViewportOverlayLayer::ToolHandle ||
          layer == ViewportOverlayLayer::ToolPreviewFill;

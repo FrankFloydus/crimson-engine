@@ -68,7 +68,7 @@ TEST(SelectionToolSettingsTests, LassoIdentityShortcutAndUserOverrideRemainCoher
   ASSERT_NE(row, catalog.end());
   EXPECT_EQ(row->default_shortcut, "Shift+Q");
   EXPECT_EQ(row->localization_key,
-            "keybindings.target.tools.activate.lasso_select.label");
+            "viewport.tool.lasso_select.label");
 
   ViewportToolState state;
   const auto chord = input_chord("Shift+Q");
@@ -119,7 +119,7 @@ TEST(SelectionToolSettingsTests, PaintIdentityDefaultIsConflictFreeRemappableAnd
   });
   ASSERT_NE(row, catalog.end());
   EXPECT_EQ(row->default_shortcut, "Ctrl+Q");
-  EXPECT_EQ(row->localization_key, "keybindings.target.tools.activate.paint_select.label");
+  EXPECT_EQ(row->localization_key, "viewport.tool.paint_select.label");
 
   const auto conflicts = editor.commands().analyze_shortcut_assignment(row->key, "Ctrl+Q");
   ASSERT_TRUE(conflicts.ok) << conflicts.message;

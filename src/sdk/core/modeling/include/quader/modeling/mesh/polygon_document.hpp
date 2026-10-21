@@ -345,6 +345,7 @@ public:
   [[nodiscard]] Result<OperationResult> connect_selected_edges();
   [[nodiscard]] Result<OperationResult> snap_selected_edges_to_active();
   [[nodiscard]] Result<OperationResult> split_selected_edges();
+  [[nodiscard]] Result<OperationResult> split_selected_edges_midpoint();
   [[nodiscard]] Result<OperationResult> dissolve_selected_edges();
   [[nodiscard]] Result<OperationResult> merge_selected_edges();
   [[nodiscard]] Result<OperationResult> collapse_selected_edges();

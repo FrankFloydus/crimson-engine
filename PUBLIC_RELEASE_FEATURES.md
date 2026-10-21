@@ -6,22 +6,22 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Features unavailable in public v0.1
+# Public v0.1 feature checklist
 
 This is the reactivation checklist for **quader-0.1.exe**. The internal **quader.exe**
 retains the complete feature set except for temporary UI restrictions explicitly
 marked as applying to both executables below. Public feature releases are independent
 of the internal application version in `VERSION`.
 
-Unchecked items are intentionally unavailable in public 0.1. Unless explicitly
-marked **UI only**, they are hidden from the UI and rejected through commands,
+Checked items have been enabled in public 0.1; unchecked items remain unavailable.
+Unless explicitly marked **UI only**, unavailable features are hidden from the UI and rejected through commands,
 shortcuts, tools and native public APIs. UI-only restrictions preserve the underlying
 data and programmatic behavior.
 The authoritative scheduling table is
 [release_features.cpp](src/core/release_features.cpp); native command/tool
 requirements live in
 [release_feature_requirements.cpp](src/editor/metadata/release_feature_requirements.cpp).
-Keep this checklist aligned when scheduling a feature for a later public release.
+Keep this checklist aligned whenever public availability changes.
 
 ## Materials and UVs
 
@@ -166,12 +166,14 @@ The editor packages the current native reader; no separate QDR parser is introdu
 
 - [ ] **Torus** — `ReleaseFeature::TorusPrimitive`.
 - [ ] **Cone** — `ReleaseFeature::ConePrimitive`.
-- [ ] **Quad Sphere** — `ReleaseFeature::QuadSpherePrimitive`.
+- [ ] **Stairs & Ramps** — `ReleaseFeature::StairsAndRamps`.
+- [x] **Quad Sphere** — `ReleaseFeature::QuadSpherePrimitive`, available in public 0.1.
 
-These exclusions cover the primitive toolbar popup, commands, shape options and
+The remaining exclusions cover the primitive toolbar popup, commands, shape options and
 direct creation entry points. The public popup exposes Create Box, Create Cylinder
 and Create Sphere, with default shortcuts Shift+B, Shift+C and Shift+S respectively.
-Sphere retains its Type setting with UV Sphere; Quad Sphere stays excluded.
+Sphere exposes UV Sphere and Quad Sphere in its Type setting, with Quad Sphere's
+subdivision control available.
 Cone and Torus remain unassigned by default in Internal Full.
 
 The toolbar button starts with Box and remembers the last successfully activated
@@ -182,15 +184,15 @@ creation session; reselecting the active shape leaves the current session unchan
 
 ## Modeling operations
 
-- [ ] **Bevel Vertices** — `ReleaseFeature::BevelVertices`.
-- [ ] **Bevel Edges** — `ReleaseFeature::BevelEdges`, including edge-bevel previews/options.
+- [x] **Bevel Vertices** — `ReleaseFeature::BevelVertices`, available in public 0.1.
+- [x] **Bevel Edges** — `ReleaseFeature::BevelEdges`, including edge-bevel previews/options, available in public 0.1.
 - [ ] **Slice Quads** — `ReleaseFeature::SliceQuads`.
-- [ ] **Thicken Faces** — `ReleaseFeature::ThickenFaces`.
+- [x] **Thicken Faces** — `ReleaseFeature::ThickenFaces`, available in public 0.1.
 - [ ] **Create Outer Hull** — `ReleaseFeature::OuterHull`.
 - [ ] **Half Cut meshes** — `ReleaseFeature::HalfCut`.
 
 Thicken Faces and Create Outer Hull share an internal operation but have separate
-public feature entries so they can be released independently.
+public feature entries. Thicken Faces is public; Create Outer Hull remains excluded.
 
 ## Arrangement, placement and baking
 
@@ -198,20 +200,20 @@ public feature entries so they can be released independently.
   - Align minimum, center or maximum on X, Y or Z (nine commands).
   - Distribute centers on X, Y or Z (three commands).
   - Distribute gaps on X, Y or Z (three commands).
-- [ ] **Radial Align** — `ReleaseFeature::RadialAlign`
+- [x] **Radial Align** — `ReleaseFeature::RadialAlign`, available in public 0.1.
   - Vertex, edge and face variants, including the generic context action.
-- [ ] **Snap to Floor** — `ReleaseFeature::SnapToFloor`
+- [x] **Snap to Floor** — `ReleaseFeature::SnapToFloor`, available in public 0.1.
   - Snap Meshes to Floor and Snap Vertices to Floor.
 - [ ] **Transform baking** — `ReleaseFeature::TransformBaking`
   - Bake Transforms, Bake Location, Bake Rotation and Bake Scale.
 
 ## Tools, symmetry and arrays
 
-- [ ] **Mirror Tool** — `ReleaseFeature::MirrorTool`, including its preview/settings.
+- [x] **Mirror Tool** — `ReleaseFeature::MirrorTool`, including its preview/settings, available in public 0.1.
 - [ ] **Mesh mirroring** — `ReleaseFeature::MeshMirror`, on X, Y and Z.
-- [ ] **Mesh flips** — `ReleaseFeature::MeshFlip`, horizontal and vertical geometric flips.
+- [x] **Mesh flips** — `ReleaseFeature::MeshFlip`, horizontal and vertical geometric flips, available in public 0.1.
 - [ ] **Cut Tool** — `ReleaseFeature::CutTool`, including face-plane cutting and cut-mode gestures.
-- [ ] **Poly Tool** — `ReleaseFeature::PolyTool`.
+- [x] **Poly Tool** — `ReleaseFeature::PolyTool`, available in public 0.1.
 - [ ] **Persistent Extrude Tool** — `ReleaseFeature::ExtrudeTool`
   - Extrude toolbar/menu activation and the persistent tool's settings workflow.
   - Standalone extrusion controls and preview entry points.
@@ -229,13 +231,16 @@ public feature entries so they can be released independently.
 Knife, clipboard Cut and Flip Normals remain available. Completed mesh geometry
 does not retain a history of which tool produced it: these gates restrict the
 workflows, not an equivalent geometric result produced through permitted tools.
+The released Mirror Tool is separate from the still-excluded Mirror Selection X/Y/Z
+commands. Horizontal/vertical geometric flips are public; texture flips remain gated
+with UV editing.
 
 ## Pivots and selection
 
-- [ ] **Pivot editing** — `ReleaseFeature::Pivot`
+- [x] **Pivot editing** — `ReleaseFeature::Pivot`, available in public 0.1.
   - Persistent Pivot Tool, pivot alignment and snapping settings.
   - Temporary Quick Pivot gesture.
-  - Copy Pivot from Active and origin/pivot rebasing operations.
+  - Copy Pivot from Active, Set Origin to Center and Set Origin to Pivot.
 - [ ] **Advanced selection controls (UI only)** — `ReleaseFeature::AdvancedSelectionUi`
   - Select Direction.
   - Select Co-planar Faces.
@@ -258,16 +263,17 @@ with a button immediately after Local Transforms in each pane strip.
 
 ## Scene instances
 
-- [ ] **Scene instancing** — `ReleaseFeature::Instancing`
+- [x] **Scene instancing** — `ReleaseFeature::Instancing`, available in public 0.1.
   - Create Instance, Flatten Instance and instance-edit entry/exit controls.
   - Linked instance creation, flattening and edit scopes through native APIs.
   - Generic instance-object creation and duplication of hierarchies containing instances.
   - Copying and pasting linked instances through the project clipboard.
-  - Opening instance-bearing scenes in the public workspace: rejected explicitly,
-    without flattening or silently removing their contents.
+  - Saving and reopening supported public scenes containing linked instances,
+    preserving definitions and occurrences without flattening.
 
 Ordinary mesh and group duplicates retain independent geometry and remain available,
-along with their normal copy/paste workflows. Internal Full retains instancing support.
+along with their normal copy/paste workflows. Linked instances share their definition's
+geometry; the remaining material, curve, light and layer restrictions still apply.
 
 ## Layers
 

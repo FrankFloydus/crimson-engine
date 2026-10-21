@@ -23,6 +23,7 @@
 #include <QPainter>
 #include <QPointer>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QStyleOptionToolButton>
 #include <QStyledItemDelegate>
@@ -527,35 +528,47 @@ struct QtMarkingMenu::Impl {
   }
 
   void layout_radial() {
+    if (layout_in_progress_) {
+      return;
+    }
+    const QScopedValueRollback layout_guard(layout_in_progress_, true);
+    radial_center_ = global_anchor_;
     QScreen *screen = QGuiApplication::screenAt(global_anchor_);
     if (screen == nullptr) {
       screen = menu_.screen();
     }
     available_geometry_ = screen->availableGeometry();
-    const int button_height = std::max(
-        metrics_.px(28), menu_.fontMetrics().height() + metrics_.px(8));
+    int button_height = metrics_.px(28);
     const int gap = metrics_.px(6);
     std::array<int, kSlotCount> widths{};
     for (int index = 0; index < kSlotCount; ++index) {
       const auto *button = buttons_[index];
+      const auto font_metrics = button->fontMetrics();
+      if (!button->isHidden()) {
+        button_height = std::max(button_height, font_metrics.height() + metrics_.px(8));
+      }
       const int padding = metrics_.px(button->icon().isNull() ? 20 : 44);
-      widths[index] = std::min(std::clamp(menu_.fontMetrics().horizontalAdvance(
-                                              button->accessibleName()) +
-                                              padding,
+      widths[index] = std::min(std::clamp(font_metrics.horizontalAdvance(
+                                              button->accessibleName()) + padding,
                                           metrics_.px(48), metrics_.px(220)),
                                available_geometry_.width());
       const int text_width = std::max(1, widths[index] - padding);
-      buttons_[index]->setText(menu_.fontMetrics().elidedText(
+      buttons_[index]->setText(font_metrics.elidedText(
           buttons_[index]->accessibleName(), Qt::ElideRight, text_width));
     }
-    const auto place_circle = [&](int radius) {
+    const auto place_compass = [&](int radius) {
       for (int index = 0; index < kSlotCount; ++index) {
         const double angle = index * std::numbers::pi / 4.0;
-        const QPoint center =
+        const QPoint anchor =
             radial_center_ + QPoint(qRound(std::sin(angle) * radius),
                                     -qRound(std::cos(angle) * radius));
+        // Side labels grow outward from a shared compass ray. Their visible
+        // inner edges keep the direction readable regardless of label length.
+        const int left = index > 0 && index < 4 ? anchor.x()
+            : index > 4 ? anchor.x() - widths[index] + 1
+                        : anchor.x() - (widths[index] - 1) / 2;
         button_geometry_[index] = QRect(
-            center - QPoint((widths[index] - 1) / 2, (button_height - 1) / 2),
+            QPoint(left, anchor.y() - (button_height - 1) / 2),
             QSize(widths[index], button_height));
       }
     };
@@ -575,11 +588,19 @@ struct QtMarkingMenu::Impl {
       }
       return false;
     };
-    int radius = metrics_.px(90);
-    place_circle(radius);
+    int pole_half_width = 0;
+    for (const int index : {0, 4}) {
+      if (!buttons_[index]->isHidden()) {
+        pole_half_width = std::max(pole_half_width, (widths[index] + 1) / 2);
+      }
+    }
+    const int pole_clearance = static_cast<int>(std::ceil(
+        (pole_half_width + gap + 1) / std::sin(std::numbers::pi / 4.0)));
+    int radius = std::max(metrics_.px(90), pole_clearance);
+    place_compass(radius);
     while (has_overlap() && radius < metrics_.px(480)) {
       radius += std::max(1, metrics_.px(1));
-      place_circle(radius);
+      place_compass(radius);
     }
     radial_geometry_ = QRect(radial_center_ - QPoint(6, 6), QSize(13, 13));
     for (int index = 0; index < kSlotCount; ++index) {
@@ -674,7 +695,6 @@ struct QtMarkingMenu::Impl {
                             radial_geometry_.height() - gap);
     }
     overflow_geometry_ = QRect(origin, QSize(width, height));
-    overflow_->setCurrentRow(-1);
     overflow_->show();
   }
 
@@ -872,6 +892,7 @@ private:
   int active_slot_ = -1;
   int dead_zone_ = 24;
   bool running_ = false;
+  bool layout_in_progress_ = false;
   bool mouse_pressed_ = false;
   bool opening_submenu_ = false;
 };
@@ -916,6 +937,16 @@ QAction *QtMarkingMenu::exec(const QPoint &global_anchor,
 bool QtMarkingMenu::eventFilter(QObject *watched, QEvent *event) {
   if (!impl_->running_) {
     return QWidget::eventFilter(watched, event);
+  }
+  if (event->type() == QEvent::FontChange ||
+      event->type() == QEvent::ApplicationFontChange ||
+      event->type() == QEvent::StyleChange) {
+    const auto *widget = qobject_cast<QWidget *>(watched);
+    if (widget != nullptr && (widget == this || isAncestorOf(widget))) {
+      // Retained popup children can resolve inherited fonts after opening.
+      // Refit immediately so the next paint and gesture use those metrics.
+      impl_->layout_radial();
+    }
   }
   if (event->type() == QEvent::ShortcutOverride) {
     event->accept();

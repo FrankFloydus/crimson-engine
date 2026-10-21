@@ -1758,6 +1758,7 @@ void PivotToolService::set_persistent_preview_position(QVec3 world_position) {
 }
 
 void PivotToolService::begin_quick(QVec3 initial_world_position) {
+  quick_edit_checkpoint_.reset();
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return;
   }
@@ -1774,6 +1775,15 @@ void PivotToolService::begin_quick(QVec3 initial_world_position) {
       .world_position = initial_world_position,
   };
   ++selection_pivot_revision_;
+}
+
+void PivotToolService::begin_quick_edit(QVec3 initial_world_position) {
+  const QuickState before = quick_;
+  begin_quick(initial_world_position);
+  if (quick_edit_active()) {
+    quick_edit_checkpoint_ = QuickEditCheckpoint{
+        .before = before, .initial_world_position = initial_world_position};
+  }
 }
 
 void PivotToolService::set_quick_preview_position(QVec3 world_position) {
@@ -1796,10 +1806,19 @@ void PivotToolService::set_quick_preview_position(QVec3 world_position) {
 void PivotToolService::end_quick_edit() {
   if (quick_edit_active()) {
     quick_.editing = false;
+    if (quick_edit_checkpoint_ &&
+        near_same_point(quick_.world_position,
+                        quick_edit_checkpoint_->initial_world_position)) {
+      quick_ = quick_edit_checkpoint_->before;
+      quick_.editing = false;
+      ++selection_pivot_revision_;
+    }
   }
+  quick_edit_checkpoint_.reset();
 }
 
 void PivotToolService::clear_quick_override() {
+  quick_edit_checkpoint_.reset();
   if (!quick_.override_valid && !quick_.editing &&
       quick_.selection_revision == 0 && quick_.world_position.x == 0.0f &&
       quick_.world_position.y == 0.0f && quick_.world_position.z == 0.0f) {

@@ -312,7 +312,7 @@ OperationResult SplitEdgesOperation::apply(Document& document,
                                            Selection& selection) const
 {
     if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-        return OperationResult::failure("Select one or more edges to split.");
+        return OperationResult::failure("Select one or more edges to disconnect.");
     }
     const OperationResult source_validation =
         validate_authored_operation_candidate(document, document);
@@ -321,21 +321,21 @@ OperationResult SplitEdgesOperation::apply(Document& document,
     }
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.empty()) {
-        return OperationResult::failure("Select one or more valid edges to split.");
+        return OperationResult::failure("Select one or more valid edges to disconnect.");
     }
     const SplitSourceTopology topology = split_source_topology(document);
     for (const Edge edge : selected_edges) {
         const auto found = topology.edge_uses.find(split_edge_key(edge.a, edge.b));
         if (found == topology.edge_uses.end() || found->second.size() != 2U) {
             return OperationResult::failure(
-                "Edge Split needs selected interior edges with exactly two adjacent faces.");
+                "Disconnect Edge needs selected interior edges with exactly two adjacent faces.");
         }
     }
     std::optional<std::vector<SplitChain>> chains =
         ordered_split_chains(selected_edges);
     if (!chains) {
         return OperationResult::failure(
-            "Edge Split needs nonbranching edge chains or loops.");
+            "Disconnect Edge needs nonbranching edge chains or loops.");
     }
 
     std::map<ElementId, std::vector<std::size_t>> split_faces_by_vertex;
@@ -355,13 +355,13 @@ OperationResult SplitEdgesOperation::apply(Document& document,
                 split_vertex_fan(document, topology, vertex_id);
             if (!fan) {
                 return OperationResult::failure(
-                    "Edge Split needs a connected manifold face fan at each selected vertex.");
+                    "Disconnect Edge needs a connected manifold face fan at each selected vertex.");
             }
             std::optional<std::vector<std::size_t>> side =
                 split_chain_vertex_side(document, topology, *fan, chain, index);
             if (!side) {
                 return OperationResult::failure(
-                    "Edge Split could not separate the ordered chain sides at a selected vertex.");
+                    "Disconnect Edge could not separate the ordered chain sides at a selected vertex.");
             }
             split_faces_by_vertex.emplace(vertex_id, std::move(*side));
         }
@@ -373,7 +373,7 @@ OperationResult SplitEdgesOperation::apply(Document& document,
     for (const auto& [vertex_id, face_indices] : split_faces_by_vertex) {
         const Vertex* source_vertex = find_vertex(document, vertex_id);
         if (source_vertex == nullptr) {
-            return OperationResult::failure("Edge Split could not resolve a selected vertex.");
+            return OperationResult::failure("Disconnect Edge could not resolve a selected vertex.");
         }
         const ElementId duplicate_id = add_vertex(candidate, source_vertex->position);
         duplicate_vertices.emplace(vertex_id, duplicate_id);

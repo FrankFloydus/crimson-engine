@@ -46,9 +46,10 @@ enum class ViewportOverlayLayer {
     WireframeXray = 24,
     PointLightGizmo = 25,
     CollisionFill = 26,
+    DiagnosticFace = 27,
 };
 
-inline constexpr std::size_t kViewportOverlayLayerCount = 27u;
+inline constexpr std::size_t kViewportOverlayLayerCount = 28u;
 
 /**
  * Enumerates ViewportOverlayIconKind values used by render-owned billboard overlays.
@@ -99,6 +100,8 @@ enum class ViewportOverlayStyleRole {
     ActiveSelectedVertex,
     ActiveGroupBounds,
     KnifeReferenceLine,
+    LaminaFace,
+    LaminaWire,
 };
 
 /**

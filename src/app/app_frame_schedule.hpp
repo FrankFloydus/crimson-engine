@@ -41,10 +41,18 @@ private:
 class AppFrameSchedule final {
 public:
   int next_interval_ms(bool continuous, bool synchronized,
-                       int display_interval_ms, bool submitted) noexcept {
+                       int display_interval_ms, bool submitted,
+                       bool composition_driven = false) noexcept {
     if (!continuous || synchronized) {
       retry_interval_ms_ = 0;
-      return continuous ? display_interval_ms : kIdleFrameIntervalMs;
+      if (!continuous) {
+        return kIdleFrameIntervalMs;
+      }
+      // A synchronized Qt root requests its next frame after composition.
+      // Leave time for that callback instead of racing it with a second clock;
+      // retry if a requested composition never arrives.
+      return composition_driven ? display_interval_ms * 2
+                                : display_interval_ms;
     }
     if (submitted) {
       retry_interval_ms_ = 0;

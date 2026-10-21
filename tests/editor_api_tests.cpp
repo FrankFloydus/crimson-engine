@@ -3151,7 +3151,7 @@ TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) 
   EXPECT_TRUE(entry->default_shortcut.empty());
   EXPECT_TRUE(entry->unassigned);
   EXPECT_EQ(entry->localization_key,
-            "keybindings.target.tools.activate.curve.label");
+            "viewport.tool.curve.label");
 
   ASSERT_TRUE(editor.preferences().set_shortcut(kCommand, "Ctrl+Alt+F22").ok());
   quader::ViewportToolState state;
@@ -3850,7 +3850,7 @@ TEST(EditorApiTests,
   EXPECT_TRUE(entry->unassigned);
   EXPECT_EQ(entry->scope_id, "viewport.selection.object");
   EXPECT_EQ(entry->localization_key,
-            "keybindings.target.tools.activate.path_array.label");
+            "viewport.tool.path_array.label");
 
   const auto curve = editor.modeling().create_curve({
       .points = {{.position = {0.0F, 0.0F, 0.0F},
@@ -25956,9 +25956,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 237u);
+  EXPECT_EQ(commands.size(), 238u);
 #else
-  EXPECT_EQ(commands.size(), 236u);
+  EXPECT_EQ(commands.size(), 237u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

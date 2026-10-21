@@ -408,6 +408,10 @@ ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
     return setting_color(settings, ViewportColorSettingId::OpenEdge);
   case ViewportOverlayStyleRole::DiagnosticEdge:
     return setting_color(settings, ViewportColorSettingId::DiagnosticEdge);
+  case ViewportOverlayStyleRole::LaminaFace:
+    return setting_color(settings, ViewportColorSettingId::LaminaFace);
+  case ViewportOverlayStyleRole::LaminaWire:
+    return setting_color(settings, ViewportColorSettingId::LaminaWire);
   case ViewportOverlayStyleRole::HoverFace:
     return setting_color(settings, ViewportColorSettingId::HoverFace);
   case ViewportOverlayStyleRole::HoverWire:
@@ -489,6 +493,8 @@ float ViewportOverlayStyleResolver::line_width_for(
     return settings.float_value(ViewportFloatSettingId::OpenEdgeLineSize);
   case ViewportOverlayStyleRole::DiagnosticEdge:
     return settings.float_value(ViewportFloatSettingId::DiagnosticEdgeLineSize);
+  case ViewportOverlayStyleRole::LaminaWire:
+    return settings.float_value(ViewportFloatSettingId::LaminaWireLineSize);
   case ViewportOverlayStyleRole::GroupBounds:
     return settings.float_value(
         ViewportFloatSettingId::BoundingBoxWireThickness);

@@ -68,6 +68,7 @@ command_schema_for_operation(EditorOperationId operation_id) {
   case EditorOperationId::DissolveVertices:
   case EditorOperationId::ConnectEdges:
   case EditorOperationId::SplitEdges:
+  case EditorOperationId::SplitEdgesMidpoint:
   case EditorOperationId::DissolveEdges:
   case EditorOperationId::MergeEdges:
   case EditorOperationId::CollapseEdges:

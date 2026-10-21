@@ -101,40 +101,21 @@ void expect_unchanged(const QuaderEditorApi &editor,
 
 /// Independent expected public-release exclusions, including every command variant.
 constexpr auto kExcludedCommands = std::to_array<QuaderCommandId>({
-    quader_command::kEditCreateInstance,
-    quader_command::kEditFlattenInstance,
-    quader_command::kEditExitInstanceEdit,
-    quader_command::kModelingBevelVertices,
-    quader_command::kModelingBevelEdges,
     quader_command::kModelingSliceQuad,
-    quader_command::kModelingThickenFaces,
     quader_command::kModelingCreateOuterHull,
     quader_command::kModelingHalfCut,
-    quader_command::kModelingRadialAlign,
-    quader_command::kModelingRadialAlignVertices,
-    quader_command::kModelingRadialAlignEdges,
-    quader_command::kModelingRadialAlignFaces,
-    quader_command::kModelingSnapMeshesToFloor,
-    quader_command::kModelingSnapVerticesToFloor,
     quader_command::kModelingBakeTransforms,
     quader_command::kModelingBakeLocation,
     quader_command::kModelingBakeRotation,
     quader_command::kModelingBakeScale,
-    quader_command::kModelingSetOriginToCenter,
-    quader_command::kModelingSetOriginToPivot,
     quader_command::kModelingMirrorSelectionX,
     quader_command::kModelingMirrorSelectionY,
     quader_command::kModelingMirrorSelectionZ,
-    quader_command::kModelingFlipHorizontal,
-    quader_command::kModelingFlipVertical,
     quader_command::kModelingUvPeel,
-    quader_command::kToolsActivateMirror,
     quader_command::kToolsActivateCut,
-    quader_command::kToolsActivatePoly,
     quader_command::kToolsActivateLinearArray,
     quader_command::kToolsActivateRadialArray,
     quader_command::kToolsActivatePathArray,
-    quader_command::kToolsActivatePivot,
     quader_command::kToolsActivateCurve,
     quader_command::kToolsActivateCreateCurve,
     quader_command::kToolsActivateCreateTorus,
@@ -153,7 +134,6 @@ constexpr auto kExcludedCommands = std::to_array<QuaderCommandId>({
          id.starts_with("modeling.align.") ||
          id.starts_with("modeling.distribute.") ||
          id.starts_with("scene.layers.") ||
-         id == "modeling.copy_pivot_from_active" ||
          id == "scene.create_point_light" ||
          id == "scene.create_directional_light" ||
          id == "viewport.toggle_mesh_grid" ||
@@ -172,9 +152,16 @@ TEST(PublicReleaseProfile, ExecutableIdentityCatalogAndSettingsArePublic01) {
   EXPECT_FALSE(info.internal_full);
   for (const auto &feature : release_feature_catalog()) {
     SCOPED_TRACE(feature.id);
+    constexpr auto kPublicFeatures = std::to_array<ReleaseFeature>({
+        ReleaseFeature::LassoSelection, ReleaseFeature::PaintSelection,
+        ReleaseFeature::BevelVertices, ReleaseFeature::BevelEdges,
+        ReleaseFeature::ThickenFaces, ReleaseFeature::PolyTool,
+        ReleaseFeature::MirrorTool, ReleaseFeature::MeshFlip,
+        ReleaseFeature::RadialAlign, ReleaseFeature::SnapToFloor,
+        ReleaseFeature::Pivot, ReleaseFeature::Instancing,
+        ReleaseFeature::QuadSpherePrimitive});
     EXPECT_EQ(editor.feature_available(feature.feature),
-              feature.feature == ReleaseFeature::LassoSelection ||
-              feature.feature == ReleaseFeature::PaintSelection);
+              std::ranges::find(kPublicFeatures, feature.feature) != kPublicFeatures.end());
     EXPECT_TRUE(product_release_has_feature(kInternalFullRelease, feature.feature));
   }
   ASSERT_NE(std::getenv("LOCALAPPDATA"), nullptr);
@@ -233,6 +220,30 @@ TEST(PublicReleaseCommands, EveryExcludedCommandIsAbsentAndRejectsWithoutMutatio
     expect_unchanged(editor, before);
   }
   EXPECT_GE(count, kExcludedCommands.size());
+  constexpr auto kPromotedCommands = std::to_array<QuaderCommandId>({
+      quader_command::kEditCreateInstance,
+      quader_command::kEditFlattenInstance,
+      quader_command::kEditExitInstanceEdit,
+      quader_command::kModelingBevelVertices,
+      quader_command::kModelingBevelEdges,
+      quader_command::kModelingThickenFaces,
+      quader_command::kModelingRadialAlign,
+      quader_command::kModelingRadialAlignVertices,
+      quader_command::kModelingRadialAlignEdges,
+      quader_command::kModelingRadialAlignFaces,
+      quader_command::kModelingSnapMeshesToFloor,
+      quader_command::kModelingSnapVerticesToFloor,
+      quader_command::kModelingSetOriginToCenter,
+      quader_command::kModelingSetOriginToPivot,
+      quader_command::kModelingFlipHorizontal,
+      quader_command::kModelingFlipVertical,
+      quader_command::kToolsActivateMirror,
+      quader_command::kToolsActivatePoly,
+      quader_command::kToolsActivatePivot,
+      quader_command::kModelingCopyPivotFromActive});
+  for (const auto command : kPromotedCommands) {
+    EXPECT_TRUE(editor.commands().descriptor(command).has_value()) << command.string();
+  }
   for (const auto command : {quader_command::kToolsActivateKnife,
                              quader_command::kToolsActivateLassoSelect,
                              quader_command::kToolsActivatePaintSelect,
@@ -244,24 +255,65 @@ TEST(PublicReleaseCommands, EveryExcludedCommandIsAbsentAndRejectsWithoutMutatio
   }
 }
 
-TEST(PublicReleaseCommands, OriginPlacementApisRejectWithoutMutation) {
-  auto standalone = create_standalone_editor();
-  auto &editor = standalone.editor();
-  const auto box = editor.modeling().create_box(
-      {.min = {0.f, 0.f, 0.f}, .max = {4.f, 2.f, 3.f}}, "Origin selection");
-  ASSERT_TRUE(box.ok()) << box.error_message();
-  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
-  const auto before = capture_command_observable_state(editor);
-  EXPECT_FALSE(editor.modeling().can_set_origin_to_center());
-  EXPECT_FALSE(editor.modeling().can_set_origin_to_pivot());
-  const auto centered = editor.modeling().set_origin_to_center();
-  EXPECT_FALSE(centered.ok());
-  EXPECT_FALSE(centered.changed());
-  expect_unchanged(editor, before);
-  const auto pivoted = editor.modeling().set_origin_to_pivot();
-  EXPECT_FALSE(pivoted.ok());
-  EXPECT_FALSE(pivoted.changed());
-  expect_unchanged(editor, before);
+TEST(PublicReleaseCommands, OriginPlacementPreservesWorldGeometryAndReplaysHistory) {
+  for (const bool center : {false, true}) {
+    SCOPED_TRACE(center);
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto created = editor.modeling().create_box_mesh(
+        {.min = {0.f, 0.f, 0.f}, .max = {4.f, 2.f, 3.f}}, "Origin selection");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto mesh = created.value();
+    const auto entity = mesh.ref().entity;
+    ASSERT_TRUE(mesh.select().replace().ok());
+    const auto world_vertices = [&] {
+      std::vector<QVec3> positions;
+      const auto compiled = mesh.compiled_mesh();
+      EXPECT_TRUE(compiled.has_value());
+      if (compiled) {
+        const auto world = session.scene().world_transform_matrix(entity);
+        for (const auto &vertex : compiled->vertices) {
+          positions.push_back(transform_point(world, vertex.position));
+        }
+      }
+      return positions;
+    };
+    const auto before_vertices = world_vertices();
+    const auto before_origin = session.scene().transform(entity)->location;
+    const auto expected = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(expected.has_value());
+    EXPECT_TRUE(editor.modeling().can_set_origin_to_center());
+    EXPECT_TRUE(editor.modeling().can_set_origin_to_pivot());
+    const auto moved = center ? editor.modeling().set_origin_to_center()
+                              : editor.modeling().set_origin_to_pivot();
+    ASSERT_TRUE(moved.ok()) << moved.error_message();
+    EXPECT_TRUE(moved.changed());
+    EXPECT_TRUE(session.scene().transform(entity)->custom_pivot);
+    const auto after_origin = session.scene().transform(entity)->location;
+    EXPECT_NEAR(after_origin.x, expected->x, 0.0001f);
+    EXPECT_NEAR(after_origin.y, expected->y, 0.0001f);
+    EXPECT_NEAR(after_origin.z, expected->z, 0.0001f);
+    const auto expect_world_preserved = [&] {
+      const auto actual = world_vertices();
+      ASSERT_EQ(actual.size(), before_vertices.size());
+      for (std::size_t index = 0; index < actual.size(); ++index) {
+        EXPECT_NEAR(actual[index].x, before_vertices[index].x, 0.0001f);
+        EXPECT_NEAR(actual[index].y, before_vertices[index].y, 0.0001f);
+        EXPECT_NEAR(actual[index].z, before_vertices[index].z, 0.0001f);
+      }
+    };
+    expect_world_preserved();
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FLOAT_EQ(session.scene().transform(entity)->location.x, before_origin.x);
+    EXPECT_FLOAT_EQ(session.scene().transform(entity)->location.y, before_origin.y);
+    EXPECT_FLOAT_EQ(session.scene().transform(entity)->location.z, before_origin.z);
+    expect_world_preserved();
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_FLOAT_EQ(session.scene().transform(entity)->location.x, after_origin.x);
+    EXPECT_FLOAT_EQ(session.scene().transform(entity)->location.y, after_origin.y);
+    EXPECT_FLOAT_EQ(session.scene().transform(entity)->location.z, after_origin.z);
+    expect_world_preserved();
+  }
 }
 
 TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePreview) {
@@ -269,9 +321,8 @@ TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePrevie
   auto &editor = standalone.editor();
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
   const auto before = capture_command_observable_state(editor);
-  for (const auto tool : {"mirror", "cut", "poly", "linear_array",
-                          "radial_array", "path_array", "curve", "create_curve",
-                          "pivot", "uv_peel"}) {
+  for (const auto tool : {"cut", "linear_array", "radial_array", "path_array",
+                          "curve", "create_curve", "uv_peel"}) {
     SCOPED_TRACE(tool);
     EXPECT_FALSE(editor.tools().can_activate(tool));
     const auto result = editor.tools().activate(tool);
@@ -754,7 +805,7 @@ TEST(PublicReleaseCommands, ParentingCommandsArePublicAndSupportMeshesAndGroups)
 
 TEST(PublicReleaseCommands, ParentingRejectsRestrictedParticipantsAtomically) {
   for (const EntityKind restricted :
-       {EntityKind::Curve, EntityKind::Light, EntityKind::Instance}) {
+       {EntityKind::Curve, EntityKind::Light}) {
     SCOPED_TRACE(static_cast<int>(restricted));
     SceneSession session;
     QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -816,7 +867,7 @@ TEST(PublicReleaseCommands, ParentingOverridesAndExplicitUnassignmentSurviveRelo
   EXPECT_TRUE(commands.shortcut_for(quader_command::kUnparentSelection).empty());
 }
 
-TEST(PublicReleaseCommands, DisabledHeldInputDoesNotConsumeQuickPivotOrMaterialTransfer) {
+TEST(PublicReleaseCommands, QuickPivotResolvesWhileMaterialTransferRemainsUnavailable) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   const auto box = editor.modeling().create_box(
@@ -828,7 +879,11 @@ TEST(PublicReleaseCommands, DisabledHeldInputDoesNotConsumeQuickPivotOrMaterialT
   ViewportToolState state;
   state.active_tool = ViewportToolId::Move;
   state.selection_mode = ViewportSelectionMode::Face;
-  for (const auto input : {"D", "Shift+RightMouseClick", "Shift+RightMouseDoubleClick",
+  ViewportInputActionKind pivot_action = ViewportInputActionKind::None;
+  EXPECT_TRUE(editor.commands().resolve_viewport_input_action(
+      single_chord("D"), state, true, false, pivot_action, {.viewport_hovered = true}));
+  EXPECT_EQ(pivot_action, ViewportInputActionKind::QuickPivot);
+  for (const auto input : {"Shift+RightMouseClick", "Shift+RightMouseDoubleClick",
                            "Ctrl+RightMouseClick", "Ctrl+RightMouseDoubleClick"}) {
     SCOPED_TRACE(input);
     ViewportInputActionKind action = ViewportInputActionKind::None;
@@ -843,11 +898,11 @@ TEST(PublicReleaseCommands, DormantShortcutOverridesSurviveEditsReloadAndResetAl
   const auto path = directory.path() / "keybindings.json";
   write_text(path, R"([
     {"command":"tools.activate.cut","key":"Ctrl+Alt+F23"},
-    {"command":"viewport.quick_pivot","key":"Ctrl+Alt+F22"}
+    {"command":"tools.activate.linear_array","key":"Ctrl+Alt+F22"}
   ])");
   const auto contains_dormant_bindings = [&] {
     const auto json = nlohmann::json::parse(read_text(path));
-    for (const auto id : {"tools.activate.cut", "viewport.quick_pivot"}) {
+    for (const auto id : {"tools.activate.cut", "tools.activate.linear_array"}) {
       EXPECT_TRUE(std::any_of(json.begin(), json.end(), [id](const auto &entry) {
         return entry.value("command", std::string{}) == id;
       })) << id;
@@ -941,6 +996,70 @@ TEST(PublicReleasePersistence, PublicAuthoringSavesAndReopensTaggedSceneAndProje
   }));
 }
 
+TEST(PublicReleasePersistence, PublicInstancesSaveAndReopenWithoutRaisingFileRequirements) {
+  PublicReleaseDirectory directory;
+  const auto root = directory.path() / "PublicInstances";
+  std::filesystem::create_directory(root);
+  std::filesystem::path manifest_path;
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+  EntityId member = kInvalidEntityId;
+  const auto relative = scene_path("Scenes/Instances.qdr");
+  {
+    ProjectSession project;
+    QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(root).ok());
+    const auto created = editor.modeling().create_box(
+        {.min = {-1.f, -1.f, -1.f}, .max = {1.f, 1.f, 1.f}}, "Saved Instance Member");
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    member = created.value().entity;
+    ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    const auto instanced = editor.modeling().create_instance_from_selection();
+    ASSERT_TRUE(instanced.ok()) << instanced.error_message();
+    occurrence = instanced.value().occurrence.root.id;
+    definition = instanced.value().definition.root.id;
+    const auto active = editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(active.has_value());
+    ASSERT_TRUE(editor.scene_documents().save_as(*active, relative).ok());
+    manifest_path = editor.project().manifest_path();
+    const auto manifest = ProjectManifestStore::deserialize(read_text(manifest_path));
+    ASSERT_TRUE(manifest.ok()) << manifest.error().message;
+    EXPECT_EQ(manifest.value().minimum_product_release(), kPublicRelease01);
+    const auto saved = QdrDocumentReader::read_project_document(
+        root / relative.native_path(), kPublicRelease01);
+    ASSERT_TRUE(saved.ok) << saved.message;
+    EXPECT_EQ(saved.minimum_product_release, kPublicRelease01);
+    const auto *saved_occurrence = saved.document.scene().instance_occurrence(occurrence);
+    ASSERT_NE(saved_occurrence, nullptr);
+    EXPECT_EQ(saved_occurrence->definition, definition);
+    EXPECT_EQ(saved.document.scene().parent(member), definition);
+    ASSERT_TRUE(editor.project().close().ok());
+  }
+  const auto before_open = directory_contents(directory.path());
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  const auto opened = editor.project().open(manifest_path);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  EXPECT_EQ(directory_contents(directory.path()), before_open);
+  const auto restored = editor.query().entity(occurrence);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_TRUE(restored->has_instance_occurrence);
+  EXPECT_EQ(restored->instance_definition, definition);
+  ASSERT_TRUE(editor.query().entity(member).has_value());
+  EXPECT_EQ(editor.query().entity(member)->parent, definition);
+  ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  EXPECT_TRUE(editor.modeling().instance_edit_state().active);
+  ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
+  ASSERT_TRUE(editor.selection().select_objects({occurrence}, occurrence).ok());
+  EXPECT_TRUE(editor.modeling().can_flatten_selected_instances());
+  const auto flattened = editor.modeling().flatten_selected_instances();
+  ASSERT_TRUE(flattened.ok()) << flattened.error_message();
+  EXPECT_FALSE(editor.query().entity(occurrence).has_value());
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.query().entity(occurrence).has_value());
+  EXPECT_EQ(editor.query().entity(occurrence)->instance_definition, definition);
+}
+
 TEST(PublicReleasePersistence, RejectedSceneRequirementsPreserveLiveStateAndFiles) {
   PublicReleaseDirectory directory;
   const auto root = directory.path() / "WorkingProject";
@@ -984,33 +1103,6 @@ TEST(PublicReleasePersistence, RejectedSceneRequirementsPreserveLiveStateAndFile
     EXPECT_EQ(rejected_read.stats.unique_geometry_decoded_count, 0u);
     EXPECT_TRUE(QdrDocumentReader::read_project_document(path, kInternalFullRelease).ok);
   }
-  // Earlier 0.1-tagged scenes may contain instances. Reject them without
-  // stripping roles, changing live state, or rewriting the authored file.
-  auto instanced = QdrDocumentReader::read_project_document(root / "Scenes/Existing.qdr");
-  ASSERT_TRUE(instanced.ok) << instanced.message;
-  auto &instance_scene = instanced.document.scene();
-  const EntityId definition = instance_scene.create_entity("Retained Definition");
-  ASSERT_TRUE(instance_scene.set_parent(box.value().entity, definition, false));
-  ASSERT_TRUE(instance_scene.set_instance_definition(definition));
-  const EntityId occurrence = instance_scene.create_entity("Retained Instance", EntityKind::Instance);
-  ASSERT_TRUE(instance_scene.set_instance_occurrence(occurrence, {.definition = definition}));
-  auto instance_snapshot = qdr_project_write_snapshot_from_document(instanced.document);
-  ASSERT_TRUE(instance_snapshot.ok()) << instance_snapshot.error().message;
-  instance_snapshot.value().minimum_product_release = kPublicRelease01;
-  const auto instance_path = root / "Scenes/ExistingInstances.qdr";
-  ASSERT_TRUE(QdrDocumentWriter::write_project_document_atomic(
-      instance_path, instance_snapshot.value()).ok);
-  const auto instance_files_before = directory_contents(directory.path());
-  const auto instance_open = editor.scene_documents().open_native_path(instance_path);
-  EXPECT_FALSE(instance_open.ok());
-  EXPECT_FALSE(instance_open.changed());
-  expect_unchanged(editor, before);
-  EXPECT_EQ(directory_contents(directory.path()), instance_files_before);
-  const auto retained = QdrDocumentReader::read_project_document(instance_path, kInternalFullRelease);
-  ASSERT_TRUE(retained.ok) << retained.message;
-  ASSERT_NE(retained.document.scene().instance_occurrence(occurrence), nullptr);
-  EXPECT_EQ(retained.document.scene().instance_occurrence(occurrence)->definition, definition);
-
   // A real historical file exercises the release-less compatibility path.
   const auto fixture = std::filesystem::path(__FILE__).parent_path() /
                        "fixtures/qdr/current_project_document_v4.qdr";
@@ -1251,12 +1343,12 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
     EXPECT_FALSE(action->isSeparator());
     EXPECT_FALSE(action->isCheckable());
   }
-  for (const auto tool : {"mirror", "cut", "poly", "linear_array",
-                          "radial_array", "path_array", "curve", "pivot"}) {
+  for (const auto tool : {"cut", "linear_array", "radial_array", "path_array", "curve"}) {
     EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)
         << tool;
   }
-  for (const auto tool : {"select", "lasso_select", "paint_select", "move", "rotate", "scale", "knife"}) {
+  for (const auto tool : {"select", "lasso_select", "paint_select", "move", "rotate",
+                          "scale", "knife", "mirror", "poly", "pivot"}) {
     EXPECT_NE(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)
         << tool;
   }

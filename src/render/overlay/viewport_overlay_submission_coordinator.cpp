@@ -26,6 +26,26 @@
 namespace quader {
 namespace {
 
+const MeshGeometryProjection *dimension_preview_projection(
+    const RenderToolPreviewMeshRecord &preview) {
+  return preview.geometry_projection ? preview.geometry_projection.get()
+                                     : preview.mesh.geometry_projection().get();
+}
+
+std::span<const MeshVertex> dimension_preview_vertices(
+    const RenderToolPreviewMeshRecord &preview) {
+  const auto *projection = dimension_preview_projection(preview);
+  return projection ? projection->vertices() : preview.mesh.geometry_vertices();
+}
+
+std::span<const QVec3> dimension_preview_positions(
+    const RenderToolPreviewMeshRecord &preview) {
+  if (preview.dynamic_position_payload) return *preview.dynamic_position_payload;
+  const auto *projection = dimension_preview_projection(preview);
+  return projection && projection->positions
+      ? std::span<const QVec3>(*projection->positions) : std::span<const QVec3>{};
+}
+
 bool uses_mesh_outlines(const ViewportOverlaySubmissionRequest &request) {
   return request.overlays_visible && request.selection_overlays_visible &&
          (request.scene_selection_mode == RenderOverlaySelectionMode::Object ||
@@ -388,13 +408,14 @@ std::optional<ViewportSelectionDimensionBounds> array_dimension_bounds(
     std::optional<ViewportSelectionDimensionBounds> bounds,
     ViewportOverlaySubmissionWorkCounters &work) {
   for (const auto &preview : request.selection_dimension_preview_meshes) {
-    const auto &vertices = preview.mesh.geometry().vertices;
-    const bool dynamic = preview.dynamic_positions && preview.dynamic_position_payload &&
-        preview.dynamic_position_payload->size() == vertices.size();
+    const auto vertices = dimension_preview_vertices(preview);
+    const auto positions = dimension_preview_positions(preview);
+    const bool dynamic = preview.dynamic_positions &&
+        !positions.empty() && positions.size() == vertices.size();
     const auto append_at = [&](const QMat4 &world) {
       for (std::size_t index = 0u; index < vertices.size(); ++index) {
         include_dimension_point(bounds, transform_point(world, dynamic
-            ? (*preview.dynamic_position_payload)[index] : vertices[index].position));
+            ? positions[index] : vertices[index].position));
       }
       work.selection_dimension_source_record_count += vertices.size();
     };
@@ -438,15 +459,16 @@ std::optional<ViewportSelectionDimensionBounds> selection_dimension_bounds(
   std::unordered_map<const RenderToolPreviewMeshRecord *, ViewportSelectionDimensionBounds>
       preview_bounds;
   for (const RenderToolPreviewMeshRecord &preview : request.selection_dimension_preview_meshes) {
-    const auto &vertices = preview.mesh.geometry().vertices;
-    const bool dynamic = preview.dynamic_positions && preview.dynamic_position_payload &&
-                         preview.dynamic_position_payload->size() == vertices.size();
+    const auto vertices = dimension_preview_vertices(preview);
+    const auto positions = dimension_preview_positions(preview);
+    const bool dynamic = preview.dynamic_positions &&
+        !positions.empty() && positions.size() == vertices.size();
     if (preview.suppress_source) {
       std::optional<ViewportSelectionDimensionBounds> candidate;
       const auto append_at = [&](const QMat4 &world) {
         for (std::size_t index = 0u; index < vertices.size(); ++index) {
           include_dimension_point(candidate, transform_point(world, dynamic
-              ? (*preview.dynamic_position_payload)[index] : vertices[index].position));
+              ? positions[index] : vertices[index].position));
         }
         work.selection_dimension_source_record_count += vertices.size();
       };
@@ -731,10 +753,9 @@ ViewportOverlaySubmissionCoordinator::component_selection_dimension_bounds(
   QDR_PROFILE_SCOPE("Selection dimensions update component bounds");
   const auto previews = request.selection_dimension_preview_meshes;
   const auto eligible = [](const RenderToolPreviewMeshRecord &preview) {
+    const auto positions = dimension_preview_positions(preview);
     return preview.source_object_id >= 0 && preview.dynamic_positions &&
-           preview.dynamic_position_payload &&
-           preview.dynamic_position_payload->size() ==
-               preview.mesh.geometry().vertices.size();
+           !positions.empty() && positions.size() == dimension_preview_vertices(preview).size();
   };
   bool mapping_matches = component_dimensions_.valid &&
       component_dimensions_.selection_revision == selection_revision &&
@@ -746,22 +767,26 @@ ViewportOverlaySubmissionCoordinator::component_selection_dimension_bounds(
       auto &retained = component_dimensions_.previews[index];
       const bool dynamic = eligible(preview);
       if (retained.object_id != preview.source_object_id ||
-          static_cast<bool>(retained.geometry) != dynamic) {
+          retained.dynamic != dynamic) {
         mapping_matches = false;
         break;
       }
-      if (!dynamic || retained.geometry.get() == &preview.mesh.geometry()) continue;
-      const auto &vertices = preview.mesh.geometry().vertices;
-      if (retained.geometry->vertices.size() != vertices.size() ||
+      if (!dynamic) continue;
+      const auto vertices = dimension_preview_vertices(preview);
+      if (retained.vertices.data() == vertices.data()) continue;
+      if (retained.vertices.size() != vertices.size() ||
           !std::equal(vertices.begin(), vertices.end(),
-                      retained.geometry->vertices.begin(),
+                      retained.vertices.begin(),
                       [](const MeshVertex &left, const MeshVertex &right) {
                         return left.source_vertex_id == right.source_vertex_id;
                       })) {
         mapping_matches = false;
         break;
       }
-      retained.geometry = preview.mesh.geometry_payload();
+      const auto *projection = dimension_preview_projection(preview);
+      retained.geometry = projection ? projection->source_geometry : preview.mesh.geometry_payload();
+      retained.vertex_attributes = projection ? projection->vertex_attributes : nullptr;
+      retained.vertices = vertices;
     }
   }
   if (!mapping_matches) {
@@ -809,11 +834,17 @@ ViewportOverlaySubmissionCoordinator::component_selection_dimension_bounds(
     for (std::size_t preview_index = 0u; preview_index < previews.size(); ++preview_index) {
       const auto &preview = previews[preview_index];
       const bool dynamic = eligible(preview);
+      const auto *projection = dimension_preview_projection(preview);
+      const auto vertices = dynamic ? dimension_preview_vertices(preview)
+                                    : std::span<const MeshVertex>{};
       component_dimensions_.previews.push_back({
           .object_id = preview.source_object_id,
-          .geometry = dynamic ? preview.mesh.geometry_payload() : nullptr});
+          .dynamic = dynamic,
+          .geometry = dynamic ? (projection ? projection->source_geometry
+                                           : preview.mesh.geometry_payload()) : nullptr,
+          .vertex_attributes = dynamic && projection ? projection->vertex_attributes : nullptr,
+          .vertices = vertices});
       if (!dynamic) continue;
-      const auto &vertices = preview.mesh.geometry().vertices;
       for (std::size_t vertex_index = 0u; vertex_index < vertices.size(); ++vertex_index) {
         const auto found = selected_points.find(point_key(preview.source_object_id,
             static_cast<int>(vertices[vertex_index].source_vertex_id)));
@@ -844,7 +875,7 @@ ViewportOverlaySubmissionCoordinator::component_selection_dimension_bounds(
     for (const auto &binding : component_dimensions_.positions) {
       const auto &preview = previews[binding.preview_index];
       include_dimension_point(bounds, transform_point(preview.transform,
-          (*preview.dynamic_position_payload)[binding.vertex_index]));
+          dimension_preview_positions(preview)[binding.vertex_index]));
     }
   }
   work_counters_.selection_dimension_position_read_count +=

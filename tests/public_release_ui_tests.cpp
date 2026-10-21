@@ -31,6 +31,7 @@
 #include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_tool_toolbar.hpp"
+#include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_marking_menu.hpp"
@@ -45,6 +46,7 @@
 #include <QAccessible>
 #include <QApplication>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QLabel>
@@ -62,6 +64,7 @@
 #include <QPropertyAnimation>
 #include <QPixmap>
 #include <QStackedWidget>
+#include <QSpinBox>
 #include <QStyle>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -115,7 +118,7 @@ private:
   std::unique_ptr<QApplication> application_;
 };
 
-TEST_F(PublicReleaseUiTests, MeshMarkingMenuRetainsOnlyThePublicNormalDirection) {
+TEST_F(PublicReleaseUiTests, MeshMarkingMenuExposesInstancesPlacementAndFlips) {
   SceneSession session;
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   const auto box = editor.modeling().create_box(
@@ -150,9 +153,10 @@ TEST_F(PublicReleaseUiTests, MeshMarkingMenuRetainsOnlyThePublicNormalDirection)
       const auto *button = popup->findChild<QToolButton *>(
           QStringLiteral("markingMenu.slot.%1").arg(slot));
       ASSERT_NE(button, nullptr);
-      EXPECT_EQ(!button->isHidden(), slot == 2);
-      if (slot == 2) {
-        EXPECT_EQ(button->accessibleName(), QStringLiteral("Flip Normals"));
+      EXPECT_EQ(!button->isHidden(), slot == 0 || slot == 2 || slot == 4);
+      if (slot == 0 || slot == 2 || slot == 4) {
+        EXPECT_EQ(button->accessibleName(), slot == 0 ? QStringLiteral("Create Instance")
+            : slot == 2 ? QStringLiteral("Flip Mesh Normals") : QStringLiteral("Snap Meshes to Floor"));
         EXPECT_TRUE(button->isEnabled());
       }
     }
@@ -163,18 +167,27 @@ TEST_F(PublicReleaseUiTests, MeshMarkingMenuRetainsOnlyThePublicNormalDirection)
                           quader_command::kModelingSnapMeshesToFloor,
                           quader_command::kModelingSetOriginToCenter,
                           quader_command::kModelingSetOriginToPivot,
-                          quader_command::kModelingBakeLocation,
+                          quader_command::kModelingFlipHorizontal,
+                          quader_command::kModelingFlipVertical}) {
+      EXPECT_NE(popup->findChild<QAction *>(QString::fromUtf8(id.string().data())), nullptr)
+          << id.string();
+    }
+    for (const auto id : {quader_command::kModelingBakeLocation,
                           quader_command::kModelingBakeTransforms,
                           quader_command::kModelingMirrorSelectionX,
-                          quader_command::kModelingFlipHorizontal}) {
+                          quader_command::kModelingMirrorSelectionY,
+                          quader_command::kModelingMirrorSelectionZ}) {
       EXPECT_EQ(popup->findChild<QAction *>(QString::fromUtf8(id.string().data())), nullptr)
           << id.string();
     }
     for (const auto *name : {"viewport_marking_submenu_mirror",
-                              "viewport_marking_submenu_flip",
                               "viewport_marking_submenu_bake"}) {
       EXPECT_EQ(popup->findChild<QMenu *>(QString::fromUtf8(name)), nullptr);
     }
+    const auto *flip_menu = popup->findChild<QMenu *>(
+        QStringLiteral("viewport_marking_submenu_flip"));
+    ASSERT_NE(flip_menu, nullptr);
+    EXPECT_EQ(flip_menu->actions().size(), 2);
     const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
     if (!review_directory.isEmpty()) {
       ASSERT_TRUE(QDir().mkpath(review_directory));
@@ -486,10 +499,13 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
   EXPECT_EQ(ui.main_window()->findChild<QToolBar *>(
                 QStringLiteral("viewportDisplayToolbar")), nullptr);
   const auto tool_actions = tools->actions();
-  ASSERT_EQ(tool_actions.size(), 3);
+  ASSERT_EQ(tool_actions.size(), 6);
   EXPECT_EQ(tool_actions[0]->objectName(), QStringLiteral("tool_create_primitive"));
-  EXPECT_EQ(tool_actions[1]->objectName(), QStringLiteral("tool_insert_edge_loop"));
-  EXPECT_EQ(tool_actions[2]->objectName(), QStringLiteral("tool_knife"));
+  EXPECT_EQ(tool_actions[1]->objectName(), QStringLiteral("tool_pivot"));
+  EXPECT_EQ(tool_actions[2]->objectName(), QStringLiteral("tool_insert_edge_loop"));
+  EXPECT_EQ(tool_actions[3]->objectName(), QStringLiteral("tool_knife"));
+  EXPECT_EQ(tool_actions[4]->objectName(), QStringLiteral("tool_mirror"));
+  EXPECT_EQ(tool_actions[5]->objectName(), QStringLiteral("tool_poly"));
   for (QAction *action : tool_actions) {
     EXPECT_FALSE(action->isSeparator());
   }
@@ -962,6 +978,8 @@ TEST_F(PublicReleaseUiTests, AdvancedSelectionDisappearsOnlyFromDiscoverySurface
   QtCommandPalette palette(editor.commands(), localization);
   palette.setAttribute(Qt::WA_DontShowOnScreen, true);
   palette.open_palette();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(palette.isVisible());
   auto *search = palette.findChild<QLineEdit *>(
       QStringLiteral("commandPalette.search"));
   auto *results = palette.findChild<QTreeWidget *>(
@@ -1012,6 +1030,171 @@ TEST_F(PublicReleaseUiTests, AdvancedSelectionDisappearsOnlyFromDiscoverySurface
   palette.reject();
 }
 
+TEST_F(PublicReleaseUiTests, PromotedModelingCommandsAppearInMenusKeybindingsAndSearch) {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  QMainWindow window;
+  QtMainMenu menu;
+  menu.initialize(*window.menuBar(), QtMainMenuContext{
+      .editor = editor, .modeling = session.modeling(),
+      .viewport_settings = viewport_settings, .localization = localization,
+  });
+  QtSettingsDialog settings;
+  settings.set_context(ui_settings, viewport_settings, localization, editor.commands(), {});
+  auto *table = settings.findChild<QTableView *>(QStringLiteral("settingsKeybindingsTable"));
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(table->model(), nullptr);
+  QtCommandPalette palette(editor.commands(), localization);
+  palette.setAttribute(Qt::WA_DontShowOnScreen, true);
+  palette.open_palette();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(palette.isVisible());
+  auto *search = palette.findChild<QLineEdit *>(QStringLiteral("commandPalette.search"));
+  auto *results = palette.findChild<QTreeWidget *>(QStringLiteral("commandPalette.results"));
+  ASSERT_NE(search, nullptr);
+  ASSERT_NE(results, nullptr);
+  const auto keybinding_catalog = editor.commands().keybinding_catalog();
+  const auto has_keybinding_row = [&](const QString &target) {
+    // Settings groups resolver targets under one editable action per scope.
+    // Match the requested command to that public action before finding its row.
+    for (const auto &entry : keybinding_catalog) {
+      bool matches = QString::fromStdString(entry.action_id) == target ||
+          QString::fromStdString(entry.target_id) == target;
+      for (const auto &target_id : entry.target_ids) {
+        matches |= QString::fromStdString(target_id) == target;
+      }
+      if (!matches || !entry.editable) continue;
+      const QString action = QString::fromStdString(entry.action_id);
+      for (int row = 0; row < table->model()->rowCount(); ++row) {
+        const auto index = table->model()->index(row, 0);
+        if (index.data(Qt::UserRole).toString() == action &&
+            !index.data(Qt::DisplayRole).toString().isEmpty()) return true;
+      }
+    }
+    return false;
+  };
+  const auto has_palette_result = [&](const QString &target) {
+    search->setText(target);
+    for (int row = 0; row < results->topLevelItemCount(); ++row) {
+      if (results->topLevelItem(row)->data(0, Qt::UserRole).toString() == target) return true;
+    }
+    return false;
+  };
+  const auto has_menu_action = [&](const QString &target) {
+    for (const auto *action : window.menuBar()->findChildren<QAction *>()) {
+      if (action->property("quaderCommandId").toString() == target) return true;
+    }
+    return false;
+  };
+  for (const auto id : {quader_command::kModelingBevelVertices,
+                        quader_command::kModelingBevelEdges,
+                        quader_command::kModelingThickenFaces,
+                        quader_command::kToolsActivatePoly,
+                        quader_command::kToolsActivateMirror,
+                        quader_command::kModelingFlipHorizontal,
+                        quader_command::kModelingFlipVertical,
+                        quader_command::kModelingRadialAlign,
+                        quader_command::kModelingRadialAlignVertices,
+                        quader_command::kModelingRadialAlignEdges,
+                        quader_command::kModelingRadialAlignFaces,
+                        quader_command::kModelingSnapMeshesToFloor,
+                        quader_command::kModelingSnapVerticesToFloor,
+                        quader_command::kToolsActivatePivot,
+                        quader_command::kModelingCopyPivotFromActive,
+                        quader_command::kModelingSetOriginToCenter,
+                        quader_command::kModelingSetOriginToPivot,
+                        quader_command::kEditCreateInstance,
+                        quader_command::kEditFlattenInstance}) {
+    SCOPED_TRACE(id.string());
+    const QString target = QString::fromUtf8(id.string().data());
+    EXPECT_TRUE(editor.commands().descriptor(id).has_value());
+    EXPECT_TRUE(has_keybinding_row(target));
+    EXPECT_TRUE(has_palette_result(target));
+  }
+  for (const auto id : {quader_command::kModelingBevelVertices,
+                        quader_command::kModelingBevelEdges,
+                        quader_command::kModelingThickenFaces,
+                        quader_command::kModelingFlipHorizontal,
+                        quader_command::kModelingFlipVertical,
+                        quader_command::kModelingRadialAlignVertices,
+                        quader_command::kModelingRadialAlignEdges,
+                        quader_command::kModelingRadialAlignFaces,
+                        quader_command::kModelingSnapVerticesToFloor,
+                        quader_command::kEditCreateInstance,
+                        quader_command::kEditFlattenInstance}) {
+    EXPECT_TRUE(has_menu_action(QString::fromUtf8(id.string().data()))) << id.string();
+  }
+  EXPECT_TRUE(editor.commands().descriptor(quader_command::kEditExitInstanceEdit).has_value());
+  for (const auto id : {quader_command::kModelingCreateOuterHull,
+                        quader_command::kModelingMirrorSelectionX,
+                        quader_command::kModelingMirrorSelectionY,
+                        quader_command::kModelingMirrorSelectionZ}) {
+    SCOPED_TRACE(id.string());
+    const QString target = QString::fromUtf8(id.string().data());
+    EXPECT_FALSE(editor.commands().descriptor(id).has_value());
+    EXPECT_FALSE(has_keybinding_row(target));
+    EXPECT_FALSE(has_palette_result(target));
+    EXPECT_FALSE(has_menu_action(target));
+  }
+  palette.reject();
+}
+
+TEST_F(PublicReleaseUiTests, SphereSettingsExposeQuadSubdivisionAndRetainBothTypes) {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  ASSERT_TRUE(editor.commands().execute(quader_command::kToolsActivateCreateSphere).ok());
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.set_localization(localization);
+  panel.bind(editor);
+  panel.set_expanded(true);
+  panel.show();
+  panel.refresh();
+  auto *type = panel.findChild<QComboBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(type, nullptr);
+  ASSERT_EQ(type->count(), 2);
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("uv"))), QStringLiteral("UV Sphere"));
+  EXPECT_EQ(type->itemText(type->findData(QStringLiteral("quad"))), QStringLiteral("Quad Sphere"));
+  type->setCurrentIndex(type->findData(QStringLiteral("quad")));
+  QCoreApplication::processEvents();
+  panel.refresh();
+  EXPECT_EQ(session.primitive_creation().sphere_settings().type, PrimitiveSphereType::Quad);
+  auto *subdivision = panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.subdivision"));
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_TRUE(subdivision->isVisible());
+  EXPECT_EQ(panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.radial_segments")), nullptr);
+  const int edited_subdivision = subdivision->value() == subdivision->maximum()
+      ? subdivision->value() - 1 : subdivision->value() + 1;
+  subdivision->setValue(edited_subdivision);
+  ASSERT_TRUE(QMetaObject::invokeMethod(subdivision, "editingFinished", Qt::DirectConnection));
+  EXPECT_EQ(session.primitive_creation().sphere_settings().subdivision, edited_subdivision);
+  type = panel.findChild<QComboBox *>(QStringLiteral("tool_settings.control.primitive.sphere.type"));
+  ASSERT_NE(type, nullptr);
+  type->setCurrentIndex(type->findData(QStringLiteral("uv")));
+  QCoreApplication::processEvents();
+  panel.refresh();
+  EXPECT_EQ(session.primitive_creation().sphere_settings().type, PrimitiveSphereType::Uv);
+  EXPECT_NE(panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.radial_segments")), nullptr);
+  EXPECT_EQ(panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.subdivision")), nullptr);
+  ASSERT_TRUE(editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
+  panel.refresh();
+  subdivision = panel.findChild<QSpinBox *>(
+      QStringLiteral("tool_settings.control.primitive.sphere.subdivision"));
+  ASSERT_NE(subdivision, nullptr);
+  EXPECT_EQ(subdivision->value(), edited_subdivision);
+}
+
 TEST_F(PublicReleaseUiTests, AntiAliasingPreferenceUsesApplyCancelAndPersists) {
   SceneSession session;
   QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
@@ -1057,6 +1240,79 @@ TEST_F(PublicReleaseUiTests, AntiAliasingPreferenceUsesApplyCancelAndPersists) {
   dialog.reject();
   EXPECT_EQ(viewport_settings.anti_aliasing(), ViewportAntiAliasing::Off);
   std::filesystem::remove(path);
+}
+
+TEST_F(PublicReleaseUiTests, LaminaAppearanceControlsStageApplyAndPersist) {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const auto path = std::filesystem::path(directory.path().toStdWString()) / "lamina.ini";
+  std::size_t commits = 0u;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        if (change.kind == QtSettingsChangeKind::ViewportCommit) {
+          ++commits;
+          EXPECT_TRUE(viewport_settings.save(path));
+        }
+      });
+  auto *fill = dialog.findChild<QPushButton *>(QStringLiteral("viewportSetting_LaminaFaceColor"));
+  auto *wire = dialog.findChild<QPushButton *>(QStringLiteral("viewportSetting_LaminaWireColor"));
+  auto *width = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_LaminaWireLineSize"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  ASSERT_NE(fill, nullptr);
+  ASSERT_NE(wire, nullptr);
+  ASSERT_NE(width, nullptr);
+  ASSERT_NE(apply, nullptr);
+  EXPECT_EQ(fill->accessibleName(), QStringLiteral("Lamina Face Fill"));
+  EXPECT_EQ(wire->accessibleName(), QStringLiteral("Lamina Wire"));
+  EXPECT_DOUBLE_EQ(width->value(), 1.5);
+  dialog.show();
+  QCoreApplication::processEvents();
+  width->setValue(3.5);
+  dialog.reject();
+  EXPECT_EQ(commits, 0u);
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(ViewportFloatSettingId::LaminaWireLineSize), 1.5f);
+  dialog.show();
+  QCoreApplication::processEvents();
+  const QColor chosen(40, 120, 200, 80);
+  bool opened = false;
+  QTimer::singleShot(0, &dialog, [&]() {
+    auto *picker = dialog.findChild<QColorDialog *>(
+        QStringLiteral("viewportSetting_LaminaFaceColor_dialog"));
+    if (picker == nullptr) {
+      ADD_FAILURE() << "Expected the public lamina color picker.";
+      if (auto *modal = QApplication::activeModalWidget()) modal->close();
+      return;
+    }
+    opened = true;
+    EXPECT_TRUE(picker->testOption(QColorDialog::ShowAlphaChannel));
+    picker->setCurrentColor(chosen);
+    picker->accept();
+  });
+  fill->click();
+  ASSERT_TRUE(opened);
+  width->setValue(3.5);
+  EXPECT_EQ(commits, 0u);
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_FLOAT_EQ(viewport_settings.color(ViewportColorSettingId::LaminaFace).a, 64.0f / 255.0f);
+  apply->click();
+  EXPECT_EQ(commits, 1u);
+  const auto persisted = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(persisted.float_value(ViewportFloatSettingId::LaminaWireLineSize), 3.5f);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      persisted.color(ViewportColorSettingId::LaminaFace),
+      {.r = 40.0f / 255.0f, .g = 120.0f / 255.0f,
+       .b = 200.0f / 255.0f, .a = 80.0f / 255.0f}));
+  EXPECT_FLOAT_EQ(persisted.color(ViewportColorSettingId::LaminaWire).a, 1.0f);
+  dialog.reject();
 }
 
 TEST_F(PublicReleaseUiTests, ContextHintsRespectPublicAvailabilityAndCurrentBindings) {
@@ -1105,7 +1361,9 @@ TEST_F(PublicReleaseUiTests, ContextHintsRespectPublicAvailabilityAndCurrentBind
   EXPECT_TRUE(editor.tools().active_input_hints(context).empty());
   context = {};
   context.selection_gesture = QuaderInputSelectionGesture::EnterInstance;
-  EXPECT_TRUE(editor.tools().active_input_hints(context).empty());
+  const auto instance_hints = editor.tools().active_input_hints(context);
+  ASSERT_EQ(instance_hints.size(), 1u);
+  EXPECT_EQ(instance_hints.front().label_fallback, "Enter Instance");
 
   SceneSession session;
   QuaderEditorApi phase_editor{QuaderApiSessionInternalAccess::from_scene_session(session)};

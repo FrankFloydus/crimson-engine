@@ -1698,8 +1698,7 @@ public:
   }
 
   bool present_face_sample(bool dimensions_visible = false) {
-    QuaderEditorApi editor(
-        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    auto &editor = array_editor();
     if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
         !QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(), bridge_).ok()) {
       return false;
@@ -8844,6 +8843,129 @@ TEST(SelectionOverlayRuntimeTests,
     EXPECT_TRUE(canceled.save(QDir(directory).filePath(
         QStringLiteral("bridge_canceled_pane_%1.png").arg(pane))));
   }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanFaceMoveDimensionsFollowAcceptedCoordinatesAndRetireOldFrame) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-face-move-dimensions-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.create_dimension_sample(true));
+  auto &editor = harness.workflow_editor();
+  auto &modeling = editor.modeling();
+  const auto capture_dimensions = [&](float delta, const char *phase) {
+    EXPECT_TRUE(harness.present_face_sample(false));
+    const QImage disabled = harness.capture();
+    EXPECT_TRUE(harness.present_face_sample(true));
+    const auto &submission = harness.last_submission();
+    EXPECT_TRUE(submission.selection_dimension_bounds.has_value());
+    if (!submission.selection_dimension_bounds) return QImage{};
+    const auto bounds = *submission.selection_dimension_bounds;
+    EXPECT_NEAR(bounds.min.x, -1.0f + delta, 0.00001f);
+    EXPECT_NEAR(bounds.max.x, 1.0f + delta, 0.00001f);
+    EXPECT_FLOAT_EQ(bounds.min.y, -0.6f);
+    EXPECT_FLOAT_EQ(bounds.max.y, 0.6f);
+    EXPECT_FLOAT_EQ(bounds.min.z, -0.4f);
+    EXPECT_FLOAT_EQ(bounds.max.z, 0.4f);
+    const QImage enabled = harness.capture();
+    EXPECT_FALSE(enabled.isNull());
+    if (enabled.isNull() || disabled.isNull()) return QImage{};
+    std::array<QVec2, 8u> corners;
+    for (std::size_t corner = 0u; corner < corners.size(); ++corner) {
+      corners[corner] = harness.cutting_preview_pixel({
+          delta + ((corner & 1u) ? 1.0f : -1.0f),
+          (corner & 2u) ? 0.6f : -0.6f,
+          (corner & 4u) ? 0.4f : -0.4f});
+    }
+    int dimension_pixels = 0;
+    int stale_pixels = 0;
+    for (int y = 0; y < enabled.height(); ++y) {
+      for (int x = 0; x < enabled.width(); ++x) {
+        if (enabled.pixel(x, y) == disabled.pixel(x, y)) continue;
+        ++dimension_pixels;
+        bool on_current_edge = false;
+        for (std::size_t axis = 0u; axis < 3u; ++axis) {
+          for (std::size_t corner = 0u; corner < corners.size(); ++corner) {
+            if ((corner & (1u << axis)) != 0u) continue;
+            const auto start = corners[corner];
+            const auto end = corners[corner | (1u << axis)];
+            const float dx = end.x - start.x;
+            const float dy = end.y - start.y;
+            const float length_squared = dx * dx + dy * dy;
+            const float along = length_squared > 0.0f
+                ? std::clamp(((x + 0.5f - start.x) * dx +
+                              (y + 0.5f - start.y) * dy) / length_squared, 0.0f, 1.0f)
+                : 0.0f;
+            on_current_edge |= std::hypot(x + 0.5f - start.x - along * dx,
+                                         y + 0.5f - start.y - along * dy) <= 4.0f;
+          }
+        }
+        if (!on_current_edge) ++stale_pixels;
+      }
+    }
+    EXPECT_GT(dimension_pixels, 50) << "Dimension lines must reach the Vulkan surface.";
+    EXPECT_EQ(stale_pixels, 0) << "Dimension pixels must lie on the current face bounds.";
+    const auto builds = harness.selection_frame_builds();
+    const auto uploads = harness.component_overlay_stats().uploads;
+    EXPECT_TRUE(harness.present_face_sample(true));
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    EXPECT_EQ(harness.selection_frame_builds(), builds);
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              uploads.shared_position_upload_count);
+    EXPECT_EQ(harness.capture(), enabled);
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(enabled.save(QDir(directory).filePath(
+          QStringLiteral("face_move_dimensions_%1.png").arg(QString::fromLatin1(phase)))));
+    }
+    return enabled;
+  };
+  const auto baseline = capture_dimensions(0.0f, "baseline");
+  ASSERT_FALSE(baseline.isNull());
+  const QuaderTransformDragBeginRequest begin{
+      .tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::X,
+      .screen_position = {100, 100}, .screen_pivot = {100, 100},
+      .screen_tip = {120, 100}, .has_world_direction = true,
+      .world_direction = {1, 0, 0},
+      .ray = {.origin = {0, 0, 5}, .direction = {0, 0, -1}},
+      .camera = {.orthographic = true, .origin = {0, 0, 5},
+                 .x_axis = {1, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1},
+                 .viewport_size = {800, 600}, .orthographic_size = 8},
+      .vertex_snap_radius = 0, .grid_snap_enabled = false};
+  const auto move = [&](float delta) {
+    const auto moved = modeling.update_transform_drag({
+        .screen_position = {100 + delta * 100, 100},
+        .ray = {.origin = {delta, 0, 5}, .direction = {0, 0, -1}},
+        .camera = begin.camera, .vertex_snap_radius = 0, .grid_snap_enabled = false});
+    EXPECT_TRUE(moved.ok()) << moved.error_message();
+    if (moved.ok()) EXPECT_NEAR(moved.value().move_delta.x, delta, 0.00001f);
+  };
+  ASSERT_TRUE(modeling.begin_transform_drag(begin).ok());
+  EXPECT_EQ(capture_dimensions(0.0f, "press"), baseline);
+  move(0.3f);
+  ASSERT_FALSE(capture_dimensions(0.3f, "first").isNull());
+  move(0.9f);
+  ASSERT_FALSE(capture_dimensions(0.9f, "second").isNull());
+  ASSERT_TRUE(modeling.cancel_transform_drag().ok());
+  EXPECT_EQ(capture_dimensions(0.0f, "cancel"), baseline);
+  ASSERT_TRUE(modeling.begin_transform_drag(begin).ok());
+  move(0.9f);
+  ASSERT_FALSE(capture_dimensions(0.9f, "before_commit").isNull());
+  ASSERT_TRUE(modeling.commit_transform_drag().ok());
+  ASSERT_FALSE(capture_dimensions(0.9f, "commit").isNull());
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(capture_dimensions(0.0f, "undo"), baseline);
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_FALSE(capture_dimensions(0.9f, "redo").isNull());
 }
 
 TEST(SelectionOverlayRuntimeTests,

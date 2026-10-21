@@ -19,7 +19,10 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <memory>
+#include <set>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -38,6 +41,23 @@ void expect_release_rejection(QuaderEditorApi &editor, Action action) {
   const auto difference = test::diff_command_observable_state(
       before, test::capture_command_observable_state(editor));
   EXPECT_TRUE(difference.empty()) << difference.summary;
+}
+
+void expect_geometry_equal(const QuaderEditorApi &editor,
+                           const test::CommandObservableState &expected) {
+  const auto difference = test::diff_command_observable_state(
+      expected, test::capture_command_observable_state(editor),
+      test::command_observable_domain_mask(test::CommandObservableDomain::Geometry));
+  EXPECT_TRUE(difference.empty()) << difference.summary;
+}
+
+void expect_geometry_history(QuaderEditorApi &editor,
+                             const test::CommandObservableState &before,
+                             const test::CommandObservableState &after) {
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_geometry_equal(editor, before);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_geometry_equal(editor, after);
 }
 
 class PublicReleaseModelingTests : public testing::Test {
@@ -110,62 +130,347 @@ TEST_F(PublicReleaseModelingTests,
 }
 
 TEST_F(PublicReleaseModelingTests,
-       ComponentHelpersRejectBeforeReplacingSelectionOrCancelingPreview) {
+       RestrictedComponentHelpersPreserveSelectionAndPreview) {
   ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
   ASSERT_TRUE(editor().modeling().update_transform_translate({0.5f, 0.0f, 0.0f}).ok());
-  const auto vertices = second_.vertices().only({0, 1, 2});
-  const auto edges = second_.edges().only({{0, 1}, {1, 2}});
   const auto faces = second_.faces().only({0});
-  expect_release_rejection(editor(), [&] { return vertices.radial_align(); });
-  expect_release_rejection(editor(), [&] { return edges.radial_align(); });
-  expect_release_rejection(editor(), [&] { return faces.radial_align(); });
-  expect_release_rejection(editor(), [&] { return vertices.bevel(); });
-  expect_release_rejection(editor(), [&] { return edges.bevel({}).begin_result(); });
   expect_release_rejection(editor(), [&] { return faces.slice({}).begin_result(); });
-  expect_release_rejection(editor(), [&] { return faces.thicken({}).begin_result(); });
-  expect_release_rejection(editor(), [&] { return second_.select().snap_to_floor(); });
-  expect_release_rejection(editor(), [&] { return vertices.snap_to_floor(); });
   expect_release_rejection(editor(), [&] { return faces.assign_material_slot(1u); });
   expect_release_rejection(editor(), [&] { return second_.materials().assign_slot(1u); });
   ASSERT_TRUE(editor().modeling().cancel_transform_preview().ok());
 }
 
-TEST_F(PublicReleaseModelingTests, InstancingRejectionsPreservePendingToolAndPreview) {
-  auto &modeling = editor().modeling();
-  const auto expect_rejections = [&] {
-    EXPECT_FALSE(modeling.can_create_instance_from_selection());
-    EXPECT_FALSE(modeling.can_flatten_selected_instances());
-    EXPECT_FALSE(modeling.can_enter_instance_edit(first_.id()));
-    EXPECT_FALSE(modeling.can_exit_instance_edit());
-    expect_release_rejection(editor(), [&] { return modeling.create_instance_from_selection(); });
-    expect_release_rejection(editor(), [&] { return modeling.flatten_selected_instances(); });
-    expect_release_rejection(editor(), [&] { return modeling.enter_instance_edit(first_.id()); });
-    expect_release_rejection(editor(), [&] { return modeling.exit_instance_edit(); });
-  };
-  ASSERT_TRUE(modeling.begin_transform_preview().ok());
-  ASSERT_TRUE(modeling.update_transform_translate({0.5f, 0.0f, 0.0f}).ok());
-  expect_rejections();
-  ASSERT_TRUE(modeling.cancel_transform_preview().ok());
-  ASSERT_TRUE(editor().tools().activate(ViewportToolId::CreatePrimitive).ok());
-  expect_rejections();
+TEST_F(PublicReleaseModelingTests,
+       PromotedComponentOperationsSupportPreviewCancelAndHistory) {
+  for (const std::string_view action :
+       {"bevel_vertices", "bevel_edges", "thicken_faces", "radial_align"}) {
+    SCOPED_TRACE(action);
+    auto standalone = create_standalone_editor();
+    auto &active_editor = standalone.editor();
+    quader_poly::Document document;
+    if (action == "bevel_vertices" || action == "bevel_edges") {
+      document = quader_poly::make_cube({});
+    } else {
+      const std::array vertices{
+          quader_poly::add_vertex(document, {-2.0f, 0.0f, 0.0f}),
+          quader_poly::add_vertex(document, {0.0f, 1.0f, 0.0f}),
+          quader_poly::add_vertex(document, {3.0f, 0.0f, 0.0f}),
+          quader_poly::add_vertex(document, {0.0f, -1.0f, 0.0f})};
+      ASSERT_NE(quader_poly::add_face(document, vertices), quader_poly::kInvalidElementId);
+    }
+    const auto first_vertex = static_cast<QuaderElementId>(document.faces.front().vertices[0]);
+    const auto second_vertex = static_cast<QuaderElementId>(document.faces.front().vertices[1]);
+    const auto first_face = static_cast<QuaderElementId>(document.faces.front().id);
+    const auto created = active_editor.modeling().create_mesh_handle(
+        QuaderPolygonDocumentInternalAccess::from_backend(document),
+        {.name = "Published operation fixture"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto mesh = created.value();
+    ASSERT_TRUE(mesh.select().replace().ok());
+    ASSERT_TRUE(active_editor.mode().set(QuaderEditorMode::Edit).ok());
+    if (action == "bevel_vertices") {
+      ASSERT_TRUE(mesh.vertices().only({first_vertex}).replace().ok());
+    } else if (action == "bevel_edges") {
+      ASSERT_TRUE(mesh.edges().only({{first_vertex, second_vertex}}).replace().ok());
+    } else {
+      ASSERT_TRUE(mesh.faces().only({first_face}).replace().ok());
+    }
+    const auto before = test::capture_command_observable_state(active_editor);
+    const auto before_mesh = active_editor.query().mesh(mesh.ref().mesh);
+    ASSERT_TRUE(before_mesh.has_value());
+    if (action == "bevel_edges" || action == "thicken_faces") {
+      auto preview = action == "bevel_edges"
+                         ? mesh.edges().only({{first_vertex, second_vertex}}).bevel({.width = 0.1})
+                         : mesh.faces().only({first_face}).thicken({.thickness = 0.3});
+      ASSERT_TRUE(preview.begin_result().ok()) << preview.begin_result().error_message();
+      ASSERT_TRUE(preview.valid());
+      const auto preview_difference = test::diff_command_observable_state(
+          before, test::capture_command_observable_state(active_editor),
+          test::command_observable_domain_mask(test::CommandObservableDomain::Geometry));
+      EXPECT_FALSE(preview_difference.empty());
+      ASSERT_TRUE(preview.cancel().ok());
+      expect_geometry_equal(active_editor, before);
+      preview = action == "bevel_edges"
+                    ? mesh.edges().only({{first_vertex, second_vertex}}).bevel({.width = 0.1})
+                    : mesh.faces().only({first_face}).thicken({.thickness = 0.3});
+      ASSERT_TRUE(preview.begin_result().ok()) << preview.begin_result().error_message();
+      const auto updated = action == "bevel_edges"
+                               ? preview.update(QuaderEdgeBevelArgs{.width = 0.2, .segments = 2})
+                               : preview.update(QuaderThickenArgs{.thickness = 0.6});
+      ASSERT_TRUE(updated.ok()) << updated.error_message();
+      const auto committed = preview.commit();
+      ASSERT_TRUE(committed.ok()) << committed.error_message();
+      EXPECT_TRUE(committed.changed());
+    } else {
+      const auto applied = action == "bevel_vertices"
+                               ? mesh.vertices().only({first_vertex}).bevel()
+                               : mesh.faces().only({first_face}).radial_align();
+      ASSERT_TRUE(applied.ok()) << applied.error_message();
+      EXPECT_TRUE(applied.changed());
+    }
+    const auto after = test::capture_command_observable_state(active_editor);
+    const auto difference = test::diff_command_observable_state(
+        before, after,
+        test::command_observable_domain_mask(test::CommandObservableDomain::Geometry));
+    EXPECT_FALSE(difference.empty());
+    if (action != "radial_align") {
+      const auto after_mesh = active_editor.query().mesh(mesh.ref().mesh);
+      ASSERT_TRUE(after_mesh.has_value());
+      EXPECT_GT(after_mesh->vertex_count, before_mesh->vertex_count);
+    }
+    expect_geometry_history(active_editor, before, after);
+  }
 }
 
-TEST_F(PublicReleaseModelingTests, PlacementBakingAndPivotCannotMutateSelection) {
+TEST_F(PublicReleaseModelingTests, EdgeSplitMidpointsKeepSelectedHalvesAndReplayHistory) {
+  for (const int edge_count : {1, 2}) {
+    SCOPED_TRACE(edge_count);
+    auto standalone = create_standalone_editor();
+    auto &active_editor = standalone.editor();
+    quader_poly::Document document;
+    const std::array vertices{
+        quader_poly::add_vertex(document, {0, 0, 0}),
+        quader_poly::add_vertex(document, {4, 0, 0}),
+        quader_poly::add_vertex(document, {4, 0, 2}),
+        quader_poly::add_vertex(document, {0, 0, 2})};
+    ASSERT_NE(quader_poly::add_face(document, vertices), quader_poly::kInvalidElementId);
+    const auto created = active_editor.modeling().create_mesh_handle(
+        QuaderPolygonDocumentInternalAccess::from_backend(document), {.name = "Public midpoint boundary"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto mesh = created.value();
+    ASSERT_TRUE(mesh.select().replace().ok());
+    ASSERT_TRUE(active_editor.mode().set(QuaderEditorMode::Edit).ok());
+    const std::array<QuaderEdgeRef, 2> edges{{
+        {static_cast<QuaderElementId>(vertices[0]), static_cast<QuaderElementId>(vertices[1])},
+        {static_cast<QuaderElementId>(vertices[2]), static_cast<QuaderElementId>(vertices[3])}}};
+    const auto selected = mesh.edges().only(std::span(edges).first(static_cast<std::size_t>(edge_count)));
+    ASSERT_TRUE(selected.replace().ok());
+    const auto command = active_editor.commands().descriptor(quader_command::kModelingSplitEdgesMidpoint);
+    ASSERT_TRUE(command.has_value());
+    EXPECT_TRUE(command->enabled);
+    EXPECT_EQ(command->label, "Edge Split");
+    const auto disconnect = active_editor.commands().descriptor(quader_command::kModelingSplitEdges);
+    ASSERT_TRUE(disconnect.has_value());
+    EXPECT_EQ(disconnect->label, "Disconnect Edge");
+    const auto expect_selected_segments = [&](int subdivisions) {
+      const auto summary = active_editor.selection().summary();
+      EXPECT_EQ(summary.mode, QuaderSelectionMode::Edge);
+      EXPECT_EQ(summary.selected_edge_count, static_cast<std::uint32_t>(edge_count * subdivisions));
+      std::set<std::array<float, 6>> actual_segments;
+      std::set<int> selected_vertex_ids;
+      for (const auto &line : active_editor.query().selection_overlay().lines) {
+        if (line.layer != QuaderOverlayLayer::SelectedEdge || line.element.object_id != mesh.id()) continue;
+        std::array start{line.start.x, line.start.y, line.start.z};
+        std::array end{line.end.x, line.end.y, line.end.z};
+        if (end < start) std::swap(start, end);
+        actual_segments.insert({start[0], start[1], start[2], end[0], end[1], end[2]});
+        selected_vertex_ids.insert(line.element.edge_a);
+        selected_vertex_ids.insert(line.element.edge_b);
+      }
+      std::set<std::array<float, 6>> expected_segments;
+      for (int edge = 0; edge < edge_count; ++edge) {
+        const float z = edge == 0 ? 0.0f : 2.0f;
+        for (int segment = 0; segment < subdivisions; ++segment) {
+          expected_segments.insert({4.0f * segment / subdivisions, 0, z,
+              4.0f * (segment + 1) / subdivisions, 0, z});
+        }
+      }
+      EXPECT_EQ(actual_segments, expected_segments);
+      EXPECT_EQ(selected_vertex_ids.size(), static_cast<std::size_t>(edge_count * (subdivisions + 1)));
+      const auto compiled = mesh.compiled_mesh();
+      ASSERT_TRUE(compiled.has_value());
+      EXPECT_FALSE(compiled->indices.empty());
+    };
+    const auto expect_replayed_state = [&](const test::CommandObservableState &expected) {
+      const auto difference = test::diff_command_observable_state(expected,
+          test::capture_command_observable_state(active_editor),
+          test::command_observable_domain_mask(test::CommandObservableDomain::Geometry) |
+          test::command_observable_domain_mask(test::CommandObservableDomain::Selection));
+      EXPECT_TRUE(difference.empty()) << difference.summary;
+    };
+    const auto before = test::capture_command_observable_state(active_editor);
+    const auto split = edge_count == 1 ? selected.split_midpoint()
+        : active_editor.commands().execute(quader_command::kModelingSplitEdgesMidpoint);
+    ASSERT_TRUE(split.ok()) << split.error_message();
+    ASSERT_TRUE(split.changed());
+    expect_selected_segments(2);
+    const auto after = test::capture_command_observable_state(active_editor);
+    ASSERT_TRUE(active_editor.history().undo().ok());
+    expect_replayed_state(before);
+    expect_selected_segments(1);
+    ASSERT_TRUE(active_editor.history().redo().ok());
+    expect_replayed_state(after);
+    expect_selected_segments(2);
+    const auto repeated = active_editor.history().repeat_last_action();
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    ASSERT_TRUE(repeated.changed());
+    expect_selected_segments(4);
+    const auto after_repeat = test::capture_command_observable_state(active_editor);
+    ASSERT_TRUE(active_editor.history().undo().ok());
+    expect_replayed_state(after);
+    ASSERT_TRUE(active_editor.history().redo().ok());
+    expect_replayed_state(after_repeat);
+    expect_selected_segments(4);
+  }
+}
+
+TEST_F(PublicReleaseModelingTests, MeshFlipsChangeGeometryAndReplayHistory) {
+  ASSERT_TRUE(second_.select().replace().ok());
+  for (const auto command : {quader_command::kModelingFlipHorizontal,
+                             quader_command::kModelingFlipVertical}) {
+    SCOPED_TRACE(command.string());
+    const auto before = test::capture_command_observable_state(editor());
+    const auto result = editor().commands().execute(command);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    const auto after = test::capture_command_observable_state(editor());
+    const auto difference = test::diff_command_observable_state(
+        before, after,
+        test::command_observable_domain_mask(test::CommandObservableDomain::Geometry));
+    EXPECT_FALSE(difference.empty());
+    expect_geometry_history(editor(), before, after);
+  }
+}
+
+TEST_F(PublicReleaseModelingTests, PublishedPersistentToolsActivateWithoutEditingGeometry) {
+  const auto before = test::capture_command_observable_state(editor());
+  for (const auto tool : {"mirror", "poly", "pivot"}) {
+    SCOPED_TRACE(tool);
+    EXPECT_TRUE(editor().tools().can_activate(tool));
+    const auto activated = editor().tools().activate(tool);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    EXPECT_EQ(editor().tools().active_tool(), tool);
+    expect_geometry_equal(editor(), before);
+    ASSERT_TRUE(editor().tools().activate("select").ok());
+    expect_geometry_equal(editor(), before);
+  }
+}
+
+TEST_F(PublicReleaseModelingTests, InstancesCreateEditExitFlattenAndReplayHistory) {
   auto &modeling = editor().modeling();
-  EXPECT_FALSE(modeling.can_snap_selected_meshes_to_floor());
-  EXPECT_FALSE(modeling.can_snap_selected_vertices_to_floor());
+  EXPECT_TRUE(modeling.can_create_instance_from_selection());
+  const auto created = modeling.create_instance_from_selection();
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(created.changed());
+  const auto occurrence = created.value().occurrence.root.id;
+  const auto definition = created.value().definition.root.id;
+  ASSERT_EQ(created.value().definition.members.size(), 1u);
+  EXPECT_EQ(created.value().definition.members.front().id, first_.ref().entity);
+  ASSERT_TRUE(editor().query().entity(occurrence).has_value());
+  EXPECT_TRUE(editor().query().entity(occurrence)->has_instance_occurrence);
+  EXPECT_EQ(editor().query().entity(occurrence)->instance_definition, definition);
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_FALSE(editor().query().entity(occurrence).has_value());
+  ASSERT_TRUE(editor().history().redo().ok());
+  ASSERT_TRUE(modeling.can_enter_instance_edit(occurrence));
+  ASSERT_TRUE(modeling.enter_instance_edit(occurrence).ok());
+  EXPECT_TRUE(modeling.instance_edit_state().active);
+  EXPECT_EQ(modeling.instance_edit_state().occurrence.id, occurrence);
+  EXPECT_TRUE(modeling.can_exit_instance_edit());
+  ASSERT_TRUE(modeling.exit_instance_edit().ok());
+  EXPECT_FALSE(modeling.instance_edit_state().active);
+  ASSERT_TRUE(editor().selection().select_objects({occurrence}, occurrence).ok());
+  EXPECT_TRUE(modeling.can_flatten_selected_instances());
+  const auto flattened = modeling.flatten_selected_instances();
+  ASSERT_TRUE(flattened.ok()) << flattened.error_message();
+  ASSERT_TRUE(flattened.changed());
+  ASSERT_EQ(flattened.value().root_entities.size(), 1u);
+  EXPECT_EQ(flattened.value().root_entities.front().id, first_.ref().entity);
+  EXPECT_FALSE(editor().query().entity(occurrence).has_value());
+  ASSERT_TRUE(editor().history().undo().ok());
+  ASSERT_TRUE(editor().query().entity(occurrence).has_value());
+  EXPECT_EQ(editor().query().entity(occurrence)->instance_definition, definition);
+  ASSERT_TRUE(editor().history().redo().ok());
+  EXPECT_FALSE(editor().query().entity(occurrence).has_value());
+}
+
+TEST_F(PublicReleaseModelingTests, MeshAndVertexFloorPlacementReplayHistory) {
+  const auto floor = editor().modeling().create_box(
+      {.min = {-10.0f, -3.0f, -10.0f}, .max = {10.0f, -2.0f, 10.0f}}, "Floor receiver");
+  ASSERT_TRUE(floor.ok()) << floor.error_message();
+  ASSERT_TRUE(first_.select().replace().ok());
+  EXPECT_TRUE(editor().modeling().can_snap_selected_meshes_to_floor());
+  const auto before_y = editor().query().entity(first_.ref().entity)->transform.location.y;
+  const auto snapped = first_.select().snap_to_floor();
+  ASSERT_TRUE(snapped.ok()) << snapped.error_message();
+  EXPECT_TRUE(snapped.changed());
+  EXPECT_NEAR(editor().query().entity(first_.ref().entity)->transform.location.y,
+              before_y - 1.0f, 0.0001f);
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.y, before_y);
+  ASSERT_TRUE(editor().history().redo().ok());
+  EXPECT_NEAR(editor().query().entity(first_.ref().entity)->transform.location.y,
+              before_y - 1.0f, 0.0001f);
+
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {-2.0f, 4.0f, -2.0f}),
+      quader_poly::add_vertex(document, {2.0f, 4.0f, -2.0f}),
+      quader_poly::add_vertex(document, {2.0f, 4.0f, 2.0f}),
+      quader_poly::add_vertex(document, {-2.0f, 4.0f, 2.0f})};
+  ASSERT_NE(quader_poly::add_face(document, vertices), quader_poly::kInvalidElementId);
+  const std::array<QuaderElementId, 4> selected_vertices{
+      static_cast<QuaderElementId>(vertices[0]), static_cast<QuaderElementId>(vertices[1]),
+      static_cast<QuaderElementId>(vertices[2]), static_cast<QuaderElementId>(vertices[3])};
+  const auto created = editor().modeling().create_mesh_handle(
+      QuaderPolygonDocumentInternalAccess::from_backend(document), {.name = "Floor vertices"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto mesh = created.value();
+  ASSERT_TRUE(mesh.select().replace().ok());
+  ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(mesh.vertices().only(selected_vertices).replace().ok());
+  EXPECT_TRUE(editor().modeling().can_snap_selected_vertices_to_floor());
+  const auto before = test::capture_command_observable_state(editor());
+  const auto projected = mesh.vertices().only(selected_vertices).snap_to_floor();
+  ASSERT_TRUE(projected.ok()) << projected.error_message();
+  EXPECT_TRUE(projected.changed());
+  const auto compiled = mesh.compiled_mesh();
+  ASSERT_TRUE(compiled.has_value());
+  for (const auto &vertex : compiled->vertices) {
+    // The selected source excludes itself; the box underneath it is a receiver.
+    EXPECT_NEAR(vertex.position.y, -2.0f, 0.0001f);
+  }
+  expect_geometry_history(editor(), before, test::capture_command_observable_state(editor()));
+}
+
+TEST_F(PublicReleaseModelingTests, CopyPivotFromActivePreservesSelectionAndReplaysHistory) {
+  ASSERT_TRUE(second_.transform().translate({7.0f, 4.0f, 2.0f}).ok());
+  ASSERT_TRUE(editor().selection().select_objects(
+      {first_.ref().entity, second_.ref().entity}, second_.ref().entity).ok());
+  // Give the source an offset custom pivot using the shared visible pivot.
+  ASSERT_TRUE(editor().modeling().set_origin_to_pivot().ok());
+  const auto before = editor().query().entity(first_.ref().entity)->transform.location;
+  const auto source = editor().query().entity(second_.ref().entity)->transform.location;
+  constexpr QVec3 kSourceCenter{11.0f, 5.0f, 3.0f};
+  EXPECT_TRUE(editor().modeling().can_copy_pivot_from_active());
+  const auto copied = editor().modeling().copy_pivot_from_active();
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  EXPECT_TRUE(copied.changed());
+  const auto after = editor().query().entity(first_.ref().entity)->transform.location;
+  EXPECT_NEAR(after.x, source.x - kSourceCenter.x, 0.0001f);
+  EXPECT_NEAR(after.y, source.y - kSourceCenter.y, 0.0001f);
+  EXPECT_NEAR(after.z, source.z - kSourceCenter.z, 0.0001f);
+  EXPECT_EQ(editor().selection().summary().selected_object_count, 2u);
+  ASSERT_TRUE(editor().history().undo().ok());
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.x, before.x);
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.y, before.y);
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.z, before.z);
+  ASSERT_TRUE(editor().history().redo().ok());
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.x, after.x);
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.y, after.y);
+  EXPECT_FLOAT_EQ(editor().query().entity(first_.ref().entity)->transform.location.z, after.z);
+}
+
+TEST_F(PublicReleaseModelingTests, ArrangementAndBakingRemainUnavailable) {
+  auto &modeling = editor().modeling();
   EXPECT_FALSE(modeling.can_align_selected_meshes());
   EXPECT_FALSE(modeling.can_distribute_selected_meshes());
-  EXPECT_FALSE(modeling.can_copy_pivot_from_active());
-  expect_release_rejection(editor(), [&] { return modeling.snap_selected_meshes_to_floor(); });
-  expect_release_rejection(editor(), [&] { return modeling.snap_selected_vertices_to_floor(); });
   expect_release_rejection(editor(), [&] {
     return modeling.align_selected_meshes(QuaderTransformAxis::X, QuaderMeshAlignment::Center);
   });
   expect_release_rejection(editor(), [&] {
     return modeling.distribute_selected_meshes(QuaderTransformAxis::X, QuaderMeshDistribution::Gaps);
   });
-  expect_release_rejection(editor(), [&] { return modeling.copy_pivot_from_active(); });
   for (const auto mode : {QuaderTransformBakeMode::Transforms,
                           QuaderTransformBakeMode::Location,
                           QuaderTransformBakeMode::Rotation,
@@ -178,11 +483,8 @@ TEST_F(PublicReleaseModelingTests, PlacementBakingAndPivotCannotMutateSelection)
 TEST_F(PublicReleaseModelingTests, RestrictedOperationEntryPointsPreserveState) {
   auto &modeling = editor().modeling();
   for (const std::string_view action : {
-           "bevel_vertices", "bevel_edges", "slice_quad", "thicken_faces",
-           "create_outer_hull", "half_cut", "radial_align_vertices",
-           "radial_align_edges", "radial_align_faces", "mirror_selection_x",
-           "mirror_selection_y", "mirror_selection_z", "flip_horizontal",
-           "flip_vertical", "cut_tool", "poly_tool", "mirror_tool"}) {
+           "slice_quad", "create_outer_hull", "half_cut", "mirror_selection_x",
+           "mirror_selection_y", "mirror_selection_z", "cut_tool"}) {
     SCOPED_TRACE(action);
     EXPECT_FALSE(modeling.can_execute_tool(action));
     expect_release_rejection(editor(), [&] { return modeling.execute_tool(action); });
@@ -214,9 +516,6 @@ TEST_F(PublicReleaseModelingTests, MaterialAndUvWritesCannotDisturbGeometry) {
   EXPECT_FALSE(modeling.face_texture_settings().editable);
   EXPECT_FALSE(modeling.face_texture_canvas().editable);
   EXPECT_FALSE(modeling.uv_peel_settings().editable);
-  QuaderPreviewSettings settings;
-  settings.interaction.edge_bevel_width = 2.0;
-  expect_release_rejection(editor(), [&] { return modeling.update_preview(settings); });
 }
 
 TEST_F(PublicReleaseModelingTests, CustomMeshCreationPreservesPassiveUvData) {
@@ -274,15 +573,9 @@ TEST_F(PublicReleaseModelingTests, PrimitiveChoicesAndEditsRespectTheRelease) {
       return tools.set_setting("create_primitive", "primitive.type", type);
     });
   }
-  expect_release_rejection(editor(), [&] {
-    return tools.set_setting("create_primitive", "primitive.sphere.type", "quad");
-  });
-  expect_release_rejection(editor(), [&] {
-    return tools.set_setting("create_primitive", "primitive.sphere.type", 1.0);
-  });
-  expect_release_rejection(editor(), [&] {
-    return tools.set_setting("create_primitive", "primitive.sphere.subdivision", 4.0);
-  });
+  ASSERT_TRUE(tools.set_setting("create_primitive", "primitive.sphere.type", "quad").ok());
+  ASSERT_TRUE(tools.set_setting("create_primitive", "primitive.sphere.type", 1.0).ok());
+  ASSERT_TRUE(tools.set_setting("create_primitive", "primitive.sphere.subdivision", 2.0).ok());
   const auto settings = tools.active_settings();
   bool found_primitive_type = false;
   bool found_sphere_type = false;
@@ -292,8 +585,10 @@ TEST_F(PublicReleaseModelingTests, PrimitiveChoicesAndEditsRespectTheRelease) {
     }
     if (control.id == "primitive.sphere.type") {
       found_sphere_type = true;
-      ASSERT_EQ(control.choices.size(), 1u);
-      EXPECT_EQ(control.choices.front().id, "uv");
+      ASSERT_EQ(control.choices.size(), 2u);
+      EXPECT_EQ(control.choices[0].id, "uv");
+      EXPECT_EQ(control.choices[1].id, "quad");
+      EXPECT_EQ(control.choice_value, "quad");
     }
   }
   EXPECT_FALSE(found_primitive_type);
@@ -302,6 +597,46 @@ TEST_F(PublicReleaseModelingTests, PrimitiveChoicesAndEditsRespectTheRelease) {
   EXPECT_TRUE(found_sphere_type);
   EXPECT_TRUE(tools.cancel_active_tool_preview().ok());
   EXPECT_EQ(tools.preferred_primitive_shape(), QuaderPrimitiveCreationShape::Sphere);
+}
+
+TEST(PublicReleasePrimitiveTests, QuadSpherePlacementCommitCancelAndHistory) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto draw_sphere = [&] {
+    ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Sphere).ok());
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.sphere.type", "quad").ok());
+    ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.sphere.subdivision", 2.0).ok());
+    const ModelingBoxToolEvent start{
+        .ray = {.origin = {0.0f, 8.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+        .grid_size = 1.0};
+    ASSERT_TRUE(session.modeling().begin_box_footprint(start).ok);
+    auto finish = start;
+    finish.ray.origin = {4.0f, 8.0f, 4.0f};
+    ASSERT_TRUE(session.modeling().update_box_footprint(finish).valid);
+    ASSERT_TRUE(session.modeling().begin_box_height(finish).valid);
+    ASSERT_TRUE(editor.tools().accept_active_primitive("Public Quad Sphere").ok());
+  };
+  ASSERT_NO_FATAL_FAILURE(draw_sphere());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_TRUE(editor.modeling().objects().empty());
+  ASSERT_NO_FATAL_FAILURE(draw_sphere());
+  const auto accepted = editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+  EXPECT_TRUE(accepted.changed());
+  ASSERT_EQ(editor.modeling().objects().size(), 1u);
+  const auto object = editor.modeling().objects().front();
+  const auto mesh = editor.modeling().mesh(object.modeling_object_id);
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  const auto compiled = mesh.value().compiled_mesh();
+  ASSERT_TRUE(compiled.has_value());
+  ASSERT_FALSE(compiled->vertices.empty());
+  ASSERT_FALSE(compiled->indices.empty());
+  EXPECT_EQ(compiled->indices.size() % 6u, 0u);
+  const auto after = test::capture_command_observable_state(editor);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(editor.modeling().objects().empty());
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_geometry_equal(editor, after);
 }
 
 TEST_F(PublicReleaseModelingTests,

@@ -3323,6 +3323,10 @@ Result<OperationResult> PolygonDocument::split_selected_edges() {
   return apply_operation(*impl_, quader_poly::split_selected_edges);
 }
 
+Result<OperationResult> PolygonDocument::split_selected_edges_midpoint() {
+  return apply_operation(*impl_, quader_poly::split_selected_edges_midpoint);
+}
+
 Result<OperationResult> PolygonDocument::dissolve_selected_edges() {
   return apply_operation(*impl_, quader_poly::dissolve_selected_edges);
 }

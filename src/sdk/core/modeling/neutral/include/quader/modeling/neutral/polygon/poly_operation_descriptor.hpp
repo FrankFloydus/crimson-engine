@@ -65,6 +65,7 @@ enum class PolyOperationKey : std::size_t {
   BridgeSelectedFaces,
   ThickenSelectedFaces,
   ResetSelectedEdgeNormalsToDefault,
+  SplitSelectedEdgesMidpoint,
   Count,
 };
 
@@ -96,7 +97,7 @@ inline constexpr std::array<PolyOperationMetadata,
          "DissolveVerticesOperation"},
         {"connect_selected_edges", "Connect Selected Edges",
          "ConnectEdgesOperation"},
-        {"split_selected_edges", "Split Selected Edges", "SplitEdgesOperation"},
+        {"split_selected_edges", "Disconnect Edge", "SplitEdgesOperation"},
         {"dissolve_selected_edges", "Dissolve Selected Edges",
          "DissolveEdgesOperation"},
         {"merge_selected_edges", "Merge Selected Edges", "MergeEdgesOperation"},
@@ -153,6 +154,7 @@ inline constexpr std::array<PolyOperationMetadata,
         {"reset_selected_edge_normals_to_default",
          "Set Selected Edge Normals to Default",
          "EdgeNormalHardnessOperation"},
+        {"split_selected_edges_midpoint", "Edge Split", "SplitEdgesMidpointOperation"},
     }};
 
 [[nodiscard]] inline const PolyOperationMetadata &

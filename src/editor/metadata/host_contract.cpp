@@ -177,7 +177,7 @@ HostActionDescriptor tool_action(
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-  static const std::array<HostActionDescriptor, 43> kDescriptors{{
+  static const std::array<HostActionDescriptor, 44> kDescriptors{{
       operation_action("invert_mesh", "Flip Mesh Normals", "flip_face_normals",
                        action_availability(HostSelectionMode::Object, 0, 0,
                                            HostActiveSelectionKind::None, false,
@@ -247,7 +247,11 @@ std::span<const HostActionDescriptor> action_descriptors()
                        action_availability(HostSelectionMode::Edge, 0, 2,
                                            HostActiveSelectionKind::None,
                                            true)),
-      operation_action("split_edges", "Split Edges", "split_edges",
+      operation_action("split_edges", "Disconnect Edge", "split_edges",
+                       action_availability(HostSelectionMode::Edge, 0, 1,
+                                           HostActiveSelectionKind::None,
+                                           false)),
+      operation_action("split_edges_midpoint", "Edge Split", "split_edges_midpoint",
                        action_availability(HostSelectionMode::Edge, 0, 1,
                                            HostActiveSelectionKind::None,
                                            false)),
@@ -382,10 +386,11 @@ std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
       "dissolve_vertices",
       "radial_align_vertices",
   }};
-  static constexpr std::array<std::string_view, 14> kEdgeActions{{
+  static constexpr std::array<std::string_view, 15> kEdgeActions{{
       "snap_edges_to_active",
       "connect_edges",
       "split_edges",
+      "split_edges_midpoint",
       "default_edge_normals",
       "harden_edge_normals",
       "soften_edge_normals",
@@ -645,9 +650,9 @@ std::span<const HostInteractionDescriptor> interaction_descriptors()
        HostInteractionKind::ViewportAction},
       {"mirror_axis_z", "Mirror Across Z QAxis",
        HostInteractionKind::ViewportAction},
-      {"flip_horizontal", "Flip Horizontally",
+      {"flip_horizontal", "Flip Horizontal",
        HostInteractionKind::ViewportAction},
-      {"flip_vertical", "Flip Vertically", HostInteractionKind::ViewportAction},
+      {"flip_vertical", "Flip Vertical", HostInteractionKind::ViewportAction},
       {"zoom", "Zoom", HostInteractionKind::ViewportAction},
       {"fly_or_orthographic_pan", "Fly Or Orthographic Pan",
        HostInteractionKind::ViewportAction},

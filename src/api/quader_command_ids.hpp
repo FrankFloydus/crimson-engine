@@ -260,6 +260,8 @@ inline constexpr QuaderCommandId kModelingSnapEdgesToActive{
 inline constexpr QuaderCommandId kModelingConnectEdges{
     "modeling.connect_edges"};
 inline constexpr QuaderCommandId kModelingSplitEdges{"modeling.split_edges"};
+inline constexpr QuaderCommandId kModelingSplitEdgesMidpoint{
+    "modeling.split_edges_midpoint"};
 inline constexpr QuaderCommandId kModelingMergeEdges{"modeling.merge_edges"};
 inline constexpr QuaderCommandId kModelingCollapseEdges{
     "modeling.collapse_edges"};
@@ -605,6 +607,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingSnapEdgesToActive,
     kModelingConnectEdges,
     kModelingSplitEdges,
+    kModelingSplitEdgesMidpoint,
     kModelingMergeEdges,
     kModelingCollapseEdges,
     kModelingFillHole,

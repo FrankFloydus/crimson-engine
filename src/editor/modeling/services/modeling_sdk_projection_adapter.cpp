@@ -3901,6 +3901,11 @@ public:
         return document.split_selected_edges();
       };
       break;
+    case Id::SplitEdgesMidpoint:
+      mutation = [](PolygonDocument &document) {
+        return document.split_selected_edges_midpoint();
+      };
+      break;
     case Id::DissolveEdges:
       mutation = [](PolygonDocument &document) {
         return document.dissolve_selected_edges();

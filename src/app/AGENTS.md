@@ -63,7 +63,12 @@ file except through prior written authorization from Francesco Di Blasi.
   uncapped frame work, backs off rejected submissions, and uses an idle interval when appropriate.
   Qt owns the composed window's actual VSync; the host owns supported native-surface modes and records
   the compositor's resolved mode. Count composed presentations after the common Qt flush, not when
-  a timer merely requests pane updates. Timer changes cannot implement VSync.
+  a timer merely requests pane updates. Continuous synchronized composition requests its next App
+  frame from the root anchor's completed submission, through the coalesced queued request; the
+  rounded display timer remains a fallback after two display periods. Do not introduce a second
+  independent pacing clock.
+  Timer changes cannot implement VSync. The GPU-free root-callback regression and the opt-in
+  `QtFlyNavigationPacingTests` real-App fixture protect the gates and delivery cadence.
 - Scene/project replacement must install the new UI binding before publishing lifecycle events.
   `render_frame()` reacquires the active scene after synchronous input dispatch. Do not retain
   scene/session pointers across commands or nested event loops.

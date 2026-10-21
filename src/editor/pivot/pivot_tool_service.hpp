@@ -88,6 +88,8 @@ public:
   void set_persistent_preview_position(QVec3 world_position);
 
   void begin_quick(QVec3 initial_world_position);
+  /// Native holds restore their previous override when no placement changed it.
+  void begin_quick_edit(QVec3 initial_world_position);
   void set_quick_preview_position(QVec3 world_position);
   void end_quick_edit();
   void clear_quick_override();
@@ -130,6 +132,12 @@ private:
       QVec3 world_position = {};
   };
 
+  /// Restores the prior pivot when a native hold accepts no position change.
+  struct QuickEditCheckpoint {
+    QuickState before;
+    QVec3 initial_world_position;
+  };
+
   [[nodiscard]] std::optional<EntityId>
   active_selection_target(const EditorSelectionService &selection) const;
   [[nodiscard]] PivotTargetKind target_kind(EntityId target,
@@ -150,6 +158,7 @@ private:
   PivotSnapSettings snap_settings_;
   mutable std::optional<PersistentSession> persistent_;
   QuickState quick_;
+  std::optional<QuickEditCheckpoint> quick_edit_checkpoint_;
   std::uint64_t selection_pivot_revision_ = 0;
   std::uint64_t tool_settings_revision_ = 0;
   PivotPlanningStats planning_stats_;

@@ -935,6 +935,11 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
 - Formal occurrences reference scene-local definition members. All world projection and scope
   checks retain both occurrence and geometry identity. Cross-scene paste clones an independent
   definition; flattening must not sever surviving occurrence links.
+- Component drafts in instance editing replace only the active occurrence; siblings retain
+  committed geometry until acceptance, then commit/undo/redo update their shared definition.
+  Return through Object mode before exiting the instance after component edits. The public
+  `--instance-preview` [GPU probe](tests/crimson_editor_composition_probe.cpp) covers this lifecycle
+  in both render hosts; do not interpret an unchanged sibling during a pending draft as stale geometry.
 - Radial Array converts explicit source roots only inside acceptance, one linked family per
   source. Conversion recenters occurrences: apply captured preview placement deltas to the new
   occurrence frame, using the original visible pivot for radial repeats. Independent copies of

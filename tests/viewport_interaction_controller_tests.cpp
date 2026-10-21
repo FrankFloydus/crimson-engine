@@ -1231,6 +1231,7 @@ create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
 /// Retains exactly the styled streams submitted by the viewport coordinator.
 class ComponentSelectionPresentation final
     : public quader::ViewportOverlaySelectionFrameProvider,
+      public quader::ViewportOverlayDynamicToolFrameProvider,
       public quader::ViewportOverlaySubmissionTarget {
 public:
   ComponentSelectionPresentation(
@@ -1238,7 +1239,10 @@ public:
       quader::ViewportOverlaySelectionContext context)
       : harness_(harness), context_(context) {}
 
-  quader::ViewportOverlaySubmissionResult submit() {
+  quader::ViewportOverlaySubmissionResult submit(
+      const quader::ViewportOverlayFrame *dynamic_tools = nullptr,
+      std::uint64_t dynamic_revision = 0u) {
+    if (dynamic_tools != nullptr) dynamic_tools_ = *dynamic_tools;
     auto &modeling = harness_.session.modeling();
     const auto volatile_overlay = modeling.volatile_overlay_snapshot();
     return coordinator_.submit(
@@ -1266,6 +1270,11 @@ public:
                     .publication_revision =
                         volatile_overlay.source.publication_revision,
                 },
+            .dynamic_tool_source = {
+                .source_identity = dynamic_tools != nullptr
+                    ? reinterpret_cast<std::uintptr_t>(this) : 0u,
+                .publication_revision = dynamic_revision},
+            .dynamic_tool_frame_provider = dynamic_tools != nullptr ? this : nullptr,
             .scene_selection_mode = quader::RenderOverlaySelectionMode::Component,
             .style_selection_context = context_,
             .overlays_visible = true,
@@ -1277,6 +1286,15 @@ public:
   [[nodiscard]] quader::ViewportOverlayFrame
   build_selection_overlay_frame() const override {
     return harness_.session.modeling().selection_overlay_render_frame();
+  }
+
+  [[nodiscard]] quader::ViewportOverlayFrame
+  build_dynamic_tool_overlay_frame() const override {
+    return dynamic_tools_;
+  }
+
+  [[nodiscard]] const quader::ViewportOverlayFrame &submitted_dynamic_frame() const {
+    return dynamic_;
   }
 
   [[nodiscard]] quader::ViewportOverlayCameraUpdate update_overlay_cameras(
@@ -1390,6 +1408,7 @@ private:
   quader::ViewportOverlaySubmissionCoordinator coordinator_;
   quader::ViewportOverlayFrame persistent_;
   quader::ViewportOverlayFrame dynamic_;
+  quader::ViewportOverlayFrame dynamic_tools_;
 };
 
 struct ComponentModeCase final {
@@ -10643,6 +10662,298 @@ TEST(ViewportInteractionControllerTests,
   EXPECT_EQ(pane.selection_pivot_recompute_count(), 1u);
   EXPECT_TRUE(harness.controller.dragging());
   EXPECT_TRUE(harness.controller.cancel_active_drag(harness.editor));
+}
+
+TEST(ViewportInteractionControllerTests,
+     QuickPivotReleaseKeepsAcceptedIntentAcrossFlyNavigation) {
+  for (const bool remapped : {false, true}) {
+    SCOPED_TRACE(remapped);
+    ViewportInteractionHarness harness;
+    const auto box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    ASSERT_TRUE(harness.editor.commands().set_keybinding_storage_path({}).ok());
+    if (remapped) {
+      ASSERT_TRUE(harness.editor.commands().set_shortcut("viewport.quick_pivot", "F8").ok());
+    }
+    const auto parsed = quader::quader_input_parse_chord(remapped ? "F8" : "D");
+    ASSERT_TRUE(parsed.has_value());
+    const auto chord = *parsed;
+    const auto forward = *quader::quader_input_parse_chord("W");
+    std::vector<quader::QuaderInputChord> suppressed;
+    std::optional<quader::QuaderInputChord> quick_pivot_hold;
+    double linear_remainder = 0.0;
+    double radial_remainder = 0.0;
+    const auto dispatch = [&] {
+      quader::ViewportKeybindingResolver::resolve(
+          harness.editor, harness.router.state(), harness.input, suppressed,
+          linear_remainder, radial_remainder, {}, nullptr, &quick_pivot_hold);
+      (void)harness.controller.handle_native_tools(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera, {.input = harness.input, .input_result = harness.input_result});
+    };
+    harness.input.pressed_input_chords = {chord};
+    harness.input.active_input_chords = {chord};
+    dispatch();
+    ASSERT_TRUE(harness.session.pivot().quick_edit_active());
+    constexpr quader::QVec3 kUserPivot{3.0f, 4.0f, 5.0f};
+    harness.session.pivot().set_quick_preview_position(kUserPivot);
+    harness.input.pressed_input_chords.clear();
+    harness.input.quick_pivot_pressed = false;
+    harness.input.quick_pivot_down = false;
+    harness.input.navigation_active = true;
+    harness.input.fly_navigation_active = true;
+    harness.input_result.navigation_active = true;
+    harness.input_result.fly_navigation_active = true;
+    harness.input.active_input_chords = {chord, forward};
+    dispatch();
+    EXPECT_TRUE(harness.input.quick_pivot_down);
+    EXPECT_TRUE(harness.session.pivot().quick_edit_active());
+    harness.input.quick_pivot_down = false;
+    harness.input.active_input_chords = {forward};
+    harness.input.released_input_chords = {chord};
+    dispatch();
+    EXPECT_TRUE(harness.input.quick_pivot_released);
+    EXPECT_FALSE(harness.session.pivot().quick_edit_active());
+    EXPECT_FALSE(harness.session.pivot().handle_state().visible);
+    EXPECT_FALSE(quick_pivot_hold.has_value());
+    const auto preserved = harness.session.pivot().selection_pivot_override();
+    ASSERT_TRUE(preserved.valid);
+    expect_vec3_near(preserved.world_position, kUserPivot);
+    harness.input.navigation_active = false;
+    harness.input.fly_navigation_active = false;
+    harness.input_result = {};
+    harness.input.quick_pivot_released = false;
+    harness.input.pressed_input_chords = {chord};
+    harness.input.released_input_chords.clear();
+    harness.input.active_input_chords = {chord};
+    dispatch();
+    ASSERT_TRUE(harness.session.pivot().quick_edit_active());
+    harness.input.viewport_focused = false;
+    EXPECT_TRUE(harness.input.quick_pivot_down);
+    harness.input.pressed_input_chords.clear();
+    harness.input.active_input_chords.clear();
+    dispatch();
+    EXPECT_TRUE(harness.input.quick_pivot_released);
+    EXPECT_FALSE(harness.session.pivot().quick_edit_active());
+    ASSERT_TRUE(harness.session.pivot().selection_pivot_override().valid);
+    expect_vec3_near(harness.session.pivot().selection_pivot_override().world_position, kUserPivot);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     QuickPivotInterruptionRollsBackOnlyThePendingHandleDrag) {
+  for (const bool text_input : {false, true}) {
+    SCOPED_TRACE(text_input);
+    ViewportInteractionHarness harness;
+    const auto box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    harness.camera.set_view_direction({-0.3f, -0.5f, -1.0f});
+    const auto chord = *quader::quader_input_parse_chord("D");
+    std::vector<quader::QuaderInputChord> suppressed;
+    std::optional<quader::QuaderInputChord> quick_pivot_hold;
+    double linear_remainder = 0.0;
+    double radial_remainder = 0.0;
+    const auto dispatch = [&](bool left_pressed = false,
+                              bool left_down = false,
+                              quader::QVec2 left_click_local = {}) {
+      harness.input.quick_pivot_pressed = false;
+      harness.input.quick_pivot_down = false;
+      harness.input.quick_pivot_released = false;
+      quader::ViewportKeybindingResolver::resolve(
+          harness.editor, harness.router.state(), harness.input, suppressed,
+          linear_remainder, radial_remainder, {}, nullptr, &quick_pivot_hold);
+      return harness.controller.handle_native_tools(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera, {.input = harness.input,
+                           .input_result = harness.input_result,
+                           .left_pressed = left_pressed,
+                           .left_down = left_down,
+                           .left_click_local = left_click_local});
+    };
+    harness.input.pressed_input_chords = {chord};
+    harness.input.active_input_chords = {chord};
+    (void)dispatch();
+    ASSERT_TRUE(harness.session.pivot().quick_edit_active());
+    harness.input.pressed_input_chords.clear();
+
+    // A completed placement earlier in this hold remains authored if the next
+    // handle drag is interrupted before its pointer release.
+    constexpr quader::QVec3 kAcceptedPivot{2.0f, 0.0f, 0.0f};
+    harness.session.pivot().set_quick_preview_position(kAcceptedPivot);
+    const auto projected = harness.camera.project_world_point(kAcceptedPivot);
+    ASSERT_TRUE(projected.visible);
+    harness.input.mouse_local = projected.position;
+    harness.input.mouse_screen = projected.position;
+    ASSERT_TRUE(dispatch(true, true, projected.position).pivot_consumed);
+    ASSERT_TRUE(harness.session.native_tools().pointer_dragging());
+    harness.input.mouse_local = projected.position + quader::QVec2{80.0f, 0.0f};
+    harness.input.mouse_screen = harness.input.mouse_local;
+    ASSERT_TRUE(dispatch(false, true, projected.position).pivot_consumed);
+    const auto pending = harness.session.pivot().selection_pivot_override();
+    ASSERT_TRUE(pending.valid);
+    ASSERT_GT(quader::length(pending.world_position - kAcceptedPivot), 0.1f);
+
+    harness.input.text_input_active = text_input;
+    harness.input.viewport_focused = text_input;
+    const auto interrupted = dispatch(false, true, projected.position);
+    EXPECT_TRUE(harness.input.quick_pivot_released);
+    EXPECT_FALSE(harness.input.quick_pivot_down);
+    EXPECT_FALSE(quick_pivot_hold.has_value());
+    EXPECT_FALSE(harness.session.native_tools().pointer_dragging());
+    EXPECT_FALSE(harness.session.pivot().quick_edit_active());
+    EXPECT_FALSE(harness.session.pivot().handle_state().visible);
+    EXPECT_TRUE(interrupted.invalidate_hover);
+    EXPECT_TRUE(interrupted.mark_overlay_dirty);
+    const auto preserved = harness.session.pivot().selection_pivot_override();
+    ASSERT_TRUE(preserved.valid);
+    expect_vec3_near(preserved.world_position, kAcceptedPivot);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     UntouchedQuickPivotNavigationHoldRestoresItsPreviousPivot) {
+  for (const bool existing_override : {false, true}) {
+    SCOPED_TRACE(existing_override);
+    ViewportInteractionHarness harness;
+    const auto box = create_unit_box(harness);
+    select_single_component(harness, box, quader::QuaderSelectionMode::Edge);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    if (existing_override) {
+      harness.session.pivot().begin_quick({2.0f, 3.0f, 4.0f});
+      harness.session.pivot().end_quick_edit();
+    }
+    const auto before = harness.editor.query().selection_transform_pivot();
+    ASSERT_TRUE(before.has_value());
+    const auto chord = *quader::quader_input_parse_chord("D");
+    const auto forward = *quader::quader_input_parse_chord("W");
+    std::vector<quader::QuaderInputChord> suppressed;
+    std::optional<quader::QuaderInputChord> quick_pivot_hold;
+    double linear_remainder = 0.0;
+    double radial_remainder = 0.0;
+    const auto dispatch = [&] {
+      quader::ViewportKeybindingResolver::resolve(
+          harness.editor, harness.router.state(), harness.input, suppressed,
+          linear_remainder, radial_remainder, {}, nullptr, &quick_pivot_hold);
+      (void)harness.controller.handle_native_tools(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera, {.input = harness.input, .input_result = harness.input_result});
+    };
+    harness.input.pressed_input_chords = {chord};
+    harness.input.active_input_chords = {chord};
+    dispatch();
+    ASSERT_TRUE(harness.session.pivot().quick_edit_active());
+    harness.input.pressed_input_chords.clear();
+    harness.input.quick_pivot_pressed = false;
+    harness.input.quick_pivot_down = false;
+    harness.input.navigation_active = true;
+    harness.input.fly_navigation_active = true;
+    harness.input_result.navigation_active = true;
+    harness.input_result.fly_navigation_active = true;
+    harness.input.active_input_chords = {chord, forward};
+    dispatch();
+    harness.input.quick_pivot_down = false;
+    harness.input.active_input_chords = {forward};
+    harness.input.released_input_chords = {chord};
+    dispatch();
+    EXPECT_FALSE(harness.session.pivot().quick_edit_active());
+    EXPECT_EQ(harness.session.pivot().selection_pivot_override().valid, existing_override);
+    const auto after = harness.editor.query().selection_transform_pivot();
+    ASSERT_TRUE(after.has_value());
+    expect_vec3_near(*after, *before);
+    if (existing_override) continue;
+
+    harness.input.navigation_active = false;
+    harness.input.fly_navigation_active = false;
+    harness.input.quick_pivot_released = false;
+    harness.input.active_input_chords.clear();
+    harness.input.released_input_chords.clear();
+    harness.input_result = {};
+    (void)harness.dispatch_frame(harness.frame());
+    const auto *gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const auto initial_overlay = build_gizmo_overlay(*gizmo, harness);
+    ComponentSelectionPresentation presentation(
+        harness, quader::ViewportOverlaySelectionContext::Edge);
+    (void)presentation.submit(&initial_overlay, 1u);
+    const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const auto start = axis_screen_point(*axis, 0.7f);
+    press_update_release_gizmo(harness, start, start + quader::QVec2{80.0f, 0.0f});
+    (void)harness.dispatch_frame(harness.frame());
+    gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const auto moved_center = harness.editor.query().selection_center();
+    ASSERT_TRUE(moved_center.has_value());
+    EXPECT_GT(quader::length(*moved_center - *before), 0.01f);
+    expect_vec3_near(gizmo->info.pivot, *moved_center);
+    const auto committed_overlay = build_gizmo_overlay(*gizmo, harness);
+    (void)presentation.submit(&committed_overlay, 2u);
+    EXPECT_TRUE(std::ranges::any_of(presentation.submitted_dynamic_frame().lines,
+        [&](const auto &line) {
+          return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+              quader::length(line.start - *moved_center) < 0.0001f;
+        }));
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     EdgeMoveCommitRetainsGizmoAtTheMovedSelection) {
+  ViewportInteractionHarness harness;
+  const auto box = create_unit_box(harness);
+  select_single_component(harness, box, quader::QuaderSelectionMode::Edge);
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(quader::ViewportToolId::Move);
+  ASSERT_TRUE(harness.editor.viewports().set_control(
+      quader::QuaderViewportControl::SnappingEnabled, false).ok());
+  (void)harness.dispatch_frame(harness.frame());
+  const auto *initial = harness.controller.transform_gizmo_frame();
+  ASSERT_NE(initial, nullptr);
+  const auto initial_pivot = initial->info.pivot;
+  ComponentSelectionPresentation presentation(
+      harness, quader::ViewportOverlaySelectionContext::Edge);
+  const auto initial_overlay = build_gizmo_overlay(*initial, harness);
+  (void)presentation.submit(&initial_overlay, 1u);
+  const auto *axis = find_axis(*initial, quader_editor_core::TransformAxis::X);
+  ASSERT_NE(axis, nullptr);
+  const auto start = axis_screen_point(*axis, 0.7f);
+  const auto moved = start + quader::QVec2{80.0f, 0.0f};
+  press_update_release_gizmo(harness, start, moved);
+  EXPECT_FALSE(harness.controller.dragging());
+  const auto expected = harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(expected.has_value());
+  EXPECT_GT(quader::length(*expected - initial_pivot), 0.01f);
+  for (int frame_index = 0; frame_index < 3; ++frame_index) {
+    (void)harness.dispatch_frame(harness.frame());
+    const auto *committed = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(committed, nullptr);
+    expect_vec3_near(committed->info.pivot, *expected);
+    const auto overlay = build_gizmo_overlay(*committed, harness);
+    EXPECT_FALSE(overlay.lines.empty());
+    (void)presentation.submit(&overlay, 2u);
+    EXPECT_TRUE(std::ranges::any_of(presentation.submitted_dynamic_frame().lines,
+        [&](const auto &line) {
+          return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+              quader::length(line.start - *expected) < 0.0001f;
+        }));
+    EXPECT_FALSE(std::ranges::any_of(presentation.submitted_dynamic_frame().lines,
+        [&](const auto &line) {
+          return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+              quader::length(line.start - initial_pivot) < 0.0001f;
+        }));
+    const auto *committed_axis = find_axis(*committed, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(committed_axis, nullptr);
+    expect_vec3_near(committed_axis->world_start, *expected);
+  }
 }
 
 TEST(ViewportInteractionControllerTests,

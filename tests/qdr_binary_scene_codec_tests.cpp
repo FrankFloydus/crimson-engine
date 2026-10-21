@@ -3213,12 +3213,18 @@ TEST(QdrBinarySceneCodecTests,
   public_tagged_snapshot.minimum_product_release = kPublicRelease01;
   const auto public_tagged_bytes = QdrDocumentWriter::serialize_project_document_bytes(
       public_tagged_snapshot, test_uuid());
-  const auto restricted = QdrDocumentReader::deserialize_project_document(
+  const auto public_read = QdrDocumentReader::deserialize_project_document(
       public_tagged_bytes, kPublicRelease01);
-  EXPECT_FALSE(restricted.ok);
-  ASSERT_FALSE(restricted.diagnostics.empty());
-  EXPECT_EQ(restricted.diagnostics.front().code, "qdr.binary.unavailable_feature");
-  EXPECT_TRUE(restricted.document.scene().entities().empty());
+  ASSERT_TRUE(public_read.ok) << public_read.message;
+  EXPECT_EQ(public_read.minimum_product_release, kPublicRelease01);
+  EXPECT_TRUE(public_read.document.scene().is_instance_definition_entity(definition));
+  EXPECT_EQ(public_read.document.scene().parent(member), definition);
+  ASSERT_NE(public_read.document.scene().instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(public_read.document.scene().instance_occurrence(occurrence)->definition,
+            definition);
+  ASSERT_NE(public_read.document.scene().texture_mapping(occurrence), nullptr);
+  EXPECT_EQ(*public_read.document.scene().texture_mapping(occurrence),
+            occurrence_mapping);
   const auto retained = QdrDocumentReader::deserialize_project_document(
       public_tagged_bytes, kInternalFullRelease);
   ASSERT_TRUE(retained.ok) << retained.message;

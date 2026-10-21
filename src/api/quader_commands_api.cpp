@@ -893,27 +893,11 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kToolsActivateCreateStairs)) {
     return "Stairs & Ramps";
   }
-  if (is(quader_command::kToolsActivateCreateCurve)) {
-    return "Activate New Curve Creation Tool";
-  }
-  if (is(quader_command::kToolsActivateExtrudeIndividual)) {
-    return "Activate Extrude Individually";
-  }
-  if (is(quader_command::kToolsActivateExtrudeAlongNormals)) {
-    return "Activate Extrude Along Normals";
-  }
-  if (is(quader_command::kToolsActivateAlign)) {
-    return "Activate Align Tool";
-  }
-  if (const std::optional<std::string_view> tool_id =
+  if (const auto tool_id =
           quader_tool_id_from_activation_command_target(command_id)) {
-    if (*tool_id == "create_primitive") {
-      return "Activate Primitive Creation Tool";
+    if (const ViewportTool *tool = find_viewport_tool(*tool_id)) {
+      return std::string(tool->label());
     }
-    if (*tool_id == "insert_edge_loop") {
-      return "Activate Edge Loop Insertion Tool";
-    }
-    return "Activate " + std::string(command_label) + " Tool";
   }
   return std::string(command_label);
 }
@@ -1139,8 +1123,11 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
       return localization_key;
     }
   }
-  if (quader_tool_id_from_activation_command_target(command_id)) {
-    return stable();
+  if (const auto tool_id =
+          quader_tool_id_from_activation_command_target(command_id)) {
+    if (find_viewport_tool(*tool_id) != nullptr) {
+      return "viewport.tool." + std::string(*tool_id) + ".label";
+    }
   }
   return stable();
 }

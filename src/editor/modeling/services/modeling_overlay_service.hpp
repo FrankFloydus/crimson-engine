@@ -24,6 +24,7 @@
 namespace quader {
 
 class ModelingSdkProjectionAdapter;
+class ModelingLaminaOverlayService;
 class ModelingSelectionService;
 class SceneDocument;
 
@@ -218,6 +219,7 @@ private:
     };
 
     mutable SelectionOverlayCache selection_overlay_cache_;
+    mutable std::shared_ptr<ModelingLaminaOverlayService> lamina_overlay_service_;
     mutable quader_editor_core::SelectionOverlayGeometryWorkCounters geometry_work_;
     mutable OverlayBaseCache overlay_base_cache_;
     mutable ProjectedOverlayBaseCache projected_overlay_base_cache_;

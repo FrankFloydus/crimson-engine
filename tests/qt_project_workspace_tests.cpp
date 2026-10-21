@@ -12820,3 +12820,109 @@ TEST(QtProjectWorkspaceTests, AssetBrowserCreatesDetachedScenesInFullWidthBottom
                 QStringLiteral("Levels/New Material.qmat"));
   ui.shutdown();
 }
+
+TEST(QtProjectWorkspaceTests,
+     ComposedPresentationRequestsOnlyContinuousSynchronizedFrames) {
+  class PresentationRenderSystem final : public quader::RenderSystem {
+  public:
+    [[nodiscard]] bool initialized() const override { return true; }
+    [[nodiscard]] bool presentation_is_synchronized() const override {
+      return synchronized;
+    }
+    void complete_composited_presentation_frame() override { ++completed_frames; }
+
+    bool synchronized = true;
+    std::size_t completed_frames = 0u;
+  };
+
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-composed-presentation-request-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-composed-presentation-request-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  PresentationRenderSystem renderer;
+  quader::UISystem ui;
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  ASSERT_TRUE(ui.initialize(renderer, resources, true));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ASSERT_FALSE(ui.main_window()->isVisible());
+  QPointer<quader::QtVulkanCompositionWidget> anchor =
+      dynamic_cast<quader::QtVulkanCompositionWidget *>(
+          ui.main_window()->findChild<QRhiWidget *>(
+              QStringLiteral("viewportCompositionAnchor")));
+  ASSERT_NE(anchor, nullptr);
+  EXPECT_EQ(anchor->shared_context(), nullptr);
+
+  std::vector<std::size_t> requested_after_frames;
+  const auto request_frame = [&] {
+    requested_after_frames.push_back(renderer.completed_frames);
+  };
+  ui.set_viewport_presentation_requested_callback(request_frame);
+  const auto submit_root = [&] {
+    return QMetaObject::invokeMethod(anchor.data(), "frameSubmitted",
+                                     Qt::DirectConnection);
+  };
+
+  // Home is idle; root presentation accounting still completes each signal.
+  ASSERT_FALSE(ui.needs_continuous_rendering());
+  ASSERT_TRUE(submit_root());
+  EXPECT_EQ(renderer.completed_frames, 1u);
+  EXPECT_TRUE(requested_after_frames.empty());
+
+  // Loading requests continuous work without showing or initializing the RHI.
+  ui.begin_loading_presentation();
+  ASSERT_TRUE(ui.needs_continuous_rendering());
+  for (std::size_t frame = 2u; frame != 5u; ++frame) {
+    ASSERT_TRUE(submit_root());
+    EXPECT_EQ(renderer.completed_frames, frame);
+    EXPECT_EQ(requested_after_frames.size(), frame - 1u);
+    ASSERT_FALSE(requested_after_frames.empty());
+    EXPECT_EQ(requested_after_frames.back(), frame)
+        << "complete root accounting before requesting the next app frame";
+  }
+
+  renderer.synchronized = false;
+  ASSERT_TRUE(submit_root());
+  EXPECT_EQ(renderer.completed_frames, 5u);
+  EXPECT_EQ(requested_after_frames.size(), 3u);
+
+  renderer.synchronized = true;
+  ui.end_loading_presentation(false);
+  ASSERT_FALSE(ui.needs_continuous_rendering());
+  ASSERT_TRUE(submit_root());
+  EXPECT_EQ(renderer.completed_frames, 6u);
+  EXPECT_EQ(requested_after_frames.size(), 3u);
+
+  ui.begin_loading_presentation();
+  ASSERT_TRUE(ui.needs_continuous_rendering());
+  ui.set_viewport_presentation_requested_callback({});
+  ASSERT_TRUE(submit_root());
+  EXPECT_EQ(renderer.completed_frames, 7u);
+  EXPECT_EQ(requested_after_frames.size(), 3u);
+
+  ui.set_viewport_presentation_requested_callback(request_frame);
+  ASSERT_TRUE(submit_root());
+  EXPECT_EQ(renderer.completed_frames, 8u);
+  ASSERT_EQ(requested_after_frames.size(), 4u);
+  EXPECT_EQ(requested_after_frames.back(), 8u);
+
+  ui.detach_render_resources();
+  ASSERT_TRUE(submit_root());
+  EXPECT_EQ(renderer.completed_frames, 9u);
+  EXPECT_EQ(requested_after_frames.size(), 4u);
+  EXPECT_EQ(anchor->shared_context(), nullptr);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(anchor.data(), "frameSubmitted",
+                                       Qt::QueuedConnection));
+  ui.shutdown();
+  EXPECT_EQ(anchor, nullptr);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+  EXPECT_EQ(renderer.completed_frames, 9u);
+  EXPECT_EQ(requested_after_frames.size(), 4u);
+}

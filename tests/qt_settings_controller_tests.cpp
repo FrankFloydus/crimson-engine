@@ -118,6 +118,18 @@ TEST(QtSettingsControllerTests,
             "Dimension Font Size (pt)");
   EXPECT_EQ(italian.text("viewport.settings.DimensionFontSize.label", ""),
             "Dimensione font quote (pt)");
+  EXPECT_EQ(english.text("viewport.settings.LaminaFaceColor.label", ""),
+            "Lamina Face Fill");
+  EXPECT_EQ(italian.text("viewport.settings.LaminaFaceColor.label", ""),
+            "Riempimento faccia lamina");
+  EXPECT_EQ(english.text("viewport.settings.LaminaWireColor.label", ""),
+            "Lamina Wire");
+  EXPECT_EQ(italian.text("viewport.settings.LaminaWireColor.label", ""),
+            "Wire lamina");
+  EXPECT_EQ(english.text("viewport.settings.LaminaWireLineSize.label", ""),
+            "Lamina Wire Size");
+  EXPECT_EQ(italian.text("viewport.settings.LaminaWireLineSize.label", ""),
+            "Dimensione wire lamina");
   EXPECT_EQ(
       english.text("viewport.settings.ShowHoverDimensions.label", ""),
       "Show Dimensions on Hover");
@@ -170,12 +182,12 @@ TEST(QtSettingsControllerTests,
 
 TEST(QtSettingsControllerTests,
      EveryControlMutatesItsOwnerAndNotifiesItsPhase) {
-  static_assert(kViewportColorSettingCount == 27u);
-  static_assert(kViewportFloatSettingCount == 35u);
+  static_assert(kViewportColorSettingCount == 29u);
+  static_assert(kViewportFloatSettingCount == 36u);
   static_assert(kViewportBoolSettingCount == 17u);
   static_assert(3u + kViewportColorSettingCount + kViewportFloatSettingCount +
                      kViewportBoolSettingCount ==
-                82u);
+                85u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();

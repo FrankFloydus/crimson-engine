@@ -401,6 +401,7 @@ private:
   bool modal_tool_owns_viewport_snapshot_ = false;
   bool active_tool_revision_valid_ = false;
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
+  std::optional<QuaderInputChord> quick_pivot_hold_;
   std::vector<QuaderViewportKeybindingRepeat> repeated_keybinding_commands_;
   std::array<ViewportPointerReleaseSuppression, 3>
       command_pointer_release_suppression_;

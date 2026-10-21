@@ -287,6 +287,7 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/modeling_sdk_projection_adapter.cpp
     src/editor/modeling/services/runtime_tool_command_service.cpp
     src/editor/modeling/services/modeling_session_services.cpp
+        src/editor/modeling/services/modeling_lamina_overlay_service.cpp
     src/editor/modeling/services/modeling_session_service.cpp
     src/editor/modeling/services/face_texture_edit_context.cpp
     src/editor/modeling/services/face_texture_gesture_math.cpp
@@ -1769,6 +1770,7 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
+        tests/qt_fly_navigation_pacing_tests.cpp
         tests/bridge_reader_tests.cpp
         tests/mesh_collision_geometry_tests.cpp
         tests/collision_shape_overlay_tests.cpp
@@ -1776,6 +1778,7 @@ if(QUADER_BUILD_TESTS)
         tests/component_transform_persistence_tests.cpp
         tests/modeling_component_merge_tests.cpp
         tests/selection_diagnostics_tests.cpp
+        tests/modeling_lamina_overlay_service_tests.cpp
         tests/qt_console_panel_tests.cpp
         tests/core_tests.cpp
         tests/editor_history_limit_tests.cpp
@@ -2032,6 +2035,7 @@ if(QUADER_BUILD_TESTS)
 
     add_executable(quader_public_release_tests
         tests/quader_tests_main.cpp
+        tests/qt_fly_navigation_pacing_tests.cpp
         tests/public_release_tests.cpp
         tests/public_release_modeling_tests.cpp
         tests/public_release_render_tests.cpp

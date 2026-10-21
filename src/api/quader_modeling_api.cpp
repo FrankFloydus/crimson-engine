@@ -1277,6 +1277,10 @@ QuaderApiVoidResult QuaderEdgeSelection::split() const {
   return execute_after_replace("split_edges");
 }
 
+QuaderApiVoidResult QuaderEdgeSelection::split_midpoint() const {
+  return execute_after_replace("split_edges_midpoint");
+}
+
 QuaderApiVoidResult QuaderEdgeSelection::reset_normals_to_default() const {
   return execute_after_replace("default_edge_normals");
 }

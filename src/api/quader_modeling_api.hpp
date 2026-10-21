@@ -422,6 +422,7 @@ public:
   QuaderApiVoidResult snap_to_active() const;
   QuaderApiVoidResult connect() const;
   QuaderApiVoidResult split() const;
+  QuaderApiVoidResult split_midpoint() const;
   QuaderApiVoidResult reset_normals_to_default() const;
   QuaderApiVoidResult harden_normals() const;
   QuaderApiVoidResult soften_normals() const;

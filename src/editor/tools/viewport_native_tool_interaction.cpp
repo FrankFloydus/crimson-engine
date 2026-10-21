@@ -1209,6 +1209,12 @@ ViewportNativeToolInteraction::handle_frame(
                                        input_result.fly_navigation_active ||
                                        input_result.navigation_active;
     if (input.quick_pivot_released) {
+      if (pivot_handle_press_ && !pivot_handle_press_->persistent &&
+          !navigation_suspended && native_pointer_interrupted(frame)) {
+        pivot->set_quick_preview_position(pivot_handle_press_->position_before);
+        output.invalidate_hover = true;
+        output.mark_overlay_dirty = true;
+      }
       pivot->end_quick_edit();
       if (pivot_handle_press_) {
         left_release_suppression_.begin(QuaderMouseButton::Left,
@@ -1221,7 +1227,7 @@ ViewportNativeToolInteraction::handle_frame(
         !pivot->quick_edit_active()) {
       if (frame.selection_transform_pivot.has_value()) {
         const QVec3 initial = *frame.selection_transform_pivot;
-        pivot->begin_quick(initial);
+        pivot->begin_quick_edit(initial);
         output.pivot_consumed = true;
       }
     }

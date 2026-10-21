@@ -87,7 +87,7 @@ TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelItemsResolveT
 		}
 	}
 
-	EXPECT_TRUE(item_count == 38U);
+	EXPECT_TRUE(item_count == 39U);
 }
 
 TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelPreservesNativePanelOrdering) {
@@ -111,10 +111,11 @@ TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelPreservesNati
 		"radial_align_vertices",
 	}});
 
-	check_action_order(require_panel("edge_operations"), std::array<std::string_view, 14> {{
+	check_action_order(require_panel("edge_operations"), std::array<std::string_view, 15> {{
 		"snap_edges_to_active",
 		"connect_edges",
 		"split_edges",
+		"split_edges_midpoint",
 		"default_edge_normals",
 		"harden_edge_normals",
 		"soften_edge_normals",

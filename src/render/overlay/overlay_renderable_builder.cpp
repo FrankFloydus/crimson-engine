@@ -47,6 +47,7 @@ bool overlay_layer_can_build_face_fill(ViewportOverlayLayer layer) {
          layer == ViewportOverlayLayer::SelectedXrayFace ||
          layer == ViewportOverlayLayer::SelectedFaceMask ||
          layer == ViewportOverlayLayer::HoverFace ||
+         layer == ViewportOverlayLayer::DiagnosticFace ||
          layer == ViewportOverlayLayer::ToolPlane ||
          layer == ViewportOverlayLayer::ToolPreviewFill ||
          layer == ViewportOverlayLayer::ToolHandle;

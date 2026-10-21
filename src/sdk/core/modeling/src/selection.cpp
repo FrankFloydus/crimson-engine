@@ -284,6 +284,12 @@ OperationReceipt EdgeSelection::split() const {
   });
 }
 
+OperationReceipt EdgeSelection::split_midpoint() const {
+  return direct_mutate_selection(*context_, selection_, [](PolygonDocument &document) {
+    return document.split_selected_edges_midpoint();
+  });
+}
+
 OperationReceipt EdgeSelection::reset_normals_to_default() const {
   return direct_mutate_selection(*context_, selection_, [](PolygonDocument &document) {
     return document.reset_selected_edge_normals_to_default();

@@ -85,8 +85,7 @@ TEST(PublicReleaseSceneAssetsTests, AuthoringDenialsPreserveModelingPreview) {
   });
   expect_scene_asset_denied(editor, [&] { return editor.scene().create_point_light(); });
   expect_scene_asset_denied(editor, [&] { return editor.scene().create_directional_light(); });
-  for (const auto kind : {QuaderEntityKind::Light, QuaderEntityKind::Curve,
-                          QuaderEntityKind::Instance}) {
+  for (const auto kind : {QuaderEntityKind::Light, QuaderEntityKind::Curve}) {
     expect_scene_asset_denied(editor, [&] {
       return editor.scene().create_entity({.name = "Excluded", .kind = kind});
     });
@@ -163,7 +162,7 @@ TEST(PublicReleaseSceneAssetsTests, GenericProjectFoldersRemainAvailableForScene
   EXPECT_TRUE(std::filesystem::exists(temporary.path() / "Maps/Main.qdr"));
 }
 
-TEST(PublicReleaseSceneAssetsTests, ExistingInstancesCannotBeEditedCopiedOrDuplicated) {
+TEST(PublicReleaseSceneAssetsTests, InstanceClipboardAndDuplicatesRetainLinkedGeometry) {
   PublicSceneAssetsDirectory temporary;
   ProjectSession project;
   const auto created = project.create(temporary.path());
@@ -174,46 +173,51 @@ TEST(PublicReleaseSceneAssetsTests, ExistingInstancesCannotBeEditedCopiedOrDupli
   ASSERT_TRUE(mesh.ok()) << mesh.error_message();
   SceneSession &session = *project.active_scene()->session;
   SceneDocument &scene = session.scene();
-  // Seed retained authored data directly: public authoring must not manufacture it.
-  const EntityId definition = scene.create_entity("Existing Definition");
-  ASSERT_TRUE(scene.set_parent(mesh.value().entity, definition, false));
-  ASSERT_TRUE(scene.set_instance_definition(definition));
-  const EntityId occurrence = scene.create_entity("Existing Instance", EntityKind::Instance);
-  ASSERT_TRUE(scene.set_instance_occurrence(occurrence, {.definition = definition}));
-  ASSERT_TRUE(editor.selection().select_object(occurrence).ok());
-
-  EXPECT_FALSE(editor.modeling().can_create_instance());
-  EXPECT_FALSE(editor.modeling().can_flatten_instance());
-  EXPECT_FALSE(editor.modeling().can_enter_instance_edit(occurrence));
-  EXPECT_FALSE(editor.modeling().can_execute_tool("copy_selection"));
-  EXPECT_FALSE(editor.modeling().can_duplicate_selected_entity_hierarchy());
-  expect_scene_asset_denied(editor, [&] { return editor.modeling().create_instance(); });
-  expect_scene_asset_denied(editor, [&] { return editor.modeling().flatten_instance(); });
-  expect_scene_asset_denied(editor, [&] { return editor.modeling().enter_instance_edit(occurrence); });
-  expect_scene_asset_denied(editor, [&] { return editor.modeling().copy_selection(); });
-  expect_scene_asset_denied(editor, [&] { return editor.modeling().duplicate_selected_entity_hierarchy(); });
-  expect_scene_asset_denied(editor, [&] { return editor.scene().duplicate(occurrence); });
-  expect_scene_asset_denied(editor, [&] { return editor.scene().duplicate(definition); });
-
-  const auto before = capture_command_observable_state(editor);
-  const std::array roots{occurrence};
-  const auto duplicated = session.modeling().duplicate_entity_hierarchy(
-      roots, session.document_commands(), ModelingSelectionMode::Object);
-  EXPECT_FALSE(duplicated.ok);
-  EXPECT_FALSE(duplicated.changed);
-  EXPECT_EQ(duplicated.message, release_feature_unavailable_message());
-  EXPECT_FALSE(project.clipboard().can_paste_instance_selection(project));
-  const auto pasted = project.clipboard().paste_instance_selection(project);
-  EXPECT_FALSE(pasted.ok);
-  EXPECT_FALSE(pasted.changed);
-  EXPECT_EQ(pasted.message, release_feature_unavailable_message());
-  EXPECT_FALSE(project.clipboard().has_instance_payload());
-  const auto difference = diff_command_observable_state(
-      before, capture_command_observable_state(editor));
-  EXPECT_TRUE(difference.empty()) << difference.summary;
+  ASSERT_TRUE(editor.modeling().can_create_instance());
+  const auto created_instance = editor.modeling().create_instance();
+  ASSERT_TRUE(created_instance.ok()) << created_instance.error_message();
+  const auto selected = scene.selected_entities();
+  ASSERT_EQ(selected.size(), 1u);
+  const EntityId occurrence = selected.front();
   ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
-  EXPECT_EQ(scene.instance_occurrence(occurrence)->definition, definition);
+  const EntityId definition = scene.instance_occurrence(occurrence)->definition;
   EXPECT_EQ(scene.parent(mesh.value().entity), definition);
+
+  EXPECT_TRUE(editor.modeling().can_flatten_instance());
+  EXPECT_TRUE(editor.modeling().can_enter_instance_edit(occurrence));
+  EXPECT_TRUE(editor.modeling().can_execute_tool("copy_selection"));
+  EXPECT_TRUE(editor.modeling().can_duplicate_selected_entity_hierarchy());
+  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+  EXPECT_TRUE(project.clipboard().has_instance_payload());
+  EXPECT_TRUE(project.clipboard().can_paste_instance_selection(project));
+  const auto pasted = editor.modeling().paste_selection();
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  EXPECT_TRUE(pasted.changed());
+  const auto pasted_selection = scene.selected_entities();
+  ASSERT_EQ(pasted_selection.size(), 1u);
+  const EntityId pasted_occurrence = pasted_selection.front();
+  EXPECT_NE(pasted_occurrence, occurrence);
+  ASSERT_NE(scene.instance_occurrence(pasted_occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(pasted_occurrence)->definition, definition);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(scene.exists(pasted_occurrence));
+  EXPECT_TRUE(scene.exists(occurrence));
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_NE(scene.instance_occurrence(pasted_occurrence), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(pasted_occurrence)->definition, definition);
+
+  const auto duplicated = editor.scene().duplicate(occurrence);
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_NE(scene.instance_occurrence(duplicated.value().id), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(duplicated.value().id)->definition, definition);
+  ASSERT_TRUE(editor.selection().select_object(occurrence).ok());
+  ASSERT_TRUE(editor.modeling().duplicate_selected_entity_hierarchy().ok());
+  const auto duplicate_selection = scene.selected_entities();
+  ASSERT_EQ(duplicate_selection.size(), 1u);
+  EXPECT_NE(duplicate_selection.front(), occurrence);
+  ASSERT_NE(scene.instance_occurrence(duplicate_selection.front()), nullptr);
+  EXPECT_EQ(scene.instance_occurrence(duplicate_selection.front())->definition,
+            definition);
 }
 
 TEST(PublicReleaseSceneAssetsTests, CaseRenamedFullSceneRejectsBeforeRecoveryWrites) {

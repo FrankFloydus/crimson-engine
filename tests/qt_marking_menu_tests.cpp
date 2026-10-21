@@ -95,6 +95,10 @@ QToolButton *slot_button(QtMarkingMenu &menu, int slot) {
       QStringLiteral("markingMenu.slot.%1").arg(slot));
 }
 
+QRect global_rect(const QWidget &widget) {
+  return QRect(widget.mapToGlobal(QPoint{}), widget.size());
+}
+
 QListWidget *overflow_list(QtMarkingMenu &menu) {
   return menu.findChild<QListWidget *>(QStringLiteral("markingMenu.overflow"));
 }
@@ -273,9 +277,6 @@ TEST_F(QtMarkingMenuTests,
   const QRect pointer_bounds = available.adjusted(8, 8, -8, -8);
   const int beyond_distance =
       std::max(available.width(), available.height()) + 1;
-  const auto global_rect = [](QWidget &widget) {
-    return QRect(widget.mapToGlobal(QPoint{}), widget.size());
-  };
   for (const float factor : {1.0F, 2.0F}) {
     SCOPED_TRACE(factor);
     menu.apply_ui_scale(QtUiScaleMetrics(factor));
@@ -1100,7 +1101,7 @@ TEST_F(QtMarkingMenuTests,
 }
 
 TEST_F(QtMarkingMenuTests,
-       IndependentLabelWidthsKeepCircularCentersAndLivePointerHairline) {
+       IndependentLabelWidthsKeepCompassInnerAnchorsAndLivePointerHairline) {
   QtMarkingMenu menu;
   MarkingActions actions;
   actions.slot_actions[0]->setText(QStringLiteral("Cut"));
@@ -1122,8 +1123,11 @@ TEST_F(QtMarkingMenuTests,
     for (std::size_t slot = 0; slot < directions.size(); ++slot) {
       auto *button = slot_button(menu, static_cast<int>(slot));
       ASSERT_NE(button, nullptr);
-      const QPoint center = button->mapToGlobal(button->rect().center());
-      const QPoint delta = center - anchor_;
+      const QRect bounds = global_rect(*button);
+      const QPoint compass_anchor(directions[slot].x() > 0 ? bounds.left()
+          : directions[slot].x() < 0 ? bounds.right() : bounds.center().x(),
+          bounds.center().y());
+      const QPoint delta = compass_anchor - anchor_;
       const double length =
           std::hypot(directions[slot].x(), directions[slot].y());
       EXPECT_NEAR(std::hypot(delta.x(), delta.y()), radius, 2.0);
@@ -1524,6 +1528,111 @@ TEST_F(
         });
     EXPECT_EQ(selected, nullptr);
   }
+}
+
+TEST_F(QtMarkingMenuTests,
+       UnequalLabelsKeepVisibleCompassPlacementAcrossScaleEdgesAndNativeContrast) {
+  const QFont baseline_font = QApplication::font();
+  const QPalette fusion_palette = QApplication::style()->standardPalette();
+  const QRect available = QApplication::primaryScreen()->availableGeometry();
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  owner.setGeometry(available.right() - 179, available.bottom() - 119, 180, 120);
+  owner.show();
+  QtMarkingMenu menu(&owner);
+  MarkingActions actions;
+  const std::array labels{
+      QStringLiteral("Bevel"), QStringLiteral("Insert Edge Loop"),
+      QStringLiteral("Connect"), QStringLiteral("Bridge Edges"),
+      QStringLiteral("Split"), QStringLiteral("Merge Vertices to Active"),
+      QStringLiteral("Fill"), QStringLiteral("Disconnect Edge")};
+  for (std::size_t slot = 0u; slot < labels.size(); ++slot) {
+    actions.slot_actions[slot]->setText(labels[slot]);
+  }
+  struct ViewCase final {
+    float scale;
+    bool screen_edge;
+    bool right_to_left;
+    bool high_contrast;
+    const char *name;
+  };
+  const std::array views{
+      ViewCase{1.0f, false, false, false, "100"},
+      ViewCase{2.0f, false, false, false, "200"},
+      ViewCase{1.0f, false, false, false, "100-scale-down"},
+      ViewCase{1.0f, true, true, false, "100-edge-rtl"},
+      ViewCase{2.0f, true, true, true, "200-edge-rtl-high-contrast"}};
+  std::array<QSize, 8> original_sizes;
+  std::array<QPoint, 8> original_offsets;
+  for (std::size_t view_index = 0u; view_index < views.size(); ++view_index) {
+    const auto &view = views[view_index];
+    SCOPED_TRACE(view.name);
+    const QtUiScaleMetrics metrics(view.scale, view_index + 1u);
+    QApplication::setFont(metrics.font(baseline_font));
+    QApplication::setLayoutDirection(view.right_to_left ? Qt::RightToLeft : Qt::LeftToRight);
+    apply_qt_application_theme_for_contrast_preference(fusion_palette,
+        view.high_contrast ? Qt::ContrastPreference::HighContrast : Qt::ContrastPreference::NoPreference);
+    menu.apply_ui_scale(metrics);
+    anchor_ = view.screen_edge ? owner.mapToGlobal(owner.rect().bottomRight()) : available.center();
+    for (int chosen_slot = 0; chosen_slot < 8; ++chosen_slot) {
+      SCOPED_TRACE(chosen_slot);
+      EXPECT_EQ(run_menu(menu, actions.slot_actions, {}, [&]() {
+        std::array<QRect, 8> rectangles;
+        for (int slot = 0; slot < 8; ++slot) {
+          auto *button = slot_button(menu, slot);
+          ASSERT_NE(button, nullptr);
+          ASSERT_TRUE(button->isVisible());
+          rectangles[slot] = global_rect(*button);
+          EXPECT_TRUE(available.contains(rectangles[slot]));
+          EXPECT_EQ(button->accessibleName(), labels[slot]);
+          EXPECT_EQ(button->text(), labels[slot]);
+          EXPECT_LE(button->fontMetrics().horizontalAdvance(button->text()), button->width());
+          EXPECT_GE(button->height(), button->fontMetrics().height());
+          for (int other = 0; other < slot; ++other) {
+            EXPECT_FALSE(rectangles[slot].intersects(rectangles[other])) << slot << ',' << other;
+          }
+        }
+        // Read the visible label boundaries: a long diagonal must occupy its
+        // compass column even when its center would already lie on a circle.
+        EXPECT_LT(rectangles[0].right(), rectangles[1].left());
+        EXPECT_LT(rectangles[1].left(), rectangles[2].left());
+        EXPECT_LT(rectangles[4].right(), rectangles[3].left());
+        EXPECT_LT(rectangles[3].left(), rectangles[2].left());
+        EXPECT_LT(rectangles[6].right(), rectangles[7].right());
+        EXPECT_LT(rectangles[7].right(), rectangles[0].left());
+        EXPECT_LT(rectangles[6].right(), rectangles[5].right());
+        EXPECT_LT(rectangles[5].right(), rectangles[4].left());
+        for (const int diagonal : {1, 7}) {
+          EXPECT_LT(rectangles[0].center().y(), rectangles[diagonal].center().y());
+          EXPECT_LT(rectangles[diagonal].center().y(), rectangles[2].center().y());
+        }
+        for (const int diagonal : {3, 5}) {
+          EXPECT_LT(rectangles[2].center().y(), rectangles[diagonal].center().y());
+          EXPECT_LT(rectangles[diagonal].center().y(), rectangles[4].center().y());
+        }
+        EXPECT_NE(rectangles[0].width(), rectangles[5].width());
+        for (int slot = 0; slot < 8; ++slot) {
+          const QPoint offset = rectangles[slot].center() - rectangles[0].center();
+          if (view_index == 0u) {
+            original_sizes[slot] = rectangles[slot].size();
+            original_offsets[slot] = offset;
+          } else if (view_index == 2u) {
+            EXPECT_EQ(rectangles[slot].size(), original_sizes[slot]);
+            EXPECT_EQ(offset, original_offsets[slot]);
+          }
+        }
+        if (chosen_slot == 0) {
+          capture_menu(menu, QStringLiteral("marking-visible-compass-%1.png").arg(QString::fromUtf8(view.name)));
+        }
+        auto *chosen = slot_button(menu, chosen_slot);
+        move_pointer(*chosen, chosen->mapToGlobal(chosen->rect().center()));
+        send_key(*chosen, QEvent::KeyRelease, Qt::Key_Q);
+      }), actions.slot_actions[chosen_slot]);
+    }
+  }
+  QApplication::setFont(baseline_font);
+  QApplication::setLayoutDirection(Qt::LeftToRight);
+  apply_qt_application_theme_for_contrast_preference(fusion_palette, Qt::ContrastPreference::NoPreference);
 }
 
 } // namespace

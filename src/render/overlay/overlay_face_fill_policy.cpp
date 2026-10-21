@@ -16,6 +16,8 @@ overlay_face_fill_class(const ViewportOverlayTriangle &triangle) {
     return OverlayFaceFillClass::None;
   }
   switch (triangle.layer) {
+  case ViewportOverlayLayer::DiagnosticFace:
+    return OverlayFaceFillClass::Diagnostic;
   case ViewportOverlayLayer::SelectedVisibleFace:
   case ViewportOverlayLayer::SelectedXrayFace:
   case ViewportOverlayLayer::SelectedFaceMask:

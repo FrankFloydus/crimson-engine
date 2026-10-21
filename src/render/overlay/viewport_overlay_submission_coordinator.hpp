@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -319,7 +320,10 @@ private:
   /// Pins only source-ID layout; changing preview positions remain owner inputs.
   struct ComponentDimensionPreviewLayout final {
     int object_id = -1;
+    bool dynamic = false;
     std::shared_ptr<const MeshGeometryPayload> geometry;
+    std::shared_ptr<const std::vector<MeshVertex>> vertex_attributes;
+    std::span<const MeshVertex> vertices;
   };
 
   /// Addresses one selected authored vertex in an accepted preview position stream.

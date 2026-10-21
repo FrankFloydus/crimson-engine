@@ -29,7 +29,7 @@ struct PortableOperationMapping {
 
 namespace detail {
 
-inline constexpr std::array<PortableOperationMapping, 36>
+inline constexpr std::array<PortableOperationMapping, 37>
     kPortableOperationMappings{{
         {EditorOperationId::Bridge, quader::modeling::OperationKind::Bridge,
          "Bridge"},
@@ -60,7 +60,9 @@ inline constexpr std::array<PortableOperationMapping, 36>
         {EditorOperationId::ConnectEdges,
          quader::modeling::OperationKind::ConnectEdges, "Connect Edges"},
         {EditorOperationId::SplitEdges,
-         quader::modeling::OperationKind::SplitEdges, "Split Edges"},
+         quader::modeling::OperationKind::SplitEdges, "Disconnect Edge"},
+        {EditorOperationId::SplitEdgesMidpoint,
+         quader::modeling::OperationKind::SplitEdgesMidpoint, "Edge Split"},
         {EditorOperationId::DissolveEdges,
          quader::modeling::OperationKind::DissolveEdges, "Dissolve Edges"},
         {EditorOperationId::MergeEdges,

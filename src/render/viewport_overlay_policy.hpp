@@ -45,6 +45,7 @@ struct ViewportOverlayLayerPolicy {
 
 inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kViewportOverlayDrawOrder{{
         ViewportOverlayLayer::CollisionFill,
+        ViewportOverlayLayer::DiagnosticFace,
         ViewportOverlayLayer::SelectedVisibleFace,
         ViewportOverlayLayer::SelectedFaceMask,
         ViewportOverlayLayer::WireframeBase,
@@ -82,6 +83,8 @@ inline constexpr std::uint32_t kOverlayWireframeXrayColor = rgba8(238, 242, 247,
 inline constexpr std::uint32_t kOverlaySourceWireColor = 0xebffe05cU;
 inline constexpr std::uint32_t kOverlayOpenEdgeColor = 0xff00ffffU;
 inline constexpr std::uint32_t kOverlayDiagnosticEdgeColor = 0xff0000ffU;
+inline constexpr std::uint32_t kOverlayLaminaFaceColor = rgba8(255, 0, 0, 64);
+inline constexpr std::uint32_t kOverlayLaminaWireColor = rgba8(255, 0, 0);
 inline constexpr std::uint32_t kOverlayGroupBoundsColor = rgba8(255, 230, 0, 255);
 inline constexpr std::uint32_t kOverlayKnifeReferenceColor = rgba8(255, 143, 24);
 inline constexpr std::uint32_t kOverlayHoverFaceColor = 0x161fff66U;
@@ -166,6 +169,7 @@ inline constexpr float kOverlaySelectionWireLineWidthPixels = 2.5f;
 inline constexpr float kOverlayHoverWireLineWidthPixels = 2.5f;
 inline constexpr float kOverlayOpenEdgeLineWidthPixels = 1.0f;
 inline constexpr float kOverlayDiagnosticEdgeLineWidthPixels = 4.0f;
+inline constexpr float kOverlayLaminaWireLineWidthPixels = 1.5f;
 inline constexpr float kOverlayGroupBoundsLineWidthPixels = 1.5f;
 inline constexpr float kOverlaySelectionDimensionLineWidthPixels = 2.0f;
 inline constexpr float kOverlayToolPlaneLineWidthPixels = 1.0f;

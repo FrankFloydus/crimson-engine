@@ -137,6 +137,8 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::Background, ViewportSettingsSectionId::Shading, "Background Color", key("BackgroundColor"), kDefaultViewportBackgroundColor,
          "Editor background for Shaded, Solid and Wireframe views. Rendered views use the scene environment. Use Apply to preview."},
         {ViewportColorSettingId::WireframeOnShaded, ViewportSettingsSectionId::Shading, "Wireframe on Shaded Color", key("WireframeOnShadedColor"), {0.0f, 0.0f, 0.0f, 1.0f}},
+        {ViewportColorSettingId::LaminaFace, ViewportSettingsSectionId::Overlay, "Lamina Face Fill", key("LaminaFaceColor"), abgr8(kOverlayLaminaFaceColor)},
+        {ViewportColorSettingId::LaminaWire, ViewportSettingsSectionId::Overlay, "Lamina Wire", key("LaminaWireColor"), abgr8(kOverlayLaminaWireColor)},
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
@@ -180,6 +182,7 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
          "0 keeps the normal grid; 1 hides it while editing an instance. Use Apply to preview."},
         {ViewportFloatSettingId::Grid2DIntensity, ViewportSettingsSectionId::Grid, "2D Grid Intensity", key("Grid2DIntensity"), 0.0f, 4.0f, 1.0f},
         {ViewportFloatSettingId::Grid3DIntensity, ViewportSettingsSectionId::Grid, "3D Grid Intensity", key("Grid3DIntensity"), 0.0f, 4.0f, 1.0f},
+        {ViewportFloatSettingId::LaminaWireLineSize, ViewportSettingsSectionId::Overlay, "Lamina Wire Size", key("LaminaWireLineSize"), kMinLineSize, kMaxLineSize, kOverlayLaminaWireLineWidthPixels},
 }};
 
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{{

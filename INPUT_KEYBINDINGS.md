@@ -130,6 +130,14 @@ Tool, selection-mode, grid, and ordinary viewport command bindings normally requ
 For example, `W` activates Move when idle and means Fly Forward during fly navigation. The router
 consumes semantic `ViewportInputActionKind`/`ViewportNavigationInput`, not Qt keys or physical chords.
 
+Quick Pivot retains the chord accepted on its initiating press until that physical hold ends.
+Starting fly navigation may reinterpret D as Fly Right, but must still retire the accepted Quick
+Pivot hold on release. Focus loss, text input and runtime replacement retire it too. An untouched
+native hold restores its previous pivot state; it must not turn the automatic selection center
+into a fixed world-space override. A placed pivot remains authored. Direct
+`PivotToolService::begin_quick(point)` calls retain their explicit authoring contract.
+See [input and submitted-gizmo regressions](tests/viewport_interaction_controller_tests.cpp).
+
 Cursor-position viewport launchers are semantic non-command targets resolved through that same
 dispatcher. The viewport adapter captures the initiating pane and pointer position, while the Qt
 presenter uses stack-local popup menus and revalidates the runtime, scene session, revisions, pane,

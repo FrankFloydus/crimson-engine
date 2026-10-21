@@ -12,6 +12,9 @@
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_main_menu.hpp"
+#include "ui/qt_modeling_operation_catalog.hpp"
+#include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_marking_menu.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -26,6 +29,7 @@
 #include <QKeyEvent>
 #include <QListWidget>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMouseEvent>
 #include <QPalette>
 #include <QPixmap>
@@ -42,6 +46,8 @@
 #include <filesystem>
 #include <functional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -520,17 +526,17 @@ TEST(QtViewportMarkingMenuTests,
   };
   const std::array submenus{
       ExpectedSubmenu{QStringLiteral("mirror"), QStringLiteral("Mirror"),
-          {{command::kModelingMirrorSelectionX, QStringLiteral("Mirror X")},
-           {command::kModelingMirrorSelectionY, QStringLiteral("Mirror Y")},
-           {command::kModelingMirrorSelectionZ, QStringLiteral("Mirror Z")}}},
+          {{command::kModelingMirrorSelectionX, QStringLiteral("Mirror Across X")},
+           {command::kModelingMirrorSelectionY, QStringLiteral("Mirror Across Y")},
+           {command::kModelingMirrorSelectionZ, QStringLiteral("Mirror Across Z")}}},
       ExpectedSubmenu{QStringLiteral("flip"), QStringLiteral("Flip"),
-          {{command::kModelingFlipHorizontal, QStringLiteral("Flip Horizontally")},
-           {command::kModelingFlipVertical, QStringLiteral("Flip Vertically")}}},
+          {{command::kModelingFlipHorizontal, QStringLiteral("Flip Horizontal")},
+           {command::kModelingFlipVertical, QStringLiteral("Flip Vertical")}}},
       ExpectedSubmenu{QStringLiteral("bake"), QStringLiteral("Bake"),
           {{command::kModelingBakeLocation, QStringLiteral("Bake Location")},
            {command::kModelingBakeRotation, QStringLiteral("Bake Rotation")},
            {command::kModelingBakeScale, QStringLiteral("Bake Scale")},
-           {command::kModelingBakeTransforms, QStringLiteral("Bake All")}}}};
+           {command::kModelingBakeTransforms, QStringLiteral("Bake Transforms")}}}};
   /// Exercises constrained launch geometry, scale restoration and native fallback.
   struct ViewCase final {
     float factor;
@@ -560,8 +566,8 @@ TEST(QtViewportMarkingMenuTests,
       auto *overflow = popup.findChild<QListWidget *>(QStringLiteral("markingMenu.overflow"));
       ASSERT_NE(overflow, nullptr);
       const std::array<QString, 8> labels{
-          QStringLiteral("Create Instance"), {}, QStringLiteral("Flip Normals"), {},
-          QStringLiteral("Snap to Floor"), {}, {}, {}};
+          QStringLiteral("Create Instance"), {}, QStringLiteral("Flip Mesh Normals"), {},
+          QStringLiteral("Snap Meshes to Floor"), {}, {}, {}};
       for (int slot = 0; slot < 8; ++slot) {
         auto *button = popup.findChild<QToolButton *>(
             QStringLiteral("markingMenu.slot.%1").arg(slot));
@@ -999,4 +1005,141 @@ TEST(QtViewportMarkingMenuTests, SceneSwitchWhileBakeSubmenuIsOpenRejectsItsLeaf
   EXPECT_FLOAT_EQ(first_state->transform.location.x, 3.0F);
   EXPECT_FLOAT_EQ(first_state->transform.location.y, 4.0F);
   EXPECT_FLOAT_EQ(first_state->transform.location.z, 5.0F);
+}
+
+TEST(QtViewportMarkingMenuTests, CanonicalLabelsMatchNativeMenusAndToolsInBothLocales) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-canonical-label-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(application.palette());
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  const auto first = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Canonical Label Box");
+  const auto second = editor.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Canonical Label Peer");
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  QWidget owner;
+  prepare_owner(owner);
+  const auto visible_label = [](QString text) {
+    text = text.section(QLatin1Char('\t'), 0, 0);
+    text.remove(QLatin1Char('&'));
+    return text.trimmed();
+  };
+  for (const std::string_view language : {"en-US", "it-IT", "fallback"}) {
+    SCOPED_TRACE(language);
+    quader::LocalizationService localization;
+    if (language != "fallback") {
+      ASSERT_TRUE(localization.load(std::filesystem::path(QUADER_SOURCE_DIR) /
+          "resources" / "locales", std::string(language)));
+    }
+    QMenuBar menu_bar;
+    quader::ViewportSettings viewport_settings = quader::ViewportSettings::defaults();
+    quader::QtMainMenu native_menu;
+    native_menu.initialize(menu_bar, quader::QtMainMenuContext{
+        .editor = editor, .modeling = session.modeling(),
+        .viewport_settings = viewport_settings, .localization = localization});
+    quader::QtToolToolbar toolbar;
+    toolbar.set_localization(localization);
+    for (const auto mode : {quader::QuaderSelectionMode::Object,
+                            quader::QuaderSelectionMode::Vertex,
+                            quader::QuaderSelectionMode::Edge,
+                            quader::QuaderSelectionMode::Face,
+                            quader::QuaderSelectionMode::Group}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+      ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
+      if (mode == quader::QuaderSelectionMode::Vertex || mode == quader::QuaderSelectionMode::Edge ||
+          mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_object(first.value()).ok());
+        ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+        ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+        ASSERT_TRUE(editor.selection().clear().ok());
+        if (mode == quader::QuaderSelectionMode::Vertex) {
+          ASSERT_TRUE(editor.selection().select_vertices(first.value(), {1, 2, 3}).ok());
+        } else if (mode == quader::QuaderSelectionMode::Edge) {
+          ASSERT_TRUE(editor.selection().select_edge(first.value(), 1, 2).ok());
+        } else {
+          ASSERT_TRUE(editor.selection().select_face(first.value(), 1).ok());
+        }
+      } else {
+        ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      }
+      native_menu.refresh();
+      toolbar.synchronize(editor, editor.selection().summary(), true);
+      bool inspected = false;
+      EXPECT_FALSE(show_and_interact(owner, editor, input_router, localization, [&](QWidget &popup) {
+        inspected = true;
+        int compared_menu_actions = 0;
+        int compared_toolbar_actions = 0;
+        for (const auto *action : popup.findChildren<QAction *>()) {
+          if (action->isSeparator() || action->menu() != nullptr) continue;
+          const QString id = action->objectName();
+          const bool shared_edit = id == QStringLiteral("edit.create_instance") ||
+              id == QStringLiteral("edit.flatten_instance") || id == QStringLiteral("edit.group") ||
+              id == QStringLiteral("edit.ungroup") || id == QStringLiteral("edit.parent_to_active") ||
+              id == QStringLiteral("edit.unparent");
+          if (!id.startsWith(QStringLiteral("modeling.")) &&
+              !id.startsWith(QStringLiteral("tools.activate.")) && !shared_edit) continue;
+          QString menu_id = id;
+          if (id == QStringLiteral("modeling.merge_vertices_to_active")) {
+            menu_id = QStringLiteral("modeling.merge_vertices");
+          } else if (id == QStringLiteral("modeling.merge_vertices_to_center")) {
+            menu_id = QStringLiteral("modeling.merge_vertices_at_center");
+          }
+          for (const auto *native_action : menu_bar.findChildren<QAction *>()) {
+            if (native_action->property("quaderCommandId").toString() != menu_id) continue;
+            EXPECT_EQ(action->text(), visible_label(native_action->text())) << id.toStdString();
+            ++compared_menu_actions;
+          }
+          if (id.startsWith(QStringLiteral("tools.activate."))) {
+            const QString tool_id = id.mid(QStringLiteral("tools.activate.").size());
+            const auto *tool = toolbar.findChild<QAction *>(QStringLiteral("tool_") + tool_id);
+            ASSERT_NE(tool, nullptr) << id.toStdString();
+            EXPECT_EQ(action->text(), visible_label(tool->text())) << id.toStdString();
+            ++compared_toolbar_actions;
+          }
+        }
+        EXPECT_GE(compared_menu_actions, 2);
+        if (mode == quader::QuaderSelectionMode::Edge) EXPECT_GE(compared_toolbar_actions, 1);
+        for (const auto &spec : quader::qt_modeling_operation_specs()) {
+          if (spec.mode != mode || spec.marking_slot < 0) continue;
+          const auto *action = popup.findChild<QAction *>(QString::fromUtf8(spec.command_id.string().data()));
+          ASSERT_NE(action, nullptr);
+          const auto *button = popup.findChild<QToolButton *>(
+              QStringLiteral("markingMenu.slot.%1").arg(spec.marking_slot));
+          ASSERT_NE(button, nullptr);
+          EXPECT_EQ(button->accessibleName(), action->text());
+        }
+        if (mode == quader::QuaderSelectionMode::Edge) {
+          const auto *disconnect = popup.findChild<QToolButton *>(QStringLiteral("markingMenu.slot.5"));
+          ASSERT_NE(disconnect, nullptr);
+          EXPECT_EQ(disconnect->accessibleName(), language == "it-IT"
+              ? QStringLiteral("Disconnetti spigolo") : QStringLiteral("Disconnect Edge"));
+          const auto *midpoint = popup.findChild<QAction *>(QStringLiteral("modeling.split_edges_midpoint"));
+          ASSERT_NE(midpoint, nullptr);
+          EXPECT_EQ(midpoint->text(), language == "it-IT"
+              ? QStringLiteral("Dividi spigolo") : QStringLiteral("Edge Split"));
+          auto *overflow = popup.findChild<QListWidget *>(QStringLiteral("markingMenu.overflow"));
+          ASSERT_NE(overflow, nullptr);
+          EXPECT_EQ(overflow->findItems(midpoint->text(), Qt::MatchExactly).size(), 1);
+          for (const auto *button : popup.findChildren<QToolButton *>()) {
+            EXPECT_NE(button->accessibleName(), midpoint->text());
+          }
+        }
+        capture_marking_widget(popup, QStringLiteral("marking-canonical-%1-mode-%2.png")
+            .arg(QString::fromUtf8(language.data(), static_cast<qsizetype>(language.size())))
+            .arg(static_cast<int>(mode)));
+        popup.close();
+      }));
+      EXPECT_TRUE(inspected);
+    }
+  }
 }
