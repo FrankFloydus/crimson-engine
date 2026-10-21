@@ -11,9 +11,12 @@ file except through prior written authorization from Francesco Di Blasi.
 - Render extraction, backend adapters, material/texture binding, overlays, and viewport drawing
   belong here. Scene, assets, and modeling remain authoritative; render caches never mutate them.
 - App/UI consume `RenderHost`, `RenderSceneSink`, `RenderView` and opaque surface lifetimes.
-  `quader_render_common` owns CPU extraction and semantic overlay builders. Full's
-  `quader_render_full_host` composes Filament `RenderSystem`; the Public 0.1 composition
-  is `quader_render_crimson_host`. Keep exactly one `create_app_render_host()` implementation
+  `quader_render_common` owns CPU extraction and semantic overlay builders. On `main`,
+  `quader_render_full_host` composes Filament `RenderSystem` for Full and Public 0.1.
+  On `quader-crimson`, Full keeps Filament and Public uses `quader_render_crimson_host`.
+  Both branches retain shared application and semantic overlay changes. The Crimson
+  dependency and optional probes remain available on `main`, outside its Public link closure.
+  Keep exactly one `create_app_render_host()` implementation
   in each editor executable. Backend choice belongs to final target composition, outside the shared
   runtime and product interaction paths. See the [Crimson integration contract](../../thirdparty/crimson/README.md)
   for dependency identity and the canonical `Crimson::Renderer` supplied by the
@@ -25,8 +28,9 @@ file except through prior written authorization from Francesco Di Blasi.
   normal, sampling/chart transforms and identity; material/raster incompatibility and transparent
   ordering retain their explicit paths. Camera culling reuses the retained population. An unchanged
   scene uploads no instance records; placement edits update dirty records without rebuilding meshes.
-  Product scene-instancing availability remains owned by the release catalog. The actual Public
-  executable's `--crimson-instancing-test-output=<absolute-directory>` diagnostic exercises the
+  Product scene-instancing availability remains owned by the release catalog. On
+  `quader-crimson`, the Public executable's
+  `--crimson-instancing-test-output=<absolute-directory>` diagnostic exercises the
   production host with 100,000 shared cubes, upload/draw counters and pixel comparisons through
   [the Qt composition probe](../ui/qt_crimson_instancing_probe.cpp).
 - One host coordinates all panes for a Qt root/device generation. Crimson preflights the complete

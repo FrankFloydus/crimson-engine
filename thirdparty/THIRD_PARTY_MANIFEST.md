@@ -15,7 +15,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
 | Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `aab101b4c038da83f71a16accb8279516a0247b9` (upstream version label `1.76.1`), source SHA-256 `7c464ef115a048ab77eb8e1898f1f79721a21b8364a4fda3e44a7e0e5f447c68`, Quader patch `quader-vsync9` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, retained swapchain presentation lifetimes, optional Windows presentation scaling, unclipped presentable images, shifted AO reconstruction, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
-| Crimson Renderer | https://github.com/qvertexworks/crimson-renderer | Recorded Git submodule commit at `thirdparty/crimson-renderer`, with `renderer-manifest.json` | Proprietary first-party renderer, used under the author's authorization; bundled dependency notices remain separate. | Canonical renderer shared with Crimson Engine; Public uses its borrowed Vulkan modeling recipe. |
+| Crimson Renderer | https://github.com/qvertexworks/crimson-renderer | Recorded Git submodule commit at `thirdparty/crimson-renderer`, with `renderer-manifest.json` | Proprietary first-party renderer, used under the author's authorization; bundled dependency notices remain separate. | Canonical renderer shared with Crimson Engine; Public on `quader-crimson` uses its borrowed Vulkan modeling recipe. The dependency and optional composition probes remain available on `main`. |
 | bgfx | https://github.com/bkaradzic/bgfx.cmake | Pinned `1.129.8940-496` archive and maintained overlay port revision `14` in the renderer submodule, see `crimson/README.md` | BSD-2-Clause, see `licenses/bgfx-BSD-2-Clause.txt` | Canonical renderer device, resource, pass and native composition mechanisms. |
 | meshoptimizer | https://github.com/zeux/meshoptimizer | Native vcpkg `1.1`, upstream tag `v1.1`, at the existing manifest baseline | MIT, exact installed notice in `licenses/meshoptimizer-MIT.txt` | Canonical renderer support for mesh detail preparation and content identity. |
 | bx and bimg | https://github.com/bkaradzic/bgfx.cmake | Bundled in the same pinned bgfx archive | BSD-2-Clause, see `licenses/bx-BSD-2-Clause.txt` and `licenses/bimg-BSD-2-Clause.txt` | bgfx platform utilities and image support. |
@@ -39,8 +39,10 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 
 ## Qt Vulkan Source Policy
 
-The Public editor consumes the pinned canonical Crimson Renderer submodule;
-the Full editor retains Filament. The native preset selects the renderer's
+On `main`, Full and Public both use Filament. The `quader-crimson` branch keeps
+Full on Filament and Public on the pinned canonical Crimson Renderer submodule.
+The submodule and optional composition probes remain available on `main`, but its
+Public executable does not link the Crimson host. The native preset selects the renderer's
 maintained bgfx overlay, with package/source provenance checked at configure time.
 The portable SDK does not consume these native feature dependencies. See
 [the integration and dependency contract](crimson/README.md) for source identity,

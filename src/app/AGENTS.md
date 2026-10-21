@@ -11,8 +11,12 @@ file except through prior written authorization from Francesco Di Blasi.
 - `App` composes services and owns startup/shutdown, persisted top-level placement, and frame flow.
   Domain behavior remains in its owner; `UISystem` constructs/composes the retained `QMainWindow`.
 - App/UI use the neutral `RenderHost`, `RenderSceneSink` and `RenderView` facades. Each final
-  executable links one `create_app_render_host()` implementation: `quader_render_full_host`
-  supplies Full's Filament host; `quader_render_crimson_host` supplies the Public 0.1 host.
+  executable links one `create_app_render_host()` implementation. On `main`,
+  `quader_render_full_host` supplies Filament for both Full and Public 0.1. On
+  `quader-crimson`, Full keeps that host and Public uses `quader_render_crimson_host`.
+  Preserve shared application changes in both branches without carrying over the other
+  branch's renderer composition. The Crimson dependency and probes remain available on
+  `main`; they are outside its Public executable's link closure.
   Do not select a backend in the shared runtime or duplicate renderer/resource owners per pane.
   Current activation and dependency requirements live in the
   [Crimson integration contract](../../thirdparty/crimson/README.md).

@@ -1,11 +1,19 @@
 # Shared Crimson renderer integration
 
-The public 0.1 editor and Crimson Engine consume the canonical
-[Crimson Renderer repository](https://github.com/qvertexworks/crimson-renderer).
-Quader pins it at `thirdparty/crimson-renderer`; Engine pins the same commit at
-`third_party/crimson-renderer`. The Full editor retains Filament. Each Quader
-executable supplies its renderer through the same application interfaces; the
-optional composition probes verify the two implementations.
+Quader maintains two application branches. On `main`, Full and Public 0.1 use
+Filament. On `quader-crimson`, Full retains Filament and Public 0.1 consumes the
+canonical [Crimson Renderer repository](https://github.com/qvertexworks/crimson-renderer),
+shared with Crimson Engine. Both branches retain the shared modeling, input,
+scene, UI and overlay changes; renderer selection belongs to each executable's
+final target composition.
+
+Quader retains the renderer submodule at `thirdparty/crimson-renderer`, including
+on `main`, where its adapter and optional composition probes remain available
+without entering the Public executable's link closure. Engine pins the shared
+renderer at `third_party/crimson-renderer`. Each Quader executable supplies its
+renderer through the same application interfaces; the optional composition probes
+verify the two implementations. Publish shared renderer changes to its own
+repository's `main`, then update consumer pins explicitly.
 
 `QUADER_CRIMSON_SOURCE_DIR` defaults to the submodule root, which exports
 `Crimson::Renderer`. It has no source dependency on an Engine checkout. Native
@@ -48,9 +56,11 @@ must be retired after all rendering and copy use, before the borrowed Qt device.
 
 Quader retains documents, modeling, assets, semantic overlays, exact selection,
 tools, history, and release policy. Immutable extraction data is translated
-to neutral Crimson descriptors at `src/render/crimson`. Full remains on Filament;
-the Public host links `quader_render_crimson_host`. A clear-image integration probe
-alone does not establish modeling-editor parity.
+to neutral Crimson descriptors at `src/render/crimson`. Full remains on Filament
+in both application branches. On `main`, Public also links the Filament
+`quader_render_full_host`; on `quader-crimson`, Public links
+`quader_render_crimson_host`. A clear-image integration probe alone does not
+establish modeling-editor parity.
 
 `quader_render_common` contains CPU extraction and overlay builders. The shared
 application, UI and editor API consume `RenderHost`, `RenderSceneSink` and
@@ -65,11 +75,13 @@ recipe retains its editor display contracts. The canonical library owns their
 common device, GPU resources, target, frame and retirement mechanisms. Host
 adapters retain SDL/Qt/ImGui, application scenes, asset catalogs and history.
 
-The Public host requires Qt's Vulkan composition path. Legacy OpenGL launch
-selectors apply to the Full host. Its public-profile test executable selects the
-Crimson factory too; an explicit Full renderer link remains there only for the
-existing concrete helper fixtures. The shipping Public link closure excludes
-the Full host, Full renderer and Filament SDK.
+The Crimson Public host on `quader-crimson` requires Qt's Vulkan composition path.
+Legacy OpenGL launch selectors apply to Filament hosts. The public-profile test
+executable selects the same branch-specific factory as Public: Filament on `main`,
+Crimson on `quader-crimson`. On the Crimson branch, an explicit Full renderer link
+remains in that test executable for concrete helper fixtures; the shipping Public
+link closure excludes the Full host, Full renderer and Filament SDK. On `main`,
+Public links those Filament owners and excludes the Crimson host and renderer.
 
 All visible panes preflight their scene/editor generations, resources and pass
 reservations before any pane records commands. A rejected scene translation or

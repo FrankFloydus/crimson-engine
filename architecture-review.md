@@ -112,9 +112,12 @@ Qt root/device. Retained UI must abandon expired owners during project/scene rep
 see [UI lifetime rules](src/ui/AGENTS.md).
 
 Application, UI and editor APIs consume `RenderHost`, `RenderSceneSink` and `RenderView`.
-Each app executable links exactly one `create_app_render_host()` composition: Full uses
-`quader_render_full_host` and Filament; the Public 0.1 composition is
-`quader_render_crimson_host`, adapting to the canonical external `Crimson::Renderer`.
+Each app executable links exactly one `create_app_render_host()` composition. On `main`,
+Full and Public 0.1 both use `quader_render_full_host` and Filament. The `quader-crimson`
+branch keeps Full on Filament and composes Public 0.1 with `quader_render_crimson_host`,
+adapting to the canonical external `Crimson::Renderer`. Both branches retain the shared
+modeling, input, scene, UI and overlay changes. Keep renderer selection in final target
+composition when carrying shared application changes between them.
 The shared runtime does not select backends or own a second renderer implementation.
 Activation, dependency provenance and GPU gate status belong in the
 [Crimson integration contract](thirdparty/crimson/README.md).
@@ -143,7 +146,9 @@ Crimson owns its reusable GPU mechanisms in the pinned
 `qvertexworks/crimson-renderer`, shared with Crimson Engine. Native configuration
 checks that checkout against the recorded gitlink and verifies the installed bgfx
 package against the canonical manifest and overlay hashes. Its dependency overlay
-is selected by the native preset; portable SDK builds do not consume renderer
+is selected by the native preset. The dependency and optional Crimson composition probes
+remain available on `main`, but its Public executable does not link the Crimson host.
+Portable SDK builds do not consume renderer
 sources or native dependency features. Consumers never mutate
 modeling/scene/assets. Snapshot and GPU-upload payload lifetimes must be explicit.
 
