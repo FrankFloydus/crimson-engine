@@ -1511,7 +1511,10 @@ TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
   const std::string review = read_source_file("architecture-review.md");
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string modeling = read_source_file("cmake/QuaderModeling.cmake");
-  const std::string build_files = root_c_make + "\n" + modeling;
+  const std::string crimson_composition =
+      read_source_file("cmake/QuaderCrimsonComposition.cmake");
+  const std::string build_files =
+      root_c_make + "\n" + modeling + "\n" + crimson_composition;
 
   const std::regex target_pattern(R"(`(quader_[a-z0-9_]+)`)");
   for (std::sregex_iterator it(review.begin(), review.end(), target_pattern), end;

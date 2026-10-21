@@ -32,7 +32,7 @@ file except through prior written authorization from Francesco Di Blasi.
   `quader-crimson`, the Public executable's
   `--crimson-instancing-test-output=<absolute-directory>` diagnostic exercises the
   production host with 100,000 shared cubes, upload/draw counters and pixel comparisons through
-  [the Qt composition probe](../ui/qt_crimson_instancing_probe.cpp).
+  [the Qt composition probe on `quader-crimson`](https://github.com/qvertexworks/quader-native/blob/quader-crimson/src/ui/qt_crimson_instancing_probe.cpp).
 - One host coordinates all panes for a Qt root/device generation. Crimson preflights the complete
   pane set, including scene/editor generation agreement, resource validation, pass reservations
   and palette capacity, before recording any pane. Publish all target candidates, accepted scene,
