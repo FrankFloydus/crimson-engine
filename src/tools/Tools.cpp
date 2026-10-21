@@ -177,6 +177,8 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     static ImGuiTextFilter filter;
     sectionTitle("ENVIRONMENT");
     changed |= ImGui::Checkbox("Environment lighting##environment", &environment.enabled);
+    changed |= ImGui::Checkbox("Specular AA",&environment.specularAA);
+    help("Reduce sparkling specular highlights from undersampled surface normals.");
     ImGui::TextUnformatted("Environment image");
     changed |= assetSlot(assets, "Environment image", "Equirectangular panorama. HDR is linear radiance; PNG/JPEG/TGA/BMP are sRGB.",
         environment.map, filter, true, "Built-in studio",

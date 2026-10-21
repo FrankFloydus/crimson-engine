@@ -50,7 +50,7 @@ void exerciseGrazingBrdf(const ShaderCompileConfig& config,Tick&& tick,std::vect
     const auto fileText=[](const std::filesystem::path& path){std::ifstream input(path,std::ios::binary);check(bool(input),"Cannot read BRDF production shader: "+path.string());std::ostringstream text;text<<input.rdbuf();return text.str();};
     const auto varying=config.sourceDirectory/"varying.def.sc";
     ShaderCompileRecipe vertexRecipe;vertexRecipe.name="vs_grazing_brdf_probe";vertexRecipe.stage=ShaderStage::Vertex;
-    vertexRecipe.varyingDefinition=varying;vertexRecipe.includeDirectories={config.sourceDirectory};vertexRecipe.contract="grazing-brdf-probe-v1";
+    vertexRecipe.varyingDefinition=varying;vertexRecipe.includeDirectories={config.sourceDirectory};vertexRecipe.contract="grazing-brdf-probe-v2";
     vertexRecipe.source="$input a_position\n#include <bgfx_shader.sh>\nvoid main(){gl_Position=vec4(a_position,1.0);}\n";
     const auto vertex=compileShader(config,vertexRecipe);
     Uniform probe{bgfx::createUniform("u_brdfProbe",bgfx::UniformType::Vec4)};
@@ -64,12 +64,12 @@ void exerciseGrazingBrdf(const ShaderCompileConfig& config,Tick&& tick,std::vect
     // The caller owns destinations until after Renderer shutdown, including
     // the exceptional path if a bounded read cannot be drained.
     for(bool sphere:{false,true}) {
-        const auto source=fileText(config.sourceDirectory/(sphere?"fs_pbr.sc":"model_lighting.sh"));
-        const auto begin=source.find("vec3 integratedSpecularResponse(");
-        const auto end=sphere?source.find("void main()",begin):source.size();
-        check(begin!=std::string::npos&&end!=std::string::npos&&end>begin,"BRDF production helper range is missing.");
+        // Both embedded surface families include this single production BRDF.
+        // The sphere must not reintroduce a separately maintained copy.
+        const auto surface=fileText(config.sourceDirectory/(sphere?"fs_pbr.sc":"fs_model.sc"));
+        check(surface.find("#include \"model_lighting.sh\"")!=std::string::npos,"Surface is disconnected from the shared production BRDF.");
         ShaderCompileRecipe fragmentRecipe;fragmentRecipe.name=sphere?"fs_sphere_grazing_brdf_probe":"fs_model_grazing_brdf_probe";
-        fragmentRecipe.varyingDefinition=varying;fragmentRecipe.includeDirectories={config.sourceDirectory};fragmentRecipe.contract="grazing-brdf-probe-v1";
+        fragmentRecipe.varyingDefinition=varying;fragmentRecipe.includeDirectories={config.sourceDirectory};fragmentRecipe.contract="grazing-brdf-probe-v2";
         std::string giResponse;
         if(!sphere) {
             const auto giSource=fileText(config.sourceDirectory/"ssgi_material.sh");
@@ -79,19 +79,21 @@ void exerciseGrazingBrdf(const ShaderCompileConfig& config,Tick&& tick,std::vect
         }
         // Fix external IBL inputs to a known LUT and unit diffuse irradiance;
         // evaluateEnvironment itself and its energy split remain production code.
-        fragmentRecipe.source="#include <bgfx_shader.sh>\n#include \"point_light.sh\"\nCONST(float PI=3.141592653589793);\nuniform vec4 u_brdfProbe;\n"
-            "#define u_environment vec4_splat(0.0)\n#define u_ambientLight vec4_splat(1.0)\n#define u_roughness vec4(1.0,0.0,0.5,0.0)\n"
+        fragmentRecipe.source="#include <bgfx_shader.sh>\n#include \"point_light.sh\"\nuniform vec4 u_brdfProbe;\n"
+            "#define CC_ENVIRONMENT_AMBIENT_SH 1\n#define u_environment vec4_splat(0.0)\n#define u_ambientLight vec4_splat(1.0)\n"
             "#undef textureCube\n#define textureCube(s,uv) vec4_splat(1.0)\n#undef textureCubeLod\n#define textureCubeLod(s,uv,lod) vec4_splat(0.0)\n"
-            "vec2 forwardPlusBrdf(vec2 uv){return vec2(0.4,0.2);}\nvec3 environmentDirection(vec3 d){return d;}\nvec3 environmentAmbientIrradiance(vec3 value){return value;}\n"+
-            source.substr(begin,end-begin)+giResponse+
+            "vec2 forwardPlusBrdf(vec2 uv){return vec2(0.4,0.2);}\nvec3 environmentAmbientIrradiance(vec3 value){return value;}\n"
+            "#include \"model_lighting.sh\"\n"+giResponse+
             "\nvoid main(){vec3 N=vec3(0.0,0.0,1.0);vec3 V=vec3(sqrt(max(1.0-u_brdfProbe.x*u_brdfProbe.x,0.0)),0.0,u_brdfProbe.x);"
-            "if(u_brdfProbe.z>0.5){vec3 base=vec3(0.2,0.5,0.8);float metallic=u_brdfProbe.w;"+
-            (sphere?std::string("vec3 ambient=evaluateEnvironment(N,V,base,metallic,1.0);float gi=ambient.y*0.6;"):
-                std::string("vec3 ambient=evaluateEnvironment(N,V,base,metallic,1.0,0.5);float gi=ssgiDiffuseResponse(N,V,base,metallic,1.0,0.5,0.6).y;"))+
+            "if(u_brdfProbe.z>0.5){vec3 base=vec3(0.2,0.5,0.8);float metallic=u_brdfProbe.w;LightingEnergy energy=lightingEnergy(N,V,base,metallic,1.0,0.5);"
+            "vec3 ambient=evaluateEnvironment(N,V,1.0,energy,N,1.0);"+
+            (sphere?std::string("float gi=ambient.y*0.6;"):
+                std::string("float gi=ssgiDiffuseResponse(energy,0.6).y;"))+
             "gl_FragColor=vec4(ambient,gi);return;}"
             "vec3 L=vec3(sqrt(max(1.0-u_brdfProbe.y*u_brdfProbe.y,0.0)),0.0,u_brdfProbe.y);"
-            "vec3 result=evaluateLightResponse(N,V,L,vec3_splat(1.0),vec3_splat(0.5),0.0,1.0,0.0,1.0,0.0);"+
-            (sphere?std::string("float donor=result.x;"):std::string("float donor=evaluateLightDiffuse(N,V,L,vec3_splat(1.0),vec3_splat(0.5),0.0,0.0).x;"))+
+            "LightingEnergy energy=lightingEnergy(N,V,vec3_splat(0.5),0.0,1.0,0.0);"
+            "vec3 result=evaluateLightResponse(N,V,L,vec3_splat(1.0),vec3_splat(0.5),0.0,1.0,0.0,energy,1.0,0.0);"+
+            (sphere?std::string("float donor=result.x;"):std::string("float donor=evaluateLightDiffuse(N,L,vec3_splat(1.0),energy).x;"))+
             "gl_FragColor=vec4(result.x,donor,result.y,result.z);}\n";
         const auto fragment=compileShader(config,fragmentRecipe);
         const auto vs=bgfx::createShader(bgfx::copy(vertex.bytes.data(),static_cast<std::uint32_t>(vertex.bytes.size())));
@@ -114,7 +116,7 @@ void exerciseGrazingBrdf(const ShaderCompileConfig& config,Tick&& tick,std::vect
         };
         for(float noL:{1.f,0.f,-1.f})for(float noV:{-.2f,-.000001f,0.f,.000001f,.2f}) {
             const auto pixels=capture({noV,noL,0,0});
-            const double expected=noL<=0?0:.5/std::numbers::pi*(1-std::pow(1-std::sqrt((1+double(noV))*.5),5));
+            const double expected=noL<=0?0:.8*.5/std::numbers::pi*double(noL);
             for(const auto& pixel:*pixels)for(unsigned channel=0;channel<4;++channel)
                 check(std::isfinite(pixel[channel])&&std::abs(double(pixel[channel])-expected)<.000002,
                     std::string(sphere?"Sphere":"Model/GI donor")+" BRDF lost continuous illumination across N.V=0: NoV="+std::to_string(noV)+
@@ -125,7 +127,8 @@ void exerciseGrazingBrdf(const ShaderCompileConfig& config,Tick&& tick,std::vect
             constexpr std::array<double,3> base{.2,.5,.8};std::array<double,4> expected{};
             for(unsigned channel=0;channel<3;++channel) {
                 const double f0=.04*(1-double(metallic))+base[channel]*double(metallic);
-                expected[channel]=(1-(f0*.4+.2))*(1-double(metallic))*base[channel];
+                const double compensation=1+f0*(1/.6-1);
+                expected[channel]=(1-(f0*.4+.2)*compensation)*(1-double(metallic))*base[channel];
             }
             expected[3]=expected[1]*.6;
             for(const auto& pixel:*pixels)for(unsigned channel=0;channel<4;++channel)
@@ -1269,8 +1272,29 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     bindings[0].handles[3]=BGFX_INVALID_HANDLE;bindings[0].handles[4]=color.handle;material.emissive={1,1,1};settings.environment.enabled=false;
     reset();expect(position,0,"Emissive map did not use the standard transformed domain.");material.uvOffset[0]=.5f;expect(position,1,"Emissive map ignored the shared offset.");
     bindings[0].handles[4]=BGFX_INVALID_HANDLE;material.emissive={};scene.directionalLights=lights;material.metallic=1;bindings[0].handles[1]=data.handle;
-    reset();const auto packedA=sample(capture(),settings.camera,position);material.uvOffset[0]=.5f;const auto packedB=sample(capture(),settings.camera,position);
-    check(difference(packedA,packedB)>30,"Packed metallic/roughness map ignored the shared offset.");
+    const auto packedDebugView=renderer.debugView(RenderViewPurpose::Game);
+    for(const auto mode:{RenderDebugView::Lit,RenderDebugView::Roughness,RenderDebugView::Metal}) {
+        renderer.setDebugView(RenderViewPurpose::Game,mode);
+        reset();material.metallic=1;material.roughness=1;bindings[0].handles[1]=data.handle;
+        const auto packedA=sample(capture(),settings.camera,position);
+        material.uvOffset[0]=.5f;const auto packedB=sample(capture(),settings.camera,position);
+        // Mapping must select the same physical material as the corresponding
+        // scalar values. Their Lit brightnesses need not differ: compensated
+        // rough conductor and smooth dielectric responses can be similar.
+        bindings[0].handles[1]=BGFX_INVALID_HANDLE;material.metallic=0;material.roughness=0;
+        const auto scalarA=sample(capture(),settings.camera,position);
+        material.metallic=1;material.roughness=1;
+        const auto scalarB=sample(capture(),settings.camera,position);
+        const auto view=mode==RenderDebugView::Lit?"Lit":mode==RenderDebugView::Roughness?"Roughness":"Metal";
+        std::cerr<<"[material mapping] Packed MR "<<view<<": mapped "<<packedA[0]<<','<<packedA[1]<<','<<packedA[2]
+            <<" / "<<packedB[0]<<','<<packedB[1]<<','<<packedB[2]<<", scalar "<<scalarA[0]<<','<<scalarA[1]<<','<<scalarA[2]
+            <<" / "<<scalarB[0]<<','<<scalarB[1]<<','<<scalarB[2]<<'\n'<<std::flush;
+        check(difference(packedA,scalarA)<=3,std::string("Packed map black texel disagrees with scalar roughness/metal zero in ")+view+" view.");
+        check(difference(packedB,scalarB)<=3,std::string("Packed map offset texel disagrees with scalar roughness/metal one in ")+view+" view.");
+        if(mode!=RenderDebugView::Lit)
+            check(difference(packedA,packedB)>100,std::string("Packed map offset did not select distinct ")+view+" endpoints.");
+    }
+    renderer.setDebugView(RenderViewPurpose::Game,packedDebugView);bindings[0].handles[1]=data.handle;
     // Color and ID picking must agree on a transformed alpha silhouette.
     reset();bindings[0].handles.fill(BGFX_INVALID_HANDLE);material.metallic=0;instance.shading=MaterialShading::Unlit;
     constexpr std::array<std::uint8_t,8> alphaPixels{{255,255,255,0,255,255,255,255}};

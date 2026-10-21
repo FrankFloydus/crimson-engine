@@ -62,7 +62,7 @@ double variation(const DecodedImage& image) {
         total+=std::abs(int(image.rgba[offset])-int(image.rgba[offset+image.width*4]));++count;}
     return total/count;
 }
-void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& artifacts,bool closedCubeOnly) {
+void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& artifacts,bool closedCubeOnly,bool pbrQualityOnly) {
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     MaterialGraphPrograms programs(resources,config);TestGpuContext gpu;
     bgfx::reset(320,240,BGFX_RESET_NONE);renderer.resizeViewport(Width,Height);renderer.resizeGameViewport(Width,Height);renderer.setGridVisible(false);
@@ -168,6 +168,194 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     };
     const auto pair=[&](const char* off,const char* on){settings.environment.ssr.enabled=false;auto baseline=capture(off);
         settings.environment.ssr.enabled=true;return std::pair{std::move(baseline),capture(on)};};
+    if(!closedCubeOnly) {
+        // A low-radiance furnace stays below display clipping. White dielectric
+        // and white conductor endpoints must return unit total energy; this
+        // checks the coupled diffuse/specular equations through real draws.
+        const auto savedGraph=asset.graph;const auto savedSettings=settings;const auto savedInstances=instances;
+        const auto savedSceneInstances=scene.instances;
+        const auto savedDirectional=scene.directionalLights;
+        const auto savedBinding=mirrorBindings[0];const auto savedMaterials=mirrorMaterials;
+        const auto decode=[](std::uint8_t code){const double value=code/255.;
+            return value<=.04045?value/12.92:std::pow((value+.055)/1.055,2.4);};
+        const auto centerLinear=[&](const DecodedImage& image){std::array<double,3> result{};
+            for(int y=int(Height/2)-3;y<=int(Height/2)+3;++y)for(int x=int(Width/2)-3;x<=int(Width/2)+3;++x)
+                for(unsigned c=0;c<3;++c)result[c]+=decode(image.rgba[(std::size_t(y)*Width+std::size_t(x))*4+c])/49.;
+            return result;};
+        const auto furnace=[&](const DecodedImage& image,const std::string& label){const auto value=centerLinear(image);
+            for(const double channel:value)check(std::abs(channel-.2)<.008,label+": white furnace lost/gained energy: "+std::to_string(channel));};
+        settings.environment.ssgi.enabled=settings.environment.ssao.enabled=settings.environment.ssr.enabled=settings.environment.glow.enabled=false;
+        settings.environment.fog.enabled=false;settings.environment.specularAA=false;
+        settings.environment.ambientLight.source=AmbientLightSource::Sky;settings.environment.ambientLight.energy=1;
+        settings.environment.ambientLight.skyContribution=1;settings.environment.intensity=1;settings.exposure=1;
+        settings.camera.position={0,0,3};settings.camera.target={};settings.camera.up={0,1,0};
+        scene.instances=std::span(&mirror,1);scene.directionalLights={};
+        mirror.model={flat,math::scaling({3,3,3})};
+        output().baseColor={1,1,1};output().occlusion=1;output().blend=MaterialBlend::Opaque;
+        for(const bool generated:{false,true})for(const float metallic:{0.f,1.f})for(const float roughness:{.045f,.25f,.5f,.75f,1.f})for(const bool grazing:{false,true}) {
+            settings.camera.position=grazing?Vec3{2.985f,0,.3f}:Vec3{0,0,3};
+            output().metallic=metallic;output().roughness=roughness;
+            mirrorMaterials[0].baseColor={1,1,1,1};mirrorMaterials[0].metallic=metallic;mirrorMaterials[0].roughness=roughness;
+            mirrorMaterials[0].doubleSided=true;
+            mirrorBindings[0].graph=generated?prepare():std::shared_ptr<const PreparedGraphMaterial>{};
+            const auto label=std::string("pbr-furnace-")+(generated?"graph":"fixed")+"-metal-"+std::to_string(metallic)+
+                "-rough-"+std::to_string(roughness)+(grazing?"-grazing":"-normal");
+            furnace(capture(label.c_str()),label);
+        }
+        // Transparent endpoint energy must use precisely the same integrated
+        // reflected budget as the surface. Intermediate metallic absorbs under
+        // the standard workflow, but changing Transmission cannot add energy.
+        settings.environment.background.show=true;output().blend=MaterialBlend::Alpha;output().refraction=true;
+        output().thickness=0;output().attenuationColor={1,1,1};
+        for(const bool grazing:{false,true})for(const float metallic:{0.f,.5f,1.f})for(const float roughness:{.045f,.55f,1.f})for(const float ior:{1.f,1.5f}) {
+            settings.camera.position=grazing?Vec3{2.985f,0,.3f}:Vec3{0,0,3};
+            output().metallic=metallic;output().roughness=roughness;output().ior=ior;
+            std::array<double,3> first{};
+            for(const float transmission:{0.f,1.f}) {
+                output().transmission=transmission;mirrorBindings[0].graph=prepare();
+                const auto label="pbr-glass-furnace-metal-"+std::to_string(metallic)+"-rough-"+std::to_string(roughness)+
+                    "-ior-"+std::to_string(ior)+"-transmission-"+std::to_string(transmission)+(grazing?"-grazing":"-normal");
+                const auto image=capture(label.c_str());const auto value=centerLinear(image);
+                if(metallic==0||metallic==1)furnace(image,label);
+                for(unsigned c=0;c<3;++c) {
+                    check(value[c]>=0&&value[c]<=.208,label+": intermediate metallic glass created furnace energy.");
+                    if(transmission==0)first[c]=value[c];
+                    else check(std::abs(value[c]-first[c])<.008,label+": changing Transmission changed the white furnace budget.");
+                }
+            }
+        }
+        {
+            // At native 720p an accidental .045 transmission floor selects a
+            // blurred source mip. The small ordinary fixture cannot resolve
+            // that error, so keep this sharp optical limit explicit.
+            constexpr std::uint16_t clearWidth=1280,clearHeight=720;
+            std::array<std::uint8_t,2048*2*4> bars{};
+            for(unsigned y=0;y<2;++y)for(unsigned x=0;x<2048;++x) {
+                const auto p=(y*2048+x)*4;const auto value=std::uint8_t(x&1?150:13);
+                bars[p]=bars[p+1]=bars[p+2]=value;bars[p+3]=255;
+            }
+            Texture barTexture{bgfx::createTexture2D(2048,2,false,1,bgfx::TextureFormat::RGBA8,0,
+                bgfx::copy(bars.data(),std::uint32_t(bars.size())))};
+            check(bgfx::isValid(barTexture.handle),"Clear transmission source allocation failed.");
+            std::vector<ModelMaterial> barMaterials(1);std::vector<ModelMaterialTextures> barBindings(1);
+            barMaterials[0].baseColor={1,1,1,1};barMaterials[0].metallic=0;
+            barBindings[0].handles[0]=barTexture.handle;
+            barBindings[0].flags[0]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+            RenderModelInstance background;background.entityId=0x504252434c454152;
+            background.model={flat,math::translation({0,0,-20})*math::scaling({30,30,1})};
+            background.materials=&barMaterials;background.textures=&barBindings;
+            background.shading=MaterialShading::Unlit;background.forceFullDetail=true;
+            settings.camera.position={0,0,3};settings.environment.background.show=false;settings.environment.specularAA=false;
+            output().metallic=0;output().roughness=0;output().ior=1.5f;output().transmission=1;output().thickness=0;
+            mirrorBindings[0].graph=prepare();
+            std::array clarityInstances{background,mirror};
+            renderer.resizeGameViewport(clearWidth,clearHeight);scene.instances=std::span(clarityInstances.data(),1);
+            const auto captureClarity=[&](const char* name) {
+                renderer.renderGame(scene);check(renderer.refractionStatus().empty(),renderer.refractionStatus());
+                const auto image=read(renderer.gameViewportTexture(),clearWidth,clearHeight);
+                check(lodepng::encode((artifacts/(std::string(name)+".png")).string(),image.rgba,image.width,image.height)==0,
+                    "Clear transmission PNG write failed.");return image;
+            };
+            const auto sharpSource=captureClarity("pbr-clear-glass-source");
+            scene.instances=clarityInstances;const auto clearOff=captureClarity("pbr-clear-glass-aa-off");
+            settings.environment.specularAA=true;const auto clearOn=captureClarity("pbr-clear-glass-aa-on");
+            double sumX{},sumY{},sumXX{},sumXY{},aaDifference{};unsigned count{};
+            for(unsigned y=clearHeight*2/5;y<clearHeight*3/5;++y)for(unsigned x=clearWidth*2/5;x<clearWidth*3/5;++x) {
+                const auto p=(std::size_t(y)*clearWidth+x)*4;
+                const double a=decode(sharpSource.rgba[p]),b=decode(clearOff.rgba[p]);
+                sumX+=a;sumY+=b;sumXX+=a*a;sumXY+=a*b;++count;
+                aaDifference+=std::abs(int(clearOff.rgba[p])-int(clearOn.rgba[p]));
+            }
+            const double variance=sumXX/count-std::pow(sumX/count,2);
+            check(variance>.02,"Clear transmission reference did not resolve its high-frequency source.");
+            const double transfer=(sumXY/count-(sumX/count)*(sumY/count))/variance;
+            std::cout<<"Clear r0 glass native contrast transfer="<<transfer<<", flat AA difference="<<aaDifference/count<<" codes\n";
+            check(transfer>.9&&transfer<1.01,"Zero-roughness glass blurred its source or amplified contrast.");
+            check(aaDifference/count<.5,"Specular AA blurred constant-normal zero-roughness transmission.");
+            renderer.resizeGameViewport(Width,Height);scene.instances=std::span(&mirror,1);
+        }
+        settings.camera.position={0,0,3};settings.environment.background.show=false;
+        output().refraction=false;output().blend=MaterialBlend::Opaque;output().metallic=1;output().roughness=.045f;output().occlusion=1;
+        mirrorBindings[0].graph=prepare();settings.environment.specularAA=false;const auto flatOff=capture("pbr-aa-flat-off");
+        settings.environment.specularAA=true;const auto flatOn=capture("pbr-aa-flat-on");
+        check(difference(flatOff,flatOn)<.5,"Specular AA changed constant-normal geometry.");
+        const auto normalId=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D).id;
+        auto* normalNode=findMaterialNode(asset.graph,normalId);normalNode->texture.role=MaterialTextureRole::Normal;
+        normalNode->texture.image.id="assets/textures/pbr-normal-variance.png";
+        connectMaterialNodes(asset.graph,normalId,MaterialPin::Normal,outputId,MaterialPin::Normal);
+        std::vector<std::uint8_t> normalPixels(512*512*4);
+        for(unsigned y=0;y<512;++y)for(unsigned x=0;x<512;++x) {
+            const float phase=float(x+y)*std::numbers::pi_v<float>/4;
+            const auto p=(std::size_t(y)*512+x)*4;
+            normalPixels[p]=std::uint8_t(std::lround(127.5f+44.5f*std::sin(phase)));
+            normalPixels[p+1]=std::uint8_t(std::lround(127.5f+44.5f*std::cos(phase)));
+            normalPixels[p+2]=247;normalPixels[p+3]=255;
+        }
+        Texture varianceNormal{bgfx::createTexture2D(512,512,false,1,bgfx::TextureFormat::RGBA8,0,
+            bgfx::copy(normalPixels.data(),std::uint32_t(normalPixels.size())))};
+        check(bgfx::isValid(varianceNormal.handle),"PBR normal variance allocation failed.");
+        mirrorBindings[0].graph=prepare(varianceNormal.handle);
+        furnace(capture("pbr-aa-mapped-furnace"),"Mapped normal AA furnace");
+        settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+        DirectionalLight glint;glint.direction={0,-.655f,-.755f};glint.color={1,1,1};glint.intensity=.002f;
+        scene.directionalLights=std::span(&glint,1);settings.environment.specularAA=false;const auto aliased=capture("pbr-aa-mapped-direct-off");
+        settings.environment.specularAA=true;const auto filtered=capture("pbr-aa-mapped-direct-on");
+        const auto glintMetrics=[&](const DecodedImage& image){double peak{},variation{};unsigned count{};
+            for(unsigned y=Height/3;y<Height*2/3-1;++y)for(unsigned x=Width/3;x<Width*2/3-1;++x) {
+                const auto p=(std::size_t(y)*Width+x)*4;const double value=decode(image.rgba[p]);peak=std::max(peak,value);
+                variation+=std::abs(value-decode(image.rgba[p+4]))+std::abs(value-decode(image.rgba[p+Width*4]));++count;
+            }
+            return std::array<double,2>{peak,variation/count};};
+        const auto rawGlint=glintMetrics(aliased),smoothGlint=glintMetrics(filtered);
+        std::cout<<"PBR AA direct glints: peak "<<rawGlint[0]<<" -> "<<smoothGlint[0]<<", adjacent variation "<<rawGlint[1]<<" -> "<<smoothGlint[1]<<'\n';
+        check(rawGlint[0]>.05&&rawGlint[1]>.001,"PBR variance fixture produced no meaningful narrow specular glints.");
+        check(smoothGlint[0]<rawGlint[0]*.85&&smoothGlint[1]<rawGlint[1]*.85,
+            "Specular AA did not reduce high-variance normal-map glints.");
+        // Strong shading tilt puts the reflected lobe below the actual plane.
+        // Horizon attenuation is soft, with the exact central value 4*Nz^4.
+        asset.graph.links.clear();settings.environment.specularAA=false;settings.environment.enabled=true;
+        settings.environment.ambientLight.source=AmbientLightSource::Sky;scene.directionalLights={};
+        const auto tipped=plane("pbr-geometric-horizon-plane",{.9f,0,.4358899f});
+        check(renderer.prepareModel(*tipped),renderer.modelStatus());mirror.model.asset=tipped;mirrorBindings[0].graph=prepare();
+        const auto horizon=centerLinear(capture("pbr-geometric-horizon"));
+        for(const auto channel:horizon)check(std::abs(channel-.2*4*std::pow(.4358899,4))<.009,
+            "Environment reflection did not use the actual triangle's soft geometric horizon.");
+        settings.environment.ssr.enabled=true;const auto horizonSsr=capture("pbr-geometric-horizon-ssr");
+        for(const auto channel:centerLinear(horizonSsr))check(std::abs(channel-horizon[0])<.008,
+            "SSR accepted reflection rays beneath the geometric receiver plane.");
+        settings.environment.ssr.enabled=false;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+        output().metallic=0;mirrorBindings[0].graph=prepare();glint.direction={-.9f,0,-.4358899f};glint.intensity=.4f;
+        scene.directionalLights=std::span(&glint,1);
+        check(centerLinear(capture("pbr-horizon-direct-diffuse"))[0]>.05,"Geometric reflection horizon incorrectly suppressed direct diffuse light.");
+        scene.directionalLights={};settings.environment.enabled=true;settings.environment.ambientLight.source=AmbientLightSource::Sky;
+        mirror.model.asset=flat;settings.camera.position={2.985f,0,.3f};output().metallic=1;output().roughness=.1f;output().occlusion=.25f;
+        mirrorBindings[0].graph=prepare();const auto ao=centerLinear(capture("pbr-grazing-specular-ao"));
+        for(const auto channel:ao)check(channel>.01&&channel<.035,"Grazing specular AO did not follow the roughness-dependent visibility.");
+        // A constant visible source equal to the environment must produce zero
+        // signed replacement even after compensated DFG. A colored control
+        // confirms this equality is not passing merely because every ray misses.
+        output().occlusion=1;output().baseColor={1,1,1};settings.camera.position={0,0,3};mirror.model={tilted,math::scaling({.7f,.7f,.7f})};
+        scene.instances=instances;settings.environment.ssr.maxRoughness=.9f;
+        donorMaterials[0].baseColor=backMaterials[0].baseColor={.2f,.2f,.2f,1};
+        for(const float roughness:{.045f,.55f}) {
+            output().roughness=roughness;mirrorBindings[0].graph=prepare();
+            const auto [off,on]=pair("pbr-ssr-furnace-off","pbr-ssr-furnace-on");
+            furnace(off,"SSR furnace baseline");check(difference(on,off)<1.5,"SSR double-counted the compensated environment response.");
+            donorMaterials[0].baseColor={.9f,.05f,.025f,1};const auto red=capture("pbr-ssr-furnace-visible-control");
+            check(center(red)[0]>center(on)[0]+3,"PBR signed-replacement control missed its visible donor.");
+            donorMaterials[0].baseColor={.2f,.2f,.2f,1};
+        }
+        output().blend=MaterialBlend::Alpha;output().refraction=true;output().metallic=0;output().ior=1.5f;
+        output().transmission=1;output().roughness=.55f;mirrorBindings[0].graph=prepare();
+        const auto [glassOff,glassOn]=pair("pbr-glass-ssr-furnace-off","pbr-glass-ssr-furnace-on");
+        furnace(glassOff,"Glass SSR furnace");check(difference(glassOn,glassOff)<1.5,"Glass SSR used a different compensated reflected budget.");
+        donorMaterials[0].baseColor={.9f,.05f,.025f,1};backMaterials[0].baseColor={.025f,.025f,.025f,1};
+        asset.graph=savedGraph;settings=savedSettings;instances=savedInstances;mirrorBindings[0]=savedBinding;mirrorMaterials=savedMaterials;
+        scene.instances=savedSceneInstances;scene.directionalLights=savedDirectional;
+        for(unsigned i=0;i<9;++i){renderer.renderGame(scene);tick();}
+        std::cout<<"PBR white-furnace endpoints, optical transmission budget, mapped-normal AA, geometric horizon, specular AO and SSR replacement passed.\n";
+    }
+    if(pbrQualityOnly){resources.stop();frame=renderer.drainPending(frame);return;}
     {
         // Reproduce the authored closed mirror rather than substituting a
         // shading-normal tilt on an open plane. Hard normal charts retain the
@@ -574,13 +762,14 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
 }
 }
 int main(int argc,char** argv){try{
-    check(argc==5||(argc==6&&std::string_view(argv[5])=="--closed-cube-only"),
-        "Pass shaderc, source/include directories, an artifact output directory and optional --closed-cube-only.");
+    check(argc==5||(argc==6&&(std::string_view(argv[5])=="--closed-cube-only"||std::string_view(argv[5])=="--pbr-quality-only")),
+        "Pass shaderc, source/include directories, artifacts and optional --closed-cube-only or --pbr-quality-only.");
     const auto cache=fs::temp_directory_path()/("crimson-ssr-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup{fs::path path;~Cleanup(){std::error_code error;const auto resolved=fs::weakly_canonical(path,error),root=fs::weakly_canonical(fs::temp_directory_path(),error);
         if(!error&&resolved.parent_path()==root&&resolved.filename().string().starts_with("crimson-ssr-"))fs::remove_all(resolved,error);}} cleanup{cache};
     ShaderCompileConfig config{argv[1],argv[2],argv[3],cache};
     check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());struct Quit{~Quit(){SDL_Quit();}} quit;
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson SSR checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-    check(bool(window),SDL_GetError());exercise(window.get(),config,fs::path(argv[4])/(selectedTestGraphicsBackend()==GraphicsBackend::Direct3D11?"dx11":"dx12"),argc==6);return 0;
+    check(bool(window),SDL_GetError());exercise(window.get(),config,fs::path(argv[4])/(selectedTestGraphicsBackend()==GraphicsBackend::Direct3D11?"dx11":"dx12"),
+        argc==6&&std::string_view(argv[5])=="--closed-cube-only",argc==6&&std::string_view(argv[5])=="--pbr-quality-only");return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

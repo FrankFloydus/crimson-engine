@@ -66,6 +66,9 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
     EnvironmentSettings value;
     value.map=json.value("map",value.map);
     value.enabled=json.value("enabled",value.enabled);
+    if(json.contains("specularAA")&&!json.at("specularAA").is_boolean())
+        throw std::runtime_error("Specular antialiasing must be a boolean.");
+    value.specularAA=json.value("specularAA",value.specularAA);
     value.intensity=json.value("intensity",value.intensity);
     value.rotation=json.value("rotation",value.rotation);
     value.toneMapping=static_cast<ToneMapping>(json.value("toneMapping",0));
@@ -302,7 +305,7 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
     validateEnvironmentSettings(value);
     constexpr std::array<const char*,5> glowBlendModes{"Additive","Screen","SoftLight","Replace","Mix"};
     const auto& sky=value.procedural;const auto& background=value.background;const auto& fog=value.fog;
-    return {{"map",value.map},{"enabled",value.enabled},{"intensity",value.intensity},{"rotation",value.rotation},
+    return {{"map",value.map},{"enabled",value.enabled},{"specularAA",value.specularAA},{"intensity",value.intensity},{"rotation",value.rotation},
         {"toneMapping",static_cast<int>(value.toneMapping)},
         {"toneMappingParameters",{{"reinhardWhite",value.toneMappingParameters.reinhardWhite},{"acesWhite",value.toneMappingParameters.acesWhite},
             {"agxWhite",value.toneMappingParameters.agxWhite},{"agxContrast",value.toneMappingParameters.agxContrast}}},

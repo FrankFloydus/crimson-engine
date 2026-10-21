@@ -272,7 +272,12 @@ void independentPresentation() {
 }
 void thumbnailInvalidation() {
     EnvironmentSettings environment;ProceduralSun sun{{0,1,0},{1,1,1},2,true};
+    check(!environment.specularAA,"Specular AA must remain opt-in.");
     auto signature=thumbnailEnvironmentKey(environment,sun);
+    environment.specularAA=true;
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Specular AA did not invalidate the thumbnail's lighting fingerprint.");
+    environment.specularAA=false;
+    check(thumbnailEnvironmentKey(environment,sun)==signature,"Restoring Specular AA reused a different thumbnail fingerprint.");
     environment.procedural.skyTop={1,0,0};sun.direction={1,1,0};
     check(thumbnailEnvironmentKey(environment,sun)==signature,"Inactive procedural settings changed HDRI thumbnail.");
     environment.source=EnvironmentSource::ProceduralSky;

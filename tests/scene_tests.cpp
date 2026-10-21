@@ -1282,6 +1282,39 @@ void environmentToneMappingParametersStorageAndHistory() {
     const auto invalidId="assets/scenes/tone-parameters-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
     require(!reopened.load(invalidId),"Invalid stored curve tuning replaced a working scene.");sameRecords(before,reopened.scene().records());
 }
+void environmentSpecularAaStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    require(!resolveEnvironment(document.scene()).environment.specularAA,"New scenes enabled Specular AA.");
+    const auto id=document.createEnvironment("Specular quality");const auto original=*document.scene().find(id);
+    auto edited=original;edited.environment->environment.specularAA=true;
+    const auto history=document.history().size();
+    require(document.begin("Toggle specular antialiasing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment=edited.environment;})&&document.commit(),document.status());
+    require(document.history().size()==history+1&&resolveEnvironment(document.scene()).environment.specularAA,
+        "Specular AA did not form one Environment history command.");
+    require(document.undo()&&!resolveEnvironment(document.scene()).environment.specularAA,"Specular AA undo lost its disabled default.");
+    require(document.redo()&&resolveEnvironment(document.scene()).environment.specularAA,"Specular AA redo lost the authored value.");
+    require(document.begin("Cancel specular antialiasing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment->environment.specularAA=false;}),document.status());
+    document.cancel();require(resolveEnvironment(document.scene()).environment.specularAA,"Cancel changed the committed Specular AA toggle.");
+    require(document.save("Specular quality"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
+    require(saved.at("version")==23,"Optional Specular AA changed the scene schema.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&
+        resolveEnvironment(reopened.scene()).environment.specularAA,"Specular AA Save/reopen lost its value or dirtied the scene.");
+    document.select({id});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->environment->environment.specularAA,"Environment duplication lost Specular AA.");
+    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("specularAA");
+    const auto missingId="assets/scenes/specular-aa-missing.crimson-scene";const auto text=missing.dump();writeText(project.root/missingId,text);
+    require(reopened.load(missingId)&&!reopened.dirty()&&!resolveEnvironment(reopened.scene()).environment.specularAA&&readText(project.root/missingId)==text,
+        "Missing Specular AA enabled the effect, dirtied the scene or changed authored bytes.");
+    const auto encoded=environmentSettingsJson(edited.environment->environment);
+    require(encoded.at("specularAA")==true&&readEnvironmentSettings(encoded).specularAA,"Specular AA JSON did not round-trip.");
+    for(const auto bad:{Json(0),Json(1),Json("true"),Json(nullptr),Json::object(),Json::array()})
+        rejects([&]{auto json=encoded;json["specularAA"]=bad;(void)readEnvironmentSettings(json);});
+    auto invalid=saved;for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["specularAA"]=1;
+    const auto invalidId="assets/scenes/specular-aa-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+    const auto before=reopened.scene().records();require(!reopened.load(invalidId),"Malformed Specular AA replaced a working scene.");sameRecords(before,reopened.scene().records());
+}
 void environmentSsrStorageAndHistory() {
     TempProject project;SceneDocument document(project.root);
     require(resolveEnvironment(document.scene()).environment.ssr==SsrSettings{},"New scenes enabled SSR or changed its defaults.");
@@ -1702,7 +1735,7 @@ int main() {
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();glowValidationAndLevelContribution();glowSingleEffectMigration();glowBlendModeStorageAndHistory();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
-        environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        environmentSpecularAaStorageAndHistory();environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
         std::cout << "Scene core checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

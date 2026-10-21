@@ -988,6 +988,11 @@ if(BUILD_TESTING)
     set_tests_properties(ssr_render_core ssr_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
     set_tests_properties(ssr_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
 
+    add_test(NAME pbr_render_core COMMAND ssr_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/verification/pbr" --pbr-quality-only)
+    add_test(NAME pbr_render_dx11_core COMMAND ssr_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/verification/pbr" --pbr-quality-only)
+    set_tests_properties(pbr_render_core pbr_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
+    set_tests_properties(pbr_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
+
     add_executable(glow_render_tests tests/glow_render_tests.cpp ${CC_FOG_BACKGROUND_TEST_SOURCES})
     target_include_directories(glow_render_tests PRIVATE src tests "${CC_GENERATED_DIR}")
     target_compile_definitions(glow_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

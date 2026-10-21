@@ -3,13 +3,12 @@
 Reviewed 2026-10-21 against the canonical shared renderer, the local Unreal 5.8
 raster SSR sources, research papers and maintained production references.
 
-The current PBR equations form a coherent conventional real-time baseline.
-The current-frame SSR tracer is a foundation, with a corrected rough-hit
-visibility defect. Neither conclusion establishes state-of-the-art reflection
-quality. A modern production target also needs specular reconstruction, reliable
-receiver guides and controlled sampling. The additional work below is a proposal,
-not an implemented feature or a new material authoring contract. Planar reflections
-remain deferred.
+The PBR quality slice now adds practical GGX energy compensation, opt-in specular
+antialiasing and shared environment/SSR reflection visibility, including glass.
+The current-frame SSR tracer retains its corrected rough-hit visibility path.
+These changes do not establish state-of-the-art reflection reconstruction: the
+later history, receiver-guide and sampling work remains proposed. Temporal SSR
+and planar reflections remain deferred.
 
 ## Rough mirror regression and correction
 
@@ -63,9 +62,11 @@ match to the user's unsaved camera. The fixture is part of
 [model_lighting.sh](../third_party/crimson-renderer/src/shaders/model_lighting.sh),
 [fs_pbr.sc](../third_party/crimson-renderer/src/shaders/fs_pbr.sc) and
 [Environment.cpp](../third_party/crimson-renderer/src/forward/Environment.cpp)
-agree on perceptual roughness, `alpha = roughness^2`, GGX distribution and
-height-correlated Smith visibility. The CPU BRDF LUT integrates that same
-single-scattering response. The specular prefilter's roughness-to-mip mapping
+share perceptual roughness, `alpha = roughness^2`, GGX distribution and
+height-correlated Smith visibility. The preview sphere now includes the common
+lighting implementation instead of maintaining duplicate BRDF functions. The
+CPU BRDF LUT still integrates the single-scattering response; the shader applies
+compensation using its existing scale/bias encoding. The specular prefilter's roughness-to-mip mapping
 agrees with runtime sampling; diffuse preprocessing includes division by pi once.
 No basic double-pi, squared-roughness or LUT-convention mismatch was found.
 
@@ -76,12 +77,12 @@ must keep those conventions coherent. The existing
 [environment checks](../tests/environment_tests.cpp) compare the LUT with a
 separate numerical integration and check finite extreme inputs.
 
-## Remaining quality gaps
+## PBR quality changes and remaining limits
 
 ### Specular energy preservation
 
-The model includes one microfacet scattering event. A white conductor with
-F0 = 1 under a constant white environment loses energy as roughness increases:
+The original model included one microfacet scattering event. Before compensation,
+a white conductor with F0 = 1 under a constant white environment loses energy as roughness increases:
 
 | Roughness | Reflected energy at normal view |
 | ---: | ---: |
@@ -90,33 +91,47 @@ F0 = 1 under a constant white environment loses energy as roughness increases:
 | .75 | .626886 |
 | 1.00 | .306853 |
 
-These values come from numerical integration of the implemented direct formula.
-The fully rough result is `1-ln(2)` and is already asserted by the LUT test.
-This is expected single-scattering energy loss, not evidence of a broken GGX
-formula. Multiple-scattering compensation would improve rough metals. Apply it
-coherently to direct lighting, IBL, SSR replacement and diffuse energy budgeting.
-Crimson's LUT stores scale/bias, so its white-Fresnel directional reflectance is
-`lut.x + lut.y`; another engine's differently packed DFG formula cannot be copied
-by channel name. See [Heitz et al., 2016](https://jo.dreggn.org/home/2016_microfacets.pdf)
+These values come from numerical integration of the original direct formula.
+The fully rough result is `1-ln(2)` and remains asserted by the single-scattering
+LUT test. The current shader computes `E = clamp(lut.x + lut.y, epsilon, 1)` and
+the practical compensation `W = 1 + clamp(F0, 0, 1) * (1/E - 1)`. Direct specular
+and integrated DFG both use W. A precomputed directional-albedo diffuse budget
+uses the complement of compensated DFG, shared by direct lighting, IBL and GI.
+This is a practical energy-preserving approximation, not a full reciprocal
+multiple-scattering BSDF. The LUT and IBL preprocessing representation stay
+unchanged. Another engine's differently packed DFG formula cannot be copied by
+channel name. See [Heitz et al., 2016](https://jo.dreggn.org/home/2016_microfacets.pdf)
 and [Filament's energy-loss discussion](https://google.github.io/filament/Filament.md.html#materialsystem/specularbrdf/energylossinspecularreflectance).
+
+Glass uses that same remaining budget for transmission before Beer attenuation.
+Transmission, surface fog correction and SSR share the faced optical normal,
+effective roughness and vertex-modulated material inputs. IOR one retains exact
+zero dielectric interface reflection; a metallic component keeps its reflection.
 
 ### Shading antialiasing and visibility
 
-The roughness floor and ordinary texture filtering do not account for unresolved
-normal variance. There is no geometric specular antialiasing or normal-map
-variance adjustment, so small glossy details can shimmer in first-person motion.
-SMAA filters image edges; it does not recover those missing shading samples.
+**Environment -> Specular AA** is optional and defaults off. It applies a bounded
+screen-derivative normal-variance adjustment in squared GGX-alpha space, using
+fixed variance .15 and kernel threshold .2. Base lighting, IBL, SSR and glass
+transmission share the same raw normal-variance filtering. GGX/DFG/SSR retain
+their .045 numerical floor; the transmission cone uses the unfloored filtered
+roughness so authored zero stays clear with AA off or constant normals. The
+disabled branch retains the ordinary roughness calculation. This filters projected normal variation without adding texture
+channels or graph inputs. It is not a full normal-distribution mip representation
+and cannot recover every unresolved texture feature. SMAA remains separate.
 [Improved Geometric Specular Antialiasing](https://yusuketokuyoshi.com/papers/2019/ImprovedGeometricSpecularAA.pdf)
 and [LEAN Mapping](https://userpages.cs.umbc.edu/olano/papers/lean/) are relevant
 references with different implementation costs.
 
-Baseline environment reflection has no geometric-horizon rejection, while SSR
-does reject directions below the receiver's geometry. Strong normal maps can
-therefore obtain baseline environment light from below an opaque surface.
-Material AO/SSAO also multiply environment diffuse and specular by one scalar,
-which is only an approximation to glossy directional visibility. A targeted
-quality slice should address horizon handling and specular occlusion together;
-see [Filament's occlusion treatment](https://google.github.io/filament/Filament.md.html#lighting/occlusion).
+Environment reflection and SSR replacement now use identical roughness/NoV-aware
+specular AO and soft geometric-horizon attenuation. The geometric normal comes
+from the actual triangle, faced toward the view; a mapped reflection below that
+horizon fades by `clamp(1 + dot(R, Ng), 0, 1)^2`. This reduces below-surface light
+leaks but is approximate lobe visibility, not exact hemisphere clipping. SSR's
+individual rays keep their strict geometric-hemisphere rejection. Diffuse AO
+remains independent of direct light. Visibility does not redirect occluded
+reflection energy into glass transmission. See
+[Filament's occlusion treatment](https://google.github.io/filament/Filament.md.html#lighting/occlusion).
 
 ### Rough reflection estimation
 
@@ -162,15 +177,16 @@ SM5/DX11 family, so its SDK is not a drop-in replacement for the existing pass.
 
 ## Recommended implementation sequence
 
-1. Land the rough-hit correction with the closed-cube regression and preserve
-   the existing no-donor floor, silhouette, glass, fog and resource checks.
-2. Establish reference-image and numerical quality checks: white furnace,
-   roughness sweeps, grazing normal maps, known colored reflection donors,
-   viewport exits, disocclusion and moving geometry. Compare quality at equal
-   GPU cost, with active and retired memory counted.
-3. Improve PBR energy preservation and specular antialiasing coherently across
-   direct lighting, IBL, generated materials, glass and SSR. Keep the authoring
-   workflow stable; introduce no new material model merely to fix these gaps.
+1. Preserve the implemented rough-hit correction and closed-cube regression,
+   including no-donor floor, silhouette, glass, fog and resource checks.
+2. Validate the implemented PBR quality changes with white-furnace and roughness
+   sweeps, grazing normals, known colored reflection donors, optional AA,
+   complementary glass energy and matching SSR replacement. The actual saved
+   Main scene is captured before/after from ShadowCamera using one immutable
+   project snapshot, including an additional after capture with AA enabled.
+3. Keep energy preservation and effective roughness coherent across every
+   lighting provider. Further material-model or normal-distribution filtering
+   improvements need their own measured slice.
 4. Publish positive raw reflection radiance, hit distance and confidence before
    final composition, with exact receiver normal/roughness/depth/motion guides.
    Reconstruct that signal first, then apply material response, fog and signed

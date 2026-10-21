@@ -20,6 +20,8 @@ void MaterialPreview::setNodePreview(std::optional<MaterialGraphPreviewTarget> t
 void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     ImGui::PushItemWidth(260);
     ImGui::Checkbox("Environment lighting",&environment_.enabled);
+    ImGui::Checkbox("Specular AA",&environment_.specularAA);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce sparkling specular highlights from undersampled surface normals.");
     ImGui::TextUnformatted("HDRI");
     drawEnvironmentImageField(environment_,assets);
     ImGui::SliderFloat("Intensity",&environment_.intensity,0,10,"%.2f");

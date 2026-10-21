@@ -28,6 +28,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -44,6 +45,7 @@ struct Options {
     fs::path source,artifacts,shaderDirectory;std::string scene{"Content/Main.crimson-scene"},camera{"ShadowCamera"},settings{"both"},channel{"both"};
     EntityId emitter{0x5bb7882f31e19ae7};unsigned width{960},height{540},warmup{512},frames{48},staticSamples{};
     float amplitude{.35f};bool keepProject{},stationaryOnly{};std::map<std::string,std::string> overrides;
+    std::optional<bool> specularAA;
 };
 SsgiSettings overrideSettings(SsgiSettings value,const Options& options) {
     for(const auto& [option,text]:options.overrides) {
@@ -219,6 +221,9 @@ void exercise(SDL_Window* window,Snapshot& snapshot,const ShaderCompileConfig& c
             {"near",camera->nearPlane},{"far",camera->farPlane}}},{"emitter_id",entityText(options.emitter)},
         {"emitter_world",emissionWorld},{"width",options.width},{"height",options.height},
         {"warmup_frames",options.warmup},{"static_capture_count",options.staticSamples},{"stationary_only",options.stationaryOnly},
+        {"exposure",baseline.environment.exposure},{"saved_specular_aa",baseline.environment.environment.specularAA},
+        {"effective_specular_aa",options.specularAA.value_or(baseline.environment.environment.specularAA)},
+        {"specular_aa_override",options.specularAA?Json(*options.specularAA):Json(nullptr)},
         {"tuning_overrides",options.overrides},
         {"motion",{{"amplitude_m",options.amplitude},{"direction","camera right"},{"period_rendered_frames",120},{"simulation_hz",60}}},
         {"metrics_note","Frame differences include the physical lighting change; compare identical trajectories and settings across shader variants."},
@@ -233,7 +238,9 @@ void exercise(SDL_Window* window,Snapshot& snapshot,const ShaderCompileConfig& c
         resources.pump();assets.updateResources(frame);renderer.advanceStreaming();auto extracted=baseline;
         const Vec3 offset=moving?camera->right()*(options.amplitude*std::sin(float(phaseFrame)*6.28318530718f/120.f)):heldOffset;
         for(auto& model:extracted.models)if(model.id==options.emitter){model.world=math::translation(offset)*emissionWorld;if(removed)model.visible=false;}
-        extracted.environment.environment.ssgi=settings;prepared.beginFrame();prepared.setMaterialContext({});
+        extracted.environment.environment.ssgi=settings;
+        if(options.specularAA)extracted.environment.environment.specularAA=*options.specularAA;
+        prepared.beginFrame();prepared.setMaterialContext({});
         EditorRenderFrameInput input;input.extracted=std::move(extracted);input.settings.environment=input.extracted.environment.environment;
         input.settings.environment.map=environmentMap;input.settings.exposure=baseline.environment.exposure;input.settings.proceduralSun=baseline.proceduralSun;
         input.settings.antiAliasing=AntiAliasing::Smaa;input.sceneCamera=*camera;input.gameCamera=*camera;
@@ -319,6 +326,9 @@ int main(int argc,char** argv) {
             else if(option=="--emitter-id")options.emitter=std::stoull(value,nullptr,16);
             else if(option=="--settings")options.settings=value;
             else if(option=="--channel")options.channel=value;
+            else if(option=="--specular-aa") {
+                check(value=="on"||value=="off","Specular AA override must be on or off.");options.specularAA=value=="on";
+            }
             else if(option=="--ssgi-shader-dir"||option=="--shader-dir")options.shaderDirectory=fs::absolute(value).lexically_normal();
             else if(option.starts_with("--ssgi-"))options.overrides[std::string(option)]=value;
             else if(option=="--width")options.width=unsigned(std::stoul(value));else if(option=="--height")options.height=unsigned(std::stoul(value));

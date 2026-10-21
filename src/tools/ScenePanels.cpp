@@ -51,7 +51,7 @@ enum class Edit { None, Name, InlineName, Visible,
     ModelCastShadows, ModelReceiveShadows,ModelShading,
     ModelDirectReceivers,ModelCasterScope,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
-    Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
+    Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentSpecularAA, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
     EnvironmentSkyTop, EnvironmentSkyHorizon, EnvironmentSkyCurve,
     EnvironmentGroundBottom, EnvironmentGroundHorizon, EnvironmentGroundCurve,
     EnvironmentSun, EnvironmentSunDiameter, EnvironmentSunHaloExtent, EnvironmentSunHaloCurve,
@@ -563,6 +563,8 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
     if(sourceChanged)value.source=static_cast<EnvironmentSource>(source);
     field(Edit::EnvironmentSource,"Change environment source",sourceChanged);
     field(Edit::EnvironmentEnabled,"Toggle environment lighting",ImGui::Checkbox("Lighting",&value.enabled));
+    field(Edit::EnvironmentSpecularAA,"Toggle specular antialiasing",ImGui::Checkbox("Specular AA",&value.specularAA));
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce sparkling specular highlights from undersampled surface normals.");
     field(Edit::EnvironmentIntensity,"Change environment intensity",
         ImGui::SliderFloat("Intensity",&value.intensity,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
     if(value.source==EnvironmentSource::Hdri) {

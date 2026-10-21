@@ -683,6 +683,8 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             return DocumentEditorMenuState{isOpen(),isOpen(),canUndo(),canRedo(),document_.undoLabel(),document_.redoLabel()};
         },[&] {
             ImGui::SetNextItemWidth(ImGui::GetFontSize()*14);
+            ImGui::Checkbox("Specular AA",&preview_.environment.specularAA);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reduce sparkling specular highlights from undersampled surface normals.");
             drawToneMappingControl(preview_.environment.toneMapping);
             drawToneMappingParameterControls(preview_.environment.toneMapping,preview_.environment.toneMappingParameters);
             drawGlowControls(preview_.environment.glow);

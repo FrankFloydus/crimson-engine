@@ -236,7 +236,8 @@ void refractionShaderChecks() {
         check(bool(binding("s_refractionSceneColor"))==transmission,"Scene-color refraction sampler leaked into another pass.");
         if(transmission) {
             check(binding("s_refractionSceneColor")->samplerSlot==12&&binding("s_refractionSceneDepth")->samplerSlot==14&&
-                binding("s_prefiltered")->samplerSlot==13&&!binding("s_irradiance")&&!binding("s_brdfLut")&&!binding("s_pointShadow"),
+                binding("s_prefiltered")->samplerSlot==13&&binding("s_brdfLut")&&binding("s_brdfLut")->samplerSlot==15&&
+                binding("u_pbrSettings")&&binding("u_clusterAtlas")&&binding("u_clusterOptions")&&!binding("s_irradiance")&&!binding("s_pointShadow"),
                 "Transmission binding layout aliases the twelve material textures or lighting inputs.");
             check(variant.source.find("#include \"material_graph_transmission.sh\"")!=std::string::npos,"Transmission pass selected the ordinary surface fragment.");
         }
@@ -288,8 +289,8 @@ void cpuChecks() {
                 "Reflection variants were omitted from Lit coverage or admitted for Unlit/Additive materials.");
         }
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v35")!=std::string::npos,
-            "Generated material identity does not invalidate pre-emission-publication bundles.");
+        check(variant.source.find("crimson-material-graph-generator-v36")!=std::string::npos,
+            "Generated material identity does not invalidate earlier PBR/optical bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle&&variant.pass!=MaterialGraphPass::ParticleReflection),
             "Generated mesh/particle inputs disagree with the circular UV vertex interface.");
@@ -300,6 +301,7 @@ void cpuChecks() {
         };
         const bool surface=variant.pass==MaterialGraphPass::Model || variant.pass==MaterialGraphPass::Particle;
         const bool reflection=variant.pass==MaterialGraphPass::ModelReflection || variant.pass==MaterialGraphPass::ParticleReflection;
+        check(has("u_pbrSettings")==bool(surface||reflection),"PBR quality settings are missing from shading or leaked into a coverage pass.");
         const bool readableDepth=variant.pass==MaterialGraphPass::PointShadow || variant.pass==MaterialGraphPass::DirectionalShadow;
         check(!has("u_glowSource"),"Removed emission publication remained in the generated material manifest.");
         const bool motionDepth=variant.pass==MaterialGraphPass::PointShadow;
@@ -701,6 +703,10 @@ void ssrCompileChecks(const std::filesystem::path& compiler,const std::filesyste
             std::string diagnostic;
             if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
                 throw std::runtime_error("Focused SSR receiver/capture: "+diagnostic);
+            auto missingPbr=variant.manifest;
+            std::erase_if(missingPbr,[](const auto& binding){return binding.name=="u_pbrSettings";});
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,missingPbr,diagnostic),
+                "Lit receiver/capture admitted the obsolete PBR quality contract.");
             if(!reflection)continue;
             ++receivers;++reflectionFragments;
             auto wrong=variant.manifest;
@@ -740,6 +746,25 @@ void ssrCompileChecks(const std::filesystem::path& compiler,const std::filesyste
         compileReceivers(blend==MaterialBlend::Opaque?"Lit Opaque":blend==MaterialBlend::Mask?"Lit Mask":"Lit Alpha",material,blend==MaterialBlend::Opaque);
     }
     compileReceivers("Lit Glass",refractionFixture(),false);
+    // Glass attenuation consumes the same DFG budget as its surface/reflection
+    // programs. Validate its dedicated free atlas slot without changing the
+    // twelve graph textures or the immutable color/depth snapshot bindings.
+    const auto glass=generateMaterialGraphShader(refractionFixture());
+    for(const auto& variant:glass.variants)if(variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission) {
+        std::cout<<"Focused SSR Lit Glass: compiling "<<(variant.pass==MaterialGraphPass::ModelTransmission?"ModelTransmission":"ParticleTransmission")<<".\n"<<std::flush;
+        const auto fragment=compileShader(config,materialGraphShaderRecipe(config,glass,variant)),vertex=compileShader(config,variant.vertexName);
+        std::string diagnostic;
+        if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+            throw std::runtime_error("Glass PBR quality contract: "+diagnostic);
+        for(const char* name:{"u_pbrSettings","u_clusterAtlas","u_clusterOptions","s_brdfLut"}) {
+            auto missing=variant.manifest;std::erase_if(missing,[&](const auto& binding){return binding.name==name;});
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,missing,diagnostic),"Glass transmission admitted a missing DFG/PBR binding.");
+        }
+        auto aliased=variant.manifest;
+        const auto atlas=std::find_if(aliased.begin(),aliased.end(),[](const auto& binding){return binding.name=="s_brdfLut";});
+        check(atlas!=aliased.end(),"Glass transmission omitted the BRDF atlas.");atlas->samplerSlot=14;
+        check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,aliased,diagnostic),"Glass BRDF atlas aliased the readable depth sampler.");
+    }
     auto maximum=fixture();auto& graph=maximum.graph;
     const auto output=materialOutputNode(graph).id;
     auto tail=materialInputLink(graph,output,MaterialPin::BaseColor)->fromNode;
@@ -760,7 +785,7 @@ void ssrCompileChecks(const std::filesystem::path& compiler,const std::filesyste
         "Focused SSR fixture lost twelve textures, normal mapping or displaced geometry.");
     compileReceivers("Twelve-texture normals and Height",maximum,false);
     check(reflectionFragments==10&&domainStages==1,"Focused SSR compile matrix changed its intended coverage.");
-    std::cout<<"Focused SSR compiled "<<reflectionFragments<<" receiver fragments, two capture fragments and "<<domainStages<<" native domain stage.\n";
+    std::cout<<"Focused SSR compiled "<<reflectionFragments<<" receiver fragments, two capture fragments, two glass transmission fragments and "<<domainStages<<" native domain stage.\n";
 }
 void compileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
     {
