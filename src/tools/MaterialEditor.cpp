@@ -278,15 +278,15 @@ void MaterialEditor::properties(AssetLibrary& assets) {
         if(!canceled && changed && propertyEditing_)document_.update([&](auto& asset){asset=std::move(candidate);});
         if(deactivated && propertyEditing_)finish();
     };
-    const auto hdr=[&](const char* label,const char* transaction,bool outputColor,bool emission=false) {
+    const auto hdr=[&](const char* label,const char* transaction,bool outputColor,bool emission=false,bool attenuation=false) {
         auto candidate=document_.definition();auto* node=findMaterialNode(candidate.graph,selected);if(!node)return;
-        Vec3 value=outputColor?(emission?node->output.emission:node->output.baseColor):Vec3{node->color[0],node->color[1],node->color[2]};
+        Vec3 value=outputColor?(attenuation?node->output.attenuationColor:emission?node->output.emission:node->output.baseColor):Vec3{node->color[0],node->color[1],node->color[2]};
         float alpha=node->color[3];ImGui::BeginDisabled(!editable);
-        auto edit=drawHdrColorControl(label,value,outputColor?nullptr:&alpha,emission?emissionEditor_:colorEditor_,false,1000000.f,"Alpha");
+        auto edit=drawHdrColorControl(label,value,outputColor?nullptr:&alpha,attenuation?alphaEditor_:emission?emissionEditor_:colorEditor_,false,attenuation?1.f:1000000.f,"Alpha");
         ImGui::EndDisabled();if(!editable)return;
         if(!canceled && (edit.activated || edit.changed) && !document_.transactionActive())propertyEditing_=document_.begin(transaction);
         if(!canceled && edit.changed && propertyEditing_) {
-            if(outputColor){if(emission)node->output.emission=value;else node->output.baseColor=value;}
+            if(outputColor){if(attenuation)node->output.attenuationColor=value;else if(emission)node->output.emission=value;else node->output.baseColor=value;}
             else node->color={value[0],value[1],value[2],alpha};
             document_.update([&](auto& asset){asset=std::move(candidate);});
         }
@@ -313,6 +313,11 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             if(ImGui::IsItemHovered())ImGui::SetTooltip("Apply the scene's distance and height fog to this material.");
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr)
                 control("Change occlusion strength",[](auto& n){return ImGui::SliderFloat("AO strength",&n.output.occlusionStrength,0,1,"%.3f");});
+            const auto& currentOutput=materialOutputNode(document_.definition().graph).output;
+            ImGui::BeginDisabled(currentOutput.shading!=MaterialShading::StandardPbr||currentOutput.blend!=MaterialBlend::Alpha);
+            control("Toggle material refraction",[](auto& n){return ImGui::Checkbox("Refraction",&n.output.refraction);});
+            ImGui::EndDisabled();
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Requires Lit (PBR) and Translucent. Optical thickness is in world-space meters.");
             control("Toggle material tessellation",[](auto& n){return ImGui::Checkbox("Tessellation",&n.output.tessellation.enabled);});
             if(ImGui::IsItemHovered())ImGui::SetTooltip("Subdivide and displace mesh geometry from Height. Requires Direct3D 12.");
             if(materialOutputNode(document_.definition().graph).output.tessellation.enabled) {
@@ -340,7 +345,7 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr) {
                 if(disconnected(MaterialPin::Roughness))control("Change default roughness",[](auto& n){return ImGui::SliderFloat("Roughness",&n.output.roughness,0,1,"%.3f");});
                 if(disconnected(MaterialPin::Metallic))control("Change default metallic",[](auto& n){return ImGui::SliderFloat("Metallic",&n.output.metallic,0,1,"%.3f");});
-                if(disconnected(MaterialPin::Specular))control("Change default specular",[](auto& n){return ImGui::SliderFloat("Specular",&n.output.specular,0,1,"%.3f");});
+                if(!materialRefractionActive(materialOutputNode(document_.definition().graph).output)&&disconnected(MaterialPin::Specular))control("Change default specular",[](auto& n){return ImGui::SliderFloat("Specular",&n.output.specular,0,1,"%.3f");});
                 if(disconnected(MaterialPin::Occlusion))control("Change default occlusion",[](auto& n){return ImGui::SliderFloat("Ambient Occlusion",&n.output.occlusion,0,1,"%.3f");});
                 if(disconnected(MaterialPin::Emission))hdr("Emissive Color","Change default emission",true,true);
             }
@@ -351,6 +356,13 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 control("Change default opacity mask",[](auto& n){return ImGui::SliderFloat("Opacity Mask",&n.output.opacityMask,0,1,"%.3f");});
             if(output.tessellation.enabled && disconnected(MaterialPin::Height))
                 control("Change default height",[](auto& n){return ImGui::SliderFloat("Height",&n.output.height,0,1,"%.3f");});
+            if(materialRefractionActive(output)) {
+                if(disconnected(MaterialPin::Transmission))control("Change default transmission",[](auto& n){return ImGui::SliderFloat("Transmission",&n.output.transmission,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                if(disconnected(MaterialPin::Ior))control("Change default IOR",[](auto& n){const bool changed=ImGui::SliderFloat("IOR",&n.output.ior,1,3,"%.3f");if(changed)n.output.ior=std::max(n.output.ior,1.f);return changed;});
+                if(disconnected(MaterialPin::Thickness))control("Change default thickness",[](auto& n){const bool changed=ImGui::DragFloat("Thickness (m)",&n.output.thickness,.001f,0,0,"%.3f");if(changed)n.output.thickness=std::max(n.output.thickness,0.f);return changed;});
+                if(disconnected(MaterialPin::AttenuationColor))hdr("Attenuation Color","Change default attenuation color",true,false,true);
+                if(disconnected(MaterialPin::AttenuationDistance))control("Change default attenuation distance",[](auto& n){const bool changed=ImGui::DragFloat("Attenuation Distance (m)",&n.output.attenuationDistance,.01f,0,0,"%.3f");if(changed)n.output.attenuationDistance=std::max(n.output.attenuationDistance,.000001f);return changed;});
+            }
             ImGui::TreePop();
         }
     } else {

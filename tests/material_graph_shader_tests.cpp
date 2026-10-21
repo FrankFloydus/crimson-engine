@@ -209,11 +209,54 @@ void tessellatedCoverageNormalChecks() {
                 "Tessellated depth/picking manifest omits its deformation-normal matrix/options contract.");
     }
 }
+MaterialAsset refractionFixture() {
+    auto material=fixture();auto& graph=material.graph;
+    auto& output=materialOutputNode(graph);const auto id=output.id;
+    output.output.blend=MaterialBlend::Alpha;output.output.refraction=true;
+    output.output.thickness=.02f;output.output.roughness=.2f;
+    const auto* coverage=materialInputLink(graph,id,MaterialPin::OpacityMask);
+    connectMaterialNodes(graph,coverage->fromNode,coverage->fromPin,id,MaterialPin::Opacity);
+    const auto ior=addMaterialNode(graph,MaterialNodeKind::Scalar).id;
+    findMaterialNode(graph,ior)->scalar=1.5f;
+    connectMaterialNodes(graph,ior,MaterialPin::Value,id,MaterialPin::Ior);
+    return material;
+}
+void refractionShaderChecks() {
+    auto material=refractionFixture();const auto generated=generateMaterialGraphShader(material);
+    check(generated.refraction&&generated.variants.size()==7,"Enabled refraction did not publish both optional transmission variants.");
+    auto edited=material;materialOutputNode(edited.graph).output.thickness=.1f;
+    materialOutputNode(edited.graph).output.attenuationColor={.3f,.5f,.8f};
+    const auto changed=generateMaterialGraphShader(edited);
+    check(generated.topologyKey==changed.topologyKey&&generated.uniforms!=changed.uniforms,"Optical parameter edits compiled another topology or retained stale data.");
+    for(std::size_t index:{1u,2u,4u})check(generated.variants[index].source==changed.variants[index].source,"Optical parameter edits changed independent picking/shadow coverage.");
+    for(const auto& variant:generated.variants) {
+        const bool transmission=variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission;
+        const auto binding=[&](const char* name)->const ShaderUniformContract* {const auto found=std::find_if(variant.manifest.begin(),variant.manifest.end(),[&](const auto& value){return value.name==name;});return found==variant.manifest.end()?nullptr:&*found;};
+        check(bool(binding("s_refractionSceneColor"))==transmission,"Scene-color refraction sampler leaked into another pass.");
+        if(transmission) {
+            check(binding("s_refractionSceneColor")->samplerSlot==12&&binding("s_refractionSceneDepth")->samplerSlot==14&&
+                binding("s_prefiltered")->samplerSlot==13&&!binding("s_irradiance")&&!binding("s_brdfLut")&&!binding("s_pointShadow"),
+                "Transmission binding layout aliases the twelve material textures or lighting inputs.");
+            check(variant.source.find("#include \"material_graph_transmission.sh\"")!=std::string::npos,"Transmission pass selected the ordinary surface fragment.");
+        }
+    }
+    auto specular=material;materialOutputNode(specular.graph).output.specular=.9f;
+    check(generateMaterialGraphShader(specular).uniforms==generated.uniforms,"Dormant Specular changed the refraction packet.");
+    const auto scalar=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& node){return node.kind==MaterialNodeKind::Scalar;})->id;
+    const auto preview=generateMaterialGraphPreviewShader(material,{scalar,MaterialPin::Value});
+    check(!preview.refraction&&preview.variants.size()==1,"Node visualization acquired refractive composition.");
+    materialOutputNode(material.graph).output.tessellation.enabled=true;
+    const auto displaced=generateMaterialGraphShader(material);
+    const auto& transmission=displaced.variants[5];
+    check(transmission.tessellation&&transmission.vertexName=="vs_model"&&transmission.domainSource.find("#define CC_TESS_PASS 0")!=std::string::npos,
+        "Mesh transmission no longer shares Model's displaced geometry/varyings.");
+    check(!displaced.variants[6].tessellation&&displaced.variants[6].vertexName=="vs_particle","Sprite transmission incorrectly requested tessellated mesh geometry.");
+}
 void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
     check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v33")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v34")!=std::string::npos,
             "Generated material identity does not invalidate pre-emission-publication bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle),
@@ -624,6 +667,31 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
+    {
+        auto material=refractionFixture();const auto ordinary=generateMaterialGraphShader(material);compileGenerated(ordinary);
+        // The matte transport target is a required part of the transmission
+        // contract, even when shaderc strips DXBC resource reflection.
+        const auto& variant=ordinary.variants[5];const auto vertex=compileShader(config,variant.vertexName);
+        std::ifstream input(source/"material_graph_transmission.sh");check(bool(input),"Transmission target test template is unavailable.");
+        std::string fragmentTemplate{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
+        const auto body=fragmentTemplate.find('{',fragmentTemplate.find("void main()"));
+        check(body!=std::string::npos,"Transmission target test lost its entry point.");
+        fragmentTemplate.insert(body+1,"\n    vec4 discardedMatte;\n");
+        const std::string target="gl_FragData[1]";std::size_t cursor{};
+        while((cursor=fragmentTemplate.find(target,cursor))!=std::string::npos){fragmentTemplate.replace(cursor,target.size(),"discardedMatte");cursor+=14;}
+        auto corrupt=materialGraphShaderRecipe(config,ordinary,variant);
+        const std::string includeTemplate="#include \"material_graph_transmission.sh\"";
+        const auto includeAt=corrupt.source.find(includeTemplate);check(includeAt!=std::string::npos,"Transmission target test lost its fragment include.");
+        corrupt.source.replace(includeAt,includeTemplate.size(),fragmentTemplate);
+        const auto fragment=compileShader(config,corrupt);std::string diagnostic;
+        check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic)&&diagnostic.find("matte")!=std::string::npos,
+            "Generated transmission admitted a missing matte render target.");
+        materialOutputNode(material.graph).output.tessellation.enabled=true;
+        const auto generated=generateMaterialGraphShader(material);
+        compileGenerated(generated);
+        for(const auto& variant:generated.variants)if(variant.tessellation)
+            check(!compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant)).bytes.empty(),"Refractive mesh domain stage failed native compilation.");
+    }
     for(const auto mode:{MaterialUvMode::UV0,MaterialUvMode::UV1,MaterialUvMode::LocalTriplanar,MaterialUvMode::WorldTriplanar})for(bool cached:{false,true}){
         const auto material=decodedNormalFixture(mode,cached);compileGenerated(generateMaterialGraphShader(material));
         const auto normal=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::DecodeNormal;})->id;compileGenerated(generateMaterialGraphPreviewShader(material,{normal,MaterialPin::Normal}));
@@ -860,6 +928,12 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
     const auto fullVertex=compileShader(config,fullVariant.vertexName);std::string fullDiagnostic;
     if(!preflightGeneratedShaderPair(fullVertex.bytes,fullFragment.bytes,fullVertex.bytes,fullVariant.manifest,fullDiagnostic))
         throw std::runtime_error("Maximum texture budget: "+fullDiagnostic);
+    materialOutputNode(maxGraph).output.blend=MaterialBlend::Alpha;materialOutputNode(maxGraph).output.refraction=true;
+    connectMaterialNodes(maxGraph,maxTail,MaterialPin::Value,materialOutputNode(maxGraph).id,MaterialPin::Ior);
+    const auto glassBudget=generateMaterialGraphShader(maximum);check(glassBudget.textures.size()==12,"Refraction reduced the material texture budget.");
+    const auto& glassVariant=glassBudget.variants[5];const auto glassFragment=compileShader(config,materialGraphShaderRecipe(config,glassBudget,glassVariant));
+    if(!preflightGeneratedShaderPair(fullVertex.bytes,glassFragment.bytes,fullVertex.bytes,glassVariant.manifest,fullDiagnostic))
+        throw std::runtime_error("Maximum transmission texture budget: "+fullDiagnostic);
     MaterialAsset constant;constant.graph=materialGraphFromLegacy(constant.surface,MaterialShading::Unlit,MaterialBlend::Alpha);
     const auto constantGraph=generateMaterialGraphShader(constant);
     check(constantGraph.textures.empty(),"Constant material unexpectedly allocated texture bindings.");
@@ -929,7 +1003,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

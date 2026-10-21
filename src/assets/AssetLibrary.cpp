@@ -1426,6 +1426,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     packet->blend=generated.nodePreview?MaterialBlend::Opaque:output.blend;
     packet->receiveFog=output.receiveFog;
     packet->nodePreview=generated.nodePreview;
+    packet->refraction=generated.refraction;
     packet->signature=programs.programs->signature;
     streaming::detail::hash(packet->signature,packet->receiveFog);
     streaming::detail::hash(packet->signature,packet->dynamicHeight);

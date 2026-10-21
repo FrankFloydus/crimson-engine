@@ -42,7 +42,7 @@ inline std::uint64_t preparedModelSignature(const ModelAsset& asset,std::uint64_
         hash(result,binding.graphPending);
         if(binding.graph) {
             hash(result,binding.graph->signature);hash(result,binding.graph->shading);hash(result,binding.graph->blend);
-            hash(result,binding.graph->nodePreview);hash(result,binding.graph->dynamicCoverage);hash(result,binding.graph->receiveFog);
+            hash(result,binding.graph->nodePreview);hash(result,binding.graph->dynamicCoverage);hash(result,binding.graph->receiveFog);hash(result,binding.graph->refraction);
         }
         for(std::size_t slot=0;slot<binding.handles.size();++slot) {
             hash(result,binding.handles[slot].idx);hash(result,binding.flags[slot]);

@@ -973,6 +973,54 @@ void heightInputActivationAndFallback() {
         "Disconnecting Height did not restore the exact retained fallback.");
 }
 
+void refractionInputActivationAndFallbacks() {
+    GraphUi ui;MaterialNodeId output{},scalar{};
+    require(ui.document.edit("Optical canvas fixture",[&](auto& asset){asset.graph={};
+        output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{300,-180}).id;
+        scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-250,-100}).id;
+    })&&ui.document.save(),"Could not configure optical canvas fixture.");ui.frame(5);
+    const MaterialPin optical[]{MaterialPin::Transmission,MaterialPin::Ior,MaterialPin::Thickness,MaterialPin::AttenuationColor,MaterialPin::AttenuationDistance};
+    const auto active=[&](MaterialPin semantic) {
+        for(const auto& pin:ui.editor.presentation().pins)if(pin.node==output&&pin.input&&pin.pin==semantic)return pin.active;
+        throw std::runtime_error("Output removed an optical or retained Specular pin.");
+    };
+    const auto field=[&](MaterialPin semantic){return std::any_of(ui.editor.presentation().fields.begin(),ui.editor.presentation().fields.end(),[&](const auto& item){return item.node==output&&item.pin==semantic;});};
+    const auto fieldPoint=[&](MaterialPin semantic,float fraction=.25f) {
+        for(const auto& item:ui.editor.presentation().fields)if(item.node==output&&item.pin==semantic)return ImVec2{item.minimum[0]+(item.maximum[0]-item.minimum[0])*fraction,(item.minimum[1]+item.maximum[1])*.5f};
+        throw std::runtime_error("Output removed a disconnected optical fallback.");
+    };
+    for(const auto pin:optical)require(!active(pin)&&!field(pin),"Disabled optical input exposed an inline editor or active pin.");
+    const auto disabled=ui.snapshot();ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(output,MaterialPin::Transmission,true));
+    require(ui.snapshot()==disabled&&!materialInputLink(ui.document.definition().graph,output,MaterialPin::Transmission),"Canvas accepted a disabled optical connection.");
+    require(ui.document.edit("Enable Refraction",[](auto& asset){auto& o=materialOutputNode(asset.graph).output;o.blend=MaterialBlend::Alpha;o.refraction=true;}),"Could not enable canvas Refraction.");ui.frame(3);
+    for(const auto pin:optical)require(active(pin)&&field(pin),"Enabled optical input lacks a typed pin or inline fallback.");
+    require(!active(MaterialPin::Specular)&&!field(MaterialPin::Specular),"IOR did not make retained Specular dormant on canvas.");
+    // Sliders select an absolute position, unlike the neighboring drag fields.
+    // Use the presented, zoom-adjusted width rather than a pixel delta that can
+    // finish below the original thumb at a different canvas scale.
+    auto position=fieldPoint(MaterialPin::Ior,.3f);const auto before=ui.snapshot();ui.drag(position,fieldPoint(MaterialPin::Ior,.85f));
+    require(materialOutputNode(ui.document.definition().graph).output.ior>1.5f,"IOR inline control retained the old 0-1 Output gesture range.");ui.oneUndo(before);
+    const auto beforeCancel=ui.snapshot();position=fieldPoint(MaterialPin::Thickness);auto& io=ImGui::GetIO();ui.move(position);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move({position.x+30,position.y});
+    require(ui.document.transactionActive()&&ui.snapshot()!=beforeCancel,"Thickness inline drag did not begin a value transaction.");
+    ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+    require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Escape did not restore optical fallbacks exactly.");
+    const auto beforeColor=ui.snapshot();ui.click(fieldPoint(MaterialPin::AttenuationColor));
+    require(ui.popup()&&ui.snapshot()==beforeColor&&!ui.document.transactionActive(),"Opening attenuation color altered authored values.");
+    ui.key(ImGuiKey_Escape);require(ui.snapshot()==beforeColor&&!ui.popup(),"Closing attenuation color changed its fallback.");
+    const auto beforeConnect=ui.snapshot();ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(output,MaterialPin::Transmission,true));
+    const auto* connected=materialInputLink(ui.document.definition().graph,output,MaterialPin::Transmission);
+    require(connected&&connected->fromNode==scalar&&!field(MaterialPin::Transmission),"Optical graph connection did not hide the retained fallback.");
+    const auto identity=connected->id;ui.oneUndo(beforeConnect);
+    require(ui.document.edit("Disable Refraction",[](auto& asset){materialOutputNode(asset.graph).output.refraction=false;}),"Could not disable canvas Refraction.");ui.frame(3);
+    require(!active(MaterialPin::Transmission)&&active(MaterialPin::Specular)&&field(MaterialPin::Specular)&&
+        materialInputLink(ui.document.definition().graph,output,MaterialPin::Transmission)->id==identity,
+        "Disabling Refraction lost optical wiring or did not restore Specular.");
+    require(ui.document.undo(),"Could not restore canvas Refraction.");ui.frame(3);
+    ui.move(ui.pin(output,MaterialPin::Transmission,true));io.AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(output,MaterialPin::Transmission,true));io.AddKeyEvent(ImGuiMod_Alt,false);ui.frame(3);
+    require(active(MaterialPin::Transmission)&&field(MaterialPin::Transmission)&&materialOutputNode(ui.document.definition().graph).output.transmission==1,
+        "Disconnecting optical input did not restore its exact fallback.");
+}
+
 void inlineComboPopupCoordinates() {
     GraphUi ui;MaterialNodeId mapping{},texture{},grunge{};
     require(ui.document.edit("Dropdown fixture",[&](auto& asset) {
@@ -1928,5 +1976,5 @@ void boundedNodeSearchResults() {
 }
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

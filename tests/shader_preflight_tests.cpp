@@ -39,6 +39,7 @@
 #include "cs_ssgi_publish.h"
 #include "cs_ssao_evaluate.h"
 #include "cs_ssao_publish.h"
+#include "cs_refraction_downsample.h"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -81,6 +82,8 @@ int main() {
         check(crimson::preflightComputeShader(cc_cs_ssgi_publish,cc_cs_ssgi_publish,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_ssao_evaluate,cc_cs_ssao_evaluate,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_ssao_publish,cc_cs_ssao_publish,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_refraction_downsample,cc_cs_refraction_downsample,diagnostic),diagnostic);
+        check(!crimson::preflightComputeShader(cc_cs_refraction_downsample,cc_cs_glow_downsample,diagnostic),"Refraction filtering must retain its explicit source-mip and destination interface.");
         check(!crimson::preflightComputeShader(cc_cs_ssao_publish,cc_cs_ssao_evaluate,diagnostic),"SSAO publication must retain its independent receiver/atlas contract.");
         check(!crimson::preflightComputeShader(cc_cs_ssgi_publish,cc_cs_ssgi_trace,diagnostic),"GI publication must retain its separate atlas-write contract.");
         check(!crimson::preflightComputeShader(cc_cs_model_deform,cc_cs_procedural_filter,diagnostic),"Deformation compute must retain its independent buffer/uniform contract.");

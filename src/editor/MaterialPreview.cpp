@@ -147,6 +147,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
     if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     if(!renderer.antiAliasingStatus().empty())ImGui::TextWrapped("%s",renderer.antiAliasingStatus().c_str());
+    if(!renderer.refractionStatus().empty())ImGui::TextWrapped("%s",renderer.refractionStatus().c_str());
     const auto size=ImGui::GetContentRegionAvail();
     if(size.x<=0 || size.y<=0){cancelInteraction();return;}
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;

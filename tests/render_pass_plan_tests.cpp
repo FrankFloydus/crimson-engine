@@ -33,7 +33,11 @@ void erase(RenderPassPlan& plan,Kind kind) {
     throw std::runtime_error("Test tried to erase a missing pass.");
 }
 void error(const RenderPassPlan& plan,Error expected,const char* message) {
-    check(validateRenderPassPlan(plan).error==expected,message);
+    const auto result=validateRenderPassPlan(plan);
+    if(result.error!=expected) {
+        std::cerr<<message<<" Actual error: "<<renderPassPlanErrorText(result.error)<<" resource "<<unsigned(result.resource)<<" pass "<<unsigned(result.passIndex)<<'\n';
+    }
+    check(result.error==expected,message);
 }
 void error(const RenderPassPlan& plan,const RenderResourceTable& table,Error expected,const char* message) {
     const auto result=validateRenderPassPlan(plan,table);
@@ -108,12 +112,24 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
         auto& ao=table.bindings[index(Resource::SsaoVisibility)];ao.textures[0]=atlas;
         ao.textures[0].range.firstTexel=1041;ao.textures[0].range.texelCount=5;
     }
+    if(plan.config.refraction) {
+        auto snapshot=texture(6000,64,64,5);snapshot.mipLevels=plan.config.refraction_levels;
+        table.bindings[index(Resource::RefractionMatte)].textures[0]=texture(6200,64,64,6);
+        for(unsigned level=0;level<plan.config.refraction_levels;++level) {
+            auto& mip=table.bindings[index(static_cast<Resource>(unsigned(Resource::RefractionMip0)+level))];
+            mip.textures[0]=snapshot;mip.textures[0].range.firstMip=std::uint16_t(level);
+            if(level) {
+                auto& scratch=table.bindings[index(static_cast<Resource>(unsigned(Resource::RefractionScratch1)+level-1))];
+                scratch.textures[0]=texture(6100+level,std::max(1u,64u>>level),std::max(1u,64u>>level),5);
+            }
+        }
+    }
     return table;
 }
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool collisions:{false,true})for(bool gi:{false,true})for(bool ao:{false,true})for(bool smaa:{false,true})for(bool refraction:{false,true}) {
             const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=world || purpose==RenderViewPurpose::Thumbnail;
@@ -122,6 +138,7 @@ void profiles() {
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
             config.collisionOverlays=collisions && world;config.ssgi=gi && world;config.ssao=ao && world;
             config.smaa=smaa;
+            config.refraction=refraction;config.refraction_levels=7;
             config.glowBaseWidth=config.glowBaseHeight=32;
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported profile has an invalid structural plan.");
             check(bool(validateRenderPassPlan(plan,concrete(plan))),"A supported profile has invalid concrete resource bindings.");
@@ -341,6 +358,82 @@ void spatialAntiAliasingContracts() {
         check(item.resource<Resource::SmaaEdges || item.resource>Resource::SmaaSearch,"Disabled AA retained scratch/LUT dependencies.");
     check(std::any_of(off.find(Kind::Encode)->uses().begin(),off.find(Kind::Encode)->uses().end(),[](const auto& item){return item.resource==Resource::Composite;}),"Off did not retain the ordinary tone-map composition path.");
 }
+void refractionContracts() {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
+        for(bool gi:{false,true})for(bool ao:{false,true}) {
+            const bool world=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game;
+            RenderPassPlanConfig config;config.view={purpose,721};config.refraction=true;config.refraction_levels=7;
+            config.ssgi=gi&&world;config.ssao=ao&&world;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
+            const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
+            check(bool(validateRenderPassPlan(plan,resources)),"Refraction failed a view's concrete resource contract.");
+            const auto slots=renderViewPassSlots(purpose);
+            check(plan.has(Kind::RefractionDepth)==(!config.ssgi&&!config.ssao),"Refraction duplicated an existing readable-depth prepass or omitted its late depth pass.");
+            const auto& capture=*plan.find(Kind::RefractionCapture);
+            check(capture.execution==RenderPassExecution::Compute && capture.physicalView==slots.refraction_capture &&
+                plan.find(Kind::Opaque)->physicalView<capture.physicalView && capture.physicalView<plan.find(Kind::Transparent)->physicalView,
+                "Refraction snapshot is not captured strictly between opaque and transparent rendering.");
+            if(const auto* depth=plan.find(Kind::RefractionDepth))check(plan.find(Kind::Opaque)->physicalView<depth->physicalView &&
+                depth->physicalView<capture.physicalView,"Late readable depth escaped its raster-to-compute boundary.");
+            check(std::any_of(capture.uses().begin(),capture.uses().end(),[](const auto& item){return item.resource==Resource::SceneHdr && item.access==Access::SampledRead;}),
+                "Refraction capture does not read the original HDR source.");
+            const auto& matte_init=*plan.find(Kind::RefractionMatteInit);
+            check(matte_init.physicalView==capture.physicalView&&matte_init.execution==RenderPassExecution::Compute&&
+                matte_init.resources[0].resource==Resource::RefractionMip0&&matte_init.resources[0].access==Access::SampledRead&&
+                matte_init.resources[1].resource==Resource::RefractionMatte&&matte_init.resources[1].access==Access::StorageWrite,
+                "Refraction matte throughput is not initialized from captured opaque coverage.");
+            auto matte_contract=plan;
+            check(use(matte_contract,Kind::Transparent,Resource::RefractionMatte).access==Access::ColorAttachment&&
+                use(matte_contract,Kind::Transparent,Resource::RefractionMatte).load==Load::Load&&
+                use(matte_contract,Kind::ToneMap,Resource::RefractionMatte).access==Access::SampledRead,
+                "Transparent compositing and presentation do not share initialized RGB matte throughput.");
+            for(unsigned level=1;level<7;++level) {
+                const auto filter=static_cast<Kind>(unsigned(Kind::RefractionFilter1)+(level-1)*2),copy=static_cast<Kind>(unsigned(filter)+1);
+                const auto& down=*plan.find(filter);const auto& publish=*plan.find(copy);
+                check(down.physicalView==capture.physicalView && publish.physicalView==capture.physicalView &&
+                    down.execution==RenderPassExecution::Compute && publish.execution==RenderPassExecution::Compute,
+                    "Refraction filters do not run in their ordered compute view.");
+                check(down.resources[0].resource==static_cast<Resource>(unsigned(Resource::RefractionMip0)+level-1) &&
+                    down.resources[1].resource==static_cast<Resource>(unsigned(Resource::RefractionScratch1)+level-1) &&
+                    publish.resources[0].resource==down.resources[1].resource &&
+                    publish.resources[1].resource==static_cast<Resource>(unsigned(Resource::RefractionMip0)+level),
+                    "Refraction does not filter into independent scratch before publishing a lower mip.");
+            }
+            auto broken=plan;erase(broken,Kind::RefractionCapture);error(broken,Error::MissingProducer,"Refraction accepted an uncaptured base mip.");
+            broken=plan;erase(broken,Kind::RefractionMatteInit);error(broken,Error::UndefinedLoad,"Refraction accepted uninitialized presentation matte throughput.");
+            broken=plan;erase(broken,Kind::RefractionCopy3);error(broken,Error::MissingProducer,"Refraction accepted a lower mip without publication.");
+            auto bad=resources;bad.bindings[index(Resource::RefractionMip0)].textures=bad.bindings[index(Resource::SceneHdr)].textures;
+            bad.bindings[index(Resource::RefractionMip0)].textures[0].mipLevels=config.refraction_levels;
+            // Matching source dimensions still cannot make scene-color feedback legal.
+            check(!validateRenderPassPlan(plan,bad),"Refraction captured into the attached scene HDR allocation.");
+            bad=resources;bad.bindings[index(Resource::RefractionScratch2)].textures[0].width++;
+            error(plan,bad,Error::InvalidTexture,"Refraction accepted a stale scratch extent.");
+            bad=resources;bad.bindings[index(Resource::RefractionMip2)].textures[0].range.firstMip=1;
+            error(plan,bad,Error::InvalidTexture,"Refraction lower mips overlap their previous source range.");
+            bad=resources;bad.bindings[index(Resource::RefractionMip2)].textures[0].physicalId++;
+            error(plan,bad,Error::InvalidTexture,"Refraction lower mips escaped their single snapshot allocation.");
+            bad=resources;bad.bindings[index(Resource::RefractionScratch2)].view.instanceId++;
+            error(plan,bad,Error::InvalidOwner,"Two views shared refraction scratch ownership.");
+            bad=resources;bad.bindings[index(Resource::RefractionMatte)].textures[0].width++;
+            error(plan,bad,Error::InvalidTexture,"Refraction accepted a stale matte throughput extent.");
+            bad=resources;bad.bindings[index(Resource::RefractionMatte)].textures=bad.bindings[index(Resource::Composite)].textures;
+            error(plan,bad,Error::FeedbackLoop,"Tone mapping sampled its attached output as matte throughput.");
+            bad=resources;bad.bindings[index(Resource::RefractionMatte)].view.instanceId++;
+            error(plan,bad,Error::InvalidOwner,"Two views shared presentation matte throughput.");
+            bad=resources;bad.bindings[index(Resource::ReadableSceneDepth)].textureCount=0;
+            error(plan,bad,Error::MissingBinding,"Refraction accepted missing foreground rejection depth.");
+            config.refraction=false;const auto off=buildRenderPassPlan(config);
+            for(const auto& entry:off.passes())for(const auto& item:entry.uses())check(item.resource<Resource::RefractionMip0 || item.resource>Resource::RefractionMatte,
+                "Disabled refraction retained snapshot dependencies.");
+            check(!off.has(Kind::RefractionCapture)&&!off.has(Kind::RefractionDepth)&&!off.has(Kind::RefractionMatteInit),"Disabled refraction scheduled capture/depth/matte work.");
+        }
+    auto maximum=fullConfig();maximum.smaa=true;maximum.glowPrefilters=5;maximum.glowBaseWidth=maximum.glowBaseHeight=1;
+    maximum.refraction=true;maximum.refraction_levels=MaximumRefractionMipLevels;
+    check(bool(validateRenderPassPlan(buildRenderPassPlan(maximum))),"Maximum lighting, Glow, AA and refraction chains exceed bounded plan capacity.");
+    maximum.refraction_levels=0;error(buildRenderPassPlan(maximum),Error::InvalidPass,"Refraction accepted no snapshot mip.");
+    maximum.refraction_levels=MaximumRefractionMipLevels+1;error(buildRenderPassPlan(maximum),Error::InvalidPass,"Refraction accepted an unsupported seventeenth mip.");
+    RenderPassPlanConfig one;one.refraction=true;const auto one_plan=buildRenderPassPlan(one);
+    check(bool(validateRenderPassPlan(one_plan,concrete(one_plan))) && !one_plan.has(Kind::RefractionFilter1),"A single-mip refraction snapshot retained filtering work.");
+}
 void ownershipAndOrderFailures() {
     const auto correct=buildRenderPassPlan(fullConfig());
     auto value=correct;value.bindings[index(Resource::SceneHdr)].view.instanceId++;error(value,Error::InvalidOwner,"Logical HDR belongs to another view.");
@@ -369,7 +462,7 @@ void ownershipAndOrderFailures() {
 }
 int main() {
     static_assert(std::is_trivially_copyable_v<RenderPassPlan> && std::is_trivially_copyable_v<RenderResourceTable>);
-    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();ownershipAndOrderFailures(); }
+    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();refractionContracts();ownershipAndOrderFailures(); }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
     std::cout<<"Render pass/resource contracts passed.\n";return 0;
 }

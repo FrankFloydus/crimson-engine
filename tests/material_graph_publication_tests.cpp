@@ -77,6 +77,7 @@ void preparedSignatureChecks() {
     graph->blend=MaterialBlend::Opaque;check(signature()!=original,"Graph blend state was omitted from prepared identity.");graph->blend=MaterialBlend::Mask;
     graph->shading=MaterialShading::Unlit;check(signature()!=original,"Graph shading state was omitted from prepared identity.");graph->shading=MaterialShading::StandardPbr;
     graph->receiveFog=false;check(signature()!=original,"Graph fog reception was omitted from prepared identity.");graph->receiveFog=true;
+    graph->refraction=true;check(signature()!=original,"Graph refraction composition was omitted from prepared identity.");graph->refraction=false;
     surfaces.front().doubleSided=!surfaces.front().doubleSided;check(signature()!=original,"Double-sided draw state did not replace prepared materials.");surfaces.front()=material.surface;
     surfaces.front().receiveFog=false;check(signature()!=original,"Fallback fog reception was omitted from prepared identity.");surfaces.front()=material.surface;
     surfaces.front().alphaCutoff+=.1f;check(signature()!=original,"Coverage cutoff did not replace prepared materials.");surfaces.front()=material.surface;
@@ -134,7 +135,9 @@ void requireComplete(const MaterialGraphProgramResult& result) {
     if(!result.current)throw std::runtime_error("Expected complete graph shader publication: "+result.diagnostic);
     check(result.programs&&result.programs->bytes>0,"Published graph has no program allocation accounting.");
     check(bgfx::isValid(result.programs->parameters),"Published graph has no parameter uniform.");
-    for(const auto handle:result.programs->programs)check(bgfx::isValid(handle),"A partial graph program bundle was published.");
+    for(std::size_t pass=0;pass<5;++pass)check(bgfx::isValid(result.programs->programs[pass]),"A partial graph program bundle was published.");
+    check(bgfx::isValid(result.programs->programs[5])==bgfx::isValid(result.programs->programs[6]),
+        "A partial optional transmission pair was published.");
     for(const auto handle:result.programs->samplers)check(bgfx::isValid(handle),"Published graph has an incomplete sampler set.");
 }
 
@@ -714,7 +717,7 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
         check(!retainedVersion.expired(),"Destroying the program owner invalidated an outstanding packet lease.");
         resources.stop();
     }
-    for(const auto handle:retainedPacket.programs->programs)check(bgfx::isValid(handle),"A complete generation did not survive its owner through the packet lease.");
+    for(std::size_t pass=0;pass<5;++pass)check(bgfx::isValid(retainedPacket.programs->programs[pass]),"A complete generation did not survive its owner through the packet lease.");
     retainedPacket.programs.reset();
     check(retainedVersion.expired(),"Program generation was not destroyed before graphics shutdown.");
     for(int frame=0;frame<3;++frame)bgfx::frame();

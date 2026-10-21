@@ -556,6 +556,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!renderer.clusteredLightingStatus().empty())status_+=renderer.clusteredLightingStatus();
     if(!renderer.ssgiStatus().empty())status_+=renderer.ssgiStatus();
     if(!renderer.antiAliasingStatus().empty())status_+=renderer.antiAliasingStatus()+'\n';
+    if(!renderer.refractionStatus().empty())status_+=renderer.refractionStatus()+'\n';
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
     if(play_.playing()) {
         status_+=play_.status();

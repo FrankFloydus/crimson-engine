@@ -1,3 +1,4 @@
 [submodule "third_party/crimson-renderer"]
 	path = third_party/crimson-renderer
 	url = https://github.com/qvertexworks/crimson-renderer.git
+	branch = main

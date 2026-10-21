@@ -389,6 +389,30 @@ void fogReceptionTransactions() {
         require(document.save()&&document.load(id)&&same(document.definition(),changed)&&!document.dirty(),"Fog exclusion did not survive save/reopen.");
     }
 }
+void refractionTransactions() {
+    Project project;MaterialDocument document(project.root);require(document.create("Glass history"),"Could not create optical material fixture.");
+    require(document.edit("Configure glass",[](auto& asset){auto& output=materialOutputNode(asset.graph).output;output.blend=MaterialBlend::Alpha;output.refraction=true;})&&document.save(),"Could not configure Lit Translucent glass.");
+    const auto original=document.definition();const auto committed=document.committed();const auto bytes=text(materialAssetPath(project.root,document.assetId()));
+    require(document.begin("Optical gesture")&&document.update([](auto& asset){auto& output=materialOutputNode(asset.graph).output;output.ior=1.7f;output.thickness=.05f;output.attenuationColor={.3f,.7f,1};}),"Optical value gesture failed.");
+    require(document.committed()==committed&&same(*committed,original),"Live optical editing changed a committed material packet.");
+    document.cancel();require(same(document.definition(),original)&&!document.dirty(),"Cancel lost exact optical defaults or clean state.");
+    MaterialNodeId thickness{};
+    require(document.edit("Optical graph",[&](auto& asset){auto& graph=asset.graph;thickness=addMaterialNode(graph,MaterialNodeKind::Scalar).id;findMaterialNode(graph,thickness)->scalar=.04f;
+        connectMaterialNodes(graph,thickness,MaterialPin::Value,materialOutputNode(graph).id,MaterialPin::Thickness);
+        auto& output=materialOutputNode(graph).output;output.ior=1.8f;output.attenuationColor={.3f,.7f,1};output.attenuationDistance=2;}),"Could not commit optical graph inputs.");
+    const auto optical=document.definition();const auto link=materialInputLink(optical.graph,materialOutputNode(optical.graph).id,MaterialPin::Thickness)->id;
+    require(document.undo()&&same(document.definition(),original)&&!document.dirty()&&document.redo()&&same(document.definition(),optical),"Optical edit failed single-step undo/redo.");
+    require(document.edit("Make optics dormant",[](auto& asset){materialOutputNode(asset.graph).output.shading=MaterialShading::Unlit;})&&
+        !materialRefractionActive(materialOutputNode(document.definition().graph).output)&&
+        materialInputLink(document.definition().graph,materialOutputNode(document.definition().graph).id,MaterialPin::Thickness)->id==link,
+        "Shader model switch lost dormant optical settings or links.");
+    require(document.undo()&&same(document.definition(),optical),"Undo did not restore optical activation exactly.");
+    require(text(materialAssetPath(project.root,document.assetId()))==bytes,"Optical edits rewrote disk before Save.");
+    require(document.save()&&document.load(document.assetId())&&same(document.definition(),optical)&&!document.dirty(),"Optical graph failed native save/reopen.");
+    const auto revision=document.revision();
+    require(!document.edit("Invalid optical value",[](auto& asset){materialOutputNode(asset.graph).output.attenuationDistance=0;})&&
+        same(document.definition(),optical)&&document.revision()==revision&&!document.dirty(),"Rejected optical edit changed document authority or history.");
+}
 void usageBlendAndHdrTransactions() {
     Project project;MaterialDocument document(project.root);require(document.create("Coverage history"),"Coverage fixture creation failed.");
     const auto original=document.definition();const auto output=materialOutputNode(original.graph).id;
@@ -412,5 +436,5 @@ void usageBlendAndHdrTransactions() {
 }
 int main(int argc,char** argv){try{if(argc==4&&std::string(argv[1])=="--verify-material"){verifyActualMaterial(argv[2],argv[3]);return 0;}
     require(argc==1,"Expected --verify-material <project root> <material id>, or no arguments.");
-    publicationAndHistory();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+    publicationAndHistory();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

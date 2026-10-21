@@ -35,6 +35,7 @@ const std::map<std::string,std::string> varying{
     {"cs_ssgi_trace","varying.def.sc"},{"cs_ssgi_temporal","varying.def.sc"},
     {"cs_ssgi_filter","varying.def.sc"},{"cs_ssgi_publish","varying.def.sc"},
     {"cs_ssao_evaluate","varying.def.sc"},{"cs_ssao_publish","varying.def.sc"},
+    {"cs_refraction_downsample","varying.def.sc"},
     {"vs_particle","particle.varying.def.sc"},{"fs_particle","particle.varying.def.sc"},
     {"vs_pbr","varying.def.sc"},{"fs_pbr","varying.def.sc"},{"vs_model","model.varying.def.sc"},{"fs_model","model.varying.def.sc"},
     {"vs_model_instanced","model_instanced.varying.def.sc"},{"vs_pick_instanced","model_instanced.varying.def.sc"},

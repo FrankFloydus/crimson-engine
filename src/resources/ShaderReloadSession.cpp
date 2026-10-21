@@ -102,7 +102,8 @@ void ShaderReloadSession::pump() {
         ready.at("cs_model_deform")->bytes,
         ready.at("cs_ssgi_trace")->bytes,ready.at("cs_ssgi_temporal")->bytes,
         ready.at("cs_ssgi_filter")->bytes,ready.at("cs_ssgi_publish")->bytes,
-        ready.at("cs_ssao_evaluate")->bytes,ready.at("cs_ssao_publish")->bytes)) {
+        ready.at("cs_ssao_evaluate")->bytes,ready.at("cs_ssao_publish")->bytes,
+        ready.at("cs_refraction_downsample")->bytes)) {
         bgfx::destroy(ui); pending_=false; status_="Shader reload: "+renderer_.shaderStatus(); return;
     }
     // The renderer accepted its whole candidate group; this commit cannot fail.
