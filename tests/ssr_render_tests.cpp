@@ -4,6 +4,7 @@
 #include <crimson/renderer/forward/ModelAnimation.h>
 #include "crimson-renderer/Picking.h"
 #include "assets/MaterialAsset.h"
+#include "assets/BuiltinGeometry.h"
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
 #include <crimson/renderer/forward/SsrGpu.h>
@@ -20,6 +21,7 @@
 #include <memory>
 #include <numbers>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -60,7 +62,7 @@ double variation(const DecodedImage& image) {
         total+=std::abs(int(image.rgba[offset])-int(image.rgba[offset+image.width*4]));++count;}
     return total/count;
 }
-void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& artifacts) {
+void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& artifacts,bool closedCubeOnly) {
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     MaterialGraphPrograms programs(resources,config);TestGpuContext gpu;
     bgfx::reset(320,240,BGFX_RESET_NONE);renderer.resizeViewport(Width,Height);renderer.resizeGameViewport(Width,Height);renderer.setGridVisible(false);
@@ -166,6 +168,129 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     };
     const auto pair=[&](const char* off,const char* on){settings.environment.ssr.enabled=false;auto baseline=capture(off);
         settings.environment.ssr.enabled=true;return std::pair{std::move(baseline),capture(on)};};
+    {
+        // Reproduce the authored closed mirror rather than substituting a
+        // shading-normal tilt on an open plane. Hard normal charts retain the
+        // cube's six actual face normals, including with Smooth selected.
+        const auto savedOutput=output();const auto savedSettings=settings;const auto savedInstances=scene.instances;
+        const auto box=builtinBoxGeometry();check(renderer.prepareModel(*box),renderer.modelStatus());
+        constexpr Vec3 authoredPosition{4.1101737f,.50492734f,1.0236609f};
+        output().blend=MaterialBlend::Alpha;output().opacity=1;output().metallic=1;
+        output().baseColor={1,1,1};output().doubleSided=false;output().refraction=false;
+        std::vector<ModelMaterial> cubeMaterials(1),floorMaterials(1);
+        std::vector<ModelMaterialTextures> cubeBindings(1),floorBindings(1);
+        floorMaterials[0].metallic=0;floorMaterials[0].roughness=.42f;floorMaterials[0].baseColor={1,1,1,1};
+        floorMaterials[0].uvScale={3,3,1};
+        std::array<std::uint8_t,32*32*4> checker{};
+        for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x) {
+            const auto p=(y*32+x)*4;const std::uint8_t value=((x/4+y/4)&1)?210:42;
+            checker[p]=checker[p+1]=checker[p+2]=value;checker[p+3]=255;
+        }
+        Texture checkerTexture{bgfx::createTexture2D(32,32,false,1,bgfx::TextureFormat::RGBA8,0,bgfx::copy(checker.data(),std::uint32_t(checker.size())))};
+        check(bgfx::isValid(checkerTexture.handle),"Closed mirror checker source allocation failed.");
+        floorBindings[0].handles[0]=checkerTexture.handle;
+        floorBindings[0].flags[0]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+        std::array<std::vector<ModelMaterial>,4> stepMaterials;
+        std::array<RenderModelInstance,6> closedScene;
+        auto& cube=closedScene[0];cube.entityId=0x53535243554245;cube.model={box,math::translation(authoredPosition)};
+        cube.materials=&cubeMaterials;cube.textures=&cubeBindings;cube.meshShading=MeshShading::Smooth;cube.forceFullDetail=true;
+        auto& ground=closedScene[1];ground.entityId=cube.entityId+1;
+        ground.model={flat,math::translation({authoredPosition[0],0,authoredPosition[2]})*
+            math::rotation(math::axisAngle({1,0,0},-std::numbers::pi/2))*math::scaling({6,6,1})};
+        ground.materials=&floorMaterials;ground.textures=&floorBindings;ground.forceFullDetail=true;
+        for(unsigned step=0;step<stepMaterials.size();++step) {
+            const float height=.12f+.12f*step;
+            stepMaterials[step].resize(1);stepMaterials[step][0].baseColor=step&1?Vec4{.95f,.08f,.025f,1}:Vec4{.6f,.04f,.015f,1};
+            auto& tread=closedScene[step+2];tread.entityId=cube.entityId+2+step;tread.model={box,
+                math::translation({authoredPosition[0]+1.05f+.5f*step,height*.5f,authoredPosition[2]-.65f})*
+                math::scaling({.5f,height,2.0f})};
+            tread.materials=&stepMaterials[step];tread.shading=MaterialShading::Unlit;tread.forceFullDetail=true;
+        }
+        scene.instances=closedScene;
+        settings.environment.ssgi.enabled=settings.environment.ssao.enabled=settings.environment.glow.enabled=false;
+        settings.environment.fog.enabled=false;settings.environment.ssr.quality=SsrQuality::Medium;
+        settings.environment.ssr.strength=1;settings.environment.ssr.maxDistance=50;
+        settings.environment.ssr.maxRoughness=.8f;settings.environment.ssr.bias=.0005f;settings.environment.ssr.depthTolerance=.059f;
+        settings.camera.fov=45;settings.camera.nearPlane=.0006994245f;settings.camera.farPlane=2048;
+        const std::array<Vec3,2> eyes{{{4.5f,2.6f,3.f},{3.2f,1.6f,2.4f}}};
+        std::vector<std::string> closedFailures;
+        const auto cross=[](const Vec3& a,const Vec3& b){return Vec3{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};};
+        for(unsigned angle=0;angle<eyes.size();++angle) {
+            settings.camera.position=authoredPosition+eyes[angle];settings.camera.target=authoredPosition;settings.camera.up={0,1,0};
+            const auto forward=math::normalized(settings.camera.target-settings.camera.position);
+            const auto right=math::normalized(cross(forward,settings.camera.up)),up=cross(right,forward);
+            const float halfHeight=std::tan(settings.camera.fov*std::numbers::pi_v<float>/360);
+            const auto cubePixel=[&](unsigned x,unsigned y) {
+                const auto ray=math::normalized(forward+right*((2*(x+.5f)/Width-1)*halfHeight*Width/Height)+
+                    up*((1-2*(y+.5f)/Height)*halfHeight));
+                const auto eye=settings.camera.position-authoredPosition;float entry=0,exit=1000000;
+                for(unsigned axis=0;axis<3;++axis) {
+                    if(std::abs(ray[axis])<1e-8f){if(std::abs(eye[axis])>.5f)return false;continue;}
+                    const float a=(-.5f-eye[axis])/ray[axis],b=(.5f-eye[axis])/ray[axis];
+                    entry=std::max(entry,std::min(a,b));exit=std::min(exit,std::max(a,b));
+                }
+                if(exit<=entry||entry<=0)return false;
+                const auto point=eye+ray*entry;unsigned nearEdges{};
+                for(unsigned axis=0;axis<3;++axis)if(std::abs(point[axis])>.46f)++nearEdges;
+                return nearEdges==1; // Exclude rasterized edges/corners, retain all three visible faces.
+            };
+            double sharpInteriorContrast{};
+            const auto decode=[](std::uint8_t code){const double value=code/255.;
+                return value<=.04045?value/12.92:std::pow((value+.055)/1.055,2.4);};
+            for(float roughness:{.045f,.09f,.10f,.116f,.15f}) {
+                output().roughness=roughness;cubeBindings[0].graph=prepare();
+                const auto label="closed-mirror-angle-"+std::to_string(angle)+"-roughness-"+std::to_string(roughness);
+                const auto [without,with]=pair((label+"-off").c_str(),(label+"-on").c_str());
+                double maximumResponse{},meanResponse{},maximumNeighborJump{};unsigned samples{},changed{};
+                for(unsigned y=0;y<Height;++y)for(unsigned x=0;x<Width;++x)if(cubePixel(x,y)) {
+                    const auto p=(std::size_t(y)*Width+x)*4;double response{};
+                    for(unsigned c=0;c<3;++c)response=std::max(response,double(std::abs(int(with.rgba[p+c])-int(without.rgba[p+c]))));
+                    maximumResponse=std::max(maximumResponse,response);meanResponse+=response;++samples;if(response>2)++changed;
+                    if(x+1<Width&&cubePixel(x+1,y))for(unsigned c=0;c<3;++c)maximumNeighborJump=std::max(maximumNeighborJump,
+                        double(std::abs((int(with.rgba[p+c])-int(without.rgba[p+c]))-
+                        (int(with.rgba[p+4+c])-int(without.rgba[p+4+c])))));
+                }
+                std::cout<<label<<": max response="<<maximumResponse<<", mean="<<meanResponse/samples
+                    <<", changed="<<changed<<'/'<<samples<<", max correction neighbor jump="<<maximumNeighborJump<<'\n';
+                check(samples>100,"Closed mirror camera did not cover a meaningful receiver area.");
+                if(maximumResponse<=3)closedFailures.push_back(label+": closed Alpha mirror lost every floor/step donor response.");
+                // Changing the known red treads to green must change their
+                // reflected footprint, independently of the gray environment.
+                for(auto& material:stepMaterials)material[0].baseColor={.025f,.95f,.04f,1};
+                const auto green=capture((label+"-green-steps").c_str());double coloredResponse{};
+                for(unsigned y=0;y<Height;++y)for(unsigned x=0;x<Width;++x)if(cubePixel(x,y)) {
+                    const auto p=(std::size_t(y)*Width+x)*4;
+                    coloredResponse=std::max(coloredResponse,double(int(green.rgba[p+1])-int(with.rgba[p+1])));
+                }
+                std::cout<<label<<": known donor green response="<<coloredResponse<<'\n';
+                if(coloredResponse<=3)closedFailures.push_back(label+": closed mirror failed to reflect its visible opaque step donor.");
+                double interiorContrast{};
+                for(int y=int(Height/2)-3;y<=int(Height/2)+3;++y)for(int x=int(Width/2)-3;x<=int(Width/2)+3;++x) {
+                    check(cubePixel(unsigned(x),unsigned(y)),"Closed mirror donor probe left its interior.");
+                    const auto p=(std::size_t(y)*Width+std::size_t(x))*4+1;
+                    interiorContrast+=(decode(green.rgba[p])-decode(with.rgba[p]))/49.;
+                }
+                if(roughness==.09f){sharpInteriorContrast=interiorContrast;
+                    check(sharpInteriorContrast>.1,"Closed mirror sharp reference missed the broad stair interior.");}
+                if(roughness>=.1f) {
+                    const double retained=interiorContrast/sharpInteriorContrast,minimum=roughness<.15f?.6:.4;
+                    std::cout<<label<<": linear broad-donor contrast="<<interiorContrast<<", retained versus .09="<<retained<<'\n';
+                    if(retained<minimum)closedFailures.push_back(label+": rough branch retained only "+std::to_string(retained)+
+                        " of the broad uniform donor's linear contrast; minimum="+std::to_string(minimum));
+                }
+                for(unsigned step=0;step<stepMaterials.size();++step)stepMaterials[step][0].baseColor=
+                    step&1?Vec4{.95f,.08f,.025f,1}:Vec4{.6f,.04f,.015f,1};
+            }
+        }
+        output()=savedOutput;settings=savedSettings;scene.instances=savedInstances;
+        if(!closedCubeOnly)for(unsigned i=0;i<9;++i){renderer.renderGame(scene);tick();}
+        check(closedFailures.empty(),"Closed mirror reflection regression: "+
+            (closedFailures.empty()?std::string{}:closedFailures.front())+" ("+std::to_string(closedFailures.size())+" failures).");
+    }
+    if(closedCubeOnly) {
+        resources.stop();frame=renderer.drainPending(frame);
+        std::cout<<"Closed Alpha mirror/floor/visible step donor fixture passed. Artifacts: "<<artifacts.string()<<'\n';return;
+    }
     mirrorBindings[0].graph=prepare();
     settings.environment.ssr.enabled=false;const auto disabled=capture("opaque-disabled");
     check(renderer.ssrResidentBytes()==0,"Disabled SSR allocated view resources.");
@@ -449,12 +574,13 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
 }
 }
 int main(int argc,char** argv){try{
-    check(argc==5,"Pass shaderc, source/include directories and an artifact output directory.");
+    check(argc==5||(argc==6&&std::string_view(argv[5])=="--closed-cube-only"),
+        "Pass shaderc, source/include directories, an artifact output directory and optional --closed-cube-only.");
     const auto cache=fs::temp_directory_path()/("crimson-ssr-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup{fs::path path;~Cleanup(){std::error_code error;const auto resolved=fs::weakly_canonical(path,error),root=fs::weakly_canonical(fs::temp_directory_path(),error);
         if(!error&&resolved.parent_path()==root&&resolved.filename().string().starts_with("crimson-ssr-"))fs::remove_all(resolved,error);}} cleanup{cache};
     ShaderCompileConfig config{argv[1],argv[2],argv[3],cache};
     check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());struct Quit{~Quit(){SDL_Quit();}} quit;
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson SSR checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-    check(bool(window),SDL_GetError());exercise(window.get(),config,fs::path(argv[4])/(selectedTestGraphicsBackend()==GraphicsBackend::Direct3D11?"dx11":"dx12"));return 0;
+    check(bool(window),SDL_GetError());exercise(window.get(),config,fs::path(argv[4])/(selectedTestGraphicsBackend()==GraphicsBackend::Direct3D11?"dx11":"dx12"),argc==6);return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
