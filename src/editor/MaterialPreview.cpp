@@ -42,18 +42,34 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     }
     if(std::isfinite(dt)&&dt>0)materialContext_.gameSeconds+=std::min(dt,1.0);
     materialContext_.realSeconds=ImGui::GetTime();
-    if(imageDocumentId_!=material.id){imageCurrent_={};classifiedImageGraph_.reset();classifiedImageTarget_.reset();staticImage_=false;imageDocumentId_=material.id;}
+    if(imageDocumentId_!=material.id){imageCurrent_={};classifiedImageGraph_.reset();classifiedImageTarget_.reset();staticImage_=false;imageDocumentId_=material.id;mode_=MaterialPreviewMode::ThreeD;}
     if(nodePreview_) {
         const auto* node=findMaterialNode(material.graph,nodePreview_->node);
         const auto outputs=node?materialNodeOutputs(material.graph,*node):std::vector<MaterialPinDefinition>{};
         if(!node || std::none_of(outputs.begin(),outputs.end(),[&](const auto& pin){return pin.pin==nodePreview_->pin;}))setNodePreview({});
-        else if(imageGraph_) {
+    }
+    if(nodePreview_) {
+        if(ImGui::RadioButton("2D",mode_==MaterialPreviewMode::TwoD))setMode(MaterialPreviewMode::TwoD);
+        ImGui::SameLine();
+        if(ImGui::RadioButton("3D",mode_==MaterialPreviewMode::ThreeD))setMode(MaterialPreviewMode::ThreeD);
+    }
+    const bool flatNode=nodePreview_&&mode_==MaterialPreviewMode::TwoD;
+    if(!flatNode) {
+        constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane","Sprite"};
+        auto selected=static_cast<int>(mesh_);
+        ImGui::SetNextItemWidth(std::min(180.f,ImGui::GetContentRegionAvail().x));
+        if(resettableProperty(selected,static_cast<int>(MaterialPreviewMesh::Sphere),[&]{return ImGui::Combo("##Preview mesh",&selected,names,6);},"Sphere"))mesh_=static_cast<MaterialPreviewMesh>(selected);
+        ImGui::SameLine();if(ImGui::Button("Reset view")){navigation_.reset();cancelInteraction();}
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("MMB tumble · Shift+MMB pan · Ctrl+MMB rotate environment\nWheel zoom · Double-click MMB resets view and environment rotation");
+    }
+    if(flatNode) {
+        if(imageGraph_) {
             if(classifiedImageGraph_!=imageGraph_||classifiedImageTarget_!=nodePreview_) {
                 classifiedImageGraph_=imageGraph_;classifiedImageTarget_=nodePreview_;staticImage_=false;
                 try {
                     MaterialImagePreviewOptions options;options.width=options.height=256;
                     validateMaterialGraphImagePreview(*imageGraph_,*nodePreview_,options);staticImage_=true;
-                } catch(const std::exception&) { /* Context-dependent outputs keep their mesh preview. */ }
+                } catch(const std::exception&) { /* Context-dependent outputs use the node shader on a fixed plane. */ }
             }
             if(staticImage_) {
                 cancelInteraction();
@@ -109,7 +125,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     else if(!environmentRevision_)status_="Preparing preview environment...";
     if(!environment_.map.empty() && source.empty())status_="The assigned HDRI is unavailable; using the built-in studio.";
     const auto diagnose=[&](const std::string& message){if(!status_.empty())status_+='\n';status_+=message;};
-    try {
+    if(!nodePreview_)try {
         auto bindings=assets.materialPreviewBindings(material,textureEdge);
         if(!bindings.diagnostic.empty())diagnose(bindings.diagnostic);
         if(materialPreviewPacketReady(bindings) && (!bindings.graphPending || !current_ || !current_->bindings.graph)) {
@@ -122,11 +138,6 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
             }
         } else if(!bindings.graphPending)diagnose("Preparing material textures...");
     } catch(const std::exception& error) {diagnose(error.what());}
-    if(nodePreview_) {
-        const auto* node=findMaterialNode(material.graph,nodePreview_->node);
-        const auto outputs=node?materialNodeOutputs(material.graph,*node):std::vector<MaterialPinDefinition>{};
-        if(!node || std::none_of(outputs.begin(),outputs.end(),[&](const auto& pin){return pin.pin==nodePreview_->pin;}))setNodePreview({});
-    }
     if(nodePreview_)try {
         if(!nodePrograms_)nodePrograms_=assets.createMaterialNodePreviewPrograms();
         if(!nodePrograms_)throw std::runtime_error("Node preview shader compilation is unavailable.");
@@ -141,13 +152,8 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
         nodePrograms_->trim();
     } catch(const std::exception& error) {diagnose(error.what());}
     const auto displayed=nodePreview_?nodeCurrent_:current_;
-    const bool particlePreview=displayed && usesParticleMaterialPreview(mesh_,displayed->bindings);
-    constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane","Sprite"};
-    auto selected=static_cast<int>(mesh_);
-    ImGui::SetNextItemWidth(std::min(180.f,ImGui::GetContentRegionAvail().x));
-    if(resettableProperty(selected,static_cast<int>(MaterialPreviewMesh::Sphere),[&]{return ImGui::Combo("##Preview mesh",&selected,names,6);},"Sphere"))mesh_=static_cast<MaterialPreviewMesh>(selected);
-    ImGui::SameLine();if(ImGui::Button("Reset view")){navigation_.reset();cancelInteraction();}
-    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("MMB tumble · Shift+MMB pan · Ctrl+MMB rotate environment\nWheel zoom · Double-click MMB resets view and environment rotation");
+    const auto displayMesh=flatNode?MaterialPreviewMesh::Plane:mesh_;
+    const bool particlePreview=displayed && usesParticleMaterialPreview(displayMesh,displayed->bindings);
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
     if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     if(!renderer.antiAliasingStatus().empty())ImGui::TextWrapped("%s",renderer.antiAliasingStatus().c_str());
@@ -170,24 +176,27 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && !ImGui::IsKeyPressed(ImGuiKey_Escape,false);
     if(ownsInput && ImGui::IsItemHovered()) {
         if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt)selectMaterial_=true;
-        if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {navigation_.reset();environment_.rotation=0;cancelInteraction();}
-        else if(ImGui::IsMouseClicked(ImGuiMouseButton_Middle)){ImGui::SetWindowFocus();gesture_=io.KeyCtrl?3:io.KeyShift?2:particlePreview?0:1;}
-        if(io.MouseWheel)navigation_.zoom(io.MouseWheel);
+        if(!flatNode) {
+            if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {navigation_.reset();environment_.rotation=0;cancelInteraction();}
+            else if(ImGui::IsMouseClicked(ImGuiMouseButton_Middle)){ImGui::SetWindowFocus();gesture_=io.KeyCtrl?3:io.KeyShift?2:particlePreview?0:1;}
+            if(io.MouseWheel)navigation_.zoom(io.MouseWheel);
+        }
     }
-    if(!ownsInput || !ImGui::IsMouseDown(ImGuiMouseButton_Middle) || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))cancelInteraction();
+    if(flatNode || !ownsInput || !ImGui::IsMouseDown(ImGuiMouseButton_Middle) || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))cancelInteraction();
     const Vec2 delta{io.MouseDelta.x*scale.x,io.MouseDelta.y*scale.y};
     if(gesture_==1)navigation_.tumble(delta);
     if(gesture_==2)navigation_.translate(delta);
     if(gesture_==3)environment_.rotation=MaterialPreviewNavigation::rotateEnvironment(environment_.rotation,delta[0]);
     if(!displayed)return;
-    SceneSettings settings;settings.camera.position={navigation_.pan[0],navigation_.pan[1],navigation_.distance};
-    settings.camera.target={navigation_.pan[0],navigation_.pan[1],0};settings.camera.nearPlane=.1f;settings.camera.farPlane=30;
+    SceneSettings settings;settings.camera.position=flatNode?Vec3{0,0,2.6f}:Vec3{navigation_.pan[0],navigation_.pan[1],navigation_.distance};
+    settings.camera.target=flatNode?Vec3{}:Vec3{navigation_.pan[0],navigation_.pan[1],0};settings.camera.nearPlane=.1f;settings.camera.farPlane=30;
     settings.exposure=1;settings.environment=environment_;settings.antiAliasing=antiAliasing_;
-    renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,mesh_,navigation_.objectTransform(),showBackground_ && environment_.enabled,displayed,materialContext_);
+    renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,displayMesh,flatNode?Mat4{}:navigation_.objectTransform(),!flatNode && showBackground_ && environment_.enabled,displayed,materialContext_);
 }
 void MaterialPreview::release(Renderer& renderer) {
     cancelInteraction();renderer.releaseMaterialPreview();current_.reset();nodeCurrent_.reset();nodePrograms_.reset();nodePreview_.reset();nodeDefinitionKey_.clear();definitionKey_.clear();environmentHandle_={};
     requestedEnvironment_.clear();environmentRevision_=0;displayedTarget_=UINT16_MAX;navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;materialContext_={};
     imageCurrent_={};imageGraph_.reset();classifiedImageGraph_.reset();classifiedImageTarget_.reset();imageDocumentId_.clear();staticImage_=displayingImage_=false;
+    mode_=MaterialPreviewMode::ThreeD;
 }
 }

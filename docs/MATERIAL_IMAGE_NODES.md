@@ -14,13 +14,16 @@ Connect a Texture 2D or Noise source through an adjustment, then to a material
 channel. Edit disconnected input defaults inline or in Properties; connecting
 an input retains its default for later disconnection. A gesture is one undo
 command and Escape cancels it. Double left-click a node to start or stop its
-preview, or right-click an output to preview that specific output. Selecting
-another node does not retarget the preview. The add/search popup keeps its
+preview, or right-click an output to preview that specific output. Node preview
+defaults to the selected 3D mesh. Use **2D | 3D** above the preview to view the
+same output flat or on the mesh; returning to 3D restores the chosen mesh and
+camera. The mode stays selected while switching nodes within the document.
+Selecting another node does not retarget the preview. The add/search popup keeps its
 search field visible above a scrolling result list; Up/Down brings the selected
 result into view.
 
-Supported static image outputs show 128 px inline images and a 256 px sidebar
-image for the preview target. Evaluation uses the authored source resolution,
+Supported static image outputs show 128 px inline images and, in 2D mode, a
+256 px sidebar image for the preview target. Evaluation uses the authored source resolution,
 then area-reduces the completed output for display. It does not reevaluate a
 1K/2K/4K procedural source on a coarse preview lattice. This preserves thin-mark
 coverage and nonlinear adjustments such as Levels. Cached image Value outputs
@@ -38,8 +41,8 @@ branches. Vector2 likewise displays its numerical XY channels. RGB/RGBA previews
 retain the single linear-to-sRGB color conversion and straight-alpha checker
 composition. Choosing a different output can therefore change its display
 interpretation. These are preview-only transforms; source pixels, Height,
-Roughness and saved materials are unaffected. Contextual/animated outputs keep
-their existing rendered material previews.
+Roughness and saved materials are unaffected. Contextual/animated outputs use
+the node shader on the selected mesh in 3D or a fixed plane in 2D.
 
 Packed channel maps should use Texture 2D **Sample Type: Linear Data**. Color
 textures decode RGB for linear material calculations; alpha remains linear.

@@ -8,6 +8,7 @@
 #include "resources/TextureStreamer.h"
 namespace crimson {
 class AssetLibrary;
+enum class MaterialPreviewMode { TwoD, ThreeD };
 inline bool materialPreviewPacketReady(const ModelMaterialTextures& bindings) noexcept {
     return bindings.sourceReady&&bindings.drawable();
 }
@@ -24,6 +25,8 @@ public:
     void draw(AssetLibrary&,Renderer&,ResourceManager&,const MaterialAsset&,double dt);
     void setAntiAliasing(AntiAliasing value) { antiAliasing_=value; }
     void setNodePreview(std::optional<MaterialGraphPreviewTarget> target);
+    void setMode(MaterialPreviewMode value) { mode_=value;cancelInteraction(); }
+    MaterialPreviewMode mode() const { return mode_; }
     void setImageGraph(std::shared_ptr<const MaterialGraph> graph) { imageGraph_=std::move(graph); }
     std::optional<MaterialGraphPreviewTarget> nodePreview() const {return nodePreview_;}
     void cancelInteraction() { gesture_=0; }
@@ -32,6 +35,7 @@ public:
 private:
     MaterialPreviewNavigation navigation_;
     MaterialPreviewMesh mesh_{MaterialPreviewMesh::Sphere};
+    MaterialPreviewMode mode_{MaterialPreviewMode::ThreeD};
     EnvironmentSettings environment_;
     AntiAliasing antiAliasing_{AntiAliasing::Smaa};
     bool showBackground_{true};

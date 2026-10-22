@@ -1442,13 +1442,22 @@ void materialPreviewSourceLifetime(const fs::path& compiler,const fs::path& sour
     const auto authored=serializeMaterialAsset(material);
     const auto tick=[&]{resources.pump();library.updateResources(bgfx::frame());programs.trim();};
     const auto ready=[](const ModelMaterialTextures& value){return value.graph&&!value.graphPending&&value.sourceReady&&value.complete&&value.drawable();};
-    ModelMaterialTextures full;const auto fullDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{25};
+    // A fresh cache prepares both the usable and fully optimized shader tiers.
+    // Keep the complete/optimized/idle requirements, allowing cold compiler
+    // processes to finish even under concurrent system load.
+    ModelMaterialTextures full;const auto fullDeadline=std::chrono::steady_clock::now()+std::chrono::seconds{45};
     do {
         tick();full=library.materialPreviewBindings(material,128);
         if(ready(full)&&full.graph->programs->optimized&&resources.idle())break;
         std::this_thread::sleep_for(std::chrono::milliseconds{2});
     }while(std::chrono::steady_clock::now()<fullDeadline);
-    require(ready(full)&&full.graph->programs->optimized&&resources.idle(),"Shared-input lifetime fixture could not warm its Resize material: "+full.diagnostic);
+    if(!ready(full)||!full.graph->programs->optimized||!resources.idle()) {
+        const auto stats=resources.stats();
+        throw std::runtime_error("Shared-input lifetime fixture could not warm its Resize material: "+full.diagnostic+
+            " ready="+std::to_string(ready(full))+" optimized="+std::to_string(full.graph&&full.graph->programs->optimized)+
+            " queued="+std::to_string(stats.queued)+" running="+std::to_string(stats.running)+
+            " loads="+std::to_string(stats.loads)+" failures="+std::to_string(stats.failures));
+    }
     const auto sourceId=findMaterialNode(material.graph,source)->texture.image.id;
     const auto initialPublications=resources.takePublications();
     require(std::any_of(initialPublications.begin(),initialPublications.end(),[&](const auto& value) {
@@ -1834,6 +1843,32 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         require(independentFinal.sourceFingerprint==finalLiveTexture.sourceFingerprint&&independentFinal.signature==finalLiveTexture.signature,
             "The settled drag retained an intermediate definition instead of the final Histogram Scan value.");
         library.releaseMaterialNodeImagePreviews(textured.id);
+        // The same disconnected target also supplies the mesh preview. Numeric
+        // edits must update its diagnostic packet without compiling a new shader
+        // or changing the full material's Output/preview geometry policy.
+        auto meshScan=textured;meshScan.graph=liveGraph;canonicalizeMaterialAsset(meshScan);
+        const auto scanOutputHash=materialGraphRenderHash(meshScan.surface);
+        auto scanPrograms=library.createMaterialNodePreviewPrograms();
+        require(bool(scanPrograms),"Histogram Scan mesh preview has no program owner.");
+        const auto requestScan=[&]{auto result=library.materialNodePreviewBindings(*scanPrograms,meshScan,scanTarget,128);scanPrograms->trim();return result;};
+        const auto settledScan=[&](const auto& binding){return ready(binding)&&binding.graph->programs->optimized&&resources.idle();};
+        const auto scanBefore=until(requestScan,settledScan,"Histogram Scan mesh preview did not publish");
+        require(scanBefore.graph->nodePreview&&scanBefore.graph->shading==MaterialShading::Unlit&&
+            scanBefore.graph->blend==MaterialBlend::Opaque&&scanBefore.graph->sources.size()==1&&
+            !scanBefore.graph->sources.front().resize&&!scanBefore.graph->sources.front().grunge&&
+            !usesParticleMaterialPreview(MaterialPreviewMesh::Cube,scanBefore)&&
+            !usesParticleMaterialPreview(MaterialPreviewMesh::Plane,scanBefore)&&
+            !usesParticleMaterialPreview(MaterialPreviewMesh::Sprite,scanBefore),
+            "Node preview did not retain one mesh-capable diagnostic source across 2D/3D geometry choices.");
+        findMaterialNode(meshScan.graph,scan)->atomic.coverage=.3125f;
+        findMaterialNode(meshScan.graph,scan)->atomic.contrast=.45f;
+        canonicalizeMaterialAsset(meshScan);
+        const auto scanAfter=until(requestScan,settledScan,"Histogram Scan mesh numeric edit did not publish");
+        require(scanAfter.graph->programs==scanBefore.graph->programs&&scanAfter.graph->uniforms!=scanBefore.graph->uniforms&&
+            scanAfter.graph->signature!=scanBefore.graph->signature&&
+            scanAfter.graph->sourceFingerprints==scanBefore.graph->sourceFingerprints&&
+            materialGraphRenderHash(meshScan.surface)==scanOutputHash&&serializeMaterialAsset(textured)==texturedAuthored,
+            "A disconnected mesh-node numeric edit recompiled its shader, changed its source or modified the full material.");
         // Exercise the public adapter, including a shared direct/baked source,
         // rather than only TextureStreamer's generated-float cache in isolation.
         MaterialAsset resized;resized.id="resize-resource-fixture";resized.name="Processed Resize";

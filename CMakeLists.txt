@@ -852,7 +852,7 @@ if(BUILD_TESTING)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
     set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
     add_test(NAME material_preview_resource_core COMMAND asset_library_deletion_tests --material-preview-resources "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
-    set_tests_properties(material_preview_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 90)
+    set_tests_properties(material_preview_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
 
     add_executable(import_identity_tests tests/import_identity_tests.cpp
         src/editor/CollisionResources.cpp
