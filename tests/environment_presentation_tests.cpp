@@ -38,6 +38,59 @@ void reflectionThumbnailIdentity() {
         check(thumbnailEnvironmentKey(changed,sun)!=active,"An active SSR control did not invalidate a thumbnail.");}
     environment.ssr.strength=0;check(thumbnailEnvironmentKey(environment,sun)==inactive,"Zero-strength SSR altered the inactive thumbnail identity.");
 }
+void postProcessingThumbnailIdentity() {
+    EnvironmentSettings environment;const ProceduralSun sun;
+    const auto inactive=thumbnailEnvironmentKey(environment,sun);
+    environment.pixelization.pixelSize=12;environment.posterization.levels=5;
+    environment.vignette.intensity=.8f;environment.vignette.radius=.6f;environment.vignette.softness=.3f;
+    check(thumbnailEnvironmentKey(environment,sun)==inactive,"Disabled post-processing tuning invalidated a thumbnail.");
+    const auto lighting=procedural::cacheKey(environment.procedural,sun);
+    environment.pixelization.enabled=true;const auto pixelized=thumbnailEnvironmentKey(environment,sun);
+    check(pixelized!=inactive,"Enabling Pixelization did not invalidate a thumbnail.");
+    environment.pixelization.pixelSize=8;
+    check(thumbnailEnvironmentKey(environment,sun)!=pixelized,"Active Pixelization size did not invalidate a thumbnail.");
+    environment.pixelization.enabled=false;environment.posterization.enabled=true;const auto posterized=thumbnailEnvironmentKey(environment,sun);
+    check(posterized!=inactive,"Enabling Posterization did not invalidate a thumbnail.");
+    environment.posterization.levels=12;
+    check(thumbnailEnvironmentKey(environment,sun)!=posterized,"Active Posterization levels did not invalidate a thumbnail.");
+    environment.posterization.enabled=false;environment.vignette.enabled=true;const auto vignette=thumbnailEnvironmentKey(environment,sun);
+    check(vignette!=inactive,"Enabling Vignette did not invalidate a thumbnail.");
+    for(const auto member:{&VignetteSettings::intensity,&VignetteSettings::radius,&VignetteSettings::softness}) {
+        auto changed=environment;changed.vignette.*member+=.05f;
+        check(thumbnailEnvironmentKey(changed,sun)!=vignette,"An active Vignette property did not invalidate a thumbnail.");
+    }
+    environment.vignette.enabled=false;
+    check(thumbnailEnvironmentKey(environment,sun)==inactive,"Disabling presentation effects did not restore the inactive thumbnail identity.");
+    environment.pixelization.enabled=true;environment.pixelization.pixelSize=1;
+    environment.vignette.enabled=true;environment.vignette.intensity=0;
+    check(thumbnailEnvironmentKey(environment,sun)==inactive,"Identity-size Pixelization or zero-intensity Vignette changed the inactive thumbnail identity.");
+    check(procedural::cacheKey(environment.procedural,sun)==lighting,"Presentation effects changed procedural lighting inputs.");
+}
+void postProcessingReferences() {
+    using namespace post_processing;
+    const Vec2 extent{161,121};
+    const auto first=pixel_uv({.5f/161,.5f/121},extent,8);
+    near(first[0],4.f/161);near(first[1],4.f/121);
+    const auto sameBlock=pixel_uv({7.5f/161,7.5f/121},extent,8);
+    check(first==sameBlock,"Pixelization did not give every pixel in a block one sample.");
+    const auto partial=pixel_uv({160.5f/161,120.5f/121},extent,8);
+    near(partial[0],160.5f/161);near(partial[1],120.5f/121);
+    check(pixel_uv({.25f,.75f},extent,1)==Vec2{.25f,.75f},"One-pixel Pixelization was not an exact identity.");
+    const auto binary=posterize({.01f,.18f,.8f},2);
+    check(binary==Vec3{0,0,1},"Two-level Posterization did not choose display black and white.");
+    const auto four=posterize({0,.25f,1},4);
+    near(four[0],0);near(four[1],.40197778f);near(four[2],1);
+    const auto repeated=posterize(four,4);
+    for(unsigned channel=0;channel<3;++channel)near(repeated[channel],four[channel]);
+    VignetteSettings vignette{true,.8f,.5f,.5f};
+    near(vignette_weight({.5f,.5f},vignette),1);
+    near(vignette_weight({.75f,.5f},vignette),1);
+    near(vignette_weight({.875f,.5f},vignette),.6f);
+    near(vignette_weight({1,.5f},vignette),.2f);
+    near(vignette_weight({0,0},vignette),.2f);
+    vignette.enabled=false;near(vignette_weight({0,0},vignette),1);
+    vignette.enabled=true;vignette.intensity=0;near(vignette_weight({0,0},vignette),1);
+}
 void fogComposition() {
     FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.density=0;
     auto params=fog::parameters(settings,1000);const Vec3 source{4,2,1};
@@ -431,7 +484,7 @@ void ambientLightControls() {
 }
 }
 int main() {
-    try {reflectionThumbnailIdentity();fogComposition();depthAndHeightFog();fogLightEnergy();fullPrecisionFogRadiance();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
+    try {reflectionThumbnailIdentity();postProcessingThumbnailIdentity();postProcessingReferences();fogComposition();depthAndHeightFog();fogLightEnergy();fullPrecisionFogRadiance();materialFogReception();backgroundFog();independentPresentation();thumbnailInvalidation();toneMappingThumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
         std::cout<<"Environment presentation and fog checks passed.\n";return 0;}
     catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

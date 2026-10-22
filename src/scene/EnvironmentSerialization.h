@@ -21,6 +21,8 @@ inline void validateEnvironmentSettings(const EnvironmentSettings& value) {
         throw std::runtime_error("Environment source is invalid.");
     if (!validSsgiSettings(value.ssgi) || !validSsaoSettings(value.ssao) || !validSsrSettings(value.ssr))
         throw std::runtime_error("Screen-space lighting tuning is invalid.");
+    if (!validPixelizationSettings(value.pixelization) || !validPosterizationSettings(value.posterization) || !validVignetteSettings(value.vignette))
+        throw std::runtime_error("Post-processing effect tuning is invalid.");
     const auto& ambient=value.ambientLight;
     if (ambient.source!=AmbientLightSource::Disabled && ambient.source!=AmbientLightSource::Color && ambient.source!=AmbientLightSource::Sky)
         throw std::runtime_error("Ambient light source is invalid.");
@@ -82,6 +84,43 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
         tone.acesWhite=source.value("acesWhite",tone.acesWhite);
         tone.agxWhite=source.value("agxWhite",tone.agxWhite);
         tone.agxContrast=source.value("agxContrast",tone.agxContrast);
+    }
+    const auto effectObject=[&](const char* name) -> const nlohmann::json& {
+        const auto& source=json.at(name);
+        if (!source.is_object())throw std::runtime_error(std::string(name)+" settings must be an object.");
+        if (source.contains("enabled") && !source.at("enabled").is_boolean())
+            throw std::runtime_error(std::string(name)+" enabled must be a boolean.");
+        return source;
+    };
+    if (json.contains("pixelization")) {
+        const auto& source=effectObject("pixelization");auto& pixelization=value.pixelization;
+        if (source.contains("pixelSize")) {
+            const auto& size=source.at("pixelSize");
+            if (!size.is_number_integer() || size<1 || size>128)
+                throw std::runtime_error("Pixelization pixel size must be an integer between one and 128.");
+            pixelization.pixelSize=size.get<int>();
+        }
+        pixelization.enabled=source.value("enabled",pixelization.enabled);
+    }
+    if (json.contains("posterization")) {
+        const auto& source=effectObject("posterization");auto& posterization=value.posterization;
+        if (source.contains("levels")) {
+            const auto& levels=source.at("levels");
+            if (!levels.is_number_integer() || levels<2 || levels>256)
+                throw std::runtime_error("Posterization levels must be an integer between two and 256.");
+            posterization.levels=levels.get<int>();
+        }
+        posterization.enabled=source.value("enabled",posterization.enabled);
+    }
+    if (json.contains("vignette")) {
+        const auto& source=effectObject("vignette");auto& vignette=value.vignette;
+        for (const auto* name:{"intensity","radius","softness"})
+            if (source.contains(name) && !source.at(name).is_number())
+                throw std::runtime_error("Vignette tuning must be numeric.");
+        vignette.enabled=source.value("enabled",vignette.enabled);
+        vignette.intensity=source.value("intensity",vignette.intensity);
+        vignette.radius=source.value("radius",vignette.radius);
+        vignette.softness=source.value("softness",vignette.softness);
     }
     const auto quality=[](const nlohmann::json& source,int fallback,int maximum=2) {
         if (!source.contains("quality"))return fallback;
@@ -322,6 +361,10 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
         {"toneMappingParameters",{{"reinhardWhite",value.toneMappingParameters.reinhardWhite},{"acesWhite",value.toneMappingParameters.acesWhite},
             {"agxWhite",value.toneMappingParameters.agxWhite},{"agxContrast",value.toneMappingParameters.agxContrast}}},
         {"debanding",value.debanding},
+        {"pixelization",{{"enabled",value.pixelization.enabled},{"pixelSize",value.pixelization.pixelSize}}},
+        {"posterization",{{"enabled",value.posterization.enabled},{"levels",value.posterization.levels}}},
+        {"vignette",{{"enabled",value.vignette.enabled},{"intensity",value.vignette.intensity},
+            {"radius",value.vignette.radius},{"softness",value.vignette.softness}}},
         {"ssgi",{{"enabled",value.ssgi.enabled},{"strength",value.ssgi.strength},{"bounces",value.ssgi.bounces},
             {"maxDistance",value.ssgi.maxDistance},{"thickness",value.ssgi.thickness},
             {"quality",static_cast<int>(value.ssgi.quality)},{"temporalStability",value.ssgi.temporalStability},

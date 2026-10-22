@@ -381,6 +381,40 @@ void spatialAntiAliasingContracts() {
         check(item.resource<Resource::SmaaEdges || item.resource>Resource::SmaaSearch,"Disabled AA retained scratch/LUT dependencies.");
     check(std::any_of(off.find(Kind::Encode)->uses().begin(),off.find(Kind::Encode)->uses().end(),[](const auto& item){return item.resource==Resource::Composite;}),"Off did not retain the ordinary tone-map composition path.");
 }
+void optionalPresentationContracts() {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::Thumbnail})for(bool smaa:{false,true}) {
+        auto config=fullConfig(purpose);config.ssgi=config.ssao=false;
+        config.glow=false;config.smaa=smaa;config.postProcess=true;
+        config.picking=purpose==RenderViewPurpose::Scene;
+        config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
+        config.collisionOverlays=purpose!=RenderViewPurpose::Thumbnail;
+        auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
+        check(bool(validateRenderPassPlan(plan,resources)),"Optional presentation effect resources failed validation.");
+        const auto& effect=*plan.find(Kind::PostProcess);
+        const auto input=smaa?Resource::SmaaOutput:Resource::Composite;
+        check(effect.physicalView>plan.find(smaa?Kind::SmaaBlend:Kind::ToneMap)->physicalView &&
+            effect.physicalView<plan.find(Kind::Encode)->physicalView,"Presentation effects escaped their post-AA/pre-encoding boundary.");
+        check(use(plan,Kind::PostProcess,input).access==Access::SampledRead,
+            "Presentation effects bypassed the completed tone-map/AA input.");
+        for(const auto kind:{Kind::Grid,Kind::CollisionOverlays,Kind::Encode})if(const auto* entry=plan.find(kind)) {
+            check(effect.physicalView<entry->physicalView,"An editor overlay was pixelized or vignetted.");
+            check(std::any_of(entry->uses().begin(),entry->uses().end(),[](const auto& item){return item.resource==Resource::PostProcessOutput;}),
+                "Presentation composition did not consume the optional effect output.");
+        }
+        auto broken=plan;erase(broken,Kind::PostProcess);
+        error(broken,purpose==RenderViewPurpose::Thumbnail?Error::MissingProducer:Error::UndefinedLoad,
+            "Presentation consumers accepted a missing effect output.");
+        auto badResources=resources;
+        badResources.bindings[index(Resource::PostProcessOutput)].textures=badResources.bindings[index(input)].textures;
+        error(plan,badResources,Error::FeedbackLoop,"Presentation effects sampled their own attached output.");
+        badResources=resources;badResources.bindings[index(Resource::PostProcessOutput)].view.instanceId++;
+        error(plan,badResources,Error::InvalidOwner,"Two views shared optional presentation output.");
+        config.postProcess=false;const auto off=buildRenderPassPlan(config);
+        check(plan.count==off.count+1 && !off.has(Kind::PostProcess),"Disabled presentation effects retained a raster pass.");
+        for(const auto& entry:off.passes())for(const auto& item:entry.uses())
+            check(item.resource!=Resource::PostProcessOutput,"Disabled presentation effects retained output dependencies.");
+    }
+}
 void refractionContracts() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail})
         for(bool gi:{false,true})for(bool ao:{false,true}) {
@@ -597,7 +631,7 @@ void ownershipAndOrderFailures() {
 }
 int main() {
     static_assert(std::is_trivially_copyable_v<RenderPassPlan> && std::is_trivially_copyable_v<RenderResourceTable>);
-    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();refractionContracts();ssrContracts();ownershipAndOrderFailures(); }
+    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();optionalPresentationContracts();refractionContracts();ssrContracts();ownershipAndOrderFailures(); }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
     std::cout<<"Render pass/resource contracts passed.\n";return 0;
 }

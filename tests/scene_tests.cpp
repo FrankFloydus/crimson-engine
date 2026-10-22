@@ -19,6 +19,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace {
@@ -1309,6 +1310,94 @@ void environmentToneMappingParametersStorageAndHistory() {
     const auto invalidId="assets/scenes/tone-parameters-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
     require(!reopened.load(invalidId),"Invalid stored curve tuning replaced a working scene.");sameRecords(before,reopened.scene().records());
 }
+void environmentPostProcessingStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    const auto defaults=resolveEnvironment(document.scene()).environment;
+    require(!defaults.pixelization.enabled&&!defaults.posterization.enabled&&!defaults.vignette.enabled,
+        "New scenes enabled optional presentation effects.");
+    const auto id=document.createEnvironment("Post processing");const auto original=*document.scene().find(id);
+    auto edited=original;auto& settings=edited.environment->environment;
+    settings.pixelization={true,9};settings.posterization={true,6};settings.vignette={true,.7f,.6f,.3f};
+    const auto history=document.history().size();
+    require(document.begin("Tune post processing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
+        record.environment=edited.environment;})&&document.commit(),document.status());
+    require(document.history().size()==history+1&&document.history().undoLabel()=="Tune post processing",
+        "Post-processing changes did not form one Environment command.");
+    require(document.undo()&&sameEnvironment(resolveEnvironment(document.scene()),*original.environment),"Post-processing undo lost disabled defaults.");
+    require(document.redo()&&sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Post-processing redo lost authored tuning.");
+    require(document.begin("Cancel post processing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id) {
+        record.environment->environment.pixelization.pixelSize=20;record.environment->environment.vignette.intensity=0;}}),document.status());
+    document.cancel();require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled post-processing changed committed tuning.");
+    for(unsigned mask=0;mask<8;++mask) {
+        auto candidate=edited;auto& value=candidate.environment->environment;
+        value.pixelization.enabled=(mask&1)!=0;value.posterization.enabled=(mask&2)!=0;value.vignette.enabled=(mask&4)!=0;
+        require(document.updateEntity(id,candidate)&&document.save("Post processing"),document.status());
+        SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&
+            sameEnvironment(resolveEnvironment(reopened.scene()),*candidate.environment),"Save/reopen lost active or inactive post-processing tuning.");
+        const auto encoded=environmentSettingsJson(value);
+        require(readEnvironmentSettings(encoded)==value,"Shared Environment persistence lost post-processing tuning.");
+        const auto legacy=readEnvironmentSettings(encoded,false);
+        require(legacy.pixelization==value.pixelization&&legacy.posterization==value.posterization&&legacy.vignette==value.vignette,
+            "Legacy Environment reading lost post-processing tuning.");
+    }
+    document.select({id});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->environment->environment==settings,"Environment duplication lost presentation effects.");
+    require(document.save("Post processing"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
+    require(saved.at("version")==23,"Optional post-processing changed the scene schema.");
+    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))for(const auto* effect:{"pixelization","posterization","vignette"})
+        record["environment"]["environment"].erase(effect);
+    const auto missingId="assets/scenes/post-processing-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
+    SceneDocument reopened(project.root);require(reopened.load(missingId),reopened.status());const auto restored=resolveEnvironment(reopened.scene()).environment;
+    require(!reopened.dirty()&&readText(project.root/missingId)==missingText&&restored.pixelization==defaults.pixelization&&
+        restored.posterization==defaults.posterization&&restored.vignette==defaults.vignette,"Old scene load enabled effects, changed defaults, dirtied or rewrote the file.");
+    const auto encoded=environmentSettingsJson(settings);
+    for(const auto* effect:{"pixelization","posterization","vignette"}) {
+        for(const auto bad:{Json(true),Json(1),Json(nullptr),Json::array()})
+            rejects([&]{auto json=encoded;json[effect]=bad;(void)readEnvironmentSettings(json);});
+        for(const auto bad:{Json(0),Json(1),Json("true"),Json(nullptr),Json::object()})
+            rejects([&]{auto json=encoded;json[effect]["enabled"]=bad;(void)readEnvironmentSettings(json);});
+        auto partial=encoded;partial[effect]=Json::object();const auto read=readEnvironmentSettings(partial);
+        if(std::string_view(effect)=="pixelization")require(read.pixelization==defaults.pixelization,"Partial Pixelization changed defaults.");
+        if(std::string_view(effect)=="posterization")require(read.posterization==defaults.posterization,"Partial Posterization changed defaults.");
+        if(std::string_view(effect)=="vignette")require(read.vignette==defaults.vignette,"Partial Vignette changed defaults.");
+    }
+    for(unsigned index=0;index<2;++index) {
+        const auto* effect=index==0?"pixelization":"posterization";const auto* field=index==0?"pixelSize":"levels";
+        const int minimum=index==0?1:2,maximum=index==0?128:256;
+        for(const auto bad:{Json(true),Json("8"),Json(8.5),Json(8.0),Json(nullptr),Json(minimum-1),Json(maximum+1),Json(std::numeric_limits<std::uint64_t>::max())})
+            rejects([&]{auto json=encoded;json[effect][field]=bad;(void)readEnvironmentSettings(json);});
+        for(const int boundary:{minimum,maximum}) {
+            auto json=encoded;json[effect][field]=boundary;const auto read=readEnvironmentSettings(json);
+            require((index==0?read.pixelization.pixelSize:read.posterization.levels)==boundary,"Valid discrete post-processing boundary was rejected.");
+        }
+        for(const int bad:{minimum-1,maximum+1}) {
+            auto candidate=settings;if(index==0)candidate.pixelization.pixelSize=bad;else candidate.posterization.levels=bad;
+            rejects([&]{validateEnvironmentSettings(candidate);});
+            auto record=edited;record.environment->environment=candidate;
+            require(!document.updateEntity(id,record),"Invalid discrete presentation tuning entered an authored scene.");
+        }
+    }
+    const std::array members{&VignetteSettings::intensity,&VignetteSettings::radius,&VignetteSettings::softness};
+    constexpr std::array<const char*,3> fields{"intensity","radius","softness"};
+    for(unsigned field=0;field<fields.size();++field) {
+        const float minimum=field==2?.01f:0.f;
+        for(const auto bad:{Json(true),Json("0.5"),Json(nullptr),Json::array()})
+            rejects([&]{auto json=encoded;json["vignette"][fields[field]]=bad;(void)readEnvironmentSettings(json);});
+        for(const float bad:{minimum-.01f,1.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+            auto candidate=settings;candidate.vignette.*members[field]=bad;rejects([&]{validateEnvironmentSettings(candidate);});
+            auto json=encoded;json["vignette"][fields[field]]=bad;rejects([&]{(void)readEnvironmentSettings(json);});
+            auto record=edited;record.environment->environment=candidate;
+            require(!document.updateEntity(id,record),"Invalid Vignette tuning entered an authored scene.");
+        }
+        for(const float boundary:{minimum,1.f}) {
+            auto candidate=settings;candidate.vignette.*members[field]=boundary;
+            require(readEnvironmentSettings(environmentSettingsJson(candidate))==candidate,"Valid Vignette boundary was rejected.");
+        }
+    }
+    auto invalid=saved;for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["posterization"]["levels"]=1;
+    const auto invalidId="assets/scenes/post-processing-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+    const auto before=reopened.scene().records();require(!reopened.load(invalidId),"Invalid post-processing replaced a working scene.");sameRecords(before,reopened.scene().records());
+}
 void environmentSpecularAaStorageAndHistory() {
     TempProject project;SceneDocument document(project.root);
     require(!resolveEnvironment(document.scene()).environment.specularAA,"New scenes enabled Specular AA.");
@@ -1762,7 +1851,7 @@ int main() {
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();glowValidationAndLevelContribution();glowSingleEffectMigration();glowBlendModeStorageAndHistory();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();lightIndirectEnergyStorageAndHistory();environmentToneMappingParametersStorageAndHistory();environmentSsgiStorageAndHistory();
-        environmentSpecularAaStorageAndHistory();environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        environmentPostProcessingStorageAndHistory();environmentSpecularAaStorageAndHistory();environmentSsrStorageAndHistory();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
         std::cout << "Scene core checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

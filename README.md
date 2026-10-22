@@ -525,7 +525,17 @@ GPU skin/morph deformation runs once per presented pose and is shared by visible
 
 Create an **Environment** in the Outliner and select it to edit its settings in Inspector. The first Environment becomes active; additional nodes and duplicates remain inactive until **Make Active** is used. The Outliner identifies the active node. Deleting it clears activation; other Environment nodes stay inactive and built-in studio defaults with exposure 1 take over. Undo restores the node and its activation together. New scenes remain empty, using those defaults without inserting an Environment entity.
 
-Choose **Source → HDRI / IBL** or **Procedural Sky**. **Lighting** controls distant illumination and reflections; **Intensity** scales the selected environment. Switching sources preserves both sets of settings and the HDRI assignment. **Post-processing** groups Exposure, Tone mapping, Debanding and Glow.
+Choose **Source → HDRI / IBL** or **Procedural Sky**. **Lighting** controls distant illumination and reflections; **Intensity** scales the selected environment. Switching sources preserves both sets of settings and the HDRI assignment. **Post-processing** contains **Tonemapping**, **Glow**, **Pixelization**, **Posterization** and **Vignette** subsections. Tonemapping groups Exposure, the Tone mapping selector, its curve controls and Debanding.
+
+Pixelization, Posterization and Vignette each have an **Enabled** toggle and default off. Disabling an effect retains its tuning. Their settings save with the Environment, support undo/redo and affect Scene, Game and saved-scene thumbnails.
+
+| Effect | Controls | Behavior |
+| --- | --- | --- |
+| Pixelization | Pixel Size, 1–128 pixels; default 4 | Samples the rendered image in square blocks. Size 1 preserves full resolution. |
+| Posterization | Levels, 2–256; default 8 | Limits each displayed RGB channel to the selected number of evenly spaced color levels. |
+| Vignette | Intensity 0–1, default .5; Radius 0–1, default .75; Softness .01–1, default .5 | Darkens the edges around the image center; Radius controls where the fade begins and Softness controls its width. |
+
+These effects apply after Glow, tone mapping and antialiasing, before the editor grid and collision overlays. Pixelization preserves sharp block boundaries with SMAA enabled. Material and Particle Editor preview environments remain independent.
 
 **Specular AA** reduces sparkling highlights caused by surface normals that vary within a pixel. It defaults off and filters specular roughness consistently for direct lighting, environment reflections, SSR and glass. The toggle saves with the Environment and supports undo/redo; older scenes keep it off without being rewritten. Material and Particle Editor Environment menus expose independent preview toggles, while saved-scene thumbnails use the active scene value.
 
@@ -607,7 +617,7 @@ Environment settings and the explicit Sun reference save with the scene and supp
 
 Environment and direct lights accumulate in linear HDR before exposure and tone mapping. The grid and tools keep their own brightness. IBL supplies distant illumination and reflections; it does not supply local reflections or occlusion. Point lights have optional mesh shadows as described above. Practical GGX energy compensation preserves rough-metal brightness; the split-sum approximation still loses accuracy at grazing angles and is not a full multiple-scattering transport model.
 
-The Environment Inspector's **Post-processing → Tone mapping** controls Scene, Game and saved-scene thumbnails. **Linear** preserves linear values until display clipping, **ACES** provides filmic contrast, and **AgX** compresses bright saturated colors more gently. ACES and AgX follow the local Godot source's SDR implementation. **Reinhard (legacy)** remains the default to preserve existing scenes. Exposure scales scene lighting before the selected curve; it remains separate from the curve controls. The renderer encodes to sRGB once at presentation.
+The Environment Inspector's **Post-processing → Tonemapping → Tone mapping** controls Scene, Game and saved-scene thumbnails. **Linear** preserves linear values until display clipping, **ACES** provides filmic contrast, and **AgX** compresses bright saturated colors more gently. ACES and AgX follow the local Godot source's SDR implementation. **Reinhard (legacy)** remains the default to preserve existing scenes. Exposure scales scene lighting before the selected curve; it remains separate from the curve controls. The renderer encodes to sRGB once at presentation.
 
 The selected operator exposes its relevant controls:
 

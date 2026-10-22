@@ -13,6 +13,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -106,7 +107,7 @@ void centerColor(const DecodedImage& image,const Vec3& expected,const std::strin
     for(unsigned channel=0;channel<3;++channel)
         check(std::abs(float(image.rgba[pixel+channel])-expected[channel])<=3,label+": unexpected center color.");
 }
-void exercise(SDL_Window* window) {
+void exercise(SDL_Window* window,bool postProcessingOnly) {
     ResourceManager resources;
     Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     TestGpuContext context;
@@ -215,6 +216,7 @@ void exercise(SDL_Window* window) {
         equivalent(restored[0],clear[0],"Scene "+label+" toggle restoration");
         equivalent(restored[1],clear[1],"Game "+label+" toggle restoration");
     };
+    if(!postProcessingOnly) {
     const auto baseline=capture();
     expectBoth(baseline,encoded(linear(appearance.backgroundSrgb)),"empty Preferences matte");
     sceneSettings.exposure=gameSettings.exposure=3;
@@ -362,15 +364,91 @@ void exercise(SDL_Window* window) {
         equivalent(debugFog[1],debugBaseline[1],"Game non-Lit background inspection");
         sceneSettings.environment.fog.enabled=gameSettings.environment.fog.enabled=false;
     }
+    }
+
+    // Presentation effects operate on the antialiased display image. A smooth
+    // sky plus a rotated opaque edge exercises block boundaries and tone levels
+    // without a texture, authored project or external asset dependency.
+    renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::Lit);
+    renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::Lit);
+    sceneSettings=SceneSettings{};sceneSettings.camera.position={0,0,3};sceneSettings.camera.target={};
+    sceneSettings.environment.enabled=false;sceneSettings.environment.source=EnvironmentSource::ProceduralSky;
+    sceneSettings.environment.background.show=true;sceneSettings.environment.intensity=1;
+    sceneSettings.environment.procedural.skyTop={.95f,.6f,.3f};
+    sceneSettings.environment.procedural.skyHorizon={.2f,.35f,.7f};
+    sceneSettings.environment.procedural.groundHorizon={.2f,.35f,.7f};
+    sceneSettings.environment.procedural.groundBottom={.5f,.8f,.4f};
+    sceneSettings.environment.toneMapping=ToneMapping::Linear;sceneSettings.exposure=1;
+    sceneSettings.antiAliasing=AntiAliasing::Smaa;gameSettings=sceneSettings;
+    const auto postMesh=opaqueQuad();check(renderer.prepareModel(*postMesh),renderer.modelStatus());
+    std::vector<ModelMaterial> postSurfaces(1);postSurfaces[0].baseColor={.65f,.25f,.1f,1};
+    RenderModelInstance postInstance;postInstance.entityId=188;postInstance.model.asset=postMesh;
+    postInstance.model.transform=math::rotation(math::axisAngle({0,0,1},.4f))*math::scaling({.65f,.65f,1});
+    postInstance.materials=&postSurfaces;postInstance.shading=MaterialShading::Unlit;
+    scene.instances=game.instances=std::span(&postInstance,1);scene.directionalLights=game.directionalLights={};
+    const auto postBaseline=capture();
+    const auto maxDifference=[](const DecodedImage& a,const DecodedImage& b) {
+        unsigned maximum{};for(std::size_t byte=0;byte<a.rgba.size();++byte)
+            maximum=std::max(maximum,unsigned(std::abs(int(a.rgba[byte])-int(b.rgba[byte]))));return maximum;
+    };
+    auto& pixel=sceneSettings.environment.pixelization;auto& poster=sceneSettings.environment.posterization;
+    auto& vignette=sceneSettings.environment.vignette;
+    pixel.enabled=true;pixel.pixelSize=8;const auto pixelized=capture();
+    check(maxDifference(pixelized[0],postBaseline[0])>10,"Pixelization did not alter the antialiased scene.");
+    equivalent(pixelized[1],postBaseline[1],"Pixelization Game isolation");
+    for(unsigned startY=0;startY<Height;startY+=8)for(unsigned startX=0;startX<Width;startX+=8) {
+        const auto reference=(std::size_t(startY)*Width+startX)*4;
+        for(unsigned y=startY;y<std::min(startY+8,unsigned(Height));++y)for(unsigned x=startX;x<std::min(startX+8,unsigned(Width));++x)
+            for(unsigned channel=0;channel<3;++channel)
+                check(pixelized[0].rgba[(std::size_t(y)*Width+x)*4+channel]==pixelized[0].rgba[reference+channel],
+                    "SMAA or sampling softened a Pixelization block, including an odd-sized final block.");
+    }
+    pixel.enabled=false;poster.enabled=true;poster.levels=7;const auto posterized=capture();
+    check(maxDifference(posterized[0],postBaseline[0])>10,"Posterization did not alter the scene.");
+    equivalent(posterized[1],postBaseline[1],"Posterization Game isolation");
+    for(std::size_t byte=0;byte<posterized[0].rgba.size();++byte)if(byte%4!=3) {
+        const float code=posterized[0].rgba[byte];const float level=std::round(code*6/255);
+        check(std::abs(code-level*255/6)<=1,"Posterization produced a color outside its seven display-referred levels.");
+    }
+    poster.enabled=false;vignette={true,.8f,.6f,.3f};const auto vignetted=capture();
+    equivalent(vignetted[1],postBaseline[1],"Vignette Game isolation");
+    const auto center=(std::size_t(Height/2)*Width+Width/2)*4;
+    for(unsigned channel=0;channel<3;++channel) {
+        check(std::abs(int(vignetted[0].rgba[center+channel])-int(postBaseline[0].rgba[center+channel]))<=1,"Vignette changed its clear center.");
+        const auto expected=encoded(linear(Vec3{postBaseline[0].rgba[channel]/255.f,0,0})*.2f)[0];
+        check(std::abs(float(vignetted[0].rgba[channel])-expected)<=3,"Vignette corner did not apply the authored linear attenuation.");
+    }
+    check(maxDifference(vignetted[0],postBaseline[0])>20,"Vignette did not darken the viewport edge.");
+    pixel.enabled=poster.enabled=true;const auto combined=capture();
+    check(maxDifference(combined[0],pixelized[0])>10&&maxDifference(combined[0],posterized[0])>10&&
+        maxDifference(combined[0],vignetted[0])>10,"Combined post-processing lost one or more enabled effects.");
+    gameSettings=sceneSettings;const auto bothEffects=capture();
+    check(maxDifference(bothEffects[0],bothEffects[1])<=1,"Scene/Game post-processing did not bind independent matching settings.");
+    pixel.enabled=poster.enabled=vignette.enabled=false;gameSettings=sceneSettings;const auto off=capture();
+    equivalent(off[0],postBaseline[0],"Scene all post-processing disabled restoration");
+    equivalent(off[1],postBaseline[1],"Game all post-processing disabled restoration");
+    pixel.enabled=true;pixel.pixelSize=1;vignette.enabled=true;vignette.intensity=0;gameSettings=sceneSettings;
+    const auto neutral=capture();equivalent(neutral[0],postBaseline[0],"Scene neutral Pixelization/Vignette");
+    equivalent(neutral[1],postBaseline[1],"Game neutral Pixelization/Vignette");
+    for(const auto mode:{RenderDebugView::Albedo,RenderDebugView::Roughness,RenderDebugView::Metal,RenderDebugView::Normal}) {
+        renderer.setDebugView(RenderViewPurpose::Scene,mode);renderer.setDebugView(RenderViewPurpose::Game,mode);
+        pixel.enabled=poster.enabled=vignette.enabled=false;gameSettings=sceneSettings;const auto raw=capture();
+        pixel={true,8};poster={true,7};vignette={true,.8f,.6f,.3f};gameSettings=sceneSettings;const auto rawEffects=capture();
+        equivalent(rawEffects[0],raw[0],"Scene RawData post-processing bypass");
+        equivalent(rawEffects[1],raw[1],"Game RawData post-processing bypass");
+    }
+    scene.instances=game.instances={};renderer.evictModel(postMesh->id);
     resources.stop();renderer.drainPending(frame);
-    std::cout<<"Fog Scene/Game zero Density restoration, graded matte/HDRI/procedural response, Sky Affect/aerial/sun controls, finite-surface exclusions, HDR presentation and view isolation passed on "<<renderer.backendName()<<".\n";
+    std::cout<<"Post-processing Pixelization after SMAA, perceptual Posterization, Vignette, combined effects, exact disabled restoration, RawData bypass and Scene/Game isolation passed on "<<renderer.backendName()<<".\n";
+    if(!postProcessingOnly)std::cout<<"Fog background Scene/Game controls and reference checks passed.\n";
 }
 }
-int main() {
+int main(int argc,char** argv) {
     try {
+        check(argc==1||(argc==2&&std::string_view(argv[1])=="--post-processing-only"),"Unknown fog/presentation test option.");
         Sdl sdl;
         std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
             SDL_CreateWindow("Crimson fog background regression",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-        check(bool(window),SDL_GetError());exercise(window.get());return 0;
+        check(bool(window),SDL_GetError());exercise(window.get(),argc==2);return 0;
     } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

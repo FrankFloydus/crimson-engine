@@ -67,6 +67,8 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGlowAnamorphic,EnvironmentGlowQuality,
     EnvironmentGlowLevel1,EnvironmentGlowLevel2,EnvironmentGlowLevel3,EnvironmentGlowLevel4,
     EnvironmentGlowLevel5,EnvironmentGlowLevel6,EnvironmentGlowLevel7,EnvironmentGlowHdrLuminanceCap,
+    EnvironmentPixelizationEnabled,EnvironmentPixelizationSize,EnvironmentPosterizationEnabled,EnvironmentPosterizationLevels,
+    EnvironmentVignetteEnabled,EnvironmentVignetteIntensity,EnvironmentVignetteRadius,EnvironmentVignetteSoftness,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
     EnvironmentGiRays,EnvironmentGiSteps,EnvironmentGiBias,EnvironmentGiDenoiseRadius,EnvironmentGiDenoiseStrength,EnvironmentGiRadianceClamp,
@@ -804,15 +806,19 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         ImGui::PopID();
     }
     if(ImGui::CollapsingHeader("Post-processing",ImGuiTreeNodeFlags_DefaultOpen)) {
-        field(Edit::Exposure,"Change exposure",
-            resettableProperty(environment.exposure,SceneEnvironment{}.exposure,[&]{return ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8,"%.2f",ImGuiSliderFlags_Logarithmic);}));
-        field(Edit::EnvironmentToneMapping,"Change tone mapping",drawToneMappingControl(value.toneMapping));
-        drawToneMappingParameterControls(value.toneMapping,value.toneMappingParameters,[&](ToneMappingParameterControl control,bool changed) {
-            constexpr std::array<Edit,4> properties{Edit::EnvironmentReinhardWhite,Edit::EnvironmentAcesWhite,Edit::EnvironmentAgxWhite,Edit::EnvironmentAgxContrast};
-            constexpr std::array<const char*,4> labels{"Change Reinhard white point","Change ACES white point","Change AgX white point","Change AgX contrast"};
-            const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
-        });
-        field(Edit::EnvironmentDebanding,"Toggle debanding",resettableProperty(value.debanding,EnvironmentSettings{}.debanding,[&]{return ImGui::Checkbox("Debanding",&value.debanding);}));
+        ImGui::Indent();
+        ImGui::PushID("Post-processing");
+        if(ImGui::CollapsingHeader("Tonemapping",ImGuiTreeNodeFlags_DefaultOpen)) {
+            field(Edit::Exposure,"Change exposure",
+                resettableProperty(environment.exposure,SceneEnvironment{}.exposure,[&]{return ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8,"%.2f",ImGuiSliderFlags_Logarithmic);}));
+            field(Edit::EnvironmentToneMapping,"Change tone mapping",drawToneMappingControl(value.toneMapping));
+            drawToneMappingParameterControls(value.toneMapping,value.toneMappingParameters,[&](ToneMappingParameterControl control,bool changed) {
+                constexpr std::array<Edit,4> properties{Edit::EnvironmentReinhardWhite,Edit::EnvironmentAcesWhite,Edit::EnvironmentAgxWhite,Edit::EnvironmentAgxContrast};
+                constexpr std::array<const char*,4> labels{"Change Reinhard white point","Change ACES white point","Change AgX white point","Change AgX contrast"};
+                const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
+            });
+            field(Edit::EnvironmentDebanding,"Toggle debanding",resettableProperty(value.debanding,EnvironmentSettings{}.debanding,[&]{return ImGui::Checkbox("Debanding",&value.debanding);}));
+        }
         drawGlowControls(value.glow,[&](GlowControl control,bool changed) {
             constexpr std::array<Edit,19> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold,
                 Edit::EnvironmentGlowTint,Edit::EnvironmentGlowSaturation,Edit::EnvironmentGlowHdrScale,Edit::EnvironmentGlowBlendMode,Edit::EnvironmentGlowMix,
@@ -827,6 +833,39 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
         });
         if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
+        if(ImGui::CollapsingHeader("Pixelization")) {
+            ImGui::PushID("Pixelization");auto& pixelization=value.pixelization;
+            field(Edit::EnvironmentPixelizationEnabled,"Toggle pixelization",resettableProperty(pixelization.enabled,PixelizationSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&pixelization.enabled);}));
+            ImGui::BeginDisabled(!pixelization.enabled);
+            field(Edit::EnvironmentPixelizationSize,"Change pixelization size",
+                resettableProperty(pixelization.pixelSize,PixelizationSettings{}.pixelSize,[&]{return ImGui::SliderInt("Pixel Size",&pixelization.pixelSize,1,128,"%d px",ImGuiSliderFlags_AlwaysClamp);}));
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        if(ImGui::CollapsingHeader("Posterization")) {
+            ImGui::PushID("Posterization");auto& posterization=value.posterization;
+            field(Edit::EnvironmentPosterizationEnabled,"Toggle posterization",resettableProperty(posterization.enabled,PosterizationSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&posterization.enabled);}));
+            ImGui::BeginDisabled(!posterization.enabled);
+            field(Edit::EnvironmentPosterizationLevels,"Change posterization levels",
+                resettableProperty(posterization.levels,PosterizationSettings{}.levels,[&]{return ImGui::SliderInt("Levels",&posterization.levels,2,256,"%d",ImGuiSliderFlags_AlwaysClamp);}));
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        if(ImGui::CollapsingHeader("Vignette")) {
+            ImGui::PushID("Vignette");auto& vignette=value.vignette;
+            field(Edit::EnvironmentVignetteEnabled,"Toggle vignette",resettableProperty(vignette.enabled,VignetteSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&vignette.enabled);}));
+            ImGui::BeginDisabled(!vignette.enabled);
+            field(Edit::EnvironmentVignetteIntensity,"Change vignette intensity",
+                resettableProperty(vignette.intensity,VignetteSettings{}.intensity,[&]{return ImGui::SliderFloat("Intensity",&vignette.intensity,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+            field(Edit::EnvironmentVignetteRadius,"Change vignette radius",
+                resettableProperty(vignette.radius,VignetteSettings{}.radius,[&]{return ImGui::SliderFloat("Radius",&vignette.radius,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+            field(Edit::EnvironmentVignetteSoftness,"Change vignette softness",
+                resettableProperty(vignette.softness,VignetteSettings{}.softness,[&]{return ImGui::SliderFloat("Softness",&vignette.softness,.01f,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+        ImGui::Unindent();
     }
     ImGui::PopID();
     // Collapsing a section or switching sources removes its active widget.
