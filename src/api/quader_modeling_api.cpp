@@ -2693,6 +2693,24 @@ QuaderModelingApi::begin_transform_drag(
                    structural_duplicate, session.history()));
 }
 
+std::optional<QuaderBoundsResizeState>
+QuaderModelingApi::selection_resize_bounds(QuaderTransformSpace space) const {
+  if (space != QuaderTransformSpace::Global && space != QuaderTransformSpace::Local) {
+    return std::nullopt;
+  }
+  const auto state = QuaderApiSessionInternalAccess::read_scene_session(session_).modeling().selection_resize_bounds(
+      space == QuaderTransformSpace::Local ? ModelingTransformSpace::Local
+                                          : ModelingTransformSpace::Global);
+  if (!state) {
+    return std::nullopt;
+  }
+  return QuaderBoundsResizeState{
+      .local_min = state->local_min, .local_max = state->local_max,
+      .world_origin = state->world_origin,
+      .world_x = state->world_x, .world_y = state->world_y,
+      .world_z = state->world_z, .revision = state->revision};
+}
+
 QuaderApiResult<QuaderTransformDragPreview>
 QuaderModelingApi::update_transform_drag(
     const QuaderTransformDragUpdateRequest &request) {

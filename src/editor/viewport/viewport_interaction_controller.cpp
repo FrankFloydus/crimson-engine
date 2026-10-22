@@ -12,6 +12,7 @@
 #include "core/release_features.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/tools/viewport_tool.hpp"
+#include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/viewport/primitive_creation_api_adapter.hpp"
 #include "editor/viewport/viewport_curve_picking.hpp"
 #include "editor/viewport/viewport_path_array_source_picking.hpp"
@@ -397,6 +398,9 @@ ViewportInteractionController::handle_before_active_tool_impl(
   if (!release_has_feature(ReleaseFeature::Curves)) {
     curve = nullptr;
   }
+  if (mesh_bounds_resize_.pointer_active()) {
+    return mesh_bounds_resize_.handle_frame(editor, frame);
+  }
   if (!point_light_range_.pointer_active()) {
     if (const auto transfer =
             reserve_material_transfer(editor, frame, native_tools)) {
@@ -408,12 +412,15 @@ ViewportInteractionController::handle_before_active_tool_impl(
       selection_.prepare_frame(editor, frame);
   if (resolved_selection.has_value()) {
     prepared.selection_state = *resolved_selection;
+    prepared.selection_state.transform_preview_revision =
+        frame.selection_state.transform_preview_revision;
   }
   if (frame.input_result.cancel_requested) {
     (void)selection_.cancel_lasso_drag();
     (void)selection_.cancel_paint_drag();
     (void)selection_.cancel_traversal_click();
     (void)point_light_range_.cancel(editor);
+    (void)mesh_bounds_resize_.cancel(editor);
     (void)transform_gizmo_.cancel_active_drag(editor, curve);
     return {.gizmo_consumed = true};
   }
@@ -451,6 +458,15 @@ ViewportInteractionController::handle_before_active_tool_impl(
       selection_.traversal_pointer_active() ||
       (selection_.component_double_click_active() &&
        !transform_gizmo_.pointer_interaction_active())) {
+    if (!selection_.pointer_interaction_active() &&
+        !transform_gizmo_.pointer_interaction_active() &&
+        (native_tools == nullptr || !native_tools->pointer_dragging())) {
+      auto bounds = mesh_bounds_resize_.handle_frame(editor, prepared);
+      if (bounds.gizmo_consumed) {
+        bounds.selection_after_pending_pick = resolved_selection;
+        return bounds;
+      }
+    }
     return {.selection_after_pending_pick = resolved_selection};
   }
   bool range_hovered = false;
@@ -476,6 +492,22 @@ ViewportInteractionController::handle_before_active_tool_impl(
       range_hovered ||
       (gizmo_frame != nullptr &&
        gizmo_frame->info.hover_axis != quader_editor_core::TransformAxis::None);
+  // Ordinary transform controls paint in front of the bounds disks. A fresh
+  // hit follows that order; an already captured bounds gesture returned above.
+  if (result.gizmo_consumed || (!frame.left_pressed && result.gizmo_hovered) ||
+      transform_gizmo_.pointer_interaction_active()) {
+    mesh_bounds_resize_.clear_hover();
+  } else if (!selection_.pointer_interaction_active() &&
+             !point_light_range_.pointer_active() &&
+             (native_tools == nullptr || !native_tools->pointer_dragging())) {
+    auto bounds = mesh_bounds_resize_.handle_frame(editor, prepared);
+    if (bounds.gizmo_consumed) {
+      selection_.cancel_pending_click();
+      bounds.selection_after_pending_pick = resolved_selection;
+      return bounds;
+    }
+    result.gizmo_hovered = result.gizmo_hovered || bounds.gizmo_hovered;
+  }
   const ViewportPointerCursor direct_manipulation_cursor =
       result.gizmo_consumed ||
               transform_gizmo_.pointer_interaction_active() ||
@@ -949,6 +981,7 @@ void ViewportInteractionController::handle_after_active_tool_impl(
           .scene_revision = revisions.scene_revision,
           .asset_revision = revisions.asset_revision,
           .pivot_revision = frame.selection_state.pivot_revision,
+          .transform_preview_revision = frame.selection_state.transform_preview_revision,
       },
   };
   const auto remaining_before = handle_before_active_tool_impl(
@@ -1254,6 +1287,7 @@ bool ViewportInteractionController::cancel_active_drag(
   if (selection_.cancel_lasso_drag() || selection_.cancel_paint_drag() ||
       selection_.cancel_traversal_click()) return true;
   if (point_light_range_.cancel(editor)) return true;
+  if (mesh_bounds_resize_.cancel(editor)) return true;
   if (primitive_creation_pointer_active()) {
     const auto cube = editor.tools().live_primitive_creation();
     const auto &interaction = tool_runtime_.primitive_creation_interaction();
@@ -1276,6 +1310,7 @@ bool ViewportInteractionController::cancel_active_drag(
       selection_.cancel_traversal_click()) return true;
   if (primitive_creation_pointer_active()) return cancel_active_drag(editor);
   if (point_light_range_.cancel(editor)) return true;
+  if (mesh_bounds_resize_.cancel(editor)) return true;
   return transform_gizmo_.cancel_active_drag(
       editor, &native_tools.curve_interaction());
 }
@@ -1285,18 +1320,20 @@ bool ViewportInteractionController::dragging() const {
          selection_.paint_pointer_active() ||
          selection_.traversal_pointer_active() ||
          point_light_range_.dragging() || transform_gizmo_.dragging() ||
+         mesh_bounds_resize_.dragging() ||
          (tool_runtime_.primitive_creation_interaction().active() >= 0 &&
           tool_runtime_.primitive_creation_interaction().active() < 6);
 }
 
 bool ViewportInteractionController::transform_gizmo_pointer_active() const {
-  return transform_gizmo_.pointer_interaction_active();
+  return transform_gizmo_.pointer_interaction_active() || mesh_bounds_resize_.pointer_active();
 }
 
 void ViewportInteractionController::reset(QuaderEditorApi *editor) {
   interaction_cursor_ = ViewportPointerCursor::Default;
   point_light_range_.reset(editor);
   transform_gizmo_.reset(editor);
+  mesh_bounds_resize_.reset(editor);
   selection_.reset();
   cancel_pending_material_interaction();
   cancel_context_menu_pointer();
@@ -1307,6 +1344,7 @@ void ViewportInteractionController::reset(
   interaction_cursor_ = ViewportPointerCursor::Default;
   point_light_range_.reset(editor);
   transform_gizmo_.reset(editor, &native_tools.curve_interaction());
+  mesh_bounds_resize_.reset(editor);
   selection_.reset();
   cancel_pending_material_interaction();
   cancel_context_menu_pointer();
@@ -1461,8 +1499,29 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   interaction_cursor_ = ViewportPointerCursor::Default;
   ViewportToolPointerLifecycleResult output;
   ViewportInteractionFrame interaction = frame.interaction;
+  const bool ordinary_gizmo_priority = viewport_tool_supports_transform_gizmo(
+      interaction.input_router.state().active_tool) &&
+      !interaction.input.modal_tool_active && !interaction.input.active_tool_owns_viewport;
+  bool bounds_resize_prepass = false;
+  if (mesh_bounds_resize_.pointer_active() ||
+      (!ordinary_gizmo_priority && !frame.cancel_consumed && !native_tools.pointer_dragging() &&
+       !transform_gizmo_.pointer_interaction_active() &&
+       !selection_.pointer_interaction_active() &&
+       !point_light_range_.pointer_active())) {
+    interaction.selection_state = {
+        .summary = editor.selection().summary(),
+        .scene_revision = document.revision(),
+        .asset_revision = assets.revision(),
+        .pivot_revision = native_tools.presentation_snapshot().selection_pivot_revision,
+        .transform_preview_revision = frame.interaction.selection_state.transform_preview_revision,
+    };
+    output.before_tool = mesh_bounds_resize_.handle_frame(editor, interaction);
+    bounds_resize_prepass = output.before_tool.gizmo_consumed;
+    if (!frame.runtime_binding.current()) return output;
+    if (bounds_resize_prepass) selection_.cancel_pending_click();
+  }
   const bool light_range_prepass =
-      release_has_feature(ReleaseFeature::Lights) &&
+      !bounds_resize_prepass && release_has_feature(ReleaseFeature::Lights) &&
       point_light_range_.pointer_active();
   if (light_range_prepass) {
     interaction.selection_state = {
@@ -1471,6 +1530,7 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
         .asset_revision = assets.revision(),
         .pivot_revision = native_tools.presentation_snapshot()
                               .selection_pivot_revision,
+        .transform_preview_revision = frame.interaction.selection_state.transform_preview_revision,
     };
     output.before_tool = handle_before_active_tool_impl(
         editor, interaction, &native_tools.curve_interaction(), &native_tools);
@@ -1490,7 +1550,7 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
           interaction.input.active_tool_owns_viewport,
           interaction.input.modal_tool_active);
   output.curve_gizmo_prepass =
-      !light_range_prepass && curve != nullptr && curve->controls_editable() &&
+      !bounds_resize_prepass && !light_range_prepass && curve != nullptr && curve->controls_editable() &&
       !frame.cancel_consumed &&
       (curve_gizmo_pointer_active ||
        (curve_gizmo_start_allowed && !native_tools.pointer_dragging() &&
@@ -1506,6 +1566,7 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
         .asset_revision = assets.revision(),
         .pivot_revision = native_tools.presentation_snapshot()
                               .selection_pivot_revision,
+        .transform_preview_revision = frame.interaction.selection_state.transform_preview_revision,
     };
     output.before_tool =
         handle_before_active_tool_impl(editor, interaction, curve,
@@ -1533,7 +1594,8 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   native_frame.curve_control_picker = &curve_control_picker;
   native_frame.path_array_source_picker = &path_array_source_picker;
   native_frame.transform_gizmo_consumed =
-      (light_range_prepass || output.curve_gizmo_prepass) && output.before_tool.gizmo_consumed;
+      (bounds_resize_prepass || light_range_prepass || output.curve_gizmo_prepass) &&
+      output.before_tool.gizmo_consumed;
   output.native_tool = handle_native_tools(
       editor, document, assets, native_tools, point_placement, camera,
       native_frame);
@@ -1575,10 +1637,11 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
       .asset_revision = assets.revision(),
       .pivot_revision = native_tools.presentation_snapshot()
                             .selection_pivot_revision,
+      .transform_preview_revision = frame.interaction.selection_state.transform_preview_revision,
   };
   interaction.selection_state = output.interaction_selection;
 
-  if (!light_range_prepass && !output.curve_gizmo_prepass) {
+  if (!bounds_resize_prepass && !light_range_prepass && !output.curve_gizmo_prepass) {
     output.before_tool =
         frame.cancel_consumed ||
                 output.native_tool.blocks_transform_gizmo
@@ -1588,7 +1651,7 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   }
   if (native_tools.pointer_cursor() != ViewportPointerCursor::Default &&
       (!output.before_tool.gizmo_consumed ||
-       (!light_range_prepass && !output.curve_gizmo_prepass &&
+       (!bounds_resize_prepass && !light_range_prepass && !output.curve_gizmo_prepass &&
         output.native_tool.blocks_transform_gizmo))) {
     interaction_cursor_ = native_tools.pointer_cursor();
   }

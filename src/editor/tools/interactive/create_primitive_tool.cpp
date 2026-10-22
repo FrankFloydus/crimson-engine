@@ -94,8 +94,6 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
     return consumed_cube();
   }
   std::optional<ViewportPrimitiveCreationState> cube = box.live_primitive();
-  interaction.project(box.primitive_controls_visible ? cube : std::nullopt,
-                      context.camera, box.raster_scale);
   const auto retire = [&]() {
     modal.primary_release_suppression.begin(QuaderMouseButton::Left,
                                             pointer.left_down);
@@ -103,6 +101,7 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
     modal.primitive_creation_drag_started = false;
     interaction.end();
     interaction.hover(-1);
+    if (!box.primitive_controls_visible) interaction.clear();
     invalidate_cube(context);
   };
   if (interaction.active() >= 0) {
@@ -118,12 +117,19 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
       retire();
       return consumed_cube();
     }
+    const ViewportPointerButtonEdge *release = modal.primary_pointer_gesture
+        ? viewport_pointer_matching_release(pointer.pointer_released_edges,
+              pointer.pointer_pressed_edges, modal.primary_pointer_gesture->press)
+        : nullptr;
+    const bool matching_release = release != nullptr ||
+        (pointer.left_released && pointer.pointer_released_edges.empty() &&
+         modal.primary_pointer_gesture && modal.primary_pointer_gesture->press.sequence == 0u);
     const bool interrupted = pointer.pointer_interaction_canceled ||
         pointer.navigation_active ||
         pointer.text_input_active || pointer.gizmo_consumed ||
         (resizing && pointer.camera_changed) ||
         !box.primitive_controls_visible ||
-        (!pointer.left_down && !pointer.left_released);
+        (!pointer.left_down && !matching_release);
     if (interrupted || !modal.primary_pointer_gesture) {
       if (resizing) {
         // Capture and context loss finish the last published sample. They are
@@ -138,12 +144,11 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
       retire();
       return consumed_cube();
     }
+    // Hidden presentation clears projected capture, so settle its owner before
+    // applying visibility. A failed completion must retain the active resize.
+    interaction.project(cube, context.camera, box.raster_scale);
     if (!pointer.viewport_focused) return consumed_cube();
     const ViewportPointerGesture &gesture = *modal.primary_pointer_gesture;
-    const ViewportPointerButtonEdge *release =
-        viewport_pointer_edge_after(pointer.pointer_released_edges, gesture.press);
-    const bool matching_release = pointer.left_released &&
-        (release || (gesture.press.sequence == 0 && pointer.pointer_released_edges.empty()));
     const QVec2 current = matching_release && release
                              ? release->local : pointer.mouse_local;
     modal.primitive_creation_drag_started |=
@@ -161,11 +166,13 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
         const ModelingCommandResult update = box.update_resize(*delta);
         const bool ok = accepted_cube_result(update);
         if (!context.runtime_binding.current()) return consumed_cube();
-        if (!ok) {
-          retire();
+        if (!ok && !matching_release) {
+          // Rejected publication retains the owner's resize baseline and last
+          // accepted mesh. A held press can retry; its matching release still
+          // completes below without lending capture to a newer button cycle.
           return consumed_cube();
         }
-        if (update.changed) invalidate_cube(context);
+        if (ok && update.changed) invalidate_cube(context);
       }
     }
     if (matching_release || pointer.finalize_pressed) {
@@ -194,6 +201,8 @@ ViewportToolResult CreatePrimitiveTool::handle_event(
     return consumed_cube();
   }
 
+  interaction.project(box.primitive_controls_visible ? cube : std::nullopt,
+                      context.camera, box.raster_scale);
   const bool eligible = cube && box.primitive_controls_visible && pointer.hovered &&
       !pointer.navigation_active &&
       !pointer.gizmo_consumed && !pointer.text_input_active &&

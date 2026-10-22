@@ -42,6 +42,7 @@
 #include "scene/scene_entity_naming.hpp"
 #include "scene/scene_hierarchy_visibility.hpp"
 #include "scene/scene_material_surface.hpp"
+#include "scene/scene_mesh_occurrence_projection.hpp"
 #include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
 #include "scene/scene_texture_mapping.hpp"
@@ -2272,6 +2273,129 @@ public:
       return bounds_center(*bounds);
     }
     return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<ModelingBoundsResizeState>
+  selection_resize_bounds(ModelingTransformSpace space) const {
+    const ModelingInstanceEditScope scope = instance_edit_scope();
+    const std::array<std::uint64_t, 9> key{
+        scene_.revision(), assets_.revision(), selection_revision(),
+        selection_service_.viewport_visibility_revision(),
+        editor_mode_service_ != nullptr ? editor_mode_service_->revision() : 0u,
+        static_cast<std::uint64_t>(selection_mode()),
+        static_cast<std::uint64_t>(space),
+        static_cast<std::uint64_t>(scope.occurrence),
+        static_cast<std::uint64_t>(scope.definition)};
+    if (resize_bounds_cache_key_ == key) {
+      return resize_bounds_cache_;
+    }
+    resize_bounds_cache_key_ = key;
+    resize_bounds_cache_.reset();
+    ++resize_bounds_revision_;
+    if (selection_mode() != ModelingSelectionMode::Object ||
+        (space != ModelingTransformSpace::Global && space != ModelingTransformSpace::Local) ||
+        (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object)) {
+      return std::nullopt;
+    }
+    const auto selected = scene_.selected_entities();
+    if (selected.empty()) {
+      return std::nullopt;
+    }
+    const auto eligible = [&](EntityId entity) {
+      if (!scene_.exists(entity) || scene_.transform(entity) == nullptr ||
+          (scene_.mesh(entity) == nullptr && scene_.instance_occurrence(entity) == nullptr) ||
+          !selection_service_.viewport_entity_visible(entity)) {
+        return false;
+      }
+      return scope.active() && scene_.containing_instance_definition(entity) == scope.definition
+          ? scene_hierarchy_segment_is_selectable(scene_, entity, scope.definition)
+          : scene_.is_effectively_visible(entity) && scene_.is_effectively_selectable(entity);
+    };
+    if (!std::all_of(selected.begin(), selected.end(), eligible)) {
+      return std::nullopt;
+    }
+    ModelingTransform3 frame;
+    if (space == ModelingTransformSpace::Local) {
+      const auto orientation = selection_transform_orientation();
+      if (!orientation) {
+        return std::nullopt;
+      }
+      frame = *orientation;
+    }
+    const QMat4 world_from_frame = from_glm(glm::mat4{
+        glm::vec4{to_glm(frame.x_axis), 0.0f},
+        glm::vec4{to_glm(frame.y_axis), 0.0f},
+        glm::vec4{to_glm(frame.z_axis), 0.0f},
+        glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}});
+    const auto frame_from_world = try_scene_matrix_inverse(world_from_frame);
+    if (!frame_from_world) {
+      return std::nullopt;
+    }
+    std::optional<SceneBounds> bounds;
+    const auto merge = [&](const std::optional<SceneBounds> &value) {
+      if (value) {
+        if (!bounds) {
+          bounds = value;
+        } else {
+          include_point(*bounds, value->min);
+          include_point(*bounds, value->max);
+        }
+      }
+    };
+    std::unordered_set<EntityId> visited;
+    const auto occurrences = scene_.mesh_occurrence_projection();
+    for (const EntityId root : selected) {
+      for (const EntityId entity : scene_.descendants(root, true)) {
+        if (!visited.emplace(entity).second || !selection_service_.viewport_entity_visible(entity)) {
+          continue;
+        }
+        QMat4 display_from_local = scene_.world_transform_matrix(entity);
+        if (scope.active() && scene_.containing_instance_definition(entity) == scope.definition) {
+          if (!scene_hierarchy_segment_is_visible(scene_, entity, scope.definition)) {
+            continue;
+          }
+          display_from_local = scene_transform_multiply(
+              scene_selection_display_from_scene(), display_from_local);
+        } else if (!scene_.is_effectively_visible(entity)) {
+          continue;
+        }
+        if (!try_scene_matrix_inverse(display_from_local)) {
+          return std::nullopt;
+        }
+        const QMat4 frame_from_local = scene_transform_multiply(*frame_from_world, display_from_local);
+        if (const MeshComponent *component = scene_.mesh(entity)) {
+          const MeshAsset *mesh = assets_.mesh(component->mesh);
+          if (mesh == nullptr || mesh->geometry_vertices().empty()) {
+            return std::nullopt;
+          }
+          merge(mesh_world_bounds(*mesh, frame_from_local));
+        } else if (const CurveComponent *component = scene_.curve(entity)) {
+          if (const CurveAsset *curve = assets_.curve(component->curve)) {
+            merge(curve_world_bounds(*curve, *component, frame_from_local));
+          }
+        } else if (scene_.instance_occurrence(entity) != nullptr) {
+          for (const auto &placement : occurrences->records_for_display(entity)) {
+            const auto *component = scene_.mesh(placement.geometry_entity);
+            const auto *mesh = component != nullptr ? assets_.mesh(component->mesh) : nullptr;
+            if (mesh != nullptr) {
+              merge(mesh_world_bounds(*mesh, scene_transform_multiply(
+                  *frame_from_world, placement.world_from_geometry)));
+            }
+          }
+        }
+      }
+    }
+    const auto finite = [](QVec3 value) {
+      return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    if (!bounds || !finite(bounds->min) || !finite(bounds->max)) {
+      return std::nullopt;
+    }
+    resize_bounds_cache_ = ModelingBoundsResizeState{
+        .local_min = bounds->min, .local_max = bounds->max,
+        .world_x = frame.x_axis, .world_y = frame.y_axis, .world_z = frame.z_axis,
+        .revision = resize_bounds_revision_};
+    return resize_bounds_cache_;
   }
 
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const {
@@ -7572,6 +7696,38 @@ public:
                        const ModelingStructuralDuplicate
                            *structural_duplicate = nullptr,
                        EditorHistoryService *history = nullptr) {
+    if (request.bounds_resize_reference) {
+      const auto finite = [](QVec3 value) {
+        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+      };
+      const bool axis_valid = request.axis == ModelingTransformAxis::X ||
+          request.axis == ModelingTransformAxis::Y || request.axis == ModelingTransformAxis::Z;
+      const QVec3 moving = request.bounds_resize_reference->moving_point;
+      const auto orientation = to_runtime(request.orientation);
+      if (request.tool != ModelingTransformTool::Scale ||
+          request.operation != ModelingTransformOperation::Transform ||
+          request.duplicate_selected || !axis_valid || !finite(request.pivot) ||
+          !finite(moving) || !normalized_orientation_basis(orientation) ||
+          !selection_resize_bounds(request.space)) {
+        return {.ok = false, .message = "Bounds resizing requires an eligible mesh selection and a finite axis frame."};
+      }
+      const QVec3 delta = quader_editor_core::inverse_transform_vector(
+          orientation, moving - request.pivot);
+      const float span = request.axis == ModelingTransformAxis::X ? delta.x
+          : request.axis == ModelingTransformAxis::Y ? delta.y : delta.z;
+      const QVec3 direction = request.axis == ModelingTransformAxis::X ? request.orientation.x_axis
+          : request.axis == ModelingTransformAxis::Y ? request.orientation.y_axis : request.orientation.z_axis;
+      const QVec3 residual = moving - request.pivot - direction * span;
+      const double world_span = std::hypot(
+          static_cast<double>(moving.x) - request.pivot.x,
+          static_cast<double>(moving.y) - request.pivot.y,
+          static_cast<double>(moving.z) - request.pivot.z);
+      if (!std::isfinite(world_span) || world_span <= 0.000001 ||
+          std::hypot(static_cast<double>(residual.x), residual.y, residual.z) >
+              std::max(0.00001, world_span * 0.00001)) {
+        return {.ok = false, .message = "Bounds resize anchor and moving point must span one nondegenerate axis."};
+      }
+    }
     if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
         !ModelingSelectionService::has_component_selection(selection_summary())) {
       return {.ok = false, .message = "Select components before transforming."};
@@ -12212,6 +12368,9 @@ private:
 
   SceneDocument &scene_;
   AssetRegistry &assets_;
+  mutable std::optional<std::array<std::uint64_t, 9>> resize_bounds_cache_key_;
+  mutable std::optional<ModelingBoundsResizeState> resize_bounds_cache_;
+  mutable std::uint64_t resize_bounds_revision_ = 0;
   ModelingObjectRuntimeMap object_registry_;
   ModelingMeshSyncService mesh_sync_service_;
   ModelingSdkProjectionAdapter sdk_projection_adapter_;
@@ -12443,6 +12602,11 @@ ModelingSessionService::selection_transform_orientation() const {
 
 std::optional<SceneBounds> ModelingSessionService::selection_bounds() const {
   return impl_->selection_bounds();
+}
+
+std::optional<ModelingBoundsResizeState>
+ModelingSessionService::selection_resize_bounds(ModelingTransformSpace space) const {
+  return impl_->selection_resize_bounds(space);
 }
 
 ModelingSelectionMode ModelingSessionService::selection_mode() const {

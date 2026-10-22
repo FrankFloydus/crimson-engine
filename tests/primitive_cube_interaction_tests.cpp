@@ -7,6 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/interactive/create_primitive_tool.hpp"
 #include "editor/tools/primitive_creation_interaction.hpp"
@@ -14,6 +15,9 @@
 #include "editor/viewport/viewport_interaction_controller.hpp"
 
 #include <gtest/gtest.h>
+
+#include <cmath>
+#include <limits>
 
 namespace quader {
 namespace {
@@ -138,7 +142,7 @@ struct PrimitiveCubeInteractionHarness {
   }
 };
 
-TEST(PrimitiveCubeInteractionTests, PanePresentationRetainsProjectionAndMirrorsSharedFeedback) {
+TEST(PrimitiveCubeInteractionTests, EveryShapeSharesSixBoundsHandlesAndRetainsProjection) {
   for (const auto shape : {ViewportPrimitiveCreationShape::Box,
                           ViewportPrimitiveCreationShape::Cylinder,
                           ViewportPrimitiveCreationShape::Cone,
@@ -147,358 +151,154 @@ TEST(PrimitiveCubeInteractionTests, PanePresentationRetainsProjectionAndMirrorsS
     SCOPED_TRACE(static_cast<int>(shape));
     PrimitiveCubeInteractionHarness h(shape);
     auto &interaction = h.modal.primitive_creation;
-    ViewportCameraController other_camera;
-    other_camera.set_viewport_size(640, 480);
-    other_camera.focus_origin(12);
-    other_camera.view_axis(ViewportViewAxis::Z, 1);
-    PrimitiveCreationInteraction presentation;
-    const auto present = [&]() -> const PrimitiveCreationControlsFrame & {
-      return presentation.project_presentation(
-          h.box.live_primitive(), other_camera, 2.0f, interaction.frame());
-    };
-    interaction.hover(6);
-    interaction.set_subdivision_decrement(true);
-    const auto &frame = present();
-    ASSERT_TRUE(frame.visible);
-    EXPECT_EQ(frame.hovered, 6);
-    EXPECT_EQ(frame.active, -1);
-    EXPECT_TRUE(frame.controls[6].subdivision_decrement);
-    EXPECT_EQ(frame.controls[6].enabled, interaction.frame().controls[6].enabled);
-    EXPECT_EQ(frame.label_key, interaction.frame().label_key);
-    EXPECT_DOUBLE_EQ(frame.label_value, interaction.frame().label_value);
-    EXPECT_EQ(frame.highlight_point_count, interaction.frame().highlight_point_count);
-    const auto projected = other_camera.project_world_point(frame.controls[6].world_position);
-    EXPECT_FLOAT_EQ(frame.controls[6].screen_position.x, projected.position.x);
-    EXPECT_FLOAT_EQ(frame.controls[6].screen_position.y, projected.position.y);
-    EXPECT_FLOAT_EQ(frame.label_position.x,
-                    frame.controls[6].screen_position.x + frame.controls[6].radius_pixels + 16.0f);
-    const auto projections = presentation.projection_count();
-    const auto revision = frame.revision;
-    const auto owner_projections = interaction.projection_count();
-    for (int index = 0; index < 12; ++index) {
-      interaction.project(h.box.live_primitive(), h.camera, 1.0f);
-      EXPECT_EQ(present().revision, revision);
-    }
-    EXPECT_EQ(presentation.projection_count(), projections);
-    EXPECT_EQ(interaction.projection_count(), owner_projections);
-
-    interaction.hover(0);
-    EXPECT_EQ(present().hovered, 0);
-    EXPECT_GT(presentation.frame().revision, revision);
-    EXPECT_EQ(presentation.projection_count(), projections);
-    EXPECT_EQ(presentation.frame().label_key, interaction.frame().label_key);
-    const auto primitive = h.box.live_primitive();
-    ASSERT_TRUE(primitive);
-    interaction.begin(0, *primitive, h.camera, interaction.frame().controls[0].screen_position);
-    const auto &active_frame = present();
-    EXPECT_EQ(active_frame.active, 0);
-    EXPECT_LT(length(active_frame.controls[0].world_position -
-                     interaction.frame().controls[0].world_position), 0.0001f);
-    EXPECT_LT(length(active_frame.controls[0].resize_axis -
-                     interaction.frame().controls[0].resize_axis), 0.0001f);
-    interaction.end();
-    EXPECT_EQ(present().active, -1);
-
-    interaction.begin(6, *primitive, h.camera,
-                      interaction.frame().controls[6].screen_position, true);
-    const auto &button_frame = present();
-    EXPECT_EQ(button_frame.active, 6);
-    EXPECT_TRUE(button_frame.controls[6].subdivision_decrement);
-    EXPECT_LT(length(button_frame.controls[6].world_position -
-                     interaction.frame().controls[6].world_position), 0.0001f);
-    const auto button_projections = presentation.projection_count();
-    const auto button_revision = button_frame.revision;
-    for (int index = 0; index < 12; ++index) EXPECT_EQ(present().revision, button_revision);
-    EXPECT_EQ(presentation.projection_count(), button_projections);
-    EXPECT_EQ(interaction.active(), 6);
-    const auto &cleared = presentation.project_presentation(
-        std::nullopt, other_camera, 2.0f, interaction.frame());
-    EXPECT_FALSE(cleared.visible);
-    EXPECT_EQ(cleared.active, -1);
-    EXPECT_TRUE(cleared.label_key.empty());
-    EXPECT_EQ(cleared.highlight_point_count, 0u);
-    EXPECT_EQ(interaction.active(), 6);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, EveryShapeUsesHandForHandlesAndGrabsOnlyConfirmedResizeDrags) {
-  for (const auto shape : {ViewportPrimitiveCreationShape::Box,
-                          ViewportPrimitiveCreationShape::Cylinder,
-                          ViewportPrimitiveCreationShape::Cone,
-                          ViewportPrimitiveCreationShape::Sphere,
-                          ViewportPrimitiveCreationShape::Torus}) {
-    SCOPED_TRACE(static_cast<int>(shape));
-    PrimitiveCubeInteractionHarness h(shape);
-    auto &interaction = h.modal.primitive_creation;
-    const auto cursor = [&] {
-      return interaction.pointer_cursor(h.modal.primitive_creation_drag_started);
-    };
-    const auto control = interaction.frame().controls[0];
-    ASSERT_TRUE(control.visible);
-    h.pointer(control.screen_position, false, false, false);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
-    const auto projections = interaction.projection_count();
-    for (int index = 0; index < 5; ++index) {
-      h.pointer(control.screen_position, false, false, false);
-      EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
-    }
-    EXPECT_EQ(interaction.projection_count(), projections);
-    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::OpenHand);
-    ASSERT_TRUE(h.pointer(control.screen_position + QVec2{20, 20}, false, true, false).consumed);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::ClosedHand);
-    EXPECT_TRUE(h.frame({.left_down = true, .viewport_focused = false,
-                        .pointer_interaction_canceled = true}).consumed);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-    h.pointer(control.screen_position, false, false, true);
-
-    for (const bool decrement : {false, true}) {
-      SCOPED_TRACE(decrement);
-      ASSERT_TRUE(h.box.set_segments(0, 8).ok);
-      const auto button = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
-      ASSERT_TRUE(button.visible);
-      h.pointer(button.screen_position, false, false, false, decrement);
-      ASSERT_TRUE(interaction.frame().controls[6].enabled);
-      EXPECT_EQ(interaction.frame().controls[6].subdivision_decrement, decrement);
-      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-      ASSERT_TRUE(h.pointer(button.screen_position, true, true, false, decrement).consumed);
-      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-      ASSERT_TRUE(h.pointer(button.screen_position + QVec2{20, 20}, false, true, false,
-                            decrement).consumed);
-      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-      h.pointer(button.screen_position + QVec2{20, 20}, false, false, true, decrement);
-      EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-    }
-    ASSERT_TRUE(h.box.set_segments(0, 128).ok);
-    const auto disabled = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
-    h.pointer(disabled.screen_position, false, false, false);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-    h.box.primitive_controls_visible = false;
-    h.pointer(control.screen_position, false, false, false);
-    EXPECT_EQ(cursor(), ViewportPointerCursor::Default);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, OrderedWheelConsumesLimitsAndFractionalReversals) {
-  PrimitiveCubeInteractionHarness h;
-  const auto send = [&](float steps, int axis = 0) {
-    const auto &frame = h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1);
-    std::array<ViewportNavigationWheelEvent, 1> events{{
-        {.action = ViewportInputActionKind::Zoom, .steps = steps,
-         .local = frame.controls[6 + axis].screen_position}}};
-    EXPECT_TRUE(h.wheel(events).consumed);
-    EXPECT_TRUE(events[0].consumed);
-  };
-  const auto count = [&] { return h.box.live_primitive()->subdivisions[0]; };
-  const auto revision = h.box.live_primitive()->revision;
-  const auto projections = h.modal.primitive_creation.projection_count();
-  send(-0.5f); // A blocked fraction cannot postpone the reverse direction.
-  send(0.5f);
-  EXPECT_EQ(count(), 1);
-  EXPECT_EQ(h.box.live_primitive()->revision, revision);
-  EXPECT_EQ(h.modal.primitive_creation.projection_count(), projections);
-  send(0.5f);
-  EXPECT_EQ(count(), 2);
-  send(0.75f);
-  send(-0.5f); // Reversal discards the earlier positive remainder.
-  send(-0.5f);
-  EXPECT_EQ(count(), 1);
-  ASSERT_TRUE(h.box.set_segments(0, 128).ok);
-  const auto &frame = h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1);
-  ASSERT_FALSE(frame.controls[6].enabled);
-  std::array<ViewportNavigationWheelEvent, 2> ordered{{
-      {.action = ViewportInputActionKind::Zoom, .steps = 1,
-       .local = frame.controls[6].screen_position},
-      {.action = ViewportInputActionKind::Zoom, .steps = -1,
-       .local = frame.controls[6].screen_position}}};
-  EXPECT_TRUE(h.wheel(ordered, {.mouse_local = {0, 0}}).consumed);
-  EXPECT_TRUE(ordered[0].consumed);
-  EXPECT_TRUE(ordered[1].consumed);
-  EXPECT_EQ(count(), 127);
-  send(0.75f);
-  send(-1.0f);
-  EXPECT_EQ(count(), 126);
-  send(0.5f);
-  send(0.5f, 1); // A new button cannot inherit another button's fraction.
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[1], 1);
-  send(0.5f, 1);
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[1], 2);
-}
-
-TEST(PrimitiveCubeInteractionTests, WheelHonorsInputOwnersAndActiveClickDirection) {
-  PrimitiveCubeInteractionHarness h;
-  ASSERT_TRUE(h.box.set_segments(0, 4).ok);
-  const auto point = h.modal.primitive_creation.project(
-      h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
-  for (int guard = 0; guard < 6; ++guard) {
-    ViewportPointerToolEvent pointer;
-    pointer.navigation_active = guard == 0;
-    pointer.text_input_active = guard == 1;
-    pointer.viewport_focused = guard != 2;
-    pointer.gizmo_consumed = guard == 3;
-    pointer.pointer_interaction_canceled = guard == 4;
-    pointer.left_down = guard == 5;
-    std::array<ViewportNavigationWheelEvent, 1> events{{
-        {.action = ViewportInputActionKind::Zoom, .steps = 1, .local = point}}};
-    EXPECT_FALSE(h.wheel(events, pointer).consumed);
-    EXPECT_FALSE(events[0].consumed);
-    EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 4);
-  }
-  ASSERT_TRUE(h.pointer(point, true, true, false, true).consumed);
-  std::array<ViewportNavigationWheelEvent, 1> events{{
-      {.action = ViewportInputActionKind::Zoom, .steps = 1, .local = point}}};
-  EXPECT_FALSE(h.wheel(events).consumed);
-  EXPECT_TRUE(h.modal.primitive_creation.frame().controls[6].subdivision_decrement);
-  EXPECT_FALSE(h.modal.primitive_creation.frame().controls[7].subdivision_decrement);
-  ASSERT_TRUE(h.pointer(point, false, false, true).consumed);
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 3);
-}
-
-TEST(PrimitiveCubeInteractionTests, WheelUsesEachRoundPrimitiveSegmentSettingAndMinimum) {
-  for (auto shape : {ViewportPrimitiveCreationShape::Cylinder,
-                     ViewportPrimitiveCreationShape::Cone,
-                     ViewportPrimitiveCreationShape::Sphere,
-                     ViewportPrimitiveCreationShape::Torus}) {
-    PrimitiveCubeInteractionHarness h(shape);
-    for (int index : {6, 7}) {
-      auto control = h.modal.primitive_creation.project(
-          h.box.live_primitive(), h.camera, 1).controls[index];
-      if (!control.visible) continue;
-      ASSERT_TRUE(h.box.set_segments(index - 6, control.minimum_segments).ok);
-      control = h.modal.primitive_creation.project(
-          h.box.live_primitive(), h.camera, 1).controls[index];
-      std::array<ViewportNavigationWheelEvent, 2> events{{
-          {.action = ViewportInputActionKind::Zoom, .steps = -1,
-           .local = control.screen_position},
-          {.action = ViewportInputActionKind::Zoom, .steps = 1,
-           .local = control.screen_position}}};
-      EXPECT_TRUE(h.wheel(events).consumed);
-      EXPECT_TRUE(events[0].consumed);
-      EXPECT_TRUE(events[1].consumed);
-      EXPECT_EQ(h.modal.primitive_creation.frame().controls[index].segment_count,
-                control.minimum_segments + 1);
-      EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
+    for (const float scale : {1.0f, 2.0f, 1.0f}) {
+      const auto primitive = h.box.live_primitive();
+      ASSERT_TRUE(primitive);
+      const auto &frame = interaction.project(primitive, h.camera, scale);
+      ASSERT_TRUE(frame.visible);
+      for (int index = 0; index < 6; ++index) {
+        const auto &control = frame.controls[index];
+        EXPECT_TRUE(control.visible);
+        EXPECT_TRUE(control.enabled);
+        EXPECT_FLOAT_EQ(control.radius_pixels, 6.0f * scale);
+        EXPECT_EQ(control.resize_control, static_cast<ViewportPrimitiveResizeControl>(index));
+        EXPECT_EQ(interaction.hit_test(control.screen_position), index);
+        EXPECT_FLOAT_EQ(length(control.world_position -
+            frame.bounds.handles[index].world_position), 0.0f);
+      }
+      for (int index = 6; index < 9; ++index) {
+        EXPECT_FALSE(frame.controls[index].visible);
+        EXPECT_FALSE(interaction.wheel_segment_value(index, 1.0).has_value());
+      }
+      const auto projections = interaction.projection_count();
+      const auto revision = frame.revision;
+      for (int iteration = 0; iteration < 10; ++iteration) {
+        interaction.project(primitive, h.camera, scale);
+        interaction.set_subdivision_decrement(iteration % 2 == 0);
+      }
+      EXPECT_EQ(interaction.projection_count(), projections);
+      EXPECT_EQ(interaction.frame().revision, revision);
     }
   }
 }
 
-TEST(PrimitiveCubeInteractionTests, FaceCentersAndOuterEdgesShareCachedHitTargets) {
-  PrimitiveCubeInteractionHarness h;
-  auto cube = h.box.live_primitive();
-  ASSERT_TRUE(cube);
-  const auto &frame = h.modal.primitive_creation.project(cube, h.camera, 1);
-  ASSERT_TRUE(frame.visible);
-  for (int i = 0; i < 9; ++i) {
-    ASSERT_TRUE(frame.controls[i].visible);
-    EXPECT_EQ(h.modal.primitive_creation.hit_test(frame.controls[i].screen_position), i);
-    EXPECT_FLOAT_EQ(frame.controls[i].radius_pixels, i < 6 ? 6.0f : 9.0f);
-  }
-  const auto builds = h.modal.primitive_creation.projection_count();
-  for (int i = 0; i < 20; ++i) h.modal.primitive_creation.project(cube, h.camera, 1);
-  EXPECT_EQ(h.modal.primitive_creation.projection_count(), builds);
-  h.modal.primitive_creation.project(cube, h.camera, 2);
-  EXPECT_EQ(h.modal.primitive_creation.projection_count(), builds + 1);
-  EXPECT_FLOAT_EQ(h.modal.primitive_creation.frame().controls[6].radius_pixels, 18);
-}
-
-TEST(PrimitiveCubeInteractionTests, EachPlusChangesOnlyItsAxisOnceWithoutDrawing) {
-  PrimitiveCubeInteractionHarness h;
-  for (int axis = 0; axis < 3; ++axis) {
-    const auto &frame = h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1);
-    const QVec2 point = frame.controls[6 + axis].screen_position;
-    ASSERT_TRUE(h.pointer(point, true, true, false).consumed);
-    EXPECT_EQ(h.box.live_primitive()->subdivisions[axis], 1);
-    ASSERT_TRUE(h.pointer(point, false, false, true).consumed);
-    EXPECT_EQ(h.box.live_primitive()->subdivisions[axis], 2);
-    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, ControlClickDecrementsOnlyItsAxisWithoutDrawing) {
-  PrimitiveCubeInteractionHarness h;
-  for (int axis = 0; axis < 3; ++axis) {
-    ASSERT_TRUE(h.box.set_segments(
-        axis, 3).ok);
-  }
-  for (int axis = 0; axis < 3; ++axis) {
-    const auto before = h.box.live_primitive()->subdivisions;
-    const auto &frame = h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1);
-    const QVec2 point = frame.controls[6 + axis].screen_position;
-    ASSERT_TRUE(h.pointer(point, true, false, true, true).consumed);
-    auto expected = before;
-    --expected[axis];
-    EXPECT_EQ(h.box.live_primitive()->subdivisions, expected);
-    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, ModifierOnlyChangesGlyphWithoutProjectionOrMeshWork) {
+TEST(PrimitiveCubeInteractionTests, PanePresentationSharesFeedbackWithoutRecapturingDrag) {
   PrimitiveCubeInteractionHarness h;
   auto &interaction = h.modal.primitive_creation;
-  const auto projections = interaction.projection_count();
+  ViewportCameraController other_camera;
+  other_camera.set_viewport_size(640, 480);
+  other_camera.view_axis(ViewportViewAxis::Z, 1);
+  PrimitiveCreationInteraction presentation;
+  const auto primitive = h.box.live_primitive();
+  ASSERT_TRUE(primitive);
+  interaction.hover(0);
+  const auto &frame = presentation.project_presentation(
+      primitive, other_camera, 2.0f, interaction.frame());
+  EXPECT_EQ(frame.hovered, 0);
+  EXPECT_EQ(frame.label_key, "primitive.controls.width");
+  EXPECT_DOUBLE_EQ(frame.label_value,
+      length(frame.bounds.handles[0].world_position -
+             frame.bounds.handles[0].opposite_world_position));
+  const auto count = presentation.projection_count();
+  const auto owner_count = interaction.projection_count();
+  interaction.begin(1, *primitive, h.camera, interaction.frame().controls[1].screen_position);
+  presentation.project_presentation(primitive, other_camera, 2.0f, interaction.frame());
+  EXPECT_EQ(presentation.active(), 1);
+  EXPECT_EQ(interaction.active(), 1);
+  EXPECT_EQ(presentation.projection_count(), count);
+  EXPECT_EQ(interaction.projection_count(), owner_count);
+  EXPECT_EQ(presentation.frame().label_key, "primitive.controls.width");
+  for (int iteration = 0; iteration < 10; ++iteration) {
+    presentation.project_presentation(primitive, other_camera, 2.0f, interaction.frame());
+  }
+  EXPECT_EQ(presentation.projection_count(), count);
+  interaction.end();
+  presentation.project_presentation(primitive, other_camera, 2.0f, interaction.frame());
+  EXPECT_EQ(presentation.active(), -1);
+}
+
+TEST(PrimitiveCubeInteractionTests, CommonBoundsEndOnPairsRemainDistinctAndDragOutwards) {
+  for (const auto view : {ViewportViewAxis::X, ViewportViewAxis::Y, ViewportViewAxis::Z}) {
+    ViewportCameraController camera;
+    camera.set_viewport_size(800, 600);
+    camera.focus_origin(10);
+    camera.view_axis(view, 1);
+    const ViewportBoundsResizeState state{
+        .local_min = {-1.0f, -1.0f, -1.0f},
+        .local_max = {1.0f, 1.0f, 1.0f}};
+    BoundsResizeInteraction interaction;
+    const auto &frame = interaction.project(state, camera, 1.0f);
+    for (int index = 0; index < 6; ++index) {
+      const auto handle = frame.handles[index];
+      ASSERT_TRUE(handle.visible);
+      EXPECT_EQ(interaction.hit_test(handle.screen_position), index);
+      interaction.begin(index, state, camera, handle.screen_position);
+      const auto anchor = camera.project_world_point(handle.world_position).position;
+      const auto direction = handle.screen_position - anchor;
+      const auto moved = interaction.displacement(camera, handle.screen_position + direction);
+      ASSERT_TRUE(moved.has_value());
+      EXPECT_GT(*moved, 0.0);
+      const auto baseline = interaction.displacement(camera, handle.screen_position);
+      ASSERT_TRUE(baseline.has_value());
+      EXPECT_NEAR(*baseline, 0.0, 0.000001);
+      interaction.end();
+    }
+  }
+}
+
+TEST(PrimitiveCubeInteractionTests, CommonBoundsRejectInvalidFramesAndDisableZeroExtentAxes) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800, 600);
+  camera.focus_origin(10);
+  ViewportBoundsResizeState state{
+      .local_min = {0.0f, -1.0f, -1.0f},
+      .local_max = {0.0f, 1.0f, 1.0f}};
+  BoundsResizeInteraction interaction;
+  const auto &flat = interaction.project(state, camera, 1.0f);
+  ASSERT_TRUE(flat.visible);
+  EXPECT_FALSE(flat.handles[0].enabled);
+  EXPECT_FALSE(flat.handles[1].enabled);
+  EXPECT_EQ(interaction.hit_test(flat.handles[0].screen_position), -1);
+  interaction.begin(0, state, camera, flat.handles[0].screen_position);
+  EXPECT_EQ(interaction.active(), -1);
+  state.world_x = {};
+  EXPECT_FALSE(interaction.project(state, camera, 1.0f).visible);
+  state.world_x = {1.0f, 0.0f, 0.0f};
+  state.local_max.x = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(interaction.project(state, camera, 1.0f).visible);
+  EXPECT_EQ(interaction.hit_test({400.0f, 300.0f}), -1);
+}
+
+TEST(PrimitiveCubeInteractionTests, BoundsClickDoesNotChangeGeometryOrAddHistory) {
+  PrimitiveCubeInteractionHarness h;
+  const auto before = *h.box.live_primitive();
   const auto content = h.session.modeling().content_revision();
-  const auto cube_revision = h.box.live_primitive()->revision;
-  const auto original = interaction.frame();
-  h.pointer({0, 0}, false, false, false, true);
-  const auto minus_revision = interaction.frame().revision;
-  EXPECT_GT(minus_revision, original.revision);
-  for (int axis = 0; axis < 3; ++axis) {
-    EXPECT_TRUE(interaction.frame().controls[6 + axis].subdivision_decrement);
-    EXPECT_FALSE(interaction.frame().controls[6 + axis].enabled);
-    EXPECT_EQ(interaction.frame().controls[6 + axis].screen_position.x,
-              original.controls[6 + axis].screen_position.x);
-  }
-  for (int i = 0; i < 20; ++i) h.pointer({0, 0}, false, false, false, true);
-  EXPECT_EQ(interaction.frame().revision, minus_revision);
-  h.pointer({0, 0}, false, false, false);
-  for (int axis = 0; axis < 3; ++axis) {
-    EXPECT_FALSE(interaction.frame().controls[6 + axis].subdivision_decrement);
-    EXPECT_TRUE(interaction.frame().controls[6 + axis].enabled);
-  }
-  EXPECT_EQ(interaction.projection_count(), projections);
+  const auto point = h.modal.primitive_creation.frame().controls[0].screen_position;
+  ASSERT_TRUE(h.pointer(point, true, false, true).consumed);
+  EXPECT_EQ(h.modal.primitive_creation.active(), -1);
   EXPECT_EQ(h.session.modeling().content_revision(), content);
-  EXPECT_EQ(h.box.live_primitive()->revision, cube_revision);
+  EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, before.local_max.x);
+  EXPECT_FALSE(h.box.live_primitive()->resizing);
+  EXPECT_EQ(h.session.primitive_creation().shape_count(), 1U);
+  EXPECT_EQ(h.session.history().undo_count(), 0U);
 }
 
-TEST(PrimitiveCubeInteractionTests, SubdivisionDirectionAndGlyphFreezeAtPress) {
-  PrimitiveCubeInteractionHarness h;
-  ASSERT_TRUE(h.box.set_segments(0, 3).ok);
-  auto &interaction = h.modal.primitive_creation;
-  const auto point = interaction.project(h.box.live_primitive(), h.camera, 1)
-                         .controls[6].screen_position;
-  for (const bool decrement : {true, false}) {
-    const auto before = h.box.live_primitive()->subdivisions[0];
-    ASSERT_TRUE(h.pointer(point, true, true, false, decrement).consumed);
-    ASSERT_TRUE(h.pointer(point, false, true, false, !decrement).consumed);
-    EXPECT_EQ(interaction.frame().controls[6].subdivision_decrement, decrement);
-    EXPECT_EQ(interaction.frame().controls[7].subdivision_decrement, !decrement);
-    ASSERT_TRUE(h.pointer(point, false, false, true, !decrement).consumed);
-    EXPECT_EQ(h.box.live_primitive()->subdivisions[0], before + (decrement ? -1 : 1));
-    EXPECT_EQ(interaction.frame().controls[6].subdivision_decrement, !decrement);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, SubdivisionLimitsConsumeClickWithoutPublication) {
-  PrimitiveCubeInteractionHarness h;
-  auto &interaction = h.modal.primitive_creation;
-  for (const bool decrement : {true, false}) {
-    const int limit = decrement ? 1 : 128;
-    ASSERT_TRUE(h.box.set_segments(0, limit).ok);
-    const auto point = interaction.project(h.box.live_primitive(), h.camera, 1)
-                           .controls[6].screen_position;
-    h.pointer(point, false, false, false, decrement);
-    EXPECT_FALSE(interaction.frame().controls[6].enabled);
-    const auto content = h.session.modeling().content_revision();
-    const auto revision = h.box.live_primitive()->revision;
-    EXPECT_TRUE(h.pointer(point, true, false, true, decrement).consumed);
-    EXPECT_EQ(h.box.live_primitive()->subdivisions[0], limit);
-    EXPECT_EQ(h.box.live_primitive()->revision, revision);
-    EXPECT_EQ(h.session.modeling().content_revision(), content);
-    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-    EXPECT_TRUE(h.pointer(point, true, false, true, !decrement).consumed);
-    EXPECT_EQ(h.box.live_primitive()->subdivisions[0], decrement ? 2 : 127);
+TEST(PrimitiveCubeInteractionTests, EveryShapeUsesHandForBoundsAndGrabsOnlyConfirmedDrags) {
+  for (const auto shape : {ViewportPrimitiveCreationShape::Box,
+                          ViewportPrimitiveCreationShape::Cylinder,
+                          ViewportPrimitiveCreationShape::Cone,
+                          ViewportPrimitiveCreationShape::Sphere,
+                          ViewportPrimitiveCreationShape::Torus}) {
+    PrimitiveCubeInteractionHarness h(shape);
+    const auto point = h.modal.primitive_creation.frame().controls[0].screen_position;
+    h.pointer(point, false, false, false);
+    EXPECT_EQ(h.modal.primitive_creation.pointer_cursor(false), ViewportPointerCursor::OpenHand);
+    ASSERT_TRUE(h.pointer(point, true, true, false).consumed);
+    EXPECT_EQ(h.modal.primitive_creation.pointer_cursor(false), ViewportPointerCursor::OpenHand);
+    ASSERT_TRUE(h.pointer(point + QVec2{40.0f, 20.0f}, false, true, false).consumed);
+    EXPECT_EQ(h.modal.primitive_creation.pointer_cursor(true), ViewportPointerCursor::ClosedHand);
+    ASSERT_TRUE(h.pointer(point + QVec2{40.0f, 20.0f}, false, false, true).consumed);
+    EXPECT_EQ(h.modal.primitive_creation.active(), -1);
   }
 }
 
@@ -509,8 +309,9 @@ TEST(PrimitiveCubeInteractionTests, DotResizePreservesOppositeFaceAndSnaps) {
   ASSERT_TRUE(cube);
   const auto &frame = h.modal.primitive_creation.frame();
   const QVec2 press = frame.controls[0].screen_position;
-  const auto end = h.camera.project_world_point(
-      frame.controls[0].world_position + cube->world_x * 0.8f).position;
+  const auto end = press + h.camera.project_world_point(
+      frame.controls[0].world_position + cube->world_x * 0.8f).position -
+      h.camera.project_world_point(frame.controls[0].world_position).position;
   ASSERT_TRUE(h.pointer(press, true, true, false).consumed);
   ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
   ASSERT_TRUE(h.pointer(end, false, false, true).consumed);
@@ -528,7 +329,7 @@ TEST(PrimitiveCubeInteractionTests, InterruptedResizeKeepsLastBoundsAndRetiresIt
     PrimitiveCubeInteractionHarness h;
     const auto before = *h.box.live_primitive();
     const auto control = h.modal.primitive_creation.frame().controls[0];
-    const auto end = h.camera.project_world_point(control.world_position + before.world_x).position;
+    const auto end = control.screen_position + h.camera.project_world_point(control.world_position + before.world_x).position - h.camera.project_world_point(control.world_position).position;
     ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
     ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
     const auto authored = *h.box.live_primitive();
@@ -546,8 +347,12 @@ TEST(PrimitiveCubeInteractionTests, InterruptedResizeKeepsLastBoundsAndRetiresIt
     EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, before.local_min.x);
     EXPECT_FALSE(h.box.live_primitive()->resizing);
     EXPECT_FALSE(h.modal.primary_pointer_gesture);
+    EXPECT_EQ(h.modal.primitive_creation.active(), -1);
+    EXPECT_EQ(h.modal.primary_release_suppression.active(), interruption != 1);
+    if (interruption == 5) EXPECT_FALSE(h.modal.primitive_creation.frame().visible);
     EXPECT_FALSE(h.session.history().can_undo());
     (void)h.pointer(end, false, false, true);
+    EXPECT_FALSE(h.modal.primary_release_suppression.active());
     EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, authored.local_max.x);
     EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
     EXPECT_EQ(h.session.primitive_creation().shape_count(), 1U);
@@ -561,11 +366,199 @@ TEST(PrimitiveCubeInteractionTests, InterruptedResizeKeepsLastBoundsAndRetiresIt
   }
 }
 
+TEST(PrimitiveCubeInteractionTests, ResizeUsesFirstMatchingReleaseBeforeAnotherCoalescedPress) {
+  for (const bool second_released : {false, true}) {
+    SCOPED_TRACE(second_released);
+    PrimitiveCubeInteractionHarness h;
+    h.camera.view_axis(ViewportViewAxis::Z, 1);
+    h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1.0f);
+    const auto before = *h.box.live_primitive();
+    const auto control = h.modal.primitive_creation.frame().controls[0];
+    const auto end_at = [&](float delta) {
+      return control.screen_position + h.camera.project_world_point(
+          control.world_position + before.world_x * delta).position -
+          h.camera.project_world_point(control.world_position).position;
+    };
+    const std::array first_press{ViewportPointerButtonEdge{
+        .button = QuaderMouseButton::Left, .local = control.screen_position, .sequence = 10u}};
+    ASSERT_TRUE(h.frame({.hovered = true, .left_clicked = true, .left_down = true,
+        .mouse_local = control.screen_position, .left_click_local = control.screen_position,
+        .pointer_pressed_edges = first_press}).consumed);
+    const std::array second_press{ViewportPointerButtonEdge{
+        .button = QuaderMouseButton::Left, .local = end_at(1.0f), .sequence = 12u}};
+    const std::array releases{
+        ViewportPointerButtonEdge{.button = QuaderMouseButton::Left, .local = end_at(0.6f), .sequence = 11u},
+        ViewportPointerButtonEdge{.button = QuaderMouseButton::Left, .local = end_at(1.8f), .sequence = 13u}};
+    ASSERT_TRUE(h.frame({.hovered = true, .left_clicked = true, .left_down = !second_released,
+        .left_released = true, .mouse_local = end_at(1.8f), .left_click_local = second_press[0].local,
+        .pointer_pressed_edges = second_press,
+        .pointer_released_edges = std::span(releases).first(second_released ? 2u : 1u)}).consumed);
+    const auto resized = h.box.live_primitive();
+    ASSERT_TRUE(resized);
+    EXPECT_NEAR(resized->local_max.x, before.local_max.x + 0.6f, 0.0001f);
+    EXPECT_FLOAT_EQ(resized->local_min.x, before.local_min.x);
+    EXPECT_FALSE(resized->resizing);
+    EXPECT_FALSE(h.modal.primary_pointer_gesture);
+    EXPECT_EQ(h.modal.primitive_creation.active(), -1);
+    EXPECT_EQ(h.modal.primary_release_suppression.active(), !second_released);
+    (void)h.pointer(end_at(1.8f), false, false, true);
+    EXPECT_FALSE(h.modal.primary_release_suppression.active());
+    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, resized->local_max.x);
+    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1u);
+    EXPECT_FALSE(h.session.history().can_undo());
+  }
+}
+
+TEST(PrimitiveCubeInteractionTests, RejectedCoalescedFinalSampleEndsOnlyItsCapturedResize) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+    for (const bool second_released : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(failure));
+      SCOPED_TRACE(second_released);
+      PrimitiveCubeInteractionHarness h;
+      h.camera.view_axis(ViewportViewAxis::Z, 1);
+      h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1.0f);
+      const auto before = *h.box.live_primitive();
+      const auto control = h.modal.primitive_creation.frame().controls[0];
+      const auto end_at = [&](float delta) {
+        return control.screen_position + h.camera.project_world_point(
+            control.world_position + before.world_x * delta).position -
+            h.camera.project_world_point(control.world_position).position;
+      };
+      const std::array first_press{ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Left, .local = control.screen_position, .sequence = 10u}};
+      ASSERT_TRUE(h.frame({.hovered = true, .left_clicked = true, .left_down = true,
+          .mouse_local = control.screen_position, .left_click_local = control.screen_position,
+          .pointer_pressed_edges = first_press}).consumed);
+      ASSERT_TRUE(h.pointer(end_at(0.4f), false, true, false).consumed);
+      const auto accepted = *h.box.live_primitive();
+      const auto content_revision = h.session.modeling().content_revision();
+      const auto update_resize = h.box.update_resize;
+      int rejected_samples = 0;
+      h.box.update_resize = [&](double delta) {
+        EXPECT_TRUE(std::isfinite(delta));
+        EXPECT_NEAR(delta, 0.9, 0.0001);
+        h.session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+        const auto result = update_resize(delta);
+        h.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+            ModelingSdkProjectionFailurePoint::None);
+        ++rejected_samples;
+        EXPECT_FALSE(result.ok);
+        return result;
+      };
+      const std::array second_press{ViewportPointerButtonEdge{
+          .button = QuaderMouseButton::Left, .local = end_at(1.2f), .sequence = 12u}};
+      const std::array releases{
+          ViewportPointerButtonEdge{.button = QuaderMouseButton::Left, .local = end_at(0.9f), .sequence = 11u},
+          ViewportPointerButtonEdge{.button = QuaderMouseButton::Left, .local = end_at(1.8f), .sequence = 13u}};
+      ASSERT_TRUE(h.frame({.hovered = true, .left_clicked = true, .left_down = !second_released,
+          .left_released = true, .mouse_local = end_at(1.8f), .left_click_local = second_press[0].local,
+          .pointer_pressed_edges = second_press,
+          .pointer_released_edges = std::span(releases).first(second_released ? 2u : 1u)}).consumed);
+      h.box.update_resize = update_resize;
+      EXPECT_EQ(rejected_samples, 1);
+      EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, accepted.local_max.x);
+      EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, before.local_min.x);
+      EXPECT_EQ(h.session.modeling().content_revision(), content_revision);
+      EXPECT_FALSE(h.box.live_primitive()->resizing);
+      EXPECT_FALSE(h.modal.primary_pointer_gesture);
+      EXPECT_EQ(h.modal.primitive_creation.active(), -1);
+      EXPECT_EQ(h.modal.primary_release_suppression.active(), !second_released);
+      if (!second_released) ASSERT_TRUE(h.pointer(end_at(1.8f), false, true, false).consumed);
+      (void)h.pointer(end_at(1.8f), false, false, true);
+      EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, accepted.local_max.x);
+      EXPECT_FALSE(h.modal.primary_pointer_gesture);
+      EXPECT_FALSE(h.modal.primary_release_suppression.active());
+      EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+      EXPECT_EQ(h.session.primitive_creation().shape_count(), 1u);
+      EXPECT_FALSE(h.session.history().can_undo());
+    }
+  }
+}
+
+TEST(PrimitiveCubeInteractionTests, RejectedResizePublicationRetainsCaptureForRetryReleaseAndCancel) {
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::CommittedAssetReplace,
+                             ModelingSdkProjectionFailurePoint::CommittedSceneNotify}) {
+    for (int completion = 0; completion < 3; ++completion) {
+      SCOPED_TRACE(static_cast<int>(failure));
+      SCOPED_TRACE(completion);
+      PrimitiveCubeInteractionHarness h;
+      h.camera.view_axis(ViewportViewAxis::Z, 1);
+      h.modal.primitive_creation.project(h.box.live_primitive(), h.camera, 1.0f);
+      const auto before = *h.box.live_primitive();
+      const auto control = h.modal.primitive_creation.frame().controls[0];
+      const auto end_at = [&](float delta) {
+        return control.screen_position + h.camera.project_world_point(
+            control.world_position + before.world_x * delta).position -
+            h.camera.project_world_point(control.world_position).position;
+      };
+      ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
+      ASSERT_TRUE(h.pointer(end_at(0.4f), false, true, false).consumed);
+      const auto accepted = *h.box.live_primitive();
+      EXPECT_NEAR(accepted.local_max.x, before.local_max.x + 0.4f, 0.0001f);
+      const auto content_revision = h.session.modeling().content_revision();
+      const auto overlay_invalidations = h.overlay_invalidations;
+      const auto update_resize = h.box.update_resize;
+      int rejected_samples = 0;
+      h.box.update_resize = [&](double delta) {
+        EXPECT_TRUE(std::isfinite(delta));
+        EXPECT_NEAR(delta, 0.9, 0.0001);
+        h.session.modeling().set_modeling_sdk_projection_failure_for_tests(failure);
+        const auto result = update_resize(delta);
+        h.session.modeling().set_modeling_sdk_projection_failure_for_tests(
+            ModelingSdkProjectionFailurePoint::None);
+        ++rejected_samples;
+        EXPECT_FALSE(result.ok);
+        EXPECT_FALSE(result.changed);
+        return result;
+      };
+      const bool released = completion == 1;
+      ASSERT_TRUE(h.pointer(end_at(0.9f), false, !released, released).consumed);
+      ASSERT_EQ(rejected_samples, 1);
+      h.box.update_resize = update_resize;
+      ASSERT_TRUE(h.box.live_primitive());
+      EXPECT_EQ(h.box.live_primitive()->resizing, !released);
+      EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, accepted.local_max.x);
+      EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, before.local_min.x);
+      if (released) EXPECT_GT(h.box.live_primitive()->revision, accepted.revision);
+      else EXPECT_EQ(h.box.live_primitive()->revision, accepted.revision);
+      EXPECT_EQ(h.session.modeling().content_revision(), content_revision);
+      EXPECT_EQ(h.overlay_invalidations, overlay_invalidations + (released ? 1 : 0));
+      EXPECT_EQ(h.modal.primary_pointer_gesture.has_value(), !released);
+      EXPECT_EQ(h.modal.primitive_creation.active(), released ? -1 : 0);
+      EXPECT_FALSE(h.modal.primary_release_suppression.active());
+      if (completion == 0) {
+        ASSERT_TRUE(h.pointer(end_at(0.9f), false, true, false).consumed);
+        EXPECT_NEAR(h.box.live_primitive()->local_max.x, before.local_max.x + 0.9f, 0.0001f);
+        ASSERT_TRUE(h.pointer(end_at(0.9f), false, false, true).consumed);
+      } else if (released) {
+        // The matching release immediately completes the last accepted sample.
+        (void)h.pointer(end_at(0.9f), false, false, false);
+        EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, accepted.local_max.x);
+      } else {
+        ASSERT_TRUE(h.editor.tools().cancel_primitive_resize().ok());
+        ASSERT_TRUE(h.pointer(end_at(0.9f), false, true, false).consumed);
+        EXPECT_TRUE(h.modal.primary_release_suppression.active());
+        ASSERT_TRUE(h.pointer(end_at(0.9f), false, false, true).consumed);
+        EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.x, before.local_max.x);
+      }
+      EXPECT_FALSE(h.box.live_primitive()->resizing);
+      EXPECT_FALSE(h.modal.primary_pointer_gesture);
+      EXPECT_EQ(h.modal.primitive_creation.active(), -1);
+      EXPECT_FALSE(h.modal.primary_release_suppression.active());
+      EXPECT_EQ(h.session.primitive_creation().shape_count(), 1u);
+      EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
+      EXPECT_FALSE(h.session.history().can_undo());
+    }
+  }
+}
+
 TEST(PrimitiveCubeInteractionTests, FocusAlonePreservesResizeAndFailedCompletionCanRetry) {
   PrimitiveCubeInteractionHarness h;
   const auto before = *h.box.live_primitive();
   const auto control = h.modal.primitive_creation.frame().controls[0];
-  const auto end = h.camera.project_world_point(control.world_position + before.world_x).position;
+  const auto end = control.screen_position + h.camera.project_world_point(control.world_position + before.world_x).position - h.camera.project_world_point(control.world_position).position;
   ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
   ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
   const auto authored = *h.box.live_primitive();
@@ -618,50 +611,13 @@ TEST(PrimitiveCubeInteractionTests, OrthographicEndOnAxisHasFiniteScreenFallback
   EXPECT_TRUE(std::isfinite(*delta));
 }
 
-TEST(PrimitiveCubeInteractionTests, DraggingOffPlusDoesNotIncrementOrStartFootprint) {
-  PrimitiveCubeInteractionHarness h;
-  const auto press = h.modal.primitive_creation.frame().controls[6].screen_position;
-  h.pointer(press, true, true, false);
-  EXPECT_TRUE(h.pointer({press.x + 40, press.y}, false, false, true).consumed);
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 1);
-  EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-}
-
-TEST(PrimitiveCubeInteractionTests, OlderReleaseCannotCompleteNewPlusPress) {
-  PrimitiveCubeInteractionHarness h;
-  const auto point = h.modal.primitive_creation.frame().controls[6].screen_position;
-  std::array<ViewportPointerButtonEdge, 1> press{{
-      {.button = QuaderMouseButton::Left, .local = point, .sequence = 20}}};
-  h.frame({.hovered = true, .left_clicked = true, .left_down = true,
-           .mouse_local = point, .left_click_local = point,
-           .pointer_pressed_edges = press});
-  std::array<ViewportPointerButtonEdge, 1> release{{
-      {.button = QuaderMouseButton::Left, .local = point, .sequence = 19}}};
-  h.frame({.hovered = true, .left_down = true, .left_released = true,
-           .mouse_local = point, .pointer_released_edges = release});
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 1);
-  EXPECT_EQ(h.modal.primitive_creation.active(), 6);
-  release[0].sequence = 21;
-  h.frame({.hovered = true, .left_released = true, .mouse_local = point,
-           .pointer_released_edges = release});
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 2);
-}
-
 TEST(PrimitiveCubeInteractionTests, HiddenControlsAllowOrdinaryFootprintPress) {
   PrimitiveCubeInteractionHarness h;
-  const auto point = h.modal.primitive_creation.frame().controls[6].screen_position;
+  const auto point = h.modal.primitive_creation.frame().controls[0].screen_position;
   h.box.primitive_controls_visible = false;
   EXPECT_TRUE(h.pointer(point, true, true, false).consumed);
   EXPECT_EQ(h.modal.primitive_creation.active(), -1);
   EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Footprint);
-}
-
-TEST(PrimitiveCubeInteractionTests, FastClickWithBothEdgesInOneFrameIncrementsOnce) {
-  PrimitiveCubeInteractionHarness h;
-  const auto point = h.modal.primitive_creation.frame().controls[6].screen_position;
-  EXPECT_TRUE(h.pointer(point, true, false, true).consumed);
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 2);
-  EXPECT_EQ(h.modal.primitive_creation.active(), -1);
 }
 
 TEST(PrimitiveCubeInteractionTests, SelectionLossRetiresOwnerResizeAndTrailingRelease) {
@@ -694,7 +650,7 @@ TEST(PrimitiveCubeInteractionTests, ResizeReturnsToBaselineAfterCrossingThreshol
   PrimitiveCubeInteractionHarness h;
   const auto before = h.box.live_primitive();
   const auto control = h.modal.primitive_creation.frame().controls[0];
-  const auto end = h.camera.project_world_point(control.world_position + before->world_x).position;
+  const auto end = control.screen_position + h.camera.project_world_point(control.world_position + before->world_x).position - h.camera.project_world_point(control.world_position).position;
   h.pointer(control.screen_position, true, true, false);
   h.pointer(end, false, true, false);
   ASSERT_NE(h.box.live_primitive()->local_max.x, before->local_max.x);
@@ -704,21 +660,12 @@ TEST(PrimitiveCubeInteractionTests, ResizeReturnsToBaselineAfterCrossingThreshol
   EXPECT_FALSE(h.box.live_primitive()->resizing);
 }
 
-TEST(PrimitiveCubeInteractionTests, ReturningToPlusAfterDraggingDoesNotClick) {
-  PrimitiveCubeInteractionHarness h;
-  const auto point = h.modal.primitive_creation.frame().controls[6].screen_position;
-  h.pointer(point, true, true, false);
-  h.pointer({point.x + 40, point.y}, false, true, false);
-  h.pointer(point, false, false, true);
-  EXPECT_EQ(h.box.live_primitive()->subdivisions[0], 1);
-}
-
 TEST(PrimitiveCubeInteractionTests, RepeatedSnappedDragSkipsMeshAndOverlayWork) {
   PrimitiveCubeInteractionHarness h;
   h.snap = true;
   const auto cube = h.box.live_primitive();
   const auto control = h.modal.primitive_creation.frame().controls[0];
-  const auto end = h.camera.project_world_point(control.world_position + cube->world_x).position;
+  const auto end = control.screen_position + h.camera.project_world_point(control.world_position + cube->world_x).position - h.camera.project_world_point(control.world_position).position;
   h.pointer(control.screen_position, true, true, false);
   h.pointer(end, false, true, false);
   // The first post-publication frame refreshes the retained projection once.
@@ -738,7 +685,7 @@ TEST(PrimitiveCubeInteractionTests, CameraChangeFinishesLastResizeAndReservesRel
   PrimitiveCubeInteractionHarness h;
   const auto before = h.box.live_primitive();
   const auto control = h.modal.primitive_creation.frame().controls[0];
-  const auto end = h.camera.project_world_point(control.world_position + before->world_x).position;
+  const auto end = control.screen_position + h.camera.project_world_point(control.world_position + before->world_x).position - h.camera.project_world_point(control.world_position).position;
   h.pointer(control.screen_position, true, true, false);
   h.pointer(end, false, true, false);
   ASSERT_NE(h.box.live_primitive()->local_max.x, before->local_max.x);
@@ -756,7 +703,7 @@ TEST(PrimitiveCubeInteractionTests, ControllerCancellationAfterSelectionLossRest
   const auto before = h.box.live_primitive();
   const auto control = controller.primitive_creation_controls(
       h.editor.tools().live_primitive_creation(), h.camera, 1).controls[0];
-  const auto end = h.camera.project_world_point(control.world_position + before->world_x).position;
+  const auto end = control.screen_position + h.camera.project_world_point(control.world_position + before->world_x).position - h.camera.project_world_point(control.world_position).position;
   ViewportToolContext context{.state = h.tool_state, .camera = h.camera,
       .ports = h.ports.ports(), .box = &h.box};
   const auto send = [&](QVec2 point, bool press, bool down, bool release) {
@@ -779,525 +726,6 @@ TEST(PrimitiveCubeInteractionTests, ControllerCancellationAfterSelectionLossRest
   EXPECT_TRUE(send(end, false, false, true).consumed);
 }
 
-TEST(PrimitiveCubeInteractionTests, CylinderProjectsThreeDotsAndOneRimButtonWithCachedPicking) {
-  PrimitiveCubeInteractionHarness h(true);
-  auto &interaction = h.modal.primitive_creation;
-  for (const bool orthographic : {false, true}) {
-    if (orthographic) h.camera.view_axis(ViewportViewAxis::Z, 1);
-    const auto primitive = h.box.live_primitive();
-    ASSERT_TRUE(primitive);
-    const auto &frame = interaction.project(primitive, h.camera, 2);
-    int visible = 0;
-    for (int index = 0; index < 9; ++index) {
-      EXPECT_EQ(frame.controls[index].visible, index == 0 || index == 2 || index == 3 || index == 6);
-      if (!frame.controls[index].visible) continue;
-      ++visible;
-      EXPECT_EQ(interaction.hit_test(frame.controls[index].screen_position), index);
-      EXPECT_FLOAT_EQ(frame.controls[index].radius_pixels, index < 6 ? 12 : 18);
-    }
-    EXPECT_EQ(visible, 4);
-    EXPECT_EQ(frame.controls[0].resize_control, ViewportPrimitiveResizeControl::Radius);
-    EXPECT_FLOAT_EQ(frame.controls[0].resize_axis.y, 0);
-    const auto count = interaction.projection_count();
-    const auto revision = frame.revision;
-    for (int i = 0; i < 20; ++i) interaction.project(primitive, h.camera, 2);
-    EXPECT_EQ(interaction.projection_count(), count);
-    EXPECT_EQ(frame.revision, revision);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, CylinderHeightDotsMoveOnlyChosenEndAndUseSnapBypass) {
-  for (const int index : {2, 3}) {
-    for (const bool snap : {false, true}) {
-      PrimitiveCubeInteractionHarness h(true);
-      h.snap = snap;
-      const auto before = *h.box.live_primitive();
-      const auto control = h.modal.primitive_creation.frame().controls[index];
-      const float displacement = index == 2 ? 0.8f : -0.8f;
-      const QVec2 end = h.camera.project_world_point(
-          control.world_position + before.world_y * displacement).position;
-      ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-      ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
-      ASSERT_TRUE(h.pointer(end, false, false, true).consumed);
-      const auto after = *h.box.live_primitive();
-      const float expected = snap ? (index == 2 ? 1.0f : -1.0f) : displacement;
-      EXPECT_NEAR(after.local_max.y, before.local_max.y + (index == 2 ? expected : 0), 0.0001);
-      EXPECT_NEAR(after.local_min.y, before.local_min.y + (index == 3 ? expected : 0), 0.0001);
-      EXPECT_FLOAT_EQ(after.local_min.x, before.local_min.x);
-      EXPECT_FLOAT_EQ(after.local_max.z, before.local_max.z);
-      EXPECT_FALSE(after.resizing);
-      EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-    }
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, CylinderRadiusKeepsCenterAndAspectThroughSettingsAndRepeatResize) {
-  PrimitiveCubeInteractionHarness h(true);
-  auto &interaction = h.modal.primitive_creation;
-  for (const float displacement : {0.8f, -0.3f}) {
-    const auto before = *h.box.live_primitive();
-    const auto control = interaction.project(before, h.camera, 1).controls[0];
-    const QVec3 world_axis = before.world_x * control.resize_axis.x +
-                            before.world_z * control.resize_axis.z;
-    const auto end = h.camera.project_world_point(control.world_position + world_axis * displacement).position;
-    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-    ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
-    ASSERT_TRUE(h.pointer(end, false, false, true).consumed);
-    const auto after = *h.box.live_primitive();
-    const auto size = after.local_max - after.local_min;
-    const auto original_size = before.local_max - before.local_min;
-    EXPECT_NEAR(size.x / size.z, original_size.x / original_size.z, 0.0001);
-    EXPECT_NEAR(after.local_min.x + after.local_max.x,
-                before.local_min.x + before.local_max.x, 0.0001);
-    EXPECT_NEAR(after.local_min.z + after.local_max.z,
-                before.local_min.z + before.local_max.z, 0.0001);
-    EXPECT_FLOAT_EQ(after.local_min.y, before.local_min.y);
-    EXPECT_FLOAT_EQ(after.local_max.y, before.local_max.y);
-    EXPECT_EQ(size.x > original_size.x, displacement > 0);
-    ASSERT_TRUE(h.editor.tools().toggle_primitive_caps().ok());
-    ASSERT_TRUE(h.editor.tools().flip_primitive_faces().ok());
-    ASSERT_TRUE(h.box.set_segments(0, 12).ok);
-    const auto edited = *h.box.live_primitive();
-    EXPECT_FLOAT_EQ(edited.local_min.x, after.local_min.x);
-    EXPECT_FLOAT_EQ(edited.local_max.z, after.local_max.z);
-    EXPECT_NE(edited.caps, after.caps);
-    EXPECT_NE(edited.flip_faces, after.flip_faces);
-    EXPECT_EQ(edited.side_count, 12);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, CylinderSegmentButtonUsesCtrlAndBothLimitsWithoutNewFootprint) {
-  PrimitiveCubeInteractionHarness h(true);
-  auto &interaction = h.modal.primitive_creation;
-  for (const int initial : {3, 4, 127, 128}) {
-    for (const bool decrement : {false, true}) {
-      ASSERT_TRUE(h.box.set_segments(0, initial).ok);
-      const auto button = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6];
-      h.pointer(button.screen_position, false, false, false, decrement);
-      const bool enabled = decrement ? initial > 3 : initial < 128;
-      EXPECT_EQ(interaction.frame().controls[6].enabled, enabled);
-      EXPECT_EQ(interaction.frame().controls[6].subdivision_decrement, decrement);
-      const auto revision = h.box.live_primitive()->revision;
-      const auto content = h.session.modeling().content_revision();
-      ASSERT_TRUE(h.pointer(button.screen_position, true, true, false, decrement).consumed);
-      ASSERT_TRUE(h.pointer(button.screen_position, false, false, true, !decrement).consumed);
-      EXPECT_EQ(h.box.live_primitive()->side_count, initial + (enabled ? (decrement ? -1 : 1) : 0));
-      if (!enabled) {
-        EXPECT_EQ(h.box.live_primitive()->revision, revision);
-        EXPECT_EQ(h.session.modeling().content_revision(), content);
-      }
-      EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-      EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-    }
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, CylinderCaptureLossKeepsRadiusWhileUndoRestoresIt) {
-  for (const bool undo : {false, true}) {
-    PrimitiveCubeInteractionHarness h(true);
-    const auto before = *h.box.live_primitive();
-    const auto control = h.modal.primitive_creation.frame().controls[0];
-    const auto end = h.camera.project_world_point(control.world_position +
-        before.world_x * control.resize_axis.x + before.world_z * control.resize_axis.z).position;
-    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-    ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
-    EXPECT_NE(h.box.live_primitive()->local_max.x, before.local_max.x);
-    const auto authored = *h.box.live_primitive();
-    if (undo) {
-      ASSERT_TRUE(h.editor.history().undo().ok());
-      EXPECT_TRUE(h.pointer(end, false, true, false).consumed);
-    } else {
-      EXPECT_TRUE(h.frame({.left_down = true, .viewport_focused = false,
-                           .pointer_interaction_canceled = true}).consumed);
-    }
-    EXPECT_TRUE(h.pointer(end, false, false, true).consumed);
-    const auto &expected = undo ? before : authored;
-    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_min.x, expected.local_min.x);
-    EXPECT_FLOAT_EQ(h.box.live_primitive()->local_max.z, expected.local_max.z);
-    EXPECT_FALSE(h.box.live_primitive()->resizing);
-    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, CylinderRadiusRepeatedSnappedPositionSkipsMeshAndOverlayWork) {
-  PrimitiveCubeInteractionHarness h(true);
-  h.snap = true;
-  const auto before = *h.box.live_primitive();
-  const auto control = h.modal.primitive_creation.frame().controls[0];
-  const auto end = h.camera.project_world_point(control.world_position +
-      before.world_x * control.resize_axis.x + before.world_z * control.resize_axis.z).position;
-  h.pointer(control.screen_position, true, true, false);
-  h.pointer(end, false, true, false);
-  h.pointer(end, false, true, false);
-  const auto revision = h.box.live_primitive()->revision;
-  const auto content = h.session.modeling().content_revision();
-  const auto projections = h.modal.primitive_creation.projection_count();
-  const auto invalidations = h.overlay_invalidations;
-  for (int i = 0; i < 20; ++i) h.pointer(end, false, true, false);
-  EXPECT_EQ(h.box.live_primitive()->revision, revision);
-  EXPECT_EQ(h.session.modeling().content_revision(), content);
-  EXPECT_EQ(h.modal.primitive_creation.projection_count(), projections);
-  EXPECT_EQ(h.overlay_invalidations, invalidations);
-}
-
-TEST(PrimitiveCubeInteractionTests, CylinderRadiusDragUsesRotatedScaledPlacementAxes) {
-  PrimitiveCubeInteractionHarness h(true);
-  auto primitive = *h.box.live_primitive();
-  primitive.world_origin = {1, 0, 0};
-  primitive.world_x = {0, 0, 2};
-  primitive.world_y = {0, 1.5f, 0};
-  primitive.world_z = {-0.5f, 0, 0};
-  PrimitiveCreationInteraction interaction;
-  const auto control = interaction.project(primitive, h.camera, 1.5f).controls[0];
-  ASSERT_TRUE(control.visible);
-  ASSERT_EQ(interaction.hit_test(control.screen_position), 0);
-  const QVec3 axis = primitive.world_x * control.resize_axis.x +
-                     primitive.world_z * control.resize_axis.z;
-  interaction.begin(0, primitive, h.camera, control.screen_position);
-  const auto end = h.camera.project_world_point(control.world_position + axis * 0.75f);
-  ASSERT_TRUE(end.visible);
-  const auto displacement = interaction.displacement(h.camera, end.position);
-  ASSERT_TRUE(displacement);
-  EXPECT_NEAR(*displacement, 0.75, 0.0001);
-  EXPECT_NEAR(interaction.axis_world_scale(), length(axis), 0.0001);
-}
-
-TEST(PrimitiveCubeInteractionTests, BoxFeedbackShowsWorldDimensionsIndependentOfSubdivisions) {
-  PrimitiveCubeInteractionHarness h;
-  auto primitive = *h.box.live_primitive();
-  primitive.local_min = {-1.0f, -1.0f, -1.0f};
-  primitive.local_max = {1.25f, 1.5f, 1.75f};
-  primitive.world_origin = {1.0f, 0.0f, 0.0f};
-  primitive.world_x = {0.0f, 0.0f, 2.0f};
-  primitive.world_y = {0.0f, 0.5f, 0.0f};
-  primitive.world_z = {-1.5f, 0.0f, 0.0f};
-  constexpr std::array<double, 3> kWorldDimensions{4.5, 1.25, 4.125};
-  constexpr std::array<double, 3> kWorldResizeIncrements{0.5, 0.125, 0.375};
-  constexpr std::array<std::string_view, 3> kKeys{
-      "primitive.controls.width", "primitive.controls.height", "primitive.controls.depth"};
-  PrimitiveCreationInteraction interaction;
-  for (const auto subdivisions : {std::array{1, 1, 1}, std::array{7, 9, 11}}) {
-    primitive.subdivisions = subdivisions;
-    const auto &frame = interaction.project(primitive, h.camera, 1.5f);
-    for (int index = 0; index < 9; ++index) {
-      SCOPED_TRACE(index);
-      const int axis = index < 6 ? index / 2 : index - 6;
-      ASSERT_TRUE(frame.controls[index].visible);
-      interaction.hover(index);
-      EXPECT_EQ(frame.label_key, kKeys[axis]);
-      EXPECT_FALSE(frame.label_is_count);
-      EXPECT_NEAR(frame.label_value, kWorldDimensions[axis], 0.00001);
-      if (index >= 6) {
-        EXPECT_EQ(frame.controls[index].segment_count, subdivisions[axis]);
-        interaction.set_subdivision_decrement(true);
-        EXPECT_FALSE(frame.label_is_count);
-        EXPECT_NEAR(frame.label_value, kWorldDimensions[axis], 0.00001);
-        interaction.set_subdivision_decrement(false);
-      }
-    }
-  }
-
-  for (int index = 0; index < 6; ++index) {
-    SCOPED_TRACE(index);
-    const int axis = index / 2;
-    const auto control = interaction.project(primitive, h.camera, 1.5f).controls[index];
-    interaction.begin(index, primitive, h.camera, control.screen_position);
-    EXPECT_FALSE(interaction.frame().label_is_count);
-    EXPECT_NEAR(interaction.frame().label_value, kWorldDimensions[axis], 0.00001);
-    auto resized = primitive;
-    resized.resizing = true;
-    QVec3 &moving = index % 2 == 0 ? resized.local_max : resized.local_min;
-    const float displacement = index % 2 == 0 ? 0.25f : -0.25f;
-    if (axis == 0) moving.x += displacement;
-    else if (axis == 1) moving.y += displacement;
-    else moving.z += displacement;
-    const auto &frame = interaction.project(resized, h.camera, 1.5f);
-    interaction.hover(-1);
-    EXPECT_EQ(frame.label_key, kKeys[axis]);
-    EXPECT_FALSE(frame.label_is_count);
-    EXPECT_NEAR(frame.label_value,
-                kWorldDimensions[axis] + kWorldResizeIncrements[axis], 0.00001);
-    interaction.end();
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, RoundShapesExposeOnlyRelevantControlsAndGatedFeedback) {
-  for (const auto shape : {ViewportPrimitiveCreationShape::Cone,
-                          ViewportPrimitiveCreationShape::Sphere,
-                          ViewportPrimitiveCreationShape::Torus}) {
-    PrimitiveCubeInteractionHarness h(shape);
-    auto &interaction = h.modal.primitive_creation;
-    const auto primitive = h.box.live_primitive();
-    ASSERT_TRUE(primitive);
-    const auto &frame = interaction.project(primitive, h.camera, 1.5f);
-    int dots = 0, buttons = 0;
-    for (int index = 0; index < 9; ++index) {
-      if (!frame.controls[index].visible) continue;
-      index < 6 ? ++dots : ++buttons;
-      EXPECT_EQ(interaction.hit_test(frame.controls[index].screen_position), index);
-    }
-    EXPECT_EQ(dots, 3);
-    EXPECT_EQ(buttons, shape == ViewportPrimitiveCreationShape::Cone ? 1 : 2);
-    interaction.hover(6);
-    EXPECT_TRUE(frame.label_is_count);
-    EXPECT_EQ(frame.label_value, frame.controls[6].segment_count);
-    EXPECT_EQ(frame.highlight_point_count, 65u);
-    const auto key = frame.label_key;
-    if (buttons == 2) {
-      const auto loop = frame.highlight_points;
-      interaction.hover(7);
-      EXPECT_NE(frame.label_key, key);
-      bool different = false;
-      for (std::size_t index = 0; index < loop.size(); ++index) {
-        different |= length(loop[index] - frame.highlight_points[index]) > 0.001f;
-      }
-      EXPECT_TRUE(different);
-    }
-    const auto builds = interaction.projection_count();
-    const auto revision = frame.revision;
-    for (int repeat = 0; repeat < 20; ++repeat) {
-      interaction.project(primitive, h.camera, 1.5f);
-      interaction.hover(buttons == 2 ? 7 : 6);
-    }
-    EXPECT_EQ(interaction.projection_count(), builds);
-    EXPECT_EQ(frame.revision, revision);
-    interaction.clear();
-    EXPECT_TRUE(frame.label_key.empty());
-    EXPECT_EQ(frame.highlight_point_count, 0u);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, ConeSphereDotsRetainOppositePoleAndFootprintProportions) {
-  for (const auto shape : {ViewportPrimitiveCreationShape::Cone,
-                          ViewportPrimitiveCreationShape::Sphere}) {
-    for (const int index : {0, 2, 3}) {
-      PrimitiveCubeInteractionHarness h(shape);
-      const auto before = *h.box.live_primitive();
-      const auto control = h.modal.primitive_creation.frame().controls[index];
-      const QVec3 axis = before.world_x * control.resize_axis.x +
-          before.world_y * control.resize_axis.y + before.world_z * control.resize_axis.z;
-      const float delta = index == 3 ? -0.7f : 0.7f;
-      const auto end = h.camera.project_world_point(control.world_position + axis * delta).position;
-      ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-      ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
-      ASSERT_TRUE(h.pointer(end, false, false, true).consumed);
-      const auto after = *h.box.live_primitive();
-      EXPECT_FALSE(after.resizing);
-      if (index == 0) {
-        EXPECT_GT(after.local_max.x, before.local_max.x);
-        EXPECT_NEAR((after.local_max.x - after.local_min.x) /
-                    (after.local_max.z - after.local_min.z), 2, 0.0001);
-        EXPECT_FLOAT_EQ(after.local_min.y, before.local_min.y);
-        EXPECT_FLOAT_EQ(after.local_max.y, before.local_max.y);
-      } else {
-        EXPECT_NEAR(after.local_max.y, before.local_max.y + (index == 2 ? delta : 0), 0.0001);
-        EXPECT_NEAR(after.local_min.y, before.local_min.y + (index == 3 ? delta : 0), 0.0001);
-      }
-      EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-    }
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, RoundShapeButtonsChangeOnlyTheirSettingAndFreezeCtrlAtLimits) {
-  for (const auto shape : {ViewportPrimitiveCreationShape::Cone,
-                          ViewportPrimitiveCreationShape::Sphere,
-                          ViewportPrimitiveCreationShape::Torus}) {
-    PrimitiveCubeInteractionHarness h(shape);
-    auto &interaction = h.modal.primitive_creation;
-    const int axes = shape == ViewportPrimitiveCreationShape::Cone ? 1 : 2;
-    for (int axis = 0; axis < axes; ++axis) {
-      ASSERT_TRUE(h.box.set_segments(axis, 6).ok);
-      auto before = interaction.project(h.box.live_primitive(), h.camera, 1);
-      const auto button = before.controls[axis + 6];
-      ASSERT_TRUE(h.pointer(button.screen_position, true, true, false, true).consumed);
-      ASSERT_TRUE(h.pointer(button.screen_position, false, false, true, false).consumed);
-      const auto after = interaction.project(h.box.live_primitive(), h.camera, 1);
-      EXPECT_EQ(after.controls[axis + 6].segment_count, 5);
-      if (axes == 2) EXPECT_EQ(after.controls[7 - axis].segment_count, before.controls[7 - axis].segment_count);
-      ASSERT_TRUE(h.box.set_segments(axis, button.minimum_segments).ok);
-      const auto minimum = interaction.project(h.box.live_primitive(), h.camera, 1).controls[axis + 6];
-      h.pointer(minimum.screen_position, false, false, false, true);
-      EXPECT_FALSE(interaction.frame().controls[axis + 6].enabled);
-      const auto revision = h.box.live_primitive()->revision;
-      h.pointer(minimum.screen_position, true, true, false, true);
-      h.pointer(minimum.screen_position, false, false, true, true);
-      EXPECT_EQ(h.box.live_primitive()->revision, revision);
-    }
-    EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, TorusBoundaryDragsPreserveBoundsAndRatioOnCaptureLoss) {
-  for (const int index : {0, 1, 2}) {
-    PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Torus);
-    const auto before = *h.box.live_primitive();
-    const auto control = h.modal.primitive_creation.frame().controls[index];
-    const QVec3 axis = before.world_x * control.resize_axis.x +
-        before.world_y * control.resize_axis.y + before.world_z * control.resize_axis.z;
-    const auto end = h.camera.project_world_point(control.world_position + axis * 0.2f).position;
-    ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-    ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
-    const auto after = *h.box.live_primitive();
-    if (index == 0) {
-      EXPECT_GT(after.local_max.x, before.local_max.x);
-      EXPECT_NEAR((after.local_max.x - after.local_min.x) * (1 - 2 * after.tube_radius_ratio),
-                  (before.local_max.x - before.local_min.x) * (1 - 2 * before.tube_radius_ratio), 0.0001);
-    } else if (index == 1) {
-      EXPECT_FLOAT_EQ(after.local_min.x, before.local_min.x);
-      EXPECT_FLOAT_EQ(after.local_max.z, before.local_max.z);
-      EXPECT_LT(after.tube_radius_ratio, before.tube_radius_ratio);
-    } else {
-      EXPECT_NEAR(after.local_max.y, before.local_max.y + 0.2f, 0.0001);
-      EXPECT_FLOAT_EQ(after.local_min.y, before.local_min.y);
-    }
-    EXPECT_TRUE(h.frame({.left_down = true, .viewport_focused = false,
-                        .pointer_interaction_canceled = true}).consumed);
-    EXPECT_TRUE(h.pointer(end, false, false, true).consumed);
-    const auto finished = *h.box.live_primitive();
-    EXPECT_FLOAT_EQ(finished.local_max.x, after.local_max.x);
-    EXPECT_FLOAT_EQ(finished.local_max.y, after.local_max.y);
-    EXPECT_DOUBLE_EQ(finished.tube_radius_ratio, after.tube_radius_ratio);
-    EXPECT_FALSE(finished.resizing);
-  }
-}
-
-TEST(PrimitiveCubeInteractionTests, QuadSphereProjectsOneSubdivisionControlAndRetainsCachedFeedback) {
-  PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
-  auto &interaction = h.modal.primitive_creation;
-  const auto uv = *h.box.live_primitive();
-  const auto uv_frame = interaction.frame();
-  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
-  const auto quad = h.box.live_primitive();
-  ASSERT_TRUE(quad);
-  EXPECT_EQ(quad->sphere_type, ViewportSphereType::Quad);
-  EXPECT_EQ(quad->sphere_subdivision, 3);
-  const auto &frame = interaction.project(quad, h.camera, 1);
-  for (int index = 0; index < 9; ++index) {
-    const bool visible = index == 0 || index == 2 || index == 3 || index == 6;
-    EXPECT_EQ(frame.controls[index].visible, visible);
-    if (visible) {
-      EXPECT_EQ(interaction.hit_test(frame.controls[index].screen_position), index);
-      EXPECT_LT(length(frame.controls[index].world_position -
-                       uv_frame.controls[index].world_position), 0.00001f);
-    }
-  }
-  EXPECT_EQ(frame.controls[6].segment_count, 3);
-  EXPECT_EQ(frame.controls[6].minimum_segments, 1);
-  EXPECT_EQ(frame.controls[6].maximum_segments, 6);
-  interaction.hover(6);
-  EXPECT_EQ(frame.label_key, "primitive.controls.subdivision");
-  EXPECT_EQ(frame.label_value, 3);
-  EXPECT_TRUE(frame.label_is_count);
-  EXPECT_EQ(frame.highlight_point_count, 0u);
-  const auto projections = interaction.projection_count();
-  const auto revision = frame.revision;
-  for (int repeat = 0; repeat < 20; ++repeat) {
-    interaction.project(quad, h.camera, 1);
-    interaction.hover(6);
-  }
-  EXPECT_EQ(interaction.projection_count(), projections);
-  EXPECT_EQ(frame.revision, revision);
-
-  // The DTO fields also invalidate presentation when the producer's revision
-  // happens to match, as on a presentation-only rebind.
-  auto changed = *quad;
-  changed.sphere_subdivision = 2;
-  interaction.project(changed, h.camera, 1);
-  EXPECT_EQ(interaction.projection_count(), projections + 1);
-  EXPECT_EQ(frame.label_value, 2);
-  changed.sphere_type = ViewportSphereType::Uv;
-  interaction.project(changed, h.camera, 1);
-  EXPECT_EQ(interaction.projection_count(), projections + 2);
-  EXPECT_TRUE(frame.controls[7].visible);
-  EXPECT_EQ(frame.controls[6].segment_count, uv.radial_segments);
-  EXPECT_EQ(frame.controls[7].segment_count, uv.rings);
-  EXPECT_EQ(frame.controls[6].maximum_segments, 128);
-  EXPECT_EQ(frame.label_key, "primitive.controls.radial_segments");
-  EXPECT_EQ(frame.highlight_point_count, 65u);
-}
-
-TEST(PrimitiveCubeInteractionTests, QuadSphereButtonsConsumeBothLimitsAndFreezeClickDirection) {
-  PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
-  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
-  auto &interaction = h.modal.primitive_creation;
-  const auto initial = *h.box.live_primitive();
-  auto point = interaction.project(initial, h.camera, 1).controls[6].screen_position;
-  ASSERT_TRUE(h.pointer(point, true, true, false, true).consumed);
-  ASSERT_TRUE(h.pointer(point, false, false, true, false).consumed);
-  EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 2);
-  EXPECT_EQ(h.box.live_primitive()->radial_segments, initial.radial_segments);
-  EXPECT_EQ(h.box.live_primitive()->rings, initial.rings);
-
-  for (const bool decrement : {true, false}) {
-    const int limit = decrement ? 1 : 6;
-    ASSERT_TRUE(h.box.set_segments(0, limit).ok);
-    point = interaction.project(h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
-    h.pointer(point, false, false, false, decrement);
-    EXPECT_FALSE(interaction.frame().controls[6].enabled);
-    const auto revision = h.box.live_primitive()->revision;
-    const auto content = h.session.modeling().content_revision();
-    EXPECT_TRUE(h.pointer(point, true, false, true, decrement).consumed);
-    EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, limit);
-    std::array<ViewportNavigationWheelEvent, 1> wheels{{
-        {.action = ViewportInputActionKind::Zoom, .steps = decrement ? -1.0f : 1.0f,
-         .local = point}}};
-    EXPECT_TRUE(h.wheel(wheels).consumed);
-    EXPECT_TRUE(wheels[0].consumed);
-    EXPECT_EQ(h.box.live_primitive()->revision, revision);
-    EXPECT_EQ(h.session.modeling().content_revision(), content);
-    EXPECT_EQ(h.session.modeling().box_drag_state(), ModelingBoxDragState::Idle);
-  }
-  EXPECT_EQ(h.session.primitive_creation().shape_count(), 1);
-}
-
-TEST(PrimitiveCubeInteractionTests, SphereTypeChangeRetiresHeldButtonsAndFractionalWheelInput) {
-  for (const int source_control : {6, 7}) {
-    PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
-    auto &interaction = h.modal.primitive_creation;
-    const auto point = interaction.frame().controls[source_control].screen_position;
-    ASSERT_TRUE(h.pointer(point, true, true, false).consumed);
-    ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
-    const auto revision = h.box.live_primitive()->revision;
-    ASSERT_TRUE(h.pointer(point, false, true, false).consumed);
-    EXPECT_EQ(interaction.active(), -1);
-    EXPECT_TRUE(h.modal.primary_release_suppression.active());
-    ASSERT_TRUE(h.pointer(point, false, false, true).consumed);
-    EXPECT_EQ(h.box.live_primitive()->revision, revision);
-    EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 3);
-
-    const auto quad_point = interaction.project(
-        h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
-    ASSERT_TRUE(h.pointer(quad_point, true, true, false).consumed);
-    ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 0.0).ok());
-    const auto uv_revision = h.box.live_primitive()->revision;
-    ASSERT_TRUE(h.pointer(quad_point, false, false, true).consumed);
-    EXPECT_EQ(interaction.active(), -1);
-    EXPECT_EQ(h.box.live_primitive()->revision, uv_revision);
-  }
-
-  PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
-  const auto send_half_step = [&] {
-    const auto point = h.modal.primitive_creation.project(
-        h.box.live_primitive(), h.camera, 1).controls[6].screen_position;
-    std::array<ViewportNavigationWheelEvent, 1> wheels{{
-        {.action = ViewportInputActionKind::Zoom, .steps = 0.5f, .local = point}}};
-    EXPECT_TRUE(h.wheel(wheels).consumed);
-    EXPECT_TRUE(wheels[0].consumed);
-  };
-  send_half_step();
-  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 1.0).ok());
-  send_half_step();
-  EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 3);
-  send_half_step();
-  EXPECT_EQ(h.box.live_primitive()->sphere_subdivision, 4);
-  send_half_step();
-  ASSERT_TRUE(h.editor.tools().set_setting(kCreatePrimitiveToolId, kSphereTypeSetting, 0.0).ok());
-  send_half_step();
-  EXPECT_EQ(h.box.live_primitive()->radial_segments, 32);
-  send_half_step();
-  EXPECT_EQ(h.box.live_primitive()->radial_segments, 33);
-}
-
 TEST(PrimitiveCubeInteractionTests, QuadSphereTypeChangeRetiresResizeWithoutRestoringOldBounds) {
   for (const bool to_quad : {true, false}) {
     PrimitiveCubeInteractionHarness h(ViewportPrimitiveCreationShape::Sphere);
@@ -1307,8 +735,9 @@ TEST(PrimitiveCubeInteractionTests, QuadSphereTypeChangeRetiresResizeWithoutRest
     const auto control = h.modal.primitive_creation.project(
         h.box.live_primitive(), h.camera, 1).controls[2];
     ASSERT_TRUE(h.pointer(control.screen_position, true, true, false).consumed);
-    const auto end = h.camera.project_world_point(
-        control.world_position + QVec3{0, 0.7f, 0}).position;
+    const auto end = control.screen_position + h.camera.project_world_point(
+        control.world_position + QVec3{0, 0.7f, 0}).position -
+        h.camera.project_world_point(control.world_position).position;
     ASSERT_TRUE(h.pointer(end, false, true, false).consumed);
     const auto resized = *h.box.live_primitive();
     ASSERT_TRUE(resized.resizing);

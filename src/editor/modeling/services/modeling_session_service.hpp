@@ -209,6 +209,8 @@ public:
   [[nodiscard]] std::optional<ModelingTransform3>
   selection_transform_orientation() const;
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
+  [[nodiscard]] std::optional<ModelingBoundsResizeState>
+  selection_resize_bounds(ModelingTransformSpace space) const;
   [[nodiscard]] ModelingSelectionMode selection_mode() const;
   [[nodiscard]] ModelingSelectionSummary selection_summary() const;
   [[nodiscard]] std::span<const EntityId>

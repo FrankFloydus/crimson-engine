@@ -251,6 +251,7 @@ private:
     std::uint64_t controls_revision = 0u;
     bool controls_valid = false;
     TransformGizmoPresentation idle_gizmo;
+    MeshBoundsResizePresentation bounds_resize_presentation;
     PrimitiveCreationInteraction primitive_presentation;
   };
 

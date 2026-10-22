@@ -128,3 +128,23 @@ fallback. Rejection must preserve every accepted stream and revision, and no reu
 buffer may be written while an accepted or older snapshot pins it. These contracts are covered by
 [coordinate projection parity](../../../../tests/uv_native_sampling_tests.cpp) and
 [component transform lifecycle tests](../../../../tests/component_transform_persistence_tests.cpp).
+
+Bounds resize captures one common frame, its extents, the moving side and the opposite
+anchor before starting the existing transform preview. Samples are absolute outward world
+displacements from that capture. The constrained factor is `1 + displacement / extent`,
+clamped to `[0.001, 10000]`; snapping resolves the moving coordinate in the captured frame.
+Zero displacement remains neutral even for an off-grid boundary. Rotated, reflected and
+parented mesh selections use the same common affine, preserving their relative placement.
+The bounds-specific scene preview retains a necessary affine remainder through the existing
+transform representation and history transaction; ordinary transform tools retain their own
+representability policy. Each candidate is derived from the capture, including its parent
+frame, so repeated samples never accumulate an affine remainder. Invalid candidates preserve
+the last accepted preview. See the [bounds API regressions](../../../../tests/bounds_resize_api_tests.cpp).
+
+The shared [bounds interaction](../../tools/bounds_resize_interaction.hpp) publishes an immutable
+pane-local layout for drawing and picking. A pressed mesh handle does not start history or
+settle another tool until its drag threshold is crossed. Selection, scene and document fences
+retire stale captures. Primitive creation consumes the same six-side presentation through its
+parametric owner. Accepted preview revisions must reach surfaces, wires, outlines, picking,
+depth and dimensions together; passive panes project the accepted state without running input
+lifecycle code. Unchanged frames reuse both the bounds query and retained overlay submission.

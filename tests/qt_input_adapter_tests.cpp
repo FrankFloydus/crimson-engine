@@ -2444,7 +2444,7 @@ TEST(QtViewportSurfaceInputTests,
     const auto &controls = controller.primitive_creation_controls(cube, camera, 1);
     EXPECT_EQ(controls.revision, held_revision);
     EXPECT_EQ(controls.hovered, -1);
-    for (int index : {6, 7, 8}) EXPECT_TRUE(controls.controls[index].subdivision_decrement);
+    for (int index : {6, 7, 8}) EXPECT_FALSE(controls.controls[index].visible);
   }
 
   QKeyEvent release(QEvent::KeyRelease, Qt::Key_Control, Qt::ControlModifier);
@@ -2458,7 +2458,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_FLOAT_EQ(up.input.mouse_delta.y, 0.0f);
   controller.set_primitive_creation_decrement(up.input.modifiers.primary);
   const auto &released = controller.primitive_creation_controls(cube, camera, 1);
-  EXPECT_GT(released.revision, held_revision);
+  EXPECT_EQ(released.revision, held_revision);
   for (int index : {6, 7, 8}) EXPECT_FALSE(released.controls[index].subdivision_decrement);
   EXPECT_FALSE(surface.take_input_frame(1.0f / 60.0f, false).input.modifiers.primary);
 }
@@ -2772,6 +2772,7 @@ TEST(QtViewportSurfaceInputTests,
   auto &camera = session.viewport_workspace().camera(
       quader::ViewportPaneId::Perspective);
   camera.focus_origin(10);
+  camera.view_axis(quader::ViewportViewAxis::Z, 1);
   process_input();
   const auto local_point = [&](quader::QVec2 pixels) {
     return QPointF{pixels.x / surface->devicePixelRatio(),
@@ -2800,12 +2801,11 @@ TEST(QtViewportSurfaceInputTests,
     send_visible_viewport_event(surface, &event);
   };
   constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
-  // Keep the button above its decrement limit so an unreserved command click
-  // would visibly change the cube and fail the ownership assertions below.
+  // Mouse commands retain ownership over every projected bounds handle.
   ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
       quader::kBoxSubdivisionsXSetting, 2.0).ok());
   for (const bool coalesced : {false, true}) {
-    for (const int control : {0, 6}) {
+    for (const int control : {0, 1, 2, 3, 4, 5}) {
       SCOPED_TRACE(coalesced);
       SCOPED_TRACE(control);
       ASSERT_TRUE(editor.commands().set_shortcut(kFlip, "Ctrl+LeftMouse").ok());
@@ -2841,7 +2841,7 @@ TEST(QtViewportSurfaceInputTests,
   // A mouse sequence prefix reserves its press even before a command executes.
   ASSERT_TRUE(editor.commands().set_shortcut(kFlip, "Ctrl+LeftMouse F").ok());
   const auto before_sequence = editor.tools().live_primitive_cube();
-  const QPointF plus = control_point(6);
+  const QPointF plus = control_point(0);
   send_mouse(QEvent::MouseButtonPress, plus, Qt::ControlModifier);
   send_mouse(QEvent::MouseButtonRelease, plus, Qt::NoModifier);
   process_input();
@@ -2874,64 +2874,13 @@ TEST(QtViewportSurfaceInputTests,
   process_input();
   ASSERT_TRUE(editor.tools().live_primitive_cube());
   EXPECT_EQ(editor.tools().live_primitive_cube()->subdivisions[0],
-            before_click->subdivisions[0] - 1);
+            before_click->subdivisions[0]);
   EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces, before_click->flip_faces);
-
-  constexpr std::array<std::string_view, 3> kSubdivisionSettings{
-      quader::kBoxSubdivisionsXSetting, quader::kBoxSubdivisionsYSetting,
-      quader::kBoxSubdivisionsZSetting};
-  for (const bool coalesced : {false, true}) {
-    for (int axis = 0; axis < 3; ++axis) {
-      SCOPED_TRACE(coalesced);
-      SCOPED_TRACE(axis);
-      for (const auto setting : kSubdivisionSettings) {
-        ASSERT_TRUE(editor.tools().set_setting(
-            quader::kCreatePrimitiveToolId, setting, 2.0).ok());
-      }
-      const QPointF button = control_point(6 + axis);
-      for (const int initial : {2, 1}) {
-        SCOPED_TRACE(initial);
-        const auto before = editor.tools().live_primitive_cube();
-        ASSERT_TRUE(before);
-        ASSERT_EQ(before->subdivisions[axis], initial);
-        send_ctrl(true);
-        send_mouse(QEvent::MouseButtonPress, button, Qt::ControlModifier);
-        if (!coalesced) process_input();
-        // Release Ctrl first, including a separate stationary frame while
-        // the mouse is held. The press still owns the decrement operation.
-        send_ctrl(false);
-        if (!coalesced) process_input();
-        send_mouse(QEvent::MouseButtonRelease, button, Qt::NoModifier);
-        process_input();
-        const auto after = editor.tools().live_primitive_cube();
-        ASSERT_TRUE(after);
-        auto expected = before->subdivisions;
-        expected[axis] = 1;
-        EXPECT_EQ(after->subdivisions, expected);
-        if (initial == 1) EXPECT_EQ(after->revision, before->revision);
-        EXPECT_FALSE(after->resizing);
-        EXPECT_EQ(session.modeling().box_drag_state(), quader::ModelingBoxDragState::Idle);
-        EXPECT_EQ(session.primitive_creation().shape_count(), 1);
-      }
-
-      // The inverse ordering also freezes intent: Ctrl pressed after the
-      // mouse-down changes live mode, but the accepted click increments.
-      send_mouse(QEvent::MouseButtonPress, button, Qt::NoModifier);
-      if (!coalesced) process_input();
-      send_ctrl(true);
-      send_mouse(QEvent::MouseButtonRelease, button, Qt::ControlModifier);
-      process_input();
-      ASSERT_TRUE(editor.tools().live_primitive_cube());
-      EXPECT_EQ(editor.tools().live_primitive_cube()->subdivisions[axis], 2);
-      send_ctrl(false);
-      process_input();
-    }
-  }
 
   auto *dimension_label = panel.findChild<QLabel *>(
       QStringLiteral("viewportPrimitiveFeedback_perspective"));
   ASSERT_NE(dimension_label, nullptr);
-  for (const int index : {2, 3, 7}) {
+  for (const int index : {2, 3}) {
     SCOPED_TRACE(index);
     const QPointF height_control = control_point(index);
     QMouseEvent hover_height(QEvent::MouseMove, height_control,
@@ -2942,7 +2891,7 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_FALSE(dimension_label->isHidden());
     EXPECT_EQ(dimension_label->text(), QStringLiteral("Height: 32"));
   }
-  const QPointF width_button = control_point(6);
+  const QPointF width_button = control_point(0);
   QMouseEvent hover_width(QEvent::MouseMove, width_button, width_button + QPointF{100, 100},
                           Qt::NoButton, Qt::NoButton, Qt::NoModifier);
   send_visible_viewport_event(surface, &hover_width);
@@ -2977,8 +2926,9 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_TRUE(editor.tools().live_primitive_cube()->resizing);
   EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces, before_resize->flip_faces);
   const auto &frame = projection.frame();
-  const QPointF moved = local_point(camera.project_world_point(
-      frame.controls[0].world_position + before_resize->world_x * 2.0f).position);
+  const QPointF moved = local_point(frame.controls[0].screen_position +
+      camera.project_world_point(frame.controls[0].world_position + before_resize->world_x * 2.0f).position -
+      camera.project_world_point(frame.controls[0].world_position).position);
   send_mouse(QEvent::MouseMove, moved, Qt::NoModifier);
   process_input();
   EXPECT_GT(editor.tools().live_primitive_cube()->local_max.x, before_resize->local_max.x);
@@ -2994,7 +2944,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_EQ(session.primitive_creation().shape_count(), 1);
 }
 
-TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNativeRouting) {
+TEST(QtViewportSurfaceInputTests, CylinderCapsFlipAndBoundsResizeShareNativeRouting) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-cylinder-viewport-tests";
@@ -3062,8 +3012,9 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
   EXPECT_FALSE(editor.tools().live_primitive_creation()->caps);
   EXPECT_TRUE(editor.tools().live_primitive_creation()->flip_faces);
   EXPECT_TRUE(editor.tools().live_primitive_creation()->resizing);
-  const auto end = camera.project_world_point(control.world_position +
-      before->world_x * control.resize_axis.x + before->world_z * control.resize_axis.z).position;
+  const auto end = control.screen_position + camera.project_world_point(control.world_position +
+      before->world_x * control.resize_axis.x + before->world_z * control.resize_axis.z).position -
+      camera.project_world_point(control.world_position).position;
   mouse(QEvent::MouseMove, end, Qt::NoModifier);
   process();
   mouse(QEvent::MouseButtonRelease, end, Qt::NoModifier);
@@ -3074,13 +3025,13 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
   EXPECT_GT(resized->local_max.x, before->local_max.x);
   const auto button = projection.project(
       quader::ViewportPrimitiveCreationApiAdapter::from_api(resized), camera,
-      static_cast<float>(surface->devicePixelRatio())).controls[6];
+      static_cast<float>(surface->devicePixelRatio())).controls[1];
   mouse(QEvent::MouseButtonPress, button.screen_position, Qt::ControlModifier);
   mouse(QEvent::MouseButtonRelease, button.screen_position, Qt::NoModifier);
   process();
   const auto after = editor.tools().live_primitive_creation();
   ASSERT_TRUE(after);
-  EXPECT_EQ(after->side_count, resized->side_count - 1);
+  EXPECT_EQ(after->side_count, resized->side_count);
   EXPECT_FALSE(after->caps);
   EXPECT_TRUE(after->flip_faces);
   EXPECT_FLOAT_EQ(after->local_max.x, resized->local_max.x);
@@ -3089,7 +3040,7 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
 }
 
 TEST(QtViewportSurfaceInputTests,
-     RoundPrimitiveButtonsRouteSettingsAndRetainLocalizedFeedback) {
+     RoundPrimitiveBoundsRetainSettingsAndLocalizedDimensionFeedback) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-round-primitive-feedback-tests";
@@ -3172,69 +3123,45 @@ TEST(QtViewportSurfaceInputTests,
           panel.viewport_raster_scale(quader::ViewportPaneId::Perspective));
     };
     process();
-    // The four-world-unit primitive is 128 map units tall with a 64-unit radius.
-    for (const int index : {0, 2}) {
+    // Every shape exposes the same six bound-side dimensions in map units.
+    const auto before = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(before);
+    const auto before_counts = counts(*before);
+    for (int index = 0; index < 6; ++index) {
       const auto handle = project().controls[index];
       ASSERT_TRUE(handle.visible);
       mouse(QEvent::MouseMove, handle.screen_position);
       process();
       ASSERT_FALSE(label->isHidden());
-      const bool torus = kind == quader::PrimitiveCreationKind::Torus;
-      const QString name = index == 0
-          ? (torus ? QStringLiteral("Outer Radius") : QStringLiteral("Radius"))
-          : (torus ? QStringLiteral("Tube Height") : QStringLiteral("Height"));
-      EXPECT_EQ(label->text(), name + (index == 0 ? QStringLiteral(": 64")
-                                                 : QStringLiteral(": 128")));
-    }
-    const bool side_count_kind = kind == quader::PrimitiveCreationKind::Cylinder ||
-        kind == quader::PrimitiveCreationKind::Cone;
-    const int button_count = side_count_kind || quad_sphere ? 1 : 2;
-    if (quad_sphere) EXPECT_FALSE(project().controls[7].visible);
-    for (int axis = 0; axis < button_count; ++axis) {
-      const int index = 6 + axis;
-      const auto button = project().controls[index];
-      ASSERT_TRUE(button.visible);
-      mouse(QEvent::MouseMove, button.screen_position);
-      process();
-      ASSERT_FALSE(label->isHidden());
-      projection.hover(index);
-      const auto &feedback = project();
-      const auto prefix = QString::fromStdString(
-          localization.text(feedback.label_key, "missing")) + QStringLiteral(": ");
-      EXPECT_EQ(label->text(), prefix + QString::number(static_cast<int>(feedback.label_value)));
-      if (quad_sphere) EXPECT_EQ(label->text(), QStringLiteral("Subdivision: 3"));
+      const QString name = index / 2 == 0 ? QStringLiteral("Width")
+          : index / 2 == 1 ? QStringLiteral("Height") : QStringLiteral("Depth");
+      EXPECT_EQ(label->text(), name + QStringLiteral(": 128"));
       const auto update_count = panel.primitive_feedback_update_count();
       for (int frame = 0; frame < 60; ++frame) process();
-      EXPECT_EQ(panel.primitive_feedback_update_count(), update_count)
-          << "Unchanged input must not reformat or reset the retained feedback";
-
-      const auto before = editor.tools().live_primitive_creation();
-      ASSERT_TRUE(before);
-      const auto before_counts = counts(*before);
-      const int setting_index = quad_sphere ? 5 : side_count_kind ? 0
-          : kind == quader::PrimitiveCreationKind::Sphere ? 1 + axis : 3 + axis;
-      for (const bool decrement : {false, true}) {
-        mouse(QEvent::MouseButtonPress, button.screen_position,
-              decrement ? Qt::ControlModifier : Qt::NoModifier);
-        process();
-        EXPECT_FALSE(label->isHidden());
-        mouse(QEvent::MouseButtonRelease, button.screen_position);
-        process();
-        const auto after = editor.tools().live_primitive_creation();
-        ASSERT_TRUE(after);
-        auto expected_counts = before_counts;
-        if (!decrement) ++expected_counts[setting_index];
-        EXPECT_EQ(counts(*after), expected_counts);
-        EXPECT_EQ(after->subdivisions, before->subdivisions);
-        EXPECT_EQ(after->object_id, before->object_id);
-        EXPECT_FLOAT_EQ(quader::length_squared(after->local_min - before->local_min), 0.0f);
-        EXPECT_FLOAT_EQ(quader::length_squared(after->local_max - before->local_max), 0.0f);
-        EXPECT_FALSE(after->resizing);
-      }
-      EXPECT_EQ(session.primitive_creation().shape_count(), 1);
+      EXPECT_EQ(panel.primitive_feedback_update_count(), update_count);
+      mouse(QEvent::MouseButtonPress, handle.screen_position);
+      process();
+      mouse(QEvent::MouseButtonRelease, handle.screen_position);
+      process();
+      const auto after = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(after);
+      EXPECT_EQ(counts(*after), before_counts);
+      EXPECT_FALSE(after->resizing);
+      EXPECT_FLOAT_EQ(quader::length_squared(after->local_min - before->local_min), 0.0f);
+      EXPECT_FLOAT_EQ(quader::length_squared(after->local_max - before->local_max), 0.0f);
     }
+    for (int index = 6; index < 9; ++index) EXPECT_FALSE(project().controls[index].visible);
+    const std::string_view setting = quad_sphere ? quader::kSphereSubdivisionSetting
+        : kind == quader::PrimitiveCreationKind::Sphere ? quader::kSphereRadialSegmentsSetting
+        : kind == quader::PrimitiveCreationKind::Torus ? quader::kTorusMajorSegmentsSetting
+        : kind == quader::PrimitiveCreationKind::Cone ? quader::kConeSideCountSetting
+        : quader::kCylinderSideCountSetting;
+    ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId, setting,
+        quad_sphere ? 2.0 : 16.0).ok());
+    process();
+    EXPECT_EQ(session.primitive_creation().shape_count(), 1U);
     // Catalog publication is an independent input to the presentation gate.
-    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    mouse(QEvent::MouseMove, project().controls[0].screen_position);
     process();
     const auto english = label->text();
     const auto before_locale = panel.primitive_feedback_update_count();
@@ -3246,7 +3173,7 @@ TEST(QtViewportSurfaceInputTests,
     mouse(QEvent::MouseMove, {12, 12});
     process();
     EXPECT_TRUE(label->isHidden());
-    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    mouse(QEvent::MouseMove, project().controls[0].screen_position);
     process();
     ASSERT_FALSE(label->isHidden());
     QEvent leave(QEvent::Leave);
@@ -3255,7 +3182,7 @@ TEST(QtViewportSurfaceInputTests,
     process();
     EXPECT_TRUE(label->isHidden());
     send_visible_viewport_event(surface, &enter);
-    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    mouse(QEvent::MouseMove, project().controls[0].screen_position);
     process();
     ASSERT_FALSE(label->isHidden());
     QFocusEvent blur(QEvent::FocusOut);
@@ -3264,7 +3191,7 @@ TEST(QtViewportSurfaceInputTests,
     process();
     EXPECT_FALSE(label->isHidden());
     send_visible_viewport_event(surface, &focus);
-    mouse(QEvent::MouseMove, project().controls[6].screen_position);
+    mouse(QEvent::MouseMove, project().controls[0].screen_position);
     process();
     ASSERT_FALSE(label->isHidden());
     panel.abandon_interactions();
@@ -9207,7 +9134,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     PrimitiveWheelUsesEventPositionsConsumesLimitsAndPreservesKeybindingOwners) {
+     PrimitiveBoundsWheelNavigatesAndPreservesKeybindingOwners) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-primitive-wheel-panel-tests";
@@ -9247,7 +9174,7 @@ TEST(QtViewportSurfaceInputTests,
     const auto pixels = projection.project(
         quader::ViewportPrimitiveCreationApiAdapter::from_api(editor.tools().live_primitive_creation()),
         camera, panel.viewport_raster_scale(quader::ViewportPaneId::Perspective))
-                            .controls[6].screen_position;
+                            .controls[0].screen_position;
     return QPointF{pixels.x / surface->devicePixelRatio(), pixels.y / surface->devicePixelRatio()};
   };
   const auto wheel = [&](int delta, bool pixel = false,
@@ -9262,32 +9189,11 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
       quader::kBoxSubdivisionsXSetting, 128.0).ok());
   const auto distance = camera.state().distance;
-  const auto target = camera.state().target;
   wheel(120);
-  wheel(-120);
-  // A later mouse packet must not replace the two wheel hit-test positions.
-  QMouseEvent move(QEvent::MouseMove, {12, 12}, {12, 12},
-                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-  send_visible_viewport_event(surface, &move);
-  process();
-  EXPECT_EQ(count(), 127);
-  EXPECT_FLOAT_EQ(camera.state().distance, distance);
-  EXPECT_FLOAT_EQ(quader::length_squared(camera.state().target - target), 0.0f);
-
-  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
-      quader::kBoxSubdivisionsXSetting, 128.0).ok());
-  wheel(20, true, Qt::ControlModifier); // Blocked half-step still owns Ctrl+zoom.
-  process();
-  wheel(-20, true, Qt::ControlModifier);
   process();
   EXPECT_EQ(count(), 128);
-  EXPECT_FLOAT_EQ(camera.state().distance, distance);
-  wheel(-20, true, Qt::ControlModifier);
-  process();
-  EXPECT_EQ(count(), 127);
-  EXPECT_FLOAT_EQ(camera.state().distance, distance);
-  EXPECT_FLOAT_EQ(quader::length_squared(camera.state().target - target), 0.0f);
-
+  EXPECT_LT(camera.state().distance, distance);
+  const auto navigation_distance = camera.state().distance;
   constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
   for (const bool sequence : {false, true}) {
     ASSERT_TRUE(editor.commands().set_shortcut(kFlip, sequence ? "K WheelUp" : "WheelUp").ok());
@@ -9301,14 +9207,14 @@ TEST(QtViewportSurfaceInputTests,
     wheel(120);
     process();
     EXPECT_NE(editor.tools().live_primitive_creation()->flip_faces, before);
-    EXPECT_EQ(count(), 127);
-    EXPECT_FLOAT_EQ(camera.state().distance, distance);
+    EXPECT_EQ(count(), 128);
+    EXPECT_FLOAT_EQ(camera.state().distance, navigation_distance);
     EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
   }
 }
 
 TEST(QtViewportSurfaceInputTests,
-     QuadSphereWheelChangesSubdivisionAndConsumesLimitsWithoutNavigation) {
+     QuadSphereBoundsWheelNavigatesAndSettingsRemainAvailable) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-quad-sphere-wheel-panel-tests";
@@ -9360,9 +9266,10 @@ TEST(QtViewportSurfaceInputTests,
         quader::ViewportPrimitiveCreationApiAdapter::from_api(
             editor.tools().live_primitive_creation()), camera,
         panel.viewport_raster_scale(quader::ViewportPaneId::Perspective));
-    ASSERT_TRUE(controls.controls[6].visible);
+    ASSERT_TRUE(controls.controls[0].visible);
+    EXPECT_FALSE(controls.controls[6].visible);
     EXPECT_FALSE(controls.controls[7].visible);
-    const auto pixels = controls.controls[6].screen_position;
+    const auto pixels = controls.controls[0].screen_position;
     const QPointF point{pixels.x / surface->devicePixelRatio(),
                         pixels.y / surface->devicePixelRatio()};
     QWheelEvent event(point, point, pixel ? QPoint{0, delta} : QPoint{},
@@ -9374,30 +9281,14 @@ TEST(QtViewportSurfaceInputTests,
     return editor.tools().live_primitive_creation()->sphere_subdivision;
   };
   const auto distance = camera.state().distance;
-  const auto target = camera.state().target;
-  wheel(-120);
-  wheel(120);
-  // Wheel hit tests retain each event's button position even after the pointer leaves it.
-  QMouseEvent move(QEvent::MouseMove, {12, 12}, {12, 12},
-                    Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-  send_visible_viewport_event(surface, &move);
-  process();
-  EXPECT_EQ(subdivision(), 2);
-
-  wheel(-20, true, Qt::ControlModifier);
-  process();
-  EXPECT_EQ(subdivision(), 2);
-  wheel(-20, true, Qt::ControlModifier);
-  process();
-  EXPECT_EQ(subdivision(), 1);
-  wheel(-40, true, Qt::ControlModifier);
-  process();
-  EXPECT_EQ(subdivision(), 1);
   wheel(120);
   process();
+  EXPECT_EQ(subdivision(), 1);
+  EXPECT_LT(camera.state().distance, distance);
+  ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
+      quader::kSphereSubdivisionSetting, 2.0).ok());
+  process();
   EXPECT_EQ(subdivision(), 2);
-  EXPECT_FLOAT_EQ(camera.state().distance, distance);
-  EXPECT_FLOAT_EQ(quader::length_squared(camera.state().target - target), 0.0f);
   const auto current = editor.tools().live_primitive_creation();
   ASSERT_TRUE(current);
   EXPECT_EQ(current->radial_segments, original->radial_segments);

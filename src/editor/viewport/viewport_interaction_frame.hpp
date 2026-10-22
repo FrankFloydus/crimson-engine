@@ -63,6 +63,7 @@ struct ViewportInteractionSelectionState {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t pivot_revision = 0;
+  std::uint64_t transform_preview_revision = 0;
 };
 
 /**

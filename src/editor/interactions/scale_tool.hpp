@@ -30,6 +30,12 @@ struct ScaleToolState {
 	ToolBounds3 bounds;
 	bool snap_bounds_to_grid = false;
 	bool snap_uniform_to_grid = false;
+	/// A bounds gesture uses an absolute world displacement, not screen sensitivity.
+	bool bounds_resize = false;
+	double bounds_resize_world_extent = 0.0;
+	double bounds_resize_axis_scale = 1.0;
+	double bounds_resize_coordinate = 0.0;
+	double bounds_resize_side = 1.0;
 	quader::QVec3 preview_scale { 1.0F, 1.0F, 1.0F };
 };
 
@@ -78,6 +84,9 @@ struct ScalePreviewResult {
 ScaleBeginResult begin_scale_drag(const ScaleBeginInput& input);
 ScalePreviewResult preview_scale_from_screen_position(ScaleToolState& state, quader::QVec2 screen_position, bool grid_enabled, double grid_size);
 ScalePreviewResult preview_scale_from_scale(ScaleToolState& state, quader::QVec3 scale);
+ScalePreviewResult preview_bounds_resize_from_displacement(
+    ScaleToolState &state, double world_displacement, bool grid_enabled,
+    double grid_size);
 void reset_scale(ScaleToolState& state);
 
 } // namespace quader_editor_core

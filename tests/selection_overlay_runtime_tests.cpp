@@ -21,6 +21,7 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/tools/extrude_handle_layout.hpp"
 #include "editor/tools/bridge_preview_handle_layout.hpp"
+#include "editor/tools/bounds_resize_interaction.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/selected_mesh_outline_mask_cache.hpp"
@@ -1852,7 +1853,9 @@ public:
 
   bool present_workflow_pane(std::size_t pane = 0u,
                              const ViewportSettings *appearance = nullptr,
-                             bool dimensions_visible = false) {
+                             bool dimensions_visible = false,
+                             const BoundsResizeFrame *bounds_resize = nullptr,
+                             float raster_scale = 1.0f) {
     auto &editor = array_editor();
     auto &modeling = session_.modeling();
     auto &view = extrusion_pane_view(pane);
@@ -1872,6 +1875,17 @@ public:
     const std::array panes{ViewportPaneId::Perspective, ViewportPaneId::Top};
     std::uint8_t wire_mask = 0u;
     const auto settings = appearance != nullptr ? *appearance : ViewportSettings::defaults();
+    const auto overlay_camera = ViewportCameraAdapter::overlay_camera(camera, {kWidth, kHeight});
+    const ViewportToolOverlaySource tool_source({
+        .source_identity = reinterpret_cast<std::uintptr_t>(this),
+        .raster_scale = raster_scale,
+        .overlay_camera = &overlay_camera,
+        .viewport_camera = &camera,
+        .mesh_bounds_resize = bounds_resize,
+        .viewport_settings = &settings,
+        .gizmos_visible = true,
+        .overlays_visible = true});
+    const SelectionRuntimeToolFrame tool_provider(tool_source, tool_frame_builds_);
     const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
     ViewportPersistentOverlayRasterGroupSet groups;
     for (std::size_t index = 0u; index < panes.size(); ++index) {
@@ -1907,8 +1921,9 @@ public:
     last_submission_ = bridge_.submit_viewport_overlay(
         {.viewport_index = pane,
          .layer_mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)),
+         .raster_scale = raster_scale,
          .construction_object_id = live_primitive ? live_primitive->object_id : -1,
-         .camera = ViewportCameraAdapter::overlay_camera(camera, {kWidth, kHeight}),
+         .camera = overlay_camera,
          .selection_source = {
              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
              .content_revision = modeling.content_revision(),
@@ -1924,6 +1939,9 @@ public:
          .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
          .volatile_modeling_source = {.source_identity = volatile_overlay.source.source_identity,
              .publication_revision = volatile_overlay.source.publication_revision},
+         .dynamic_tool_source = bounds_resize != nullptr ? tool_source.source_stamp()
+                                                        : ViewportOverlayDynamicToolSourceStamp{},
+         .dynamic_tool_frame_provider = bounds_resize != nullptr ? &tool_provider : nullptr,
          .scene_selection_mode = ViewportToolOverlayProjection::selection_mode(mode),
          .style_selection_context = context,
          .overlays_visible = true,
@@ -9299,6 +9317,104 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchPi
                 << pink_delta[0] << ',' << pink_delta[1] << '\n';
     }
   }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanBoundsResizeHandlesMatchPickingAndRetainAcrossScaleAndCancel) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-bounds-resize-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  auto &editor = harness.workflow_editor();
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Bounds resize pixel fixture");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.scene().set_transform(box.value().entity,
+      {.rotation_euler = {0.0f, 0.0f, 0.7853981634f}}).ok());
+  ViewportCameraController camera;
+  camera.set_viewport_size(640, 480);
+  camera.set_clip_planes(0.01f, 200.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {7.0f, 5.0f, 9.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}}));
+  BoundsResizeInteraction interaction;
+  const auto project = [&](float scale) -> const BoundsResizeFrame & {
+    const auto bounds = editor.modeling().selection_resize_bounds(QuaderTransformSpace::Global);
+    EXPECT_TRUE(bounds.has_value());
+    if (!bounds) return interaction.project(std::nullopt, camera, scale);
+    return interaction.project(ViewportBoundsResizeState{
+        .local_min = bounds->local_min, .local_max = bounds->local_max,
+        .world_origin = bounds->world_origin, .world_x = bounds->world_x,
+        .world_y = bounds->world_y, .world_z = bounds->world_z,
+        .revision = bounds->revision}, camera, scale);
+  };
+  const auto capture = [&](const char *phase, float scale) {
+    harness.set_sample_camera(camera);
+    const auto &bounds = project(scale);
+    EXPECT_TRUE(bounds.visible);
+    EXPECT_TRUE(harness.present_workflow_pane(0u, nullptr, true, &bounds, scale));
+    const QImage image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    if (!directory.isEmpty()) EXPECT_TRUE(image.save(QDir(directory).filePath(
+        QStringLiteral("bounds-%1.png").arg(QString::fromLatin1(phase)))));
+    const auto builds = harness.tool_frame_builds();
+    for (int repeat = 0; repeat < 4; ++repeat) {
+      EXPECT_TRUE(harness.present_workflow_pane(0u, nullptr, true, &bounds, scale));
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    }
+    EXPECT_EQ(harness.tool_frame_builds(), builds);
+    EXPECT_EQ(harness.capture(), image);
+    for (int index = 0; index < 6; ++index) {
+      const auto &handle = bounds.handles[index];
+      if (!handle.visible) continue;
+      EXPECT_EQ(interaction.hit_test(handle.screen_position), index);
+      const int x = static_cast<int>(std::round(handle.screen_position.x));
+      const int y = image.height() - 1 - static_cast<int>(std::round(handle.screen_position.y));
+      EXPECT_GE(x, 0);
+      EXPECT_LT(x, image.width());
+      EXPECT_GE(y, 0);
+      EXPECT_LT(y, image.height());
+      if (x < 0 || x >= image.width() || y < 0 || y >= image.height()) continue;
+      const auto color = image.pixelColor(x, y);
+      const std::array channels{color.red(), color.green(), color.blue()};
+      EXPECT_GT(channels[handle.axis], channels[(handle.axis + 1) % 3] + 20);
+      EXPECT_GT(channels[handle.axis], channels[(handle.axis + 2) % 3] + 20);
+    }
+    return image;
+  };
+  const QImage original = capture("perspective-100", 1.0f);
+  EXPECT_NE(capture("perspective-200", 2.0f), original);
+  EXPECT_EQ(capture("perspective-scaled-down", 1.0f), original);
+  const auto handle = interaction.frame().handles[0];
+  QuaderTransformDragBeginRequest begin;
+  begin.tool = QuaderTransformTool::Scale;
+  begin.axis = QuaderTransformAxis::X;
+  begin.pivot = handle.opposite_world_position;
+  begin.grid_snap_enabled = false;
+  begin.bounds_resize_reference = QuaderBoundsResizeReference{handle.world_position};
+  ASSERT_TRUE(editor.modeling().begin_transform_drag(begin).ok());
+  QuaderTransformDragUpdateRequest update;
+  update.grid_snap_enabled = false;
+  update.bounds_resize_displacement = 1.0;
+  ASSERT_TRUE(editor.modeling().update_transform_drag(update).ok());
+  EXPECT_NE(capture("resize-preview", 1.0f), original);
+  ASSERT_TRUE(editor.modeling().cancel_transform_drag().ok());
+  EXPECT_EQ(capture("resize-cancelled", 1.0f), original);
+  camera.view_axis(ViewportViewAxis::Y, 1);
+  camera.focus_origin(4.0f);
+  capture("top-100", 1.0f);
+  camera.view_axis(ViewportViewAxis::X, 1);
+  camera.focus_origin(4.0f);
+  capture("side-200", 2.0f);
 }
 
 TEST(SelectionOverlayRuntimeTests,

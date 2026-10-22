@@ -223,6 +223,7 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
     src/editor/tools/base/point_sequence_tool.cpp
     src/editor/tools/base/two_stage_box_tool.cpp
     src/editor/tools/interactive/create_primitive_tool.cpp
+    src/editor/tools/bounds_resize_interaction.cpp
     src/editor/tools/primitive_creation_interaction.cpp
     src/editor/tools/base/viewport_tool_catalog.cpp
 )
@@ -876,6 +877,7 @@ add_library(quader_render_common STATIC
     src/render/overlay/render_overlay_collision_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/viewport_box_overlay_builder.cpp
+    src/render/overlay/viewport_bounds_resize_overlay_builder.cpp
     src/render/overlay/viewport_primitive_creation_overlay_builder.cpp
     src/render/overlay/selected_mesh_outline_cache.cpp
     src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
@@ -999,6 +1001,7 @@ add_library(quader_editor_viewport STATIC
     src/editor/viewport/viewport_tool_overlay_projection.cpp
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/point_light_range_interaction.cpp
+    src/editor/viewport/mesh_bounds_resize_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
     src/editor/viewport/viewport_modeling_tool_commit_adapter.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
@@ -1776,6 +1779,7 @@ if(QUADER_BUILD_TESTS)
         tests/collision_shape_overlay_tests.cpp
         tests/command_behavior_contract_tests.cpp
         tests/component_transform_persistence_tests.cpp
+        tests/bounds_resize_api_tests.cpp
         tests/modeling_component_merge_tests.cpp
         tests/selection_diagnostics_tests.cpp
         tests/modeling_lamina_overlay_service_tests.cpp

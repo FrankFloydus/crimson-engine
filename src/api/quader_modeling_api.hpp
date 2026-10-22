@@ -754,6 +754,9 @@ public:
 
   QuaderApiResult<QuaderTransformDragPreview>
   begin_transform_drag(const QuaderTransformDragBeginRequest &request);
+  /// Tight bounds of eligible selected meshes in one shared transform frame.
+  [[nodiscard]] std::optional<QuaderBoundsResizeState>
+  selection_resize_bounds(QuaderTransformSpace space) const;
   QuaderApiResult<QuaderTransformDragPreview>
   update_transform_drag(const QuaderTransformDragUpdateRequest &request);
   QuaderApiResult<QuaderTransformDragPreview> commit_transform_drag();

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "viewport/primitive_creation_controls.hpp"
+#include "editor/tools/bounds_resize_interaction.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_types.hpp"
 
@@ -43,8 +44,8 @@ public:
   [[nodiscard]] ViewportPointerCursor pointer_cursor(bool drag_started) const;
   [[nodiscard]] std::int32_t object_id() const { return object_id_; }
   [[nodiscard]] const PrimitiveCreationControlsFrame &frame() const { return frame_; }
-  [[nodiscard]] std::uint64_t projection_count() const { return projection_count_; }
-  [[nodiscard]] double axis_world_scale() const { return drag_axis_scale_; }
+  [[nodiscard]] std::uint64_t projection_count() const { return bounds_.projection_count(); }
+  [[nodiscard]] double axis_world_scale() const { return bounds_.axis_world_scale(); }
   [[nodiscard]] ViewportPrimitiveCreationShape shape() const { return shape_; }
   [[nodiscard]] ViewportSphereType sphere_type() const { return sphere_type_; }
   /// The visible controls may precede the first captured resize gesture.
@@ -56,33 +57,14 @@ public:
   }
 
 private:
-  void update_subdivision_controls();
+  void update_frame();
   void update_feedback();
+  BoundsResizeInteraction bounds_;
   PrimitiveCreationControlsFrame frame_;
-  bool subdivision_decrement_ = false;
-  bool active_subdivision_decrement_ = false;
   std::optional<ViewportPrimitiveCreationState> cached_cube_;
-  ViewportCameraState cached_camera_;
-  ViewportCameraPose cached_pose_;
-  QVec2 cached_viewport_;
-  float cached_scale_ = 0.0f;
-  bool cache_valid_ = false;
-  std::uint64_t projection_count_ = 0;
   std::int32_t object_id_ = {};
   ViewportPrimitiveCreationShape shape_ = ViewportPrimitiveCreationShape::Box;
   ViewportSphereType sphere_type_ = ViewportSphereType::Uv;
-  QVec3 drag_anchor_;
-  QVec3 drag_axis_;
-  QVec2 drag_press_;
-  QVec2 drag_screen_tip_;
-  QVec2 drag_screen_anchor_;
-  std::optional<double> drag_axis_start_;
-  double drag_axis_scale_ = 1.0;
-  double drag_world_per_pixel_ = 1.0;
-  double drag_reference_world_ = 1.0;
-  bool drag_screen_fallback_ = false;
-  int wheel_control_ = -1;
-  double wheel_remainder_ = 0.0;
 };
 
 } // namespace quader

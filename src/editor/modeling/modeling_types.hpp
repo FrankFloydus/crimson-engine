@@ -935,9 +935,24 @@ struct BridgePreviewHandleState {
 };
 
 /**
- * Stores the Modeling Transform Drag Begin Request data contract used by the
- * modeling domain.
+ * Pins the moving point of one whole-selection bounds resize.
  */
+struct ModelingBoundsResizeReference {
+  QVec3 moving_point = {};
+};
+
+/// Owner-derived extents for whole-mesh selection in a shared affine frame.
+struct ModelingBoundsResizeState {
+  QVec3 local_min = {};
+  QVec3 local_max = {};
+  QVec3 world_origin = {};
+  QVec3 world_x = {1.0f, 0.0f, 0.0f};
+  QVec3 world_y = {0.0f, 1.0f, 0.0f};
+  QVec3 world_z = {0.0f, 0.0f, 1.0f};
+  std::uint64_t revision = 0;
+};
+
+/// Captures transform intent before a preview transaction begins.
 struct ModelingTransformDragBeginRequest {
   ModelingTransformTool tool = ModelingTransformTool::Move;
   ModelingTransformOperation operation = ModelingTransformOperation::Transform;
@@ -958,6 +973,7 @@ struct ModelingTransformDragBeginRequest {
   double rotation_snap_degrees = 15.0;
   bool precision = false;
   bool duplicate_selected = false;
+  std::optional<ModelingBoundsResizeReference> bounds_resize_reference;
 };
 
 /// Captures the frame and displacement for one discrete viewport transform.
@@ -987,6 +1003,7 @@ struct ModelingTransformDragUpdateRequest {
   bool grid_snap_enabled = true;
   double rotation_snap_degrees = 15.0;
   bool precision = false;
+  std::optional<double> bounds_resize_displacement;
 };
 
 /**

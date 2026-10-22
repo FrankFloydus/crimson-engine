@@ -603,6 +603,54 @@ DocumentCommandResult SceneTransformDragService::preview_world_transform_delta(
 }
 
 DocumentCommandResult
+SceneTransformDragService::preview_bounds_resize_delta(
+    SceneDocument &document, const QMat4 &world_transform_delta) {
+  if (!preview_) {
+    return document_command_invalid_request_result("Transform preview is not active");
+  }
+  if (!scene_matrix_is_affine(world_transform_delta) ||
+      !try_scene_matrix_inverse(world_transform_delta)) {
+    return document_command_invalid_request_result("Bounds resize requires a finite invertible affine transform");
+  }
+  std::vector<DocumentTransformEdit> edits;
+  edits.reserve(targets_.size());
+  for (const auto &target : targets_) {
+    if (!document.exists(target.entity) ||
+        document.parent(target.entity) != target.parent_entity) {
+      return document_command_missing_entity_result();
+    }
+    const QMat4 parent_world = target.parent_entity == kInvalidEntityId
+        ? scene_transform_identity_matrix()
+        : document.world_transform_matrix(target.parent_entity);
+    if (parent_world.values != target.parent_world_transform.values) {
+      return document_command_invalid_request_result("Bounds resize parent frame changed during the drag");
+    }
+    auto next = world_transform_delta.values == QMat4{}.values
+        ? std::optional<TransformComponent>{target.transform}
+        : transformed_target_from_world_delta(document, target, world_transform_delta);
+    if (!next) {
+      // The same captured channel values can represent a new affine placement
+      // through their existing compensation prefix. Apply the absolute delta to
+      // the captured parent frame; never multiply an accepted preview prefix.
+      const QMat4 moved_parent = scene_transform_multiply(target.scene_from_display,
+          scene_transform_multiply(world_transform_delta, target.display_parent_world_transform));
+      next = try_scene_reparented_transform_preserving_world(
+          target.parent_world_transform, moved_parent, target.transform);
+    }
+    const QMat4 requested_world = scene_transform_multiply(target.scene_from_display,
+        scene_transform_multiply(world_transform_delta, target.world_transform));
+    if (!next || !try_scene_matrix_inverse(scene_local_transform_matrix(*next)) ||
+        !scene_matrix_near_equal_normalized_basis(
+            scene_transform_multiply(target.parent_world_transform, scene_local_transform_matrix(*next)),
+            requested_world)) {
+      return document_command_invalid_request_result("Bounds resize cannot preserve the requested affine placement");
+    }
+    edits.push_back({.entity = target.entity, .before = target.transform, .after = *next});
+  }
+  return preview_->preview_transforms(std::move(edits), SceneTextureTransformKind::Scale);
+}
+
+DocumentCommandResult
 SceneTransformDragService::preview_world_translation_delta(
     SceneDocument &document, QVec3 world_translation_delta) {
   if (inspector_context_validator_ && !inspector_context_validator_()) {
@@ -927,6 +975,9 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
           .display_visible_pivot = display_visible_pivot,
           .world_transform = world_transform,
           .scene_from_display = *scene_from_display,
+          .parent_entity = parent,
+          .parent_world_transform = parent_world,
+          .display_parent_world_transform = scene_transform_multiply(display_from_scene, parent_world),
           .parent_space_world_x = basis.world_x,
           .parent_space_world_y = basis.world_y,
           .parent_space_world_z = basis.world_z,

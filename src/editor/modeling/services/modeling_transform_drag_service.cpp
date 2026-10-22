@@ -495,7 +495,10 @@ ModelingTransformDragService::begin_transform_drag(
     QDR_PROFILE_SCOPE("Modeling transform drag begin runtime state");
     context.runtime.begin_transform_drag_state(
         tool, operation, axis,
-        trackball_rotation ? quader_editor_core::TransformSpace::Global
+        // Bounds resizing keeps a common affine for every captured target,
+        // including when its orientation came from the toolbar's Local frame.
+        trackball_rotation || request.bounds_resize_reference
+            ? quader_editor_core::TransformSpace::Global
                            : to_runtime(request.space),
         to_runtime(request.orientation), pivot);
   }
@@ -688,7 +691,31 @@ ModelingTransformDragService::begin_transform_drag(
                                    ? "Scale drag failed."
                                    : begin_result.message);
     }
-    context.runtime.set_transform_drag_scale_state(begin_result.state);
+    auto scale_state = begin_result.state;
+    if (request.bounds_resize_reference) {
+      const QVec3 moving = request.bounds_resize_reference->moving_point;
+      const QVec3 local = quader_editor_core::inverse_transform_vector(
+          scale_state.orientation, moving);
+      const QVec3 anchor = quader_editor_core::inverse_transform_vector(
+          scale_state.orientation, request.pivot);
+      const int component = request.axis == ModelingTransformAxis::X ? 0
+          : request.axis == ModelingTransformAxis::Y ? 1 : 2;
+      const auto coordinate = [component](QVec3 value) {
+        return component == 0 ? value.x : component == 1 ? value.y : value.z;
+      };
+      const QVec3 direction = component == 0 ? request.orientation.x_axis
+          : component == 1 ? request.orientation.y_axis : request.orientation.z_axis;
+      scale_state.bounds_resize = true;
+      scale_state.bounds_resize_world_extent = std::hypot(
+          static_cast<double>(moving.x) - request.pivot.x,
+          static_cast<double>(moving.y) - request.pivot.y,
+          static_cast<double>(moving.z) - request.pivot.z);
+      scale_state.bounds_resize_axis_scale = std::hypot(
+          static_cast<double>(direction.x), direction.y, direction.z);
+      scale_state.bounds_resize_coordinate = coordinate(local);
+      scale_state.bounds_resize_side = coordinate(local) >= coordinate(anchor) ? 1.0 : -1.0;
+    }
+    context.runtime.set_transform_drag_scale_state(scale_state);
   } else {
     return fail_after_cancel(
         "Transform drag only supports move, rotate, or scale.");
@@ -707,6 +734,8 @@ ModelingTransformDragService::begin_transform_drag(
                      .rotation_snap_degrees =
                          request.rotation_snap_degrees,
                      .precision = request.precision,
+                     .bounds_resize_displacement = request.bounds_resize_reference
+                         ? std::optional<double>{0.0} : std::nullopt,
                  });
   }
 }
@@ -1442,6 +1471,33 @@ ModelingTransformDragService::apply_transform_drag_preview(
   };
   const quader_editor_core::TransformDragState drag_before_update =
       context.runtime.transform_drag_state();
+  if (drag_before_update.scale.bounds_resize) {
+    auto scale = drag_before_update.scale;
+    if (!request.bounds_resize_displacement) {
+      auto invalid = transform_drag_preview(context, false);
+      invalid.ok = false;
+      invalid.message = "Bounds resizing requires an absolute displacement.";
+      return invalid;
+    }
+    const auto preview = quader_editor_core::preview_bounds_resize_from_displacement(
+        scale, *request.bounds_resize_displacement, request.grid_snap_enabled,
+        request.grid_size);
+    if (!preview.ok) {
+      auto invalid = transform_drag_preview(context, false);
+      invalid.ok = false;
+      invalid.message = preview.message;
+      return invalid;
+    }
+    const bool changed = scale.preview_scale.x != drag_before_update.scale.preview_scale.x ||
+        scale.preview_scale.y != drag_before_update.scale.preview_scale.y ||
+        scale.preview_scale.z != drag_before_update.scale.preview_scale.z;
+    if (!changed) {
+      return transform_drag_preview(context, false);
+    }
+    context.runtime.set_transform_drag_scale_state(scale);
+    return publish_transform_drag_preview(context, drag_before_update,
+                                          request.grid_size, changed);
+  }
   quader_editor_core::TransformDragPreviewInput input;
   input.camera = modeling_runtime_camera(request.camera);
   input.screen_position = to_runtime(request.screen_position);
@@ -1583,6 +1639,12 @@ ModelingTransformDragService::publish_transform_drag_preview(
       if (!scene_preview_transform_for_drag(scene_drag, scene_transform)) {
         return std::nullopt;
       }
+      if (scene_drag.scale.bounds_resize) {
+        const auto scale = scene_drag.scale.preview_scale;
+        return scene_transform_drag_service_.preview_bounds_resize_delta(
+            context.scene, scale.x == 1.0F && scale.y == 1.0F && scale.z == 1.0F
+                ? QMat4{} : matrix_from_runtime_transform(scene_transform));
+      }
       return scene_drag.tool == quader_editor_core::ViewportInteractionTool::Move
                  ? scene_transform_drag_service_.preview_world_translation_delta(
                        context.scene, scene_transform.origin)
@@ -1595,6 +1657,13 @@ ModelingTransformDragService::publish_transform_drag_preview(
     }();
     if (scene_preview.has_value()) {
       if (!scene_preview->ok) {
+        if (scene_drag.scale.bounds_resize) {
+          context.runtime.set_transform_drag_state(drag_before_update);
+          auto rejected = transform_drag_preview(context, false);
+          rejected.ok = false;
+          rejected.message = scene_preview->message;
+          return rejected;
+        }
         return fail_after_cancel(
             scene_preview->message.empty()
                 ? "Could not update scene transform preview."

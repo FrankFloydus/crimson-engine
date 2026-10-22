@@ -700,8 +700,24 @@ struct QuaderHoverSummary {
 };
 
 /**
- * Stores a Quader Transform Drag Begin Request value used by the public Quader API surface.
+ * Pins the moving side of a bounds resize; the drag pivot is its opposite anchor.
  */
+struct QuaderBoundsResizeReference {
+  QVec3 moving_point = {};
+};
+
+/// Captured selection extents in one common, affine world frame.
+struct QuaderBoundsResizeState {
+  QVec3 local_min = {};
+  QVec3 local_max = {};
+  QVec3 world_origin = {};
+  QVec3 world_x = {1.0f, 0.0f, 0.0f};
+  QVec3 world_y = {0.0f, 1.0f, 0.0f};
+  QVec3 world_z = {0.0f, 0.0f, 1.0f};
+  std::uint64_t revision = 0;
+};
+
+/// Starts a semantic transform drag through the existing preview owner.
 struct QuaderTransformDragBeginRequest {
     QuaderTransformTool tool = QuaderTransformTool::Move;
     QuaderTransformOperation operation = QuaderTransformOperation::Transform;
@@ -722,6 +738,8 @@ struct QuaderTransformDragBeginRequest {
     double rotation_snap_degrees = 15.0;
     bool precision = false;
     bool duplicate_selected = false;
+    /// Scale from moving_point about pivot, keeping one common selection frame.
+    std::optional<QuaderBoundsResizeReference> bounds_resize_reference;
 };
 
 /// A discrete transform already resolved against the current viewport frame.
@@ -751,6 +769,8 @@ struct QuaderTransformDragUpdateRequest {
   bool grid_snap_enabled = true;
   double rotation_snap_degrees = 15.0;
   bool precision = false;
+  /// Absolute displacement from press, in world units, positive outward.
+  std::optional<double> bounds_resize_displacement;
 };
 
 /**

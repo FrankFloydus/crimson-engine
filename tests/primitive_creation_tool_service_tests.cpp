@@ -4237,10 +4237,8 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(before.has_value());
     EXPECT_EQ(cube_components(before->local_min), (std::array<float, 3>{-3.0f, -2.0f, -1.0f}));
     EXPECT_EQ(cube_components(before->local_max), (std::array<float, 3>{3.0f, 2.0f, 1.0f}));
-    for (const auto invalid : {QuaderPrimitiveResizeControl::PositiveX,
-                               QuaderPrimitiveResizeControl::NegativeX,
-                               QuaderPrimitiveResizeControl::PositiveZ,
-                               QuaderPrimitiveResizeControl::NegativeZ,
+    for (const auto invalid : {QuaderPrimitiveResizeControl::OuterRadius,
+                               QuaderPrimitiveResizeControl::InnerRadius,
                                static_cast<QuaderPrimitiveResizeControl>(99)}) {
       EXPECT_FALSE(editor.tools().begin_primitive_resize(invalid).ok());
     }
@@ -4795,9 +4793,7 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(original.has_value());
     EXPECT_EQ(original->shape, kind == "cone" ? QuaderPrimitiveCreationShape::Cone
                                               : QuaderPrimitiveCreationShape::Sphere);
-    for (const auto invalid : {QuaderPrimitiveResizeControl::PositiveX,
-                               QuaderPrimitiveResizeControl::NegativeZ,
-                               QuaderPrimitiveResizeControl::OuterRadius,
+    for (const auto invalid : {QuaderPrimitiveResizeControl::OuterRadius,
                                QuaderPrimitiveResizeControl::InnerRadius}) {
       EXPECT_FALSE(editor.tools().begin_primitive_resize(invalid).ok());
     }
@@ -4859,6 +4855,67 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
+     EveryShapeSupportsSixFixedOppositeBoundsSidesAndCancellation) {
+  for (const std::string_view kind : {"box", "cylinder", "cone", "sphere", "torus"}) {
+    for (int index = 0; index < 6; ++index) {
+      SCOPED_TRACE(::testing::Message() << kind << ";" << index);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_NO_FATAL_FAILURE(activate_public_primitive(editor.tools(), kind));
+      if (kind == "sphere") {
+        ASSERT_TRUE(editor.tools().set_setting(
+            kCreatePrimitiveToolId, kSphereRadialSegmentsSetting, 8.0).ok());
+        ASSERT_TRUE(editor.tools().set_setting(
+            kCreatePrimitiveToolId, kSphereRingsSetting, 4.0).ok());
+      }
+      ASSERT_TRUE(session.primitive_creation().accept_preview(
+          oriented_primitive_preview({}, {0.0f, 0.0f, -1.0f},
+              {0.0f, 1.0f, 0.0f}, 6.0f, 4.0f, 2.0f), "Bounds Primitive").ok);
+      const auto before = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(before.has_value());
+      const auto content = compiled_content_id(session.modeling(), "Bounds Primitive");
+      const auto minimum = cube_components(before->local_min);
+      const auto maximum = cube_components(before->local_max);
+      const double displacement = index % 2 == 0 ? 0.75 : -0.75;
+      const auto control = static_cast<QuaderPrimitiveResizeControl>(index);
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+      ASSERT_TRUE(editor.tools().update_primitive_resize(displacement).ok());
+      const auto after = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(after.has_value());
+      const auto next_minimum = cube_components(after->local_min);
+      const auto next_maximum = cube_components(after->local_max);
+      for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_FLOAT_EQ(next_minimum[axis], minimum[axis] +
+            (axis == index / 2 && index % 2 != 0 ? -0.75f : 0.0f));
+        EXPECT_FLOAT_EQ(next_maximum[axis], maximum[axis] +
+            (axis == index / 2 && index % 2 == 0 ? 0.75f : 0.0f));
+      }
+      EXPECT_DOUBLE_EQ(after->tube_radius_ratio, before->tube_radius_ratio);
+      EXPECT_EQ(after->side_count, before->side_count);
+      EXPECT_EQ(after->radial_segments, before->radial_segments);
+      const auto stats = session.modeling().modeling_sdk_projection_stats_for_tests();
+      EXPECT_FALSE(editor.tools().update_primitive_resize(displacement).changed());
+      EXPECT_EQ(session.modeling().modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+                stats.mesh_compile_count);
+      ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+      EXPECT_EQ(cube_components(editor.tools().live_primitive_creation()->local_min), minimum);
+      EXPECT_EQ(cube_components(editor.tools().live_primitive_creation()->local_max), maximum);
+      EXPECT_EQ(compiled_content_id(session.modeling(), "Bounds Primitive"), content);
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(control).ok());
+      ASSERT_TRUE(editor.tools().update_primitive_resize(
+          index % 2 == 0 ? -1000.0 : 1000.0).ok());
+      const auto clamped = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(clamped.has_value());
+      const auto clamped_minimum = cube_components(clamped->local_min);
+      const auto clamped_maximum = cube_components(clamped->local_max);
+      EXPECT_GE(static_cast<double>(clamped_maximum[index / 2]) -
+          clamped_minimum[index / 2], kPrimitiveMinimumExtent);
+      ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
      TorusRadiusControlsHoldOppositeEllipseFixedAndRespectRatioLimits) {
   for (const auto control : {QuaderPrimitiveResizeControl::OuterRadius,
                              QuaderPrimitiveResizeControl::InnerRadius}) {
@@ -4875,9 +4932,8 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_EQ(before->major_segments, 8);
     EXPECT_EQ(before->minor_segments, 8);
     EXPECT_DOUBLE_EQ(before->tube_radius_ratio, 0.2);
-    for (const auto invalid : {QuaderPrimitiveResizeControl::NegativeY,
-                               QuaderPrimitiveResizeControl::Radius,
-                               QuaderPrimitiveResizeControl::PositiveX}) {
+    for (const auto invalid : {QuaderPrimitiveResizeControl::Radius,
+                               static_cast<QuaderPrimitiveResizeControl>(99)}) {
       EXPECT_FALSE(editor.tools().begin_primitive_resize(invalid).ok());
     }
     const QVec3 ray{3.0f, 0.0f, 4.0f};

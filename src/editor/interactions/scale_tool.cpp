@@ -183,6 +183,34 @@ ScalePreviewResult preview_scale_from_scale(ScaleToolState& state, quader::QVec3
 	return scale_tool_impl().preview_scale_from_scale(state, scale);
 }
 
+ScalePreviewResult preview_bounds_resize_from_displacement(
+    ScaleToolState &state, double world_displacement, bool grid_enabled,
+    double grid_size) {
+  if (!state.active || !state.bounds_resize ||
+      !std::isfinite(world_displacement) ||
+      !std::isfinite(state.bounds_resize_world_extent) ||
+      state.bounds_resize_world_extent <= 0.0) {
+    return {false, "Bounds resize displacement is invalid."};
+  }
+  double displacement = world_displacement;
+  if (displacement != 0.0 && grid_enabled && std::isfinite(grid_size) && grid_size > 0.0) {
+    const double coordinate = state.bounds_resize_coordinate +
+        state.bounds_resize_side * displacement / state.bounds_resize_axis_scale;
+    const double snapped = std::round(coordinate / grid_size) * grid_size;
+    displacement = (snapped - state.bounds_resize_coordinate) *
+        state.bounds_resize_side * state.bounds_resize_axis_scale;
+  }
+  constexpr double kMinimumBoundsScale = 0.001;
+  constexpr double kMaximumBoundsScale = 10000.0;
+  const double factor = std::clamp(
+      1.0 + displacement / state.bounds_resize_world_extent,
+      kMinimumBoundsScale, kMaximumBoundsScale);
+  if (!std::isfinite(factor)) {
+    return {false, "Bounds resize scale is invalid."};
+  }
+  return preview_scale_from_scale(state, axis_scale(state.axis, factor));
+}
+
 void reset_scale(ScaleToolState& state)
 {
 	scale_tool_impl().reset_scale(state);

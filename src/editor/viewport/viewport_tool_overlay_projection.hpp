@@ -26,6 +26,7 @@ struct LinearArrayHandleState;
 struct ExtrudeHandleState;
 struct PivotHandleState;
 struct PrimitiveCreationControlsFrame;
+struct BoundsResizeFrame;
 struct RadialArrayCenterState;
 class ViewportCameraController;
 struct ViewportSelectionMarquee;
@@ -57,6 +58,8 @@ struct ViewportToolOverlaySourceInputs final {
   const ModelingBoxPreview *box_preview = nullptr;
   /// Borrows the picking owner's physical-pixel layout and publication revision.
   const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
+  const BoundsResizeFrame *mesh_bounds_resize = nullptr;
+  const ViewportSettings *viewport_settings = nullptr;
   /// Pane-derived frame using the shared operation's semantic gizmo state.
   const quader_editor_core::TransformGizmoFrame *transform_gizmo = nullptr;
   const std::vector<quader_editor_core::SelectionOverlayPoint> *

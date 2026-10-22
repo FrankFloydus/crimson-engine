@@ -1008,6 +1008,7 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
     pane_state.controls_valid = false;
     pane_state.control_selection_valid = false;
     pane_state.idle_gizmo.reset();
+    pane_state.bounds_resize_presentation.reset();
   }
   refresh_workspace_layout();
 }
@@ -1876,6 +1877,7 @@ void QtViewportPanel::prepare_viewports(
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
       .pivot_revision = native_presentation.selection_pivot_revision,
+      .transform_preview_revision = modeling.transient_transform_preview_revision(),
   };
   const std::vector<quader_editor_core::SelectionOverlayPoint> &
       transform_snap_points =
@@ -1976,6 +1978,16 @@ void QtViewportPanel::prepare_viewports(
             radial_array_center.visible, radial_array_center.locked,
             true);
     const bool primitive_creation_visible = gizmos_visible && live_primitive_creation.has_value();
+    const bool bounds_pointer_active = interaction_controller_.mesh_bounds_resize_pointer_active();
+    const auto *mesh_bounds_resize = gizmos_visible && !live_primitive_creation &&
+        (bounds_pointer_active || (!native_tools.pointer_dragging() &&
+         !interaction_controller_.transform_gizmo_pointer_active()))
+        ? pane_state.bounds_resize_presentation.prepare(editor, pane_workspace.camera,
+            gizmo_selection, editor.viewports().transform_space(pane_state.id),
+            modeling.transient_transform_preview_revision(),
+            viewport_raster_scale(pane_state.id),
+            interaction_controller_.mesh_bounds_resize_frame())
+        : nullptr;
     if (render_view != nullptr) {
       RenderView &renderer = *render_view;
       renderer.set_overlay_visible(should_enable_viewport_overlay_pass({
@@ -1990,7 +2002,8 @@ void QtViewportPanel::prepare_viewports(
               (native_presentation.curve_preview != nullptr &&
                native_presentation.curve_preview->active) ||
               assets.curve_count() != 0u,
-          .tool_overlay_visible = tool_overlay_visible || primitive_creation_visible,
+          .tool_overlay_visible = tool_overlay_visible || primitive_creation_visible ||
+                                  mesh_bounds_resize != nullptr,
       }));
     }
 
@@ -2050,6 +2063,8 @@ void QtViewportPanel::prepare_viewports(
             .viewport_camera = &pane_workspace.camera,
             .box_preview = &active_box_preview_,
             .primitive_creation_controls = primitive_creation_controls,
+            .mesh_bounds_resize = mesh_bounds_resize,
+            .viewport_settings = &pane_settings,
             .transform_gizmo = transform_gizmo,
             .transform_snap_points = uses_interaction_gizmo ? &transform_snap_points : nullptr,
             .selection_marquee = &selection_marquee,
@@ -4680,6 +4695,9 @@ void QtViewportPanel::process_viewport_input(
           workspace_->preferred_selection_tool(*input_pane),
       .scene_billboard_pick_candidates = billboards,
       .scene_billboard_pick_revision = point_light_pick_generation_,
+      .selection_state = {
+          .transform_preview_revision = modeling.transient_transform_preview_revision(),
+      },
   };
   const ViewportContextMenuPointerResult context_menu_pointer =
       interaction_controller_.handle_context_menu_pointer(

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "math/types.hpp"
+#include "viewport/bounds_resize_controls.hpp"
 
 #include <array>
 #include <cstddef>
@@ -68,10 +69,9 @@ struct PrimitiveCreationControl final {
   int maximum_segments = 128;
 };
 
-/** Shared drawing/picking slots: dots 0–5, segment buttons 6–8. Round shapes
- *  use radius 0, poles 2/3 and buttons 6/7; Torus uses outer 0, inner 1, top 2.
- */
+/** Six bounds handles share the common layout. Legacy segment slots stay hidden. */
 struct PrimitiveCreationControlsFrame final {
+  BoundsResizeFrame bounds;
   std::array<PrimitiveCreationControl, 9> controls;
   int hovered = -1;
   int active = -1;

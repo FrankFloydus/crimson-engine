@@ -48,7 +48,7 @@
 #include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
-#include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
+#include "render/overlay/viewport_circular_handle.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "scene/scene_document.hpp"
@@ -3816,18 +3816,12 @@ TEST(RenderOverlaySnapshotTests,
   EXPECT_FLOAT_EQ(handle.y, center.y);
   EXPECT_FLOAT_EQ(handle.z, center.z - 5.0f);
   const OverlayCameraProjector projector(camera);
-  const auto projected = projector.project(projector.view_point_for(handle));
-  PrimitiveCreationControlsFrame controls;
-  controls.visible = true;
-  controls.controls.front() = {
-      .world_position = handle,
-      .screen_position = {projected.pixel.x, camera.viewport_size.y - projected.pixel.y},
-      .depth = -projector.view_point_for(handle).z,
-      .radius_pixels = 6.0f,
-      .visible = true,
-  };
+  const float handle_depth = -projector.view_point_for(handle).z;
+  const float world_radius = 2.0f * handle_depth *
+      std::tan(camera.fov_degrees * 0.008726646259971648f) * 6.0f / camera.viewport_size.y;
   ViewportOverlayFrame primitive_handle;
-  ViewportPrimitiveCreationOverlayBuilder::append(primitive_handle, camera, controls);
+  append_viewport_circular_handle(primitive_handle, handle,
+      camera.right * world_radius, camera.up * -world_radius);
   ASSERT_EQ(primitive_handle.triangles.size(), billboard.triangles.size());
   for (std::size_t index = 0u; index < billboard.triangles.size(); ++index) {
     const auto &actual = billboard.triangles[index];

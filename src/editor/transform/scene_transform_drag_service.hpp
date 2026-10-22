@@ -37,6 +37,9 @@ struct SceneTransformDragTarget {
   QVec3 display_visible_pivot = {};
   QMat4 world_transform;
   QMat4 scene_from_display;
+  EntityId parent_entity = kInvalidEntityId;
+  QMat4 parent_world_transform;
+  QMat4 display_parent_world_transform;
   QVec3 parent_space_world_x = {1.0f, 0.0f, 0.0f};
   QVec3 parent_space_world_y = {0.0f, 1.0f, 0.0f};
   QVec3 parent_space_world_z = {0.0f, 0.0f, 1.0f};
@@ -100,6 +103,9 @@ public:
     preview_world_transform_delta(SceneDocument &document,
                                   const QMat4 &world_transform_delta,
                                   SceneTextureTransformKind kind = SceneTextureTransformKind::Combined);
+    /// Bounds resize may store an exact affine prefix when editable TRS cannot represent it.
+    DocumentCommandResult preview_bounds_resize_delta(
+        SceneDocument &document, const QMat4 &world_transform_delta);
     DocumentCommandResult
     preview_world_translation_delta(SceneDocument &document,
                                     QVec3 world_translation_delta);

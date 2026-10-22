@@ -233,6 +233,20 @@ bool is_documentation_only_example(const std::string &source) {
 
 bool allowed_public_behavior_harness_use(std::string_view relative,
                                          std::string_view line) {
+  if (relative == "tests/bounds_resize_api_tests.cpp") {
+    // The standalone fixture supplies the editor binding. Its sole native
+    // mutation establishes an authored affine prefix absent from public TRS
+    // setters; resizing, hierarchy, visibility, selection and history use APIs.
+    const std::string trimmed = trim(std::string(line));
+    const std::array<std::string_view, 4> fixture_access{
+        "#include \"api/quader_api_session_internal_access.hpp\"",
+        "SceneSession session;",
+        "QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};",
+        "ASSERT_TRUE(harness.session.scene().set_transform(target.entity, placement));",
+    };
+    return std::find(fixture_access.begin(), fixture_access.end(), trimmed) !=
+           fixture_access.end();
+  }
   if (relative == "tests/face_texture_mirror_api_tests.cpp") {
     // BehaviorScenario snapshots omit authored corner UVs, normals and
     // occurrence sampling. This fixture inspects their published mesh and

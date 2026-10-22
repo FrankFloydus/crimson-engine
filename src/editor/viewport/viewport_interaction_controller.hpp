@@ -10,6 +10,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
 #include "editor/viewport/transform_gizmo_interaction.hpp"
+#include "editor/viewport/mesh_bounds_resize_interaction.hpp"
 #include "editor/viewport/point_light_range_interaction.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
@@ -138,6 +139,15 @@ public:
 
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
   transform_gizmo_frame() const;
+  [[nodiscard]] const BoundsResizeFrame *mesh_bounds_resize_frame() const {
+    return mesh_bounds_resize_.frame();
+  }
+  [[nodiscard]] bool mesh_bounds_resize_pointer_active() const {
+    return mesh_bounds_resize_.pointer_active();
+  }
+  [[nodiscard]] std::uint64_t mesh_bounds_resize_query_count() const {
+    return mesh_bounds_resize_.bounds_query_count();
+  }
   [[nodiscard]] const std::vector<quader_editor_core::SelectionOverlayPoint> &
   transform_gizmo_snap_overlay_points() const;
   [[nodiscard]] const TransformGizmoSelectionCacheStats &
@@ -227,6 +237,7 @@ private:
 
   ViewportToolRuntime tool_runtime_;
   TransformGizmoInteraction transform_gizmo_;
+  MeshBoundsResizeInteraction mesh_bounds_resize_;
   PointLightRangeInteraction point_light_range_;
   ViewportSelectionInteraction selection_;
   std::optional<SceneSessionId> mode_context_scene_;

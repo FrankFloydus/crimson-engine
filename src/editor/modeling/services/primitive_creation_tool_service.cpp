@@ -1646,8 +1646,6 @@ CommandResult PrimitiveCreationToolService::begin_resize(
     return command_invalid_result("A primitive resize is already active.");
   }
   const bool radial = control >= PrimitiveResizeControl::Radius;
-  const bool height = control == PrimitiveResizeControl::PositiveY ||
-                      control == PrimitiveResizeControl::NegativeY;
   bool allowed = false;
   switch (primitive->kind) {
   case PrimitiveCreationKind::Box:
@@ -1657,10 +1655,10 @@ CommandResult PrimitiveCreationToolService::begin_resize(
   case PrimitiveCreationKind::Cylinder:
   case PrimitiveCreationKind::Cone:
   case PrimitiveCreationKind::Sphere:
-    allowed = height || control == PrimitiveResizeControl::Radius;
+    allowed = !radial || control == PrimitiveResizeControl::Radius;
     break;
   case PrimitiveCreationKind::Torus:
-    allowed = control == PrimitiveResizeControl::PositiveY ||
+    allowed = !radial ||
               control == PrimitiveResizeControl::OuterRadius ||
               control == PrimitiveResizeControl::InnerRadius;
     break;

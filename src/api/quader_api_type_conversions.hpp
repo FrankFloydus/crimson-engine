@@ -879,6 +879,10 @@ to_modeling_transform_drag_begin_request(
       .rotation_snap_degrees = request.rotation_snap_degrees,
       .precision = request.precision,
       .duplicate_selected = request.duplicate_selected,
+      .bounds_resize_reference = request.bounds_resize_reference
+          ? std::optional<ModelingBoundsResizeReference>{ModelingBoundsResizeReference{
+                .moving_point = request.bounds_resize_reference->moving_point}}
+          : std::nullopt,
   };
 }
 
@@ -894,6 +898,7 @@ to_modeling_transform_drag_update_request(
       .grid_snap_enabled = request.grid_snap_enabled,
       .rotation_snap_degrees = request.rotation_snap_degrees,
       .precision = request.precision,
+      .bounds_resize_displacement = request.bounds_resize_displacement,
   };
 }
 

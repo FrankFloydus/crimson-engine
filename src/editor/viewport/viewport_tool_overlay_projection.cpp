@@ -17,11 +17,13 @@
 #include "render/overlay/viewport_box_overlay_builder.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/viewport_primitive_creation_overlay_builder.hpp"
+#include "render/overlay/viewport_bounds_resize_overlay_builder.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "viewport/primitive_creation_controls.hpp"
+#include "viewport/bounds_resize_controls.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_pixel_scale.hpp"
 
@@ -478,10 +480,17 @@ std::uint64_t tool_overlay_publication_revision(
     // Never scan its projected targets before the coordinator's unchanged gate.
     signature.add_value(inputs.primitive_creation_controls->revision);
   }
+  const bool bounds_resize_visible = inputs.gizmos_visible &&
+      inputs.mesh_bounds_resize != nullptr && inputs.mesh_bounds_resize->visible;
+  signature.add_bool(bounds_resize_visible);
+  if (bounds_resize_visible) {
+    signature.add_value(inputs.mesh_bounds_resize->revision)
+        .add_value(revisions.active_tool);
+  }
   const bool camera_affects_frame =
       inputs.tool_overlay_visible ||
       transform_gizmo_visible || marquee_visible || pivot_visible ||
-      primitive_creation_visible ||
+      primitive_creation_visible || bounds_resize_visible ||
       (inputs.linear_array_handle != nullptr && inputs.linear_array_handle->visible &&
        inputs.linear_array_handle->constraint != LinearArrayAxisConstraint::Free) ||
       (inputs.extrusion_handle != nullptr && inputs.extrusion_handle->active) ||
@@ -567,6 +576,11 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
   if (inputs_.primitive_creation_controls != nullptr) {
     ViewportToolOverlayProjection::append_primitive_creation_controls(
         frame, *inputs_.overlay_camera, *inputs_.primitive_creation_controls);
+  }
+  if (inputs_.gizmos_visible && inputs_.mesh_bounds_resize != nullptr &&
+      inputs_.viewport_settings != nullptr) {
+    ViewportBoundsResizeOverlayBuilder::append(frame, *inputs_.overlay_camera,
+        *inputs_.mesh_bounds_resize, *inputs_.viewport_settings);
   }
   if (inputs_.interaction_pane) {
     if (inputs_.overlays_visible) {
