@@ -58,6 +58,7 @@ bool matchesFilter(AssetKind kind,BrowserAssetFilter filter) {
     case BrowserAssetFilter::Particles:return kind==AssetKind::Particle;
     case BrowserAssetFilter::NavigationProfiles:return kind==AssetKind::NavigationAgentProfile;
     case BrowserAssetFilter::GameplayEffects:return kind==AssetKind::GameplayEffect;
+    case BrowserAssetFilter::Animations:return kind==AssetKind::Animation;
     }
     return false;
 }

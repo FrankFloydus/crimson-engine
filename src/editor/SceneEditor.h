@@ -17,6 +17,7 @@ class MaterialEditor;
 class NavigationAgentProfileEditor;
 class CollisionLayersEditor;
 class GameplayEffectEditor;
+class AnimationEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
 struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true},navigationMesh{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
@@ -24,7 +25,7 @@ class SceneEditor {
     friend struct EditorPerformanceProbe;
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
-                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,
+                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,AnimationEditor&,
                      const GameplayInspectorContext& gameplay={});
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
@@ -83,7 +84,7 @@ private:
     std::uint64_t navigationPreviewGeneration_{};
     EntityId navigationPreviewVolume_{};
     std::function<std::string(const std::string&)> navigationBuildStatus_;
-    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Game };
+    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
     void cancelOpen();

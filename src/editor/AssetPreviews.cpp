@@ -29,7 +29,7 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=11;
+constexpr uint32_t PreviewVersion=AssetPreviewImageVersion;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
@@ -51,6 +51,7 @@ void materialHash(uint64_t& value,const ModelMaterial& material) {
 uint64_t materialPreviewHash(const MaterialAsset& material) {
     auto key=streaming::detail::HashSeed;hash(key,material.shading);hash(key,material.blend);materialHash(key,material.surface);return key;
 }
+uint64_t animationPreviewHash(const AnimationAsset& animation) {return textHash(serializeAnimationAsset(animation));}
 std::vector<std::filesystem::path> uniqueFiles(std::vector<std::filesystem::path> files) {
     std::sort(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)<resourcePathKey(b);});
     files.erase(std::unique(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)==resourcePathKey(b);}),files.end()); return files;
@@ -124,6 +125,7 @@ struct AssetPreviews::Impl {
         PreviewValidationKey indexValidation;
         std::vector<std::filesystem::path> files;
         std::vector<PreviewMaterialFingerprint> materials;
+        std::vector<PreviewAnimationFingerprint> animations;
         std::vector<PreviewSourceLocation> locations;
         bool clean{},indexChecked{};
         bool wanted{},forceScene{},saveRequested{};
@@ -151,6 +153,8 @@ struct AssetPreviews::Impl {
     std::chrono::steady_clock::time_point validationDeadline;
     std::filesystem::path cacheFolder;
     std::unordered_map<std::string,AssetKind> catalogKinds;
+    struct AnimationHash {uint64_t revision{},fingerprint{};};
+    std::unordered_map<std::string,AnimationHash> animationHashes;
     uint64_t catalogRevision{};
     std::string status;
     Impl(std::filesystem::path directory,AssetLibrary& library,ResourceManager& manager,Renderer& gpu,EditorResources& models)
@@ -159,19 +163,25 @@ struct AssetPreviews::Impl {
     std::filesystem::path cache(const std::string& id,uint64_t signature) const {
         return assetPreviewImagePath(cacheFolder,id,signature);
     }
+    uint64_t animationHash(const AnimationAsset& animation) {
+        const auto [entry,inserted]=animationHashes.try_emplace(animation.id);
+        const auto revision=assets.animationRevision(animation.id);
+        if(inserted||entry->second.revision!=revision)entry->second={revision,animationPreviewHash(animation)};
+        return entry->second.fingerprint;
+    }
     void writePreview(const ThumbnailResult& result,Entry& entry) {
         const auto id=result.id; const auto signature=result.signature;
         entry.writePin=std::make_shared<DecodedImage>(result.image);
         const std::weak_ptr<const DecodedImage> weak=entry.writePin;
         CachedAssetPreview record;record.signature=signature;record.edge=result.image.width;record.shaderSignature=renderer.shaderSignature();
-        record.policyFingerprint=policyFingerprint;record.files=entry.files;record.materials=entry.materials;record.locations=entry.locations;
+        record.policyFingerprint=policyFingerprint;record.files=entry.files;record.materials=entry.materials;record.animations=entry.animations;record.locations=entry.locations;
         const auto expected=entry.dependencies.snapshot();const auto folder=cacheFolder,project=root;
         if(expected && expected->files==record.files)record.sourceFingerprints=expected->sourceFingerprints;
         ResourceRequestOptions options; options.variant="preview-write:"+std::to_string(signature); options.priority=ResourcePriority::Background;
         options.retainLoader=false;options.cancelWhenUnused=true;options.forceReload=true;
         entry.writer=resources.request<DecodedImage>(AssetRef<DecodedImage>{id},[weak,folder,project,id,signature,record=std::move(record)](std::stop_token token) mutable {
             const auto pixels=weak.lock(); if (!pixels || token.stop_requested()) throw std::runtime_error("Preview write canceled.");
-            // Unsaved material edits can have a useful session PNG, but must not
+            // Unsaved material/animation edits can have a useful session PNG, but must not
             // become a warm-start preview for the older saved asset definition.
             // Idle residency deliberately releases CPU dependency snapshots.
             // A PNG restored after that point can still be displayed, but it
@@ -179,6 +189,10 @@ struct AssetPreviews::Impl {
             bool saved=record.files.empty() || record.sourceFingerprints.size()==record.files.size();
             for(const auto& material:record.materials)if(!isEngineAssetId(material.id)) {
                 try {if(materialPreviewHash(loadMaterialAsset(project,material.id))!=material.fingerprint)saved=false;}
+                catch(const std::exception&){saved=false;}
+            }
+            for(const auto& animation:record.animations) {
+                try {if(animationPreviewHash(loadAnimationAsset(project,animation.id))!=animation.fingerprint)saved=false;}
                 catch(const std::exception&){saved=false;}
             }
             record.image=pixels;writeAssetPreviewCache(project,folder,id,record,saved,token);
@@ -215,9 +229,13 @@ struct AssetPreviews::Impl {
             bool current=true;
             for(const auto& expected:cached.materials)if(const auto material=assets.peekMaterial(expected.id))
                 if(materialPreviewHash(*material)!=expected.fingerprint){current=false;break;}
+            for(const auto& expected:cached.animations) {
+                const auto animation=assets.findAnimation(expected.id);
+                if(!animation||animationHash(*animation)!=expected.fingerprint){current=false;break;}
+            }
             if(current && renderer.setThumbnail(id,cached.signature,*cached.image)) {
                 entry.signature=cached.signature;entry.cacheState.published=cached.signature;
-                entry.files=cached.files;entry.materials=cached.materials;entry.locations=cached.locations;
+                entry.files=cached.files;entry.materials=cached.materials;entry.animations=cached.animations;entry.locations=cached.locations;
                 entry.clean=true;entry.validated=validation;entry.retry.reset();entry.error.clear();entry.diskIndex={};
                 ++statistics.diskHits;return true;
             }
@@ -319,6 +337,7 @@ struct AssetPreviews::Impl {
         std::vector<std::filesystem::path> files;
         std::vector<std::filesystem::path> validationFiles;
         std::vector<PreviewMaterialFingerprint> materialVersions;
+        std::vector<PreviewAnimationFingerprint> animationVersions;
         std::vector<PreviewSourceLocation> locations;
         const auto sourceFile=[&](const std::string& source) {
             auto file=resolveAssetPath(root,source);locations.push_back({source,file});return file;
@@ -407,6 +426,26 @@ struct AssetPreviews::Impl {
                 const auto dependencies=assets.modelDependencies(model.assetId);
                 validationFiles.insert(validationFiles.end(),dependencies.begin(),dependencies.end());
             }
+            if(!model.animation.asset.empty()) {
+                const auto animationId=assets.references().resolveAnimation(model.animation.asset.id);
+                hash(sourceKey,animationId.data(),animationId.size());
+                if(const auto animation=assets.findAnimation(animationId)) {
+                    const auto animationFingerprint=animationHash(*animation);hash(sourceKey,animationFingerprint);
+                    animationVersions.push_back({animation->id,animationFingerprint});validationFiles.push_back(sourceFile(animation->id));
+                    const auto source=assets.findModel(animation->sourceModel.id);
+                    if(!source) {
+                        loaded=false;
+                        if(!assets.modelLoading(animation->sourceModel.id))entry.error="Animation source model is unavailable: "+animation->sourceModel.id;
+                    }else {
+                        hash(sourceKey,assets.modelFingerprint(source->id));
+                        if(source->format!="BUILTIN") {
+                            validationFiles.push_back(sourceFile(source->id));
+                            const auto dependencies=assets.modelDependencies(source->id);
+                            validationFiles.insert(validationFiles.end(),dependencies.begin(),dependencies.end());
+                        }
+                    }
+                }else if(!animationId.empty()){loaded=false;entry.error=assets.animationDiagnostic(animationId);}
+            }
             const auto materials=assets.resolvedModelMaterials(*asset,model.materialOverrides);
             if (!assets.modelMaterialsReady(*asset,model.materialOverrides)) {
                 loaded=false;
@@ -470,7 +509,9 @@ struct AssetPreviews::Impl {
         const auto dependencies=entry.dependencies.snapshot(); if (!dependencies) return;
         auto signature=sourceKey; hash(signature,dependencies->fingerprint); entry.signature=signature;
         validationFiles.insert(validationFiles.end(),dependencies->files.begin(),dependencies->files.end());
-        entry.files=uniqueFiles(std::move(validationFiles));entry.materials=std::move(materialVersions);entry.locations=std::move(locations);
+        std::sort(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
+        animationVersions.erase(std::unique(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),animationVersions.end());
+        entry.files=uniqueFiles(std::move(validationFiles));entry.materials=std::move(materialVersions);entry.animations=std::move(animationVersions);entry.locations=std::move(locations);
         entry.clean=true;entry.validated=validation;
         if (warmCache(id,entry,signature)) { if (entry.cacheState.published==signature) entry.saveRequested=false; return; }
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
@@ -596,14 +637,20 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
     impl_->validation={0,policyRevision,impl_->renderer.shaderSignature(),impl_->assets.materialShaderRevision(),impl_->previewSize};
     if(impl_->catalogRevision!=impl_->assets.catalogRevision()) {
         impl_->catalogRevision=impl_->assets.catalogRevision();impl_->catalogKinds.clear();
-        for(const auto& asset:impl_->assets.catalog())impl_->catalogKinds.emplace(asset.id,asset.kind);
+        for(const auto& asset:impl_->assets.catalog()) {
+            impl_->catalogKinds.emplace(asset.id,asset.kind);
+            if(asset.kind==AssetKind::Animation)if(const auto animation=impl_->assets.findAnimation(asset.id))impl_->animationHash(*animation);
+        }
+        std::erase_if(impl_->animationHashes,[&](const auto& entry){return !impl_->catalogKinds.contains(entry.first);});
         // Catalog growth and model hydration do not change existing previews.
-        // Authored material publication can change an unsaved surface without a
-        // file event, so compare only each preview's actual material versions.
+        // Authored material/animation publication can change an unsaved preview
+        // without a file event; compare only its actual authored dependencies.
         for(auto& [id,entry]:impl_->entries)if(entry.clean) {
             (void)id;
             const auto changed=std::any_of(entry.materials.begin(),entry.materials.end(),[&](const auto& expected){
                 const auto current=impl_->assets.peekMaterial(expected.id);return current && materialPreviewHash(*current)!=expected.fingerprint;
+            })||std::any_of(entry.animations.begin(),entry.animations.end(),[&](const auto& expected){
+                const auto current=impl_->assets.findAnimation(expected.id);return !current||impl_->animationHash(*current)!=expected.fingerprint;
             });
             if(changed) {
                 entry.clean=false;entry.indexChecked=true;entry.diskIndex={};entry.sourceKey=0;entry.signature=0;

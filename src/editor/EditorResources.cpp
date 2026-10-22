@@ -266,19 +266,30 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     } catch (const std::exception& error) { entry.diagnostic=error.what(); entry.failed=true; return retain(entry.current); }
 }
 std::shared_ptr<const ModelPose> EditorResources::pose(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {
-    if(!asset || (asset->skins.empty()&&asset->animations.empty()&&std::none_of(asset->primitives.begin(),asset->primitives.end(),
+    if(!asset || (model.animation.asset.empty()&&asset->skins.empty()&&asset->animations.empty()&&std::none_of(asset->primitives.begin(),asset->primitives.end(),
         [](const auto& primitive){return !primitive.morphTargets.empty();})))return {};
     auto& entry=poses_[model.id];entry.wanted=true;
-    const auto clip=model.animation.clip;
-    if(entry.value&&entry.source.lock()==asset&&entry.clip==clip&&entry.seconds==model.animationSeconds&&entry.loop==model.animation.loop)return entry.value;
-    const auto selected=clip>=0&&static_cast<std::size_t>(clip)<asset->animations.size()?std::optional<std::size_t>{static_cast<std::size_t>(clip)}:std::nullopt;
-    if(clip>=0&&!selected)status_+="Animation clip is unavailable for "+asset->name+".\n";
-    const auto sampleTime=model.animationSeconds+(selected?asset->animations[*selected].start:0.);
-    auto value=std::make_shared<const ModelPose>(evaluateModelPose(*asset,selected,sampleTime,model.animation.loop));
+    const auto animation=model.animation.asset.empty()?nullptr:assets_.findAnimation(model.animation.asset.id);
+    const auto source=animation?assets_.findModel(animation->sourceModel.id):nullptr;
+    const bool bindingChanged=entry.source.lock()!=asset||entry.animation!=animation||entry.animationSource.lock()!=source;
+    if(!bindingChanged&&entry.value&&entry.seconds==model.animationSeconds&&entry.loop==model.animation.loopOverride)return entry.value;
+    std::shared_ptr<const ModelPose> value;
+    try {
+        if(bindingChanged)entry.binding=animation&&source?std::optional{prepareAnimationBinding(*animation,*source,*asset)}:std::nullopt;
+        if(entry.binding)value=std::make_shared<const ModelPose>(evaluateAnimationPose(*entry.binding,*source,*asset,model.animationSeconds,model.animation.loopOverride));
+        else {
+            if(!model.animation.asset.empty())status_+="Animation is unavailable for "+asset->name+".\n";
+            value=std::make_shared<const ModelPose>(evaluateModelPose(*asset));
+        }
+    } catch(const std::exception& error) {
+        entry.binding.reset();status_+="Animation for "+asset->name+": "+error.what()+"\n";
+        value=std::make_shared<const ModelPose>(evaluateModelPose(*asset));
+    }
     if(entry.value&&entry.source.lock()==asset&&value->signature==entry.value->signature&&value->drawTransforms==entry.value->drawTransforms&&
         value->skinPalettes==entry.value->skinPalettes&&value->nodeWeights==entry.value->nodeWeights&&
         value->localTransforms==entry.value->localTransforms&&value->worldTransforms==entry.value->worldTransforms)value=entry.value;
-    entry={asset,value,clip,model.animationSeconds,model.animation.loop,true};
+    entry.source=asset;entry.value=value;entry.animation=animation;entry.animationSource=source;
+    entry.seconds=model.animationSeconds;entry.loop=model.animation.loopOverride;entry.wanted=true;
     return value;
 }
 Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {

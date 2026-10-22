@@ -7,6 +7,7 @@
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
 #include "assets/GameplayEffectAsset.h"
+#include "assets/AnimationAsset.h"
 #include "resources/AssetId.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
@@ -289,15 +290,19 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
             const auto& source=entity.at("modelAnimation");
             if(!source.is_object())throw std::runtime_error("Model animation settings must be an object.");
             auto& animation=record.modelAnimation;
+            if(source.contains("asset"))animation.asset=source.at("asset").get<AssetRef<AnimationAsset>>();
             if(source.contains("clip")) {
                 const auto& clip=source.at("clip");
                 if(!clip.is_number_integer() ||
                     (clip.is_number_unsigned()?clip.get<std::uint64_t>()>std::uint64_t(std::numeric_limits<std::int32_t>::max()):
                         clip.get<std::int64_t>()<-1 || clip.get<std::int64_t>()>std::numeric_limits<std::int32_t>::max()))
                     throw std::runtime_error("Model animation clip must be an integer from -1 to 2147483647.");
-                animation.clip=clip.get<std::int32_t>();
+                const auto index=clip.get<std::int32_t>();
+                if(!source.contains("asset") && index>=0 && record.model)animation.asset.id=importedAnimationId(record.model->id,static_cast<std::uint32_t>(index));
             }
-            animation.playing=source.value("playing",animation.playing);animation.loop=source.value("loop",animation.loop);
+            animation.playing=source.value("playing",animation.playing);
+            if(source.contains("loopOverride"))animation.loopOverride=source.at("loopOverride").get<bool>();
+            else if(source.contains("clip") && source.contains("loop"))animation.loopOverride=source.at("loop").get<bool>();
             animation.speed=source.value("speed",animation.speed);animation.startTime=source.value("startTime",animation.startTime);
         }
         if(version>=11 && entity.contains("modelMaterials")) {
@@ -674,8 +679,9 @@ Json writeScene(const SceneSnapshot& snapshot) {
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
                 {"shadowCasterMask",record.lightingScopes.shadowCasterMask}};
             const auto& animation=record.modelAnimation;
-            entity["modelAnimation"]={{"clip",animation.clip},{"playing",animation.playing},{"loop",animation.loop},
+            entity["modelAnimation"]={{"asset",animation.asset},{"playing",animation.playing},
                 {"speed",animation.speed},{"startTime",animation.startTime}};
+            if(animation.loopOverride)entity["modelAnimation"]["loopOverride"]=*animation.loopOverride;
         }
         auto materials=record.modelMaterials;trimModelMaterialOverrides(materials);
         if(!materials.empty())entity["modelMaterials"]=materials;
@@ -1220,6 +1226,17 @@ std::vector<std::string> SceneDocument::historicalMaterialReferences() const {
     std::unordered_set<std::string> references;
     const auto add=[&](const EntityRecord& record) {
         for(const auto& material:record.modelMaterials)if(!material.empty())references.insert(material.id);
+    };
+    for(const auto& command:history_.commands_)for(const auto& change:command.entities) {
+        if(change.before)add(*change.before);if(change.after)add(*change.after);
+    }
+    if(transaction_)for(const auto& change:transaction_->command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
+    std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
+}
+std::vector<std::string> SceneDocument::historicalAnimationReferences() const {
+    std::unordered_set<std::string> references;
+    const auto add=[&](const EntityRecord& record) {
+        if(!record.modelAnimation.asset.empty())references.insert(record.modelAnimation.asset.id);
     };
     for(const auto& command:history_.commands_)for(const auto& change:command.entities) {
         if(change.before)add(*change.before);if(change.after)add(*change.after);

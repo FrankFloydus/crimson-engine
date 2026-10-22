@@ -8,6 +8,7 @@
 #include "tools/NavigationAgentProfileEditor.h"
 #include "tools/CollisionLayersEditor.h"
 #include "tools/GameplayEffectEditor.h"
+#include "tools/AnimationEditor.h"
 #include "NavigationPreview.h"
 #include "SceneParticles.h"
 #include "PlayShortcuts.h"
@@ -73,6 +74,7 @@ private:
     NavigationAgentProfileEditor navigationProfileEditor_;
     CollisionLayersEditor collisionLayersEditor_;
     GameplayEffectEditor gameplayEffectEditor_;
+    AnimationEditor animationEditor_;
     SceneParticles particles_;
     SceneAnimations editAnimations_,playAnimations_;
     std::uint64_t animationPlayTick_{};

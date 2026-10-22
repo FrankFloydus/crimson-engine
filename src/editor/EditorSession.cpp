@@ -23,7 +23,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -133,6 +133,7 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     materialEditor_.filesChanged(paths);
     navigationProfileEditor_.filesChanged(paths);
     gameplayEffectEditor_.filesChanged(paths);
+    animationEditor_.filesChanged(paths);
     collisionLayersEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
@@ -224,7 +225,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
+    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
@@ -322,7 +323,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             }
         }
     }
-    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,gameplay);
+    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,gameplay);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
@@ -340,6 +341,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(frame.createGameplayEffect)gameplayEffectEditor_.requestCreate(frame.gameplayEffectFolder,assets);
     if(!frame.openGameplayEffect.empty())gameplayEffectEditor_.requestOpen(frame.openGameplayEffect,assets);
     gameplayEffectEditor_.draw(assets);
+    if(!frame.openAnimation.empty())animationEditor_.requestOpen(frame.openAnimation,assets);
+    animationEditor_.setAntiAliasing(editor_.antiAliasing());
+    animationEditor_.draw(assets,renderer,resources_,prepared_,simulationSeconds);
     status_=startupStatus_+playStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         cameraPilot_.sync(document,settings_.camera);
@@ -392,7 +396,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes(),attributeDebug_.enabled());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
-        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive()});
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive()});
     if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
@@ -464,8 +468,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(play_.playing()) {
         const auto ticks=play_.tickCount();
         const auto elapsed=ticks>=animationPlayTick_?(ticks-animationPlayTick_)*PlaySession::FixedStep:0.;
-        playAnimations_.advance(extracted,document.documentGeneration(),elapsed);animationPlayTick_=ticks;
-    } else editAnimations_.advance(extracted,document.documentGeneration(),simulationSeconds);
+        playAnimations_.advance(extracted,document.documentGeneration(),elapsed,[&assets](const auto& id){return assets.findAnimation(id);});animationPlayTick_=ticks;
+    } else editAnimations_.advance(extracted,document.documentGeneration(),simulationSeconds,[&assets](const auto& id){return assets.findAnimation(id);});
     settings_.environment=extracted.environment.environment;settings_.exposure=extracted.environment.exposure;
     settings_.proceduralSun=extracted.proceduralSun;
     settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);

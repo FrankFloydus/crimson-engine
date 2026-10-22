@@ -8,7 +8,9 @@
 #include <vector>
 
 namespace crimson {
+inline constexpr unsigned AssetPreviewImageVersion=12,AssetPreviewIndexVersion=2;
 struct PreviewMaterialFingerprint { std::string id; std::uint64_t fingerprint{}; };
+struct PreviewAnimationFingerprint { std::string id; std::uint64_t fingerprint{}; };
 struct PreviewSourceLocation { std::string id; std::filesystem::path file; };
 struct CachedAssetPreview {
     std::uint64_t signature{},shaderSignature{},policyFingerprint{};
@@ -16,6 +18,7 @@ struct CachedAssetPreview {
     std::vector<std::filesystem::path> files;
     std::vector<std::uint64_t> sourceFingerprints; // Optional exact render-time versions; not serialized.
     std::vector<PreviewMaterialFingerprint> materials;
+    std::vector<PreviewAnimationFingerprint> animations;
     std::vector<PreviewSourceLocation> locations;
     std::shared_ptr<const DecodedImage> image;
 };

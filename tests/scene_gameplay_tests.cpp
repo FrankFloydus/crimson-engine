@@ -1,3 +1,4 @@
+#include "assets/AnimationAsset.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneComponents.h"
 #include "scene/SceneExtraction.h"
@@ -1255,7 +1256,7 @@ void modelAnimationStorageAndRuntime() {
     const auto model=document.createModel("assets/models/animated/manifest.json","Animated model"),empty=document.createEmpty("Empty");
     require(model&&empty,document.status());
     require(document.scene().find(model)->modelAnimation==SceneModelAnimation{},"New models did not retain the imported bind pose by default.");
-    auto authored=*document.scene().find(model);authored.modelAnimation={2,false,false,1.5f,2.25f};
+    auto authored=*document.scene().find(model);authored.modelAnimation.asset.id="f5d1dd3d-dcfe-4f05-891e-06ac972fd22e";authored.modelAnimation.playing=false;authored.modelAnimation.loopOverride=false;authored.modelAnimation.speed=1.5f;authored.modelAnimation.startTime=2.25f;
     require(document.updateEntity(model,authored,"Configure animation"),document.status());
     require(extractScene(document.scene()).models.front().animation==authored.modelAnimation,"Render extraction lost authored playback settings.");
     require(document.undo()&&document.scene().find(model)->modelAnimation==SceneModelAnimation{}&&document.redo(),
@@ -1270,14 +1271,14 @@ void modelAnimationStorageAndRuntime() {
         require(!document.updateEntity(bad.id,bad),"Invalid animation settings were published.");
         same(document.scene().records(),records);require(document.history().size()==history,"Rejected animation edit added history.");
     };
-    auto invalid=authored;invalid.modelAnimation.clip=-2;rejectsRecord(invalid);
+    auto invalid=authored;
     for(const auto speed:{-.01f,100.01f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
         invalid=authored;invalid.modelAnimation.speed=speed;rejectsRecord(invalid);
     }
     for(const auto time:{-.01f,1.1e9f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
         invalid=authored;invalid.modelAnimation.startTime=time;rejectsRecord(invalid);
     }
-    invalid=*document.scene().find(empty);invalid.modelAnimation.clip=0;rejectsRecord(invalid);
+    invalid=*document.scene().find(empty);invalid.modelAnimation.asset=authored.modelAnimation.asset;rejectsRecord(invalid);
     auto legacy=json;legacy["version"]=9;for(auto& entity:legacy["entities"])entity.erase("modelAnimation");
     const std::string legacyId="assets/scenes/legacy-animation.crimson-scene";const auto legacyBytes=legacy.dump();
     {std::ofstream file(project.root/legacyId);file<<legacyBytes;}
@@ -1288,6 +1289,22 @@ void modelAnimationStorageAndRuntime() {
         const std::string id="assets/scenes/invalid-animation.crimson-scene";{std::ofstream file(project.root/id);file<<malformed.dump();}
         const auto before=reopened.scene().records();require(!reopened.load(id),"Invalid saved animation clip was accepted.");same(before,reopened.scene().records());
     }
+    auto embedded=json;
+    for(auto& entity:embedded["entities"])if(entity.contains("modelAnimation")) {
+        entity["modelAnimation"].erase("asset");entity["modelAnimation"].erase("loopOverride");
+        entity["modelAnimation"]["clip"]=2;entity["modelAnimation"]["loop"]=false;
+    }
+    const std::string embeddedId="assets/scenes/embedded-animation.crimson-scene";const auto embeddedBytes=embedded.dump();
+    {std::ofstream file(project.root/embeddedId);file<<embeddedBytes;}
+    require(reopened.load(embeddedId),reopened.status());
+    const auto converted=reopened.scene().find(model)->modelAnimation;
+    require(converted.asset.id==importedAnimationId(authored.model->id,2)&&converted.loopOverride==false&&!reopened.dirty(),
+        "Legacy embedded clip did not convert to its stable Animation identity without dirtying the scene.");
+    std::ifstream untouched(project.root/embeddedId);require(std::string(std::istreambuf_iterator<char>(untouched),{})==embeddedBytes,
+        "Loading legacy animation rewrote its scene.");
+    const auto convertedJson=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,embeddedId)));
+    for(const auto& entity:convertedJson["entities"])if(entity.contains("modelAnimation"))
+        require(entity["modelAnimation"].contains("asset")&&!entity["modelAnimation"].contains("clip"),"Current scene writer retained embedded clip indices.");
     SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
     auto live=*runtime.scene().find(model);live.modelAnimation.playing=true;live.modelAnimation.speed=2;
     require(runtime.updateEntity(model,live),runtime.status());pose(runtime,model,{3,4,5});

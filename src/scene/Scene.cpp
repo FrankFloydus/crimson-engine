@@ -268,9 +268,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if(!record.model && record.meshShading!=MeshShading::UseMeshNormals)
             throw std::runtime_error("Mesh shading settings require a model entity.");
         const auto& animation=record.modelAnimation;
-        if(animation.clip<-1 || !std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
+        if(!std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
             !std::isfinite(animation.startTime) || animation.startTime<0 || animation.startTime>1e9f)
-            throw std::runtime_error("Model animation needs a valid clip, Speed from 0 to 100 and Start Time from 0 to 1000000000 seconds.");
+            throw std::runtime_error("Model animation needs Speed from 0 to 100 and Start Time from 0 to 1000000000 seconds.");
         if(!record.model && animation!=SceneModelAnimation{})
             throw std::runtime_error("Model animation settings require a model entity.");
         if(record.modelMaterials.size()>MaximumModelMaterialSlots)

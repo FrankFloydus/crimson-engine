@@ -3,6 +3,7 @@
 #include "assets/ModelMaterialOverrides.h"
 #include "crimson-renderer/Renderer.h"
 #include "resources/ResourceManager.h"
+#include "runtime/AnimationPlayback.h"
 #include <chrono>
 #include <filesystem>
 #include <unordered_map>
@@ -13,6 +14,7 @@ class AssetLibrary;
 struct ExtractedScene;
 struct ExtractedModel;
 struct ModelPose;
+struct AnimationAsset;
 struct PreparedEditorModel {
     std::shared_ptr<const ModelAsset> asset;
     std::vector<ModelMaterial> materials;
@@ -74,9 +76,12 @@ private:
     struct PoseEntry {
         std::weak_ptr<const ModelAsset> source;
         std::shared_ptr<const ModelPose> value;
-        std::int32_t clip{-1};
+        std::shared_ptr<const AnimationAsset> animation;
+        std::weak_ptr<const ModelAsset> animationSource;
+        std::optional<PreparedAnimationBinding> binding;
         double seconds{};
-        bool loop{},wanted{};
+        std::optional<bool> loop;
+        bool wanted{};
     };
     std::unordered_map<std::uint64_t,PoseEntry> poses_;
     std::vector<std::shared_ptr<const PreparedEditorModel>> framePins_;

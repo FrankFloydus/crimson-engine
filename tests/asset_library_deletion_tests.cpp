@@ -2143,7 +2143,63 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
 }
 }
 
+namespace {
+void animationAssetLibrary() {
+    Project project;const auto source=project.root/"sources"/"animated.gltf";const auto buffer=source.parent_path()/"animation.bin";
+    model_test::Bytes bytes;
+    for(float value:std::array<float,9>{0,0,0,1,0,0,0,1,0})model_test::append(bytes,value);
+    for(float value:std::array<float,2>{1,3})model_test::append(bytes,value);
+    for(float value:std::array<float,6>{0,0,0,2,0,0})model_test::append(bytes,value);
+    const nlohmann::json sampler={{"input",1},{"output",2},{"interpolation","LINEAR"}};
+    const nlohmann::json clip={{"name","Walk"},{"samplers",nlohmann::json::array({sampler})},
+        {"channels",nlohmann::json::array({{{"sampler",0},{"target",{{"node",0},{"path","translation"}}}}})}};
+    nlohmann::json gltf={{"asset",{{"version","2.0"}}},{"scene",0},{"scenes",nlohmann::json::array({{{"nodes",{0}}}})},
+        {"nodes",nlohmann::json::array({{{"name","root"},{"mesh",0}}})},
+        {"meshes",nlohmann::json::array({{{"primitives",nlohmann::json::array({{{"attributes",{{"POSITION",0}}}}})}}})},
+        {"buffers",nlohmann::json::array({{{"uri","animation.bin"},{"byteLength",bytes.size()}}})},
+        {"bufferViews",nlohmann::json::array({{{"buffer",0},{"byteOffset",0},{"byteLength",36}},{{"buffer",0},{"byteOffset",36},{"byteLength",8}},{{"buffer",0},{"byteOffset",44},{"byteLength",24}}})},
+        {"accessors",nlohmann::json::array({{{"bufferView",0},{"componentType",5126},{"count",3},{"type","VEC3"},{"min",{0,0,0}},{"max",{1,1,0}}},
+            {{"bufferView",1},{"componentType",5126},{"count",2},{"type","SCALAR"}},{{"bufferView",2},{"componentType",5126},{"count",2},{"type","VEC3"}}})},
+        {"animations",nlohmann::json::array({clip,clip})}};
+    model_test::writeBytes(buffer,bytes);model_test::writeJson(source,gltf);
+    ResourceManager resources;AssetLibrary library(project.root,&resources);
+    const auto model=library.importModel(source);require(bool(model),library.status());
+    const auto first=importedAnimationId(model->id,0),second=importedAnimationId(model->id,1);
+    require(library.findAnimation(first)&&library.findAnimation(second)&&hasAsset(library,first)&&hasAsset(library,second),
+        "GLTF import did not expose both same-named clips as independent native Animation assets.");
+    const auto originalSource=read(resolveAssetPath(project.root,model->id).parent_path()/"source.gltf");
+    auto authored=*library.findAnimation(first);authored.name="Authored in-place walk";authored.forceRootLock=true;authored.startTime=.25f;authored.endTime=1.75f;
+    saveAnimationAsset(project.root,authored);library.publishAnimation(std::make_shared<const AnimationAsset>(authored));
+    const auto authoredPath=animationAssetPath(project.root,first);const auto savedBytes=read(authoredPath);
+    require(library.importModel(source)->id==model->id&&read(authoredPath)==savedBytes&&*library.findAnimation(first)==authored,
+        "Equal-content reimport overwrote authored Animation settings or identity.");
+    library.protectAnimationDocument(first);auto committed=authored;committed.playbackRate=.5f;library.publishAnimation(std::make_shared<const AnimationAsset>(committed));
+    library.onFileChanged(authoredPath);require(library.findAnimation(first)->playbackRate==.5f,"Disk refresh replaced the open Animation document's committed authority.");
+    library.protectAnimationDocument({});library.refreshAnimations();require(*library.findAnimation(first)==authored,"Closing Animation authority did not resume disk publication.");
+    SceneDocument active(project.root);const auto entity=active.createModel(model->id,"Animated entity");auto entityRecord=*active.scene().find(entity);entityRecord.modelAnimation.asset.id=first;
+    require(active.updateEntity(entity,entityRecord)&&active.save("Animated scene"),active.status());
+    require(!library.planDeletion({model->id},&active).error.empty(),"Deleting a model orphaned surviving native Animation source tracks.");
+    auto deletion=library.planDeletion({first},&active);require(deletion.error.empty()&&deletion.needsReferenceWarning(),"Deleting a used Animation omitted its saved-scene reference warning.");
+    finishDeletion(library,resources,deletion,{{first,second}},&active);
+    require(active.scene().find(entity)->modelAnimation.asset.id==second&&
+        record(readSceneSnapshot(project.root,active.assetId()),entity).modelAnimation.asset.id==second,
+        "Animation replacement did not update saved and active scene selections transactionally.");
+    require(!hasAsset(library,first)&&library.references().resolveAnimation(first)==second,"Deleted Animation remained cataloged or lost its replacement.");
+    require(read(resolveAssetPath(project.root,model->id).parent_path()/"source.gltf")==originalSource,"Animation editing or deletion modified immutable imported source bytes.");
+    library.setAnimationDocumentReferences({model->id},{});
+    require(!library.planDeletion({model->id,second},&active).error.empty(),"Open Animation source reference did not protect model deletion.");
+    library.setAnimationDocumentReferences({},{});
+    deletion=library.planDeletion({model->id,second},&active);require(deletion.error.empty(),deletion.error);
+    finishDeletion(library,resources,deletion,{},&active);
+    require(!hasAsset(library,model->id)&&!hasAsset(library,second)&&!active.scene().find(entity),"Deleting a model with all its clips left source-dependent assets behind.");
+    resources.stop();
+}
+}
+
 int main(int argc,char** argv){try{
+    if(argc==2&&std::string(argv[1])=="--animation-assets") {
+        animationAssetLibrary();std::cout<<"Animation import, authoring retention, typed references and transactional deletion passed.\n";return 0;
+    }
     if(argc==5&&std::string(argv[1])=="--material-preview-input-lifetime") {
         bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
         require(bgfx::init(init),"Could not initialize the shared node-preview input lifetime check.");

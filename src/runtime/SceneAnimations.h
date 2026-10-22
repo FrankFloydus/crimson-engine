@@ -1,5 +1,7 @@
 #pragma once
 #include "scene/SceneExtraction.h"
+#include "assets/AnimationAsset.h"
+#include <functional>
 #include <unordered_map>
 
 namespace crimson {
@@ -7,12 +9,14 @@ namespace crimson {
 // asset or document. Edits/saves do not advance or serialize these clocks.
 class SceneAnimations {
 public:
-    void advance(ExtractedScene&,std::uint64_t documentGeneration,double seconds);
+    using Query=std::function<std::shared_ptr<const AnimationAsset>(const std::string&)>;
+    void advance(ExtractedScene&,std::uint64_t documentGeneration,double seconds,const Query& query={});
     void clear();
 private:
     struct State {
         std::string asset;
         SceneModelAnimation settings;
+        std::shared_ptr<const AnimationAsset> definition;
         double seconds{};
         bool seen{};
     };

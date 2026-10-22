@@ -484,9 +484,9 @@ void materialSlotControl(SceneDocument& document,PanelsState& state,const Entity
         ImGui::EndChild();ImGui::EndPopup();
     }
 }
-void modelAnimationControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,const AssetLibrary& assets) {
+void modelAnimationControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,const AssetLibrary& assets,std::string* openAnimation) {
     const auto model=assets.findModel(record.model->id);
-    const bool available=model&&(!model->animations.empty()||!model->skins.empty()||
+    const bool available=model&&(!model->animations.empty()||!model->skins.empty()||!record.modelAnimation.asset.empty()||
         std::any_of(model->primitives.begin(),model->primitives.end(),[](const auto& primitive){return !primitive.morphTargets.empty();}));
     bool activeDrawn=false;
     if(available&&ImGui::TreeNode("Animation")) {
@@ -496,35 +496,55 @@ void modelAnimationControls(SceneDocument& document,PanelsState& state,const Ent
                 changeEntity(record.id,[animation](auto& entity){entity.modelAnimation=animation;}));
             activeDrawn|=state.active==property;
         };
-        const auto current=animation.clip;
-        const auto clipName=current<0?std::string("Bind Pose"):std::size_t(current)<model->animations.size()?
-            (model->animations[current].name.empty()?"Clip "+std::to_string(std::int64_t(current)+1):model->animations[current].name):
-            "Missing clip "+std::to_string(std::int64_t(current)+1);
-        const bool changed=resettableProperty(animation.clip,SceneModelAnimation{}.clip,[&] {
-        bool updated=false;
-        const bool open=ImGui::BeginCombo("Clip",clipName.c_str());
-        const auto item=ImGui::GetCurrentContext()->LastItemData;
-        if(open) {
-            if(ImGui::Selectable("Bind Pose",current<0)){updated=current!=-1;animation.clip=-1;}
-            for(std::size_t index=0;index<model->animations.size();++index) {
-                ImGui::PushID(static_cast<int>(index));
-                const auto& clip=model->animations[index];const auto name=clip.name.empty()?"Clip "+std::to_string(index+1):clip.name;
-                if(ImGui::Selectable(name.c_str(),current==static_cast<std::int32_t>(index))) {
-                    updated=current!=static_cast<std::int32_t>(index);animation.clip=static_cast<std::int32_t>(index);
+        const auto selected=assets.findAnimation(animation.asset.id);
+        const auto label=selected?assets.displayName(selected->id):animation.asset.empty()?std::string("Bind Pose"):std::string("Missing Animation");
+        const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+        const auto openWidth=ImGui::CalcTextSize("Open").x+ImGui::GetStyle().FramePadding.x*2;
+        const auto width=std::max(height,ImGui::GetContentRegionAvail().x-openWidth-height-2*gap);
+        bool changed=false;
+        ImGui::BeginGroup();
+        if(ImGui::Button(label.c_str(),{width,height}))ImGui::OpenPopup("Select Animation");
+        if(ImGui::BeginPopup("Select Animation")) {
+            static ImGuiTextFilter filter;
+            filter.Draw("Search");
+            ImGui::BeginChild("Animation choices",{360,ImGui::GetFontSize()*12});
+            if(ImGui::Selectable("Bind Pose",animation.asset.empty())){changed=!animation.asset.empty();animation.asset={};animation.loopOverride.reset();ImGui::CloseCurrentPopup();}
+            const auto signature=animationBindingSignature(*model);
+            for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Animation&&filter.PassFilter(assets.displayName(entry.id).c_str())) {
+                const auto candidate=assets.findAnimation(entry.id);if(!candidate||candidate->bindingSignature!=signature)continue;
+                ImGui::PushID(entry.id.c_str());
+                if(ImGui::Selectable(assets.displayName(entry.id).c_str(),entry.id==animation.asset.id)) {
+                    changed=entry.id!=animation.asset.id;animation.asset.id=entry.id;animation.loopOverride.reset();ImGui::CloseCurrentPopup();
                 }
                 ImGui::PopID();
             }
-            ImGui::EndCombo();
+            ImGui::EndChild();ImGui::EndPopup();
         }
-        ImGui::GetCurrentContext()->LastItemData=item;
-        return updated;
-        },"Bind Pose");
-        field(Edit::ModelAnimationClip,"Choose model animation",changed);
+        ImGui::SameLine(0,gap);ImGui::BeginDisabled(animation.asset.empty());
+        if(ImGui::Button("x",{height,height})){animation.asset={};animation.loopOverride.reset();changed=true;}
+        ImGui::EndDisabled();ImGui::SameLine(0,gap);ImGui::BeginDisabled(!selected||!openAnimation);
+        if(ImGui::Button("Open",{openWidth,height})&&openAnimation)*openAnimation=selected->id;
+        ImGui::EndDisabled();ImGui::EndGroup();
+        if(ImGui::BeginDragDropTarget()) {
+            if(const auto* payload=ImGui::AcceptDragDropPayload("CC_ANIMATION_ASSET")) {
+                if(payload->Data&&payload->DataSize>1&&static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
+                    const std::string id(static_cast<const char*>(payload->Data),static_cast<std::size_t>(payload->DataSize-1));
+                    const auto candidate=assets.findAnimation(id);
+                    if(candidate&&candidate->bindingSignature==animationBindingSignature(*model)) {
+                        changed=id!=animation.asset.id;animation.asset.id=id;animation.loopOverride.reset();
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        field(Edit::ModelAnimationClip,"Assign animation",changed);
         field(Edit::ModelAnimationPlaying,"Toggle model animation playback",resettableProperty(animation.playing,SceneModelAnimation{}.playing,[&]{return ImGui::Checkbox("Playing",&animation.playing);}));
-        field(Edit::ModelAnimationLoop,"Toggle model animation loop",resettableProperty(animation.loop,SceneModelAnimation{}.loop,[&]{return ImGui::Checkbox("Loop",&animation.loop);}));
+        auto loop=animation.loopOverride.value_or(selected?selected->loop:true);
+        const bool loopChanged=resettableProperty(loop,selected?selected->loop:true,[&]{return ImGui::Checkbox("Loop",&loop);});
+        if(loopChanged)animation.loopOverride=selected&&loop==selected->loop?std::optional<bool>{}:std::optional<bool>{loop};
+        field(Edit::ModelAnimationLoop,"Change animation loop override",loopChanged);
         field(Edit::ModelAnimationSpeed,"Change model animation speed",resettableProperty(animation.speed,SceneModelAnimation{}.speed,[&]{return ImGui::DragFloat("Speed",&animation.speed,.01f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
         field(Edit::ModelAnimationStart,"Change model animation start",resettableProperty(animation.startTime,SceneModelAnimation{}.startTime,[&]{return ImGui::DragFloat("Start Time (s)",&animation.startTime,.05f,0,1e9f,"%.3f",ImGuiSliderFlags_AlwaysClamp);}));
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Changing Clip or Start Time restarts playback. Playing and Speed retain the current time.");
         ImGui::TreePop();
     }
     if(state.active>=Edit::ModelAnimationClip&&state.active<=Edit::ModelAnimationStart&&
@@ -1381,7 +1401,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation) {
     auto& state=stateFor(document);
     const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
@@ -1487,7 +1507,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 }
                 if((state.active==Edit::ModelDirectReceivers || state.active==Edit::ModelCasterScope) &&
                    (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
-                modelAnimationControls(document,state,record,assets);
+                modelAnimationControls(document,state,record,assets,openAnimation);
                 modelInformation(document,state,record,assets,renderer,openMaterial);
             } else if(section==SceneComponentKind::Model && record.model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart)finishEdit(document,state,state.active);
             if(section==SceneComponentKind::Particle && record.particle && componentHeader(state,record,SceneComponentKind::Particle)) {

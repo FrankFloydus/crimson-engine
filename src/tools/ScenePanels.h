@@ -24,5 +24,5 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                         std::uint64_t* playParticle = nullptr,std::string* openParticle = nullptr,QuaderBridge* quader=nullptr,
                         std::string* openMaterial=nullptr,const NavigationInspectorContext& navigation={},
                         const std::array<std::string,32>* collisionLayerNames=nullptr,
-                        const GameplayInspectorContext& gameplay={});
+                        const GameplayInspectorContext& gameplay={},std::string* openAnimation=nullptr);
 } // namespace crimson

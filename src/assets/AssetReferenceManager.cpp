@@ -53,6 +53,10 @@ bool navigationProfileIdentity(const std::filesystem::path& root,const std::stri
     if(!isAssetUuid(id)||builtin(id))return false;
     try{return resolveAssetPath(root,id).extension()==".crimson-agent-profile";}catch(...){return true;}
 }
+bool animationIdentity(const std::filesystem::path& root,const std::string& id) {
+    if(!isAssetUuid(id)||builtin(id))return false;
+    try{return resolveAssetPath(root,id).extension()==".crimson-animation";}catch(...){return true;}
+}
 bool particleIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return resolveAssetPath(root,id).extension()==".crimson-particle";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&relative.extension()==".crimson-particle";}
 bool materialIdentity(const std::filesystem::path& root,const std::string& id){if(isAssetUuid(id)){if(builtin(id))return false;try{return resolveAssetPath(root,id).extension()==".crimson-material";}catch(...){return true;}}const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&relative.extension()==".crimson-material";}
 void validateMaterialTarget(const std::filesystem::path& root,const std::string& target){if(!target.empty()&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId&&!materialIdentity(root,target))throw std::runtime_error("Material replacement must reference a managed material or protected material default.");}
@@ -66,7 +70,8 @@ AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(s
             if(builtin(replacement)&&!knownBuiltin(replacement))throw std::runtime_error("Replacement references an unknown built-in resource.");
             if(!replacement.empty()&&!builtin(replacement)&&!deleted_.contains(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
         for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
-            if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
+            if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
+            else if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
             else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
             else if(source&&source->extension()==".crimson-material")validateMaterialTarget(root_,resolve(id));
             else resolve(id);}
@@ -105,6 +110,9 @@ std::string AssetReferenceManager::resolveNavigationAgentProfile(const std::stri
 }
 std::string AssetReferenceManager::resolveGameplayEffect(const std::string& id)const {
     const auto result=resolve(id);if(!result.empty()&&!gameplayEffectIdentity(root_,result))throw std::runtime_error("Gameplay Effect replacement has an incompatible asset kind.");return result;
+}
+std::string AssetReferenceManager::resolveAnimation(const std::string& id)const {
+    const auto result=resolve(id);if(!result.empty()&&!animationIdentity(root_,result))throw std::runtime_error("Animation replacement has an incompatible asset kind.");return result;
 }
 std::string AssetReferenceManager::resolveParticleMaterial(const std::string& id)const{
     const auto result=resolve(id);if(result.empty()||(result==DefaultMaterialId&&deleted_.contains(id)))return DefaultParticleMaterialId;
@@ -166,16 +174,18 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
         if(a.kind==AssetKind::Particle&&!target.empty()&&checkedManagedAssetPath(root_,target).extension()!=".crimson-particle")throw std::runtime_error("Particle replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::NavigationAgentProfile&&!target.empty()&&!navigationProfileIdentity(root_,target))throw std::runtime_error("Navigation Agent Profile replacement has an incompatible asset kind.");
         if(a.kind==AssetKind::GameplayEffect&&!target.empty()&&!gameplayEffectIdentity(root_,target))throw std::runtime_error("Gameplay Effect replacement has an incompatible asset kind.");
+        if(a.kind==AssetKind::Animation&&!target.empty()&&!animationIdentity(root_,target))throw std::runtime_error("Animation replacement has an incompatible asset kind.");
         if(builtin(target)&&(!knownBuiltin(target)||(a.kind==AssetKind::Texture&&target!=GrayTextureId&&target!=NeutralNormalTextureId)||
             (a.kind==AssetKind::Environment&&target!=StudioEnvironmentId)||(a.kind==AssetKind::Material&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId)||
-            (a.kind==AssetKind::NavigationAgentProfile&&target!=DefaultNavigationAgentProfileId)||(a.kind==AssetKind::GameplayEffect&&target!=PlayerStartingEffectId&&target!=EnemyStartingEffectId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle))
+            (a.kind==AssetKind::NavigationAgentProfile&&target!=DefaultNavigationAgentProfileId)||(a.kind==AssetKind::GameplayEffect&&target!=PlayerStartingEffectId&&target!=EnemyStartingEffectId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle||a.kind==AssetKind::Animation))
             throw std::runtime_error("Built-in replacement has an incompatible asset kind.");
         if(target.empty()){switch(a.kind){case AssetKind::Texture:target=GrayTextureId;break;case AssetKind::Environment:target=StudioEnvironmentId;break;case AssetKind::Material:target=DefaultMaterialId;break;case AssetKind::NavigationAgentProfile:target=DefaultNavigationAgentProfileId;break;default:break;}}
         deleted.insert(a.id);redirects[a.id]=std::move(target);
     }
     auto previousDeleted=std::move(deleted_);auto previousRedirects=std::move(replacements_);deleted_=std::move(deleted);replacements_=std::move(redirects);
     try{for(const auto& [id,target]:replacements_){(void)target;const auto source=managedIdentityPath(root_,id);
-        if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
+        if(source&&source->extension()==".crimson-animation")resolveAnimation(id);
+        else if(source&&source->extension()==".crimson-effect")resolveGameplayEffect(id);
         else if(source&&source->extension()==".crimson-particle")resolveParticle(id);
         else if(source&&source->extension()==".crimson-material")validateMaterialTarget(root_,resolve(id));
         else resolve(id);}}

@@ -240,7 +240,7 @@ bool oldReference(std::string_view value) {
     const auto p=pathFromUtf8(value);if(p.has_root_path())return false;
     for(const auto& part:p)if(part==".."||part==".")return false;
     const auto suffix=lower(utf8(p.extension()));
-    return image(p)||suffix==".crimson-material"||suffix==".crimson-particle"||suffix==".crimson-agent-profile"||suffix==".crimson-effect"||suffix==".crimson-scene"||p.filename()=="manifest.json";
+    return image(p)||suffix==".crimson-material"||suffix==".crimson-particle"||suffix==".crimson-agent-profile"||suffix==".crimson-effect"||suffix==".crimson-animation"||suffix==".crimson-scene"||p.filename()=="manifest.json";
 }
 void convertReferences(Json& value) {
     if(value.is_string()){const auto text=value.get<std::string>();if(oldReference(text))value=canonicalAssetId(text);}
@@ -286,7 +286,7 @@ void migrateUuidReferences(const fs::path& root) {
     for(const auto& tree:{root/"Content",root/".crimson"})if(fs::exists(tree))for(auto it=fs::recursive_directory_iterator(tree);it!=fs::recursive_directory_iterator();++it) {
         if(tree==root/".crimson"&&it->is_directory()&&(it->path().filename()=="cache"||utf8(it->path().filename()).starts_with('.'))){it.disable_recursion_pending();continue;}
         if(!it->is_regular_file())continue;const auto path=it->path();const auto ext=utf8(path.extension()),name=utf8(path.filename());
-        const bool native=ext==".crimson-material"||ext==".crimson-particle"||ext==".crimson-agent-profile"||ext==".crimson-effect"||ext==".crimson-scene";
+        const bool native=ext==".crimson-material"||ext==".crimson-particle"||ext==".crimson-agent-profile"||ext==".crimson-effect"||ext==".crimson-animation"||ext==".crimson-scene";
         const bool package=tree==root/"Content"&&name=="manifest.json";
         const bool settings=path.parent_path()==root/".crimson"&&ext==".json"&&name!="asset-locations.json"&&name!="legacy-browser.backup.json"&&name!="content-move.json"&&name!="uuid-migration.json"&&name!="collision-layers.json";
         if(!native&&!settings&&!package)continue;

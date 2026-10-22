@@ -58,7 +58,7 @@ void AsyncImports::pump(AssetLibrary& library){
                 created.insert(createdMaterialIds.begin(),createdMaterialIds.end());
                 try{
                     if(!file.reused || !registered)library.registerModel(asset);
-                    else {library.ensureModelMaterials(*asset);if(library.materialCatalogDirty_)library.refreshMaterials();}
+                    else {library.ensureModelMaterials(*asset);library.ensureModelAnimations(*asset);if(library.materialCatalogDirty_)library.refreshMaterials();}
                     file.id=asset->id;
                 }
                 catch(...){

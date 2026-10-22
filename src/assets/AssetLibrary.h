@@ -10,6 +10,7 @@
 #include "ParticleAsset.h"
 #include "NavigationAgentProfile.h"
 #include "GameplayEffectAsset.h"
+#include "AnimationAsset.h"
 #include "AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
@@ -116,6 +117,17 @@ public:
     std::shared_ptr<const GameplayEffectAsset> createGameplayEffect(const std::string& name="New Gameplay Effect");
     std::shared_ptr<const GameplayEffectAsset> copyGameplayEffect(const std::string& id,const std::string& name={});
     void protectGameplayEffectDocument(std::string id){gameplayEffectDocumentId_=std::move(id);}
+    std::shared_ptr<const AnimationAsset> findAnimation(const std::string& id) const;
+    std::uint64_t animationRevision(const std::string& id) const;
+    std::string animationDiagnostic(const std::string& id) const;
+    void publishAnimation(std::shared_ptr<const AnimationAsset>);
+    void refreshAnimations();
+    std::shared_ptr<const AnimationAsset> copyAnimation(const std::string& id,const std::string& name={});
+    void protectAnimationDocument(std::string id){animationDocumentId_=std::move(id);}
+    void setAnimationDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
+        if(active!=animationDocumentReferences_||history!=animationDocumentHistory_)++catalogRevision_;
+        animationDocumentReferences_=std::move(active);animationDocumentHistory_=std::move(history);
+    }
     ResourceManager* resources() const { return resources_; }
     void setMaterialGraphPrograms(MaterialGraphPrograms* programs) { graphPrograms_=programs; }
     std::vector<std::filesystem::path> materialShaderDependencies() const;
@@ -196,6 +208,12 @@ private:
     std::unordered_map<std::string,GameplayEffectVersion> gameplayEffects_;
     std::uint64_t nextGameplayEffectRevision_{1};
     std::string gameplayEffectDocumentId_;
+    struct AnimationVersion {std::shared_ptr<const AnimationAsset> definition;std::uint64_t revision{};std::string diagnostic;};
+    std::unordered_map<std::string,AnimationVersion> animations_;
+    std::unordered_map<std::string,ResourceHandle<ModelAsset>> animationCatalogResources_;
+    std::uint64_t nextAnimationRevision_{1};
+    std::string animationDocumentId_;
+    std::vector<std::string> animationDocumentReferences_,animationDocumentHistory_;
     struct MaterialVersion { std::shared_ptr<const MaterialAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,MaterialVersion> authoredMaterials_;
     struct MaterialCompatibility {std::weak_ptr<const MaterialAsset> source;bool compatible{};};
@@ -288,6 +306,7 @@ private:
     MaterialGraphPrograms* graphPrograms_{};
     mutable std::unordered_map<const MaterialAsset*,MaterialCompatibility> materialCompatibility_;
     void ensureModelMaterials(const ModelAsset& model);
+    void ensureModelAnimations(const ModelAsset& model);
     void registerModel(std::shared_ptr<const ModelAsset> model,bool refreshMaterialCatalog=true);
     std::vector<std::string> newModelImportAssets(const ModelAsset& model,bool reused) const;
     std::string placeImportedAssets(std::span<const std::string> ids,const std::string& destinationFolder);

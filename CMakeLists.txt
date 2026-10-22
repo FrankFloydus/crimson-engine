@@ -87,7 +87,7 @@ add_library(crimson-gameplay src/gameplay/GameplayTags.cpp src/gameplay/Attribut
 target_include_directories(crimson-gameplay PUBLIC src)
 target_compile_options(crimson-gameplay PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/SceneAnimations.cpp src/assets/NavigationAgentProfile.cpp src/assets/GameplayEffectAsset.cpp)
+add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/SceneAnimations.cpp src/runtime/AnimationPlayback.cpp src/assets/AnimationAsset.cpp src/assets/NavigationAgentProfile.cpp src/assets/GameplayEffectAsset.cpp)
 target_include_directories(crimson-scene PUBLIC src)
 target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage crimson-gameplay EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -172,7 +172,7 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
-    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp
+    src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp src/editor/AnimationDocument.cpp
     src/editor/CommandConsole.cpp src/editor/AttributeDebug.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
@@ -204,7 +204,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp
-    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp
+    src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -251,6 +251,22 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(animation_asset_tests tests/animation_asset_tests.cpp src/assets/AssetReferenceManager.cpp)
+    target_link_libraries(animation_asset_tests PRIVATE crimson-scene)
+    target_compile_options(animation_asset_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME animation_asset_core COMMAND animation_asset_tests)
+    add_executable(animation_document_tests tests/animation_document_tests.cpp src/editor/AnimationDocument.cpp)
+    target_link_libraries(animation_document_tests PRIVATE crimson-scene)
+    target_compile_options(animation_document_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME animation_document_core COMMAND animation_document_tests)
+    add_executable(animation_playback_tests tests/animation_playback_tests.cpp)
+    target_link_libraries(animation_playback_tests PRIVATE crimson-scene)
+    target_compile_options(animation_playback_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME animation_playback_core COMMAND animation_playback_tests)
+    add_executable(animation_pose_tests third_party/crimson-renderer/tests/model_animation_pose_tests.cpp)
+    target_link_libraries(animation_pose_tests PRIVATE Crimson::Support)
+    target_compile_options(animation_pose_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME animation_pose_core COMMAND animation_pose_tests)
     add_executable(effect_policy_tests tests/effect_policy_tests.cpp)
     target_link_libraries(effect_policy_tests PRIVATE crimson-runtime)
     target_compile_options(effect_policy_tests PRIVATE /W4 /permissive- /utf-8)
@@ -850,6 +866,7 @@ if(BUILD_TESTING)
     target_compile_options(asset_library_deletion_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(asset_library_deletion_tests PRIVATE crimson-material-gpu crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
+    add_test(NAME animation_library_core COMMAND asset_library_deletion_tests --animation-assets)
     set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
     add_test(NAME material_preview_resource_core COMMAND asset_library_deletion_tests --material-preview-resources "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(material_preview_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)

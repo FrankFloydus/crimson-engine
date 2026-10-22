@@ -7,6 +7,7 @@
 #include <array>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 
 namespace {
@@ -81,12 +82,14 @@ void persistentCache() {
     const auto root=std::filesystem::temp_directory_path()/("crimson-preview-cache-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root/"Content"/"Props");
     const auto folder=root/".crimson"/"cache"/"previews",source=root/"Content"/"Props"/"model.gltf",shader=root/"preview.sc";
+    const auto animation=root/"Content"/"Props"/"walk.crimson-animation",animationSource=root/"Content"/"Props"/"walk-source.gltf";
     const auto write=[](const auto& file,const char* value){std::ofstream output(file,std::ios::binary|std::ios::trunc);output<<value;};
     try {
-        write(source,"model source");write(shader,"shader source");
+        write(source,"model source");write(shader,"shader source");write(animation,"saved root lock settings");write(animationSource,"retained animation tracks");
         crimson::CachedAssetPreview preview;preview.signature=42;preview.shaderSignature=101;preview.policyFingerprint=202;preview.edge=32;
-        preview.files={source,shader};preview.materials={{"surface",303}};preview.locations={{"model",source}};
-        preview.sourceFingerprints={crimson::fingerprintFiles({source}),crimson::fingerprintFiles({shader})};
+        preview.files={source,shader,animation,animationSource};preview.materials={{"surface",303}};preview.animations={{"walk",404}};
+        preview.locations={{"model",source},{"walk",animation},{"walk-source",animationSource}};
+        for(const auto& file:preview.files)preview.sourceFingerprints.push_back(crimson::fingerprintFiles({file}));
         preview.image=std::make_shared<crimson::DecodedImage>(crimson::DecodedImage{32,32,std::vector<std::uint8_t>(32*32*4,127)});
         crimson::writeAssetPreviewCache(root,folder,"model",preview,true);
         const auto read=[&]{return crimson::readAssetPreviewCache(root,folder,"model",32,101,202);};
@@ -94,6 +97,30 @@ void persistentCache() {
         require(cached.signature==42 && cached.image->rgba==preview.image->rgba && cached.files==preview.files && cached.materials.front().fingerprint==303,
             "A warm persistent preview did not restore its pixels and source descriptors.");
         require(cached.locations.front().id=="model" && cached.locations.front().file==source,"Persistent previews lost stable source locations.");
+        require(cached.animations.size()==1&&cached.animations.front().id=="walk"&&cached.animations.front().fingerprint==404,
+            "Persistent scene previews lost their authored Animation versions.");
+        {
+            std::ifstream metadata(std::filesystem::path(crimson::assetPreviewImagePath(folder,"model",42).wstring()+L".json"));
+            const auto record=nlohmann::json::parse(metadata);
+            require(record.at("version")==crimson::AssetPreviewImageVersion,"Preview image writer and warm reader use different versions.");
+        }
+        const auto animationStamp=std::filesystem::last_write_time(animation),tracksStamp=std::filesystem::last_write_time(animationSource);
+        write(animation,"changed root lock settings");std::filesystem::last_write_time(animation,animationStamp+std::chrono::seconds{2});
+        rejects(read,"Changed Animation root settings reused a stale scene preview.");
+        write(animation,"saved root lock settings");std::filesystem::last_write_time(animation,animationStamp);
+        write(animationSource,"different animation tracks");std::filesystem::last_write_time(animationSource,tracksStamp+std::chrono::seconds{2});
+        rejects(read,"Changed retained animation tracks reused a stale scene preview.");
+        write(animationSource,"retained animation tracks");std::filesystem::last_write_time(animationSource,tracksStamp);
+        require(read().animations.front().fingerprint==404,"Restoring Animation dependencies did not restore the valid cache.");
+        auto animationless=preview;animationless.animations.clear();
+        crimson::writeAssetPreviewCache(root,folder,"no-animation",animationless,true);
+        const auto noAnimationIndex=crimson::assetPreviewIndexPath(folder,"no-animation",32);
+        {
+            std::ifstream input(noAnimationIndex);auto record=nlohmann::json::parse(input);record.erase("animations");input.close();
+            std::ofstream output(noAnimationIndex,std::ios::binary|std::ios::trunc);output<<record.dump();
+        }
+        require(crimson::readAssetPreviewCache(root,folder,"no-animation",32,101,202).animations.empty(),
+            "An animationless descriptor required the optional Animation version list.");
         auto staleRender=preview;staleRender.sourceFingerprints={1,2};
         rejects([&]{crimson::writeAssetPreviewCache(root,folder,"stale-render",staleRender,true);},"A source version changed after rendering was advertised as a current preview.");
         const auto stamp=std::filesystem::last_write_time(source);

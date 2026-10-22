@@ -34,8 +34,9 @@ struct Identity { EntityId id{}; std::string name; };
 struct Transform { Mat4 local{}; };
 struct Relationship { EntityId parent{}; uint32_t order{}; };
 struct SceneModelAnimation {
-    std::int32_t clip{-1}; // -1 uses the imported bind pose and default morph weights.
-    bool playing{true},loop{true};
+    AssetRef<struct AnimationAsset> asset; // Empty selects the model's authored bind pose.
+    bool playing{true};
+    std::optional<bool> loopOverride; // Absent uses the Animation asset's loop setting.
     float speed{1},startTime{}; // Authored start; the live playback clock is transient.
     bool operator==(const SceneModelAnimation&) const = default;
 };
