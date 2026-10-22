@@ -59,6 +59,9 @@ private:
     struct Transaction {
         std::string label;
         MaterialAsset before;
+        // Match the complete persisted representation, including dormant
+        // branches and layout, without serializing both graphs every frame.
+        std::string beforeDefinition, currentDefinition;
         bool invalid{};
     };
     std::filesystem::path root_;

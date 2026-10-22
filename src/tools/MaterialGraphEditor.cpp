@@ -199,6 +199,22 @@ std::vector<MaterialPinDefinition> visibleInputs(const MaterialGraph& graph,cons
     auto result=materialNodeInputs(graph,node,output.shading,output.blend,node.kind==MaterialNodeKind::ImageInput);
     return result;
 }
+std::vector<MaterialPinDefinition> visibleOutputs(const MaterialGraph& graph,const MaterialNode& node,
+                                               std::optional<MaterialGraphPreviewTarget> preview={}) {
+    auto result=materialNodeOutputs(graph,node);
+    if(node.kind!=MaterialNodeKind::Texture2D||node.texture.role==MaterialTextureRole::Normal)return result;
+    // The image output includes alpha. Retain an authored RGB endpoint while
+    // it is in use without presenting two competing composite outputs on a
+    // new texture node. No authored pin IDs or links change here.
+    std::erase_if(result,[&](const auto& pin) {
+        return pin.pin==MaterialPin::RGB&&preview!=MaterialGraphPreviewTarget{node.id,pin.pin}&&
+            std::none_of(graph.links.begin(),graph.links.end(),[&](const auto& wire){return wire.fromNode==node.id&&wire.fromPin==pin.pin;});
+    });
+    if(const auto image=std::find_if(result.begin(),result.end(),[](const auto& pin){return pin.pin==MaterialPin::RGBA;});image!=result.end()) {
+        image->name="Image";std::rotate(result.begin(),image,image+1);
+    }
+    return result;
+}
 std::vector<std::string> texturePayload(const ImGuiPayload& payload) {
     if(payload.DataSize<=1 || payload.DataSize>1024*1024)return {};
     const auto* cursor=static_cast<const char*>(payload.Data);const auto* end=cursor+payload.DataSize;
@@ -402,7 +418,7 @@ struct MaterialGraphEditor::State {
     void togglePreview(const MaterialGraph& graph,MaterialNodeId id,std::optional<MaterialPin> pin={}) {
         const auto* value=findMaterialNode(graph,id);if(!value)return;
         if(value->kind==MaterialNodeKind::Output){preview.reset();return;}
-        const auto outputs=materialNodeOutputs(graph,*value);if(outputs.empty())return;
+        const auto outputs=visibleOutputs(graph,*value,preview);if(outputs.empty())return;
         const MaterialGraphPreviewTarget target{id,pin.value_or(outputs.front().pin)};
         if(preview && *preview==target)preview.reset();else preview=target;
     }
@@ -508,7 +524,9 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     std::optional<State::Pin> disconnect;
     for(const auto& node:graph.nodes) {
         const auto inputs=visibleInputs(graph,node,output);
-        const auto outputs=materialNodeOutputs(graph,node);
+        const auto outputs=visibleOutputs(graph,node,s.preview);
+        const bool textureSource=node.kind==MaterialNodeKind::Texture2D||node.kind==MaterialNodeKind::ImageInput;
+        TexturePresentation sourceTexture;
         ed::BeginNode(s.node(node.id));
         ImGui::PushID(static_cast<int>(s.node(node.id).Get()));
         const char* title=node.kind==MaterialNodeKind::Output?(output.shading==MaterialShading::StandardPbr?"Lit PBR Output":"Unlit Output"):
@@ -529,7 +547,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         const auto rule=ImGui::GetCursorScreenPos();
         ImGui::GetWindowDrawList()->AddLine(rule,{rule.x+width,rule.y},ImGui::ColorConvertFloat4ToU32(nodeColor(node.kind)),3);
         ImGui::Dummy({width,1});
-        if(assets.nodeImage&&node.kind!=MaterialNodeKind::Output&&node.kind!=MaterialNodeKind::Grunge&&
+        if((assets.nodeImage||textureSource)&&node.kind!=MaterialNodeKind::Output&&node.kind!=MaterialNodeKind::Grunge&&
            node.kind!=MaterialNodeKind::Time&&node.kind!=MaterialNodeKind::ParticleColor&&!outputs.empty()) {
             auto pin=previewing?s.preview->pin:outputs.front().pin;
             if(!previewing)for(const auto& outputPin:outputs) {
@@ -537,7 +555,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                    outputPin.type==MaterialValueType::Color4||outputPin.type==MaterialValueType::Vector2){pin=outputPin.pin;break;}
             }
             const auto type=materialOutputType(graph,node.id,pin);
-            if(type==MaterialValueType::Scalar||type==MaterialValueType::Color||type==MaterialValueType::Color4||type==MaterialValueType::Vector2) {
+            if(textureSource||type==MaterialValueType::Scalar||type==MaterialValueType::Color||type==MaterialValueType::Color4||type==MaterialValueType::Vector2) {
                 const MaterialGraphPreviewTarget target{node.id,pin};
                 if(const auto old=s.generatedTargets.find(node.id);old!=s.generatedTargets.end()&&old->second!=target)s.generatedTextures.erase(node.id);
                 s.generatedTargets[node.id]=target;
@@ -547,14 +565,37 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 const auto screenMinimum=ed::CanvasToScreen(minimum),screenMaximum=ed::CanvasToScreen(maximum);
                 const bool visible=screenMaximum.x-screenMinimum.x>=24&&screenMaximum.x>canvasMinimum.x&&screenMaximum.y>canvasMinimum.y&&
                     screenMinimum.x<canvasMinimum.x+canvasSize.x&&screenMinimum.y<canvasMinimum.y+canvasSize.y;
-                auto image=visible?assets.nodeImage(target,128):TexturePresentation{};
+                if(visible&&textureSource&&assets.describe)sourceTexture=assets.describe(node.texture.image.id);
+                auto image=visible&&assets.nodeImage&&type!=MaterialValueType::Normal?assets.nodeImage(target,128):TexturePresentation{};
                 if(image.available&&image.textureId)s.generatedTextures[node.id]=image;
                 else if(const auto old=s.generatedTextures.find(node.id);old!=s.generatedTextures.end()) {
                     const auto diagnostic=image.diagnostic;image=old->second;image.diagnostic=diagnostic;
                 }
-                ImGui::Dummy({width,edge});auto* draw=ImGui::GetWindowDrawList();
+                if(!image.textureId&&sourceTexture.available&&sourceTexture.textureId)image=sourceTexture;
+                if(textureSource) {
+                    ImGui::BeginDisabled(!editable);
+                    if(ImGui::InvisibleButton("##Texture image",{width,edge})&&assets.choose)assets.choose(node.id);
+                    s.presentation.controls.push_back({node.id,"Image",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
+                    ImGui::EndDisabled();
+                    if(editable&&ImGui::BeginDragDropTarget()) {
+                        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_TEXTURE_ASSET")) {
+                            const auto ids=texturePayload(*payload);
+                            if(ids.size()==1&&assets.validTexture&&assets.validTexture(ids.front())) {
+                                if(!document.edit("Assign graph texture",[&](auto& asset){findMaterialNode(asset.graph,node.id)->texture.image.id=ids.front();}))s.status=document.status();
+                            } else s.status="Choose a compatible texture asset.";
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+                } else ImGui::Dummy({width,edge});
+                auto* draw=ImGui::GetWindowDrawList();
                 draw->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGuiCol_FrameBg));
-                if(image.available&&image.textureId)draw->AddImage(static_cast<ImTextureID>(image.textureId),minimum,maximum);
+                if(image.available&&image.textureId) {
+                    const float scale=edge/static_cast<float>(std::max({1u,image.width,image.height}));
+                    const ImVec2 extent{image.width*scale,image.height*scale};
+                    const ImVec2 start{minimum.x+(edge-extent.x)*.5f,minimum.y+(edge-extent.y)*.5f};
+                    draw->AddImage(static_cast<ImTextureID>(image.textureId),start,{start.x+extent.x,start.y+extent.y});
+                } else if(textureSource)draw->AddText({minimum.x+8,minimum.y+edge*.5f-ImGui::GetFontSize()*.5f},
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled),node.texture.image.empty()?"Choose texture":"Loading texture");
                 if(!image.diagnostic.empty()&&ImGui::IsItemHovered()){ed::Suspend();ImGui::SetTooltip("%s",image.diagnostic.c_str());ed::Resume();}
                 s.presentation.images.push_back({node.id,point(minimum),point(maximum),image.available?image.textureId:0});
             }
@@ -694,29 +735,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             ImGui::SetNextItemWidth(labeledWidth("Rotation"));
             field("Rotate UV mapping",[defaults](auto& n){return resettableProperty(n.uv.rotation[2],defaults.uv.rotation[2],[&]{return ImGui::DragFloat("Rotation",&n.uv.rotation[2],.2f,0,0,"%.1f");});});
         } else if(node.kind==MaterialNodeKind::Texture2D || node.kind==MaterialNodeKind::ImageInput) {
-            auto texture=assets.describe?assets.describe(node.texture.image.id):TexturePresentation{};
             const auto slash=node.texture.image.id.find_last_of("/\\");
-            const auto label=!texture.name.empty()?texture.name:node.texture.image.id.empty()?std::string("None"):node.texture.image.id.substr(slash==std::string::npos?0:slash+1);
-            const auto origin=ImGui::GetCursorScreenPos();
-            ImGui::BeginDisabled(!editable);
-            if(ImGui::InvisibleButton("##Texture image",{width,80}) && assets.choose)assets.choose(node.id);
-            s.presentation.controls.push_back({node.id,"Image",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
-            ImGui::EndDisabled();
-            auto* draw=ImGui::GetWindowDrawList();draw->AddRectFilled(origin,{origin.x+width,origin.y+80},ImGui::GetColorU32(ImGuiCol_FrameBg));
-            if(texture.available && texture.textureId && texture.width && texture.height) {
-                const float scale=std::min(width/static_cast<float>(texture.width),80.f/static_cast<float>(texture.height));
-                const ImVec2 extent{texture.width*scale,texture.height*scale};const ImVec2 p{origin.x+(width-extent.x)*.5f,origin.y+(80-extent.y)*.5f};
-                draw->AddImage(static_cast<ImTextureID>(texture.textureId),p,{p.x+extent.x,p.y+extent.y});
-            } else draw->AddText({origin.x+8,origin.y+32},ImGui::GetColorU32(ImGuiCol_TextDisabled),node.texture.image.empty()?"Choose texture":"Loading texture");
-            if(editable && ImGui::BeginDragDropTarget()) {
-                if(const auto* payload=ImGui::AcceptDragDropPayload("CC_TEXTURE_ASSET")) {
-                    const auto ids=texturePayload(*payload);
-                    if(ids.size()==1 && assets.validTexture && assets.validTexture(ids.front())) {
-                        if(!document.edit("Assign graph texture",[&](auto& asset){findMaterialNode(asset.graph,node.id)->texture.image.id=ids.front();}))s.status=document.status();
-                    } else s.status="Choose a compatible texture asset.";
-                }
-                ImGui::EndDragDropTarget();
-            }
+            const auto label=!sourceTexture.name.empty()?sourceTexture.name:node.texture.image.id.empty()?std::string("None"):node.texture.image.id.substr(slash==std::string::npos?0:slash+1);
             canvasLabel(label.c_str(),width);
             ImGui::BeginDisabled(!editable || node.texture.image.empty());
             if(ImGui::SmallButton("Clear"))document.edit("Clear graph texture",[&](auto& asset){findMaterialNode(asset.graph,node.id)->texture.image.id.clear();});

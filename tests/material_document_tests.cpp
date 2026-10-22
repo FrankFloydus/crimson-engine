@@ -65,6 +65,29 @@ void publicationAndHistory(){
     document.cancel();require(same(document.definition(),valid) && document.revision()==version && !document.dirty(),"Cancel published a shared revision or changed data.");
     require(!document.load("assets/materials/missing.crimson-material") && same(document.definition(),valid),"Failed load replaced the working material.");
 }
+void returningGestureAndDirtyState() {
+    Project project;MaterialDocument document(project.root);
+    require(document.create("Returning gesture"),"Could not create returning-gesture material.");
+    const auto initial=document.definition();const auto committed=document.committed();
+    const auto revision=document.revision(),previewRevision=document.previewRevision();
+    require(document.begin("Return to initial value")&&document.update([](auto& asset){color(asset,{.2f,.3f,.4f,1});}),
+        "Could not start returning gesture.");
+    for(unsigned frame=0;frame<120;++frame)require(document.dirty(),"Live gesture lost its dirty state between frames.");
+    const auto edited=document.definition();
+    require(!document.update([](auto& asset){parameter(asset,MaterialPin::BaseColor).color[0]=std::numeric_limits<float>::infinity();})&&
+        document.dirty()&&same(document.definition(),edited),"Rejected gesture value lost the last valid dirty state.");
+    require(document.update([&](auto& asset){asset=initial;})&&!document.dirty()&&document.previewRevision()>previewRevision,
+        "Returning a gesture to its exact authored baseline retained a dirty mark or lost the preview change.");
+    require(document.commit()&&!document.canUndo()&&document.revision()==revision&&document.committed()==committed,
+        "A gesture returning to its initial state created history or published a new shared version.");
+    require(document.begin("Move disconnected node")&&document.update([](auto& asset){
+        const auto node=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{40,50}).id;
+        findMaterialNode(asset.graph,node)->scalar=.17f;
+    })&&document.dirty()&&document.commit()&&document.canUndo(),
+        "A disconnected authored branch was ignored by dirty/history comparison.");
+    require(document.undo()&&!document.dirty()&&same(document.definition(),initial),
+        "Undo of a disconnected branch failed to restore the clean authored baseline.");
+}
 void displacementTransactions() {
     Project project;MaterialDocument document(project.root);require(document.create("Displaced material"),"Could not create displacement material.");
     MaterialNodeId height{};
@@ -436,5 +459,5 @@ void usageBlendAndHdrTransactions() {
 }
 int main(int argc,char** argv){try{if(argc==4&&std::string(argv[1])=="--verify-material"){verifyActualMaterial(argv[2],argv[3]);return 0;}
     require(argc==1,"Expected --verify-material <project root> <material id>, or no arguments.");
-    publicationAndHistory();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+    publicationAndHistory();returningGestureAndDirtyState();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

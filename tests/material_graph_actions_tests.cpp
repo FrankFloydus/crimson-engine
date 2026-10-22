@@ -612,11 +612,15 @@ void cachedRuntimeUvRequirements() {
     require(materialGraphRequiredUvs(graph)==1,"Assigned Image Input failed to prune Base UV1 or omitted override UV0.");
     findMaterialNode(graph,image)->atomic.enabled=false;
     require(materialGraphRequiredUvs(graph)==0,"Disabled Image Input retained an unused override/Base UV requirement.");
-    // Preserve the existing publication contract for an unassigned ordinary
-    // bitmap node: it still advertises its selected mesh chart.
+    // An unassigned bitmap uses the white fallback and does not sample its
+    // selected chart. Assigning an image restores that runtime requirement.
     const auto empty=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
     connectMaterialNodes(graph,uv,MaterialPin::UV,empty,MaterialPin::UV);connectMaterialNodes(graph,empty,MaterialPin::RGB,out,MaterialPin::BaseColor);
-    require(materialGraphRequiredUvs(graph)==2,"Unassigned ordinary Texture2D changed its established UV requirement.");
+    require(materialGraphRequiredUvs(graph)==0,"Unassigned Texture2D retained an unused mesh UV requirement.");
+    findMaterialNode(graph,empty)->texture.image.id=canonicalAssetId("Content/textures/assigned.png");
+    require(materialGraphRequiredUvs(graph)==2,"Assigned Texture2D omitted its selected UV1 requirement.");
+    findMaterialNode(graph,empty)->texture.image={};
+    require(materialGraphRequiredUvs(graph)==0,"Clearing Texture2D retained its previous image's mesh UV requirement.");
 }
 
 }

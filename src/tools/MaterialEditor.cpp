@@ -11,9 +11,49 @@
 #include <cmath>
 #include <cstdio>
 #include <cfloat>
+#include <vector>
 
 namespace crimson {
 namespace {
+template<class Assign>
+void textureChoices(AssetLibrary& assets,ImGuiTextFilter& filter,const std::string& selected,Assign assign) {
+    if(ImGui::IsWindowAppearing())ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-1);
+    if(ImGui::InputTextWithHint("##Search textures","Search textures...",filter.InputBuf,IM_ARRAYSIZE(filter.InputBuf)))filter.Build();
+    if(ImGui::Selectable("None",selected.empty()))assign(std::string{});
+    struct Choice {const TextureAsset* asset;std::string name;};
+    std::vector<Choice> choices;choices.reserve(assets.assets().size());
+    for(const auto& texture:assets.assets())if(!texture.hdr) {
+        auto name=assets.displayName(texture.id);
+        if(filter.PassFilter(name.c_str()))choices.push_back({&texture,std::move(name)});
+    }
+    const float edge=ImGui::GetTextLineHeight()*2.5f,padding=ImGui::GetStyle().FramePadding.y;
+    const float height=edge+padding*2;
+    ImGui::BeginChild("Texture choices",{std::max(360.f,ImGui::GetFontSize()*28),height*7});
+    // Request thumbnail residency only for the rows that are actually shown.
+    ImGuiListClipper clipper;clipper.Begin(static_cast<int>(choices.size()),height+ImGui::GetStyle().ItemSpacing.y);
+    while(clipper.Step())for(int index=clipper.DisplayStart;index<clipper.DisplayEnd;++index) {
+        const auto& choice=choices[static_cast<std::size_t>(index)];
+        ImGui::PushID(choice.asset->id.c_str());
+        if(ImGui::Selectable("##Texture",choice.asset->id==selected,ImGuiSelectableFlags_None,{0,height}))assign(choice.asset->id);
+        const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();
+        auto* draw=ImGui::GetWindowDrawList();const ImVec2 well{minimum.x+padding,minimum.y+padding};
+        draw->AddRectFilled(well,{well.x+edge,well.y+edge},ImGui::GetColorU32(ImGuiCol_FrameBg));
+        if(const auto* texture=assets.find(choice.asset->id);texture&&bgfx::isValid(texture->thumbnail)) {
+            const float scale=edge/static_cast<float>(std::max({1u,texture->width,texture->height}));
+            const ImVec2 size{texture->width*scale,texture->height*scale};
+            const ImVec2 image{well.x+(edge-size.x)*.5f,well.y+(edge-size.y)*.5f};
+            draw->AddImage(ImGuiBgfx::textureId(texture->thumbnail),image,{image.x+size.x,image.y+size.y});
+        }
+        const ImVec2 text{well.x+edge+ImGui::GetStyle().ItemInnerSpacing.x,minimum.y+(height-ImGui::GetFontSize())*.5f};
+        const auto nameSize=ImGui::CalcTextSize(choice.name.c_str());
+        ImGui::RenderTextEllipsis(draw,text,{maximum.x-padding,text.y+ImGui::GetFontSize()},maximum.x-padding,
+            choice.name.c_str(),nullptr,&nameSize);
+        if(nameSize.x>maximum.x-padding-text.x&&ImGui::IsItemHovered())ImGui::SetTooltip("%s",choice.name.c_str());
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+}
 // Pickers and delivery use the same strict image compatibility checks.
 bool textureField(AssetLibrary& assets,const char* title,std::string& id,std::string& message,bool normal=false) {
     ImGui::PushID(title);
@@ -57,15 +97,12 @@ bool textureField(AssetLibrary& assets,const char* title,std::string& id,std::st
     static ImGuiTextFilter filter;
     if(picker){filter.Clear();ImGui::OpenPopup("Select texture");}
     if(ImGui::BeginPopup("Select texture")) {
-        filter.Draw("Search");
-        if(ImGui::Selectable("None",id.empty())){if(!id.empty()){id.clear();changed=true;}ImGui::CloseCurrentPopup();}
-        ImGui::BeginChild("Texture choices",{360,ImGui::GetFontSize()*12});
-        for(const auto& candidate:assets.assets())if(!candidate.hdr && filter.PassFilter(assets.displayName(candidate.id).c_str())) {
-            ImGui::PushID(candidate.id.c_str());
-            if(ImGui::Selectable(assets.displayName(candidate.id).c_str(),candidate.id==id)){assign(candidate.id);ImGui::CloseCurrentPopup();}
-            ImGui::PopID();
-        }
-        ImGui::EndChild();ImGui::EndPopup();
+        textureChoices(assets,filter,id,[&](const std::string& choice) {
+            if(choice.empty()){if(!id.empty()){id.clear();changed=true;}}
+            else assign(choice);
+            ImGui::CloseCurrentPopup();
+        });
+        ImGui::EndPopup();
     }
     ImGui::PopID();
     return changed;
@@ -717,7 +754,9 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
                 MaterialGraphEditor::TexturePresentation result;
                 try {
                     auto texture=assets.materialNodeImagePreview(imageDocument_,imageGraph_,target,edge);
-                    result.available=texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle);
+                    // An updating request can carry a newly completed earlier
+                    // gesture sample. Present it while the newest sample runs.
+                    result.available=bgfx::isValid(texture.handle)&&!texture.failed;
                     result.width=texture.width;result.height=texture.height;result.lease=std::move(texture.lease);
                     result.diagnostic=std::move(texture.diagnostic);
                     if(result.available)result.textureId=ImGuiBgfx::textureId(texture.handle);
@@ -733,7 +772,6 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
                 const auto* textureNode=findMaterialNode(document_.definition().graph,texturePickerNode_);
                 if(!textureNode || (textureNode->kind!=MaterialNodeKind::Texture2D && textureNode->kind!=MaterialNodeKind::ImageInput) || !document_.editable())ImGui::CloseCurrentPopup();
                 else {
-                    graphTextureFilter.Draw("Search");
                     const auto selectedImage=textureNode->texture.image.id;
                     const auto assign=[&](const std::string& id) {
                         finishInteraction();
@@ -742,14 +780,7 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
                         }))message_=document_.status();
                         ImGui::CloseCurrentPopup();
                     };
-                    if(ImGui::Selectable("None",selectedImage.empty()))assign({});
-                    ImGui::BeginChild("Images",{360,ImGui::GetFontSize()*14});
-                    for(const auto& texture:assets.assets())if(!texture.hdr && graphTextureFilter.PassFilter(assets.displayName(texture.id).c_str())) {
-                        ImGui::PushID(texture.id.c_str());
-                        if(ImGui::Selectable(assets.displayName(texture.id).c_str(),selectedImage==texture.id))assign(texture.id);
-                        ImGui::PopID();
-                    }
-                    ImGui::EndChild();
+                    textureChoices(assets,graphTextureFilter,selectedImage,assign);
                 }
                 ImGui::EndPopup();
             }

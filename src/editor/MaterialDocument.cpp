@@ -6,7 +6,6 @@
 
 namespace crimson {
 namespace {
-bool equal(const MaterialAsset& a,const MaterialAsset& b) { return serializeMaterialAsset(a)==serializeMaterialAsset(b); }
 uint64_t fileFingerprint(const std::filesystem::path& root,const std::string& id) {
     if(isEngineAssetId(id))return 0;
     std::ifstream input(materialAssetPath(root,id),std::ios::binary);
@@ -34,7 +33,7 @@ std::optional<uint64_t> matchingFileFingerprint(const std::filesystem::path& roo
 MaterialDocument::MaterialDocument(std::filesystem::path projectRoot)
     :root_(std::filesystem::absolute(std::move(projectRoot)).lexically_normal()) {}
 bool MaterialDocument::dirty() const {
-    return open_ && (state_!=savedState_ || (transaction_ && !equal(working_,transaction_->before)));
+    return open_ && (state_!=savedState_ || (transaction_ && transaction_->currentDefinition!=transaction_->beforeDefinition));
 }
 bool MaterialDocument::editable() const {
     // Imported model sidecars are the authored material, with a stable shared
@@ -70,7 +69,11 @@ bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver
         const bool workingChanged=rewrite(working),savedChanged=rewrite(saved);
         bool changed=workingChanged||savedChanged,committedChanged=false;
         for(auto& command:history){changed|=rewrite(command.before);changed|=rewrite(command.after);}
-        if(transaction)changed|=rewrite(transaction->before);
+        if(transaction) {
+            const bool beforeChanged=rewrite(transaction->before);changed|=beforeChanged;
+            if(beforeChanged)transaction->beforeDefinition=serializeMaterialAsset(transaction->before);
+            if(workingChanged)transaction->currentDefinition=serializeMaterialAsset(working);
+        }
         if(committed) {
             auto candidate=*committed;
             committedChanged=rewrite(candidate);changed|=committedChanged;
@@ -173,7 +176,8 @@ bool MaterialDocument::externalFileChanged() const {
 }
 bool MaterialDocument::begin(const std::string& label) {
     if (!editable() || transaction_) return false;
-    transaction_=Transaction{label,working_,false};
+    const auto definition=serializeMaterialAsset(working_);
+    transaction_=Transaction{label,working_,definition,definition,false};
     return true;
 }
 bool MaterialDocument::update(const Mutation& mutation) {
@@ -184,9 +188,13 @@ bool MaterialDocument::update(const Mutation& mutation) {
         if (candidate.originModel!=transaction_->before.originModel) throw std::runtime_error("A material edit cannot change its imported origin.");
         validateMaterialAsset(candidate);
         canonicalizeMaterialAsset(candidate);
-        if (!particleMaterialCompatible(candidate) && !modelMaterialCompatible(candidate)) throw std::runtime_error("The material shading and blend modes are incompatible.");
+        // Canonicalization has already validated the shared mesh/sprite graph.
+        // Consumer compatibility performs that same validation again.
+        auto definition=serializeMaterialAsset(candidate);
         transaction_->invalid=false;
-        if (!equal(candidate,working_)) { working_=std::move(candidate); ++previewRevision_; }
+        if (definition!=transaction_->currentDefinition) {
+            working_=std::move(candidate);transaction_->currentDefinition=std::move(definition);++previewRevision_;
+        }
         status_.clear(); return true;
     } catch (const std::exception& error) {
         transaction_->invalid=true;
@@ -197,7 +205,7 @@ bool MaterialDocument::update(const Mutation& mutation) {
 bool MaterialDocument::commit() {
     if (!transaction_) return false;
     if (transaction_->invalid) return false;
-    if (equal(working_,transaction_->before)) { transaction_.reset(); return true; }
+    if (transaction_->currentDefinition==transaction_->beforeDefinition) { transaction_.reset(); return true; }
     try {
         validateMaterialAsset(working_);
         auto snapshot=std::make_shared<const MaterialAsset>(working_);

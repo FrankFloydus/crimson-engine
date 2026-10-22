@@ -26,8 +26,10 @@ then area-reduces the completed output for display. It does not reevaluate a
 coverage and nonlinear adjustments such as Levels. Cached image Value outputs
 reuse the renderer's generated source; other supported point branches retain
 source-resolution CPU evaluation. Inline requests are limited to visible nodes;
-edits are debounced and the last complete image remains visible while its
-replacement prepares. Layout, selection and warm frames do not regenerate images.
+edits coalesce behind one active display job per target, allowing completed
+intermediate images to appear during a drag. The latest value follows without
+waiting for the gesture to stop; the last complete image remains visible while
+its replacement prepares. Layout, selection and warm frames do not regenerate images.
 
 Flat **Scalar** previews display numerical data directly: 0.25, 0.5 and 0.75
 appear at those grayscale display values, without an sRGB brightness lift.

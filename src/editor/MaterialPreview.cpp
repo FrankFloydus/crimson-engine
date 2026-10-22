@@ -60,7 +60,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
                 if(!displayingImage_){renderer.releaseMaterialPreview();displayedTarget_=UINT16_MAX;displayingImage_=true;}
                 try {
                     auto texture=assets.materialNodeImagePreview(material.id,imageGraph_,*nodePreview_,256);status_=texture.diagnostic;
-                    if(texture.sourceReady&&texture.complete&&bgfx::isValid(texture.handle))imageCurrent_=std::move(texture);
+                    if(bgfx::isValid(texture.handle)&&!texture.failed)imageCurrent_=std::move(texture);
                     else if(status_.empty())status_="Generating texture...";
                 } catch(const std::exception& error){status_=error.what();}
                 if(nodePrograms_)nodePrograms_->trim();

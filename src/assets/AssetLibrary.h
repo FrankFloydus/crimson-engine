@@ -226,7 +226,8 @@ private:
         std::uint64_t valueKey{};
         std::shared_ptr<const PreparedTexture> current;
         bool pending{};
-        std::chrono::steady_clock::time_point edited,used;
+        bool displayPending{};
+        std::chrono::steady_clock::time_point requested,used;
     };
     mutable std::unordered_map<std::string,NodeImagePreview> nodeImagePreviews_;
     mutable unsigned nodeImageStarts_{};

@@ -1681,7 +1681,6 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
     };
     const MaterialImagePreviewOptions options{edge,edge,64ull*1024*1024};
     if(state.definition!=graph) {
-        const bool hadDefinition=static_cast<bool>(state.definition);
         state.definition=graph;state.diagnostic.clear();
         try {
             validateMaterialGraphImagePreview(*graph,target,options);
@@ -1689,18 +1688,36 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
             const auto valueKey=materialGraphValueHash(*graph,output.shading,output.blend,target.node);
             if(state.valueKey!=valueKey) {
                 state.pendingInputs.clear();
-                if(!state.textureKey.empty())textureStreamer_->forgetGenerated(state.textureKey);
-                state.textureKey.clear();state.sourceKey.clear();state.sourceExtent={};state.pending=false;state.edited=hadDefinition?state.used:std::chrono::steady_clock::time_point{};
+                // Let the bounded display job finish while accepting the newest
+                // definition. Canceling it on every mouse delta starves live
+                // sliders; starting another would build a backlog of old values.
+                if(!state.displayPending) {
+                    if(!state.textureKey.empty())textureStreamer_->forgetGenerated(state.textureKey);
+                    state.textureKey.clear();state.pending=false;
+                }
+                state.sourceKey.clear();state.sourceExtent={};
                 state.valueKey=valueKey;state.sources=materialGraphImagePreviewSources(*graph,target);
             }
         } catch(const std::exception& error){
-            state.diagnostic=error.what();state.pending=false;
+            state.diagnostic=error.what();state.pending=false;state.displayPending=false;
             if(!state.textureKey.empty())textureStreamer_->forgetGenerated(state.textureKey);
             state.textureKey.clear();
         }
     }
     if(!state.diagnostic.empty())throw std::runtime_error(state.diagnostic);
-    if(state.used-state.edited<std::chrono::milliseconds{150})return waiting("Updating node image...");
+    if(state.displayPending) {
+        if(auto active=textureStreamer_->cachedGeneratedFloat(state.textureKey,edge,edge,false,edge,priority)) {
+            if(active->sourceReady&&active->complete&&bgfx::isValid(active->handle)) {
+                state.current=std::make_shared<const PreparedTexture>(*active);
+                state.pending=false;state.displayPending=false;
+            } else if(!active->failed)return waiting("Updating node image...");
+        }
+        state.pending=false;state.displayPending=false;
+    }
+    // Throttle submissions, not edits: continuous gestures still publish
+    // intermediate results, with at most one display bake per visible target.
+    const auto interval=std::chrono::milliseconds{edge>=256?16:33};
+    if(state.used-state.requested<interval)return waiting("Updating node image...");
     auto contentHash=state.valueKey;
     streaming::detail::hash(contentHash,material_procedural::algorithm_revision);
     streaming::detail::hash(contentHash,target.pin);streaming::detail::hash(contentHash,edge);
@@ -1761,7 +1778,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         const auto pendingOthers=std::count_if(nodeImagePreviews_.begin(),nodeImagePreviews_.end(),[&](const auto& entry){return &entry.second!=&state&&(entry.second.pending||!entry.second.pendingInputs.empty());});
         const MaterialGraphResizeBinding binding{graph,target.node,state.valueKey};
         CachedImageRequestInfo info;std::unordered_map<std::string,std::uint64_t> versions;
-        const auto source=preparedResizeTexture(binding,edge,priority,versions,&info,nodeImageStarts_<2&&pendingOthers<8);
+        const auto source=preparedResizeTexture(binding,edge,priority,versions,&info,nodeImageStarts_<2&&(priority==ResourcePriority::Selected||pendingOthers<8));
         if(info.started)++nodeImageStarts_;
         state.sourceKey=info.key;state.sourceExtent=info.extent;
         if(source.failed){state.pending=false;return publish(source);}
@@ -1784,11 +1801,11 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
         state.pending=false;
     }
     const auto pending=std::count_if(nodeImagePreviews_.begin(),nodeImagePreviews_.end(),[](const auto& entry){return entry.second.pending||!entry.second.pendingInputs.empty();});
-    if(nodeImageStarts_>=2||(pending>=8&&state.pendingInputs.empty()))return waiting("Waiting for node image generation...");
+    if(nodeImageStarts_>=2||(priority!=ResourcePriority::Selected&&pending>=8&&state.pendingInputs.empty()))return waiting("Waiting for node image generation...");
     const auto type=materialOutputType(*graph,target.node,target.pin);
     if(sourceMip) {
         state.pendingInputs.clear();
-        ++nodeImageStarts_;state.pending=true;
+        ++nodeImageStarts_;state.pending=true;state.displayPending=true;state.requested=state.used;
         return publish(textureStreamer_->requestGeneratedFloat(key,[sourceMip,edge,type](std::stop_token stop) {
             auto image=nodePreviewMipImage(*sourceMip,edge,stop);encodeNodeImageDisplay(image,type,stop);return image;
         },edge,edge,false,edge,priority));
@@ -1816,7 +1833,7 @@ PreparedTexture AssetLibrary::materialNodeImagePreview(const std::string& docume
     }
     if(!ready)return waiting("Loading node image inputs...");
     state.pendingInputs.clear(); // The worker's immutable pixel snapshots now own the inputs.
-    ++nodeImageStarts_;state.pending=true;
+    ++nodeImageStarts_;state.pending=true;state.displayPending=true;state.requested=state.used;
     return publish(textureStreamer_->requestGeneratedFloat(key,[graph,target,images,options,type](std::stop_token stop) {
         auto image=bakeMaterialGraphImagePreview(*graph,target,[images](const std::string& id) {
             const auto found=images->find(id);if(found==images->end())throw std::runtime_error("Node preview source snapshot is unavailable: "+id);return found->second;

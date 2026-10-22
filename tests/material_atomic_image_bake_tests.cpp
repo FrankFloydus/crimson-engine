@@ -345,6 +345,58 @@ void nodeImagePreviews() {
     std::stop_source stop;stop.request_stop();rejected=false;try{(void)bakeMaterialGraphImagePreview(source.graph,{source.root,MaterialPin::Value},resolver,small,stop.get_token());}catch(const std::exception& error){rejected=std::string(error.what()).find("cancel")!=std::string::npos;}check(rejected,"Canceled preview published pixels.");
 }
 
+void previewReductionParity() {
+    for(const auto extent:{std::array<unsigned,2>{32,16},std::array<unsigned,2>{24,12}})
+        for(const auto kind:{MaterialNodeKind::HistogramScan,MaterialNodeKind::HeightToNormal}) {
+            Fixture fixture(extent[0],extent[1],kind,MaterialPin::RGBA);
+            findMaterialNode(fixture.graph,fixture.texture)->texture.role=MaterialTextureRole::Color;
+            fixture.node().atomic.coverage=.73f;fixture.node().atomic.contrast=.41f;
+            const auto resolve=[&](const std::string&)->std::shared_ptr<const DecodedImage>{return fixture.image;};
+            const auto target=MaterialGraphPreviewTarget{fixture.root,kind==MaterialNodeKind::HeightToNormal?MaterialPin::RGB:MaterialPin::Value};
+            const auto full=bakeMaterialGraphImagePreview(fixture.graph,target,resolve,{extent[0],extent[1],0});
+            const auto reduced=bakeMaterialGraphImagePreview(fixture.graph,target,resolve,{4,4,0});
+            const unsigned sx=extent[0]/4,sy=extent[1]/4;
+            for(unsigned y=0;y<4;++y)for(unsigned x=0;x<4;++x)for(unsigned channel=0;channel<4;++channel) {
+                double expected=0;
+                for(unsigned iy=y*sy;iy<(y+1)*sy;++iy)for(unsigned ix=x*sx;ix<(x+1)*sx;++ix)
+                    expected+=full.rgba[(static_cast<std::size_t>(iy)*extent[0]+ix)*4+channel]/static_cast<double>(sx*sy);
+                near(reduced.rgba[(y*4+x)*4+channel],static_cast<float>(expected),2e-6f,
+                    "Direct preview area accumulation differs from completed authored-lattice pixels.");
+            }
+        }
+    Fixture compact(256,128,MaterialNodeKind::HistogramScan,MaterialPin::RGBA);
+    MaterialImageBakeMetrics metrics;
+    const auto output=bakeMaterialGraphImagePreview(compact.graph,{compact.root,MaterialPin::Value},
+        [&](const std::string&)->std::shared_ptr<const DecodedImage>{return compact.image;},{16,8,0},{},&metrics);
+    check(metrics.evaluatedPixels==256*128&&metrics.peakTemporaryBytes<=output.rgba.size()*sizeof(float)*2,
+        "A point thumbnail retained a full-size intermediate instead of reducing completed source samples directly.");
+}
+void previewBenchmark(const std::filesystem::path& file) {
+    nlohmann::json report{{"scope","CPU Texture 2D Color RGB -> Grayscale -> Histogram Scan previews from decoded sources. Each numeric edit evaluates the complete authored lattice before area reduction. Excludes decode, queue wait, display encoding and GPU upload."},{"samples",nlohmann::json::array()}};
+    for(unsigned extent:{256u,1024u,2048u})for(unsigned display:{128u,256u}) {
+        Fixture fixture(extent,extent,MaterialNodeKind::HistogramScan,MaterialPin::RGB);
+        findMaterialNode(fixture.graph,fixture.texture)->texture.role=MaterialTextureRole::Color;
+        const auto grayscale=addMaterialNode(fixture.graph,MaterialNodeKind::Grayscale).id;
+        connectMaterialNodesData(fixture.graph,fixture.texture,MaterialPin::RGB,grayscale,MaterialPin::Left);
+        connectMaterialNodesData(fixture.graph,grayscale,MaterialPin::Value,fixture.root,MaterialPin::Left);
+        std::vector<double> elapsed;std::size_t peak{};double checksum{};
+        for(unsigned iteration=0;iteration<8;++iteration) {
+            fixture.node().atomic.coverage=.65f+iteration*.03f;fixture.node().atomic.contrast=.35f;
+            MaterialImageBakeMetrics metrics;const auto begin=std::chrono::steady_clock::now();
+            const auto image=bakeMaterialGraphImagePreview(fixture.graph,{fixture.root,MaterialPin::Value},
+                [&](const std::string&)->std::shared_ptr<const DecodedImage>{return fixture.image;},{display,display,0},{},&metrics);
+            const auto end=std::chrono::steady_clock::now();
+            check(metrics.evaluatedPixels>=static_cast<std::size_t>(extent)*extent,"Histogram preview skipped authored source samples.");
+            if(iteration)elapsed.push_back(std::chrono::duration<double,std::milli>(end-begin).count());
+            peak=std::max(peak,metrics.peakTemporaryBytes);
+            for(std::size_t index=0;index<image.rgba.size();++index)checksum+=image.rgba[index]*(1+index%17);
+        }
+        std::sort(elapsed.begin(),elapsed.end());
+        report["samples"].push_back({{"source_edge",extent},{"display_edge",display},{"median_ms",elapsed[elapsed.size()/2]},
+            {"peak_temporary_bytes",peak},{"checksum",checksum},{"sorted_ms",elapsed}});
+    }
+    std::filesystem::create_directories(file.parent_path());std::ofstream output(file);output<<report.dump(2)<<'\n';check(bool(output),"Unable to write material preview benchmark.");std::cout<<report.dump(2)<<'\n';
+}
 void benchmark(const std::filesystem::path& file) {
     nlohmann::json report{{"scope","CPU static material image generation. Excludes caller-owned RGBA8 decode, asynchronous host cache, GPU uploads, resident output generations and frame rendering. Each cold invocation uses a new evaluator; warm-cache behavior is owned and tested by ResourceManager."},{"samples",nlohmann::json::array()}};
     for(unsigned extent:{2048u,4096u})for(auto kind:{MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::DirectionalWarp,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion}) {
@@ -361,6 +413,6 @@ void benchmark(const std::filesystem::path& file) {
 }
 }
 int main(int argc,char** argv) {
-    try{morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
+    try{morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

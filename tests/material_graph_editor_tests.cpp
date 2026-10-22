@@ -295,7 +295,7 @@ void pinGesturesAlignmentAndZoom() {
     altClick(uvA,MaterialPin::UV,false);
     require(document.definition().graph.links.empty(),"Alt-clicking an output did not disconnect its complete fan-out.");
     require(document.undo(),"Could not restore fan-out for alignment.");frame();frame();
-    connect(textureA,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    connect(textureA,MaterialPin::RGBA,output,MaterialPin::BaseColor);
 
     const auto beforeAlign=serializeMaterialAsset(document.definition());const auto priorGraph=document.definition().graph;
     click(title(uvA));io.AddKeyEvent(ImGuiMod_Ctrl,true);frame();
@@ -306,7 +306,7 @@ void pinGesturesAlignmentAndZoom() {
         require(findMaterialNode(document.definition().graph,id)->position[0]==findMaterialNode(priorGraph,id)->position[0],"Q changed a selected node's horizontal position.");
     require(findMaterialNode(document.definition().graph,uvB)->position==findMaterialNode(priorGraph,uvB)->position,"Q moved a disconnected selected node.");
     require(std::abs(pin(uvA,MaterialPin::UV,false).y-pin(textureA,MaterialPin::UV,true).y)<1.5f&&
-        std::abs(pin(textureA,MaterialPin::RGB,false).y-pin(output,MaterialPin::BaseColor,true).y)<1.5f,"Q did not straighten connected selected wires through vertical movement.");
+        std::abs(pin(textureA,MaterialPin::RGBA,false).y-pin(output,MaterialPin::BaseColor,true).y)<1.5f,"Q did not straighten connected selected wires through vertical movement.");
     oneUndo(beforeAlign);
 
     const auto covers=[&](ImVec2 point,ImU32 color,const MaterialGraphEditor::NodePresentation* node=nullptr) {
@@ -822,7 +822,7 @@ void boundedTextureLabelsAndScalarMapGestures() {
             const auto node=bounds(id);
             require((node.maximum[0]-node.minimum[0])/zoom<340,
                 "An asset filename or custom title expanded a texture node beyond its bounded content width.");
-            for(const auto semantic:{MaterialPin::RGB,MaterialPin::R,MaterialPin::G,MaterialPin::B,MaterialPin::A}) {
+            for(const auto semantic:{MaterialPin::RGBA,MaterialPin::R,MaterialPin::G,MaterialPin::B,MaterialPin::A}) {
                 const auto pin=ui.pin(id,semantic,false);
                 const float edgeInset=(node.maximum[0]-pin.x)/zoom;
                 if(!(edgeInset>0&&edgeInset<16))throw std::runtime_error("Texture output pins floated inside a node instead of following its right edge: node="+
@@ -868,10 +868,10 @@ void boundedTextureLabelsAndScalarMapGestures() {
         require(link->fromNode==source&&link->fromPin==sourcePin,"An image-to-Scalar drag inserted a conversion instead of retaining its source endpoint.");
         ui.oneUndo(before);checkBounds();
     };
-    connect(roughness,MaterialPin::RGB,MaterialPin::Roughness);
-    connect(metallic,MaterialPin::RGB,MaterialPin::Metallic,true);
+    connect(roughness,MaterialPin::RGBA,MaterialPin::Roughness);
+    connect(metallic,MaterialPin::RGBA,MaterialPin::Metallic,true);
     const auto links=ui.document.definition().graph.links.size();
-    connect(metallic,MaterialPin::RGB,MaterialPin::Roughness);
+    connect(metallic,MaterialPin::RGBA,MaterialPin::Roughness);
     require(std::count_if(ui.document.definition().graph.links.begin(),ui.document.definition().graph.links.end(),[&](const auto& wire){return wire.toNode==output&&wire.toPin==MaterialPin::Roughness;})==1&&
         ui.document.definition().graph.links.size()==links,"Replacing an occupied roughness input did not retain one direct incoming wire.");
     connect(roughness,MaterialPin::G,MaterialPin::Roughness);
@@ -1404,6 +1404,52 @@ void grungeGeneratedImagePresentation() {
     require(!retained.expired()&&ui.editor.presentation().images.front().textureId==77,"A pending Grunge generation discarded its leased last usable image.");
     require(ui.document.edit("Delete generated node",[&](auto& asset){removeMaterialNode(asset.graph,grunge);}),"Could not delete generated Grunge node.");ui.frame(3);
     require(retained.expired()&&ui.editor.presentation().images.empty(),"Deleting Grunge retained its generated image lease or presentation.");
+}
+void textureImagePresentationAndLegacyPins() {
+    GraphUi ui;MaterialNodeId texture{},output{},normal{};
+    require(ui.document.edit("Single texture image fixture",[&](auto& asset) {
+        asset.graph={};output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{500,0}).id;
+        texture=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D,{-400,0}).id;
+        normal=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D,{-100,0}).id;
+        findMaterialNode(asset.graph,normal)->texture.role=MaterialTextureRole::Normal;
+    })&&ui.document.save(),"Could not configure single texture image fixture.");
+    unsigned sourceRequests{},imageRequests{};MaterialNodeId chosen{};
+    ui.assets.describe=[&](const std::string&) {
+        ++sourceRequests;return MaterialGraphEditor::TexturePresentation{"Texture.png",71,256,128,true};
+    };
+    ui.assets.nodeImage=[&](MaterialGraphPreviewTarget target,unsigned edge) {
+        require(target==MaterialGraphPreviewTarget{texture,MaterialPin::RGBA}&&edge==128,
+            "Texture image did not use its canonical alpha-preserving image output.");
+        ++imageRequests;return MaterialGraphEditor::TexturePresentation{{},72,128,128,true};
+    };
+    ui.assets.choose=[&](MaterialNodeId node){chosen=node;};
+    const auto saved=ui.snapshot();const auto revision=ui.document.revision();ui.frame(12);
+    const auto presented=[&](MaterialNodeId id,MaterialPin pin) {
+        return std::any_of(ui.editor.presentation().pins.begin(),ui.editor.presentation().pins.end(),[&](const auto& item){return item.node==id&&!item.input&&item.pin==pin;});
+    };
+    require(sourceRequests&&imageRequests&&ui.editor.presentation().images.size()==2,
+        "Texture nodes did not present exactly one image apiece.");
+    require(presented(texture,MaterialPin::RGBA)&&!presented(texture,MaterialPin::RGB)&&presented(normal,MaterialPin::Normal),
+        "Texture nodes retained duplicate composite outputs or lost their specialized normal output.");
+    for(const auto channel:{MaterialPin::R,MaterialPin::G,MaterialPin::B,MaterialPin::A})require(presented(texture,channel),"Packed texture channel output disappeared.");
+    const auto image=std::find_if(ui.editor.presentation().images.begin(),ui.editor.presentation().images.end(),[&](const auto& item){return item.node==texture;});
+    require(image!=ui.editor.presentation().images.end()&&image->textureId==72,"The source thumbnail replaced the processed texture preview.");
+    ui.click({(image->minimum[0]+image->maximum[0])*.5f,(image->minimum[1]+image->maximum[1])*.5f});
+    require(chosen==texture&&ui.snapshot()==saved&&ui.document.revision()==revision&&!ui.document.dirty(),
+        "Clicking the single texture preview did not open the picker without changing the document.");
+    ui.select({texture});ui.shortcut(ImGuiKey_P);
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{texture,MaterialPin::RGBA},"Texture primary preview did not preserve alpha.");
+    ui.editor.clearPreview();
+    require(ui.document.edit("Legacy RGB link",[&](auto& asset){connectMaterialNodes(asset.graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);}),
+        "Could not retain an authored RGB texture link.");ui.frame(3);
+    require(presented(texture,MaterialPin::RGB)&&materialInputLink(ui.document.definition().graph,output,MaterialPin::BaseColor)->fromPin==MaterialPin::RGB,
+        "A legacy RGB texture link lost its endpoint or semantics.");
+    const auto legacy=ui.snapshot();
+    auto& io=ImGui::GetIO();ui.move(ui.pin(texture,MaterialPin::RGB,false));io.AddKeyEvent(ImGuiMod_Alt,true);ui.frame();
+    ui.click(ui.pin(texture,MaterialPin::RGB,false));io.AddKeyEvent(ImGuiMod_Alt,false);ui.frame(3);
+    require(!presented(texture,MaterialPin::RGB),"An unused duplicate RGB output remained after disconnection.");
+    require(ui.document.undo()&&ui.snapshot()==legacy,"Disconnecting a legacy texture output did not undo exactly.");ui.frame(3);
+    require(presented(texture,MaterialPin::RGB),"Undo did not restore the legacy texture endpoint.");
 }
 void staticNodeImagePresentation() {
     GraphUi ui;MaterialNodeId procedural{},split{};
@@ -1976,5 +2022,5 @@ void boundedNodeSearchResults() {
 }
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

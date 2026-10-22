@@ -1799,6 +1799,40 @@ void materialPreviewResources(const fs::path& compiler,const fs::path& sources,c
         }
         require(resources.stats().loads==texturedWarmLoads&&resources.takePublications().empty()&&serializeMaterialAsset(textured)==texturedAuthored,
             "Managed node preview repeated warm jobs, followed an unrelated missing source or changed its authored graph.");
+        // A continuous gesture must publish intermediate images. A quiet-time
+        // debounce resets on every edit and leaves both views stale until the
+        // user releases the slider, even for this small point-operation graph.
+        auto liveGraph=textured.graph;
+        const auto scan=addMaterialNode(liveGraph,MaterialNodeKind::HistogramScan).id;
+        connectMaterialNodes(liveGraph,texturedGray,MaterialPin::Value,scan,MaterialPin::Left);
+        const MaterialGraphPreviewTarget scanTarget{scan,MaterialPin::Value};
+        auto liveSnapshot=std::make_shared<const MaterialGraph>(liveGraph);
+        auto liveTexture=awaitTextured(liveSnapshot,scanTarget,"Histogram Scan preview did not warm");
+        auto lastLiveSignature=liveTexture.signature;
+        unsigned liveUpdates{};
+        const auto dragStarted=std::chrono::steady_clock::now();
+        for(unsigned frame=0;frame<64;++frame) {
+            auto& controls=findMaterialNode(liveGraph,scan)->atomic;
+            controls.coverage=.1f+static_cast<float>(frame)*.012f;controls.contrast=.8f;
+            liveSnapshot=std::make_shared<const MaterialGraph>(liveGraph);
+            tick();
+            (void)library.materialNodeImagePreview(textured.id,liveSnapshot,scanTarget,256);
+            liveTexture=library.materialNodeImagePreview(textured.id,liveSnapshot,scanTarget,128);
+            if(bgfx::isValid(liveTexture.handle)&&!liveTexture.failed&&liveTexture.signature!=lastLiveSignature) {
+                ++liveUpdates;lastLiveSignature=liveTexture.signature;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds{8});
+        }
+        require(liveUpdates>=2,"Continuous Histogram Scan edits starved intermediate node image updates.");
+        const auto finalLiveTexture=awaitTextured(liveSnapshot,scanTarget,"Histogram Scan preview did not settle after the drag");
+        require(finalLiveTexture.signature!=texturedHeight.signature&&serializeMaterialAsset(textured)==texturedAuthored,
+            "Interactive node image updates lost their identity or modified authored material data.");
+        std::cout<<"Continuous Histogram Scan drag: "<<liveUpdates<<" inline updates in "
+            <<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-dragStarted).count()<<" ms.\n";
+        library.releaseMaterialNodeImagePreviews(textured.id);
+        const auto independentFinal=awaitTextured(liveSnapshot,scanTarget,"Independent final Histogram Scan image did not settle");
+        require(independentFinal.sourceFingerprint==finalLiveTexture.sourceFingerprint&&independentFinal.signature==finalLiveTexture.signature,
+            "The settled drag retained an intermediate definition instead of the final Histogram Scan value.");
         library.releaseMaterialNodeImagePreviews(textured.id);
         // Exercise the public adapter, including a shared direct/baked source,
         // rather than only TextureStreamer's generated-float cache in isolation.
