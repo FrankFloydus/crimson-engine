@@ -68,6 +68,7 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGlowLevel1,EnvironmentGlowLevel2,EnvironmentGlowLevel3,EnvironmentGlowLevel4,
     EnvironmentGlowLevel5,EnvironmentGlowLevel6,EnvironmentGlowLevel7,EnvironmentGlowHdrLuminanceCap,
     EnvironmentPixelizationEnabled,EnvironmentPixelizationSize,EnvironmentPosterizationEnabled,EnvironmentPosterizationLevels,
+    EnvironmentDitherEnabled,EnvironmentDitherStrength,
     EnvironmentVignetteEnabled,EnvironmentVignetteIntensity,EnvironmentVignetteRadius,EnvironmentVignetteSoftness,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
@@ -839,6 +840,15 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             ImGui::BeginDisabled(!pixelization.enabled);
             field(Edit::EnvironmentPixelizationSize,"Change pixelization size",
                 resettableProperty(pixelization.pixelSize,PixelizationSettings{}.pixelSize,[&]{return ImGui::SliderInt("Pixel Size",&pixelization.pixelSize,1,128,"%d px",ImGuiSliderFlags_AlwaysClamp);}));
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        if(ImGui::CollapsingHeader("Dither")) {
+            ImGui::PushID("Dither");auto& dither=value.dither;
+            field(Edit::EnvironmentDitherEnabled,"Toggle dither",resettableProperty(dither.enabled,DitherSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&dither.enabled);}));
+            ImGui::BeginDisabled(!dither.enabled);
+            field(Edit::EnvironmentDitherStrength,"Change dither strength",
+                resettableProperty(dither.strength,DitherSettings{}.strength,[&]{return ImGui::SliderFloat("Strength",&dither.strength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             ImGui::EndDisabled();
             ImGui::PopID();
         }

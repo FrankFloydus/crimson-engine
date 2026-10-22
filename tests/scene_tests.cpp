@@ -1313,11 +1313,11 @@ void environmentToneMappingParametersStorageAndHistory() {
 void environmentPostProcessingStorageAndHistory() {
     TempProject project;SceneDocument document(project.root);
     const auto defaults=resolveEnvironment(document.scene()).environment;
-    require(!defaults.pixelization.enabled&&!defaults.posterization.enabled&&!defaults.vignette.enabled,
+    require(!defaults.pixelization.enabled&&!defaults.dither.enabled&&!defaults.posterization.enabled&&!defaults.vignette.enabled,
         "New scenes enabled optional presentation effects.");
     const auto id=document.createEnvironment("Post processing");const auto original=*document.scene().find(id);
     auto edited=original;auto& settings=edited.environment->environment;
-    settings.pixelization={true,9};settings.posterization={true,6};settings.vignette={true,.7f,.6f,.3f};
+    settings.pixelization={true,9};settings.dither={true,.6f};settings.posterization={true,6};settings.vignette={true,.7f,.6f,.3f};
     const auto history=document.history().size();
     require(document.begin("Tune post processing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
         record.environment=edited.environment;})&&document.commit(),document.status());
@@ -1328,38 +1328,50 @@ void environmentPostProcessingStorageAndHistory() {
     require(document.begin("Cancel post processing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id) {
         record.environment->environment.pixelization.pixelSize=20;record.environment->environment.vignette.intensity=0;}}),document.status());
     document.cancel();require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled post-processing changed committed tuning.");
-    for(unsigned mask=0;mask<8;++mask) {
+    for(unsigned mask=0;mask<16;++mask) {
         auto candidate=edited;auto& value=candidate.environment->environment;
         value.pixelization.enabled=(mask&1)!=0;value.posterization.enabled=(mask&2)!=0;value.vignette.enabled=(mask&4)!=0;
+        value.dither.enabled=(mask&8)!=0;
         require(document.updateEntity(id,candidate)&&document.save("Post processing"),document.status());
         SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&
             sameEnvironment(resolveEnvironment(reopened.scene()),*candidate.environment),"Save/reopen lost active or inactive post-processing tuning.");
         const auto encoded=environmentSettingsJson(value);
         require(readEnvironmentSettings(encoded)==value,"Shared Environment persistence lost post-processing tuning.");
         const auto legacy=readEnvironmentSettings(encoded,false);
-        require(legacy.pixelization==value.pixelization&&legacy.posterization==value.posterization&&legacy.vignette==value.vignette,
+        require(legacy.pixelization==value.pixelization&&legacy.dither==value.dither&&legacy.posterization==value.posterization&&legacy.vignette==value.vignette,
             "Legacy Environment reading lost post-processing tuning.");
     }
     document.select({id});require(document.duplicateSelection(),document.status());
     require(document.scene().find(document.selection().primary)->environment->environment==settings,"Environment duplication lost presentation effects.");
     require(document.save("Post processing"),document.status());const auto saved=Json::parse(readText(project.root/document.assetId()));
     require(saved.at("version")==23,"Optional post-processing changed the scene schema.");
-    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))for(const auto* effect:{"pixelization","posterization","vignette"})
+    auto missing=saved;for(auto& record:missing["entities"])if(record.contains("environment"))for(const auto* effect:{"pixelization","dither","posterization","vignette"})
         record["environment"]["environment"].erase(effect);
     const auto missingId="assets/scenes/post-processing-missing.crimson-scene";const auto missingText=missing.dump();writeText(project.root/missingId,missingText);
     SceneDocument reopened(project.root);require(reopened.load(missingId),reopened.status());const auto restored=resolveEnvironment(reopened.scene()).environment;
     require(!reopened.dirty()&&readText(project.root/missingId)==missingText&&restored.pixelization==defaults.pixelization&&
-        restored.posterization==defaults.posterization&&restored.vignette==defaults.vignette,"Old scene load enabled effects, changed defaults, dirtied or rewrote the file.");
+        restored.dither==defaults.dither&&restored.posterization==defaults.posterization&&restored.vignette==defaults.vignette,"Old scene load enabled effects, changed defaults, dirtied or rewrote the file.");
     const auto encoded=environmentSettingsJson(settings);
-    for(const auto* effect:{"pixelization","posterization","vignette"}) {
+    for(const auto* effect:{"pixelization","dither","posterization","vignette"}) {
         for(const auto bad:{Json(true),Json(1),Json(nullptr),Json::array()})
             rejects([&]{auto json=encoded;json[effect]=bad;(void)readEnvironmentSettings(json);});
         for(const auto bad:{Json(0),Json(1),Json("true"),Json(nullptr),Json::object()})
             rejects([&]{auto json=encoded;json[effect]["enabled"]=bad;(void)readEnvironmentSettings(json);});
         auto partial=encoded;partial[effect]=Json::object();const auto read=readEnvironmentSettings(partial);
         if(std::string_view(effect)=="pixelization")require(read.pixelization==defaults.pixelization,"Partial Pixelization changed defaults.");
+        if(std::string_view(effect)=="dither")require(read.dither==defaults.dither,"Partial Dither changed defaults.");
         if(std::string_view(effect)=="posterization")require(read.posterization==defaults.posterization,"Partial Posterization changed defaults.");
         if(std::string_view(effect)=="vignette")require(read.vignette==defaults.vignette,"Partial Vignette changed defaults.");
+    }
+    for(const auto bad:{Json(true),Json("0.5"),Json(nullptr),Json::array(),Json(-.01),Json(1.01)})
+        rejects([&]{auto json=encoded;json["dither"]["strength"]=bad;(void)readEnvironmentSettings(json);});
+    for(const float strength:{0.f,1.f}) {
+        auto candidate=settings;candidate.dither.strength=strength;
+        require(readEnvironmentSettings(environmentSettingsJson(candidate))==candidate,"Valid Dither strength boundary was rejected.");
+    }
+    for(const float bad:{-.01f,1.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        auto candidate=settings;candidate.dither.strength=bad;rejects([&]{validateEnvironmentSettings(candidate);});
+        auto json=encoded;json["dither"]["strength"]=bad;rejects([&]{(void)readEnvironmentSettings(json);});
     }
     for(unsigned index=0;index<2;++index) {
         const auto* effect=index==0?"pixelization":"posterization";const auto* field=index==0?"pixelSize":"levels";

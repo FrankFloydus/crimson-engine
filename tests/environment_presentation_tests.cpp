@@ -42,6 +42,7 @@ void postProcessingThumbnailIdentity() {
     EnvironmentSettings environment;const ProceduralSun sun;
     const auto inactive=thumbnailEnvironmentKey(environment,sun);
     environment.pixelization.pixelSize=12;environment.posterization.levels=5;
+    environment.dither.strength=.3f;
     environment.vignette.intensity=.8f;environment.vignette.radius=.6f;environment.vignette.softness=.3f;
     check(thumbnailEnvironmentKey(environment,sun)==inactive,"Disabled post-processing tuning invalidated a thumbnail.");
     const auto lighting=procedural::cacheKey(environment.procedural,sun);
@@ -60,6 +61,13 @@ void postProcessingThumbnailIdentity() {
         check(thumbnailEnvironmentKey(changed,sun)!=vignette,"An active Vignette property did not invalidate a thumbnail.");
     }
     environment.vignette.enabled=false;
+    environment.dither.enabled=true;const auto dithered=thumbnailEnvironmentKey(environment,sun);
+    check(dithered!=inactive,"Enabling Dither did not invalidate a thumbnail.");
+    environment.dither.strength=.7f;
+    check(thumbnailEnvironmentKey(environment,sun)!=dithered,"Active Dither strength did not invalidate a thumbnail.");
+    environment.dither.strength=0;
+    check(thumbnailEnvironmentKey(environment,sun)==inactive,"Zero-strength Dither changed the inactive thumbnail identity.");
+    environment.dither.enabled=false;
     check(thumbnailEnvironmentKey(environment,sun)==inactive,"Disabling presentation effects did not restore the inactive thumbnail identity.");
     environment.pixelization.enabled=true;environment.pixelization.pixelSize=1;
     environment.vignette.enabled=true;environment.vignette.intensity=0;
@@ -90,6 +98,26 @@ void postProcessingReferences() {
     near(vignette_weight({0,0},vignette),.2f);
     vignette.enabled=false;near(vignette_weight({0,0},vignette),1);
     vignette.enabled=true;vignette.intensity=0;near(vignette_weight({0,0},vignette),1);
+    float noiseSum{};std::array<bool,16> thresholds{};
+    unsigned low{},high{};
+    for(int y=0;y<4;++y)for(int x=0;x<4;++x) {
+        const float noise=bayer_noise(x,y);noiseSum+=noise;
+        const auto rank=static_cast<unsigned>((noise+.5f)*16);
+        check(rank<16&&!thresholds[rank],"Bayer Dither repeated a threshold inside its 4x4 tile.");thresholds[rank]=true;
+        near(bayer_noise(x+4,y+8),noise);
+        const auto dithered=ordered_dither({.21404114f,.21404114f,.21404114f},x,y,1,2);
+        check(dithered==Vec3{}||dithered==Vec3{1,1,1},"Dither introduced values outside the Posterization palette.");
+        if(dithered[0]==0)++low;else ++high;
+    }
+    near(noiseSum,0);check(low==8&&high==8,"Ordered Dither did not distribute a midpoint evenly between two levels.");
+    const Vec3 source{.1f,.2f,.3f};
+    check(ordered_dither(source,1,2,0)==source,"Zero-strength standalone Dither was not exact identity.");
+    check(ordered_dither(source,1,2,0,7)==posterize(source,7),"Zero-strength Dither changed Posterization.");
+    const auto dark=ordered_dither(source,0,0,1),bright=ordered_dither(source,0,1,1);
+    check(dark[0]<source[0]&&bright[0]>source[0],"Standalone Dither did not produce a visible ordered pattern.");
+    for(unsigned channel=0;channel<3;++channel)
+        check(ordered_dither({0,0,0},0,0,1)[channel]==0&&ordered_dither({1,1,1},0,1,1)[channel]==1,
+            "Dither exceeded display black or white.");
 }
 void fogComposition() {
     FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.density=0;

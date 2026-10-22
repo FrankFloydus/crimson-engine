@@ -14,6 +14,40 @@
 namespace {
 using namespace crimson;
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+void constantRoughnessEligibilityChecks() {
+    MaterialAsset material;auto& graph=material.graph;
+    const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id;
+    const auto generated=[&]{return generateMaterialGraphShader(material);};
+    auto first=generated();check(first.constantRoughness==1.f,"Unlinked roughness did not retain its exact parameter proof.");
+    materialOutputNode(graph).output.roughness=.2f;auto edited=generated();
+    check(first.topologyKey==edited.topologyKey&&edited.constantRoughness==.2f&&first.constantRoughness==1.f,
+        "A value-only roughness edit retained stale eligibility or mutated the previous shader packet.");
+    const auto scalar=addMaterialNode(graph,MaterialNodeKind::Scalar).id;
+    findMaterialNode(graph,scalar)->scalar=.8f;connectMaterialNodes(graph,scalar,MaterialPin::Value,output,MaterialPin::Roughness);
+    first=generated();check(first.constantRoughness==.8f,"Direct scalar roughness lost its exact parameter proof.");
+    findMaterialNode(graph,scalar)->scalar=.1f;edited=generated();
+    check(first.topologyKey==edited.topologyKey&&edited.constantRoughness==.1f,
+        "Cached scalar topology retained the old SSR eligibility after a value edit.");
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id;findMaterialNode(graph,color)->color={.25f,.75f,.5f,.9f};
+    connectMaterialNodes(graph,color,MaterialPin::RGB,output,MaterialPin::Roughness);
+    check(generated().constantRoughness==.25f,"RGB-to-scalar roughness did not use the first color component.");
+    connectMaterialNodes(graph,color,MaterialPin::G,output,MaterialPin::Roughness);
+    check(generated().constantRoughness==.75f,"Direct color-channel roughness used the wrong component.");
+    const auto time=addMaterialNode(graph,MaterialNodeKind::Time).id;
+    connectMaterialNodes(graph,time,MaterialPin::Value,output,MaterialPin::Roughness);
+    check(!generated().constantRoughness,"Runtime roughness was classified using only its initial value.");
+    const auto multiply=addMaterialNode(graph,MaterialNodeKind::Multiply).id;
+    connectMaterialNodes(graph,scalar,MaterialPin::Value,multiply,MaterialPin::Left);
+    connectMaterialNodes(graph,multiply,MaterialPin::Value,output,MaterialPin::Roughness);
+    check(!generated().constantRoughness,"CPU arithmetic was treated as an exact bound on shader roughness.");
+    const auto texture=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,texture)->texture.image.id="assets/textures/roughness.png";
+    findMaterialNode(graph,texture)->texture.role=MaterialTextureRole::Data;
+    connectMaterialNodes(graph,texture,MaterialPin::G,multiply,MaterialPin::Right);
+    check(!generated().constantRoughness,"Textured roughness retained an unsafe scalar-factor proof.");
+    connectMaterialNodes(graph,texture,MaterialPin::G,output,MaterialPin::Roughness);
+    check(!generated().constantRoughness,"A fragment-varying roughness texture was classified as constant.");
+}
 MaterialAsset fixture() {
     MaterialAsset material;material.id="fixture";material.name="Shader graph";
     auto& graph=material.graph;
@@ -1144,7 +1178,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
+        constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
         if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         else if(argc==5&&std::string_view(argv[1])=="--ssr")ssrCompileChecks(argv[2],argv[3],argv[4]);
         else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr] <shaderc> <source-dir> <include-dir>");

@@ -392,6 +392,7 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
             maximum=std::max(maximum,unsigned(std::abs(int(a.rgba[byte])-int(b.rgba[byte]))));return maximum;
     };
     auto& pixel=sceneSettings.environment.pixelization;auto& poster=sceneSettings.environment.posterization;
+    auto& dither=sceneSettings.environment.dither;
     auto& vignette=sceneSettings.environment.vignette;
     pixel.enabled=true;pixel.pixelSize=8;const auto pixelized=capture();
     check(maxDifference(pixelized[0],postBaseline[0])>10,"Pixelization did not alter the antialiased scene.");
@@ -410,7 +411,36 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
         const float code=posterized[0].rgba[byte];const float level=std::round(code*6/255);
         check(std::abs(code-level*255/6)<=1,"Posterization produced a color outside its seven display-referred levels.");
     }
-    poster.enabled=false;vignette={true,.8f,.6f,.3f};const auto vignetted=capture();
+    poster.enabled=false;dither.enabled=true;const auto dithered=capture();
+    check(maxDifference(dithered[0],postBaseline[0])>=5,"Standalone ordered Dither did not produce a visible pattern.");
+    equivalent(dithered[1],postBaseline[1],"Dither Game isolation");
+    const auto stableDither=capture();equivalent(stableDither[0],dithered[0],"Dither frame stability");
+    poster.enabled=true;const auto ditheredPoster=capture();
+    check(maxDifference(ditheredPoster[0],posterized[0])>10,"Ordered Dither did not distribute Posterization bands.");
+    for(std::size_t byte=0;byte<ditheredPoster[0].rgba.size();++byte)if(byte%4!=3) {
+        const float code=ditheredPoster[0].rgba[byte];const float level=std::round(code*6/255);
+        check(std::abs(code-level*255/6)<=1,"Dither introduced values outside the Posterization palette.");
+    }
+    // A four-pixel block size used as a sampled texel coordinate would alias
+    // the 4x4 Bayer pattern to one threshold. Block indices must retain it.
+    pixel={true,4};poster.enabled=false;const auto blockDither=capture();
+    for(unsigned startY=0;startY<Height;startY+=4)for(unsigned startX=0;startX<Width;startX+=4) {
+        const auto reference=(std::size_t(startY)*Width+startX)*4;
+        for(unsigned y=startY;y<std::min(startY+4,unsigned(Height));++y)for(unsigned x=startX;x<std::min(startX+4,unsigned(Width));++x)
+            for(unsigned channel=0;channel<3;++channel)
+                check(blockDither[0].rgba[(std::size_t(y)*Width+x)*4+channel]==blockDither[0].rgba[reference+channel],
+                    "Dither broke a Pixelization block.");
+    }
+    dither.enabled=false;const auto blocksOnly=capture();
+    bool lighter=false,darker=false;
+    for(std::size_t byte=0;byte<blockDither[0].rgba.size();++byte)if(byte%4!=3) {
+        const int difference=int(blockDither[0].rgba[byte])-int(blocksOnly[0].rgba[byte]);
+        lighter|=difference>=3;darker|=difference<=-3;
+    }
+    check(lighter&&darker,"Pixelization aliased the ordered Dither pattern to a constant threshold.");
+    pixel.enabled=false;dither={true,0};const auto zeroDither=capture();
+    equivalent(zeroDither[0],postBaseline[0],"Zero-strength Dither exact restoration");
+    dither.enabled=false;vignette={true,.8f,.6f,.3f};const auto vignetted=capture();
     equivalent(vignetted[1],postBaseline[1],"Vignette Game isolation");
     const auto center=(std::size_t(Height/2)*Width+Width/2)*4;
     for(unsigned channel=0;channel<3;++channel) {
@@ -419,12 +449,12 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
         check(std::abs(float(vignetted[0].rgba[channel])-expected)<=3,"Vignette corner did not apply the authored linear attenuation.");
     }
     check(maxDifference(vignetted[0],postBaseline[0])>20,"Vignette did not darken the viewport edge.");
-    pixel.enabled=poster.enabled=true;const auto combined=capture();
+    pixel.enabled=poster.enabled=true;dither={true,1};const auto combined=capture();
     check(maxDifference(combined[0],pixelized[0])>10&&maxDifference(combined[0],posterized[0])>10&&
         maxDifference(combined[0],vignetted[0])>10,"Combined post-processing lost one or more enabled effects.");
     gameSettings=sceneSettings;const auto bothEffects=capture();
     check(maxDifference(bothEffects[0],bothEffects[1])<=1,"Scene/Game post-processing did not bind independent matching settings.");
-    pixel.enabled=poster.enabled=vignette.enabled=false;gameSettings=sceneSettings;const auto off=capture();
+    pixel.enabled=dither.enabled=poster.enabled=vignette.enabled=false;gameSettings=sceneSettings;const auto off=capture();
     equivalent(off[0],postBaseline[0],"Scene all post-processing disabled restoration");
     equivalent(off[1],postBaseline[1],"Game all post-processing disabled restoration");
     pixel.enabled=true;pixel.pixelSize=1;vignette.enabled=true;vignette.intensity=0;gameSettings=sceneSettings;
@@ -432,14 +462,14 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
     equivalent(neutral[1],postBaseline[1],"Game neutral Pixelization/Vignette");
     for(const auto mode:{RenderDebugView::Albedo,RenderDebugView::Roughness,RenderDebugView::Metal,RenderDebugView::Normal}) {
         renderer.setDebugView(RenderViewPurpose::Scene,mode);renderer.setDebugView(RenderViewPurpose::Game,mode);
-        pixel.enabled=poster.enabled=vignette.enabled=false;gameSettings=sceneSettings;const auto raw=capture();
-        pixel={true,8};poster={true,7};vignette={true,.8f,.6f,.3f};gameSettings=sceneSettings;const auto rawEffects=capture();
+        pixel.enabled=dither.enabled=poster.enabled=vignette.enabled=false;gameSettings=sceneSettings;const auto raw=capture();
+        pixel={true,8};dither={true,1};poster={true,7};vignette={true,.8f,.6f,.3f};gameSettings=sceneSettings;const auto rawEffects=capture();
         equivalent(rawEffects[0],raw[0],"Scene RawData post-processing bypass");
         equivalent(rawEffects[1],raw[1],"Game RawData post-processing bypass");
     }
     scene.instances=game.instances={};renderer.evictModel(postMesh->id);
     resources.stop();renderer.drainPending(frame);
-    std::cout<<"Post-processing Pixelization after SMAA, perceptual Posterization, Vignette, combined effects, exact disabled restoration, RawData bypass and Scene/Game isolation passed on "<<renderer.backendName()<<".\n";
+    std::cout<<"Post-processing Pixelization after SMAA, ordered Dither, perceptual Posterization, Vignette, combined effects, exact disabled restoration, RawData bypass and Scene/Game isolation passed on "<<renderer.backendName()<<".\n";
     if(!postProcessingOnly)std::cout<<"Fog background Scene/Game controls and reference checks passed.\n";
 }
 }

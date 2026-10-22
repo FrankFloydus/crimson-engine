@@ -21,7 +21,7 @@ inline void validateEnvironmentSettings(const EnvironmentSettings& value) {
         throw std::runtime_error("Environment source is invalid.");
     if (!validSsgiSettings(value.ssgi) || !validSsaoSettings(value.ssao) || !validSsrSettings(value.ssr))
         throw std::runtime_error("Screen-space lighting tuning is invalid.");
-    if (!validPixelizationSettings(value.pixelization) || !validPosterizationSettings(value.posterization) || !validVignetteSettings(value.vignette))
+    if (!validPixelizationSettings(value.pixelization) || !validDitherSettings(value.dither) || !validPosterizationSettings(value.posterization) || !validVignetteSettings(value.vignette))
         throw std::runtime_error("Post-processing effect tuning is invalid.");
     const auto& ambient=value.ambientLight;
     if (ambient.source!=AmbientLightSource::Disabled && ambient.source!=AmbientLightSource::Color && ambient.source!=AmbientLightSource::Sky)
@@ -101,6 +101,13 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
             pixelization.pixelSize=size.get<int>();
         }
         pixelization.enabled=source.value("enabled",pixelization.enabled);
+    }
+    if (json.contains("dither")) {
+        const auto& source=effectObject("dither");auto& dither=value.dither;
+        if (source.contains("strength") && !source.at("strength").is_number())
+            throw std::runtime_error("Dither strength must be numeric.");
+        dither.enabled=source.value("enabled",dither.enabled);
+        dither.strength=source.value("strength",dither.strength);
     }
     if (json.contains("posterization")) {
         const auto& source=effectObject("posterization");auto& posterization=value.posterization;
@@ -362,6 +369,7 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
             {"agxWhite",value.toneMappingParameters.agxWhite},{"agxContrast",value.toneMappingParameters.agxContrast}}},
         {"debanding",value.debanding},
         {"pixelization",{{"enabled",value.pixelization.enabled},{"pixelSize",value.pixelization.pixelSize}}},
+        {"dither",{{"enabled",value.dither.enabled},{"strength",value.dither.strength}}},
         {"posterization",{{"enabled",value.posterization.enabled},{"levels",value.posterization.levels}}},
         {"vignette",{{"enabled",value.vignette.enabled},{"intensity",value.vignette.intensity},
             {"radius",value.vignette.radius},{"softness",value.vignette.softness}}},

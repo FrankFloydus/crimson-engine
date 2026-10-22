@@ -525,17 +525,20 @@ GPU skin/morph deformation runs once per presented pose and is shared by visible
 
 Create an **Environment** in the Outliner and select it to edit its settings in Inspector. The first Environment becomes active; additional nodes and duplicates remain inactive until **Make Active** is used. The Outliner identifies the active node. Deleting it clears activation; other Environment nodes stay inactive and built-in studio defaults with exposure 1 take over. Undo restores the node and its activation together. New scenes remain empty, using those defaults without inserting an Environment entity.
 
-Choose **Source → HDRI / IBL** or **Procedural Sky**. **Lighting** controls distant illumination and reflections; **Intensity** scales the selected environment. Switching sources preserves both sets of settings and the HDRI assignment. **Post-processing** contains **Tonemapping**, **Glow**, **Pixelization**, **Posterization** and **Vignette** subsections. Tonemapping groups Exposure, the Tone mapping selector, its curve controls and Debanding.
+Choose **Source → HDRI / IBL** or **Procedural Sky**. **Lighting** controls distant illumination and reflections; **Intensity** scales the selected environment. Switching sources preserves both sets of settings and the HDRI assignment. **Post-processing** contains **Tonemapping**, **Glow**, **Pixelization**, **Dither**, **Posterization** and **Vignette** subsections. Tonemapping groups Exposure, the Tone mapping selector, its curve controls and Debanding.
 
-Pixelization, Posterization and Vignette each have an **Enabled** toggle and default off. Disabling an effect retains its tuning. Their settings save with the Environment, support undo/redo and affect Scene, Game and saved-scene thumbnails.
+Pixelization, Dither, Posterization and Vignette each have an **Enabled** toggle and default off. Disabling an effect retains its tuning. Their settings save with the Environment, support undo/redo and affect Scene, Game and saved-scene thumbnails.
 
 | Effect | Controls | Behavior |
 | --- | --- | --- |
 | Pixelization | Pixel Size, 1–128 pixels; default 4 | Samples the rendered image in square blocks. Size 1 preserves full resolution. |
+| Dither | Strength, 0–1; default 1 | Adds a stable ordered 4×4 pattern before Posterization. Zero strength is neutral. |
 | Posterization | Levels, 2–256; default 8 | Limits each displayed RGB channel to the selected number of evenly spaced color levels. |
 | Vignette | Intensity 0–1, default .5; Radius 0–1, default .75; Softness .01–1, default .5 | Darkens the edges around the image center; Radius controls where the fade begins and Softness controls its width. |
 
 These effects apply after Glow, tone mapping and antialiasing, before the editor grid and collision overlays. Pixelization preserves sharp block boundaries with SMAA enabled. Material and Particle Editor preview environments remain independent.
+
+**Dither** uses one threshold per pixel, or per block when Pixelization is enabled. With Posterization on, its amplitude follows the selected color-level spacing and distributes gradients between adjacent levels. On its own, full Strength uses a display-channel interval of 1/16 for a visible pattern. Strength scales that interval continuously. **Tonemapping → Debanding** remains the separate, subtle final-encoding control.
 
 **Specular AA** reduces sparkling highlights caused by surface normals that vary within a pixel. It defaults off and filters specular roughness consistently for direct lighting, environment reflections, SSR and glass. The toggle saves with the Environment and supports undo/redo; older scenes keep it off without being rewritten. Material and Particle Editor Environment menus expose independent preview toggles, while saved-scene thumbnails use the active scene value.
 

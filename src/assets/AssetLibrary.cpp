@@ -1523,6 +1523,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
     packet->dynamicCoverage=generated.dynamicCoverage;
     packet->dynamicHeight=generated.dynamicHeight;
+    packet->constantRoughness=generated.constantRoughness;
     packet->tessellation=generated.tessellation;
     const auto& output=materialOutputNode(graph).output;
     packet->shading=generated.nodePreview?MaterialShading::Unlit:output.shading;

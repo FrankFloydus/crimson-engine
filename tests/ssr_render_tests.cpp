@@ -193,6 +193,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
         packet->sources=generated.textures;packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
         packet->shading=output().shading;packet->blend=output().blend;packet->receiveFog=output().receiveFog;
         packet->refraction=generated.refraction;packet->tessellation=generated.tessellation;packet->signature=published.programs->signature;
+        packet->constantRoughness=generated.constantRoughness;
         for(const auto& source:generated.textures){packet->textures[source.slot]=texture;
             packet->flags[source.slot]=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;}
         return packet;
@@ -229,6 +230,34 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     };
     const auto pair=[&](const char* off,const char* on){settings.environment.ssr.enabled=false;auto baseline=capture(off);
         settings.environment.ssr.enabled=true;return std::pair{std::move(baseline),capture(on)};};
+    if(!closedCubeOnly&&!pbrQualityOnly&&!emissiveHaloOnly) {
+        const auto savedOutput=output();const auto savedSettings=settings;const auto savedInstances=scene.instances;
+        const auto savedBindings=mirrorBindings;
+        scene.instances=std::span(instances.data(),1);
+        settings.environment.ssr.enabled=true;settings.environment.ssr.maxRoughness=.6f;
+        output().refraction=false;output().metallic=0;output().roughness=1;
+        output().tessellation.enabled=selectedTestGraphicsBackend()==GraphicsBackend::Direct3D12;
+        output().tessellation.maxFactor=4;output().tessellation.amount=.1f;output().height=.6f;
+        for(const auto blend:{MaterialBlend::Opaque,MaterialBlend::Alpha}) {
+            output().blend=blend;auto proven=prepare();
+            check(proven->constantRoughness==1.f,"Prepared SSR packet lost its exact roughness proof.");
+            auto unknown=std::make_shared<PreparedGraphMaterial>(*proven);unknown->constantRoughness.reset();
+            mirrorBindings[0].graph=unknown;
+            const auto reference=capture(blend==MaterialBlend::Opaque?"rough-opaque-unknown":"rough-alpha-unknown");
+            const auto referenceDraws=renderer.meshInstancingStats(RenderViewPurpose::Game).fallbackDraws;
+            mirrorBindings[0].graph=proven;
+            const auto optimized=capture(blend==MaterialBlend::Opaque?"rough-opaque-culled":"rough-alpha-culled");
+            const auto optimizedDraws=renderer.meshInstancingStats(RenderViewPurpose::Game).fallbackDraws;
+            check(reference.rgba==optimized.rgba,"Removing proven-ineligible SSR geometry changed the displayed image.");
+            check(referenceDraws==optimizedDraws+(blend==MaterialBlend::Opaque?2u:1u),
+                "Proven-ineligible SSR retained its geometry redraws, including tessellated receivers.");
+            output().roughness=.1f;const auto edited=prepare();
+            check(edited->constantRoughness==.1f&&proven->constantRoughness==1.f,
+                "A cached program/value-only edit reused stale SSR eligibility or mutated the retained packet.");
+            output().roughness=1;
+        }
+        output()=savedOutput;settings=savedSettings;scene.instances=savedInstances;mirrorBindings=savedBindings;
+    }
     if(!closedCubeOnly&&!pbrQualityOnly) {
         // The camera sees the emitter above a black partition. Every straight
         // path from the masked near-side floor to the entire emitter is blocked
