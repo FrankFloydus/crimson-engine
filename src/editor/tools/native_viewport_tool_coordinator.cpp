@@ -264,7 +264,7 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .tool = ViewportToolId::Pivot,
       .active_priority = 5,
       .unavailable_message =
-          "Select one visible, unlocked mesh or group in object mode.",
+          "Select one visible, unlocked mesh or group to edit its pivot.",
       .commit_label = "Apply Pivot",
       .commit_domain = ViewportNativeToolCommitDomain::Document,
       .can_activate = [&] { return pivot_.can_activate_persistent(selection_); },

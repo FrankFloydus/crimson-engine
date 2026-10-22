@@ -1517,7 +1517,7 @@ PivotToolService::activate_persistent(EditorSelectionService &selection) {
   const PivotTargetKind kind = target_kind(*target, selection);
   if (!target_is_eligible(*target, kind)) {
     return command_invalid_result(
-        "Select one visible, selectable mesh or group in object mode.");
+        "Select one visible, selectable mesh or group to edit its pivot.");
   }
 
   const std::optional<QVec3> committed_pivot =
@@ -1539,8 +1539,11 @@ PivotToolService::activate_persistent(EditorSelectionService &selection) {
   }
 
   const std::vector<EntityId> selected = scene_.selected_entities();
-  if (selected.size() != 1u || selected.front() != *target ||
-      scene_.primary_selection() != *target) {
+  const bool object_selection = selection.mode() == ModelingSelectionMode::Object ||
+                                selection.mode() == ModelingSelectionMode::Group;
+  if (object_selection &&
+      (selected.size() != 1u || selected.front() != *target ||
+       scene_.primary_selection() != *target)) {
     const std::array target_selection{*target};
     DocumentCommandResult synchronized = selection.synchronize_scene_selection(
         target_selection, *target);
@@ -1562,6 +1565,8 @@ PivotToolService::activate_persistent(EditorSelectionService &selection) {
       .target_parent = scene_.parent(*target),
       .selection_mode = selection.mode(),
       .selection_revision = scene_.selection_revision(),
+      .modeling_selection_revision = modeling_.selection_revision(),
+      .editor_mode_generation = modeling_.editor_mode_generation(),
       .target_bounds_min = resolved_bounds->min,
       .target_bounds_max = resolved_bounds->max,
       .validated_scene_revision = scene_.revision(),
@@ -1838,7 +1843,27 @@ std::optional<EntityId> PivotToolService::active_selection_target(
   const EditorSelectionState state = selection.state();
   if (state.mode != ModelingSelectionMode::Object &&
       state.mode != ModelingSelectionMode::Group) {
-    return std::nullopt;
+    // Tentative components can disappear when an operation is accepted. They
+    // cannot define a persistent target before that publication has finished.
+    if (modeling_.operation_preview_active()) {
+      return std::nullopt;
+    }
+    const bool active_component =
+        (state.mode == ModelingSelectionMode::Vertex &&
+         state.target.kind == EditorSelectionTargetKind::Vertex) ||
+        (state.mode == ModelingSelectionMode::Edge &&
+         state.target.kind == EditorSelectionTargetKind::Edge) ||
+        (state.mode == ModelingSelectionMode::Face &&
+         state.target.kind == EditorSelectionTargetKind::Face);
+    if (!active_component || !state.summary.has_selection) {
+      return std::nullopt;
+    }
+    const std::optional<EntityId> owner =
+        modeling_.entity_for_modeling_object(state.target.modeling_object_id);
+    return owner.has_value() && *owner == state.target.entity &&
+                   scene_.exists(*owner)
+               ? owner
+               : std::nullopt;
   }
   if (state.target.entity != kInvalidEntityId &&
       scene_.exists(state.target.entity)) {
@@ -1905,7 +1930,12 @@ bool PivotToolService::persistent_session_is_valid() const {
   }
   PersistentSession &session = *persistent_;
   if (scene_.selection_revision() != session.selection_revision ||
-      modeling_.selection_mode() != session.selection_mode) {
+      modeling_.selection_mode() != session.selection_mode ||
+      modeling_.editor_mode_generation() != session.editor_mode_generation ||
+      ((session.selection_mode == ModelingSelectionMode::Vertex ||
+        session.selection_mode == ModelingSelectionMode::Edge ||
+        session.selection_mode == ModelingSelectionMode::Face) &&
+       modeling_.selection_revision() != session.modeling_selection_revision)) {
     return false;
   }
   const std::uint64_t scene_revision = scene_.revision();

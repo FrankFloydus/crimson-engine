@@ -6561,6 +6561,47 @@ TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlySh
             quader::ViewportToolId::Pivot);
 }
 
+TEST(EditorApiTests, PrimitiveAndPivotRemappedShortcutsResolveInEverySelectionKind) {
+  for (const auto kind : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto box = create_selected_box(editor, "Mode Shortcut Box");
+    ASSERT_TRUE(editor.selection().set_mode(kind).ok());
+    if (kind == quader::QuaderSelectionMode::Vertex) {
+      ASSERT_TRUE(editor.selection().select_vertex(box, 1).ok());
+    } else if (kind == quader::QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+    } else if (kind == quader::QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+    }
+    ASSERT_TRUE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_command::kToolsActivatePivot, "Ctrl+Alt+F23").ok());
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_command::kToolsActivateCreateBox, "Ctrl+Alt+F24").ok());
+    const auto pivot = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F23"), {}, true, false);
+    ASSERT_EQ(pivot.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(pivot.shortcut.tool, quader::ViewportToolId::Pivot);
+    const auto primitive = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F24"), {}, true, false);
+    ASSERT_EQ(primitive.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(primitive.command_id,
+              quader::quader_command::kToolsActivateCreatePrimitive.string());
+    ASSERT_TRUE(editor.commands().execute(primitive.command_id).ok());
+    EXPECT_EQ(editor.tools().active_primitive_type(), "box");
+    EXPECT_EQ(editor.selection().summary().mode, kind);
+  }
+}
+
 TEST(EditorApiTests,
      PrimitiveToolShortcutsResolveWithoutSameContextConflicts) {
   const std::filesystem::path path =
@@ -9719,7 +9760,7 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
                             quader::ViewportToolId::Move}) {
       EXPECT_TRUE(editor.tools().can_activate(tool));
     }
-    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::CreatePrimitive));
+    EXPECT_TRUE(editor.tools().can_activate(quader::ViewportToolId::CreatePrimitive));
     const std::vector<std::function<quader::QuaderApiVoidResult()>> edits{
         [&] { return editor.selection().select_face(source, 3); },
         [&] { return editor.selection().select_face(other, 1, quader::QuaderSelectionEdit::Add); },
@@ -9746,7 +9787,7 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
     const auto mode_before = editor.mode().state();
     const auto result = edits[transition]();
     if (transition == 3u || transition == 4u ||
-        (transition >= 14u && transition <= 17u)) {
+        (transition >= 16u && transition <= 17u)) {
       EXPECT_FALSE(result.ok());
       EXPECT_FALSE(result.changed());
       EXPECT_EQ(editor.mode().revision(), mode_before.revision);
@@ -9773,6 +9814,13 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
                        preview->vertices[index].position);
     }
     EXPECT_NE(editor.history().snapshot().undo_label, history.undo_label);
+    if (transition == 14u || transition == 15u) {
+      EXPECT_EQ(editor.selection().summary().mode,
+                quader::QuaderSelectionMode::Face);
+      EXPECT_EQ(editor.mode().generation(), mode_before.generation);
+      ASSERT_TRUE(editor.tools().has_active_primitive_creation());
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    }
     ASSERT_TRUE(editor.history().undo().ok());
     const auto undone = editor.query().compiled_object_mesh(source);
     ASSERT_TRUE(undone.has_value());

@@ -209,6 +209,177 @@ ModelingBoxPreview valid_primitive_preview(float center_x = 0.0f) {
   return preview;
 }
 
+void expect_same_primitive_source_selection(
+    const QuaderSelectionSummary &actual,
+    const QuaderSelectionSummary &expected) {
+  EXPECT_EQ(actual.mode, expected.mode);
+  EXPECT_EQ(actual.has_selection, expected.has_selection);
+  EXPECT_EQ(actual.active_kind, expected.active_kind);
+  EXPECT_EQ(actual.active_object_id, expected.active_object_id);
+  EXPECT_EQ(actual.active_vertex_id, expected.active_vertex_id);
+  EXPECT_EQ(actual.active_edge_a, expected.active_edge_a);
+  EXPECT_EQ(actual.active_edge_b, expected.active_edge_b);
+  EXPECT_EQ(actual.active_face_id, expected.active_face_id);
+  EXPECT_EQ(actual.selected_object_count, expected.selected_object_count);
+  EXPECT_EQ(actual.selected_vertex_count, expected.selected_vertex_count);
+  EXPECT_EQ(actual.selected_edge_count, expected.selected_edge_count);
+  EXPECT_EQ(actual.selected_face_count, expected.selected_face_count);
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     CreationRetainsComponentAndGroupSelectionThroughResizeAndHistory) {
+  for (const auto mode : {QuaderSelectionMode::Vertex,
+                          QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face,
+                          QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    const auto source = editor.modeling().create_box(
+        {.min = {9.0f, 0.0f, -1.0f}, .max = {11.0f, 2.0f, 1.0f}},
+        "Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().select_all().ok());
+    const auto selection = editor.selection().summary();
+    const auto scene_selection = session.scene().selected_entities();
+    const auto editor_mode = editor.mode().current();
+    const auto generation = editor.mode().generation();
+    const auto participants = editor.mode().state().participants.size();
+    const auto expect_context = [&]() {
+      expect_same_primitive_source_selection(editor.selection().summary(), selection);
+      EXPECT_EQ(session.scene().selected_entities(), scene_selection);
+      EXPECT_EQ(editor.mode().current(), editor_mode);
+      EXPECT_EQ(editor.mode().generation(), generation);
+      EXPECT_EQ(editor.mode().state().participants.size(), participants);
+    };
+
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        valid_primitive_preview(), "Created in Current Mode").ok);
+    ASSERT_TRUE(editor.tools().live_primitive_creation().has_value());
+    const auto created_id = editor.tools().live_primitive_creation()->object_id;
+    const auto created_entity = session.modeling().entity_for_modeling_object(created_id);
+    ASSERT_TRUE(created_entity.has_value());
+    EXPECT_TRUE(session.scene().is_effectively_selectable(*created_entity));
+    ASSERT_TRUE(editor.tools().set_setting(
+        kCreatePrimitiveToolId, kBoxSubdivisionsXSetting, 2.0).ok());
+    ASSERT_TRUE(editor.tools().begin_primitive_resize(
+        QuaderPrimitiveResizeControl::PositiveX).ok());
+    ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+    ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+    const auto resized = editor.tools().live_primitive_creation();
+    ASSERT_TRUE(resized.has_value());
+    EXPECT_FLOAT_EQ(resized->local_max.x - resized->local_min.x, 3.0f);
+    expect_context();
+
+    ASSERT_TRUE(session.primitive_creation().accept_preview(
+        valid_primitive_preview(4.0f), "Repeated in Current Mode").ok);
+    EXPECT_EQ(session.modeling().objects().size(), 3U);
+    expect_context();
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session.modeling().objects().size(), 2U);
+    expect_context();
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(session.modeling().objects().size(), 3U);
+    expect_context();
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(session.modeling().objects().size(), 2U);
+    expect_context();
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(session.modeling().objects().size(), 3U);
+    expect_context();
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     EmptyComponentCreationSupportsRetryLiveEditingAndCancellation) {
+  for (const auto mode : {QuaderSelectionMode::Vertex,
+                          QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    for (const auto kind : {PrimitiveCreationKind::Box,
+                            PrimitiveCreationKind::Cylinder,
+                            PrimitiveCreationKind::Sphere}) {
+      SCOPED_TRACE(::testing::Message() << static_cast<int>(mode) << ";"
+                                      << static_cast<int>(kind));
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      const auto selection = editor.selection().summary();
+      const auto generation = editor.mode().generation();
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+      ASSERT_TRUE(session.primitive_creation().set_kind(kind).ok);
+      session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::AfterSelection);
+      const auto rejected = session.primitive_creation().accept_preview(
+          valid_primitive_preview(), "Retry Primitive");
+      EXPECT_FALSE(rejected.ok);
+      EXPECT_FALSE(rejected.changed);
+      EXPECT_TRUE(session.modeling().objects().empty());
+      expect_same_primitive_source_selection(editor.selection().summary(), selection);
+      EXPECT_EQ(editor.mode().generation(), generation);
+      session.modeling().set_modeling_sdk_projection_failure_for_tests(
+          ModelingSdkProjectionFailurePoint::None);
+      ASSERT_TRUE(session.primitive_creation().accept_preview(
+          valid_primitive_preview(), "Retry Primitive").ok);
+      ASSERT_TRUE(editor.tools().live_primitive_creation().has_value());
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(
+          QuaderPrimitiveResizeControl::PositiveY).ok());
+      ASSERT_TRUE(editor.tools().update_primitive_resize(1.0).ok());
+      ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+      ASSERT_TRUE(editor.tools().live_primitive_creation().has_value());
+      expect_same_primitive_source_selection(editor.selection().summary(), selection);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_TRUE(session.modeling().objects().empty());
+      expect_same_primitive_source_selection(editor.selection().summary(), selection);
+      EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Edit);
+      EXPECT_EQ(editor.mode().generation(), generation);
+    }
+  }
+}
+
+TEST(PrimitiveCreationToolServiceTests,
+     FootprintAndHeightKeepTheCurrentComponentSelection) {
+  for (const auto mode : {QuaderSelectionMode::Vertex,
+                          QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face,
+                          QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {9.0f, 0.0f, -1.0f}, .max = {11.0f, 2.0f, 1.0f}},
+        "Footprint Source").ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().select_all().ok());
+    const auto before = editor.selection().summary();
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::CreatePrimitive).ok());
+    ModelingBoxToolEvent event{
+        .screen_position = {200.0f, 200.0f},
+        .ray = {.origin = {0.0f, 5.0f, 0.0f},
+                .direction = {0.0f, -1.0f, 0.0f}},
+        .grid_size = 1.0,
+    };
+    ASSERT_TRUE(session.modeling().begin_box_footprint(event).ok);
+    expect_same_primitive_source_selection(editor.selection().summary(), before);
+    event.ray.origin = {3.0f, 5.0f, 4.0f};
+    ASSERT_TRUE(session.modeling().update_box_footprint(event).ok);
+    ASSERT_TRUE(session.modeling().begin_box_height(event).ok);
+    event.screen_position.y -= 40.0f;
+    const auto height = session.modeling().update_box_height(event);
+    ASSERT_TRUE(height.ok) << height.message;
+    EXPECT_EQ(height.drag_state, ModelingBoxDragState::Height);
+    expect_same_primitive_source_selection(editor.selection().summary(), before);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    expect_same_primitive_source_selection(editor.selection().summary(), before);
+    EXPECT_EQ(session.modeling().objects().size(), 1U);
+  }
+}
+
 const ModelingObjectRecord *find_object(
     const std::vector<ModelingObjectRecord> &objects, std::string_view name) {
   const auto found =

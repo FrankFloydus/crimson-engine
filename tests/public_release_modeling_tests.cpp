@@ -639,6 +639,47 @@ TEST(PublicReleasePrimitiveTests, QuadSpherePlacementCommitCancelAndHistory) {
   expect_geometry_equal(editor, after);
 }
 
+TEST(PublicReleasePrimitiveTests, CreationPreservesEverySelectionKindInThePublicProfile) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face, QuaderSelectionMode::Object,
+                          QuaderSelectionMode::Group}) {
+    for (const auto shape : {QuaderPrimitiveCreationShape::Box,
+                             QuaderPrimitiveCreationShape::Cylinder,
+                             QuaderPrimitiveCreationShape::Sphere}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(static_cast<int>(shape));
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      const auto context = editor.mode().current();
+      const auto generation = editor.mode().generation();
+      ASSERT_TRUE(editor.tools().begin_primitive_creation(shape).ok());
+      const ModelingBoxToolEvent start{
+          .ray = {.origin = {0.0f, 8.0f, 0.0f}, .direction = {0.0f, -1.0f, 0.0f}},
+          .grid_size = 1.0};
+      ASSERT_TRUE(session.modeling().begin_box_footprint(start).ok);
+      auto finish = start;
+      finish.ray.origin = {4.0f, 8.0f, 4.0f};
+      ASSERT_TRUE(session.modeling().update_box_footprint(finish).valid);
+      ASSERT_TRUE(session.modeling().begin_box_height(finish).valid);
+      const auto accepted = editor.tools().accept_active_primitive("Public Mode Primitive");
+      ASSERT_TRUE(accepted.ok()) << accepted.error_message();
+      ASSERT_TRUE(editor.tools().live_primitive_creation().has_value());
+      ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+      EXPECT_EQ(editor.selection().summary().mode, mode);
+      EXPECT_EQ(editor.mode().current(), context);
+      EXPECT_EQ(editor.mode().generation(), generation);
+      EXPECT_EQ(editor.modeling().objects().size(), 1u);
+      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_TRUE(editor.modeling().objects().empty());
+      EXPECT_EQ(editor.selection().summary().mode, mode);
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_EQ(editor.modeling().objects().size(), 1u);
+      EXPECT_EQ(editor.selection().summary().mode, mode);
+    }
+  }
+}
+
 TEST_F(PublicReleaseModelingTests,
        UnavailablePrimitiveLaunchesPreserveDrawingAndRememberedShape) {
   for (const auto unavailable : {PrimitiveCreationKind::Cone, PrimitiveCreationKind::Torus}) {

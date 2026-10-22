@@ -3609,8 +3609,10 @@ public:
     options.suppress_persistent_selection =
         options.suppress_persistent_selection ||
         active_scene_selection_is_owned_outside_modeling();
-    options.persistent_source_wire_object_id =
-        persistent_tool_source_wire_object_id();
+    if (options.persistent_source_wire_object_id < 0) {
+      options.persistent_source_wire_object_id =
+          persistent_tool_source_wire_object_id();
+    }
     return overlay_service_.selection_overlay_signature(
                runtime_, options, suppressed_fallback_source_wire_object_id(options)) ^
            selection_service_.editor_mode_revision() ^
@@ -3708,8 +3710,10 @@ public:
         active_scene_selection_is_owned_outside_modeling();
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
-    options.persistent_source_wire_object_id =
-        persistent_tool_source_wire_object_id();
+    if (options.persistent_source_wire_object_id < 0) {
+      options.persistent_source_wire_object_id =
+          persistent_tool_source_wire_object_id();
+    }
     return overlay_service_.selection_overlay_frame(
         projected, runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_, options);
@@ -3730,8 +3734,10 @@ public:
       options.suppress_persistent_selection =
           options.suppress_persistent_selection ||
           active_scene_selection_is_owned_outside_modeling();
-      options.persistent_source_wire_object_id =
-          persistent_tool_source_wire_object_id();
+      if (options.persistent_source_wire_object_id < 0) {
+        options.persistent_source_wire_object_id =
+            persistent_tool_source_wire_object_id();
+      }
       if (auto base = overlay_service_.accepted_coordinate_base_frame(
               *coordinates, selection_service_.viewport_visibility_revision(),
               options, selection_service_.editor_mode_revision(),
@@ -9612,9 +9618,6 @@ public:
   }
 
   ModelingCommandResult activate_box_tool() {
-    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
-      return {.ok = false, .message = "This operation requires Object Mode."};
-    }
     if (quader_host_contract::find_tool_descriptor("create_primitive") ==
         nullptr) {
       return {.ok = false,
@@ -9650,7 +9653,7 @@ public:
         RuntimeToolCommandService::begin_box_footprint(
             event, pick_scene_surface(event.ray)),
         event.snap_enabled);
-    if (preview.ok) {
+    if (preview.ok && selection_mode() == ModelingSelectionMode::Object) {
       selection_projection_service_.restore_scene_selection(
           scene_, std::span<const EntityId>{}, kInvalidEntityId);
     }
@@ -9730,13 +9733,26 @@ public:
   }
 
   ModelingCreateBoxResult
-  create_mesh(const ModelingCreateMeshRequest &request) {
-    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+  create_mesh(const ModelingCreateMeshRequest &request,
+              bool primitive_creation = false) {
+    if (!release_has_feature(ReleaseFeature::Materials) &&
+        request.material.valid() &&
+        (!request.material.project_owned() ||
+         request.material.project_asset() !=
+             *ProjectAssetId::parse(kDefaultProjectMaterialId))) {
+      return {.ok = false, .changed = false,
+              .message = release_feature_unavailable_message()};
+    }
+    if (!primitive_creation && editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() != EditorMode::Object) {
       return {.ok = false, .message = "This operation requires Object Mode."};
     }
+    const bool preserve_selection = primitive_creation &&
+        selection_mode() != ModelingSelectionMode::Object;
     ModelingCreateBoxResult created =
         sdk_projection_adapter_.create_mesh(
-            request, sdk_creation_finalizer(request.world_texture_projection));
+            request, sdk_creation_finalizer(request.world_texture_projection),
+            preserve_selection);
     if (created.ok) {
       invalidate_selection_overlay_caches();
     }
@@ -12163,9 +12179,6 @@ private:
   ModelingBoxPreview execute_box_preview_command(
       const quader_editor_core::EditorRuntimeCommand &command,
       bool snap_enabled) {
-    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
-      return {.ok = false, .message = "Primitive creation requires Object Mode."};
-    }
     const quader_editor_core::EditorRuntimeCommandResult runtime_result =
         quader_editor_core::execute_runtime_command(runtime_selection_view(),
                                                     runtime_, command);
@@ -12178,7 +12191,8 @@ private:
     if (runtime_result.command.changed) {
       invalidate_selection_overlay_caches();
     }
-    if (runtime_result.clear_selection_requested) {
+    if (runtime_result.clear_selection_requested &&
+        selection_mode() == ModelingSelectionMode::Object) {
       const ModelingCommandResult cleared = clear_selection();
       if (!cleared.ok) {
         return {
@@ -12881,6 +12895,10 @@ ModelingInstanceEditScope ModelingSessionService::instance_edit_scope() const {
 
 void ModelingSessionService::set_editor_mode_service(EditorModeService *service) {
   impl_->set_editor_mode_service(service);
+}
+
+std::uint64_t ModelingSessionService::editor_mode_generation() const {
+  return impl_->editor_mode_generation();
 }
 
 ModelingCommandResult ModelingSessionService::apply_editor_mode_context(
@@ -13711,15 +13729,12 @@ ModelingCommandResult ModelingSessionService::cancel_box() {
 
 ModelingCreateBoxResult
 ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
-  if (!release_has_feature(ReleaseFeature::Materials) &&
-      request.material.valid() &&
-      (!request.material.project_owned() ||
-       request.material.project_asset() !=
-           *ProjectAssetId::parse(kDefaultProjectMaterialId))) {
-    return {.ok = false, .changed = false,
-            .message = release_feature_unavailable_message()};
-  }
   return impl_->create_mesh(request);
+}
+
+ModelingCreateBoxResult ModelingSessionService::create_primitive_mesh(
+    const ModelingCreateMeshRequest &request) {
+  return impl_->create_mesh(request, true);
 }
 
 ModelingCreateBoxResult ModelingSessionService::create_curve(

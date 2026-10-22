@@ -14,6 +14,7 @@
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "math/glm_bridge.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "quader/modeling/neutral/polygon/document_texture.hpp"
@@ -592,6 +593,205 @@ TEST(CopyPivotFromActiveTests,
   expect_uvs_near(effective_uvs(*undone, {}), before_uvs);
   ASSERT_TRUE(harness.editor.history().redo().ok());
   expect_preserved();
+}
+
+TEST(PivotComponentSelectionTests,
+     AppliesToActiveComponentOwnerAndPreservesSelectionGeometryAndUvsThroughHistory) {
+  for (const auto kind : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    CopyPivotHarness harness;
+    const auto other = create_box(harness, "Other Selected Mesh");
+    const auto target = create_textured_asymmetric_mesh(harness);
+    const auto child = create_box(harness, "Pivot Child");
+    ASSERT_TRUE(harness.session.scene().set_parent(child.entity, target.entity));
+    const auto target_vertices = world_vertices(harness, target.entity);
+    const auto other_vertices = world_vertices(harness, other.entity);
+    const auto child_world =
+        harness.session.scene().world_transform_matrix(child.entity);
+    const auto target_uvs = effective_uvs(
+        *harness.session.assets().mesh(mesh_id(harness, target.entity)), {});
+    ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+    ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(harness.editor.selection().set_mode(kind).ok());
+    if (kind == quader::QuaderSelectionMode::Vertex) {
+      ASSERT_TRUE(harness.editor.selection().select_vertex(other, 1).ok());
+      ASSERT_TRUE(harness.editor.selection().select_vertex(
+          target, 1, quader::QuaderSelectionEdit::Add).ok());
+    } else if (kind == quader::QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(harness.editor.selection().select_edge(other, 1, 2).ok());
+      ASSERT_TRUE(harness.editor.selection().select_edge(
+          target, 1, 2, quader::QuaderSelectionEdit::Add).ok());
+    } else {
+      ASSERT_TRUE(harness.editor.selection().select_face(other, 1).ok());
+      ASSERT_TRUE(harness.editor.selection().select_face(
+          target, 1, quader::QuaderSelectionEdit::Add).ok());
+    }
+    const auto selection_before = harness.editor.selection().summary();
+    const auto mode_before = harness.editor.mode().state();
+    const auto scene_selection_before =
+        harness.session.scene().selected_entities();
+    ASSERT_EQ(selection_before.active_object_id, target.modeling_object_id);
+    ASSERT_TRUE(harness.editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(harness.session.pivot().persistent_active());
+    EXPECT_EQ(harness.session.pivot().handle_state().target, target.entity);
+    constexpr quader::QVec3 kNewPivot{9.0f, -7.0f, 5.0f};
+    harness.session.pivot().set_persistent_preview_position(kNewPivot);
+    harness.session.history().clear();
+    const auto applied = harness.editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    ASSERT_TRUE(applied.changed());
+
+    const auto expect_preserved = [&] {
+      const auto selection = harness.editor.selection().summary();
+      EXPECT_EQ(selection.mode, kind);
+      EXPECT_EQ(selection.active_kind, selection_before.active_kind);
+      EXPECT_EQ(selection.active_object_id, selection_before.active_object_id);
+      EXPECT_EQ(selection.active_vertex_id, selection_before.active_vertex_id);
+      EXPECT_EQ(selection.active_edge_a, selection_before.active_edge_a);
+      EXPECT_EQ(selection.active_edge_b, selection_before.active_edge_b);
+      EXPECT_EQ(selection.active_face_id, selection_before.active_face_id);
+      EXPECT_EQ(selection.selected_vertex_count,
+                selection_before.selected_vertex_count);
+      EXPECT_EQ(selection.selected_edge_count, selection_before.selected_edge_count);
+      EXPECT_EQ(selection.selected_face_count, selection_before.selected_face_count);
+      EXPECT_EQ(harness.editor.mode().current(), quader::QuaderEditorMode::Edit);
+      EXPECT_EQ(harness.editor.mode().generation(), mode_before.generation);
+      const auto mode = harness.editor.mode().state();
+      ASSERT_EQ(mode.participants.size(), mode_before.participants.size());
+      for (std::size_t index = 0; index < mode.participants.size(); ++index) {
+        EXPECT_EQ(mode.participants[index].id, mode_before.participants[index].id);
+      }
+      EXPECT_EQ(harness.session.scene().selected_entities(), scene_selection_before);
+      expect_vertices_near(world_vertices(harness, target.entity), target_vertices);
+      expect_vertices_near(world_vertices(harness, other.entity), other_vertices);
+      expect_matrix_near(
+          harness.session.scene().world_transform_matrix(child.entity), child_world);
+      expect_uvs_near(effective_uvs(
+                          *harness.session.assets().mesh(
+                              mesh_id(harness, target.entity)), {}),
+                      target_uvs);
+    };
+    expect_vec3_near(world_origin(harness, target.entity), kNewPivot);
+    expect_preserved();
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    expect_preserved();
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    expect_vec3_near(world_origin(harness, target.entity), kNewPivot);
+    expect_preserved();
+  }
+}
+
+TEST(PivotComponentSelectionTests,
+     EmptyComponentSelectionRejectsAndCancelKeepsTheSelectedComponents) {
+  CopyPivotHarness harness;
+  const auto target = create_box(harness, "Pivot Target");
+  ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_FALSE(harness.session.pivot().can_activate_persistent(harness.session.selection()));
+  EXPECT_FALSE(harness.session.pivot().activate_persistent(harness.session.selection()).ok);
+  ASSERT_TRUE(harness.editor.selection().select_face(target, 1).ok());
+  const auto selection_before = harness.editor.selection().summary();
+  const auto vertices_before = world_vertices(harness, target.entity);
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  harness.session.pivot().set_persistent_preview_position({7.0f, 8.0f, 9.0f});
+  const auto history_before = harness.editor.history().undo_history().history_revision;
+  ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(harness.session.pivot().persistent_active());
+  EXPECT_EQ(harness.editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  EXPECT_EQ(harness.editor.selection().summary().active_face_id,
+            selection_before.active_face_id);
+  EXPECT_EQ(harness.editor.selection().summary().active_object_id,
+            selection_before.active_object_id);
+  EXPECT_EQ(harness.editor.history().undo_history().history_revision, history_before);
+  expect_vertices_near(world_vertices(harness, target.entity), vertices_before);
+}
+
+TEST(PivotComponentSelectionTests,
+     ComponentSelectionChangesAndHiddenTargetsInvalidateTheCapturedPivot) {
+  for (const bool hide_target : {false, true}) {
+    SCOPED_TRACE(hide_target);
+    CopyPivotHarness harness;
+    const auto target = create_box(harness, "Pivot Target");
+    ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+    ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(harness.editor.selection().select_vertex(target, 1).ok());
+    const auto vertices_before = world_vertices(harness, target.entity);
+    ASSERT_TRUE(harness.session.pivot().activate_persistent(harness.session.selection()).ok);
+    harness.session.pivot().set_persistent_preview_position({7.0f, 8.0f, 9.0f});
+    if (hide_target) {
+      ASSERT_TRUE(harness.session.scene().set_visible(target.entity, false));
+    } else {
+      ASSERT_TRUE(harness.session.modeling().clear_selection().ok);
+    }
+    EXPECT_FALSE(harness.session.pivot().persistent_active());
+    EXPECT_FALSE(harness.session.pivot().apply_persistent().ok);
+    expect_vertices_near(world_vertices(harness, target.entity), vertices_before);
+  }
+}
+
+TEST(PivotComponentSelectionTests,
+     PendingTopologyPreviewRejectsBeforeSettlementAndAppliedComponentsRemainEligible) {
+  CopyPivotHarness harness;
+  const auto target = create_box(harness, "Pending Bevel Pivot Target");
+  ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(harness.editor.selection().select_edge(target, 1, 2).ok());
+  ASSERT_TRUE(harness.editor.selection().select_all().ok());
+  const auto bevel = harness.editor.commands().execute(
+      harness.editor.commands().command_id_for_modeling_action("bevel_edges"));
+  ASSERT_TRUE(bevel.ok()) << bevel.error_message();
+  ASSERT_TRUE(harness.session.modeling().operation_preview_active());
+  const auto mode_generation = harness.editor.mode().generation();
+  const auto before =
+      quader::test::capture_command_observable_state(harness.editor);
+  const auto expect_preserved = [&] {
+    EXPECT_TRUE(harness.session.modeling().operation_preview_active());
+    EXPECT_EQ(harness.editor.tools().active_settings().tool_id, "edge_bevel");
+    const auto difference = quader::test::diff_command_observable_state(
+        before, quader::test::capture_command_observable_state(harness.editor));
+    EXPECT_TRUE(difference.empty()) << difference.summary;
+  };
+  EXPECT_FALSE(harness.editor.tools().can_activate(quader::ViewportToolId::Pivot));
+  EXPECT_FALSE(harness.session.native_tools().can_activate("pivot"));
+  EXPECT_FALSE(harness.session.pivot().can_activate_persistent(harness.session.selection()));
+  expect_preserved();
+  const auto direct_pivot =
+      harness.session.pivot().activate_persistent(harness.session.selection());
+  EXPECT_FALSE(direct_pivot.ok);
+  EXPECT_FALSE(direct_pivot.changed);
+  expect_preserved();
+  const auto direct_native = harness.session.native_tools().activate("pivot", 1.0);
+  EXPECT_FALSE(direct_native.ok);
+  EXPECT_FALSE(direct_native.changed);
+  expect_preserved();
+  const auto through_api = harness.editor.tools().activate(quader::ViewportToolId::Pivot);
+  EXPECT_FALSE(through_api.ok());
+  EXPECT_FALSE(through_api.changed());
+  expect_preserved();
+
+  ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
+  ASSERT_FALSE(harness.session.modeling().operation_preview_active());
+  const auto *accepted =
+      harness.session.assets().mesh(mesh_id(harness, target.entity));
+  ASSERT_NE(accepted, nullptr);
+  ASSERT_NE(accepted->authored_polygon_document, nullptr);
+  ASSERT_FALSE(accepted->authored_polygon_document->faces.empty());
+  const auto &accepted_face = accepted->authored_polygon_document->faces.front();
+  ASSERT_GE(accepted_face.vertices.size(), 3u);
+  const auto selected = harness.editor.selection().select_edge(
+      target, accepted_face.vertices[0], accepted_face.vertices[1]);
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  ASSERT_GT(harness.editor.selection().summary().selected_edge_count, 0u);
+  ASSERT_TRUE(harness.editor.tools().can_activate(quader::ViewportToolId::Pivot));
+  ASSERT_TRUE(harness.session.native_tools().can_activate("pivot"));
+  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  EXPECT_EQ(harness.session.pivot().handle_state().target, target.entity);
+  EXPECT_EQ(harness.editor.mode().current(), quader::QuaderEditorMode::Edit);
+  EXPECT_EQ(harness.editor.mode().generation(), mode_generation);
+  EXPECT_EQ(harness.editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
 }
 
 TEST(CopyPivotFromActiveTests,

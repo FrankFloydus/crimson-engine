@@ -382,7 +382,7 @@ public:
       const CreationFinalizer &finalize = {});
   [[nodiscard]] ModelingCreateBoxResult create_mesh(
       const ModelingCreateMeshRequest &request,
-      const CreationFinalizer &finalize = {});
+      const CreationFinalizer &finalize = {}, bool preserve_selection = false);
   /// Publishes an already-portable authored mesh through the atomic host path.
   [[nodiscard]] ModelingCreateBoxResult create_mesh_document(
       modeling::PolygonDocument document, std::string_view name,

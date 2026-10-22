@@ -1973,9 +1973,6 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
-  if (session.editor_mode().mode() != EditorMode::Object) {
-    return quader_api_failure_status(session, "Primitive creation requires Object Mode.");
-  }
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }

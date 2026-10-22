@@ -779,7 +779,7 @@ CommandResult PrimitiveCreationToolService::accept_volume(
   if (checkpoint_hooks_.observe_before_projection) {
     checkpoint_hooks_.observe_before_projection();
   }
-  const ModelingCreateBoxResult created = modeling_.create_mesh({
+  const ModelingCreateBoxResult created = modeling_.create_primitive_mesh({
       .document = std::move(document),
       .name = std::move(name),
       .material_slot = 0,
@@ -850,6 +850,8 @@ CommandResult PrimitiveCreationToolService::accept_volume(
       .placement = preview,
       .modeling_object_id = created.object.modeling_object_id,
       .selection_revision = selection.selection_revision,
+      .selection_mode = selection.mode,
+      .editor_mode_generation = modeling_.editor_mode_generation(),
       .local_min = local_min,
       .local_max = local_max,
   };
@@ -1923,6 +1925,17 @@ bool PrimitiveCreationToolService::live_primitive_is_selected() const {
     return false;
   }
   const ModelingSelectionSummary selection = modeling_.selection_summary();
+  if (selection.mode != live_primitive_->selection_mode ||
+      modeling_.editor_mode_generation() !=
+          live_primitive_->editor_mode_generation ||
+      selection.selection_revision != live_primitive_->selection_revision ||
+      !modeling_.entity_for_modeling_object(
+          live_primitive_->modeling_object_id).has_value()) {
+    return false;
+  }
+  if (selection.mode != ModelingSelectionMode::Object) {
+    return true;
+  }
   return selection.mode == ModelingSelectionMode::Object &&
          selection.has_selection &&
          selection.active_kind == ModelingActiveSelectionKind::Object &&
@@ -2009,7 +2022,9 @@ CommandResult PrimitiveCreationToolService::update_live_primitive(
     checkpoint_hooks_.observe_before_projection();
   }
   const ModelingCommandResult updated = modeling_.replace_mesh_document(
-      live_primitive_->modeling_object_id, std::move(document), preserve_selection);
+      live_primitive_->modeling_object_id, std::move(document),
+      preserve_selection ||
+          live_primitive_->selection_mode != ModelingSelectionMode::Object);
   if (checkpoint_hooks_.record_after_projection) {
     checkpoint_hooks_.record_after_projection();
   }

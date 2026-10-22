@@ -1896,6 +1896,8 @@ public:
         editor.render(), active_snapshots_);
     selection_frame_options_.suppress_persistent_object_selection =
         mode == ModelingSelectionMode::Object;
+    selection_frame_options_.persistent_source_wire_object_id =
+        live_primitive ? live_primitive->object_id : -1;
     const auto volatile_overlay = modeling.volatile_overlay_snapshot();
     const bool retained_outlines = bridge_.tool_preview_suppression().empty();
     const bool gpu_outlines = view.update_selected_mesh_outlines(
@@ -9316,99 +9318,107 @@ TEST(SelectionOverlayRuntimeTests,
         QStringLiteral("../stairs_creation_visual"));
   }
   ASSERT_TRUE(QDir().mkpath(directory));
-  SelectionOverlayRuntimeHarness harness;
-  ASSERT_TRUE(harness.initialize(0.0F, false));
-  ViewportCameraController camera;
-  camera.set_clip_planes(0.01F, 200.0F);
-  ASSERT_TRUE(camera.restore_perspective_pose({
-      .eye = {10.0F, 8.0F, 12.0F}, .target = {0.0F, 1.0F, 0.0F},
-      .up = {0.0F, 1.0F, 0.0F}}));
-  harness.set_sample_camera(camera);
-  auto &editor = harness.workflow_editor();
-  const auto changed_pixels = [](const QImage &first, const QImage &second) {
-    std::size_t changed = 0U;
-    if (first.isNull() || second.isNull() || first.size() != second.size()) return changed;
-    for (int y = 0; y < first.height(); ++y) {
-      for (int x = 0; x < first.width(); ++x) {
-        const auto a = first.pixelColor(x, y);
-        const auto b = second.pixelColor(x, y);
-        if (std::abs(a.red() - b.red()) > 2 ||
-            std::abs(a.green() - b.green()) > 2 ||
-            std::abs(a.blue() - b.blue()) > 2) ++changed;
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face, QuaderSelectionMode::Object,
+                          QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0F, false));
+    ViewportCameraController camera;
+    camera.set_clip_planes(0.01F, 200.0F);
+    ASSERT_TRUE(camera.restore_perspective_pose({
+        .eye = {10.0F, 8.0F, 12.0F}, .target = {0.0F, 1.0F, 0.0F},
+        .up = {0.0F, 1.0F, 0.0F}}));
+    harness.set_sample_camera(camera);
+    auto &editor = harness.workflow_editor();
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    const auto changed_pixels = [](const QImage &first, const QImage &second) {
+      std::size_t changed = 0U;
+      if (first.isNull() || second.isNull() || first.size() != second.size()) return changed;
+      for (int y = 0; y < first.height(); ++y) {
+        for (int x = 0; x < first.width(); ++x) {
+          const auto a = first.pixelColor(x, y);
+          const auto b = second.pixelColor(x, y);
+          if (std::abs(a.red() - b.red()) > 2 ||
+              std::abs(a.green() - b.green()) > 2 ||
+              std::abs(a.blue() - b.blue()) > 2) ++changed;
+        }
       }
-    }
-    return changed;
-  };
-  const auto capture = [&](const char *phase) {
-    EXPECT_TRUE(harness.present_workflow_pane());
-    const QImage image = harness.capture();
-    EXPECT_FALSE(image.isNull());
-    const QString path = QDir(directory).filePath(
-        QStringLiteral("stairs-%1.png").arg(QString::fromLatin1(phase)));
-    EXPECT_TRUE(image.save(path));
-    std::cout << "Stairs preview GPU png=" << path.toStdString() << '\n';
-    const auto builds = harness.selection_frame_builds();
-    const auto outlines = harness.mesh_outline_work();
-    const auto uploads = harness.component_overlay_stats().uploads;
-    const auto projection = harness.modeling().modeling_sdk_projection_stats_for_tests();
-    for (int frame = 0; frame < 8; ++frame) {
+      return changed;
+    };
+    const auto capture = [&](const char *phase) {
       EXPECT_TRUE(harness.present_workflow_pane());
-      EXPECT_FALSE(harness.last_submission().selection_source_refreshed);
-      EXPECT_FALSE(harness.last_submission().persistent_submitted);
-      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
-    }
-    EXPECT_EQ(harness.selection_frame_builds(), builds);
-    EXPECT_EQ(harness.mesh_outline_work().geometry_builds, outlines.geometry_builds);
-    EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count,
-              uploads.geometry_creation_count);
-    EXPECT_EQ(harness.component_overlay_stats().uploads.position_upload_count,
-              uploads.position_upload_count);
-    EXPECT_EQ(harness.component_overlay_stats().uploads.index_upload_count,
-              uploads.index_upload_count);
-    EXPECT_EQ(harness.modeling().modeling_sdk_projection_stats_for_tests()
-                  .native_selection_projection_build_count,
-              projection.native_selection_projection_build_count);
-    EXPECT_EQ(harness.capture(), image);
-    return image;
-  };
-  const QImage baseline = capture("baseline");
-  ASSERT_TRUE(harness.create_stairs_sample());
-  const auto objects = editor.query().modeling_objects();
-  ASSERT_EQ(objects.size(), 1U);
-  const auto object = editor.query().modeling_object_for_id(
-      objects.front().modeling_object_id);
-  ASSERT_TRUE(object.has_value());
-  const auto initial_mesh = editor.query().compiled_object_mesh(*object);
-  ASSERT_TRUE(initial_mesh.has_value());
-  ASSERT_FALSE(initial_mesh->indices.empty());
-  const QImage straight = capture("straight");
-  EXPECT_GT(changed_pixels(baseline, straight), 256U);
-  ASSERT_TRUE(editor.tools().set_setting(
-      "create_stairs", "stairs.automatic_step_count", false).ok());
-  ASSERT_TRUE(editor.tools().set_setting(
-      "create_stairs", "stairs.step_count", 6.0).ok());
-  const QImage six_steps = capture("six-steps");
-  EXPECT_GT(changed_pixels(straight, six_steps), 32U);
-  ASSERT_TRUE(editor.tools().set_setting(
-      "create_stairs", "stairs.surface", "ramp").ok());
-  const QImage ramp = capture("ramp");
-  EXPECT_GT(changed_pixels(six_steps, ramp), 32U);
-  ASSERT_TRUE(editor.tools().set_setting(
-      "create_stairs", "stairs.construction", "slab").ok());
-  ASSERT_TRUE(editor.tools().set_setting(
-      "create_stairs", "stairs.layout", "spiral").ok());
-  ASSERT_TRUE(editor.tools().set_setting(
-      "create_stairs", "stairs.turns", 2.0).ok());
-  const QImage spiral = capture("slab-spiral-two-turns");
-  EXPECT_GT(changed_pixels(ramp, spiral), 256U);
-  EXPECT_GT(changed_pixels(baseline, spiral), 256U);
-  EXPECT_EQ(harness.undo_count(), 0U);
-  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-  EXPECT_TRUE(editor.query().modeling_objects().empty());
-  EXPECT_EQ(harness.undo_count(), 0U);
-  const QImage canceled = capture("canceled");
-  EXPECT_EQ(canceled, baseline)
-      << "Cancel must remove the prior stairs mesh, selected outline, and depth geometry.";
+      const QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      const QString path = QDir(directory).filePath(
+          QStringLiteral("stairs-mode%1-%2.png").arg(static_cast<int>(mode))
+              .arg(QString::fromLatin1(phase)));
+      EXPECT_TRUE(image.save(path));
+      std::cout << "Stairs preview GPU png=" << path.toStdString() << '\n';
+      const auto builds = harness.selection_frame_builds();
+      const auto outlines = harness.mesh_outline_work();
+      const auto uploads = harness.component_overlay_stats().uploads;
+      const auto projection = harness.modeling().modeling_sdk_projection_stats_for_tests();
+      for (int frame = 0; frame < 8; ++frame) {
+        EXPECT_TRUE(harness.present_workflow_pane());
+        EXPECT_FALSE(harness.last_submission().selection_source_refreshed);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      }
+      EXPECT_EQ(harness.selection_frame_builds(), builds);
+      EXPECT_EQ(harness.mesh_outline_work().geometry_builds, outlines.geometry_builds);
+      EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count,
+                uploads.geometry_creation_count);
+      EXPECT_EQ(harness.component_overlay_stats().uploads.position_upload_count,
+                uploads.position_upload_count);
+      EXPECT_EQ(harness.component_overlay_stats().uploads.index_upload_count,
+                uploads.index_upload_count);
+      EXPECT_EQ(harness.modeling().modeling_sdk_projection_stats_for_tests()
+                    .native_selection_projection_build_count,
+                projection.native_selection_projection_build_count);
+      EXPECT_EQ(harness.capture(), image);
+      return image;
+    };
+    const QImage baseline = capture("baseline");
+    ASSERT_TRUE(harness.create_stairs_sample());
+    const auto objects = editor.query().modeling_objects();
+    ASSERT_EQ(objects.size(), 1U);
+    const auto object = editor.query().modeling_object_for_id(
+        objects.front().modeling_object_id);
+    ASSERT_TRUE(object.has_value());
+    const auto initial_mesh = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(initial_mesh.has_value());
+    ASSERT_FALSE(initial_mesh->indices.empty());
+    const QImage straight = capture("straight");
+    EXPECT_GT(changed_pixels(baseline, straight), 256U);
+    ASSERT_TRUE(editor.tools().set_setting(
+        "create_stairs", "stairs.automatic_step_count", false).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "create_stairs", "stairs.step_count", 6.0).ok());
+    const QImage six_steps = capture("six-steps");
+    EXPECT_GT(changed_pixels(straight, six_steps), 32U);
+    ASSERT_TRUE(editor.tools().set_setting(
+        "create_stairs", "stairs.surface", "ramp").ok());
+    const QImage ramp = capture("ramp");
+    EXPECT_GT(changed_pixels(six_steps, ramp), 32U);
+    ASSERT_TRUE(editor.tools().set_setting(
+        "create_stairs", "stairs.construction", "slab").ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "create_stairs", "stairs.layout", "spiral").ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "create_stairs", "stairs.turns", 2.0).ok());
+    const QImage spiral = capture("slab-spiral-two-turns");
+    EXPECT_GT(changed_pixels(ramp, spiral), 256U);
+    EXPECT_GT(changed_pixels(baseline, spiral), 256U);
+    EXPECT_EQ(harness.undo_count(), 0U);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_TRUE(editor.query().modeling_objects().empty());
+    EXPECT_EQ(harness.undo_count(), 0U);
+    const QImage canceled = capture("canceled");
+    EXPECT_EQ(canceled, baseline)
+        << "Cancel must remove the prior stairs mesh, selected outline, and depth geometry.";
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,

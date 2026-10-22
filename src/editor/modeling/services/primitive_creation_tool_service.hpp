@@ -337,12 +337,13 @@ private:
     std::size_t history_cursor = 0;
   };
 
-  /// Keeps the newest accepted primitive editable while its selection is
-  /// unchanged.
+  /// Keeps the newest accepted primitive editable within its selection context.
   struct LivePrimitive {
     ModelingBoxPreview placement;
     int modeling_object_id = -1;
     std::uint64_t selection_revision = 0;
+    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    std::uint64_t editor_mode_generation = 0;
     QVec3 local_min;
     QVec3 local_max;
 

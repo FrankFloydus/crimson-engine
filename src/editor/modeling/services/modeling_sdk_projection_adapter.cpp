@@ -1401,6 +1401,18 @@ public:
       if (!document.ok()) {
         return failure(document.error_message());
       }
+      const Result<PolygonDocument> current = session_.document_copy(*object);
+      if (!current.ok()) {
+        return failure(current.error_message());
+      }
+      // Origin rebasing and transform baking replace coordinates, while live
+      // component intent remains SDK-owned. Prepare it on the replacement so
+      // Apply and host Undo/Redo publish geometry and selection atomically.
+      const Result<OperationResult> retained_selection =
+          document.value().apply_selection(current.value().selection());
+      if (!retained_selection.ok()) {
+        return failure(retained_selection.error_message());
+      }
       restores.push_back({
           .object = *object,
           .document = std::move(document).value(),
@@ -2520,7 +2532,7 @@ public:
 
   [[nodiscard]] ModelingCreateBoxResult
   create_mesh(const ModelingCreateMeshRequest &request,
-              const CreationFinalizer &finalize) {
+              const CreationFinalizer &finalize, bool preserve_selection) {
     if (request.document.vertices.empty() || request.document.faces.empty()) {
       return {.ok = false,
               .changed = false,
@@ -2538,7 +2550,8 @@ public:
     return create_document(std::move(document).value(), request.name,
                            request.material_slot, request.material,
                            request.initial_scene_transform,
-                           request.world_texture_projection, finalize);
+                           request.world_texture_projection, finalize,
+                           preserve_selection);
   }
 
   [[nodiscard]] ModelingCreateBoxResult create_mesh_document(
@@ -2679,7 +2692,8 @@ public:
                   std::uint32_t material_slot, MaterialReference material,
                   const std::optional<ModelingTransform3> &initial_transform,
                   bool world_texture_projection,
-                  const CreationFinalizer &finalize) {
+                  const CreationFinalizer &finalize,
+                  bool preserve_selection = false) {
     constexpr bool kCurve =
         std::is_same_v<Document, modeling::CurveDocument>;
 
@@ -2750,9 +2764,11 @@ public:
     if (!added.ok()) {
       return rollback(added.error_message());
     }
-    Result<OperationResult> selected = session_.select_object(added.value());
-    if (!selected.ok()) {
-      return rollback(selected.error_message());
+    if (!preserve_selection) {
+      Result<OperationResult> selected = session_.select_object(added.value());
+      if (!selected.ok()) {
+        return rollback(selected.error_message());
+      }
     }
     if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation)) {
       return rollback("Injected failure after SDK mesh mutation.");
@@ -2851,12 +2867,14 @@ public:
       return rollback("SDK mesh identity binding could not be installed.");
     }
     object_map_.remember_scene_entity(native_object_id, scene_, entity);
-    scene_.clear_selection();
-    if (!scene_.set_selected(entity, true)) {
-      return rollback("SDK mesh scene selection could not be updated.");
+    if (!preserve_selection) {
+      scene_.clear_selection();
+      if (!scene_.set_selected(entity, true)) {
+        return rollback("SDK mesh scene selection could not be updated.");
+      }
+      active_native_object_id_ = native_object_id;
+      selection_mode_ = ModelingSelectionMode::Object;
     }
-    active_native_object_id_ = native_object_id;
-    selection_mode_ = ModelingSelectionMode::Object;
     if (fails(ModelingSdkProjectionFailurePoint::AfterSelection)) {
       return rollback("Injected failure after SDK selection publication.");
     }
@@ -16460,8 +16478,8 @@ ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_box_from_corners(
 
 ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_mesh(
     const ModelingCreateMeshRequest &request,
-    const CreationFinalizer &finalize) {
-  return impl_->create_mesh(request, finalize);
+    const CreationFinalizer &finalize, bool preserve_selection) {
+  return impl_->create_mesh(request, finalize, preserve_selection);
 }
 
 ModelingCreateBoxResult ModelingSdkProjectionAdapter::create_mesh_document(

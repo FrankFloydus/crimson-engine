@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_command_ids.hpp"
 #include "support/behavior_expect.hpp"
 #include "support/behavior_scenario.hpp"
 
@@ -49,7 +50,7 @@ TEST(EditorModeToolPolicyTests, ComponentToolsRejectObjectModeWithoutChangingThe
   EXPECT_FALSE(editor.tools().activate_extrude(quader::QuaderExtrudeMode::Region).ok());
 }
 
-TEST(EditorModeToolPolicyTests, ObjectToolsAndCreationCannotSettleOrReplaceAnEditContext) {
+TEST(EditorModeToolPolicyTests, ObjectOnlyToolsCannotSettleOrReplaceAnEditContext) {
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
   const auto box = create_policy_box(editor);
@@ -59,7 +60,7 @@ TEST(EditorModeToolPolicyTests, ObjectToolsAndCreationCannotSettleOrReplaceAnEdi
   const auto before = editor.revisions();
   const auto generation = editor.mode().generation();
   const auto history = editor.history().undo_history().history_revision;
-  for (const std::string_view tool : {"create_primitive", "cut", "poly", "mirror", "pivot",
+  for (const std::string_view tool : {"cut", "poly", "mirror",
                                      "linear_array", "radial_array", "path_array", "curve", "align"}) {
     SCOPED_TRACE(tool);
     EXPECT_FALSE(editor.tools().can_activate(tool));
@@ -67,7 +68,6 @@ TEST(EditorModeToolPolicyTests, ObjectToolsAndCreationCannotSettleOrReplaceAnEdi
     EXPECT_FALSE(result.ok());
     EXPECT_FALSE(result.changed());
   }
-  EXPECT_FALSE(editor.tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box).ok());
   EXPECT_FALSE(editor.tools().begin_new_curve_creation().ok());
   EXPECT_FALSE(editor.tools().begin_light_creation(quader::QuaderLightType::Point).ok());
   EXPECT_EQ(editor.tools().active_tool(), "rotate");
@@ -81,6 +81,47 @@ TEST(EditorModeToolPolicyTests, ObjectToolsAndCreationCannotSettleOrReplaceAnEdi
   EXPECT_EQ(editor.revisions().asset_revision, before.asset_revision);
   EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
   EXPECT_EQ(editor.revisions().modeling_selection_revision, before.modeling_selection_revision);
+}
+
+TEST(EditorModeToolPolicyTests, PrimitiveCommandsPreserveEverySelectionKindAndContext) {
+  for (const auto kind : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    for (const auto command : {quader::quader_command::kToolsActivateCreateBox,
+                               quader::quader_command::kToolsActivateCreateCylinder,
+                               quader::quader_command::kToolsActivateCreateSphere,
+                               quader::quader_command::kToolsActivateCreateCone,
+                               quader::quader_command::kToolsActivateCreateTorus,
+                               quader::quader_command::kToolsActivateCreateStairs}) {
+      SCOPED_TRACE(static_cast<int>(kind));
+      SCOPED_TRACE(command.string());
+      auto standalone = quader::create_standalone_editor();
+      auto &editor = standalone.editor();
+      (void)create_policy_box(editor);
+      ASSERT_TRUE(editor.selection().set_mode(kind).ok());
+      const auto mode = editor.mode().current();
+      const auto generation = editor.mode().generation();
+      const auto history = editor.history().undo_history().history_revision;
+      const auto descriptor = editor.commands().descriptor(command);
+      ASSERT_TRUE(descriptor.has_value());
+      ASSERT_TRUE(descriptor->enabled);
+      const auto activated = editor.commands().execute(command);
+      ASSERT_TRUE(activated.ok()) << activated.error_message();
+      EXPECT_EQ(editor.selection().summary().mode, kind);
+      EXPECT_EQ(editor.mode().current(), mode);
+      EXPECT_EQ(editor.mode().generation(), generation);
+      EXPECT_TRUE(editor.tools().has_active_primitive_creation());
+      const auto repeated = editor.commands().execute(command);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.changed());
+      EXPECT_EQ(editor.history().undo_history().history_revision, history);
+      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+      EXPECT_EQ(editor.selection().summary().mode, kind);
+      EXPECT_EQ(editor.mode().generation(), generation);
+    }
+  }
 }
 
 TEST(EditorModeToolPolicyTests, CuttingToolsChangeComponentKindOnlyInsideTheExistingEditSet) {
@@ -199,7 +240,7 @@ TEST(EditorModeToolPolicyTests, ModeRejectionPrecedesAcceptanceOfAnUnrelatedProp
     ASSERT_TRUE(editor.scene().update_environment_color_edit(draft.value(), {0.25f, 0.35f, 0.45f}).ok());
     const auto history = editor.history().undo_history().history_revision;
     const auto rejected = editor.tools().activate(
-        mode == quader::QuaderEditorMode::Object ? "knife" : "create_primitive");
+        mode == quader::QuaderEditorMode::Object ? "knife" : "poly");
     EXPECT_FALSE(rejected.ok());
     EXPECT_FALSE(rejected.changed());
     EXPECT_EQ(editor.history().undo_history().history_revision, history);

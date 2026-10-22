@@ -102,6 +102,15 @@ scene transforms and viewport tools retain their ordinary mode requirements.
 Object-mode Inspector drafts may finish on their captured objects after a selection
 transition; fresh preview samples must still match the current property scope.
 
+Primitive creation is available in every selection kind. Its narrow creation
+publication path retains the current Edit context and component selection (or
+Groups selection), while the creation tool owns the new live target independently.
+Ordinary whole-object creation APIs retain their Object Mode requirement. Persistent
+Pivot resolves the mesh owning the active selected component without replacing
+component selection; an empty component selection or tentative operation-preview
+components supply no durable pivot target. Apply or cancel that preview first. Both
+tools fence their retained targets by selection identity and mode generation.
+
 Use the revision to invalidate retained mode-dependent presentation and caches.
 Capture the generation with gestures, deferred picks and queued property input;
 reject work from an earlier context, including an Edit→Object→Edit round trip.

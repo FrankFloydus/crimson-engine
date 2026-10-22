@@ -116,6 +116,8 @@ private:
       EntityId target_parent = kInvalidEntityId;
       ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
       std::uint64_t selection_revision = 0;
+      std::uint64_t modeling_selection_revision = 0;
+      std::uint64_t editor_mode_generation = 0;
       QVec3 target_bounds_min = {};
       QVec3 target_bounds_max = {};
       std::uint64_t validated_scene_revision = 0;

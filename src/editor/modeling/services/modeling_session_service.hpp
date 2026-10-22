@@ -352,6 +352,7 @@ public:
   restore_mesh_documents_from_scene(std::span<const EntityId> entities);
   [[nodiscard]] ModelingInstanceEditScope instance_edit_scope() const;
   void set_editor_mode_service(EditorModeService *service);
+  [[nodiscard]] std::uint64_t editor_mode_generation() const;
   [[nodiscard]] ModelingCommandResult apply_editor_mode_context(
       const EditorModeSnapshot &snapshot,
       std::span<const EntityId> first_admission_entities = {});
@@ -557,6 +558,9 @@ public:
   ModelingCreateBoxResult commit_box(std::string name);
   ModelingCommandResult cancel_box();
   ModelingCreateBoxResult create_mesh(const ModelingCreateMeshRequest &request);
+  /// Primitive sessions retain their component/group selection and editor mode.
+  ModelingCreateBoxResult
+  create_primitive_mesh(const ModelingCreateMeshRequest &request);
   /// Curve content stays in the portable session; scene assets pin projections.
   ModelingCreateBoxResult create_curve(modeling::CurveDocument document,
                                        std::string name = "Curve");

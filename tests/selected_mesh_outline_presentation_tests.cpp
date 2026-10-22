@@ -243,9 +243,10 @@ public:
   explicit ExtrudeOutlineProvider(SceneSession &session) : session_(session) {}
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++builds;
-    return session_.modeling().selection_overlay_render_frame();
+    return session_.modeling().selection_overlay_render_frame(options);
   }
   mutable std::uint64_t builds = 0u;
+  ModelingSelectionOverlayOptions options;
 
 private:
   SceneSession &session_;
@@ -414,6 +415,215 @@ struct ExtrudeOutlineHarness {
               work.dynamic_source_compose_count);
   }
 };
+
+TEST(SelectedMeshOutlinePresentationTests,
+     ComponentModePrimitiveCreationPublishesCurrentSurfacesAndWiresThroughHistory) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    for (const bool cancel : {false, true}) {
+      SCOPED_TRACE(cancel);
+      ExtrudeOutlineHarness harness;
+      auto &editor = harness.editor;
+      const auto source = editor.modeling().create_box(
+          {.min = {-5, 0, -1}, .max = {-3, 2, 1}}, "Existing component mesh");
+      ASSERT_TRUE(source.ok()) << source.error_message();
+      ASSERT_TRUE(enter_selection_context(editor, mode).ok());
+      ASSERT_TRUE(editor.selection().select_all().ok());
+      const auto source_selection = editor.query().selection();
+      const auto context = mode == QuaderSelectionMode::Vertex
+          ? ViewportOverlaySelectionContext::Vertex
+          : mode == QuaderSelectionMode::Edge
+              ? ViewportOverlaySelectionContext::Edge
+              : ViewportOverlaySelectionContext::Face;
+      auto render_snapshot = build_render_scene_snapshot(
+          harness.session.scene(), harness.session.assets());
+      QuaderModelingObjectRef created_object;
+      const auto submit = [&] {
+        const auto live = editor.tools().live_primitive_creation();
+        harness.provider.options = {
+            .persistent_source_wire_object_id = live ? live->object_id : -1,
+        };
+        auto stamp = harness.source_stamp();
+        stamp.selection_context = context;
+        stamp.overlay_signature = harness.session.modeling().selection_overlay_signature(
+            harness.provider.options);
+        render_snapshot = build_render_scene_snapshot(
+            harness.session.scene(), harness.session.assets(),
+            {.previous = &render_snapshot});
+        return harness.coordinator.submit({
+            .viewport_index = 0U,
+            .layer_mask = 1U,
+            .construction_object_id = live ? live->object_id : -1,
+            .selection_source = stamp,
+            .selection_frame_provider = &harness.provider,
+            .scene_selection_mode = RenderOverlaySelectionMode::Component,
+            .style_selection_context = context,
+            .overlays_visible = true,
+            .selection_dimensions_visible = false,
+        }, harness.settings, harness.target);
+      };
+      const auto expect_geometry = [&](bool created_exists, bool construction) {
+        EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Edit);
+        const auto selection = editor.query().selection();
+        EXPECT_EQ(selection.mode, mode);
+        EXPECT_EQ(selection.active_object_id, source_selection.active_object_id);
+        EXPECT_EQ(selection.selected_vertex_count, source_selection.selected_vertex_count);
+        EXPECT_EQ(selection.selected_edge_count, source_selection.selected_edge_count);
+        EXPECT_EQ(selection.selected_face_count, source_selection.selected_face_count);
+        ASSERT_EQ(render_snapshot.meshes.size(), created_exists ? 2U : 1U);
+        for (const auto &displayed : render_snapshot.meshes) {
+          const auto object = editor.query().modeling_object_for_entity(
+              displayed.entity_id);
+          ASSERT_TRUE(object.has_value());
+          const auto mesh = editor.query().compiled_object_mesh(*object);
+          ASSERT_TRUE(mesh.has_value());
+          const auto world = harness.session.scene().world_transform_matrix(object->entity);
+          ASSERT_EQ(displayed.mesh.vertices.size(), mesh->vertices.size());
+          ASSERT_EQ(displayed.mesh.indices.size(), mesh->indices.size());
+          EXPECT_TRUE(std::equal(displayed.mesh.indices.begin(), displayed.mesh.indices.end(),
+                                 mesh->indices.begin()));
+          for (std::size_t index = 0U; index < mesh->vertices.size(); ++index) {
+            EXPECT_LT(length_squared(
+                transform_point(displayed.world_transform,
+                                displayed.mesh.vertices[index].position) -
+                transform_point(world, mesh->vertices[index].position)), 1.0e-12F);
+          }
+        }
+        std::size_t source_lines = 0U;
+        std::size_t construction_lines = 0U;
+        for (const auto &line : harness.target.persistent.lines) {
+          const auto object = editor.query().modeling_object_for_id(line.element.object_id);
+          ASSERT_TRUE(object.has_value()) << "Retired mesh kept submitted wires";
+          const auto mesh = editor.query().compiled_object_mesh(*object);
+          ASSERT_TRUE(mesh.has_value());
+          const auto world = harness.session.scene().world_transform_matrix(object->entity);
+          for (const auto endpoint : {line.start, line.end}) {
+            EXPECT_TRUE(std::ranges::any_of(mesh->vertices, [&](const auto &vertex) {
+              return length_squared(transform_point(world, vertex.position) - endpoint) < 1.0e-12F;
+            })) << "Stale primitive submission at " << endpoint.x << ", "
+                << endpoint.y << ", " << endpoint.z;
+          }
+          if (line.element.object_id == source.value().modeling_object_id) ++source_lines;
+          if (line.element.object_id == created_object.modeling_object_id) {
+            ++construction_lines;
+            EXPECT_EQ(line.layer, ViewportOverlayLayer::SourceWire);
+          }
+        }
+        const auto expect_overlay_point = [&](int object_id, QVec3 point) {
+          const auto object = editor.query().modeling_object_for_id(object_id);
+          ASSERT_TRUE(object.has_value());
+          const auto mesh = editor.query().compiled_object_mesh(*object);
+          ASSERT_TRUE(mesh.has_value());
+          const auto world = harness.session.scene().world_transform_matrix(object->entity);
+          EXPECT_TRUE(std::ranges::any_of(mesh->vertices, [&](const auto &vertex) {
+            return length_squared(transform_point(world, vertex.position) - point) < 1.0e-12F;
+          }));
+        };
+        for (const auto &point : harness.target.persistent.points) {
+          ASSERT_NO_FATAL_FAILURE(expect_overlay_point(point.element.object_id, point.position));
+        }
+        for (const auto &triangle : harness.target.persistent.triangles) {
+          for (const auto point : {triangle.a, triangle.b, triangle.c}) {
+            ASSERT_NO_FATAL_FAILURE(expect_overlay_point(triangle.element.object_id, point));
+          }
+        }
+        EXPECT_GT(source_lines, 0U);
+        if (construction) EXPECT_GT(construction_lines, 0U);
+        if (!created_exists) EXPECT_EQ(construction_lines, 0U);
+      };
+      const auto expect_unchanged = [&] {
+        const auto builds = harness.provider.builds;
+        const auto submissions = harness.target.submissions;
+        const auto projection = harness.session.modeling().modeling_sdk_projection_stats_for_tests();
+        const auto preview_work = harness.session.modeling().tool_preview_work_stats();
+        for (int frame = 0; frame < 4; ++frame) {
+          const auto unchanged = submit();
+          EXPECT_FALSE(unchanged.selection_source_refreshed);
+          EXPECT_FALSE(unchanged.persistent_submitted);
+          EXPECT_FALSE(unchanged.dynamic_submitted);
+          for (const auto &mesh : render_snapshot.meshes) EXPECT_FALSE(mesh.mesh_dirty);
+        }
+        EXPECT_EQ(harness.provider.builds, builds);
+        EXPECT_EQ(harness.target.submissions, submissions);
+        EXPECT_EQ(harness.session.modeling().modeling_sdk_projection_stats_for_tests()
+                      .native_selection_projection_build_count,
+                  projection.native_selection_projection_build_count);
+        EXPECT_EQ(harness.session.modeling().tool_preview_work_stats().signature_enumeration_count,
+                  preview_work.signature_enumeration_count);
+        EXPECT_EQ(harness.session.modeling().tool_preview_work_stats().mesh_extraction_count,
+                  preview_work.mesh_extraction_count);
+      };
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_TRUE(editor.tools().begin_primitive_creation(QuaderPrimitiveCreationShape::Box).ok());
+      ModelingBoxPreview placement;
+      placement.ok = true;
+      placement.valid = true;
+      placement.drag_state = ModelingBoxDragState::Height;
+      placement.corner_count = 8U;
+      placement.corners = {{{0, 0, -1}, {0, 0, 1}, {2, 0, 1}, {2, 0, -1},
+                            {0, 2, -1}, {0, 2, 1}, {2, 2, 1}, {2, 2, -1}}};
+      const auto accepted = harness.session.primitive_creation().accept_preview(
+          placement, "Component creation submission");
+      ASSERT_TRUE(accepted.ok) << accepted.message;
+      const auto live = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(live.has_value());
+      const auto created = editor.query().modeling_object_for_id(live->object_id);
+      ASSERT_TRUE(created.has_value());
+      created_object = *created;
+      const auto initial_mesh = editor.query().compiled_object_mesh(created_object);
+      ASSERT_TRUE(initial_mesh.has_value());
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(expect_geometry(true, true));
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      ASSERT_TRUE(editor.tools().set_setting(
+          "create_primitive", "primitive.box.subdivisions_x", 3.0).ok());
+      const auto subdivided = editor.query().compiled_object_mesh(created_object);
+      ASSERT_TRUE(subdivided.has_value());
+      EXPECT_GT(subdivided->indices.size(), initial_mesh->indices.size());
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(expect_geometry(true, true));
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(
+          QuaderPrimitiveResizeControl::PositiveX).ok());
+      for (const double displacement : {0.75, 1.5}) {
+        ASSERT_TRUE(editor.tools().update_primitive_resize(displacement).ok());
+        const auto resized = editor.tools().live_primitive_creation();
+        ASSERT_TRUE(resized.has_value());
+        EXPECT_NEAR(resized->local_max.x, live->local_max.x + displacement, 1.0e-6);
+        ASSERT_TRUE(submit().persistent_submitted);
+        ASSERT_NO_FATAL_FAILURE(expect_geometry(true, true));
+        ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      }
+      ASSERT_TRUE(editor.tools().cancel_primitive_resize().ok());
+      const auto restored = editor.tools().live_primitive_creation();
+      ASSERT_TRUE(restored.has_value());
+      EXPECT_FLOAT_EQ(restored->local_max.x, live->local_max.x);
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(expect_geometry(true, true));
+      ASSERT_TRUE(editor.tools().begin_primitive_resize(
+          QuaderPrimitiveResizeControl::PositiveX).ok());
+      ASSERT_TRUE(editor.tools().update_primitive_resize(2.0).ok());
+      ASSERT_TRUE(editor.tools().end_primitive_resize().ok());
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(expect_geometry(true, true));
+      ASSERT_TRUE((cancel ? editor.tools().cancel_active_tool_preview()
+                          : editor.tools().commit_active_tool_preview()).ok());
+      ASSERT_TRUE(submit().persistent_submitted);
+      ASSERT_NO_FATAL_FAILURE(expect_geometry(!cancel, false));
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      if (!cancel) {
+        ASSERT_TRUE(editor.history().undo().ok());
+        ASSERT_TRUE(submit().persistent_submitted);
+        ASSERT_NO_FATAL_FAILURE(expect_geometry(false, false));
+        ASSERT_TRUE(editor.history().redo().ok());
+        ASSERT_TRUE(submit().persistent_submitted);
+        ASSERT_NO_FATAL_FAILURE(expect_geometry(true, false));
+        ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+      }
+    }
+  }
+}
 
 TEST(SelectedMeshOutlinePresentationTests,
      StairsSettingsRefreshRetainedWiresAndSurfaceGeometryWithoutIdleRebuilds) {

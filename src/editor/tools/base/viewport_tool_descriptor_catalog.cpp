@@ -104,7 +104,7 @@ constexpr std::array<ToolDescriptor, 21> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .editor_owned_native_lifecycle = true,
-        .supported_editor_modes = EditorModeSupport::Object,
+        .supported_editor_modes = EditorModeSupport::ObjectAndEdit,
     },
     {
         .tool = ViewportToolId::CreateStairs,
@@ -115,7 +115,7 @@ constexpr std::array<ToolDescriptor, 21> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .editor_owned_native_lifecycle = true,
-        .supported_editor_modes = EditorModeSupport::Object,
+        .supported_editor_modes = EditorModeSupport::ObjectAndEdit,
     },
     {
         .tool = ViewportToolId::InsertEdgeLoop,
@@ -199,7 +199,7 @@ constexpr std::array<ToolDescriptor, 21> kViewportToolDescriptors{{
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
         .editor_owned_native_lifecycle = true,
-        .supported_editor_modes = EditorModeSupport::Object,
+        .supported_editor_modes = EditorModeSupport::ObjectAndEdit,
     },
     {
         .tool = ViewportToolId::LinearArray,

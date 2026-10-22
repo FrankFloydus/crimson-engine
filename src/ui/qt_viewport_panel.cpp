@@ -1768,6 +1768,8 @@ void QtViewportPanel::prepare_viewports(
   const ModelingSelectionOverlayOptions selection_overlay_options{
       .suppress_persistent_object_selection =
           cached_overlay_mode == ModelingSelectionMode::Object,
+      .persistent_source_wire_object_id = live_primitive_creation
+          ? live_primitive_creation->object_id : -1,
   };
   const ViewportLocalVisibilitySnapshot local_visibility =
       workspace_->local_visibility_snapshot();
