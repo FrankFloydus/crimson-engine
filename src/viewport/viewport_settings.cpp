@@ -139,6 +139,7 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::WireframeOnShaded, ViewportSettingsSectionId::Shading, "Wireframe on Shaded Color", key("WireframeOnShadedColor"), {0.0f, 0.0f, 0.0f, 1.0f}},
         {ViewportColorSettingId::LaminaFace, ViewportSettingsSectionId::Overlay, "Lamina Face Fill", key("LaminaFaceColor"), abgr8(kOverlayLaminaFaceColor)},
         {ViewportColorSettingId::LaminaWire, ViewportSettingsSectionId::Overlay, "Lamina Wire", key("LaminaWireColor"), abgr8(kOverlayLaminaWireColor)},
+        {ViewportColorSettingId::PivotIcon, ViewportSettingsSectionId::Gizmo, "Pivot Icon Color", key("PivotIconColor"), {1.0f, 1.0f, 0.35f, 1.0f}},
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
@@ -183,6 +184,7 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::Grid2DIntensity, ViewportSettingsSectionId::Grid, "2D Grid Intensity", key("Grid2DIntensity"), 0.0f, 4.0f, 1.0f},
         {ViewportFloatSettingId::Grid3DIntensity, ViewportSettingsSectionId::Grid, "3D Grid Intensity", key("Grid3DIntensity"), 0.0f, 4.0f, 1.0f},
         {ViewportFloatSettingId::LaminaWireLineSize, ViewportSettingsSectionId::Overlay, "Lamina Wire Size", key("LaminaWireLineSize"), kMinLineSize, kMaxLineSize, kOverlayLaminaWireLineWidthPixels},
+        {ViewportFloatSettingId::PivotIconSize, ViewportSettingsSectionId::Gizmo, "Pivot Icon Size", key("PivotIconSize"), 8.0f, 64.0f, 20.0f},
 }};
 
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{{

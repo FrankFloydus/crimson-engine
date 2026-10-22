@@ -9,10 +9,12 @@
 #include "core/command_result.hpp"
 #include "core/types.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/interactions/move_tool.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/pivot/pivot_types.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
+#include "editor/tools/pivot_handle_layout.hpp"
 #include "viewport/curve_tool_preview.hpp"
 #include "viewport/viewport_input_types.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
@@ -90,6 +92,7 @@ struct ViewportNativeToolInteractionFrame final {
   const ViewportPathArraySourcePickingPort *path_array_source_picker = nullptr;
   bool select_backfaces = true;
   std::optional<QVec3> selection_transform_pivot;
+  std::optional<PivotHandleLayoutOptions> pivot_layout_options;
   double *linear_array_wheel_remainder = nullptr;
   double *radial_array_wheel_remainder = nullptr;
 };
@@ -145,6 +148,20 @@ public:
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const {
     return pointer_cursor_;
   }
+  [[nodiscard]] PivotHandlePart pivot_hovered_part() const {
+    return pivot_handle_hovered_ ? pivot_hover_part_ : PivotHandlePart::None;
+  }
+  [[nodiscard]] PivotHandlePart pivot_active_part() const {
+    return pivot_handle_press_ ? pivot_handle_press_->part : PivotHandlePart::None;
+  }
+  [[nodiscard]] std::uint64_t pivot_axis_sample_count() const {
+    return pivot_axis_sample_count_;
+  }
+  [[nodiscard]] std::optional<PivotHandleLayoutOptions>
+  pivot_drag_layout_options() const {
+    return pivot_handle_press_ ? std::optional{pivot_handle_press_->layout_options}
+                               : std::nullopt;
+  }
   /// Projects only the eligible hover accepted by the most recent input frame.
   void populate_operation_input_context(
       QuaderOperationInputContext &context) const;
@@ -170,7 +187,8 @@ public:
       float viewport_pixel_scale = 1.0f);
   [[nodiscard]] static bool pivot_handle_hit(
       const ViewportCameraController &camera, const PivotHandleState &handle,
-      QVec2 mouse_local, float viewport_pixel_scale = 1.0f);
+      QVec2 mouse_local, float viewport_pixel_scale = 1.0f,
+      const PivotHandleLayoutOptions &options = {});
   [[nodiscard]] static bool linear_array_handle_hit(
       const ViewportCameraController &camera,
       const LinearArrayHandleState &handle, QVec2 mouse_local,
@@ -180,6 +198,8 @@ private:
   struct HandleHoverKey final {
     std::array<float, 25> pointer_camera{};
     std::array<float, 3> position{};
+    std::array<float, 10> layout{};
+    bool persistent = false;
     bool operator==(const HandleHoverKey &) const = default;
   };
 
@@ -233,11 +253,29 @@ private:
       const ViewportCameraController &camera, QVec2 mouse_local,
       const LinearArrayHandlePress &press);
 
+  /// Rejects unchanged axis samples before scene landmark picking.
+  struct PivotAxisSampleKey final {
+    std::array<float, 25> pointer_camera{};
+    std::uint64_t scene_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t surface_revision = 0;
+    std::uint64_t settings_revision = 0;
+    int grid_preset = 0;
+    bool precision = false;
+    bool operator==(const PivotAxisSampleKey &) const = default;
+  };
+
   /** Retains press-time state for one pivot-handle gesture. */
   struct PivotHandlePress final {
     ViewportPointerGesture gesture;
     QVec3 position_before = {};
     bool persistent = false;
+    EntityId target = kInvalidEntityId;
+    PivotHandlePart part = PivotHandlePart::Center;
+    PivotHandleLayoutOptions layout_options;
+    quader_editor_core::MoveToolState axis_drag;
+    bool axis_motion_started = false;
+    std::optional<PivotAxisSampleKey> axis_sample_key;
   };
 
   /** Retains one exact stationary source-selection gesture. */
@@ -274,11 +312,12 @@ private:
   std::optional<HandleHoverKey> linear_array_hover_key_;
   std::optional<HandleHoverKey> pivot_hover_key_;
   bool linear_array_hover_hit_ = false;
-  bool pivot_hover_hit_ = false;
+  PivotHandlePart pivot_hover_part_ = PivotHandlePart::None;
   bool curve_control_hover_accepted_ = false;
   bool path_source_hovered_ = false;
   bool linear_array_endpoint_hovered_ = false;
   bool pivot_handle_hovered_ = false;
+  std::uint64_t pivot_axis_sample_count_ = 0;
   // The next adjustment family owns the pending physical wheel fraction.
   std::optional<ViewportRadialArrayInputEventKind> radial_array_wheel_kind_;
 };

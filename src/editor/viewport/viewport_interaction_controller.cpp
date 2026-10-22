@@ -1330,6 +1330,7 @@ bool ViewportInteractionController::transform_gizmo_pointer_active() const {
 }
 
 void ViewportInteractionController::reset(QuaderEditorApi *editor) {
+  pivot_orientation_key_.reset();
   interaction_cursor_ = ViewportPointerCursor::Default;
   point_light_range_.reset(editor);
   transform_gizmo_.reset(editor);
@@ -1341,6 +1342,7 @@ void ViewportInteractionController::reset(QuaderEditorApi *editor) {
 
 void ViewportInteractionController::reset(
     QuaderEditorApi *editor, NativeViewportToolCoordinator &native_tools) {
+  pivot_orientation_key_.reset();
   interaction_cursor_ = ViewportPointerCursor::Default;
   point_light_range_.reset(editor);
   transform_gizmo_.reset(editor, &native_tools.curve_interaction());
@@ -1479,6 +1481,11 @@ ViewportInteractionController::handle_native_tools(
     ViewportCameraController &camera,
     const ViewportNativeToolInteractionFrame &frame) {
   ViewportNativeToolInteractionFrame resolved_frame = frame;
+  if (!resolved_frame.pivot_layout_options &&
+      native_tools.pivot_handle_state().persistent) {
+    resolved_frame.pivot_layout_options = pivot_handle_layout_options(
+        editor, editor.viewports().transform_space(), 20.0f);
+  }
   if (release_has_feature(ReleaseFeature::Pivot) &&
       resolved_frame.input.quick_pivot_down &&
       !resolved_frame.selection_transform_pivot.has_value()) {
@@ -1487,6 +1494,28 @@ ViewportInteractionController::handle_native_tools(
   }
   return native_tools.handle_pointer_frame(document, assets, point_placement,
                                            camera, resolved_frame);
+}
+
+PivotHandleLayoutOptions ViewportInteractionController::pivot_handle_layout_options(
+    const QuaderEditorApi &editor, QuaderTransformSpace space,
+    float icon_size_pixels) {
+  PivotHandleLayoutOptions options{.icon_size_pixels = icon_size_pixels};
+  if (space != QuaderTransformSpace::Local) return options;
+  const auto binding = editor.query().document_binding();
+  const auto revisions = editor.revisions();
+  const std::array<std::uint64_t, 7> key{
+      binding.scene_session_id.packed(), binding.document_binding_generation,
+      revisions.project_revision, revisions.scene_revision, revisions.asset_revision,
+      revisions.modeling_content_revision, revisions.modeling_selection_revision};
+  if (!pivot_orientation_key_ || *pivot_orientation_key_ != key) {
+    pivot_orientation_key_ = key;
+    pivot_orientation_ = editor.query().selection_transform_orientation().value_or(QuaderTransform3{});
+    ++pivot_orientation_query_count_;
+  }
+  options.world_x = pivot_orientation_.x_axis;
+  options.world_y = pivot_orientation_.y_axis;
+  options.world_z = pivot_orientation_.z_axis;
+  return options;
 }
 
 ViewportToolPointerLifecycleResult
@@ -1580,6 +1609,11 @@ ViewportInteractionController::handle_tool_pointer_lifecycle(
   native_frame.scene_surface_revision =
       interaction.scene_surfaces ? interaction.scene_surfaces->revision() : 0;
   native_frame.viewport_pixel_scale = interaction.viewport_pixel_scale;
+  if (!native_frame.pivot_layout_options && native_tools.pivot_handle_state().visible) {
+    native_frame.pivot_layout_options = pivot_handle_layout_options(
+        editor, editor.viewports().transform_space(),
+        interaction.settings.float_value(ViewportFloatSettingId::PivotIconSize));
+  }
   native_frame.scene_vertex_snap_radius = viewport_scaled_world_pick_radius(
       interaction.settings.float_value(ViewportFloatSettingId::PickVertexRadius),
       interaction.viewport_pixel_scale, interaction.input.device_pixel_ratio);

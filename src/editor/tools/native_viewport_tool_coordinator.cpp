@@ -440,6 +440,9 @@ NativeViewportToolCoordinator::presentation_snapshot() const {
                           ExtrudeHandlePart::NewExtrusion;
   return {
       .pivot_handle = pivot_.handle_state(),
+      .pivot_hovered_part = interaction_.pivot_hovered_part(),
+      .pivot_active_part = interaction_.pivot_active_part(),
+      .pivot_drag_layout_options = interaction_.pivot_drag_layout_options(),
       .linear_array_handle = linear_array_.handle_state(),
       .radial_array_center = radial_array_.center_state(),
       .extrusion_handle = extrusion,
@@ -452,6 +455,10 @@ NativeViewportToolCoordinator::presentation_snapshot() const {
       .path_array_source_picking = path_array_.active(),
       .selection_pivot_revision = pivot_.selection_pivot_revision(),
   };
+}
+
+PivotHandleState NativeViewportToolCoordinator::pivot_handle_state() const {
+  return pivot_.handle_state();
 }
 
 void NativeViewportToolCoordinator::populate_operation_input_context(

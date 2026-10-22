@@ -78,6 +78,7 @@ enum class ViewportColorSettingId {
     WireframeOnShaded,
     LaminaFace,
     LaminaWire,
+    PivotIcon,
     Count,
 };
 
@@ -121,6 +122,8 @@ enum class ViewportFloatSettingId {
     Grid2DIntensity,
     Grid3DIntensity,
     LaminaWireLineSize,
+    /// Outer billboard diameter in logical pixels; compact axis handles stay fixed.
+    PivotIconSize,
     Count,
 };
 

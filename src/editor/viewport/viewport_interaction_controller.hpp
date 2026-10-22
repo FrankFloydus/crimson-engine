@@ -15,6 +15,7 @@
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -179,6 +180,13 @@ public:
   ViewportToolResult handle_active_tool_event(ViewportToolState &state,
                                               ViewportToolContext &context,
                                               const ViewportToolEvent &event);
+  /// Shares the revision-gated local frame between native input and pane drawing.
+  [[nodiscard]] PivotHandleLayoutOptions pivot_handle_layout_options(
+      const QuaderEditorApi &editor, QuaderTransformSpace space,
+      float icon_size_pixels);
+  [[nodiscard]] std::uint64_t pivot_orientation_query_count() const {
+    return pivot_orientation_query_count_;
+  }
   [[nodiscard]] ViewportNativeToolInteractionResult handle_native_tools(
       QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
       NativeViewportToolCoordinator &native_tools,
@@ -240,6 +248,9 @@ private:
   MeshBoundsResizeInteraction mesh_bounds_resize_;
   PointLightRangeInteraction point_light_range_;
   ViewportSelectionInteraction selection_;
+  std::optional<std::array<std::uint64_t, 7>> pivot_orientation_key_;
+  QuaderTransform3 pivot_orientation_;
+  std::uint64_t pivot_orientation_query_count_ = 0;
   std::optional<SceneSessionId> mode_context_scene_;
   std::uint64_t mode_context_generation_ = 0;
   // Ownership only: transfer happens on the semantic trigger, never while held.

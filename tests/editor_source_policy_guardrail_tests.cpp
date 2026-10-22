@@ -634,7 +634,7 @@ TEST(ViewportToolGuardrailTests,
 }
 
 TEST(ViewportToolGuardrailTests,
-     PivotHandleUsesSphereOverlayAndConsumesSelectionFallback) {
+     PivotHandleSharesDrawPickLayoutAndConsumesSelectionFallback) {
   const std::filesystem::path root = source_root();
   const std::string viewport_panel =
       read_source_file(root / "src" / "ui" / "qt_viewport_panel.cpp");
@@ -653,12 +653,9 @@ TEST(ViewportToolGuardrailTests,
                    "void ViewportToolOverlayProjection::append_pivot_handle",
                    "void ViewportToolOverlayProjection::"
                    "append_linear_array_handle");
-  EXPECT_NE(overlay_projection.find("void append_pivot_ring("),
-            std::string::npos);
-  EXPECT_NE(pivot_overlay.find("append_pivot_ring("), std::string::npos);
-  EXPECT_NE(overlay_projection.find("frame.lines.push_back({"),
-            std::string::npos);
-  EXPECT_EQ(pivot_overlay.find("frame.points.push_back"), std::string::npos);
+  EXPECT_NE(pivot_overlay.find("build_pivot_handle_layout("), std::string::npos);
+  EXPECT_NE(native_tools.find("build_pivot_handle_layout("), std::string::npos);
+  EXPECT_NE(native_tools.find("hit_pivot_handle("), std::string::npos);
   EXPECT_NE(native_tools.find("blocked_by_navigation"),
             std::string::npos);
   EXPECT_NE(native_tools.find("!blocked_by_navigation && "

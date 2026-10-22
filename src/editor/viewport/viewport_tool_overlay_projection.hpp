@@ -8,6 +8,7 @@
 
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/tools/bridge_preview_handle_layout.hpp"
+#include "editor/tools/pivot_handle_layout.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/viewport_overlay_frame.hpp"
@@ -66,6 +67,9 @@ struct ViewportToolOverlaySourceInputs final {
       transform_snap_points = nullptr;
   const ViewportSelectionMarquee *selection_marquee = nullptr;
   const PivotHandleState *pivot_handle = nullptr;
+  PivotHandleLayoutOptions pivot_layout_options;
+  PivotHandlePart pivot_hovered_part = PivotHandlePart::None;
+  PivotHandlePart pivot_active_part = PivotHandlePart::None;
   const LinearArrayHandleState *linear_array_handle = nullptr;
   const ExtrudeHandleState *extrusion_handle = nullptr;
   const BridgePreviewHandleState *bridge_handle = nullptr;
@@ -124,7 +128,11 @@ public:
   static void append_pivot_handle(ViewportOverlayFrame &frame,
                                   const ViewportCameraController &camera,
                                   const PivotHandleState &handle,
-                                  float raster_scale = 1.0f);
+                                  float raster_scale = 1.0f,
+                                  const PivotHandleLayoutOptions &options = {},
+                                  PivotHandlePart hovered_part = PivotHandlePart::None,
+                                  PivotHandlePart active_part = PivotHandlePart::None,
+                                  const ViewportSettings *settings = nullptr);
   static void append_linear_array_handle(
       ViewportOverlayFrame &frame, const LinearArrayHandleState &handle);
   static void append_extrusion_handle(

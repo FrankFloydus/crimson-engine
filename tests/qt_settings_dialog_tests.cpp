@@ -814,6 +814,199 @@ TEST(QtDoubleSpinBoxTests,
 }
 
 TEST(QtSettingsDialogTests,
+     PivotIconPreferencesStageApplyCancelAndPersistThroughGeneratedControls) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-pivot-icon-settings-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const auto path = std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+  auto ui_settings = UISettings::defaults();
+  auto settings = ViewportSettings::defaults();
+  auto localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        changes.push_back(change);
+        EXPECT_TRUE(settings.save(path));
+      });
+  auto *color = dialog.findChild<QPushButton *>(QStringLiteral("viewportSetting_PivotIconColor"));
+  auto *size = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("viewportSetting_PivotIconSize"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      dialog.findChild<QWidget *>(QStringLiteral("settingsGroup_gizmo")));
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(size, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(settings_section_title(*group), QStringLiteral("Transform Gizmos"));
+  EXPECT_TRUE(group->isAncestorOf(color));
+  EXPECT_TRUE(group->isAncestorOf(size));
+  EXPECT_EQ(color->accessibleName(), QStringLiteral("Pivot Icon Color"));
+  EXPECT_EQ(size->accessibleName(), QStringLiteral("Pivot Icon Size"));
+  EXPECT_DOUBLE_EQ(size->minimum(), 8.0);
+  EXPECT_DOUBLE_EQ(size->maximum(), 64.0);
+  EXPECT_DOUBLE_EQ(size->value(), 20.0);
+  const auto initial = settings.color(ViewportColorSettingId::PivotIcon);
+  const QColor applied(30, 100, 190, 220);
+  const auto stage = [&] {
+    EXPECT_TRUE(accept_color_picker(dialog, *color,
+        QStringLiteral("viewportSetting_PivotIconColor_dialog"), applied));
+    size->setValue(36.0);
+  };
+  dialog.show();
+  QCoreApplication::processEvents();
+  ASSERT_TRUE(reject_color_picker(dialog, *color,
+      QStringLiteral("viewportSetting_PivotIconColor_dialog"), applied));
+  EXPECT_FALSE(apply->isEnabled());
+  stage();
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(viewport_setting_colors_approximately(settings.color(ViewportColorSettingId::PivotIcon), initial));
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 20.0F);
+  dialog.reject();
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_DOUBLE_EQ(size->value(), 20.0);
+  stage();
+  apply->click();
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1U);
+  const auto expect_applied = [&](const ViewportSettings &current) {
+    EXPECT_TRUE(viewport_setting_colors_approximately(current.color(ViewportColorSettingId::PivotIcon), setting_color(applied)));
+    EXPECT_FLOAT_EQ(current.float_value(ViewportFloatSettingId::PivotIconSize), 36.0F);
+    EXPECT_FLOAT_EQ(current.float_value(ViewportFloatSettingId::GizmoSize), 1.0F);
+  };
+  expect_applied(settings);
+  expect_applied(ViewportSettings::load(path));
+  const auto persisted = read_text_file(path);
+  EXPECT_NE(persisted.find("PivotIconColor="), std::string::npos);
+  EXPECT_NE(persisted.find("PivotIconSize="), std::string::npos);
+  ASSERT_TRUE(accept_color_picker(dialog, *color,
+      QStringLiteral("viewportSetting_PivotIconColor_dialog"), QColor(210, 20, 30, 255)));
+  size->setValue(12.0);
+  dialog.reject();
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1U);
+  expect_applied(settings);
+  expect_applied(ViewportSettings::load(path));
+}
+
+TEST(QtSettingsControllerTests,
+     PivotIconColorUsesExistingLivePreviewCommitAndRollbackNotifications) {
+  auto ui_settings = UISettings::defaults();
+  auto settings = ViewportSettings::defaults();
+  auto localization = loaded_localization();
+  std::vector<QtSettingsChange> changes;
+  QtSettingsController controller;
+  controller.bind(ui_settings, settings, localization,
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
+  const auto initial = settings.color(ViewportColorSettingId::PivotIcon);
+  const ViewportSettingColor preview{0.2F, 0.4F, 0.6F, 0.8F};
+  ASSERT_TRUE(controller.preview_color(ViewportColorSettingId::PivotIcon, preview));
+  EXPECT_TRUE(viewport_setting_colors_approximately(settings.color(ViewportColorSettingId::PivotIcon), preview));
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportPreview), 1U);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 0U);
+  ASSERT_TRUE(controller.rollback_color(ViewportColorSettingId::PivotIcon, initial));
+  EXPECT_TRUE(viewport_setting_colors_approximately(settings.color(ViewportColorSettingId::PivotIcon), initial));
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportPreview), 2U);
+  ASSERT_TRUE(controller.preview_color(ViewportColorSettingId::PivotIcon, preview));
+  ASSERT_TRUE(controller.commit_color(ViewportColorSettingId::PivotIcon, initial));
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1U);
+  ASSERT_TRUE(controller.set_float(ViewportFloatSettingId::PivotIconSize, 36.0F));
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 36.0F);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 2U);
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::GizmoSize), 1.0F);
+}
+
+TEST(QtSettingsDialogTests,
+     PivotIconPreferencesRemainReadableAcrossScaleNarrowWidthAndContrast) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-pivot-icon-preferences-layout-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  const QPalette platform_palette = application.palette();
+  apply_qt_obsidian_application_theme(platform_palette);
+  QtUiScaleApplicationController scale_controller(application);
+  auto ui_settings = UISettings::defaults();
+  auto settings = ViewportSettings::defaults();
+  auto localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  scale_controller.add_change_listener(dialog, [&](const QtUiScaleMetrics &metrics) {
+    dialog.apply_ui_scale(metrics);
+  });
+  dialog.set_context(ui_settings, settings, localization, editor.commands(), {});
+  auto *categories = dialog.findChild<QListWidget *>(QStringLiteral("settingsCategories"));
+  auto *page = dialog.findChild<QScrollArea *>(QStringLiteral("settingsPage_viewport"));
+  auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      dialog.findChild<QWidget *>(QStringLiteral("settingsGroup_gizmo")));
+  auto *color = dialog.findChild<QPushButton *>(QStringLiteral("viewportSetting_PivotIconColor"));
+  auto *size = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("viewportSetting_PivotIconSize"));
+  ASSERT_NE(categories, nullptr);
+  ASSERT_NE(page, nullptr);
+  ASSERT_NE(group, nullptr);
+  ASSERT_NE(color, nullptr);
+  ASSERT_NE(size, nullptr);
+  for (int row = 0; row < categories->count(); ++row) {
+    if (categories->item(row)->data(Qt::UserRole).toString() == QStringLiteral("viewport"))
+      categories->setCurrentRow(row);
+  }
+  for (auto *section : settings_sections(*page)) section->set_expanded(section == group);
+  const QString output = QString::fromUtf8(qgetenv("QUADER_UI_REVIEW_DIR"));
+  dialog.show();
+  const auto review = [&](float scale, bool narrow, bool contrast) {
+    scale_controller.apply_factor(scale);
+    apply_qt_application_theme_for_contrast_preference(platform_palette,
+        contrast ? Qt::ContrastPreference::HighContrast : Qt::ContrastPreference::NoPreference);
+    dialog.resize(scale_controller.metrics().size(QSize(narrow ? 600 : 820, 600)));
+    for (int iteration = 0; iteration < 4; ++iteration) {
+      QCoreApplication::processEvents();
+      dialog.layout()->activate();
+    }
+    page->ensureWidgetVisible(size);
+    QCoreApplication::processEvents();
+    auto *form = qobject_cast<QFormLayout *>(group->content()->layout());
+    ASSERT_NE(form, nullptr);
+    for (QWidget *control : {static_cast<QWidget *>(color), static_cast<QWidget *>(size)}) {
+      EXPECT_TRUE(control->isVisible());
+      EXPECT_GE(control->width(), scale_controller.metrics().px(88));
+      auto *label = qobject_cast<QLabel *>(form->labelForField(control));
+      ASSERT_NE(label, nullptr);
+      EXPECT_EQ(label->buddy(), control);
+      EXPECT_LT(label->geometry().right(), control->geometry().left());
+      EXPECT_LE(label->fontMetrics().horizontalAdvance(label->text()), label->width());
+    }
+    size->setFocus();
+    if (!output.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(output));
+      const auto name = QStringLiteral("pivot-icon-preferences-%1%2%3.png")
+          .arg(static_cast<int>(scale * 100.0F))
+          .arg(narrow ? QStringLiteral("-narrow") : QString{})
+          .arg(contrast ? QStringLiteral("-high-contrast") : QString{});
+      EXPECT_TRUE(dialog.grab().save(QDir(output).filePath(name)));
+    }
+  };
+  review(1.0F, false, false);
+  review(2.0F, false, false);
+  review(2.0F, true, false);
+  review(1.0F, true, false);
+  review(1.0F, true, true);
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
      CategoriesContainOnlyPreferencesWithoutDuplicateEditorControls) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

@@ -1927,8 +1927,8 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
-  ASSERT_EQ(viewport_color_settings().size(), 29u);
-  ASSERT_EQ(viewport_float_settings().size(), 36u);
+  ASSERT_EQ(viewport_color_settings().size(), 30u);
+  ASSERT_EQ(viewport_float_settings().size(), 37u);
   ASSERT_EQ(viewport_bool_settings().size(), 18u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
@@ -1972,6 +1972,71 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(show_hover_dimensions.label, "Show Dimensions on Hover");
   EXPECT_EQ(show_hover_dimensions.key, "ShowHoverDimensions");
   EXPECT_TRUE(show_hover_dimensions.default_value);
+}
+
+TEST(ViewportSettingsTests,
+     PivotIconDefaultsLegacyPersistenceSanitizationAndReset) {
+  const auto path = std::filesystem::temp_directory_path() /
+      "quader_pivot_icon_preferences.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.GizmoSize=1.5\n";
+  }
+  auto settings = ViewportSettings::load(path);
+  const auto defaults = ViewportSettings::defaults();
+  expect_color_near(settings.color(ViewportColorSettingId::PivotIcon), {1.0F, 1.0F, 0.35F, 1.0F});
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 20.0F);
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::GizmoSize), 1.5F);
+  const auto colors = viewport_color_settings();
+  const auto descriptor = std::find_if(colors.begin(), colors.end(), [](const auto &entry) {
+    return entry.id == ViewportColorSettingId::PivotIcon;
+  });
+  ASSERT_NE(descriptor, colors.end());
+  EXPECT_EQ(descriptor->section, ViewportSettingsSectionId::Gizmo);
+  EXPECT_EQ(descriptor->key, "PivotIconColor");
+  EXPECT_EQ(descriptor->label, "Pivot Icon Color");
+  const auto &size = viewport_float_settings()[static_cast<std::size_t>(ViewportFloatSettingId::PivotIconSize)];
+  EXPECT_EQ(size.section, ViewportSettingsSectionId::Gizmo);
+  EXPECT_EQ(size.key, "PivotIconSize");
+  EXPECT_EQ(size.label, "Pivot Icon Size");
+  EXPECT_FLOAT_EQ(size.minimum, 8.0F);
+  EXPECT_FLOAT_EQ(size.maximum, 64.0F);
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::PivotIconSize, -1.0F));
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 8.0F);
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::PivotIconSize, 1000.0F));
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 64.0F);
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::PivotIconSize,
+      std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 20.0F);
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::PivotIcon,
+      {2.0F, std::numeric_limits<float>::quiet_NaN(), -1.0F, 0.5F}));
+  expect_color_near(settings.color(ViewportColorSettingId::PivotIcon), {1.0F, 1.0F, 0.0F, 0.5F});
+  const ViewportSettingColor applied{51.0F / 255.0F, 102.0F / 255.0F, 153.0F / 255.0F, 204.0F / 255.0F};
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::PivotIcon, applied));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::PivotIconSize, 36.0F));
+  ASSERT_TRUE(settings.save(path));
+  settings = ViewportSettings::load(path);
+  expect_color_near(settings.color(ViewportColorSettingId::PivotIcon), applied);
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 36.0F);
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::GizmoSize), 1.5F);
+  ASSERT_TRUE(settings.reset_to_defaults());
+  expect_color_near(settings.color(ViewportColorSettingId::PivotIcon),
+      defaults.color(ViewportColorSettingId::PivotIcon));
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 20.0F);
+  EXPECT_FALSE(settings.reset_to_defaults());
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.PivotIconSize=99999\n"
+            "QVertexWorks.Quader.Viewport.PivotIconColor=invalid\n";
+  }
+  settings = ViewportSettings::load(path);
+  EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::PivotIconSize), 64.0F);
+  expect_color_near(settings.color(ViewportColorSettingId::PivotIcon),
+      defaults.color(ViewportColorSettingId::PivotIcon));
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
 }
 
 TEST(ViewportSettingsTests,

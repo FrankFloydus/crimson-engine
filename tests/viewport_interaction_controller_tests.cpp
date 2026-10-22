@@ -26,6 +26,7 @@
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "editor/tools/extrude_handle_layout.hpp"
+#include "editor/tools/pivot_handle_layout.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
@@ -45,6 +46,7 @@
 #include "scene/components.hpp"
 #include "scene/scene_transform.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
+#include "support/command_observable_state.hpp"
 #include "support/curve_modeling_test_support.hpp"
 #include "ui/viewport_hover_controller.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
@@ -18035,7 +18037,7 @@ TEST(ViewportInteractionScaleTests,
       harness.camera.project_world_point(pivot.world_position);
   ASSERT_TRUE(screen.visible);
   const quader::QVec2 outside_unit_radius =
-      screen.position + quader::QVec2{24.0f, 0.0f};
+      screen.position + quader::QVec2{15.0f, 0.0f};
   EXPECT_FALSE(quader::ViewportNativeToolInteraction::pivot_handle_hit(
       harness.camera, pivot, outside_unit_radius, 1.0f));
   EXPECT_TRUE(quader::ViewportNativeToolInteraction::pivot_handle_hit(
@@ -21945,6 +21947,578 @@ TEST(ViewportKeybindingRepeatTests,
   }
 }
 
+namespace {
+
+quader::QVec2 pivot_workflow_screen_direction(quader::QVec2 direction) {
+  const float magnitude = std::hypot(direction.x, direction.y);
+  return magnitude > 0.000001f ? direction / magnitude : quader::QVec2{1, 0};
+}
+
+quader::QMat4 pivot_workflow_world_matrix(const quader::QuaderEditorApi &editor,
+                                          quader::EntityId entity) {
+  const auto snapshot = editor.query().entity(entity);
+  EXPECT_TRUE(snapshot);
+  if (!snapshot) return {};
+  const quader::TransformComponent transform{
+      .location = snapshot->transform.location,
+      .rotation_euler = snapshot->transform.rotation_euler,
+      .scale = snapshot->transform.scale,
+      .parenting_offset = snapshot->parenting_offset.value_or(quader::QMat4{})};
+  const auto local = quader::scene_local_transform_matrix(transform);
+  return snapshot->parent == quader::kInvalidEntityId ? local
+      : quader::scene_transform_multiply(
+            pivot_workflow_world_matrix(editor, snapshot->parent), local);
+}
+
+std::vector<quader::QVec3> pivot_workflow_world_vertices(
+    const quader::QuaderEditorApi &editor, quader::QuaderModelingObjectRef object) {
+  std::vector<quader::QVec3> positions;
+  const auto mesh = editor.query().compiled_object_mesh(object);
+  EXPECT_TRUE(mesh);
+  if (!mesh) return positions;
+  const auto world = pivot_workflow_world_matrix(editor, object.entity);
+  for (const auto &vertex : mesh->vertices) {
+    positions.push_back(quader::transform_point(world, vertex.position));
+  }
+  return positions;
+}
+
+void expect_pivot_workflow_vertices(const std::vector<quader::QVec3> &actual,
+                                    const std::vector<quader::QVec3> &expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    expect_vec3_near(actual[index], expected[index]);
+  }
+}
+
+struct PivotAxisWorkflowHarness {
+  ViewportInteractionHarness viewport;
+  quader::QuaderModelingObjectRef object;
+  std::uint64_t edge_sequence = 0;
+  float drag_threshold_pixels = 4.0f;
+
+  void seed(quader::QuaderSelectionMode mode = quader::QuaderSelectionMode::Object,
+            quader::QuaderTransform transform = {}) {
+    object = create_unit_box(viewport);
+    ASSERT_TRUE(viewport.editor.scene().set_transform(object.entity, transform).ok());
+    ASSERT_TRUE(viewport.editor.selection().select_object(object).ok());
+    if (mode != quader::QuaderSelectionMode::Object) {
+      ASSERT_NO_FATAL_FAILURE(select_single_component(viewport, object, mode));
+    }
+    viewport.camera.set_view_direction({-0.3f, -0.4f, -1.0f});
+    ASSERT_TRUE(viewport.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+    viewport.router.set_active_tool(quader::ViewportToolId::Pivot);
+    viewport.input.modal_tool_active = true;
+    viewport.input.active_tool_owns_viewport = true;
+    for (const auto setting : {quader::kPivotSnapVertexSetting,
+                               quader::kPivotSnapEdgeMidpointSetting,
+                               quader::kPivotSnapFaceCenterSetting,
+                               quader::kPivotSnapGridSetting}) {
+      ASSERT_TRUE(viewport.editor.tools().set_setting(quader::kPivotToolId, setting, false).ok());
+    }
+  }
+
+  quader::PivotHandleLayoutOptions options() {
+    return viewport.controller.pivot_handle_layout_options(viewport.editor,
+        viewport.editor.viewports().transform_space(),
+        viewport.settings.float_value(quader::ViewportFloatSettingId::PivotIconSize));
+  }
+
+  quader::PivotHandleLayout layout() {
+    auto prepared = options();
+    const auto snapshot = viewport.session.native_tools().presentation_snapshot();
+    if (snapshot.pivot_drag_layout_options) {
+      prepared.world_x = snapshot.pivot_drag_layout_options->world_x;
+      prepared.world_y = snapshot.pivot_drag_layout_options->world_y;
+      prepared.world_z = snapshot.pivot_drag_layout_options->world_z;
+    }
+    return quader::build_pivot_handle_layout(viewport.camera, snapshot.pivot_handle,
+        1.0f, prepared);
+  }
+
+  quader::ViewportNativeToolInteractionResult dispatch(quader::QVec2 pointer,
+      bool pressed = false, bool down = false, bool released = false,
+      bool earlier_handle_consumed = false,
+      std::optional<quader::QVec2> event_release = std::nullopt) {
+    auto &input = viewport.input;
+    input.mouse_local = pointer;
+    input.mouse_screen = pointer;
+    input.pointer_pressed_edges.clear();
+    input.pointer_released_edges.clear();
+    if (pressed) input.pointer_pressed_edges.push_back({
+        .button = quader::QuaderMouseButton::Left, .local = pointer,
+        .sequence = ++edge_sequence});
+    if (released) input.pointer_released_edges.push_back({
+        .button = quader::QuaderMouseButton::Left,
+        .local = event_release.value_or(pointer), .sequence = ++edge_sequence});
+    return viewport.controller.handle_native_tools(viewport.editor,
+        viewport.session.scene(), viewport.session.assets(),
+        viewport.session.native_tools(), &viewport.session.point_placement(),
+        viewport.camera, {.input = input, .input_result = viewport.input_result,
+            .transform_gizmo_consumed = earlier_handle_consumed,
+            .handles_visible = viewport.settings.bool_value(quader::ViewportBoolSettingId::ShowGizmos),
+            .left_pressed = pressed, .left_down = down, .left_released = released,
+            .left_click_local = pointer, .pointer_drag_threshold_pixels = drag_threshold_pixels,
+            .pivot_layout_options = options()});
+  }
+};
+
+} // namespace
+
+TEST(ViewportInteractionControllerTests,
+     PivotAxesPreserveGeometrySelectionAndSingleApplyHistoryInEverySelectionMode) {
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                         quader::QuaderSelectionMode::Vertex,
+                         quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face}) {
+    for (int component = 0; component < 3; ++component) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(component);
+      PivotAxisWorkflowHarness harness;
+      ASSERT_NO_FATAL_FAILURE(harness.seed(mode));
+      auto &viewport = harness.viewport;
+      const auto selection = viewport.editor.selection().summary();
+      const auto geometry = pivot_workflow_world_vertices(viewport.editor, harness.object);
+      const auto mesh = viewport.editor.query().compiled_object_mesh(harness.object);
+      ASSERT_TRUE(mesh);
+      const auto history_before = viewport.editor.history().undo_history(100).entries.size();
+      const auto origin_before = quader::transform_point(
+          pivot_workflow_world_matrix(viewport.editor, harness.object.entity), {});
+      const auto layout = harness.layout();
+      ASSERT_TRUE(layout.valid);
+      const auto &axis = layout.axes[component];
+      ASSERT_TRUE(axis.visible);
+      const auto start = axis.screen_tip;
+      const auto direction = pivot_workflow_screen_direction(axis.screen_tip - layout.center_screen);
+      ASSERT_TRUE(harness.dispatch(start).blocks_transform_gizmo);
+      EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_hovered_part, axis.part);
+      ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+      EXPECT_TRUE(viewport.session.native_tools().pointer_dragging());
+      EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_active_part, axis.part);
+      expect_vec3_near(viewport.session.pivot().handle_state().world_position, layout.center);
+      const auto update = start + direction * 60.0f;
+      ASSERT_TRUE(harness.dispatch(update, false, true).pivot_consumed);
+      const auto pending = viewport.session.pivot().handle_state().world_position;
+      const auto samples = viewport.session.native_tools().pivot_axis_sample_count();
+      for (int frame = 0; frame < 5; ++frame) {
+        const auto unchanged = harness.dispatch(update, false, true);
+        EXPECT_TRUE(unchanged.pivot_consumed);
+        EXPECT_FALSE(unchanged.invalidate_hover);
+        EXPECT_FALSE(unchanged.mark_overlay_dirty);
+      }
+      EXPECT_EQ(viewport.session.native_tools().pivot_axis_sample_count(), samples);
+      const auto delta = pending - layout.center;
+      EXPECT_GT(quader::dot(delta, axis.world_direction), 0.05f);
+      EXPECT_NEAR(quader::length(quader::cross(delta, axis.world_direction)), 0.0f, 0.001f);
+      expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+      const auto end = start + direction * 80.0f;
+      ASSERT_TRUE(harness.dispatch(update, false, false, true, false, end).pivot_consumed);
+      EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+      const auto accepted = viewport.session.pivot().handle_state().world_position;
+      EXPECT_GT(quader::dot(accepted - pending, axis.world_direction), 0.01f)
+          << "the exact release event supplies the final constrained sample";
+      EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history_before);
+      const auto applied = viewport.editor.tools().commit_active_tool_preview();
+      ASSERT_TRUE(applied.ok()) << applied.error_message();
+      EXPECT_TRUE(applied.changed());
+      EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history_before + 1);
+      expect_vec3_near(quader::transform_point(
+          pivot_workflow_world_matrix(viewport.editor, harness.object.entity), {}), accepted);
+      expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+      const auto after_mesh = viewport.editor.query().compiled_object_mesh(harness.object);
+      ASSERT_TRUE(after_mesh);
+      ASSERT_EQ(after_mesh->vertices.size(), mesh->vertices.size());
+      for (std::size_t index = 0; index < mesh->vertices.size(); ++index) {
+        EXPECT_NEAR(after_mesh->vertices[index].uv.x, mesh->vertices[index].uv.x, 0.0001f);
+        EXPECT_NEAR(after_mesh->vertices[index].uv.y, mesh->vertices[index].uv.y, 0.0001f);
+      }
+      const auto after_selection = viewport.editor.selection().summary();
+      EXPECT_EQ(after_selection.mode, selection.mode);
+      EXPECT_EQ(after_selection.active_kind, selection.active_kind);
+      EXPECT_EQ(after_selection.active_vertex_id, selection.active_vertex_id);
+      EXPECT_EQ(after_selection.active_edge_a, selection.active_edge_a);
+      EXPECT_EQ(after_selection.active_edge_b, selection.active_edge_b);
+      EXPECT_EQ(after_selection.active_face_id, selection.active_face_id);
+      EXPECT_EQ(selected_component_count(after_selection), selected_component_count(selection));
+      ASSERT_TRUE(viewport.editor.history().undo().ok());
+      expect_vec3_near(quader::transform_point(
+          pivot_workflow_world_matrix(viewport.editor, harness.object.entity), {}), origin_before);
+      expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+      ASSERT_TRUE(viewport.editor.history().redo().ok());
+      expect_vec3_near(quader::transform_point(
+          pivot_workflow_world_matrix(viewport.editor, harness.object.entity), {}), accepted);
+      expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotAxisDragPinsLocalBasisAndReusesItAcrossUnchangedPaneFrames) {
+  PivotAxisWorkflowHarness harness;
+  ASSERT_NO_FATAL_FAILURE(harness.seed(quader::QuaderSelectionMode::Object,
+      {.location = {0.25f, 0.33f, 0.75f}, .rotation_euler = {0, 0, 0.71f}}));
+  auto &viewport = harness.viewport;
+  ASSERT_TRUE(viewport.editor.viewports().set_transform_space(quader::QuaderTransformSpace::Local).ok());
+  const auto layout = harness.layout();
+  ASSERT_TRUE(layout.axes[0].visible);
+  const auto queries = viewport.controller.pivot_orientation_query_count();
+  for (int frame = 0; frame < 8; ++frame) {
+    (void)harness.options();
+    (void)harness.dispatch(layout.axes[0].screen_tip);
+  }
+  EXPECT_EQ(viewport.controller.pivot_orientation_query_count(), queries);
+  const auto start = layout.axes[0].screen_tip;
+  ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+  const auto captured = viewport.session.native_tools().presentation_snapshot().pivot_drag_layout_options;
+  ASSERT_TRUE(captured);
+  ASSERT_TRUE(viewport.editor.viewports().set_transform_space(quader::QuaderTransformSpace::Global).ok());
+  const auto direction = pivot_workflow_screen_direction(start - layout.center_screen);
+  ASSERT_TRUE(harness.dispatch(start + direction * 75.0f, false, true).pivot_consumed);
+  const auto position = viewport.session.pivot().handle_state().world_position;
+  const auto delta = position - layout.center;
+  EXPECT_GT(quader::dot(delta, layout.axes[0].world_direction), 0.05f);
+  EXPECT_NEAR(quader::length(quader::cross(delta, layout.axes[0].world_direction)), 0.0f, 0.001f);
+  const auto presentation = harness.layout();
+  expect_vec3_near(presentation.axes[0].world_direction, layout.axes[0].world_direction);
+  ASSERT_TRUE(viewport.editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_FALSE(viewport.session.pivot().persistent_active());
+  EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotAxisGridAndLandmarkSnapsKeepTheOtherCoordinatesLocked) {
+  for (const bool landmark : {false, true}) {
+    SCOPED_TRACE(landmark);
+    PivotAxisWorkflowHarness harness;
+    auto &viewport = harness.viewport;
+    if (landmark) {
+      const auto target = viewport.editor.modeling().create_box(
+          {.min = {4, 2, -1}, .max = {6, 4, 1}}, "Pivot snap landmark");
+      ASSERT_TRUE(target.ok()) << target.error_message();
+    }
+    ASSERT_NO_FATAL_FAILURE(harness.seed(quader::QuaderSelectionMode::Object,
+        {.location = {0.25f, 0.33f, 0.75f}}));
+    viewport.camera.set_view_direction({0, 0, -1});
+    viewport.camera.focus_origin(16.0f);
+    quader::QVec2 destination;
+    if (landmark) {
+      ASSERT_TRUE(viewport.editor.tools().set_setting(quader::kPivotToolId,
+          quader::kPivotSnapVertexSetting, true).ok());
+      const auto projected = viewport.camera.project_world_point({4, 2, 1});
+      ASSERT_TRUE(projected.visible);
+      destination = projected.position;
+    } else {
+      ASSERT_TRUE(viewport.editor.tools().set_setting(quader::kPivotToolId,
+          quader::kPivotSnapGridSetting, true).ok());
+    }
+    const auto layout = harness.layout();
+    const auto start = layout.axes[0].screen_tip;
+    ASSERT_TRUE(layout.axes[0].visible);
+    if (!landmark) destination = start + quader::QVec2{70, 15};
+    ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+    ASSERT_TRUE(harness.dispatch(destination, false, true).pivot_consumed);
+    const auto accepted = viewport.session.pivot().handle_state().world_position;
+    EXPECT_FLOAT_EQ(accepted.y, layout.center.y);
+    EXPECT_FLOAT_EQ(accepted.z, layout.center.z);
+    if (landmark) EXPECT_NEAR(accepted.x, 4.0f, 0.001f);
+    else {
+      const float grid = quader::viewport_grid_world_size_for_preset(viewport.input.grid_preset);
+      EXPECT_NEAR(accepted.x / grid, std::round(accepted.x / grid), 0.001f);
+    }
+    ASSERT_TRUE(harness.dispatch(destination, false, false, true).pivot_consumed);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotAxisInterruptionRestoresItsPressAndStaleComponentsCannotMoveAnotherTarget) {
+  for (int interruption = 0; interruption < 4; ++interruption) {
+    SCOPED_TRACE(interruption);
+    PivotAxisWorkflowHarness harness;
+    ASSERT_NO_FATAL_FAILURE(harness.seed(quader::QuaderSelectionMode::Vertex));
+    auto &viewport = harness.viewport;
+    const auto geometry = pivot_workflow_world_vertices(viewport.editor, harness.object);
+    const auto history = viewport.editor.history().undo_history(100).entries.size();
+    const auto layout = harness.layout();
+    const auto start = layout.axes[0].screen_tip;
+    const auto update = start + pivot_workflow_screen_direction(start - layout.center_screen) * 65.0f;
+    ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+    ASSERT_TRUE(harness.dispatch(update, false, true).pivot_consumed);
+    ASSERT_GT(quader::length(viewport.session.pivot().handle_state().world_position - layout.center), 0.05f);
+    if (interruption == 0) viewport.input.viewport_focused = false;
+    else if (interruption == 1) viewport.input.text_input_active = true;
+    else if (interruption == 2) viewport.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, false);
+    else {
+      // External component publication can invalidate a captured pointer;
+      // ordinary public selection edits intentionally settle Pivot first.
+      ASSERT_TRUE(viewport.session.modeling().clear_selection().ok);
+    }
+    EXPECT_TRUE(harness.dispatch(update, false, true).pivot_consumed);
+    EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+    if (interruption < 3) {
+      ASSERT_TRUE(viewport.session.pivot().persistent_active());
+      expect_vec3_near(viewport.session.pivot().handle_state().world_position, layout.center);
+    } else {
+      EXPECT_FALSE(viewport.session.pivot().persistent_active());
+    }
+    viewport.input.viewport_focused = true;
+    viewport.input.text_input_active = false;
+    viewport.settings.set_bool_value(quader::ViewportBoolSettingId::ShowGizmos, true);
+    const auto selected_after_interruption = viewport.editor.selection().summary();
+    EXPECT_TRUE(harness.dispatch(update, false, false, true).consumed);
+    EXPECT_EQ(viewport.editor.selection().summary().active_kind, selected_after_interruption.active_kind);
+    EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history);
+    expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotStationarySizeChangesUpdatePickingAndEarlierBoundsCaptureKeepsPriority) {
+  PivotAxisWorkflowHarness harness;
+  ASSERT_NO_FATAL_FAILURE(harness.seed());
+  auto &viewport = harness.viewport;
+  const auto layout = harness.layout();
+  const auto pointer = layout.center_screen + quader::QVec2{-12, -12};
+  (void)harness.dispatch(pointer);
+  EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_hovered_part,
+      quader::PivotHandlePart::None);
+  viewport.settings.set_float_value(quader::ViewportFloatSettingId::PivotIconSize, 40.0f);
+  (void)harness.dispatch(pointer);
+  EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_hovered_part,
+      quader::PivotHandlePart::Center);
+  EXPECT_FALSE(harness.dispatch(pointer, true, true, false, true).pivot_consumed);
+  EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+  EXPECT_TRUE(harness.dispatch(pointer, true, true).pivot_consumed);
+  EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_active_part,
+      quader::PivotHandlePart::Center);
+  EXPECT_TRUE(harness.dispatch(pointer, false, false, true).pivot_consumed);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotAxisClickRespectsScaledThresholdAndReturningToStartAddsNoHistory) {
+  for (const bool return_to_start : {false, true}) {
+    SCOPED_TRACE(return_to_start);
+    PivotAxisWorkflowHarness harness;
+    ASSERT_NO_FATAL_FAILURE(harness.seed());
+    harness.drag_threshold_pixels = 12.0f;
+    auto &viewport = harness.viewport;
+    const auto layout = harness.layout();
+    const auto start = layout.axes[0].screen_tip;
+    const auto direction = pivot_workflow_screen_direction(start - layout.center_screen);
+    const auto history = viewport.editor.history().undo_history(100).entries.size();
+    const auto authored_before = quader::test::capture_command_observable_state(viewport.editor);
+    const auto revisions_before = viewport.editor.revisions();
+    const auto samples = viewport.session.native_tools().pivot_axis_sample_count();
+    ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+    ASSERT_TRUE(harness.dispatch(start + direction * 8.0f, false, true).pivot_consumed);
+    expect_vec3_near(viewport.session.pivot().handle_state().world_position, layout.center);
+    EXPECT_EQ(viewport.session.native_tools().pivot_axis_sample_count(), samples);
+    auto release = start + direction * 8.0f;
+    if (return_to_start) {
+      ASSERT_TRUE(harness.dispatch(start + direction * 60.0f, false, true).pivot_consumed);
+      ASSERT_GT(quader::length(viewport.session.pivot().handle_state().world_position - layout.center), 0.05f);
+      ASSERT_TRUE(harness.dispatch(start, false, true).pivot_consumed);
+      release = start;
+    }
+    ASSERT_TRUE(harness.dispatch(release, false, false, true).pivot_consumed);
+    EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+    const auto returned = viewport.session.pivot().handle_state().world_position;
+    EXPECT_FLOAT_EQ(returned.x, layout.center.x);
+    EXPECT_FLOAT_EQ(returned.y, layout.center.y);
+    EXPECT_FLOAT_EQ(returned.z, layout.center.z);
+    const auto applied = viewport.editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    // Ending the persistent lifecycle is a runtime change even when Apply
+    // keeps every authored value and the history unchanged.
+    EXPECT_TRUE(applied.changed());
+    EXPECT_FALSE(viewport.session.pivot().persistent_active());
+    EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history);
+    const auto revisions_after = viewport.editor.revisions();
+    EXPECT_EQ(revisions_after.scene_revision, revisions_before.scene_revision);
+    EXPECT_EQ(revisions_after.asset_revision, revisions_before.asset_revision);
+    EXPECT_EQ(revisions_after.modeling_content_revision, revisions_before.modeling_content_revision);
+    EXPECT_EQ(revisions_after.modeling_selection_revision, revisions_before.modeling_selection_revision);
+    using Domain = quader::test::CommandObservableDomain;
+    constexpr auto kAuthoredDomains = quader::test::command_observable_domain_mask(Domain::Scene) |
+        quader::test::command_observable_domain_mask(Domain::Geometry) |
+        quader::test::command_observable_domain_mask(Domain::Selection) |
+        quader::test::command_observable_domain_mask(Domain::Assets) |
+        quader::test::command_observable_domain_mask(Domain::History);
+    const auto difference = quader::test::diff_command_observable_state(authored_before,
+        quader::test::capture_command_observable_state(viewport.editor), kAuthoredDomains);
+    EXPECT_TRUE(difference.empty()) << difference.summary;
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     OverlappingBoundsYAndPivotXGiveFreshPressToBoundsAndKeepCapturedPivotOwnership) {
+  for (const float scale : {1.0f, 2.0f, 1.0f}) {
+    for (const float overlap_distance : {24.0f, 44.0f}) {
+      SCOPED_TRACE(scale);
+      SCOPED_TRACE(overlap_distance);
+      MeshBoundsViewportHarness harness;
+      ASSERT_NO_FATAL_FAILURE(harness.seed(false));
+      auto &viewport = harness.viewport;
+      viewport.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+      ASSERT_TRUE(viewport.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+      viewport.router.set_active_tool(quader::ViewportToolId::Pivot);
+      viewport.input.modal_tool_active = true;
+      viewport.input.active_tool_owns_viewport = true;
+      for (const auto setting : {quader::kPivotSnapVertexSetting,
+                                 quader::kPivotSnapEdgeMidpointSetting,
+                                 quader::kPivotSnapFaceCenterSetting,
+                                 quader::kPivotSnapGridSetting}) {
+        ASSERT_TRUE(viewport.editor.tools().set_setting(quader::kPivotToolId, setting, false).ok());
+      }
+      const auto dispatch = [&](quader::QVec2 local, bool pressed = false,
+                                bool down = false, bool released = false) {
+        viewport.input.mouse_local = local;
+        viewport.input.mouse_screen = local;
+        auto interaction = viewport.frame(pressed, down, released, local);
+        interaction.viewport_pixel_scale = scale;
+        const quader::ViewportNativeToolInteractionFrame native{
+            .input = viewport.input, .input_result = viewport.input_result,
+            .left_pressed = pressed, .left_down = down, .left_released = released,
+            .left_click_local = local};
+        const auto result = viewport.controller.handle_tool_pointer_lifecycle(
+            viewport.editor, viewport.session.scene(), viewport.session.assets(),
+            viewport.session.native_tools(), &viewport.session.point_placement(),
+            viewport.camera, {.interaction = interaction, .native_tool = native});
+        viewport.controller.handle_after_active_tool(viewport.editor, interaction,
+            {}, result.before_tool, viewport.session.native_tools());
+        return result;
+      };
+      (void)dispatch({20, 20});
+      const auto *bounds = viewport.controller.mesh_bounds_resize_frame();
+      ASSERT_NE(bounds, nullptr);
+      ASSERT_TRUE(bounds->handles[2].visible);
+      ASSERT_TRUE(bounds->handles[2].enabled);
+      const auto target = bounds->handles[2].screen_position;
+      const auto initial = viewport.session.pivot().handle_state();
+      const auto reference = quader::build_pivot_handle_layout(viewport.camera, initial, scale);
+      ASSERT_TRUE(reference.valid);
+      const auto offset = target - reference.center_screen -
+                          quader::QVec2{overlap_distance * scale, 0};
+      const auto placed = reference.center +
+          (reference.camera_right * offset.x - reference.camera_up * offset.y) *
+          reference.world_units_per_pixel;
+      viewport.session.pivot().set_persistent_preview_position(placed);
+      const auto layout = quader::build_pivot_handle_layout(viewport.camera,
+          viewport.session.pivot().handle_state(), scale);
+      ASSERT_EQ(quader::hit_pivot_handle(layout, target), quader::PivotHandlePart::X)
+          << "the real green bounds disk must overlap the red Pivot shaft or tip";
+      const auto geometry = pivot_workflow_world_vertices(viewport.editor, harness.objects.front());
+      const auto history = viewport.editor.history().undo_history(100).entries.size();
+
+      const auto fresh = dispatch(target, true, true);
+      EXPECT_TRUE(fresh.before_tool.gizmo_consumed);
+      EXPECT_TRUE(viewport.controller.mesh_bounds_resize_pointer_active());
+      EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+      EXPECT_FALSE(fresh.native_tool.pivot_consumed);
+      EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_active_part,
+          quader::PivotHandlePart::None);
+      expect_vec3_near(viewport.session.pivot().handle_state().world_position, placed);
+      const auto *pressed_bounds = viewport.controller.mesh_bounds_resize_frame();
+      ASSERT_NE(pressed_bounds, nullptr);
+      EXPECT_EQ(pressed_bounds->active, 2);
+      EXPECT_TRUE(dispatch(target, false, false, true).before_tool.gizmo_consumed);
+      EXPECT_TRUE(viewport.session.pivot().persistent_active());
+      expect_vec3_near(viewport.session.pivot().handle_state().world_position, placed);
+      EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history);
+
+      // Capture the same red control away from the green disk, then move into
+      // the overlap. An established native gesture owns its remaining frames.
+      const auto start = overlap_distance < 40.0f ? layout.axes[0].screen_tip
+          : layout.center_screen + quader::QVec2{24.0f * scale, 0};
+      ASSERT_EQ(quader::hit_pivot_handle(layout, start), quader::PivotHandlePart::X);
+      const auto captured = dispatch(start, true, true);
+      ASSERT_TRUE(captured.native_tool.pivot_consumed);
+      EXPECT_TRUE(viewport.session.native_tools().pointer_dragging());
+      EXPECT_FALSE(viewport.controller.mesh_bounds_resize_pointer_active());
+      EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_active_part,
+          quader::PivotHandlePart::X);
+      const auto continued = dispatch(target, false, true);
+      EXPECT_TRUE(continued.native_tool.pivot_consumed);
+      EXPECT_TRUE(viewport.session.native_tools().pointer_dragging());
+      EXPECT_FALSE(viewport.controller.mesh_bounds_resize_pointer_active());
+      EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_active_part,
+          quader::PivotHandlePart::X);
+      const auto pending = viewport.session.pivot().handle_state().world_position;
+      EXPECT_GT(quader::length(pending - placed), 0.01f);
+      EXPECT_NEAR(pending.y, placed.y, 0.0001f);
+      EXPECT_NEAR(pending.z, placed.z, 0.0001f);
+      EXPECT_TRUE(dispatch(target, false, false, true).native_tool.pivot_consumed);
+      EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+      EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history);
+      expect_pivot_workflow_vertices(
+          pivot_workflow_world_vertices(viewport.editor, harness.objects.front()), geometry);
+      ASSERT_TRUE(viewport.editor.tools().cancel_active_tool_preview().ok());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotAxisCoalescedReleaseUsesItsFirstMatchingEdgeAndDoesNotStartTheLaterClick) {
+  PivotAxisWorkflowHarness harness;
+  ASSERT_NO_FATAL_FAILURE(harness.seed());
+  auto &viewport = harness.viewport;
+  viewport.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+  const auto layout = harness.layout();
+  ASSERT_TRUE(layout.axes[0].visible);
+  const auto start = layout.axes[0].screen_tip;
+  const auto first_release = start + quader::QVec2{40, 0};
+  const auto second_press = layout.center_screen;
+  const auto second_release = start + quader::QVec2{180, 75};
+  const auto geometry = pivot_workflow_world_vertices(viewport.editor, harness.object);
+  const auto history = viewport.editor.history().undo_history(100).entries.size();
+  const auto samples = viewport.session.native_tools().pivot_axis_sample_count();
+  ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+  ASSERT_EQ(harness.edge_sequence, 1U);
+  ASSERT_TRUE(viewport.session.native_tools().pointer_dragging());
+
+  // The next sampled frame contains R1 -> P2 -> R2. The original X capture
+  // ends at R1 even though the live pointer already reflects the later click.
+  viewport.input.mouse_local = second_release;
+  viewport.input.mouse_screen = second_release;
+  viewport.input.pointer_pressed_edges = {{
+      .button = quader::QuaderMouseButton::Left, .local = second_press, .sequence = 3U}};
+  viewport.input.pointer_released_edges = {
+      {.button = quader::QuaderMouseButton::Left, .local = first_release, .sequence = 2U},
+      {.button = quader::QuaderMouseButton::Left, .local = second_release, .sequence = 4U}};
+  const auto result = viewport.controller.handle_native_tools(viewport.editor,
+      viewport.session.scene(), viewport.session.assets(), viewport.session.native_tools(),
+      &viewport.session.point_placement(), viewport.camera,
+      {.input = viewport.input, .input_result = viewport.input_result,
+       .left_pressed = true, .left_down = false, .left_released = true,
+       .left_click_local = second_press, .pivot_layout_options = harness.options()});
+  EXPECT_TRUE(result.pivot_consumed);
+  EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+  EXPECT_EQ(viewport.session.native_tools().presentation_snapshot().pivot_active_part,
+      quader::PivotHandlePart::None);
+  EXPECT_EQ(viewport.session.native_tools().pivot_axis_sample_count(), samples + 1U);
+  const auto accepted = viewport.session.pivot().handle_state().world_position;
+  const auto press_ray = viewport.camera.ray_from_viewport_point(start);
+  const auto release_ray = viewport.camera.ray_from_viewport_point(first_release);
+  const auto expected = layout.center + quader::QVec3{
+      release_ray.origin.x - press_ray.origin.x, 0, 0};
+  expect_vec3_near(accepted, expected);
+  EXPECT_GT(accepted.x - layout.center.x, 0.05f);
+  EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history);
+
+  const auto idle = harness.dispatch(second_release);
+  EXPECT_FALSE(idle.pivot_consumed);
+  EXPECT_FALSE(viewport.session.native_tools().pointer_dragging());
+  expect_vec3_near(viewport.session.pivot().handle_state().world_position, accepted);
+  EXPECT_EQ(viewport.session.native_tools().pivot_axis_sample_count(), samples + 1U);
+  expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+  const auto applied = viewport.editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history + 1U);
+  expect_vec3_near(quader::transform_point(
+      pivot_workflow_world_matrix(viewport.editor, harness.object.entity), {}), expected);
+  expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, harness.object), geometry);
+}
+
 TEST(ViewportInteractionControllerTests,
      ForegroundRotateRingOwnsFreshPressWhenItOverlapsAMeshBoundsDisk) {
   ViewportInteractionHarness harness;
@@ -22078,4 +22652,103 @@ TEST(ViewportInteractionControllerTests,
   expect_vec3_near(after->transform.location, before->transform.location);
   expect_vec3_near(after->transform.rotation_euler, before->transform.rotation_euler);
   expect_vec3_near(after->transform.scale, before->transform.scale);
+}
+
+TEST(ViewportInteractionControllerTests,
+     GroupPivotLocalAxisPreservesChildGeometryAndSelectionThroughApplyUndoRedo) {
+  PivotAxisWorkflowHarness harness;
+  auto &viewport = harness.viewport;
+  const auto first_created = viewport.editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Group Pivot first child");
+  const auto second_created = viewport.editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Group Pivot second child");
+  ASSERT_TRUE(first_created.ok()) << first_created.error_message();
+  ASSERT_TRUE(second_created.ok()) << second_created.error_message();
+  const auto first = first_created.value();
+  const auto second = second_created.value();
+  ASSERT_TRUE(viewport.editor.scene().set_transform(first.entity,
+      {.location = {-2, 0.5f, 0.25f}, .rotation_euler = {0.2f, 0.1f, 0.35f},
+       .scale = {1.1f, 0.8f, 1.25f}}).ok());
+  ASSERT_TRUE(viewport.editor.scene().set_transform(second.entity,
+      {.location = {2, -0.75f, -0.5f}, .rotation_euler = {-0.1f, 0.25f, -0.3f},
+       .scale = {0.7f, 1.4f, 0.9f}}).ok());
+  ASSERT_TRUE(viewport.editor.selection().select_objects({first, second}).ok());
+  const auto grouped = viewport.editor.scene().group_selection("Compact Pivot group");
+  ASSERT_TRUE(grouped.ok()) << grouped.error_message();
+  const auto group = grouped.value();
+  const auto group_before_rotation = viewport.editor.query().entity(group.id);
+  ASSERT_TRUE(group_before_rotation);
+  auto group_transform = group_before_rotation->transform;
+  group_transform.rotation_euler = {0, 0, 0.45f};
+  ASSERT_TRUE(viewport.editor.scene().set_transform(group.id, group_transform).ok());
+  ASSERT_TRUE(viewport.editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+  ASSERT_TRUE(viewport.editor.selection().select_object(group.id).ok());
+  ASSERT_TRUE(viewport.editor.viewports().set_transform_space(quader::QuaderTransformSpace::Local).ok());
+  viewport.camera.set_view_direction({0, 0, -1});
+  ASSERT_TRUE(viewport.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  viewport.router.set_active_tool(quader::ViewportToolId::Pivot);
+  viewport.input.modal_tool_active = true;
+  viewport.input.active_tool_owns_viewport = true;
+  for (const auto setting : {quader::kPivotSnapVertexSetting,
+                             quader::kPivotSnapEdgeMidpointSetting,
+                             quader::kPivotSnapFaceCenterSetting,
+                             quader::kPivotSnapGridSetting}) {
+    ASSERT_TRUE(viewport.editor.tools().set_setting(quader::kPivotToolId, setting, false).ok());
+  }
+  const auto selection = viewport.editor.selection().summary();
+  ASSERT_EQ(selection.mode, quader::QuaderSelectionMode::Group);
+  ASSERT_EQ(viewport.session.pivot().handle_state().target, group.id);
+  const auto first_geometry = pivot_workflow_world_vertices(viewport.editor, first);
+  const auto second_geometry = pivot_workflow_world_vertices(viewport.editor, second);
+  const auto origin_before = quader::transform_point(
+      pivot_workflow_world_matrix(viewport.editor, group.id), {});
+  const auto history = viewport.editor.history().undo_history(100).entries.size();
+  const auto layout = harness.layout();
+  ASSERT_TRUE(layout.axes[0].visible);
+  const auto start = layout.axes[0].screen_tip;
+  const auto end = start + pivot_workflow_screen_direction(start - layout.center_screen) * 70.0f;
+  ASSERT_TRUE(harness.dispatch(start, true, true).pivot_consumed);
+  ASSERT_TRUE(harness.dispatch(end, false, true).pivot_consumed);
+  const auto accepted = viewport.session.pivot().handle_state().world_position;
+  const auto delta = accepted - layout.center;
+  EXPECT_GT(quader::dot(delta, layout.axes[0].world_direction), 0.05f);
+  EXPECT_NEAR(quader::length(quader::cross(delta, layout.axes[0].world_direction)), 0.0f, 0.001f);
+  EXPECT_NEAR(accepted.z, layout.center.z, 0.001f);
+  ASSERT_EQ(viewport.session.pivot().handle_state().target, group.id);
+  ASSERT_TRUE(harness.dispatch(end, false, false, true).pivot_consumed);
+  EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history);
+
+  const auto expect_children_and_selection = [&] {
+    expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, first), first_geometry);
+    expect_pivot_workflow_vertices(pivot_workflow_world_vertices(viewport.editor, second), second_geometry);
+    const auto current_group = viewport.editor.query().entity(group.id);
+    const auto current_first = viewport.editor.query().entity(first.entity);
+    const auto current_second = viewport.editor.query().entity(second.entity);
+    ASSERT_TRUE(current_group && current_first && current_second);
+    EXPECT_EQ(current_group->uuid, group.uuid);
+    EXPECT_TRUE(current_group->selected && current_group->active);
+    EXPECT_EQ(current_first->parent, group.id);
+    EXPECT_EQ(current_second->parent, group.id);
+    const auto current = viewport.editor.selection().summary();
+    EXPECT_EQ(current.mode, quader::QuaderSelectionMode::Group);
+    EXPECT_EQ(current.active_kind, selection.active_kind);
+    EXPECT_EQ(current.active_object_id, selection.active_object_id);
+    EXPECT_EQ(current.selected_object_count, selection.selected_object_count);
+  };
+  expect_children_and_selection();
+  const auto applied = viewport.editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(viewport.editor.history().undo_history(100).entries.size(), history + 1U);
+  expect_vec3_near(quader::transform_point(
+      pivot_workflow_world_matrix(viewport.editor, group.id), {}), accepted);
+  expect_children_and_selection();
+  ASSERT_TRUE(viewport.editor.history().undo().ok());
+  expect_vec3_near(quader::transform_point(
+      pivot_workflow_world_matrix(viewport.editor, group.id), {}), origin_before);
+  expect_children_and_selection();
+  ASSERT_TRUE(viewport.editor.history().redo().ok());
+  expect_vec3_near(quader::transform_point(
+      pivot_workflow_world_matrix(viewport.editor, group.id), {}), accepted);
+  expect_children_and_selection();
 }

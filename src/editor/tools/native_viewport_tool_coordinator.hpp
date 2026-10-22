@@ -47,6 +47,9 @@ class UvPeelToolService;
  */
 struct NativeViewportToolPresentationSnapshot final {
   PivotHandleState pivot_handle;
+  PivotHandlePart pivot_hovered_part = PivotHandlePart::None;
+  PivotHandlePart pivot_active_part = PivotHandlePart::None;
+  std::optional<PivotHandleLayoutOptions> pivot_drag_layout_options;
   LinearArrayHandleState linear_array_handle;
   RadialArrayCenterState radial_array_center;
   ExtrudeHandleState extrusion_handle;
@@ -143,6 +146,10 @@ public:
   }
   [[nodiscard]] CommandResult cancel_bridge_pointer_drag();
   [[nodiscard]] bool pointer_dragging() const;
+  [[nodiscard]] PivotHandleState pivot_handle_state() const;
+  [[nodiscard]] std::uint64_t pivot_axis_sample_count() const {
+    return interaction_.pivot_axis_sample_count();
+  }
   [[nodiscard]] ViewportPointerCursor pointer_cursor() const;
 
   [[nodiscard]] bool curve_control_gizmo_start_allowed(

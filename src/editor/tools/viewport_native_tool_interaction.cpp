@@ -1246,8 +1246,11 @@ ViewportNativeToolInteraction::handle_frame(
     const bool can_interact = handle.visible && frame.handles_visible &&
                              input.viewport_hovered &&
                              !native_pointer_interrupted(frame) &&
+                             !frame.transform_gizmo_consumed &&
                              !frame.suppress_hover_work;
-    bool handle_hit = false;
+    const PivotHandleLayoutOptions layout_options =
+        frame.pivot_layout_options.value_or(PivotHandleLayoutOptions{});
+    PivotHandlePart handle_part = PivotHandlePart::None;
     if (can_interact && (!pivot_handle_press_ || frame.left_released)) {
       const QVec2 pointer_local =
           frame.left_pressed ? frame.left_click_local : input.mouse_local;
@@ -1256,42 +1259,97 @@ ViewportNativeToolInteraction::handle_frame(
                                                 frame.viewport_pixel_scale),
           .position = {handle.world_position.x, handle.world_position.y,
                        handle.world_position.z},
+          .layout = {layout_options.icon_size_pixels,
+                     layout_options.world_x.x, layout_options.world_x.y, layout_options.world_x.z,
+                     layout_options.world_y.x, layout_options.world_y.y, layout_options.world_y.z,
+                     layout_options.world_z.x, layout_options.world_z.y, layout_options.world_z.z},
+          .persistent = handle.persistent,
       };
       if (!pivot_hover_key_ || *pivot_hover_key_ != hover_key) {
         pivot_hover_key_ = hover_key;
-        pivot_hover_hit_ = pivot_handle_hit(
-            camera, handle, pointer_local, frame.viewport_pixel_scale);
+        pivot_hover_part_ = hit_pivot_handle(
+            build_pivot_handle_layout(camera, handle, frame.viewport_pixel_scale,
+                                      layout_options), pointer_local);
       }
-      handle_hit = pivot_hover_hit_;
+      handle_part = pivot_hover_part_;
     }
-    if (handle_hit) {
+    if (handle_part != PivotHandlePart::None) {
       pivot_handle_hovered_ = true;
       pointer_cursor_ = ViewportPointerCursor::OpenHand;
     }
     if (can_interact && frame.left_pressed && !canceled_left_release &&
-        !pivot_handle_press_ && handle_hit) {
-      pivot_handle_press_ = PivotHandlePress{
+        !pivot_handle_press_ && handle_part != PivotHandlePart::None) {
+      PivotHandlePress press{
           .gesture = viewport_pointer_gesture_from_latest_edge(
               input.pointer_pressed_edges, QuaderMouseButton::Left,
-              frame.left_click_local, input.mouse_screen, input.modifiers),
+              frame.left_click_local, input.mouse_screen, input.modifiers,
+              frame.pointer_drag_threshold_pixels),
           .position_before = handle.world_position,
           .persistent = handle.persistent,
+          .target = handle.target,
+          .part = handle_part,
+          .layout_options = layout_options,
       };
-      output.claim_interaction_pane = true;
-      output.pivot_consumed = true;
+      bool accepted = handle_part == PivotHandlePart::Center;
+      if (!accepted && handle.persistent) {
+        const auto layout = build_pivot_handle_layout(
+            camera, handle, frame.viewport_pixel_scale, layout_options);
+        const int axis_index = static_cast<int>(handle_part) -
+                               static_cast<int>(PivotHandlePart::X);
+        if (axis_index >= 0 && axis_index < 3 && layout.axes[axis_index].visible) {
+          const auto &axis = layout.axes[axis_index];
+          const auto ray = camera.ray_from_viewport_point(frame.left_click_local);
+          const auto runtime_camera = ViewportCameraAdapter::runtime_camera(camera, input.viewport_size);
+          const auto begun = quader_editor_core::begin_move_drag({
+              .axis = axis_index == 0 ? quader_editor_core::TransformAxis::X
+                    : axis_index == 1 ? quader_editor_core::TransformAxis::Y
+                                      : quader_editor_core::TransformAxis::Z,
+              .orientation = {.x_axis = layout_options.world_x,
+                              .y_axis = layout_options.world_y,
+                              .z_axis = layout_options.world_z},
+              .has_world_direction = true,
+              .world_direction = axis.world_direction,
+              .has_world_center = true,
+              .world_center = handle.world_position,
+              .has_screen_axis = true,
+              .screen_pivot = layout.center_screen,
+              .screen_tip = axis.screen_tip,
+              .screen_position = frame.left_click_local,
+              .has_start_ray = true,
+              .start_ray = {.origin = ray.origin, .direction = ray.direction},
+              .has_camera = true,
+              .camera_transform = runtime_camera.transform,
+          });
+          if (begun.ok) {
+            press.axis_drag = begun.state;
+            accepted = true;
+          }
+        }
+      }
+      if (accepted) {
+        pivot_handle_press_ = std::move(press);
+        output.claim_interaction_pane = true;
+        output.pivot_consumed = true;
+      }
     }
     if (pivot_handle_press_) {
       output.pivot_consumed = true;
       const ViewportPointerButtonEdge *release =
-          matching_left_release(frame, pivot_handle_press_->gesture);
+          pivot_handle_press_->axis_drag.active
+              ? (frame.left_released ? viewport_pointer_matching_release(
+                    input.pointer_released_edges, input.pointer_pressed_edges,
+                    pivot_handle_press_->gesture.press) : nullptr)
+              : matching_left_release(frame, pivot_handle_press_->gesture);
       const bool matching_release =
           release != nullptr || synthetic_left_release_matches(
                                     frame, pivot_handle_press_->gesture);
+      const bool same_target = handle.persistent == pivot_handle_press_->persistent &&
+                               handle.target == pivot_handle_press_->target;
       const bool interrupted = native_pointer_interrupted(frame) ||
-                               !handle.visible || !frame.handles_visible;
+                               !handle.visible || !frame.handles_visible || !same_target;
       const bool abandoned = !frame.left_down && !frame.left_released;
       if (interrupted || abandoned) {
-        if (!navigation_suspended) {
+        if (!navigation_suspended && same_target) {
           if (pivot_handle_press_->persistent) {
             pivot->set_persistent_preview_position(
                 pivot_handle_press_->position_before);
@@ -1304,19 +1362,81 @@ ViewportNativeToolInteraction::handle_frame(
         pivot_handle_press_.reset();
         output.invalidate_hover = true;
         output.mark_overlay_dirty = true;
-      } else if (frame.left_down && handle.visible &&
-                 point_placement != nullptr) {
+      } else if ((frame.left_down || (matching_release && pivot_handle_press_->axis_drag.active)) && handle.visible &&
+                 (point_placement != nullptr || pivot_handle_press_->axis_drag.active)) {
         const PivotSnapSettings snap_settings =
             handle.persistent ? pivot->snap_settings()
                               : PivotSnapSettings{.vertex = true,
                                                   .edge_midpoint = false,
                                                   .face_center = false,
                                                   .grid = true};
-        const QVec3 position = resolved_pivot_drag_position(
-            camera, input.mouse_local, handle.world_position, document, assets,
-            *point_placement, snap_settings,
-            viewport_grid_world_size_for_preset(input.grid_preset),
-            frame.viewport_pixel_scale);
+        const QVec2 pointer = release != nullptr && pivot_handle_press_->axis_drag.active
+            ? release->local : input.mouse_local;
+        const auto sample_modifiers = release != nullptr
+            ? release->modifiers.value_or(input.modifiers) : input.modifiers;
+        const float grid_size = viewport_grid_world_size_for_preset(input.grid_preset);
+        QVec3 position = handle.world_position;
+        if (pivot_handle_press_->axis_drag.active) {
+          pivot_handle_press_->axis_motion_started =
+              pivot_handle_press_->axis_motion_started ||
+              viewport_pointer_drag_threshold_reached(pivot_handle_press_->gesture, pointer);
+          if (!pivot_handle_press_->axis_motion_started) {
+            if (matching_release && !canceled_left_release) pivot_handle_press_.reset();
+            output.pivot_blocks_gizmo = true;
+            output.consumed = true;
+            output.blocks_transform_gizmo = true;
+            if (pivot_handle_press_) pointer_cursor_ = ViewportPointerCursor::ClosedHand;
+            return output;
+          }
+          const PivotAxisSampleKey sample_key{
+              .pointer_camera = pointer_camera_key(camera, pointer, frame.viewport_pixel_scale),
+              .scene_revision = document.revision(),
+              .asset_revision = assets.revision(),
+              .surface_revision = frame.scene_surface_revision,
+              .settings_revision = pivot->tool_settings_revision(),
+              .grid_preset = input.grid_preset,
+              .precision = sample_modifiers.primary,
+          };
+          if (pivot_handle_press_->axis_sample_key == sample_key) {
+            if (matching_release && !canceled_left_release) pivot_handle_press_.reset();
+            output.pivot_blocks_gizmo = true;
+            output.consumed = true;
+            output.blocks_transform_gizmo = true;
+            if (pivot_handle_press_) pointer_cursor_ = ViewportPointerCursor::ClosedHand;
+            return output;
+          }
+          pivot_handle_press_->axis_sample_key = sample_key;
+          ++pivot_axis_sample_count_;
+          auto &drag = pivot_handle_press_->axis_drag;
+          const auto ray = camera.ray_from_viewport_point(pointer);
+          const auto runtime_camera = ViewportCameraAdapter::runtime_camera(camera, input.viewport_size);
+          auto moved = quader_editor_core::preview_move_from_viewport(
+              drag, pointer, {.origin = ray.origin, .direction = ray.direction},
+              runtime_camera, sample_modifiers.primary, snap_settings.grid, grid_size, true);
+          if (point_placement != nullptr &&
+              (snap_settings.vertex || snap_settings.edge_midpoint || snap_settings.face_center)) {
+            auto feature_settings = snap_settings;
+            feature_settings.grid = false;
+            const auto snapped = point_placement->resolve(document, assets, camera, {
+                .mouse_local = pointer,
+                .viewport_pixel_scale = frame.viewport_pixel_scale,
+                .grid_size = grid_size,
+                .policy = ViewportPointPlacementPolicy::pivot(feature_settings),
+                .fallback_plane = ViewportPointPlacementPlane{.origin = pivot_handle_press_->position_before},
+            });
+            if (snapped.valid &&
+                (snapped.snap_kind == ViewportPointSnapKind::Vertex ||
+                 snapped.snap_kind == ViewportPointSnapKind::EdgeMidpoint ||
+                 snapped.snap_kind == ViewportPointSnapKind::FaceCenter)) {
+              moved = quader_editor_core::preview_move_to_axis_snap_target(drag, snapped.world_position);
+            }
+          }
+          if (moved.ok) position = pivot_handle_press_->position_before + moved.preview_delta;
+        } else if (point_placement != nullptr) {
+          position = resolved_pivot_drag_position(
+              camera, pointer, handle.world_position, document, assets,
+              *point_placement, snap_settings, grid_size, frame.viewport_pixel_scale);
+        }
         if (handle.persistent) {
           pivot->set_persistent_preview_position(position);
         } else {
@@ -1472,19 +1592,10 @@ QVec3 ViewportNativeToolInteraction::resolved_pivot_drag_position(
 
 bool ViewportNativeToolInteraction::pivot_handle_hit(
     const ViewportCameraController &camera, const PivotHandleState &handle,
-    QVec2 mouse_local, float viewport_pixel_scale) {
-  if (!handle.visible) {
-    return false;
-  }
-  const ViewportScreenPoint screen =
-      camera.project_world_point(handle.world_position);
-  constexpr float kPickRadiusPixels = 16.0f;
-  const float pick_radius_pixels =
-      kPickRadiusPixels *
-      viewport_sanitized_pixel_scale(viewport_pixel_scale);
-  return screen.visible &&
-         screen_distance_squared(screen.position, mouse_local) <=
-             pick_radius_pixels * pick_radius_pixels;
+    QVec2 mouse_local, float viewport_pixel_scale,
+    const PivotHandleLayoutOptions &options) {
+  return hit_pivot_handle(build_pivot_handle_layout(camera, handle,
+      viewport_pixel_scale, options), mouse_local) != PivotHandlePart::None;
 }
 
 bool ViewportNativeToolInteraction::linear_array_handle_hit(

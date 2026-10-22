@@ -6,20 +6,31 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "core/localization_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/tools/pivot_handle_layout.hpp"
+#include "editor/viewport/mesh_bounds_resize_interaction.hpp"
 #include "render/render_host.hpp"
 #if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
 #include "render/crimson/crimson_render_host.hpp"
 #endif
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/overlay/viewport_overlay_dash.hpp"
+#include "render/viewport_overlay_policy.hpp"
+#include "ui/qt_settings_controller.hpp"
+#include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "ui/qt_vulkan_composition_widget.hpp"
+#include "ui/ui_settings.hpp"
 #include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <quader/modeling/neutral/polygon/document_model.hpp>
@@ -44,6 +55,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -136,9 +148,15 @@ public:
     if (pane < bounds_.size()) bounds_[pane] = result.selection_dimension_bounds;
     if (pane < handles_.size()) {
       handles_[pane].clear();
+      bounds_guides_[pane].clear();
+      handle_triangles_[pane] = 0u;
       if (result.edge_hud_frame != nullptr) {
         for (const auto &line : result.edge_hud_frame->lines) {
           if (line.layer == ViewportOverlayLayer::ToolHandle) handles_[pane].push_back(line);
+          if (line.layer == ViewportOverlayLayer::ToolPreviewLine) bounds_guides_[pane].push_back(line);
+        }
+        for (const auto &triangle : result.edge_hud_frame->triangles) {
+          handle_triangles_[pane] += triangle.layer == ViewportOverlayLayer::ToolHandle;
         }
       }
     }
@@ -147,12 +165,16 @@ public:
   const std::optional<ViewportSelectionDimensionBounds> &bounds(std::size_t pane) const { return bounds_[pane]; }
   const ProbeLaminaDiagnostics &lamina(std::size_t pane) const { return lamina_[pane]; }
   const std::vector<ViewportOverlayLine> &handles(std::size_t pane) const { return handles_[pane]; }
+  std::size_t handle_triangles(std::size_t pane) const { return handle_triangles_[pane]; }
+  const std::vector<ViewportOverlayLine> &bounds_guides(std::size_t pane) const { return bounds_guides_[pane]; }
 
 private:
   std::unique_ptr<RenderSceneSink> sink_;
   std::array<std::optional<ViewportSelectionDimensionBounds>, 4> bounds_;
   std::array<ProbeLaminaDiagnostics, 4> lamina_;
   std::array<std::vector<ViewportOverlayLine>, 4> handles_;
+  std::array<std::size_t, 4> handle_triangles_{};
+  std::array<std::vector<ViewportOverlayLine>, 4> bounds_guides_;
 };
 
 /** Drives the production four-pane adapter without selecting it for an app. */
@@ -161,7 +183,7 @@ public:
   EditorCompositionProbe(QApplication &application, QString output_directory,
                          std::filesystem::path resources, bool overlay_parity,
                          QString reference_directory, bool face_dimensions, bool lamina_overlap,
-                         bool instance_preview, bool edge_gizmo)
+                         bool instance_preview, bool edge_gizmo, bool pivot_handle, bool bounds_resize)
       : application_(application), output_directory_(std::move(output_directory)),
         resources_(std::move(resources)),
         reference_directory_(std::move(reference_directory)), overlay_parity_(overlay_parity),
@@ -169,6 +191,8 @@ public:
         lamina_overlap_(lamina_overlap),
         instance_preview_(instance_preview),
         edge_gizmo_(edge_gizmo),
+        pivot_handle_(pivot_handle),
+        bounds_resize_(bounds_resize),
         editor_(QuaderApiSessionInternalAccess::from_scene_session(session_)),
 #if defined(QUADER_FILAMENT_REFERENCE_PROBE)
         host_(create_app_render_host()) {
@@ -226,6 +250,8 @@ public:
     if (face_dimensions_ && !begin_face_dimensions()) return 1;
     if (lamina_overlap_ && !begin_lamina_overlap()) return 1;
     if (edge_gizmo_ && !begin_edge_gizmo()) return 1;
+    if (pivot_handle_ && !begin_pivot_handle()) return 1;
+    if (bounds_resize_ && !begin_bounds_resize()) return 1;
     create_root();
     step_clock_.start();
     settle_clock_.start();
@@ -880,6 +906,465 @@ private:
     return editor_.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Closed box face dimension preview"});
+  }
+
+  bool begin_bounds_resize() {
+    settings_.set_bool_value(ViewportBoolSettingId::ShowOverlays, true);
+    settings_.set_bool_value(ViewportBoolSettingId::ShowGizmos, true);
+    apply_settings();
+    const auto peer = editor_.modeling().create_box(
+        {.min = {-0.3f, -0.3f, -0.3f}, .max = {0.3f, 0.3f, 0.3f}}, "Rotated bounds peer");
+    if (!accept(peer) ||
+        !accept(editor_.scene().set_transform(object_.entity,
+            {.rotation_euler = {0, 0, 0.7853981634f}})) ||
+        !accept(editor_.scene().set_transform(peer.value().entity,
+            {.location = {1.1f, 0.2f, 0.25f}, .rotation_euler = {0.2f, 0.35f, 0.1f}})) ||
+        !accept(editor_.mode().set(QuaderEditorMode::Object)) ||
+        !accept(editor_.selection().set_mode(QuaderSelectionMode::Object)) ||
+        !accept(editor_.selection().select_objects({object_, peer.value()})) ||
+        !accept(editor_.tools().activate(ViewportToolId::Select))) return false;
+    for (const auto pane : kPanes) {
+      if (!accept(editor_.viewports().record_selected_tool(pane, ViewportToolId::Select)) ||
+          !accept(editor_.viewports().set_transform_space(pane, QuaderTransformSpace::Global))) return false;
+      auto &camera = session_.viewport_workspace().camera(pane);
+      if (pane == ViewportPaneId::Top) camera.view_axis(ViewportViewAxis::Y, 1);
+      if (pane == ViewportPaneId::Front) camera.view_axis(ViewportViewAxis::Z, 1);
+      if (pane == ViewportPaneId::Side) camera.view_axis(ViewportViewAxis::X, 1);
+      camera.focus_bounds({-2, -2, -2}, {2, 2, 2});
+    }
+    bounds_before_ = editor_.modeling().selection_resize_bounds(QuaderTransformSpace::Global);
+    if (!bounds_before_) fail("The rotated multi-selection did not expose public common bounds");
+    return bounds_before_.has_value();
+  }
+
+  bool start_bounds_resize_preview() {
+    const auto state = editor_.modeling().selection_resize_bounds(QuaderTransformSpace::Global);
+    if (!state || !bounds_presentations_[0].bounds()) {
+      fail("The common bounds retired before starting their public resize preview");
+      return false;
+    }
+    const auto &camera = session_.viewport_workspace().camera(kPanes[0]);
+    BoundsResizeInteraction picking;
+    const auto &frame = picking.project(bounds_presentations_[0].bounds(), camera,
+        panel_->viewport_raster_scale(kPanes[0]));
+    const auto &handle = frame.handles[0];
+    const auto ray = camera.ray_from_viewport_point(handle.screen_position);
+    return accept(editor_.modeling().begin_transform_drag({
+        .tool = QuaderTransformTool::Scale,
+        .axis = QuaderTransformAxis::X,
+        .space = QuaderTransformSpace::Global,
+        .orientation = {.x_axis = state->world_x, .y_axis = state->world_y,
+                        .z_axis = state->world_z, .origin = state->world_origin},
+        .pivot = handle.opposite_world_position,
+        .screen_position = handle.screen_position,
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .camera = to_api_viewport_camera(ViewportCameraAdapter::modeling_camera(camera, camera.viewport_size())),
+        .grid_snap_enabled = false,
+        .bounds_resize_reference = QuaderBoundsResizeReference{.moving_point = handle.world_position}})) &&
+        accept(editor_.modeling().update_transform_drag({
+            .grid_snap_enabled = false, .bounds_resize_displacement = kBoundsResizeDelta}));
+  }
+
+  bool verify_bounds_resize() {
+    const bool preview = bounds_phase_ == 5u || bounds_phase_ == 6u;
+    const bool unchanged = bounds_phase_ == 1u || bounds_phase_ == 3u ||
+        bounds_phase_ == 6u || bounds_phase_ == 8u;
+    const auto selected = editor_.selection().summary();
+    const auto state = editor_.modeling().selection_resize_bounds(QuaderTransformSpace::Global);
+    if (!state || !bounds_before_ || selected.mode != QuaderSelectionMode::Object ||
+        selected.selected_object_count != 2u) {
+      fail("The bounds preview lost its rotated two-object selection");
+      return false;
+    }
+    const auto world_corner = [](const QuaderBoundsResizeState &value, QVec3 local) {
+      return value.world_origin + value.world_x * local.x + value.world_y * local.y + value.world_z * local.z;
+    };
+    const auto minimum = world_corner(*state, state->local_min);
+    const auto maximum = world_corner(*state, state->local_max);
+    const auto original_minimum = world_corner(*bounds_before_, bounds_before_->local_min);
+    const auto original_maximum = world_corner(*bounds_before_, bounds_before_->local_max);
+    if (std::abs(minimum.x - original_minimum.x) > 0.0001f ||
+        std::abs(maximum.x - original_maximum.x - (preview ? kBoundsResizeDelta : 0.0f)) > 0.0001f) {
+      fail("The public common resize did not keep its opposite side fixed or cancel exactly");
+      return false;
+    }
+    const auto hue = [](QColor color) {
+      const std::array channels{color.red(), color.green(), color.blue()};
+      for (int axis = 0; axis < 3; ++axis) {
+        if (channels[axis] > channels[(axis + 1) % 3] + 25 &&
+            channels[axis] > channels[(axis + 2) % 3] + 25) return axis;
+      }
+      return -1;
+    };
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      QImage image;
+      if (!verify_pane(pane, image)) return false;
+      const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const float scale = panel_->viewport_raster_scale(kPanes[pane]);
+      const auto preview_revision = session_.modeling().transient_transform_preview_revision();
+      const ViewportInteractionSelectionState selection{
+          .summary = selected, .scene_revision = session_.scene().revision(),
+          .asset_revision = session_.assets().revision(),
+          .pivot_revision = session_.pivot().selection_pivot_revision(),
+          .transform_preview_revision = preview_revision};
+      auto &presentation = bounds_presentations_[pane];
+      const auto *frame = presentation.prepare(editor_, camera, selection,
+          QuaderTransformSpace::Global, preview_revision, scale);
+      if (frame == nullptr) {
+        fail("The production mesh-bounds presentation did not publish a visible frame");
+        return false;
+      }
+      const auto queries = presentation.bounds_query_count();
+      (void)presentation.prepare(editor_, camera, selection, QuaderTransformSpace::Global, preview_revision, scale);
+      if (presentation.bounds_query_count() != queries) {
+        fail("An unchanged mesh-bounds presentation queried selection geometry again");
+        return false;
+      }
+      BoundsResizeInteraction picking;
+      (void)picking.project_presentation(presentation.bounds(), camera, scale, *frame);
+      const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+      const auto color_at = [&](QVec2 screen) {
+        const QPoint pixel(qRound(screen.x * image.width() / render_size.x),
+                           qRound(screen.y * image.height() / render_size.y));
+        return image.rect().contains(pixel) ? image.pixelColor(pixel) : QColor{};
+      };
+      std::size_t circles = 0u;
+      for (int index = 0; index < 6; ++index) {
+        const auto &handle = frame->handles[index];
+        if (!handle.visible || !handle.enabled || picking.hit_test(handle.screen_position) != index ||
+            hue(color_at(handle.screen_position)) != handle.axis ||
+            hue(color_at(handle.screen_position + QVec2{handle.radius_pixels * 0.4f, 0})) != handle.axis) {
+          fail("A composed bounds circle or its shared hit target disagrees with its semantic axis");
+          return false;
+        }
+        if (picking.hit_test(handle.screen_position + QVec2{handle.radius_pixels * 1.15f, 0}) == index) {
+          fail("A bounds hit target extends beyond the rendered circular control");
+          return false;
+        }
+        bool white_rim = false;
+        for (const QVec2 direction : {QVec2{1, 0}, QVec2{-1, 0}, QVec2{0, 1}, QVec2{0, -1}}) {
+          const auto rim = color_at(handle.screen_position + direction * (handle.radius_pixels * 0.86f));
+          white_rim |= std::min({rim.red(), rim.green(), rim.blue()}) > 150 &&
+              std::max({rim.red(), rim.green(), rim.blue()}) - std::min({rim.red(), rim.green(), rim.blue()}) < 40;
+        }
+        if (!white_rim) {
+          fail("An actual GPU bounds circle lost its neutral circular rim");
+          return false;
+        }
+        ++circles;
+      }
+      std::array<std::size_t, 3> submitted_dashes{};
+      std::array<bool, 3> colored_guides{};
+      std::array<bool, 3> visible_dash_gaps{};
+      for (const auto &handle : frame->handles) {
+        const auto face = camera.project_world_point(handle.world_position);
+        const auto delta = handle.screen_position - face.position;
+        const float span = std::hypot(delta.x, delta.y);
+        if (!face.visible || span <= 0.001f) continue;
+        const auto direction = delta / span;
+        const auto dash = face.position + direction * (kViewportOverlayDashPixels * 0.5f * scale);
+        const auto gap = face.position + direction *
+            ((kViewportOverlayDashPixels + kViewportOverlayDashGapPixels * 0.5f) * scale);
+        if (picking.hit_test(gap) >= 0) continue;
+        bool colored_dash = false;
+        for (int y = -1; y <= 1; ++y) {
+          for (int x = -1; x <= 1; ++x) {
+            colored_dash |= hue(color_at(dash + QVec2{static_cast<float>(x), static_cast<float>(y)})) == handle.axis;
+          }
+        }
+        visible_dash_gaps[handle.axis] = visible_dash_gaps[handle.axis] ||
+            (colored_dash && hue(color_at(gap)) != handle.axis);
+      }
+      for (const auto &line : recorded_sink_->bounds_guides(pane)) {
+        const auto color = line.color;
+        const int axis = hue(QColor(color & 255u, (color >> 8u) & 255u, (color >> 16u) & 255u));
+        if (axis < 0) continue;
+        ++submitted_dashes[axis];
+        const auto sample = camera.project_world_point(line.start + (line.end - line.start) * 0.5f);
+        if (!sample.visible) continue;
+        if (std::ranges::any_of(frame->handles, [&](const auto &handle) {
+              const auto delta = sample.position - handle.screen_position;
+              return std::hypot(delta.x, delta.y) <= handle.radius_pixels + 3.0f * scale;
+            })) continue;
+        for (int y = -1; y <= 1; ++y) {
+          for (int x = -1; x <= 1; ++x) {
+            colored_guides[axis] = colored_guides[axis] || hue(color_at(sample.position +
+                QVec2{static_cast<float>(x), static_cast<float>(y)})) == axis;
+          }
+        }
+      }
+      if (circles != 6u || recorded_sink_->handle_triangles(pane) != 6u * 32u * 3u ||
+          std::ranges::any_of(submitted_dashes, [](std::size_t count) { return count < 2u; }) ||
+          std::ranges::any_of(colored_guides, [](bool colored) { return !colored; }) ||
+          std::ranges::any_of(visible_dash_gaps, [](bool visible) { return !visible; })) {
+        fail("The production four-pane GPU frame lost paired circles or colored dashed bounds guides");
+        return false;
+      }
+      if ((unchanged && image != bounds_previous_[pane]) ||
+          ((bounds_phase_ == 4u || bounds_phase_ == 7u) && image != bounds_baseline_[pane]) ||
+          (bounds_phase_ == 5u && kPanes[pane] != ViewportPaneId::Side && image == bounds_baseline_[pane])) {
+        fail("Bounds idle, scale-down, preview or cancellation produced stale GPU pixels");
+        return false;
+      }
+      if (bounds_phase_ == 0u) bounds_baseline_[pane] = image;
+      bounds_previous_[pane] = image;
+      std::cout << "bounds_resize; backend=" << kBackendName << "; phase=" << bounds_phase_
+                << "; pane=" << pane << "; scale=" << scale << "; circles=" << circles
+                << "; dashes=" << submitted_dashes[0] << ',' << submitted_dashes[1] << ',' << submitted_dashes[2]
+                << "; colored_guides=" << colored_guides[0] << ',' << colored_guides[1] << ',' << colored_guides[2]
+                << "; dash_gaps=" << visible_dash_gaps[0] << ',' << visible_dash_gaps[1] << ',' << visible_dash_gaps[2]
+                << "; bounds_queries=" << queries << "; min_x=" << minimum.x << "; max_x=" << maximum.x << std::endl;
+    }
+#if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
+    if (unchanged) {
+      CrimsonRenderDiagnostics after;
+      if (!diagnostics(after)) return false;
+      if (after.editor_projection.position_packs != before_.editor_projection.position_packs ||
+          after.editor_projection.attribute_packs != before_.editor_projection.attribute_packs ||
+          after.editor_projection.index_packs != before_.editor_projection.index_packs ||
+          after.editor_gpu.vertex_uploads != before_.editor_gpu.vertex_uploads ||
+          after.editor_gpu.index_uploads != before_.editor_gpu.index_uploads) {
+        fail("An unchanged bounds frame repacked or uploaded retained editor geometry");
+        return false;
+      }
+    }
+#endif
+    return true;
+  }
+
+  void advance_bounds_resize() {
+    bool ok = true;
+    switch (bounds_phase_) {
+    case 0: break;
+    case 1: panel_->apply_ui_scale(QtUiScaleMetrics{2.0f, ++bounds_scale_revision_}); break;
+    case 2: break;
+    case 3: panel_->apply_ui_scale(QtUiScaleMetrics{1.0f, ++bounds_scale_revision_}); break;
+    case 4: ok = start_bounds_resize_preview(); break;
+    case 5: break;
+    case 6: ok = accept(editor_.modeling().cancel_transform_drag()); break;
+    case 7: break;
+    default: finish(); return;
+    }
+    if (ok) {
+      ++bounds_phase_;
+      next(Step::Initial);
+    }
+  }
+
+  bool begin_pivot_handle() {
+    settings_.set_bool_value(ViewportBoolSettingId::ShowOverlays, true);
+    settings_.set_bool_value(ViewportBoolSettingId::ShowGizmos, true);
+    apply_settings();
+    if (!accept(editor_.mode().set(QuaderEditorMode::Edit)) ||
+        !accept(editor_.selection().set_mode(QuaderSelectionMode::Face)) ||
+        !accept(editor_.selection().select_face(object_, 1)) ||
+        !accept(editor_.selection().select_all()) ||
+        !accept(editor_.tools().activate(ViewportToolId::Pivot))) return false;
+    const auto handle = session_.pivot().handle_state();
+    if (!handle.visible || !handle.persistent) {
+      fail("The public Pivot activation did not publish its persistent handle");
+      return false;
+    }
+    pivot_origin_ = handle.world_position;
+    pivot_original_color_ = settings_.color(ViewportColorSettingId::PivotIcon);
+    for (const auto pane : kPanes) {
+      if (!accept(editor_.viewports().set_transform_space(pane, QuaderTransformSpace::Global))) return false;
+    }
+    pivot_preferences_.bind(pivot_ui_settings_, settings_, pivot_localization_,
+        [this](const QtSettingsChange &) { apply_settings(); });
+    return true;
+  }
+
+  bool verify_pivot_handle() {
+    const auto handle = session_.pivot().handle_state();
+    const bool hidden = pivot_phase_ == 11u || pivot_phase_ == 14u;
+    const bool quick = pivot_phase_ == 12u || pivot_phase_ == 13u;
+    const bool blue = pivot_phase_ == 5u || pivot_phase_ == 6u;
+    const bool unchanged = pivot_phase_ == 1u || pivot_phase_ == 3u ||
+        pivot_phase_ == 6u || pivot_phase_ == 13u;
+    if (handle.visible == hidden || (handle.visible && handle.persistent == quick)) {
+      fail("The Pivot owner published the wrong persistent or temporary visibility");
+      return false;
+    }
+    for (std::size_t pane = 0u; pane < kPanes.size(); ++pane) {
+      QImage image;
+      if (!verify_pane(pane, image)) return false;
+      const float scale = panel_->viewport_raster_scale(kPanes[pane]);
+      const PivotHandleLayoutOptions options{
+          .icon_size_pixels = settings_.float_value(ViewportFloatSettingId::PivotIconSize)};
+      const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+      const auto layout = build_pivot_handle_layout(camera, handle, scale, options);
+      std::size_t visible_axes = 0u;
+      if (hidden) {
+        if (layout.valid || !recorded_sink_->handles(pane).empty() || recorded_sink_->handle_triangles(pane) != 0u) {
+          fail("Canceling Pivot retained submitted handle geometry in a passive pane");
+          return false;
+        }
+      } else {
+        if (!layout.valid || hit_pivot_handle(layout, layout.center_screen) != PivotHandlePart::Center) {
+          fail("The composed Pivot icon disagrees with its shared center hit target");
+          return false;
+        }
+        const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+        const auto color_at = [&](QVec2 screen) {
+          const QPoint pixel(qRound(screen.x * image.width() / render_size.x),
+                             qRound(screen.y * image.height() / render_size.y));
+          return image.rect().contains(pixel) ? image.pixelColor(pixel) : QColor{};
+        };
+        const auto icon_color = [&](QColor color) {
+          return blue ? color.blue() > std::max(color.red(), color.green()) + 40
+              : color.red() > 120 && color.green() > 120 &&
+                color.red() + color.green() > color.blue() * 2 + 100;
+        };
+        const auto center = color_at(layout.center_screen);
+        const auto gap = color_at(layout.center_screen + QVec2{layout.icon_radius_pixels * 0.65f, 0});
+        constexpr std::size_t kSectors = 8u;
+        constexpr std::array<const char *, 3> kRegions{"disc", "gap", "ring"};
+        const float pixel_width = render_size.x / static_cast<float>(image.width());
+        const float pixel_height = render_size.y / static_cast<float>(image.height());
+        const float pixel_size = std::max(pixel_width, pixel_height);
+        const std::array inner_radii{0.0f, layout.disc_radius_pixels + 0.75f * pixel_size,
+                                    layout.ring_inner_radius_pixels + 0.25f * pixel_size};
+        const std::array outer_radii{layout.disc_radius_pixels - 0.75f * pixel_size,
+                                    layout.ring_inner_radius_pixels - 0.75f * pixel_size,
+                                    layout.icon_radius_pixels - 0.25f * pixel_size};
+        std::array<std::array<std::size_t, kSectors>, 3> samples{}, matches{};
+        // Audit interior pixel centers around the whole disc, gap and ring,
+        // independently of where a fractional projection falls on the raster.
+        for (int y = static_cast<int>(std::floor((layout.center_screen.y - layout.icon_radius_pixels) / pixel_height));
+             y <= static_cast<int>(std::ceil((layout.center_screen.y + layout.icon_radius_pixels) / pixel_height)); ++y) {
+          for (int x = static_cast<int>(std::floor((layout.center_screen.x - layout.icon_radius_pixels) / pixel_width));
+               x <= static_cast<int>(std::ceil((layout.center_screen.x + layout.icon_radius_pixels) / pixel_width)); ++x) {
+            const QPoint pixel(x, y);
+            if (!image.rect().contains(pixel)) continue;
+            const QVec2 offset{(static_cast<float>(x) + 0.5f) * pixel_width - layout.center_screen.x,
+                               (static_cast<float>(y) + 0.5f) * pixel_height - layout.center_screen.y};
+            const float radius = std::hypot(offset.x, offset.y);
+            const auto sector = std::min(kSectors - 1u, static_cast<std::size_t>(
+                (std::atan2(offset.y, offset.x) + std::numbers::pi_v<float>) *
+                static_cast<float>(kSectors) / (2.0f * std::numbers::pi_v<float>)));
+            const auto color = image.pixelColor(pixel);
+            for (std::size_t region = 0u; region < kRegions.size(); ++region) {
+              if (radius < inner_radii[region] || radius > outer_radii[region]) continue;
+              ++samples[region][sector];
+              const int brightness = std::max({color.red(), color.green(), color.blue()});
+              matches[region][sector] += region == 1u
+                  ? brightness < 40 && brightness < std::max({center.red(), center.green(), center.blue()}) - 70
+                  : icon_color(color);
+            }
+          }
+        }
+        if (!icon_color(center)) {
+          fail("The actual composed GPU icon lost its colored disc, dark gap or thin outer ring");
+          return false;
+        }
+        for (std::size_t region = 0u; region < kRegions.size(); ++region) {
+          for (std::size_t sector = 0u; sector < kSectors; ++sector) {
+            if (samples[region][sector] == 0u || matches[region][sector] * 100u < samples[region][sector] * 90u) {
+              std::cerr << "pivot_region; backend=" << kBackendName << "; phase=" << pivot_phase_
+                        << "; pane=" << pane << "; region=" << kRegions[region] << "; sector=" << sector
+                        << "; matching_pixels=" << matches[region][sector]
+                        << "; sampled_pixels=" << samples[region][sector] << std::endl;
+              fail("The actual GPU Pivot disc, gap or ring lost its expected circular color coverage");
+              return false;
+            }
+          }
+        }
+        for (std::size_t axis_index = 0u; axis_index < layout.axes.size(); ++axis_index) {
+          const auto &axis = layout.axes[axis_index];
+          if (!axis.visible) continue;
+          ++visible_axes;
+          if (hit_pivot_handle(layout, axis.screen_tip) != axis.part) {
+            fail("A rendered compact Pivot axis disagrees with its shared hit capsule");
+            return false;
+          }
+          const auto direction = axis.screen_tip - axis.screen_start;
+          const float span = std::hypot(direction.x, direction.y);
+          const auto sample = axis.screen_tip - direction * (3.0f * scale / span);
+          bool semantic_color = false;
+          for (int y = -1; y <= 1; ++y) {
+            for (int x = -1; x <= 1; ++x) {
+              const auto color = color_at(sample + QVec2{static_cast<float>(x), static_cast<float>(y)});
+              const std::array channels{color.red(), color.green(), color.blue()};
+              semantic_color |= channels[axis_index] > channels[(axis_index + 1u) % 3u] + 20 &&
+                                channels[axis_index] > channels[(axis_index + 2u) % 3u] + 20;
+            }
+          }
+          if (!semantic_color) {
+            fail("A compact Pivot axis lost its semantic RGB color in the actual composed GPU pixels");
+            return false;
+          }
+        }
+        if ((quick && (visible_axes != 0u || !recorded_sink_->handles(pane).empty())) ||
+            (!quick && visible_axes < 2u)) {
+          fail("Persistent Pivot axes or the icon-only Quick Pivot did not match their layout contract");
+          return false;
+        }
+        std::cout << "pivot_icon; backend=" << kBackendName << "; phase=" << pivot_phase_
+                  << "; pane=" << pane << "; scale=" << scale
+                  << "; diameter=" << options.icon_size_pixels << "; axes=" << visible_axes
+                  << "; center_rgb=" << center.red() << ',' << center.green() << ',' << center.blue()
+                  << "; gap_rgb=" << gap.red() << ',' << gap.green() << ',' << gap.blue() << std::endl;
+      }
+      if (unchanged && image != pivot_previous_[pane]) {
+        fail("An unchanged Pivot frame changed retained GPU pixels");
+        return false;
+      }
+      if ((pivot_phase_ == 4u || pivot_phase_ == 7u || pivot_phase_ == 9u) && image != pivot_baseline_[pane]) {
+        fail("Pivot scale-down or preference rollback did not restore the exact baseline pixels");
+        return false;
+      }
+      if (pivot_phase_ == 0u) pivot_baseline_[pane] = image;
+      pivot_previous_[pane] = image;
+    }
+#if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
+    if (unchanged) {
+      CrimsonRenderDiagnostics after;
+      if (!diagnostics(after)) return false;
+      if (after.editor_projection.position_packs != before_.editor_projection.position_packs ||
+          after.editor_projection.attribute_packs != before_.editor_projection.attribute_packs ||
+          after.editor_projection.index_packs != before_.editor_projection.index_packs ||
+          after.editor_gpu.vertex_uploads != before_.editor_gpu.vertex_uploads ||
+          after.editor_gpu.index_uploads != before_.editor_gpu.index_uploads) {
+        fail("An unchanged Pivot frame repacked or uploaded retained editor geometry");
+        return false;
+      }
+    }
+#endif
+    return true;
+  }
+
+  void advance_pivot_handle() {
+    bool ok = true;
+    switch (pivot_phase_) {
+    case 0: break;
+    case 1: panel_->apply_ui_scale(QtUiScaleMetrics{2.0f, ++pivot_scale_revision_}); break;
+    case 2: break;
+    case 3: panel_->apply_ui_scale(QtUiScaleMetrics{1.0f, ++pivot_scale_revision_}); break;
+    case 4: ok = pivot_preferences_.preview_color(ViewportColorSettingId::PivotIcon, {0, 0.25f, 1, 1}); break;
+    case 5: break;
+    case 6: ok = pivot_preferences_.rollback_color(ViewportColorSettingId::PivotIcon, pivot_original_color_); break;
+    case 7: ok = pivot_preferences_.set_float(ViewportFloatSettingId::PivotIconSize, 40.0f); break;
+    case 8: ok = pivot_preferences_.set_float(ViewportFloatSettingId::PivotIconSize, 20.0f); break;
+    case 9: session_.pivot().set_persistent_preview_position(pivot_origin_ + QVec3{0.6f, 0.3f, -0.2f}); break;
+    case 10:
+      ok = accept(editor_.tools().cancel_active_tool_preview()) &&
+          accept(editor_.tools().activate(ViewportToolId::Select));
+      for (const auto pane : kPanes) {
+        ok = accept(editor_.viewports().record_selected_tool(pane, ViewportToolId::Select)) && ok;
+      }
+      break;
+    case 11: session_.pivot().begin_quick_edit(pivot_origin_); break;
+    case 12: break;
+    case 13: session_.pivot().end_quick_edit(); break;
+    default: finish(); return;
+    }
+    if (!ok) {
+      if (error_.empty()) fail("The Pivot preference owner rejected the probe transition");
+      return;
+    }
+    ++pivot_phase_;
+    next(Step::Initial);
   }
 
   bool begin_edge_gizmo() {
@@ -2046,7 +2531,11 @@ private:
     const QImage presented = screen->grabWindow(0, origin.x(), origin.y(),
                                                widget->width(), widget->height()).toImage();
     offscreen = widget->grabFramebuffer().convertToFormat(QImage::Format_RGBA8888);
-    const QString stem = edge_gizmo_
+    const QString stem = bounds_resize_
+        ? QStringLiteral("bounds-resize-%1-pane-%2-").arg(bounds_phase_).arg(index)
+        : pivot_handle_
+        ? QStringLiteral("pivot-handle-%1-pane-%2-").arg(pivot_phase_).arg(index)
+        : edge_gizmo_
         ? QStringLiteral("edge-gizmo-%1-pane-%2-").arg(edge_gizmo_phase_).arg(index)
         : instance_preview_
         ? QStringLiteral("instance-preview-%1-pane-%2-").arg(face_dimension_phase_).arg(index)
@@ -2352,7 +2841,7 @@ private:
   void finish() {
     retire_root();
     timer_.stop();
-    if (release_count_ != (face_dimensions_ || lamina_overlap_ || edge_gizmo_ ? 1u : 2u)) {
+    if (release_count_ != (face_dimensions_ || lamina_overlap_ || edge_gizmo_ || pivot_handle_ || bounds_resize_ ? 1u : 2u)) {
       fail("The replacement editor root did not release its Vulkan device");
     }
     std::cout << "roots=" << root_count_ << "; releases=" << release_count_
@@ -2402,6 +2891,14 @@ private:
         !std::ranges::all_of(submitted_generations_, [this](std::uint64_t value) {
           return value == requested_generation_;
         }) || !presentation_clock_.isValid() || presentation_clock_.elapsed() < 100) {
+      return;
+    }
+    if (bounds_resize_) {
+      if (verify_bounds_resize()) advance_bounds_resize();
+      return;
+    }
+    if (pivot_handle_) {
+      if (verify_pivot_handle()) advance_pivot_handle();
       return;
     }
     if (edge_gizmo_) {
@@ -2662,6 +3159,22 @@ private:
   bool lamina_overlap_ = false;
   bool instance_preview_ = false;
   bool edge_gizmo_ = false;
+  bool pivot_handle_ = false;
+  bool bounds_resize_ = false;
+  unsigned int bounds_phase_ = 0u;
+  std::uint64_t bounds_scale_revision_ = 0u;
+  static constexpr float kBoundsResizeDelta = 0.65f;
+  std::optional<QuaderBoundsResizeState> bounds_before_;
+  std::array<MeshBoundsResizePresentation, 4> bounds_presentations_;
+  std::array<QImage, 4> bounds_previous_, bounds_baseline_;
+  unsigned int pivot_phase_ = 0u;
+  std::uint64_t pivot_scale_revision_ = 0u;
+  QVec3 pivot_origin_;
+  ViewportSettingColor pivot_original_color_;
+  std::array<QImage, 4> pivot_previous_, pivot_baseline_;
+  UISettings pivot_ui_settings_ = UISettings::defaults();
+  LocalizationService pivot_localization_;
+  QtSettingsController pivot_preferences_;
   unsigned int edge_gizmo_phase_ = 0u;
   QVec3 edge_gizmo_origin_;
   static constexpr QVec3 kEdgeGizmoDelta{2.0f, -2.0f, 0.0f};
@@ -2744,6 +3257,10 @@ int main(int argc, char **argv) {
       QStringLiteral("Convert a public mesh into linked occurrences and edit their shared face preview."));
   const QCommandLineOption edge_gizmo_option(QStringLiteral("edge-gizmo"),
       QStringLiteral("Verify a native edge Move gizmo after untouched Quick Pivot, commit and history."));
+  const QCommandLineOption pivot_handle_option(QStringLiteral("pivot-handle"),
+      QStringLiteral("Verify four-pane Pivot icon, axes, scale, live preferences, cancellation and retention."));
+  const QCommandLineOption bounds_resize_option(QStringLiteral("bounds-resize"),
+      QStringLiteral("Verify six paired bounds circles, dashed guides, shared picking, scale, resize cancellation and retention."));
   parser.addOption(output_option);
   parser.addOption(resource_option);
   parser.addOption(overlay_option);
@@ -2752,6 +3269,8 @@ int main(int argc, char **argv) {
   parser.addOption(lamina_option);
   parser.addOption(instance_option);
   parser.addOption(edge_gizmo_option);
+  parser.addOption(pivot_handle_option);
+  parser.addOption(bounds_resize_option);
   parser.process(application);
   if (parser.value(output_option).isEmpty() || parser.value(resource_option).isEmpty()) {
     std::cerr << "--output-dir and --resource-dir are required\n";
@@ -2760,6 +3279,7 @@ int main(int argc, char **argv) {
   quader::EditorCompositionProbe probe(application, parser.value(output_option),
       std::filesystem::path(parser.value(resource_option).toStdWString()),
       parser.isSet(overlay_option), parser.value(reference_option), parser.isSet(face_dimensions_option),
-      parser.isSet(lamina_option), parser.isSet(instance_option), parser.isSet(edge_gizmo_option));
+      parser.isSet(lamina_option), parser.isSet(instance_option), parser.isSet(edge_gizmo_option),
+      parser.isSet(pivot_handle_option), parser.isSet(bounds_resize_option));
   return probe.run();
 }

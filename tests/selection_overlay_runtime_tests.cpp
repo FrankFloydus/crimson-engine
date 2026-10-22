@@ -22,6 +22,11 @@
 #include "editor/tools/extrude_handle_layout.hpp"
 #include "editor/tools/bridge_preview_handle_layout.hpp"
 #include "editor/tools/bounds_resize_interaction.hpp"
+#include "editor/tools/pivot_handle_layout.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
+#include "core/localization_service.hpp"
+#include "ui/qt_settings_controller.hpp"
+#include "ui/ui_settings.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/selected_mesh_outline_mask_cache.hpp"
@@ -68,6 +73,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <set>
 #include <string>
@@ -1811,6 +1817,7 @@ public:
   }
 
   QuaderEditorApi &workflow_editor() { return array_editor(); }
+  PivotToolService &workflow_pivot_service() { return session_.pivot(); }
 
   SceneSession *native_project_scene() { return captured_project_scene_; }
 
@@ -1855,7 +1862,9 @@ public:
                              const ViewportSettings *appearance = nullptr,
                              bool dimensions_visible = false,
                              const BoundsResizeFrame *bounds_resize = nullptr,
-                             float raster_scale = 1.0f) {
+                             float raster_scale = 1.0f,
+                             const PivotHandleState *pivot_handle = nullptr,
+                             const PivotHandleLayoutOptions *pivot_options = nullptr) {
     auto &editor = array_editor();
     auto &modeling = session_.modeling();
     auto &view = extrusion_pane_view(pane);
@@ -1883,6 +1892,8 @@ public:
         .viewport_camera = &camera,
         .mesh_bounds_resize = bounds_resize,
         .viewport_settings = &settings,
+        .pivot_handle = pivot_handle,
+        .pivot_layout_options = pivot_options != nullptr ? *pivot_options : PivotHandleLayoutOptions{},
         .gizmos_visible = true,
         .overlays_visible = true});
     const SelectionRuntimeToolFrame tool_provider(tool_source, tool_frame_builds_);
@@ -1939,9 +1950,9 @@ public:
          .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
          .volatile_modeling_source = {.source_identity = volatile_overlay.source.source_identity,
              .publication_revision = volatile_overlay.source.publication_revision},
-         .dynamic_tool_source = bounds_resize != nullptr ? tool_source.source_stamp()
-                                                        : ViewportOverlayDynamicToolSourceStamp{},
-         .dynamic_tool_frame_provider = bounds_resize != nullptr ? &tool_provider : nullptr,
+         .dynamic_tool_source = bounds_resize != nullptr || pivot_handle != nullptr
+             ? tool_source.source_stamp() : ViewportOverlayDynamicToolSourceStamp{},
+         .dynamic_tool_frame_provider = bounds_resize != nullptr || pivot_handle != nullptr ? &tool_provider : nullptr,
          .scene_selection_mode = ViewportToolOverlayProjection::selection_mode(mode),
          .style_selection_context = context,
          .overlays_visible = true,
@@ -9415,6 +9426,200 @@ TEST(SelectionOverlayRuntimeTests,
   camera.view_axis(ViewportViewAxis::X, 1);
   camera.focus_origin(4.0f);
   capture("side-200", 2.0f);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanPivotBillboardPixelsMatchPickingAcrossViewsPreferencesAndCancellation) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-pivot-billboard-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  auto &editor = harness.workflow_editor();
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Pivot billboard pixel fixture").ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Pivot).ok());
+  auto settings = ViewportSettings::defaults();
+  auto ui_settings = UISettings::defaults();
+  LocalizationService localization;
+  QtSettingsController preferences;
+  preferences.bind(ui_settings, settings, localization, {});
+  ViewportCameraController camera;
+  camera.set_viewport_size(640, 480);
+  camera.set_clip_planes(0.01f, 200.0f);
+  const auto capture = [&](const QString &phase, float scale, bool blue = false) {
+    SCOPED_TRACE(phase.toStdString());
+    harness.set_sample_camera(camera);
+    const auto handle = harness.workflow_pivot_service().handle_state();
+    const PivotHandleLayoutOptions options{
+        .icon_size_pixels = settings.float_value(ViewportFloatSettingId::PivotIconSize)};
+    const auto layout = build_pivot_handle_layout(camera, handle, scale, options);
+    EXPECT_TRUE(layout.valid);
+    EXPECT_TRUE(harness.present_workflow_pane(0u, &settings, false, nullptr, scale, &handle, &options));
+    const QImage image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    if (!directory.isEmpty()) EXPECT_TRUE(image.save(
+        QDir(directory).filePath(QStringLiteral("pivot-%1.png").arg(phase))));
+    const auto color_at = [&](QVec2 screen) {
+      const QPoint pixel(qRound(screen.x), image.height() - 1 - qRound(screen.y));
+      EXPECT_TRUE(image.rect().contains(pixel));
+      return image.rect().contains(pixel) ? image.pixelColor(pixel) : QColor{};
+    };
+    const auto icon_color = [&](QColor color) {
+      return blue ? color.blue() > std::max(color.red(), color.green()) + 40
+          : color.red() > 120 && color.green() > 120 &&
+            color.red() + color.green() > color.blue() * 2 + 100;
+    };
+    const auto center = color_at(layout.center_screen);
+    EXPECT_TRUE(icon_color(center));
+    constexpr std::size_t kSectors = 8u;
+    constexpr std::array<std::string_view, 3> kRegions{"disc", "gap", "ring"};
+    const std::array inner_radii{0.0f, layout.disc_radius_pixels + 0.75f,
+                                layout.ring_inner_radius_pixels + 0.25f};
+    const std::array outer_radii{layout.disc_radius_pixels - 0.75f,
+                                layout.ring_inner_radius_pixels - 0.75f,
+                                layout.icon_radius_pixels - 0.25f};
+    std::array<std::array<std::size_t, kSectors>, 3> samples{}, matches{};
+    // Classify physical pixel centers inside each band. Rounding a point on
+    // a thin ring can select a pixel center outside its outer circumference.
+    for (int y = static_cast<int>(std::floor(layout.center_screen.y - layout.icon_radius_pixels));
+         y <= static_cast<int>(std::ceil(layout.center_screen.y + layout.icon_radius_pixels)); ++y) {
+      for (int x = static_cast<int>(std::floor(layout.center_screen.x - layout.icon_radius_pixels));
+           x <= static_cast<int>(std::ceil(layout.center_screen.x + layout.icon_radius_pixels)); ++x) {
+        const QPoint pixel(x, image.height() - 1 - y);
+        if (!image.rect().contains(pixel)) continue;
+        const QVec2 offset{static_cast<float>(x) + 0.5f - layout.center_screen.x,
+                           static_cast<float>(y) + 0.5f - layout.center_screen.y};
+        const float radius = std::hypot(offset.x, offset.y);
+        const auto sector = std::min(kSectors - 1u, static_cast<std::size_t>(
+            (std::atan2(offset.y, offset.x) + std::numbers::pi_v<float>) *
+            static_cast<float>(kSectors) / (2.0f * std::numbers::pi_v<float>)));
+        const auto color = image.pixelColor(pixel);
+        for (std::size_t region = 0u; region < kRegions.size(); ++region) {
+          if (radius < inner_radii[region] || radius > outer_radii[region]) continue;
+          ++samples[region][sector];
+          const int brightness = std::max({color.red(), color.green(), color.blue()});
+          matches[region][sector] += region == 1u
+              ? brightness < 40 && brightness < std::max({center.red(), center.green(), center.blue()}) - 70
+              : icon_color(color);
+        }
+      }
+    }
+    for (std::size_t region = 0u; region < kRegions.size(); ++region) {
+      for (std::size_t sector = 0u; sector < kSectors; ++sector) {
+        EXPECT_GT(samples[region][sector], 0u) << kRegions[region] << " sector " << sector;
+        EXPECT_GE(matches[region][sector] * 100u, samples[region][sector] * 90u)
+            << kRegions[region] << " sector " << sector;
+      }
+    }
+    EXPECT_EQ(hit_pivot_handle(layout, layout.center_screen), PivotHandlePart::Center);
+    for (std::size_t index = 0; index < layout.axes.size(); ++index) {
+      const auto &axis = layout.axes[index];
+      if (!axis.visible) continue;
+      EXPECT_EQ(hit_pivot_handle(layout, axis.screen_tip), axis.part);
+      const auto direction = axis.screen_tip - axis.screen_start;
+      const float span = std::hypot(direction.x, direction.y);
+      const auto sample = axis.screen_tip - direction * (3.0f * scale / span);
+      bool semantic_color = false;
+      for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+          const auto color = color_at(sample + QVec2{static_cast<float>(x), static_cast<float>(y)});
+          const std::array channels{color.red(), color.green(), color.blue()};
+          semantic_color |= channels[index] > channels[(index + 1u) % 3u] + 20 &&
+                            channels[index] > channels[(index + 2u) % 3u] + 20;
+        }
+      }
+      EXPECT_TRUE(semantic_color);
+    }
+    const auto builds = harness.tool_frame_builds();
+    for (int repeat = 0; repeat < 4; ++repeat) {
+      EXPECT_TRUE(harness.present_workflow_pane(0u, &settings, false, nullptr, scale, &handle, &options));
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    }
+    EXPECT_EQ(harness.tool_frame_builds(), builds);
+    EXPECT_EQ(harness.capture(), image);
+    return image;
+  };
+  for (int view = 0; view < 4; ++view) {
+    ASSERT_TRUE(camera.restore_perspective_pose(
+        {.eye = {7, 5, 9}, .target = {}, .up = {0, 1, 0}}));
+    if (view > 0) camera.view_axis(static_cast<ViewportViewAxis>(view - 1), 1);
+    const auto prefix = QStringLiteral("view-%1").arg(view);
+    const QImage baseline = capture(prefix + QStringLiteral("-100"), 1.0f);
+    EXPECT_NE(capture(prefix + QStringLiteral("-200"), 2.0f), baseline);
+    EXPECT_EQ(capture(prefix + QStringLiteral("-scale-down"), 1.0f), baseline);
+  }
+  ASSERT_TRUE(camera.restore_perspective_pose({.eye = {7, 5, 9}, .target = {}, .up = {0, 1, 0}}));
+  const QImage baseline = capture(QStringLiteral("preferences-baseline"), 1.0f);
+  const auto original_color = settings.color(ViewportColorSettingId::PivotIcon);
+  ASSERT_TRUE(preferences.preview_color(ViewportColorSettingId::PivotIcon, {0, 0.25f, 1, 1}));
+  EXPECT_NE(capture(QStringLiteral("preferences-live-blue"), 1.0f, true), baseline);
+  ASSERT_TRUE(preferences.rollback_color(ViewportColorSettingId::PivotIcon, original_color));
+  EXPECT_EQ(capture(QStringLiteral("preferences-cancelled"), 1.0f), baseline);
+  ASSERT_TRUE(preferences.set_float(ViewportFloatSettingId::PivotIconSize, 40.0f));
+  EXPECT_NE(capture(QStringLiteral("preferences-size-40"), 1.0f), baseline);
+  ASSERT_TRUE(preferences.set_float(ViewportFloatSettingId::PivotIconSize, 20.0f));
+  EXPECT_EQ(capture(QStringLiteral("preferences-size-restored"), 1.0f), baseline);
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  camera.focus_origin(4.0f);
+  const ViewportBoundsResizeState bounds_state{
+      .local_min = {-1.0f, -1.0f, -1.0f},
+      .local_max = {1.0f, 1.0f, 1.0f}};
+  for (const float scale : {1.0f, 2.0f, 1.0f}) {
+    BoundsResizeInteraction bounds_interaction;
+    const auto &bounds = bounds_interaction.project(bounds_state, camera, scale);
+    const auto target = bounds.handles[2].screen_position;
+    auto handle = harness.workflow_pivot_service().handle_state();
+    handle.world_position = {};
+    const auto reference = build_pivot_handle_layout(camera, handle, scale);
+    for (const float axis_distance : {24.0f, 44.0f}) {
+      const auto delta = target - reference.center_screen - QVec2{axis_distance * scale, 0};
+      harness.workflow_pivot_service().set_persistent_preview_position(reference.center +
+          (reference.camera_right * delta.x - reference.camera_up * delta.y) *
+          reference.world_units_per_pixel);
+      handle = harness.workflow_pivot_service().handle_state();
+      const auto layout = build_pivot_handle_layout(camera, handle, scale);
+      ASSERT_EQ(bounds_interaction.hit_test(target), 2);
+      ASSERT_EQ(hit_pivot_handle(layout, target), PivotHandlePart::X);
+      harness.set_sample_camera(camera);
+      ASSERT_TRUE(harness.present_workflow_pane(0u, &settings, false, &bounds, scale, &handle));
+      const QImage overlap = harness.capture();
+      ASSERT_FALSE(overlap.isNull());
+      const auto sample = axis_distance > 40.0f ? target - QVec2{2.0f * scale, 0} : target;
+      const QPoint pixel(qRound(sample.x), overlap.height() - 1 - qRound(sample.y));
+      ASSERT_TRUE(overlap.rect().contains(pixel));
+      const auto foreground = overlap.pixelColor(pixel);
+      EXPECT_GT(foreground.green(), foreground.red() + 20);
+      EXPECT_GT(foreground.green(), foreground.blue() + 20);
+      if (!directory.isEmpty()) EXPECT_TRUE(overlap.save(QDir(directory).filePath(
+          QStringLiteral("pivot-bounds-overlap-%1-%2.png").arg(scale).arg(axis_distance))));
+    }
+  }
+  harness.workflow_pivot_service().set_persistent_preview_position({});
+  ASSERT_TRUE(camera.restore_perspective_pose({.eye = {7, 5, 9}, .target = {}, .up = {0, 1, 0}}));
+  EXPECT_EQ(capture(QStringLiteral("bounds-overlap-retired"), 1.0f), baseline);
+  harness.workflow_pivot_service().set_persistent_preview_position({0.6f, 0.3f, -0.2f});
+  EXPECT_NE(capture(QStringLiteral("pivot-preview-moved"), 1.0f), baseline);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  const auto hidden = harness.workflow_pivot_service().handle_state();
+  EXPECT_FALSE(hidden.visible);
+  ASSERT_TRUE(harness.present_workflow_pane(0u, &settings, false, nullptr, 1.0f, &hidden));
+  const QImage cancelled = harness.capture();
+  EXPECT_NE(cancelled, baseline);
+  harness.workflow_pivot_service().begin_quick_edit({});
+  const QImage quick = capture(QStringLiteral("quick-icon-only"), 1.0f);
+  EXPECT_NE(quick, baseline);
+  harness.workflow_pivot_service().end_quick_edit();
+  const auto ended = harness.workflow_pivot_service().handle_state();
+  ASSERT_TRUE(harness.present_workflow_pane(0u, &settings, false, nullptr, 1.0f, &ended));
+  EXPECT_EQ(harness.capture(), cancelled);
 }
 
 TEST(SelectionOverlayRuntimeTests,

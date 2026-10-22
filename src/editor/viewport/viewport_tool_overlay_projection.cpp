@@ -7,11 +7,13 @@
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 
 #include "editor/array/linear_array_tool_service.hpp"
+#include "core/color_space.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
 #include "editor/pivot/pivot_types.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/tools/extrude_handle_layout.hpp"
+#include "editor/tools/pivot_handle_layout.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_box_overlay_builder.hpp"
@@ -26,6 +28,7 @@
 #include "viewport/bounds_resize_controls.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_pixel_scale.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -147,66 +150,6 @@ render_tool(quader_editor_core::ViewportInteractionTool tool) {
     });
   }
   return result;
-}
-
-std::optional<QVec3> intersect_ray_plane(const ViewportRay &ray,
-                                         QVec3 plane_point,
-                                         QVec3 plane_normal) {
-  const float denominator = dot(plane_normal, ray.direction);
-  if (std::abs(denominator) <= 0.000001f) {
-    return std::nullopt;
-  }
-  const float t = dot(plane_point - ray.origin, plane_normal) / denominator;
-  return std::isfinite(t) ? std::optional<QVec3>(ray.origin + ray.direction * t)
-                          : std::nullopt;
-}
-
-void append_pivot_ring(ViewportOverlayFrame &frame, QVec3 center, QVec3 axis_a,
-                       QVec3 axis_b, float radius) {
-  constexpr int kSegments = 32;
-  constexpr float kTau = 6.2831853071795864769f;
-  for (int segment = 0; segment < kSegments; ++segment) {
-    const float angle0 =
-        kTau * static_cast<float>(segment) / static_cast<float>(kSegments);
-    const float angle1 =
-        kTau * static_cast<float>(segment + 1) / static_cast<float>(kSegments);
-    frame.lines.push_back({
-        .layer = ViewportOverlayLayer::ToolHandle,
-        .start = center + axis_a * (std::cos(angle0) * radius) +
-                 axis_b * (std::sin(angle0) * radius),
-        .end = center + axis_a * (std::cos(angle1) * radius) +
-               axis_b * (std::sin(angle1) * radius),
-        .color = kOverlayPivotHandleColor,
-        .width_pixels = 2.0f,
-        .style_role = ViewportOverlayStyleRole::ExplicitColor,
-        .source = ViewportOverlaySource::Tool,
-    });
-  }
-}
-
-float pivot_handle_world_radius(const ViewportCameraController &camera,
-                                QVec3 position, float raster_scale) {
-  constexpr float kRadiusPixels = 7.0f;
-  const float radius_pixels = kRadiusPixels *
-                              viewport_sanitized_pixel_scale(raster_scale);
-  const ViewportScreenPoint screen = camera.project_world_point(position);
-  if (!screen.visible) {
-    return 0.08f;
-  }
-  const QVec3 plane_normal =
-      normalize_or_zero(camera.pose().target - camera.pose().eye);
-  if (length_squared(plane_normal) <= 0.000001f) {
-    return 0.08f;
-  }
-  const std::optional<QVec3> center = intersect_ray_plane(
-      camera.ray_from_viewport_point(screen.position), position, plane_normal);
-  const std::optional<QVec3> edge = intersect_ray_plane(
-      camera.ray_from_viewport_point(
-          {screen.position.x + radius_pixels, screen.position.y}),
-      position, plane_normal);
-  return center.has_value() && edge.has_value()
-             ? std::clamp(length(*edge - *center), 0.025f, 100.0f)
-             : 0.08f;
 }
 
 std::uint32_t linear_array_axis_color(LinearArrayAxisConstraint constraint) {
@@ -470,7 +413,7 @@ std::uint64_t tool_overlay_publication_revision(
       inputs.interaction_pane && inputs.overlays_visible &&
       inputs.selection_marquee != nullptr && inputs.selection_marquee->active;
   const bool pivot_visible =
-      inputs.pivot_handle != nullptr && inputs.pivot_handle->visible;
+      inputs.gizmos_visible && inputs.pivot_handle != nullptr && inputs.pivot_handle->visible;
   const bool primitive_creation_visible =
       inputs.primitive_creation_controls != nullptr &&
       inputs.primitive_creation_controls->visible;
@@ -523,7 +466,22 @@ std::uint64_t tool_overlay_publication_revision(
         .add_value(revisions.curve_preview);
     add_gizmo_info(signature, inputs.transform_gizmo);
   }
-  add_pivot_handle(signature, inputs.pivot_handle);
+  signature.add_bool(pivot_visible);
+  if (pivot_visible) {
+    add_pivot_handle(signature, inputs.pivot_handle);
+    const auto &options = inputs.pivot_layout_options;
+    signature.add_float(inputs.viewport_settings != nullptr
+        ? inputs.viewport_settings->float_value(ViewportFloatSettingId::PivotIconSize)
+        : options.icon_size_pixels)
+        .add_vec3(options.world_x).add_vec3(options.world_y).add_vec3(options.world_z)
+        .add_value(static_cast<std::uint64_t>(inputs.interaction_pane
+            ? inputs.pivot_hovered_part : PivotHandlePart::None))
+        .add_value(static_cast<std::uint64_t>(inputs.pivot_active_part));
+    if (inputs.viewport_settings != nullptr) {
+      const auto color = inputs.viewport_settings->color(ViewportColorSettingId::PivotIcon);
+      signature.add_float(color.r).add_float(color.g).add_float(color.b).add_float(color.a);
+    }
+  }
   add_linear_array_handle(signature, inputs.linear_array_handle);
   signature.add_bool(inputs.extrusion_handle != nullptr);
   if (inputs.extrusion_handle != nullptr) {
@@ -577,11 +535,6 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
     ViewportToolOverlayProjection::append_primitive_creation_controls(
         frame, *inputs_.overlay_camera, *inputs_.primitive_creation_controls);
   }
-  if (inputs_.gizmos_visible && inputs_.mesh_bounds_resize != nullptr &&
-      inputs_.viewport_settings != nullptr) {
-    ViewportBoundsResizeOverlayBuilder::append(frame, *inputs_.overlay_camera,
-        *inputs_.mesh_bounds_resize, *inputs_.viewport_settings);
-  }
   if (inputs_.interaction_pane) {
     if (inputs_.overlays_visible) {
       if (inputs_.transform_snap_points != nullptr) {
@@ -595,15 +548,23 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
       }
     }
   }
+  if (inputs_.gizmos_visible && inputs_.viewport_camera != nullptr && inputs_.pivot_handle != nullptr) {
+    ViewportToolOverlayProjection::append_pivot_handle(
+        frame, *inputs_.viewport_camera, *inputs_.pivot_handle,
+        inputs_.raster_scale, inputs_.pivot_layout_options,
+        inputs_.interaction_pane ? inputs_.pivot_hovered_part : PivotHandlePart::None,
+        inputs_.pivot_active_part, inputs_.viewport_settings);
+  }
+  if (inputs_.gizmos_visible && inputs_.mesh_bounds_resize != nullptr &&
+      inputs_.viewport_settings != nullptr) {
+    // Fresh bounds presses take priority over uncaptured native controls.
+    ViewportBoundsResizeOverlayBuilder::append(frame, *inputs_.overlay_camera,
+        *inputs_.mesh_bounds_resize, *inputs_.viewport_settings);
+  }
   if (inputs_.gizmos_visible && !inputs_.pivot_handle_editing &&
       inputs_.transform_gizmo != nullptr) {
     ViewportToolOverlayProjection::append_transform_gizmo(
         frame, *inputs_.overlay_camera, *inputs_.transform_gizmo);
-  }
-  if (inputs_.viewport_camera != nullptr && inputs_.pivot_handle != nullptr) {
-    ViewportToolOverlayProjection::append_pivot_handle(
-        frame, *inputs_.viewport_camera, *inputs_.pivot_handle,
-        inputs_.raster_scale);
   }
   if (inputs_.linear_array_handle != nullptr) {
     append_linear_array_constraint_guide(frame, *inputs_.overlay_camera,
@@ -671,18 +632,81 @@ void ViewportToolOverlayProjection::append_selection_marquee(
 
 void ViewportToolOverlayProjection::append_pivot_handle(
     ViewportOverlayFrame &frame, const ViewportCameraController &camera,
-    const PivotHandleState &handle, float raster_scale) {
-  if (!handle.visible) {
-    return;
+    const PivotHandleState &handle, float raster_scale,
+    const PivotHandleLayoutOptions &options, PivotHandlePart hovered_part,
+    PivotHandlePart active_part, const ViewportSettings *settings) {
+  PivotHandleLayoutOptions resolved = options;
+  ViewportSettingColor icon_color{1.0f, 1.0f, 0.35f, 1.0f};
+  if (settings != nullptr) {
+    resolved.icon_size_pixels = settings->float_value(ViewportFloatSettingId::PivotIconSize);
+    icon_color = settings->color(ViewportColorSettingId::PivotIcon);
   }
-  const float radius =
-      pivot_handle_world_radius(camera, handle.world_position, raster_scale);
-  append_pivot_ring(frame, handle.world_position, {1.0f, 0.0f, 0.0f},
-                    {0.0f, 1.0f, 0.0f}, radius);
-  append_pivot_ring(frame, handle.world_position, {1.0f, 0.0f, 0.0f},
-                    {0.0f, 0.0f, 1.0f}, radius);
-  append_pivot_ring(frame, handle.world_position, {0.0f, 1.0f, 0.0f},
-                    {0.0f, 0.0f, 1.0f}, radius);
+  const auto layout = build_pivot_handle_layout(camera, handle, raster_scale, resolved);
+  if (!layout.valid) return;
+  const std::uint32_t color = rgba8(normalized_to_byte(icon_color.r),
+      normalized_to_byte(icon_color.g), normalized_to_byte(icon_color.b),
+      normalized_to_byte(icon_color.a));
+  const std::uint32_t gap_color = rgba8(12, 12, 14, normalized_to_byte(icon_color.a));
+  const auto triangle = [&](QVec3 a, QVec3 b, QVec3 c, std::uint32_t fill) {
+    frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .a = a, .b = b, .c = c, .color = fill,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+    });
+  };
+  constexpr std::array<std::uint32_t, 3> kAxisColors{
+      kOverlayToolAxisXColor, kOverlayToolAxisYColor, kOverlayToolAxisZColor};
+  constexpr std::array<std::uint32_t, 3> kAxisHighlights{
+      kOverlayToolAxisXHighlightColor, kOverlayToolAxisYHighlightColor,
+      kOverlayToolAxisZHighlightColor};
+  for (int index = 0; index < 3; ++index) {
+    const auto &axis = layout.axes[index];
+    if (!axis.visible) continue;
+    const bool highlighted = axis.part == active_part || axis.part == hovered_part;
+    const auto axis_color = highlighted ? kAxisHighlights[index] : kAxisColors[index];
+    const QVec2 delta = axis.screen_tip - axis.screen_start;
+    const float span = std::hypot(delta.x, delta.y);
+    if (span <= 0.000001f) continue;
+    const QVec2 direction = delta / span;
+    const float world_pixel = axis.tip_world_units_per_pixel;
+    const QVec3 along = (layout.camera_right * direction.x - layout.camera_up * direction.y) * world_pixel;
+    const QVec3 across_direction = layout.camera_right * -direction.y - layout.camera_up * direction.x;
+    const QVec3 across = across_direction * world_pixel;
+    const QVec3 arrow_base = axis.world_tip - along * (8.0f * layout.raster_scale);
+    const QVec3 start_width = across_direction *
+        (layout.world_units_per_pixel * layout.raster_scale);
+    const QVec3 end_width = across * layout.raster_scale;
+    // Keep native handles in one ordered fill stream so the fresh bounds
+    // owner can cover both their shafts and arrowheads at overlapping targets.
+    triangle(axis.world_start + start_width, axis.world_start - start_width,
+             arrow_base - end_width, axis_color);
+    triangle(axis.world_start + start_width, arrow_base - end_width,
+             arrow_base + end_width, axis_color);
+    triangle(axis.world_tip, arrow_base + across * (4.0f * layout.raster_scale),
+             arrow_base - across * (4.0f * layout.raster_scale), axis_color);
+  }
+  constexpr int kSegments = 32;
+  constexpr float kTau = 2.0f * std::numbers::pi_v<float>;
+  const auto offset = [&](int segment, float radius) {
+    const float angle = kTau * static_cast<float>(segment) / static_cast<float>(kSegments);
+    return (layout.camera_right * std::cos(angle) + layout.camera_up * std::sin(angle)) *
+           (radius * layout.world_units_per_pixel);
+  };
+  frame.triangles.reserve(frame.triangles.size() + kSegments * 5u);
+  for (int segment = 0; segment < kSegments; ++segment) {
+    const QVec3 inner_a = layout.center + offset(segment, layout.disc_radius_pixels);
+    const QVec3 inner_b = layout.center + offset(segment + 1, layout.disc_radius_pixels);
+    const QVec3 ring_a = layout.center + offset(segment, layout.ring_inner_radius_pixels);
+    const QVec3 ring_b = layout.center + offset(segment + 1, layout.ring_inner_radius_pixels);
+    const QVec3 outer_a = layout.center + offset(segment, layout.icon_radius_pixels);
+    const QVec3 outer_b = layout.center + offset(segment + 1, layout.icon_radius_pixels);
+    triangle(layout.center, inner_a, inner_b, color);
+    triangle(inner_a, ring_a, ring_b, gap_color);
+    triangle(inner_a, ring_b, inner_b, gap_color);
+    triangle(ring_a, outer_a, outer_b, color);
+    triangle(ring_a, outer_b, ring_b, color);
+  }
 }
 
 void ViewportToolOverlayProjection::append_linear_array_handle(

@@ -2054,6 +2054,19 @@ void QtViewportPanel::prepare_viewports(
     if (primitive_feedback_input_eligible_ && primitive_creation_controls != nullptr) {
       present_primitive_feedback(pane_state, *primitive_creation_controls);
     }
+    PivotHandleLayoutOptions pivot_layout_options{
+        .icon_size_pixels = pane_settings.float_value(ViewportFloatSettingId::PivotIconSize)};
+    if (pivot_handle.visible && pivot_handle.persistent) {
+      pivot_layout_options = interaction_controller_.pivot_handle_layout_options(
+          editor, editor.viewports().transform_space(pane_state.id),
+          pivot_layout_options.icon_size_pixels);
+      if (native_presentation.pivot_drag_layout_options) {
+        const auto &captured = *native_presentation.pivot_drag_layout_options;
+        pivot_layout_options.world_x = captured.world_x;
+        pivot_layout_options.world_y = captured.world_y;
+        pivot_layout_options.world_z = captured.world_z;
+      }
+    }
     const ViewportToolOverlaySource dynamic_tool_frame_provider{
         ViewportToolOverlaySourceInputs{
             .source_identity = reinterpret_cast<std::uintptr_t>(
@@ -2069,6 +2082,10 @@ void QtViewportPanel::prepare_viewports(
             .transform_snap_points = uses_interaction_gizmo ? &transform_snap_points : nullptr,
             .selection_marquee = &selection_marquee,
             .pivot_handle = &pivot_handle,
+            .pivot_layout_options = pivot_layout_options,
+            .pivot_hovered_part = pane_state.id == interaction_pane_id_
+                ? native_presentation.pivot_hovered_part : PivotHandlePart::None,
+            .pivot_active_part = native_presentation.pivot_active_part,
             .linear_array_handle = &linear_array_handle,
             .extrusion_handle = &extrusion_handle,
             .bridge_handle = native_presentation.bridge_handle
@@ -4946,6 +4963,11 @@ void QtViewportPanel::process_viewport_input(
                            interaction_frame.pointer_drag_threshold_pixels,
                        .scene_snap_enabled = resolved_scene_snap_enabled,
                       .grid_snap_enabled = resolved_grid_snap_enabled,
+                      .pivot_layout_options = native_tools.pivot_handle_state().persistent
+                          ? std::optional{interaction_controller_.pivot_handle_layout_options(
+                                editor, editor.viewports().transform_space(*input_pane),
+                                viewport_settings.float_value(ViewportFloatSettingId::PivotIconSize))}
+                          : std::optional<PivotHandleLayoutOptions>{},
                       .linear_array_wheel_remainder =
                           &linear_array_wheel_remainder_,
                       .radial_array_wheel_remainder =

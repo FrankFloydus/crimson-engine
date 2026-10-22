@@ -415,6 +415,7 @@ add_library(quader_editor_services STATIC
     src/editor/tools/extrude_tool_service.cpp
     src/editor/tools/extrude_viewport_interaction.cpp
     src/editor/tools/extrude_handle_layout.cpp
+    src/editor/tools/pivot_handle_layout.cpp
     src/editor/tools/bridge_preview_handle_layout.cpp
     src/editor/tools/bridge_preview_viewport_interaction.cpp
     src/editor/transform/mesh_arrangement_service.cpp
@@ -1822,6 +1823,7 @@ if(QUADER_BUILD_TESTS)
         tests/extrude_tool_service_tests.cpp
         tests/extrude_viewport_interaction_tests.cpp
         tests/extrude_handle_layout_tests.cpp
+        tests/pivot_handle_layout_tests.cpp
         tests/bridge_preview_viewport_interaction_tests.cpp
         tests/extrude_preview_performance_tests.cpp
         tests/qt_extrude_tool_settings_tests.cpp
