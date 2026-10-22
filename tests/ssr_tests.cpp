@@ -40,6 +40,10 @@ void allocation(){
     // Complete FP32 color (16 B) plus min/max depth (8 B) with each lower
     // level allocated again independently: fullsize24 + 2*(quarter24+pixel24).
     check(ssrAllocationBytes(4,4)==624,"SSR resident accounting omitted one chain or its independent scratch allocations.");
+    check(ssrAllocationBytes(0,100,true)==0&&ssrAllocationBytes(1,1,true)==80,
+        "SSR reconstruction allocated an empty view or omitted its exact full-resolution targets.");
+    check(ssrAllocationBytes(4,4,true)==624+16*56&&ssrAllocationBytes(3,5,true)==504+15*56,
+        "SSR reconstruction resource accounting lost raw radiance, receiver guides or detached filtering.");
     check(ssrAllocationBytes(65535,65535)>std::numeric_limits<std::uint32_t>::max(),"Large SSR allocations overflow 32-bit byte accounting.");
     check(SsrEmptyMinimum>1.0e20f&&std::isfinite(SsrEmptyMinimum),"SSR sky interval uses an infinite or ordinary geometry depth sentinel.");
 }

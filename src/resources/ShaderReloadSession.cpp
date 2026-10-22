@@ -101,6 +101,7 @@ void ShaderReloadSession::pump() {
     pairs.push_back({RendererProgram::ModelSmoothNormals,{},ready.at("cs_model_smooth_normals")->bytes});
     pairs.push_back({RendererProgram::SsrColor,{},ready.at("cs_ssr_color")->bytes});
     pairs.push_back({RendererProgram::SsrDepth,{},ready.at("cs_ssr_depth")->bytes});
+    pairs.push_back({RendererProgram::SsrReconstruct,{},ready.at("cs_ssr_reconstruct")->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }

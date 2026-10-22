@@ -10,6 +10,7 @@
 #include <crimson/renderer/forward/SsrGpu.h>
 #include "cs_ssr_color.h"
 #include "cs_ssr_depth.h"
+#include "cs_ssr_reconstruct.h"
 #include <SDL3/SDL.h>
 #include <lodepng.h>
 #include <algorithm>
@@ -62,7 +63,7 @@ double variation(const DecodedImage& image) {
         total+=std::abs(int(image.rgba[offset])-int(image.rgba[offset+image.width*4]));++count;}
     return total/count;
 }
-void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& artifacts,bool closedCubeOnly,bool pbrQualityOnly) {
+void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::path& artifacts,bool closedCubeOnly,bool pbrQualityOnly,bool emissiveHaloOnly) {
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));
     MaterialGraphPrograms programs(resources,config);TestGpuContext gpu;
     bgfx::reset(320,240,BGFX_RESET_NONE);renderer.resizeViewport(Width,Height);renderer.resizeGameViewport(Width,Height);renderer.setGridVisible(false);
@@ -116,6 +117,66 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
         }
         bgfx::destroy(colorProgram);bgfx::destroy(depthProgram);
     }
+    if(!closedCubeOnly&&!pbrQualityOnly) {
+        // An isolated foreground receiver must not infer its plane from the
+        // bright background on both sides. Identical normals/roughness make
+        // depth continuity the only reason to preserve the black center.
+        constexpr std::uint16_t extent=9;constexpr unsigned middle=(extent/2)*extent+extent/2;
+        struct ReconstructionHandles {
+            bgfx::ProgramHandle program{BGFX_INVALID_HANDLE};
+            std::array<bgfx::UniformHandle,5> uniforms{{BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE}};
+            ~ReconstructionHandles(){for(auto uniform:uniforms)if(bgfx::isValid(uniform))bgfx::destroy(uniform);
+                if(bgfx::isValid(program))bgfx::destroy(program);}
+        } handles;
+        const auto shader=bgfx::createShader(bgfx::copy(cc_cs_ssr_reconstruct,std::uint32_t(sizeof(cc_cs_ssr_reconstruct))));
+        check(bgfx::isValid(shader),"SSR reconstruction fixture shader allocation failed.");
+        handles.program=bgfx::createProgram(shader,true);check(bgfx::isValid(handles.program),"SSR reconstruction fixture program allocation failed.");
+        handles.uniforms[0]=bgfx::createUniform("s_ssrReconstructInput",bgfx::UniformType::Sampler);
+        handles.uniforms[1]=bgfx::createUniform("s_ssrReconstructGuide",bgfx::UniformType::Sampler);
+        handles.uniforms[2]=bgfx::createUniform("s_ssrReconstructDepth",bgfx::UniformType::Sampler);
+        handles.uniforms[3]=bgfx::createUniform("u_ssrReconstructSize",bgfx::UniformType::Vec4);
+        handles.uniforms[4]=bgfx::createUniform("u_ssrInverseProjection",bgfx::UniformType::Mat4);
+        for(auto uniform:handles.uniforms)check(bgfx::isValid(uniform),"SSR reconstruction fixture uniform allocation failed.");
+        std::array<float,extent*extent*4> incoming{},guide{};
+        for(unsigned pixel=0;pixel<extent*extent;++pixel) {
+            incoming[pixel*4]=12;incoming[pixel*4+3]=1;
+            guide[pixel*4+1]=1;guide[pixel*4+3]=.42f;
+        }
+        incoming[middle*4]=0;
+        Texture raw{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RGBA32F,0,bgfx::copy(incoming.data(),std::uint32_t(sizeof(incoming))))};
+        Texture receiverGuide{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RGBA32F,0,bgfx::copy(guide.data(),std::uint32_t(sizeof(guide))))};
+        Texture filtered{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_COMPUTE_WRITE)};
+        check(bgfx::isValid(raw.handle)&&bgfx::isValid(receiverGuide.handle)&&bgfx::isValid(filtered.handle),"SSR reconstruction fixture texture allocation failed.");
+        const auto inverseProjection=math::inverse(math::perspective(55*std::numbers::pi/180,1,.05,50,
+            bgfx::getCaps()->homogeneousDepth?ClipDepth::NegativeOneToOne:ClipDepth::ZeroToOne));
+        check(inverseProjection.has_value(),"SSR reconstruction fixture projection was not invertible.");
+        const auto reconstructCenter=[&](bool isolated) {
+            std::array<float,extent*extent*2> depth{};depth.fill(2);
+            if(isolated)depth[middle*2]=depth[middle*2+1]=1;
+            Texture receiverDepth{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RG32F,0,bgfx::copy(depth.data(),std::uint32_t(sizeof(depth))))};
+            Texture staging{bgfx::createTexture2D(extent,extent,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
+            check(bgfx::isValid(receiverDepth.handle)&&bgfx::isValid(staging.handle),"SSR reconstruction fixture depth/readback allocation failed.");
+            const Vec4 size{extent,extent,1,0};bgfx::setUniform(handles.uniforms[3],size.data());
+            bgfx::setUniform(handles.uniforms[4],inverseProjection->data());
+            bgfx::setTexture(0,handles.uniforms[0],raw.handle);bgfx::setTexture(1,handles.uniforms[1],receiverGuide.handle);
+            bgfx::setTexture(2,handles.uniforms[2],receiverDepth.handle);
+            bgfx::setImage(3,filtered.handle,0,bgfx::Access::Write,bgfx::TextureFormat::RGBA32F);
+            bgfx::dispatch(DiagnosticReadbackView-1,handles.program,2,2,1);
+            std::array<float,extent*extent*4> values{};
+            bgfx::blit(DiagnosticReadbackView,staging.handle,0,0,filtered.handle,0,0,extent,extent);
+            const auto ready=bgfx::readTexture(staging.handle,values.data());check(ready!=UINT32_MAX,"SSR reconstruction fixture readback unsupported.");
+            for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return Vec4{
+                values[middle*4],values[middle*4+1],values[middle*4+2],values[middle*4+3]};}
+            throw std::runtime_error("SSR reconstruction fixture readback timed out.");
+        };
+        const auto isolated=reconstructCenter(true),continuous=reconstructCenter(false);
+        check(std::abs(isolated[0])<1.e-6f&&std::abs(isolated[1])<1.e-6f&&std::abs(isolated[2])<1.e-6f&&std::abs(isolated[3]-1)<1.e-6f,
+            "SSR reconstruction mixed bright background into an isolated foreground receiver or lost its confidence.");
+        check(continuous[0]>1&&std::abs(continuous[1])<1.e-6f&&std::abs(continuous[2])<1.e-6f&&std::abs(continuous[3]-1)<1.e-6f,
+            "SSR reconstruction continuity control disabled rough filtering or changed its confidence.");
+        std::cout<<"SSR reconstruction receiver silhouette: isolated red="<<isolated[0]<<", flat control red="<<continuous[0]
+            <<", confidence="<<isolated[3]<<'/'<<continuous[3]<<'\n';
+    }
     MaterialAsset asset;asset.id="ssr-gpu-contract";asset.name="SSR GPU contract";asset.graph.nodes.reserve(64);
     const auto outputId=addMaterialNode(asset.graph,MaterialNodeKind::Output).id;
     const auto output=[&]() -> MaterialOutputNode& {return findMaterialNode(asset.graph,outputId)->output;};
@@ -168,6 +229,118 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     };
     const auto pair=[&](const char* off,const char* on){settings.environment.ssr.enabled=false;auto baseline=capture(off);
         settings.environment.ssr.enabled=true;return std::pair{std::move(baseline),capture(on)};};
+    if(!closedCubeOnly&&!pbrQualityOnly) {
+        // The camera sees the emitter above a black partition. Every straight
+        // path from the masked near-side floor to the entire emitter is blocked
+        // by that partition, so a broad physical GGX lobe cannot explain a
+        // bright-versus-dark emitter difference there. Donor-scene mips can
+        // nevertheless mix the emitter into a valid hit on the black wall.
+        const auto savedOutput=output();const auto savedSettings=settings;const auto savedInstances=scene.instances;
+        const auto savedDirectional=scene.directionalLights;const auto savedPoint=scene.pointLights;
+        const auto sphere=builtinSphereGeometry();check(renderer.prepareModel(*sphere),renderer.modelStatus());
+        std::vector<ModelMaterial> floorMaterials(1),partitionMaterials(1),emitterMaterials(1);
+        std::vector<ModelMaterialTextures> floorBindings(1);
+        partitionMaterials[0].baseColor={0,0,0,1};partitionMaterials[0].doubleSided=true;
+        emitterMaterials[0].baseColor={0,0,0,1};emitterMaterials[0].metallic=0;
+        std::array<RenderModelInstance,3> haloScene;
+        auto& ground=haloScene[0];ground.entityId=0x53535248414c4f;
+        ground.model={flat,math::rotation(math::axisAngle({1,0,0},-std::numbers::pi/2))*math::scaling({6,6,1})};
+        ground.materials=&floorMaterials;ground.textures=&floorBindings;ground.forceFullDetail=true;
+        auto& emitter=haloScene[1];emitter.entityId=ground.entityId+1;
+        emitter.model={sphere,math::translation({0,1,-1})*math::scaling({.9f,.9f,.9f})};
+        emitter.materials=&emitterMaterials;emitter.forceFullDetail=true;
+        auto& partition=haloScene[2];partition.entityId=ground.entityId+2;
+        partition.model={flat,math::translation({0,.65f,0})*math::scaling({4,.65f,1})};
+        partition.materials=&partitionMaterials;partition.shading=MaterialShading::Unlit;partition.forceFullDetail=true;
+        settings.environment.ssgi.enabled=settings.environment.ssao.enabled=settings.environment.glow.enabled=false;
+        settings.environment.fog.enabled=false;settings.environment.specularAA=false;
+        settings.environment.enabled=true;settings.environment.intensity=1;
+        settings.environment.background.show=false;settings.environment.toneMapping=ToneMapping::Linear;
+        settings.environment.ssr.enabled=true;settings.environment.ssr.strength=1;
+        settings.environment.ssr.maxRoughness=.9f;settings.environment.ssr.maxDistance=50;
+        settings.environment.ssr.depthTolerance=.05f;settings.environment.ssr.bias=.002f;
+        settings.camera.position={0,6,6};settings.camera.target={0,.5f,0};settings.camera.up={0,1,0};
+        settings.camera.fov=55;settings.camera.nearPlane=.05f;settings.camera.farPlane=50;
+        settings.exposure=.05f;settings.antiAliasing=AntiAliasing::Off;scene.directionalLights={};scene.pointLights={};
+        output().refraction=false;output().blend=MaterialBlend::Opaque;output().opacity=1;
+        output().doubleSided=true;output().baseColor={1,1,1};output().metallic=1;output().occlusion=1;
+        const auto cross=[](const Vec3& a,const Vec3& b){return Vec3{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};};
+        const auto forward=math::normalized(settings.camera.target-settings.camera.position);
+        const auto right=math::normalized(cross(forward,settings.camera.up)),up=cross(right,forward);
+        const float halfHeight=std::tan(settings.camera.fov*std::numbers::pi_v<float>/360);
+        const auto floorPixel=[&](unsigned x,unsigned y) {
+            const auto ray=math::normalized(forward+right*((2*(x+.5f)/Width-1)*halfHeight*Width/Height)+
+                up*((1-2*(y+.5f)/Height)*halfHeight));
+            if(ray[1]>=0)return false;
+            const auto point=settings.camera.position+ray*(-settings.camera.position[1]/ray[1]);
+            // Even the conservative emitter AABB corner (y=1.45,z=-.55)
+            // reaches z=0 below 1.19 m from this patch. The 1.3 m partition
+            // spans x +/-4, so all actual sphere paths are occluded.
+            return std::abs(point[0])<1.f&&point[2]>.1f&&point[2]<2.5f;
+        };
+        const auto decode=[](std::uint8_t code){const double value=code/255.;
+            return value<=.04045?value/12.92:std::pow((value+.055)/1.055,2.4);};
+        std::vector<std::string> haloFailures;
+        for(const auto quality:{SsrQuality::Medium,SsrQuality::High})for(const float roughness:{.25f,.42f}) {
+            settings.environment.ssr.quality=quality;output().roughness=roughness;floorBindings[0].graph=prepare();
+            const auto label=std::string("emissive-halo-")+(quality==SsrQuality::Medium?"medium":"high")+"-rough-"+std::to_string(roughness);
+            const auto emissionPair=[&](bool blocked) {
+                scene.instances=std::span(haloScene.data(),blocked?3:2);
+                emitterMaterials[0].emissive={0,0,0};const auto dark=capture((label+(blocked?"-blocked-dark":"-open-dark")).c_str());
+                emitterMaterials[0].emissive={12,3,.1f};const auto bright=capture((label+(blocked?"-blocked-bright":"-open-bright")).c_str());
+                std::array<double,5> metrics{};unsigned samples{};
+                std::vector<double> signal(std::size_t(Width)*Height);
+                for(unsigned y=0;y<Height;++y)for(unsigned x=0;x<Width;++x) {
+                    const auto p=(std::size_t(y)*Width+x)*4;
+                    const double response=std::max(0.,decode(bright.rgba[p])-decode(dark.rgba[p]));
+                    signal[std::size_t(y)*Width+x]=response;
+                    metrics[2]=std::max(metrics[2],response);
+                    if(floorPixel(x,y)){metrics[0]=std::max(metrics[0],response);metrics[1]+=response;++samples;}
+                }
+                check(samples>100,"Emissive halo camera did not resolve a meaningful analytically occluded floor patch.");
+                metrics[1]/=samples;
+                check(metrics[2]>.2,"Emissive halo control did not expose the bright sphere to the camera.");
+                double signalEnergy{},laplacian{},asymmetry{},symmetryEnergy{};
+                for(unsigned y=1;y+1<Height;++y)for(unsigned x=1;x+1<Width;++x)if(floorPixel(x,y)) {
+                    const auto p=std::size_t(y)*Width+x;
+                    if(floorPixel(x-1,y)&&floorPixel(x+1,y)&&floorPixel(x,y-1)&&floorPixel(x,y+1)) {
+                        signalEnergy+=signal[p];
+                        laplacian+=std::abs(4*signal[p]-signal[p-1]-signal[p+1]-signal[p-Width]-signal[p+Width]);
+                    }
+                    if(floorPixel(Width-1-x,y)) {
+                        const auto reflected=std::size_t(y)*Width+(Width-1-x);
+                        asymmetry+=std::abs(signal[p]-signal[reflected]);
+                        symmetryEnergy+=signal[p]+signal[reflected];
+                    }
+                }
+                // Normalize by reflected signal so reducing its energy cannot
+                // masquerade as reconstruction quality. The symmetric scene
+                // also exposes coherent lobes from a fixed ray quadrature.
+                metrics[3]=laplacian/std::max(4*signalEnergy,1.e-12);
+                metrics[4]=asymmetry/std::max(symmetryEnergy,1.e-12);
+                return metrics;
+            };
+            const auto blocked=emissionPair(true),open=emissionPair(false);
+            std::cout<<label<<": occluded emitter delta peak="<<blocked[0]<<", mean="<<blocked[1]
+                <<"; visible reflection delta peak="<<open[0]<<", mean="<<open[1]
+                <<", normalized Laplacian="<<open[3]<<", mirror asymmetry="<<open[4]<<'\n';
+            // The blocked threshold permits display quantization but rejects
+            // visible emissive contamination; the open control prevents a
+            // cutoff, disabled effect or erased rough hits from passing.
+            if(blocked[0]>.01||blocked[1]>.001)haloFailures.push_back(label+": an occluded emitter contaminated valid black-wall reflection hits.");
+            if(open[0]<.02||open[1]<.0005)haloFailures.push_back(label+": rough SSR lost the visible emissive donor control.");
+            // Unreconstructed fixed rays measured .13-.30 normalized curvature
+            // here. Require resolved lobes with margin for display quantization.
+            if(open[3]>(roughness<.3f?.09:.05))haloFailures.push_back(label+": rough reflection reconstruction retained excessive high-frequency lobe boundaries.");
+        }
+        output()=savedOutput;settings=savedSettings;scene.instances=savedInstances;
+        scene.directionalLights=savedDirectional;scene.pointLights=savedPoint;
+        check(haloFailures.empty(),"Emissive rough-reflection regression: "+
+            (haloFailures.empty()?std::string{}:haloFailures.front())+" ("+std::to_string(haloFailures.size())+" failures).");
+        if(!emissiveHaloOnly)for(unsigned i=0;i<9;++i){renderer.renderGame(scene);tick();}
+    }
+    if(emissiveHaloOnly){resources.stop();frame=renderer.drainPending(frame);
+        std::cout<<"Occluded emissive donor and visible rough-reflection controls passed. Artifacts: "<<artifacts.string()<<'\n';return;}
     if(!closedCubeOnly) {
         // A low-radiance furnace stays below display clipping. White dielectric
         // and white conductor endpoints must return unit total energy; this
@@ -748,7 +921,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
             return std::pair{median(draws),median(computes)};
         };
         const auto off=measure(false);check(renderer.ssrResidentBytes()==0,"Disabled 1080p SSR allocated effect storage.");
-        const auto on=measure(true);const auto expected=ssrAllocationBytes(CostWidth,CostHeight);
+        const auto on=measure(true);const auto expected=ssrAllocationBytes(CostWidth,CostHeight,true);
         check(renderer.ssrResidentBytes()==expected,"1080p SSR memory disagreed with one independent source/depth/scratch owner.");
         check(on.first>off.first&&on.second>off.second,"Active 1080p SSR recorded no additional reflection/hierarchy work.");
         settings.environment.ssr.enabled=false;scene.instances={};renderer.renderGame(scene);
@@ -762,8 +935,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
 }
 }
 int main(int argc,char** argv){try{
-    check(argc==5||(argc==6&&(std::string_view(argv[5])=="--closed-cube-only"||std::string_view(argv[5])=="--pbr-quality-only")),
-        "Pass shaderc, source/include directories, artifacts and optional --closed-cube-only or --pbr-quality-only.");
+    check(argc==5||(argc==6&&(std::string_view(argv[5])=="--closed-cube-only"||std::string_view(argv[5])=="--pbr-quality-only"||std::string_view(argv[5])=="--emissive-halo-only")),
+        "Pass shaderc, source/include directories, artifacts and optional --closed-cube-only, --pbr-quality-only or --emissive-halo-only.");
     const auto cache=fs::temp_directory_path()/("crimson-ssr-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup{fs::path path;~Cleanup(){std::error_code error;const auto resolved=fs::weakly_canonical(path,error),root=fs::weakly_canonical(fs::temp_directory_path(),error);
         if(!error&&resolved.parent_path()==root&&resolved.filename().string().starts_with("crimson-ssr-"))fs::remove_all(resolved,error);}} cleanup{cache};
@@ -771,5 +944,6 @@ int main(int argc,char** argv){try{
     check(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS),SDL_GetError());struct Quit{~Quit(){SDL_Quit();}} quit;
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson SSR checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
     check(bool(window),SDL_GetError());exercise(window.get(),config,fs::path(argv[4])/(selectedTestGraphicsBackend()==GraphicsBackend::Direct3D11?"dx11":"dx12"),
-        argc==6&&std::string_view(argv[5])=="--closed-cube-only",argc==6&&std::string_view(argv[5])=="--pbr-quality-only");return 0;
+        argc==6&&std::string_view(argv[5])=="--closed-cube-only",argc==6&&std::string_view(argv[5])=="--pbr-quality-only",
+        argc==6&&std::string_view(argv[5])=="--emissive-halo-only");return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

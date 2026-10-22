@@ -6,9 +6,10 @@ raster SSR sources, research papers and maintained production references.
 The PBR quality slice now adds practical GGX energy compensation, opt-in specular
 antialiasing and shared environment/SSR reflection visibility, including glass.
 The current-frame SSR tracer retains its corrected rough-hit visibility path.
-These changes do not establish state-of-the-art reflection reconstruction: the
-later history, receiver-guide and sampling work remains proposed. Temporal SSR
-and planar reflections remain deferred.
+The 2026-10-22 halo follow-up adds receiver-guided spatial reconstruction for
+opaque reflections and visibility-guided source filtering for Alpha/glass.
+Reflection history, variance-guided reconstruction and adaptive sampling remain
+unimplemented. Temporal SSR and planar reflections remain deferred.
 
 ## Rough mirror regression and correction
 
@@ -152,11 +153,113 @@ the corrected visibility bug.
 
 ### Reconstruction and sampling
 
-Current SSR traces deterministic directions at full receiver resolution and has
-no reflection history, spatial ray reuse, variance-guided reconstruction or
-adaptive ray allocation. The 1/4/12 ray settings alone do not establish quality
-equivalence to a production stochastic SSR system. The current isotropic mip
-footprint also remains an approximation to projected anisotropic glossy lobes.
+Current SSR traces at full receiver resolution. Opaque rough directions have
+stable per-screen-pixel offsets and current-frame spatial reconstruction;
+Alpha/glass retain deterministic direct evaluation at their own receivers.
+There is no reflection history, visibility-revalidated spatial ray reuse,
+variance-guided reconstruction or adaptive ray allocation. The 1/4/12 ray
+settings alone do not establish quality equivalence to a production stochastic
+SSR system. The direct path's isotropic mip footprint remains an approximation
+to projected anisotropic glossy lobes.
+
+### Emissive-source halo follow-up (2026-10-22)
+
+The reported bright sphere above a rough tiled floor exposes this reconstruction
+limit. **Max Roughness** applies to the receiving surface: the SSR replacement
+weight is `clamp(2 - 2 * roughness / maximum, 0, 1)`, with no SSR at or above the
+maximum. At the default .6, the weight is full through .3, half at .45 and zero
+at .6. Lowering it suppresses the rough floor's SSR, including artifacts, without
+changing its material roughness or the sphere's emission. The local Unreal 5.8
+raster SSR uses the same fade construction in
+`Source/Runtime/Renderer/Private/ScreenSpaceRayTracing.cpp` and
+`Shaders/Private/SSRT/SSRTReflections.usf`, with additional tightening at lower
+quality levels. The cutoff equation itself is consistent with that reference.
+
+Before the follow-up fix, Crimson validated the central depth hit before
+unconditionally sampling a travel/PDF-dependent isotropic footprint in
+[ssr_trace.sh](../third_party/crimson-renderer/src/shaders/ssr_trace.sh).
+[cs_ssr_color.sc](../third_party/crimson-renderer/src/shaders/cs_ssr_color.sc)
+reduces source radiance without depth or normal guidance. Consequently, the
+footprint of a valid dark-surface hit can include nearby emissive pixels across
+a depth discontinuity. Sparse fixed GGX directions can also expose separate
+lobes or scalloped boundaries. Signed environment replacement can legitimately
+darken a reflection when visible geometry is darker than the environment;
+discrete changes between dark hits, emissive hits and misses can make that
+correction's boundary conspicuous too.
+
+The local Unreal 5.8 `SSRT/SSRTRayCast.ush` samples scene color at LOD0 per hit;
+its multi-ray path randomizes directions and compresses sample luminance before
+averaging. `IndirectLightRendering.cpp` integrates a reflection denoiser or SSR
+temporal pass when enabled. The inspected Godot checkout identifies itself as
+4.7 beta: `servers/rendering/renderer_rd/shaders/effects/screen_space_reflection.glsl`
+traces a mirror direction and samples source LOD0, then `effects/ss_effects.cpp`
+builds roughness mips of the **reflected image**. Its
+`screen_space_reflection_resolve.glsl` uses receiver depth/normal/roughness
+guidance when resolving half resolution. Godot also compresses luminance before
+rough filtering and expands it afterward. These nonlinear operations bias HDR
+integration; copying them is not a physical energy correction. Godot's own shader
+comments acknowledge rough-mip shape artifacts.
+
+The follow-up opaque path reads depth-guided source mip zero at each validated
+GGX hit. A stable per-pixel hash offsets its sample sequence, preventing the same
+four angular cells from forming coherent lobes across the floor. A separate
+RGBA32F target stores positive premultiplied incoming radiance/confidence, and
+an RGBA16F target stores the receiver's exact evaluated normal and roughness.
+Three current-frame 3x3 reconstruction stages at steps 1/2/4 filter radiance and
+confidence together. Receiver inverse-depth plane agreement, normal and
+roughness preserve surface boundaries; eligible misses stay in the denominator.
+Depth-gradient continuity checks protect thin receivers from estimating their
+plane from background neighbors. A second exact-material geometry draw applies
+the receiver's BRDF, signed environment replacement, fog and coverage afterward.
+
+Alpha/glass retain their own direct receiver path. It validates each coarse
+color tap against the donor plane over its recursively expanded source support,
+including overlapping odd-size mip reductions. The observed depth interval must
+fit every support corner's plane tolerance; merely fitting between a sloped
+plane's minimum and maximum depths would still admit unrelated geometry.
+Unsupported bilinear weight descends to finer mips continuously. At mip zero,
+depth-guided bilinear reconstruction retains the validated donor and leaves
+incompatible neighboring taps as missing coverage. Missing derivatives retain
+the finest valid hit. Both incoming radiance and environment replacement use
+the resulting confidence. Requested footprints still control screen-edge fading.
+
+This preserves validated hits instead of restoring whole-footprint rejection.
+No cutoff reduction, emission clamp, luminance compression or additional ray
+budget is used. Reconstruction adds 56 bytes/pixel of view-owned storage
+(110.7 MiB at 1080p, bringing SSR targets/scratch to 189.8 MiB), three compute
+dispatches and a second opaque reflection geometry draw. Transparent glass
+retains its three adjacent draws. Source-content cache dependencies invalidate
+changed reflection shaders within generator v36/material ABI35; the new named
+`cs_ssr_reconstruct` program participates in embedding, baseline and reload
+publication. View layout 3 uses reserved gaps for trace/filter/composition and
+moves only the five refraction capture slots after composition, preserving
+readback and platform-copy boundaries.
+
+The focused fixture in
+[ssr_render_tests.cpp](../tests/ssr_render_tests.cpp) places a bright sphere behind
+a black partition, visible to the elevated camera but fully occluded from the
+measured rough-floor patch. It changes only sphere emission, disables
+Glow/GI/AO/fog and fixes Max Roughness at .9, covering Medium/High quality and
+roughness .25/.42. Removing the partition must recover a visible rough reflection,
+preventing a disabled effect or suppressed rough hits from passing. A normalized
+Laplacian of the visible reflection measures high-frequency structure without
+rewarding reduced reflection energy. The first DX12 comparison is:
+
+| Quality / roughness | Blocked emitter peak, before | Blocked emitter peak, after | Normalized Laplacian, before | After reconstruction |
+| --- | ---: | ---: | ---: | ---: |
+| Medium / .25 | .06924 | 0 | .21872 | .05106 |
+| Medium / .42 | .04609 | 0 | .30256 | .01971 |
+| High / .25 | .04605 | 0 | .12816 | .03775 |
+| High / .42 | .03302 | 0 | .28033 | .01805 |
+
+Peak values are emission-only red-channel differences decoded from linear
+presentation's sRGB display output, not absolute HDR energy. Zero means no
+measurable difference at that readback precision. Visible reflection controls
+remain positive. The existing closed-cube/stair regression remains required.
+Reconstruction is bounded and current-frame: fine noise under motion, large
+rough lobes, direct transparent sampling, hidden/offscreen surfaces and exact
+multi-surface visibility remain limits. This is not temporal SSR or a general
+production denoiser.
 
 ## References and their practical role
 
@@ -187,11 +290,11 @@ SM5/DX11 family, so its SDK is not a drop-in replacement for the existing pass.
 3. Keep energy preservation and effective roughness coherent across every
    lighting provider. Further material-model or normal-distribution filtering
    improvements need their own measured slice.
-4. Publish positive raw reflection radiance, hit distance and confidence before
-   final composition, with exact receiver normal/roughness/depth/motion guides.
-   Reconstruct that signal first, then apply material response, fog and signed
-   environment replacement. NRD's positive-RGB contract rules out denoising our
-   signed correction directly.
+4. Extend the implemented opaque positive-radiance/confidence reconstruction
+   with hit distance and motion guides, and define a separate transparent
+   receiver-layer policy. Current opaque filtering already precedes exact
+   material response, fog and signed environment replacement. NRD's positive-RGB
+   contract rules out denoising the signed correction directly.
 5. Add independent per-view specular histories with disocclusion rejection,
    reflection-parallax reprojection, history clipping and variance-guided spatial
    filtering. Dedicated reflection history does not require global TAA, but it

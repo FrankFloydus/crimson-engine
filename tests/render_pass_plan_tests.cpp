@@ -135,6 +135,12 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
             }
         }
     }
+    if(plan.config.ssr) {
+        table.bindings[index(Resource::SsrRaw)].textures[0]=texture(7400,64,64,1);
+        table.bindings[index(Resource::SsrGuide)].textures[0]=texture(7401,64,64,8);
+        table.bindings[index(Resource::SsrFilterA)].textures[0]=texture(7402,64,64,1);
+        table.bindings[index(Resource::SsrFilterB)].textures[0]=texture(7403,64,64,1);
+    }
     return table;
 }
 
@@ -457,13 +463,19 @@ void ssrContracts() {
         const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
         check(bool(validateRenderPassPlan(plan,resources)),"SSR failed a view's concrete resource contract.");
         const auto slots=renderViewPassSlots(purpose);
+        const std::array<std::uint16_t,5> expectedTrace{116,372,338,162,300};
+        const auto first=expectedTrace[static_cast<std::size_t>(purpose)];
+        check(RenderViewLayoutVersion==3&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
+            slots.ssr_opaque==first+2&&slots.refraction_capture==first+3&&slots.refraction_capture<slots.transparent,
+            "SSR reconstruction escaped reserved view gaps or changed the numeric profile layout.");
         check(plan.has(Kind::DepthPrepass)&&!plan.has(Kind::RefractionDepth)&&plan.find(Kind::DepthPrepass)->physicalView<plan.find(Kind::Background)->physicalView,
             "SSR plus glass did not retain one early opaque/masked readable-depth prepass.");
-        const auto& prepare=*plan.find(Kind::SsrPrepareDepth);const auto& correction=*plan.find(Kind::SsrOpaque);
-        check(prepare.execution==RenderPassExecution::Compute&&prepare.physicalView==slots.ssr_prepare&&correction.execution==RenderPassExecution::Raster&&
-            correction.physicalView==slots.ssr_opaque&&prepare.physicalView==correction.physicalView&&
+        const auto& prepare=*plan.find(Kind::SsrPrepareDepth);const auto& trace=*plan.find(Kind::SsrTrace);const auto& correction=*plan.find(Kind::SsrOpaque);
+        check(prepare.execution==RenderPassExecution::Compute&&prepare.physicalView==slots.ssr_prepare&&trace.execution==RenderPassExecution::Raster&&
+            trace.physicalView==slots.ssr_trace&&prepare.physicalView==trace.physicalView&&correction.execution==RenderPassExecution::Raster&&
+            correction.physicalView==slots.ssr_opaque&&trace.physicalView<slots.ssr_reconstruct&&slots.ssr_reconstruct<correction.physicalView&&
             plan.find(Kind::Opaque)->physicalView<prepare.physicalView&&correction.physicalView<plan.find(Kind::RefractionCapture)->physicalView,
-            "SSR compute/correction did not run after source capture and before glass snapshot capture.");
+            "SSR preparation, tracing, reconstruction and correction did not precede glass snapshot capture.");
         auto contract=plan;
         check(use(contract,Kind::SsrPrepareDepth,Resource::SsrColorMip0).access==Access::SampledRead&&prepare.resourceCount==2,
             "SSR linear-depth initialization does not consume its own opaque source MRT.");
@@ -471,8 +483,24 @@ void ssrContracts() {
             use(contract,Kind::Background,Resource::SsrColorMip0).load==Load::Clear&&
             use(contract,Kind::Opaque,Resource::SsrColorMip0).load==Load::Load,
             "Unfogged SSR radiance is not captured as an initialized opaque/sky MRT.");
-        check(use(contract,Kind::SsrOpaque,Resource::SceneDepth).access==Access::DepthAttachmentWrite,
-            "SSR correction omitted its stencil ownership consumption.");
+        check(use(contract,Kind::SsrTrace,Resource::SsrRaw).access==Access::ColorAttachment&&use(contract,Kind::SsrTrace,Resource::SsrRaw).load==Load::Clear&&
+            use(contract,Kind::SsrTrace,Resource::SsrGuide).access==Access::ColorAttachment&&use(contract,Kind::SsrTrace,Resource::SsrGuide).load==Load::Clear,
+            "SSR tracing did not initialize detached radiance/confidence and receiver guides.");
+        check(use(contract,Kind::SsrTrace,Resource::SceneDepth).access==Access::DepthAttachmentWrite&&use(contract,Kind::SsrTrace,Resource::SceneDepth).load==Load::Load&&
+            use(contract,Kind::SsrOpaque,Resource::SceneDepth).access==Access::DepthAttachmentWrite,
+            "SSR trace or correction omitted its stencil ownership contract.");
+        const std::array reconstruct{Kind::SsrReconstruct1,Kind::SsrReconstruct2,Kind::SsrReconstruct4};
+        const std::array inputs{Resource::SsrRaw,Resource::SsrFilterA,Resource::SsrFilterB};
+        const std::array outputs{Resource::SsrFilterA,Resource::SsrFilterB,Resource::SsrFilterA};
+        for(unsigned stage=0;stage<reconstruct.size();++stage) {
+            const auto& filter=*plan.find(reconstruct[stage]);
+            check(filter.execution==RenderPassExecution::Compute&&filter.physicalView==slots.ssr_reconstruct&&
+                use(contract,reconstruct[stage],inputs[stage]).access==Access::SampledRead&&use(contract,reconstruct[stage],outputs[stage]).access==Access::StorageWrite&&
+                use(contract,reconstruct[stage],Resource::SsrGuide).access==Access::SampledRead&&use(contract,reconstruct[stage],Resource::SsrDepthMip0).access==Access::SampledRead,
+                "SSR receiver reconstruction lost its raw-to-A-to-B-to-A ping-pong or immutable guides.");
+        }
+        check(use(contract,Kind::SsrOpaque,Resource::SsrFilterA).access==Access::SampledRead,
+            "SSR opaque composition did not consume reconstructed positive radiance/confidence.");
         for(bool depth:{false,true})for(unsigned level=1;level<config.ssr_levels;++level) {
             const auto filter=static_cast<Kind>(unsigned(depth?Kind::SsrDepthFilter1:Kind::SsrColorFilter1)+(level-1)*2),copy=static_cast<Kind>(unsigned(filter)+1);
             const auto source=static_cast<Resource>(unsigned(depth?Resource::SsrDepthMip0:Resource::SsrColorMip0)+level-1);
@@ -483,14 +511,19 @@ void ssrContracts() {
         }
         for(unsigned level=0;level<config.ssr_levels;++level)for(bool depth:{false,true}) {
             const auto resource=static_cast<Resource>(unsigned(depth?Resource::SsrDepthMip0:Resource::SsrColorMip0)+level);
-            check(use(contract,Kind::SsrOpaque,resource).access==Access::SampledRead&&use(contract,Kind::Transparent,resource).access==Access::SampledRead,
-                "Opaque and transparent reflection receivers do not share immutable source/depth mips.");
+            check(use(contract,Kind::SsrTrace,resource).access==Access::SampledRead&&use(contract,Kind::Transparent,resource).access==Access::SampledRead&&
+                std::none_of(correction.uses().begin(),correction.uses().end(),[&](const auto& item){return item.resource==resource;}),
+                "SSR tracing/transparent receivers lost immutable inputs or opaque composition retraced the source.");
         }
         auto broken=plan;erase(broken,Kind::SsrPrepareDepth);error(broken,Error::MissingProducer,"SSR accepted uninitialized view-depth intervals.");
         broken=plan;erase(broken,Kind::SsrDepthCopy2);error(broken,Error::MissingProducer,"SSR accepted an unpublished depth mip.");
         broken=plan;erase(broken,Kind::SsrColorCopy2);error(broken,Error::MissingProducer,"SSR accepted an unpublished color mip.");
+        broken=plan;erase(broken,Kind::SsrTrace);error(broken,Error::MissingProducer,"SSR accepted uninitialized raw radiance and receiver guides.");
+        broken=plan;erase(broken,Kind::SsrReconstruct1);error(broken,Error::MissingProducer,"SSR accepted missing first receiver reconstruction.");
+        broken=plan;erase(broken,Kind::SsrReconstruct2);error(broken,Error::MissingProducer,"SSR accepted an unproduced second reconstruction image.");
+        broken=plan;erase(broken,Kind::SsrReconstruct4);error(broken,Error::MissingPass,"SSR accepted missing wide receiver reconstruction.");
         broken=plan;erase(broken,Kind::SsrOpaque);error(broken,Error::MissingPass,"SSR accepted missing opaque correction.");
-        broken=plan;std::swap(pass(broken,Kind::SsrOpaque),pass(broken,Kind::SsrPrepareDepth));error(broken,Error::MissingProducer,"SSR placed raster correction before its same-view compute preparation.");
+        broken=plan;std::swap(pass(broken,Kind::SsrTrace),pass(broken,Kind::SsrPrepareDepth));error(broken,Error::MissingProducer,"SSR placed raster tracing before its same-view compute preparation.");
         auto bad=resources;bad.bindings[index(Resource::SsrColorScratch2)].textures[0].width++;
         error(plan,bad,Error::InvalidTexture,"SSR accepted a stale color filter extent.");
         bad=resources;bad.bindings[index(Resource::SsrDepthMip0)].textures[0].width++;
@@ -501,8 +534,21 @@ void ssrContracts() {
         error(plan,bad,Error::InvalidOwner,"Two views shared SSR depth ownership.");
         bad=resources;for(unsigned level=0;level<config.ssr_levels;++level)bad.bindings[index(static_cast<Resource>(unsigned(Resource::SsrColorMip0)+level))].textures[0].physicalId=bad.bindings[index(Resource::SceneHdr)].textures[0].physicalId;
         check(!validateRenderPassPlan(plan,bad),"SSR correction sampled its attached HDR destination as source.");
+        for(const auto resource:{Resource::SsrRaw,Resource::SsrGuide,Resource::SsrFilterA,Resource::SsrFilterB}) {
+            bad=resources;bad.bindings[index(resource)].textures[0].width++;
+            error(plan,bad,Error::InvalidTexture,"SSR accepted a stale full-resolution trace/reconstruction extent.");
+            bad=resources;bad.bindings[index(resource)].view.instanceId++;
+            error(plan,bad,Error::InvalidOwner,"SSR trace/reconstruction image escaped its view owner.");
+        }
+        bad=resources;bad.bindings[index(Resource::SsrFilterA)].textures=bad.bindings[index(Resource::SsrRaw)].textures;
+        error(plan,bad,Error::FeedbackLoop,"SSR first reconstruction sampled its own output.");
+        bad=resources;bad.bindings[index(Resource::SsrFilterB)].textures=bad.bindings[index(Resource::SsrFilterA)].textures;
+        error(plan,bad,Error::FeedbackLoop,"SSR later reconstruction sampled its own output.");
+        bad=resources;bad.bindings[index(Resource::SsrFilterA)].textures[0].format++;
+        error(plan,bad,Error::InvalidTexture,"SSR reconstruction changed raw HDR precision.");
         config.ssr=false;const auto off=buildRenderPassPlan(config);
-        check(!off.has(Kind::SsrPrepareDepth)&&!off.has(Kind::SsrOpaque)&&!off.has(Kind::DepthPrepass)&&off.has(Kind::RefractionDepth),
+        check(!off.has(Kind::SsrPrepareDepth)&&!off.has(Kind::SsrTrace)&&!off.has(Kind::SsrReconstruct1)&&!off.has(Kind::SsrReconstruct2)&&!off.has(Kind::SsrReconstruct4)&&
+            !off.has(Kind::SsrOpaque)&&!off.has(Kind::DepthPrepass)&&off.has(Kind::RefractionDepth),
             "Disabled SSR retained preparation or changed the ordinary late glass depth recipe.");
         for(const auto& entry:off.passes())for(const auto& item:entry.uses())check(item.resource<Resource::SsrColorMip0,"Disabled SSR retained source or scratch resources.");
         config.ssr=true;config.refraction=false;

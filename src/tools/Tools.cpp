@@ -356,6 +356,8 @@ bool drawSsrControls(SsrSettings& reflection,const SsrControlEdit& edit) {
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Maximum reflected ray distance. Only visible opaque surfaces can supply reflections.");
         field(SsrControl::Roughness,resettableProperty(reflection.maxRoughness,SsrSettings{}.maxRoughness,[&]{return ImGui::SliderFloat("Max Roughness",&reflection.maxRoughness,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Receiver roughness cutoff. SSR fades out between half this value and this cutoff.\nLower values reduce SSR on rough surfaces; environment reflections remain. Material roughness is unchanged.");
         field(SsrControl::Tolerance,resettableProperty(reflection.depthTolerance,SsrSettings{}.depthTolerance,[&]{return ImGui::DragFloat("Depth Tolerance (m)",&reflection.depthTolerance,.001f,.000001f,10,"%.4f",ImGuiSliderFlags_AlwaysClamp);}));
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Depth agreement required at a reflected hit. Larger values can leak through thin geometry.");

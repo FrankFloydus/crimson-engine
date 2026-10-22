@@ -308,7 +308,7 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     std::filesystem::copy(source,shadowSource,std::filesystem::copy_options::recursive);
     const ShaderCompileConfig shadows{compiler,shadowSource,include,temp.root/"shadow cache"};
     const auto names=engineShaderNames();
-    for(const auto name:{"cs_ssr_color","cs_ssr_depth","fs_model_reflection","fs_pbr_reflection","fs_particle_reflection"})
+    for(const auto name:{"cs_ssr_color","cs_ssr_depth","cs_ssr_reconstruct","fs_model_reflection","fs_pbr_reflection","fs_particle_reflection"})
         require(std::find(names.begin(),names.end(),name)!=names.end(),"SSR programs are absent from atomic reload discovery.");
     require(std::find(names.begin(),names.end(),"vs_point_shadow")!=names.end() &&
         std::find(names.begin(),names.end(),"fs_point_shadow")!=names.end(),"Shadow stages are absent from atomic reload discovery.");

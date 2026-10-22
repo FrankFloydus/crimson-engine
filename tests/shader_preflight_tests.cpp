@@ -46,6 +46,7 @@
 #include "cs_refraction_downsample.h"
 #include "cs_ssr_color.h"
 #include "cs_ssr_depth.h"
+#include "cs_ssr_reconstruct.h"
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -86,6 +87,9 @@ int main() {
         check(crimson::preflightComputeShader(cc_cs_model_smooth_normals,cc_cs_model_smooth_normals,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_ssr_color,cc_cs_ssr_color,diagnostic),diagnostic);
         check(crimson::preflightComputeShader(cc_cs_ssr_depth,cc_cs_ssr_depth,diagnostic),diagnostic);
+        check(crimson::preflightComputeShader(cc_cs_ssr_reconstruct,cc_cs_ssr_reconstruct,diagnostic),diagnostic);
+        check(!crimson::preflightComputeShader(cc_cs_ssr_reconstruct,cc_cs_ssr_color,diagnostic),
+            "SSR receiver-guided reconstruction must not replace donor color reduction.");
         check(!crimson::preflightComputeShader(cc_cs_ssr_color,cc_cs_ssr_depth,diagnostic),
             "SSR color reduction must not replace the conservative min/max depth hierarchy interface.");
         check(!crimson::preflightComputeShader(cc_cs_model_smooth_normals,cc_cs_model_deform,diagnostic),

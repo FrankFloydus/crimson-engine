@@ -20,6 +20,53 @@ struct TemporaryProject {
     ~TemporaryProject(){std::error_code error;const auto path=std::filesystem::weakly_canonical(root,error),parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),error);
         if(!error&&path.parent_path()==parent&&path.filename().string().starts_with("crimson-cache-prepare-"))std::filesystem::remove_all(path,error);}
 };
+void coverageStageIdentityChecks(const crimson::ShaderCompileConfig& config) {
+    using namespace crimson;
+    const auto variant=[](const MaterialGraphShader& shader,MaterialGraphPass pass) -> const MaterialGraphShaderVariant& {
+        const auto found=std::find_if(shader.variants.begin(),shader.variants.end(),[&](const auto& value){return value.pass==pass;});
+        check(found!=shader.variants.end(),"Material cache identity fixture omitted a required shader pass.");return *found;
+    };
+    for(const auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha}) {
+        auto material=defaultMaterialAsset();canonicalizeMaterialAsset(material);
+        const auto outputId=materialOutputNode(material.graph).id;
+        materialOutputNode(material.graph).output.blend=blend;
+        const auto coverage=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
+        const auto coveragePin=blend==MaterialBlend::Mask?MaterialPin::OpacityMask:MaterialPin::Opacity;
+        if(blend!=MaterialBlend::Opaque)connectMaterialNodes(material.graph,coverage,MaterialPin::A,outputId,coveragePin);
+        const auto original=generateMaterialGraphShader(material);
+        // A new sampled color expression changes the surface topology, sampler
+        // allocation and bundle key. None of those changes consumes coverage.
+        const auto color=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
+        const auto multiply=addMaterialNode(material.graph,MaterialNodeKind::Multiply).id;
+        connectMaterialNodes(material.graph,color,MaterialPin::RGB,multiply,MaterialPin::Left);
+        connectMaterialNodes(material.graph,multiply,MaterialPin::Value,outputId,MaterialPin::BaseColor);
+        const auto edited=generateMaterialGraphShader(material);
+        check(edited.topologyKey!=original.topologyKey&&
+            materialGraphShaderRecipe(config,original,variant(original,MaterialGraphPass::Model)).name!=
+                materialGraphShaderRecipe(config,edited,variant(edited,MaterialGraphPass::Model)).name,
+            "Material cache identity fixture did not change its surface compiler input.");
+        for(const auto pass:{MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::DirectionalShadow}) {
+            const auto& before=variant(original,pass);const auto& after=variant(edited,pass);
+            check(before.source==after.source&&before.vertexName==after.vertexName&&before.varyingName==after.varyingName&&
+                materialGraphShaderRecipe(config,original,before).name==materialGraphShaderRecipe(config,edited,after).name,
+                "A surface-only topology edit invalidated an independent coverage stage or cache identity.");
+        }
+        if(blend==MaterialBlend::Opaque)continue;
+        // Prove the coverage identities are selective rather than constant:
+        // editing their actual opacity expression must invalidate consumers.
+        const auto opacity=addMaterialNode(material.graph,MaterialNodeKind::Multiply).id;
+        connectMaterialNodes(material.graph,coverage,MaterialPin::A,opacity,MaterialPin::Left);
+        connectMaterialNodes(material.graph,opacity,MaterialPin::Value,outputId,coveragePin);
+        const auto changed=generateMaterialGraphShader(material);
+        for(const auto pass:{MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::DirectionalShadow}) {
+            const auto& before=variant(edited,pass);const auto& after=variant(changed,pass);
+            const bool consumesCoverage=pass==MaterialGraphPass::Picking||blend==MaterialBlend::Mask;
+            check((before.source!=after.source)==consumesCoverage&&
+                (materialGraphShaderRecipe(config,edited,before).name!=materialGraphShaderRecipe(config,changed,after).name)==consumesCoverage,
+                "A coverage edit did not invalidate exactly the depth stages that consume it.");
+        }
+    }
+}
 void heightCacheChecks(const std::filesystem::path& root,const crimson::ShaderCompileConfig& base) {
     using namespace crimson;
     std::filesystem::create_directories(root/"assets/materials");
@@ -109,7 +156,7 @@ int main(int argc,char** argv) {
             }
         }
         const auto uniqueStages=vertexStages.size()+fragmentStages.size();
-        check(uniqueStages<15,"Coverage stages are still keyed by the whole material family.");
+        coverageStageIdentityChecks(config);
         const auto first=crimson::prepareProjectMaterialCache(temporary.root,config);
         if(first.failed!=0||first.materials!=4||first.topologies!=2||first.prepared!=2)
             throw std::runtime_error("Build preparation did not coalesce equal authored material graphs: "+crimson::serializeProjectMaterialCacheReport(first));
