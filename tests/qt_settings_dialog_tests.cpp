@@ -5742,6 +5742,125 @@ TEST(InspectorPanelTests,
 }
 
 TEST(QtMainMenuTests,
+     LaminaFacesTogglePersistsWithoutChangingGeometryAndUsesSharedMenuPresentation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-lamina-faces-menu-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  const QPalette platform_palette = application.palette();
+  apply_qt_obsidian_application_theme(platform_palette);
+  QtUiScaleApplicationController scale_controller(application);
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const auto preferences_path =
+      std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(
+      preferences_path.parent_path() / "keybindings.json").ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Lamina display mesh");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto component = *session.scene().mesh(box.value().entity);
+  const auto mesh = editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(mesh.has_value());
+  const auto scene_revision = session.scene().revision();
+  const auto asset_revision = session.assets().revision();
+  const auto undo_label = editor.query().history().undo_label;
+  auto settings = ViewportSettings::defaults();
+  editor.preferences().set_runtime_hooks({
+      .lamina_faces_visible = [&] { return settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces); },
+      .set_lamina_faces_visible = [&](bool visible) {
+        const bool changed = settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, visible);
+        if (changed) EXPECT_TRUE(settings.save(preferences_path));
+        return QuaderApiVoidResult{.ok = true, .changed = changed,
+            .mutation_kind = QuaderMutationKind::Runtime};
+      }});
+  auto localization = loaded_localization();
+  QMenuBar menu_bar;
+  QtMainMenu menu;
+  menu.initialize(menu_bar, {.editor = editor, .modeling = session.modeling(),
+      .viewport_settings = settings, .localization = localization});
+  auto *display = menu_bar.findChild<QMenu *>(QStringLiteral("menu_view_display"));
+  auto *action = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_viewport_toggle_lamina_faces"));
+  ASSERT_NE(display, nullptr);
+  ASSERT_NE(action, nullptr);
+  ASSERT_TRUE(display->actions().contains(action));
+  menu.refresh();
+  EXPECT_EQ(action->text(), QStringLiteral("Lamina Faces"));
+  EXPECT_TRUE(action->isCheckable());
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_TRUE(action->shortcut().isEmpty());
+  action->trigger();
+  menu.refresh();
+  EXPECT_FALSE(action->isChecked());
+  EXPECT_FALSE(editor.preferences().lamina_faces_visible());
+  EXPECT_FALSE(ViewportSettings::load(preferences_path).bool_value(ViewportBoolSettingId::ShowLaminaFaces));
+  EXPECT_FALSE(editor.preferences().set_lamina_faces_visible(false).changed());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kViewportToggleLaminaFaces).changed());
+  menu.refresh();
+  EXPECT_TRUE(action->isChecked());
+  EXPECT_TRUE(ViewportSettings::load(preferences_path).bool_value(ViewportBoolSettingId::ShowLaminaFaces));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
+  EXPECT_EQ(*session.scene().mesh(box.value().entity), component);
+  EXPECT_EQ(session.scene().revision(), scene_revision);
+  EXPECT_EQ(session.assets().revision(), asset_revision);
+  EXPECT_EQ(editor.query().history().undo_label, undo_label);
+  const auto current_mesh = editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(current_mesh.has_value());
+  EXPECT_EQ(current_mesh->indices, mesh->indices);
+  ASSERT_EQ(current_mesh->vertices.size(), mesh->vertices.size());
+  for (std::size_t index = 0U; index < mesh->vertices.size(); ++index) {
+    EXPECT_FLOAT_EQ(current_mesh->vertices[index].position.x, mesh->vertices[index].position.x);
+    EXPECT_FLOAT_EQ(current_mesh->vertices[index].position.y, mesh->vertices[index].position.y);
+    EXPECT_FLOAT_EQ(current_mesh->vertices[index].position.z, mesh->vertices[index].position.z);
+  }
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *binding = find_keybinding_catalog_entry(catalog, quader_command::kViewportToggleLaminaFaces.string());
+  ASSERT_NE(binding, nullptr);
+  EXPECT_TRUE(binding->default_shortcut.empty());
+  EXPECT_TRUE(binding->unassigned);
+  EXPECT_EQ(loaded_localization("it-IT").text("ui.menu.view.lamina_faces", ""), "Facce lamina");
+  const QString output = QString::fromUtf8(qgetenv("QUADER_UI_REVIEW_DIR"));
+  display->setAttribute(Qt::WA_DontShowOnScreen, true);
+  const auto review = [&](float scale, Qt::LayoutDirection direction, bool contrast) {
+    scale_controller.apply_factor(scale);
+    apply_qt_application_theme_for_contrast_preference(platform_palette,
+        contrast ? Qt::ContrastPreference::HighContrast : Qt::ContrastPreference::NoPreference);
+    display->setLayoutDirection(direction);
+    display->popup(QPoint(0, 0));
+    display->setActiveAction(action);
+    QCoreApplication::processEvents();
+    const auto geometry = display->actionGeometry(action);
+    EXPECT_GE(geometry.height(), display->fontMetrics().height());
+    // High Contrast keeps native menu metrics; Quader's dark style owns the
+    // larger themed row minimum.
+    if (!contrast) EXPECT_GE(geometry.height(), scale_controller.metrics().px(28));
+    EXPECT_GT(geometry.width(), display->fontMetrics().horizontalAdvance(action->text()));
+    EXPECT_TRUE(action->isChecked());
+    if (!output.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(output));
+      const auto name = QStringLiteral("lamina-faces-menu-%1-%2%3.png")
+          .arg(static_cast<int>(scale * 100.0F))
+          .arg(direction == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr"))
+          .arg(contrast ? QStringLiteral("-high-contrast") : QString{});
+      EXPECT_TRUE(display->grab().save(QDir(output).filePath(name)));
+    }
+    display->hide();
+  };
+  review(1.0F, Qt::LeftToRight, false);
+  review(2.0F, Qt::LeftToRight, false);
+  review(2.0F, Qt::RightToLeft, false);
+  review(1.0F, Qt::RightToLeft, false);
+  review(1.0F, Qt::LeftToRight, true);
+}
+
+TEST(QtMainMenuTests,
      CollisionDisplayTogglePersistsWithoutChangingMeshMetadata) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

@@ -827,6 +827,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportToggleCollisions)) {
     return "Toggle Collision Display";
   }
+  if (is(quader_command::kViewportToggleLaminaFaces)) {
+    return "Lamina Faces";
+  }
   if (is(quader_command::kViewportToggleInfo)) {
     return "Toggle Viewport Info";
   }
@@ -1053,6 +1056,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleCollisions.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportToggleLaminaFaces.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleInfo.string()) {
@@ -3606,6 +3612,11 @@ void QuaderCommandsApi::Impl::register_commands() {
                    "Collisions", [this] {
                      return preferences_.set_collisions_visible(
                          !preferences_.collisions_visible());
+                   });
+  register_command(quader_command::kViewportToggleLaminaFaces,
+                   "Lamina Faces", [this] {
+                     return preferences_.set_lamina_faces_visible(
+                         !preferences_.lamina_faces_visible());
                    });
   register_command(quader_command::kViewportToggleInfo,
                    "Toggle Viewport Info", [this] {

@@ -145,6 +145,7 @@ enum class ViewportBoolSettingId {
     ShowDimensions,
     WireframeOnShaded,
     BackfaceCulling,
+    ShowLaminaFaces,
     Count,
 };
 

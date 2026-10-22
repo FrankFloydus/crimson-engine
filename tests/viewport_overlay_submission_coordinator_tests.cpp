@@ -3945,6 +3945,20 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_FLOAT_EQ(target.dynamic_frame.lines.front().width_pixels, 0.75f);
   EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
             work.dynamic_source_compose_count);
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, false));
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 1u);
+  EXPECT_EQ(target.dynamic_frame.triangles.front().color, rgba8(255, 0, 255, 128));
+  EXPECT_TRUE(target.dynamic_frame.lines.empty());
+  EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, true));
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+  ASSERT_EQ(target.dynamic_frame.lines.size(), 1u);
+  EXPECT_EQ(target.dynamic_frame.lines.front().color, rgba8(0, 255, 255));
+  EXPECT_FLOAT_EQ(target.dynamic_frame.lines.front().width_pixels, 0.75f);
+  EXPECT_EQ(diagnostics.lines.size(), 1u);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
   request.overlays_visible = false;
   EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
   EXPECT_TRUE(target.dynamic_frame.triangles.empty());

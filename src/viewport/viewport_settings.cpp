@@ -203,6 +203,7 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::ShowDimensions, ViewportSettingsSectionId::Overlay, "Show Selection Dimensions", key("ShowDimensions"), true},
         {ViewportBoolSettingId::WireframeOnShaded, ViewportSettingsSectionId::Shading, "Wireframe on Shaded", key("WireframeOnShaded"), false},
         {ViewportBoolSettingId::BackfaceCulling, ViewportSettingsSectionId::Shading, "Backface Culling", key("BackfaceCulling"), true},
+        {ViewportBoolSettingId::ShowLaminaFaces, ViewportSettingsSectionId::Overlay, "Lamina Faces", key("ShowLaminaFaces"), true},
 }};
 
 std::string full_key(std::string_view suffix) {

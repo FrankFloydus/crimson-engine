@@ -150,6 +150,8 @@ inline constexpr QuaderCommandId kViewportToggleDimensions{
     "viewport.toggle_dimensions"};
 inline constexpr QuaderCommandId kViewportToggleCollisions{
     "viewport.toggle_collisions"};
+inline constexpr QuaderCommandId kViewportToggleLaminaFaces{
+    "viewport.toggle_lamina_faces"};
 inline constexpr QuaderCommandId kViewportToggleInfo{
     "viewport.toggle_info"};
 inline constexpr QuaderCommandId kViewportToggleTextureLock{
@@ -548,6 +550,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportToggleOverlays,
     kViewportToggleDimensions,
     kViewportToggleCollisions,
+    kViewportToggleLaminaFaces,
     kViewportToggleInfo,
     kViewportToggleTextureLock,
     kViewportToggleTextureLockScale,

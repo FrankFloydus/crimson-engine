@@ -1929,7 +1929,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
   ASSERT_EQ(viewport_color_settings().size(), 29u);
   ASSERT_EQ(viewport_float_settings().size(), 36u);
-  ASSERT_EQ(viewport_bool_settings().size(), 17u);
+  ASSERT_EQ(viewport_bool_settings().size(), 18u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::WireframeOnShaded));
@@ -1938,6 +1938,7 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowDimensions));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces));
   EXPECT_TRUE(
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowInfo));
@@ -1971,6 +1972,34 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(show_hover_dimensions.label, "Show Dimensions on Hover");
   EXPECT_EQ(show_hover_dimensions.key, "ShowHoverDimensions");
   EXPECT_TRUE(show_hover_dimensions.default_value);
+}
+
+TEST(ViewportSettingsTests,
+     LaminaFacesDefaultsOnForLegacyPreferencesAndPersistsIndependently) {
+  const auto path = std::filesystem::temp_directory_path() /
+      "quader_lamina_faces_preferences.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.ShowOverlays=False\n"
+            "QVertexWorks.Quader.Viewport.ShowCollisions=False\n";
+  }
+  auto settings = ViewportSettings::load(path);
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, false));
+  ASSERT_TRUE(settings.save(path));
+  settings = ViewportSettings::load(path);
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowCollisions));
+  EXPECT_FALSE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, false));
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, true));
+  ASSERT_TRUE(settings.save(path));
+  EXPECT_TRUE(ViewportSettings::load(path).bool_value(ViewportBoolSettingId::ShowLaminaFaces));
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
 }
 
 TEST(ViewportSettingsTests,
@@ -3686,6 +3715,53 @@ TEST(ViewportOverlayStyleResolverTests,
                                       false));
   EXPECT_EQ(ViewportOverlayStyleResolver::style_signature(settings),
             off_signature);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     LaminaFacesToggleFiltersOnlyNewSemanticLaminaWires) {
+  auto settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, false));
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({.layer = ViewportOverlayLayer::DiagnosticEdge,
+      .color = rgba8(12, 34, 56), .width_pixels = 4.0F,
+      .style_role = ViewportOverlayStyleRole::LaminaWire,
+      .element = {.object_id = 1}});
+  const ViewportOverlayStyleRange appended{.line_begin = frame.lines.size()};
+  frame.lines.push_back({.layer = ViewportOverlayLayer::DiagnosticEdge,
+      .style_role = ViewportOverlayStyleRole::LaminaWire,
+      .element = {.object_id = 2}});
+  frame.lines.push_back({.layer = ViewportOverlayLayer::DiagnosticEdge,
+      .color = rgba8(255, 0, 0),
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .element = {.object_id = 3}});
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge,
+      .style_role = ViewportOverlayStyleRole::SelectionWire,
+      .element = {.object_id = 4}});
+  frame.lines.push_back({.layer = ViewportOverlayLayer::HoverEdge,
+      .style_role = ViewportOverlayStyleRole::HoverWire,
+      .element = {.object_id = 5}});
+  frame.lines.push_back({.layer = ViewportOverlayLayer::SourceWire,
+      .style_role = ViewportOverlayStyleRole::SourceWire,
+      .element = {.object_id = 6}});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::DiagnosticFace,
+      .style_role = ViewportOverlayStyleRole::LaminaFace,
+      .element = {.object_id = 7}});
+  ViewportOverlayStyleResolver::apply_from(frame, settings, {}, appended);
+  ASSERT_EQ(frame.lines.size(), 5U);
+  EXPECT_EQ(frame.lines.front().element.object_id, 1);
+  EXPECT_EQ(frame.lines.front().color, rgba8(12, 34, 56));
+  EXPECT_FLOAT_EQ(frame.lines.front().width_pixels, 4.0F);
+  EXPECT_FALSE(std::ranges::any_of(frame.lines,
+      [](const auto &line) { return line.element.object_id == 2; }));
+  EXPECT_EQ(frame.lines[1].element.object_id, 3);
+  EXPECT_EQ(frame.lines[1].color, rgba8(255, 0, 0));
+  EXPECT_EQ(frame.lines[2].element.object_id, 4);
+  EXPECT_EQ(frame.lines[3].element.object_id, 5);
+  EXPECT_EQ(frame.lines[4].element.object_id, 6);
+  ASSERT_EQ(frame.triangles.size(), 1U);
+  EXPECT_EQ(frame.triangles.front().element.object_id, 7);
+  EXPECT_EQ(frame.triangles.front().layer, ViewportOverlayLayer::DiagnosticFace);
+  EXPECT_EQ(frame.triangles.front().style_role, ViewportOverlayStyleRole::LaminaFace);
 }
 
 TEST(ViewportOverlayStyleResolverTests,

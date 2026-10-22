@@ -82,6 +82,8 @@ public:
     [[nodiscard]] bool dimensions_visible() const;
     QuaderApiVoidResult set_collisions_visible(bool visible);
     [[nodiscard]] bool collisions_visible() const;
+    QuaderApiVoidResult set_lamina_faces_visible(bool visible);
+    [[nodiscard]] bool lamina_faces_visible() const;
     QuaderApiVoidResult set_texture_lock_enabled(bool enabled);
     [[nodiscard]] bool texture_lock_enabled() const;
     QuaderApiVoidResult set_texture_lock_scale_enabled(bool enabled);

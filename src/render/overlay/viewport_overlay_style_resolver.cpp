@@ -108,6 +108,8 @@ std::uint64_t ViewportOverlayStyleResolver::style_signature(
   }
   signature.add_bool(
       settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  signature.add_bool(
+      settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces));
   signature.add_float(
       viewport_overlay_sanitized_raster_scale(raster_scale));
   return signature.value();
@@ -140,6 +142,16 @@ void ViewportOverlayStyleResolver::apply_from(
     range.line_begin = std::min(range.line_begin, frame.lines.size());
     range.point_begin = std::min(range.point_begin, frame.points.size());
     range.icon_begin = std::min(range.icon_begin, frame.icons.size());
+    if (!settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces)) {
+      const auto first = frame.lines.begin() +
+                         static_cast<std::ptrdiff_t>(range.line_begin);
+      frame.lines.erase(
+          std::remove_if(first, frame.lines.end(),
+                         [](const ViewportOverlayLine &line) {
+                           return role_for(line) == ViewportOverlayStyleRole::LaminaWire;
+                         }),
+          frame.lines.end());
+    }
     const float raster_scale =
         viewport_overlay_sanitized_raster_scale(context.raster_scale);
     if (context.construction_object_id >= 0) {

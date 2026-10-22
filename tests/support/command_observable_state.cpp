@@ -1749,6 +1749,8 @@ std::string capture_preferences(const CaptureData &data) {
               bool_text(preferences.dimensions_visible()));
   writer.line("preferences.collisions_visible",
               bool_text(preferences.collisions_visible()));
+  writer.line("preferences.lamina_faces_visible",
+              bool_text(preferences.lamina_faces_visible()));
   writer.line("preferences.grid_snap",
               bool_text(preferences.grid_snap_enabled()));
   writer.line("preferences.vertex_snap",

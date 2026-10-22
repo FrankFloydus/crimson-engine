@@ -268,6 +268,16 @@ bool QuaderPreferencesApi::collisions_visible() const {
   return hooks_.collisions_visible ? hooks_.collisions_visible() : false;
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::set_lamina_faces_visible(bool visible) {
+  return hooks_.set_lamina_faces_visible
+             ? hooks_.set_lamina_faces_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::lamina_faces_visible() const {
+  return hooks_.lamina_faces_visible ? hooks_.lamina_faces_visible() : true;
+}
+
 QuaderApiVoidResult
 QuaderPreferencesApi::set_texture_lock_enabled(bool enabled) {
   if (!release_has_feature(ReleaseFeature::UvEditing)) {

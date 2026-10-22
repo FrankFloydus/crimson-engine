@@ -467,6 +467,29 @@ private:
       }
       QImage image;
       if (!verify_pane(pane, image)) return false;
+      if (lamina_phase_ >= 36u) {
+        const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
+        const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
+        const auto interior = [&](const QImage &sample) {
+          const auto projected = camera.project_world_point({-2.2f, 4, 13.5f});
+          return sample.pixelColor(qRound(projected.position.x * sample.width() / render_size.x),
+                                   qRound(projected.position.y * sample.height() / render_size.y));
+        };
+        if (lamina_phase_ == 36u) lamina_toggle_baseline_[pane] = image;
+        if (lamina_phase_ == 37u &&
+            (image == lamina_toggle_baseline_[pane] ||
+             !near_colors(interior(image), interior(lamina_toggle_baseline_[pane]), 2))) {
+          fail("Hiding lamina wire must change boundary pixels while preserving interior fill");
+          return false;
+        }
+        if ((lamina_phase_ == 38u && image != lamina_previous_[pane]) ||
+            (lamina_phase_ == 39u && image != lamina_toggle_baseline_[pane])) {
+          fail("Lamina wire display toggle retained stale pixels or lost its restored appearance");
+          return false;
+        }
+        lamina_previous_[pane] = image;
+        continue;
+      }
       if (lamina_phase_ == 30u || lamina_phase_ == 31u) {
         for (int y = 0; y < image.height(); ++y) {
           for (int x = 0; x < image.width(); ++x) {
@@ -805,6 +828,28 @@ private:
     }
     case 33: break;
     case 34: ok = accept(editor_.modeling().cancel_transform_drag()); break;
+    case 35: {
+      ok = accept(editor_.mode().set(QuaderEditorMode::Object)) &&
+          accept(editor_.scene().destroy(object_.entity)) &&
+          accept(editor_.scene().destroy(lamina_peer_.entity));
+      if (ok) {
+        const auto source = create_lamina_source();
+        ok = accept(source);
+        if (ok) object_ = source.value();
+      }
+      if (ok) ok = begin_lamina_overlap() && accept(editor_.selection().clear()) &&
+          accept(editor_.selection().clear_hover());
+      break;
+    }
+    case 36:
+      (void)settings_.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, false);
+      apply_settings();
+      break;
+    case 37: break;
+    case 38:
+      (void)settings_.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, true);
+      apply_settings();
+      break;
     default: finish(); return;
     }
     if (ok) {
@@ -2639,6 +2684,7 @@ private:
   bool lamina_expected_ = true;
   std::array<QImage, 4> lamina_previous_;
   std::array<QImage, 4> lamina_closed_base_;
+  std::array<QImage, 4> lamina_toggle_baseline_;
   std::array<std::array<QColor, 2>, 4> lamina_previous_fill_colors_;
   std::array<std::size_t, 4> lamina_previous_triangles_{};
   std::array<int, 4> lamina_previous_wire_pixels_{};

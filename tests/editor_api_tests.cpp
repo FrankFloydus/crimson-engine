@@ -26004,9 +26004,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 238u);
+  EXPECT_EQ(commands.size(), 239u);
 #else
-  EXPECT_EQ(commands.size(), 237u);
+  EXPECT_EQ(commands.size(), 238u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -26082,6 +26082,8 @@ TEST(EditorApiTests,
           }));
   EXPECT_EQ(non_command_target_count, 59u);
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog, "viewport.marking_menu", "Q"));
+  EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
+      quader::quader_command::kViewportToggleLaminaFaces.string(), ""));
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
       editor.commands().keybinding_target_id_for_selection_mode(
           quader::QuaderSelectionMode::Object), "4"));
