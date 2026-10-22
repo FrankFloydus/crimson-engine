@@ -3783,7 +3783,7 @@ TEST(ViewportOverlayStyleResolverTests,
 }
 
 TEST(ViewportOverlayStyleResolverTests,
-     LaminaFacesToggleFiltersOnlyNewSemanticLaminaWires) {
+     LaminaFacesToggleFiltersOnlyNewSemanticLaminaFacesAndWires) {
   auto settings = ViewportSettings::defaults();
   ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowLaminaFaces, false));
   ViewportOverlayFrame frame;
@@ -3791,7 +3791,13 @@ TEST(ViewportOverlayStyleResolverTests,
       .color = rgba8(12, 34, 56), .width_pixels = 4.0F,
       .style_role = ViewportOverlayStyleRole::LaminaWire,
       .element = {.object_id = 1}});
-  const ViewportOverlayStyleRange appended{.line_begin = frame.lines.size()};
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::DiagnosticFace,
+      .color = rgba8(12, 34, 56, 78),
+      .style_role = ViewportOverlayStyleRole::LaminaFace,
+      .element = {.object_id = 1}});
+  const ViewportOverlayStyleRange appended{
+      .triangle_begin = frame.triangles.size(),
+      .line_begin = frame.lines.size()};
   frame.lines.push_back({.layer = ViewportOverlayLayer::DiagnosticEdge,
       .style_role = ViewportOverlayStyleRole::LaminaWire,
       .element = {.object_id = 2}});
@@ -3811,6 +3817,19 @@ TEST(ViewportOverlayStyleResolverTests,
   frame.triangles.push_back({.layer = ViewportOverlayLayer::DiagnosticFace,
       .style_role = ViewportOverlayStyleRole::LaminaFace,
       .element = {.object_id = 7}});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::DiagnosticFace,
+      .color = rgba8(255, 0, 0, 64),
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .element = {.object_id = 8}});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .style_role = ViewportOverlayStyleRole::SelectionFace,
+      .element = {.object_id = 9}});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::HoverFace,
+      .style_role = ViewportOverlayStyleRole::HoverFace,
+      .element = {.object_id = 10}});
+  frame.triangles.push_back({.layer = ViewportOverlayLayer::ToolPreviewFill,
+      .style_role = ViewportOverlayStyleRole::ToolPreviewFill,
+      .element = {.object_id = 11}});
   ViewportOverlayStyleResolver::apply_from(frame, settings, {}, appended);
   ASSERT_EQ(frame.lines.size(), 5U);
   EXPECT_EQ(frame.lines.front().element.object_id, 1);
@@ -3823,10 +3842,16 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_EQ(frame.lines[2].element.object_id, 4);
   EXPECT_EQ(frame.lines[3].element.object_id, 5);
   EXPECT_EQ(frame.lines[4].element.object_id, 6);
-  ASSERT_EQ(frame.triangles.size(), 1U);
-  EXPECT_EQ(frame.triangles.front().element.object_id, 7);
-  EXPECT_EQ(frame.triangles.front().layer, ViewportOverlayLayer::DiagnosticFace);
-  EXPECT_EQ(frame.triangles.front().style_role, ViewportOverlayStyleRole::LaminaFace);
+  ASSERT_EQ(frame.triangles.size(), 5U);
+  EXPECT_EQ(frame.triangles.front().element.object_id, 1);
+  EXPECT_EQ(frame.triangles.front().color, rgba8(12, 34, 56, 78));
+  EXPECT_FALSE(std::ranges::any_of(frame.triangles,
+      [](const auto &triangle) { return triangle.element.object_id == 7; }));
+  EXPECT_EQ(frame.triangles[1].element.object_id, 8);
+  EXPECT_EQ(frame.triangles[1].color, rgba8(255, 0, 0, 64));
+  EXPECT_EQ(frame.triangles[2].element.object_id, 9);
+  EXPECT_EQ(frame.triangles[3].element.object_id, 10);
+  EXPECT_EQ(frame.triangles[4].element.object_id, 11);
 }
 
 TEST(ViewportOverlayStyleResolverTests,

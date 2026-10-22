@@ -143,10 +143,18 @@ void ViewportOverlayStyleResolver::apply_from(
     range.point_begin = std::min(range.point_begin, frame.points.size());
     range.icon_begin = std::min(range.icon_begin, frame.icons.size());
     if (!settings.bool_value(ViewportBoolSettingId::ShowLaminaFaces)) {
-      const auto first = frame.lines.begin() +
-                         static_cast<std::ptrdiff_t>(range.line_begin);
+      const auto triangle_first = frame.triangles.begin() +
+          static_cast<std::ptrdiff_t>(range.triangle_begin);
+      frame.triangles.erase(
+          std::remove_if(triangle_first, frame.triangles.end(),
+                         [](const ViewportOverlayTriangle &triangle) {
+                           return role_for(triangle) == ViewportOverlayStyleRole::LaminaFace;
+                         }),
+          frame.triangles.end());
+      const auto line_first = frame.lines.begin() +
+          static_cast<std::ptrdiff_t>(range.line_begin);
       frame.lines.erase(
-          std::remove_if(first, frame.lines.end(),
+          std::remove_if(line_first, frame.lines.end(),
                          [](const ViewportOverlayLine &line) {
                            return role_for(line) == ViewportOverlayStyleRole::LaminaWire;
                          }),

@@ -496,23 +496,96 @@ private:
       if (lamina_phase_ >= 36u) {
         const auto &camera = session_.viewport_workspace().camera(kPanes[pane]);
         const auto render_size = panel_->surface(kPanes[pane])->render_size_pixels();
-        const auto interior = [&](const QImage &sample) {
-          const auto projected = camera.project_world_point({-2.2f, 4, 13.5f});
-          return sample.pixelColor(qRound(projected.position.x * sample.width() / render_size.x),
-                                   qRound(projected.position.y * sample.height() / render_size.y));
+        const bool enabled = lamina_phase_ == 36u || lamina_phase_ == 39u;
+        if (settings_.bool_value(ViewportBoolSettingId::ShowLaminaFaces) != enabled) {
+          fail("The lamina visibility probe did not reach its requested on/off state");
+          return false;
+        }
+        if (lamina_phase_ == 36u) {
+          lamina_toggle_baseline_[pane] = image;
+          lamina_toggle_source_[pane] = submitted;
+        } else {
+          // The observer reads the immutable source before pane styling. A
+          // display preference must retain these classified diagnostic records.
+          const auto &source = lamina_toggle_source_[pane];
+          if (submitted.triangles != source.triangles || submitted.lines != source.lines ||
+              submitted.minimum_y != source.minimum_y || submitted.maximum_y != source.maximum_y ||
+              submitted.horizontal_triangles != source.horizontal_triangles) {
+            fail("A lamina display toggle changed its retained modeling diagnostic source");
+            return false;
+          }
+        }
+        const auto patch = [&](QVec3 world, int radius) -> std::optional<QRect> {
+          const auto projected = camera.project_world_point(world);
+          if (!projected.visible || render_size.x <= 0 || render_size.y <= 0) return std::nullopt;
+          const QPoint center(qRound(projected.position.x * image.width() / render_size.x),
+                              qRound(projected.position.y * image.height() / render_size.y));
+          const QRect region(center - QPoint(radius, radius), QSize(radius * 2 + 1, radius * 2 + 1));
+          return image.rect().contains(region) ? std::optional{region} : std::nullopt;
         };
-        if (lamina_phase_ == 36u) lamina_toggle_baseline_[pane] = image;
-        if (lamina_phase_ == 37u &&
-            (image == lamina_toggle_baseline_[pane] ||
-             !near_colors(interior(image), interior(lamina_toggle_baseline_[pane]), 2))) {
-          fail("Hiding lamina wire must change boundary pixels while preserving interior fill");
+        constexpr std::array<QVec3, 4> kInteriorPoints{
+            QVec3{-3, 4, 11.7f}, QVec3{-1, 4, 11.7f}, QVec3{-3, 4, 14}, QVec3{-1, 4, 14}};
+        std::size_t red_fill_pixels = 0u, fill_samples = 0u;
+        for (const auto point : kInteriorPoints) {
+          const auto region = patch(point, 2);
+          if (!region) {
+            fail("A lamina interior sample is outside its visible GPU surface");
+            return false;
+          }
+          std::size_t red_pixels = 0u, surface_pixels = 0u;
+          for (int y = region->top(); y <= region->bottom(); ++y) {
+            for (int x = region->left(); x <= region->right(); ++x) {
+              const auto color = image.pixelColor(x, y);
+              red_pixels += color.red() > std::max(color.green(), color.blue()) + 12;
+              surface_pixels += std::max({color.red(), color.green(), color.blue()}) > 24;
+            }
+          }
+          const auto count = static_cast<std::size_t>(region->width() * region->height());
+          if (surface_pixels * 100u < count * 95u ||
+              (enabled ? red_pixels * 100u < count * 90u : red_pixels != 0u)) {
+            fail("Display Lamina Faces must hide the red interior fill while retaining the mesh surface");
+            return false;
+          }
+          red_fill_pixels += red_pixels;
+          fill_samples += count;
+        }
+        constexpr std::array<QVec3, 6> kBoundaryPoints{
+            QVec3{-4, 4, 11.7f}, QVec3{-4, 4, 13.5f}, QVec3{0, 4, 11.7f},
+            QVec3{0, 4, 13.5f}, QVec3{-2.2f, 4, 11}, QVec3{-2.2f, 4, 15}};
+        std::size_t red_wire_pixels = 0u;
+        for (const auto point : kBoundaryPoints) {
+          const auto region = patch(point, 3);
+          if (!region) {
+            fail("A lamina boundary sample is outside its visible GPU frame");
+            return false;
+          }
+          std::size_t red_pixels = 0u;
+          for (int y = region->top(); y <= region->bottom(); ++y) {
+            for (int x = region->left(); x <= region->right(); ++x) {
+              const auto color = image.pixelColor(x, y);
+              red_pixels += color.red() > std::max(color.green(), color.blue()) + 96;
+            }
+          }
+          if (enabled ? red_pixels < 2u : red_pixels != 0u) {
+            fail("Display Lamina Faces must hide and restore its strong red boundary independently of the fill");
+            return false;
+          }
+          red_wire_pixels += red_pixels;
+        }
+        if (lamina_phase_ == 37u && image == lamina_toggle_baseline_[pane]) {
+          fail("Hiding lamina faces did not change the accepted GPU pixels");
           return false;
         }
         if ((lamina_phase_ == 38u && image != lamina_previous_[pane]) ||
             (lamina_phase_ == 39u && image != lamina_toggle_baseline_[pane])) {
-          fail("Lamina wire display toggle retained stale pixels or lost its restored appearance");
+          fail("Lamina display toggle retained stale pixels or lost its restored fill and wire appearance");
           return false;
         }
+        std::cout << "lamina_toggle; backend=" << kBackendName << "; phase=" << lamina_phase_
+                  << "; pane=" << pane << "; enabled=" << enabled
+                  << "; red_fill_pixels=" << red_fill_pixels << "; fill_samples=" << fill_samples
+                  << "; red_wire_pixels=" << red_wire_pixels
+                  << "; retained_source=" << submitted.triangles << ',' << submitted.lines << std::endl;
         lamina_previous_[pane] = image;
         continue;
       }
@@ -709,7 +782,7 @@ private:
 #if !defined(QUADER_FILAMENT_REFERENCE_PROBE)
     if (lamina_phase_ == 3u || lamina_phase_ == 6u || lamina_phase_ == 17u ||
         lamina_phase_ == 25u || lamina_phase_ == 27u || lamina_phase_ == 29u ||
-        lamina_phase_ == 31u || lamina_phase_ == 34u) {
+        lamina_phase_ == 31u || lamina_phase_ == 34u || lamina_phase_ == 38u) {
       CrimsonRenderDiagnostics after;
       if (!diagnostics(after)) return false;
       if (after.editor_projection.position_packs != before_.editor_projection.position_packs ||
@@ -718,6 +791,18 @@ private:
           after.editor_gpu.vertex_uploads != before_.editor_gpu.vertex_uploads ||
           after.editor_gpu.index_uploads != before_.editor_gpu.index_uploads) {
         fail("Unchanged lamina frames repacked or uploaded editor geometry");
+        return false;
+      }
+    }
+    if (lamina_phase_ >= 37u) {
+      CrimsonRenderDiagnostics after;
+      if (!diagnostics(after)) return false;
+      if (after.translation.position_packs != before_.translation.position_packs ||
+          after.translation.attribute_packs != before_.translation.attribute_packs ||
+          after.translation.index_packs != before_.translation.index_packs ||
+          after.translation.image_decodes != before_.translation.image_decodes ||
+          after.accepted_scene_generation != before_.accepted_scene_generation) {
+        fail("A lamina display toggle repacked geometry or replaced the retained scene");
         return false;
       }
     }
@@ -3198,6 +3283,7 @@ private:
   std::array<QImage, 4> lamina_previous_;
   std::array<QImage, 4> lamina_closed_base_;
   std::array<QImage, 4> lamina_toggle_baseline_;
+  std::array<ProbeLaminaDiagnostics, 4> lamina_toggle_source_;
   std::array<std::array<QColor, 2>, 4> lamina_previous_fill_colors_;
   std::array<std::size_t, 4> lamina_previous_triangles_{};
   std::array<int, 4> lamina_previous_wire_pixels_{};
