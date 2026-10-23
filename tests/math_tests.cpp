@@ -218,6 +218,41 @@ void projectionParityAndRays() {
     camera.nearPlane=.00001f; camera.farPlane=2048;
     require(camera.screenRay(400,300,{0,0,800,600,true,false}).has_value(),"Large depth range broke picking rays");
 }
+void richFloatingCameraDepth() {
+    Camera camera;camera.position={};camera.target={0,0,-1};camera.nearPlane=.0006994245f;camera.farPlane=2048;
+    const double n=camera.nearPlane,f=camera.farPlane;
+    for(const auto convention:{ClipDepth::ZeroToOne,ClipDepth::NegativeOneToOne}) {
+        const auto reversed=camera.reverse_projection_matrix(1.5f,convention),ordinary=camera.projectionMatrix(1.5f,convention);
+        for(unsigned column=0;column<4;++column)for(unsigned row:{0u,1u,3u})
+            require(reversed.at(row,column)==ordinary.at(row,column),"Reversed depth changed the authored camera lens or W.");
+        const auto window=[&](double distance){const auto clip=math::transformHomogeneous(reversed,{0,0,-distance,1});
+            const double value=double(clip[2])/clip[3];return convention==ClipDepth::ZeroToOne?value:value*.5+.5;};
+        near(window(n),1,1e-7);near(window(f),0,1e-7);
+    }
+    const auto projection=camera.reverse_projection_matrix(1.5f,ClipDepth::ZeroToOne);
+    const auto inverse=math::inverse(projection);
+    require(inverse.has_value(),"Reversed camera projection is singular.");
+    double previous=1;
+    for(const float distance:{.001f,.05f,1.f,3.f,10.f,100.f,1000.f}) {
+        const Vec4 point{distance*.2f,distance*-.1f,-distance,1};const auto clip=math::transformHomogeneous(projection,point);
+        const float device=clip[2]/clip[3];const double expected=n*(f/distance-1)/(f-n);
+        near(device,expected,std::max(1e-12,expected*2e-7));require(device>0&&device<previous,"Floating camera depth is not monotonic near-to-far.");previous=device;
+        const auto restored=math::transformHomogeneous(*inverse,{clip[0]/clip[3],clip[1]/clip[3],device,1});
+        for(unsigned axis=0;axis<3;++axis)near(restored[axis]/restored[3],point[axis],std::max(2e-6,double(distance)*4e-7));
+    }
+    // Independently quantize forward perspective to the former D24 storage.
+    // A real ten-centimetre gap can collapse there, while reversed float must
+    // distinguish it without increasing the authored near plane.
+    unsigned oldTies{};
+    for(unsigned index=0;index<100;++index) {
+        const double a=100+index*.1,b=a+.1;
+        const auto d24=[&](double distance){return std::llround((f/(f-n)-f*n/((f-n)*distance))*16777215.);};
+        oldTies+=d24(a)==d24(b);
+        const auto depth=[&](double distance){const auto p=math::transformHomogeneous(projection,{0,0,-distance,1});return p[2]/p[3];};
+        require(depth(a)>depth(b),"Floating reversed depth collapsed a real room-scale foreground gap.");
+    }
+    require(oldTies>50,"Camera precision regression does not expose the previous fixed-depth ambiguity.");
+}
 }
 int main() {
     int failures=0;
@@ -232,5 +267,6 @@ int main() {
     run("affine inspector presentation and preserving edits",affineInspectorFields);
     run("inspector Euler continuity, singular matrices and scale recovery",inspectorEulerAndCollapsedAxes);
     run("projection parity, unprojection and screen rays",projectionParityAndRays);
+    run("rich floating reversed camera depth and tiny-near precision",richFloatingCameraDepth);
     return failures ? 1 : 0;
 }

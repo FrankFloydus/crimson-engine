@@ -13,6 +13,16 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string_view>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace {
 using namespace crimson;
@@ -187,7 +197,71 @@ float4 main(Constants constants,float3 barycentric : SV_DomainLocation,const Out
         require(file.path().extension()!=".tmp"&&file.path().extension()!=".hlsl"&&file.path().extension()!=".d",
             "Native domain compilation left staging files behind.");
 }
-void run(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+void cachePublicationChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+#ifdef _WIN32
+    Temp temp;
+    const auto directory=temp.root/"publication sources";
+    std::filesystem::create_directories(directory);
+    const auto original=read(source/"fs_encode.sc");
+    write(directory/"fs_encode.sc",original);
+    for(const auto name:{"varying.def.sc","debanding.sh"})
+        std::filesystem::copy_file(source/name,directory/name);
+    for(const bool generated:{false,true}) {
+        const ShaderCompileConfig config{compiler,directory,include,temp.root/(generated?"generated cache":"fixed cache")};
+        const ShaderCompileRecipe recipe{"publication_lock",original,ShaderStage::Fragment,directory/"varying.def.sc",{},"publication-lock-v1"};
+        const auto compile=[&]{return generated?compileShader(config,recipe):compileShader(config,"fs_encode");};
+        const auto initial=compile();
+        std::filesystem::path target;
+        for(const auto& file:std::filesystem::directory_iterator(config.cacheDirectory))if(file.path().extension()==".bin") {
+            require(target.empty(),"Publication fixture produced ambiguous shader artifacts.");target=file.path();
+        }
+        require(!target.empty(),"Publication fixture did not create its shader artifact.");
+        constexpr const char* damaged="damaged shader cache";
+        write(target,damaged);
+        struct Reader {
+            HANDLE handle{INVALID_HANDLE_VALUE};
+            explicit Reader(const std::filesystem::path& file):handle(CreateFileW(file.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,
+                nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr)) {
+                require(handle!=INVALID_HANDLE_VALUE,"Cannot hold the disposable corrupt shader artifact.");
+            }
+            Reader(const Reader&)=delete;Reader& operator=(const Reader&)=delete;
+            ~Reader(){if(handle!=INVALID_HANDLE_VALUE)CloseHandle(handle);}
+        };
+        std::string diagnostic;
+        const auto before=shaderCompilerMetrics();const auto started=std::chrono::steady_clock::now();
+        {
+            // This reader permits compilation/cache inspection but denies
+            // deletion. A regular corrupt target must never count as success.
+            Reader held(target);
+            try{(void)compile();}catch(const std::exception& error){diagnostic=error.what();}
+            require(read(target)==damaged,"Failed shader publication altered a held corrupt artifact.");
+        }
+        const auto elapsed=std::chrono::steady_clock::now()-started;
+        const auto compilerTime=std::chrono::nanoseconds(shaderCompilerMetrics().compilerNanoseconds-before.compilerNanoseconds);
+        require(!diagnostic.empty()&&diagnostic.find(target.filename().string())!=std::string::npos&&
+            diagnostic.find("Windows error")!=std::string::npos,"A held corrupt shader target was accepted or lost its publication error context.");
+        require(elapsed<compilerTime+std::chrono::seconds{3},"A held shader artifact caused an unbounded publication wait.");
+        const auto repaired=compile();
+        require(repaired.bytes==initial.bytes&&repaired.fingerprint==initial.fingerprint,
+            "Releasing a corrupt shader target failed to repair the same immutable artifact.");
+        ShaderCacheReadSession cache(config);
+        const auto cached=generated?cache.find(recipe):cache.find("fs_encode");
+        require(cached&&cached->bytes==initial.bytes&&cache.unchanged(),"Repaired shader artifact did not hydrate from disk.");
+        const auto warmBefore=shaderCompilerMetrics();const auto warm=compile();
+        require(warm.bytes==initial.bytes&&warm.fingerprint==initial.fingerprint&&
+            shaderCompilerMetrics().compilerInvocations==warmBefore.compilerInvocations,
+            "A repaired warm shader artifact invoked the compiler again.");
+        for(const auto& file:std::filesystem::directory_iterator(config.cacheDirectory))
+            require(file.path().extension()!=".tmp"&&file.path().extension()!=".sc"&&file.path().extension()!=".d",
+                "Failed or repaired shader publication left staging files behind.");
+    }
+#else
+    (void)compiler;(void)source;(void)include;
+#endif
+}
+void run(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include,bool publicationOnly=false) {
+    cachePublicationChecks(compiler,source,include);
+    if(publicationOnly)return;
     Temp temp;
     runtimePathChecks(temp.root/"runtime selection");
     embeddedBaselineChecks(temp.root/"embedded baseline");
@@ -331,6 +405,17 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     require(dependency(modelFragment,"material_mapping.sh") && dependency(fragment,"material_mapping.sh"),"Shared material mapping was absent from color/caster reload dependencies.");
     require(dependency(modelFragment,"model_material_normal.sh"),"Shared model normal evaluation was absent from color reload dependencies.");
     require(dependency(modelFragment,"directional_shadow.sh"),"Directional receiver changes do not invalidate shader reload.");
+    require(!dependency(modelFragment,"shadow_ray_geometry.sh"),"Per-view shadow traversal leaked back into a material shader.");
+    {
+        constexpr std::array contactNames{"cs_shadow_contact_trace","cs_shadow_contact_publish"};
+        for(const auto name:contactNames) {
+            require(std::find(names.begin(),names.end(),name)!=names.end(),"A directional contact stage is absent from atomic reload discovery.");
+            const auto compiled=compileShader(shadows,name);
+            require(preflightComputeShader(compiled.bytes,compiled.bytes,diagnostic),"A valid directional contact compute stage failed preflight.");
+            if(std::string_view(name)!="cs_shadow_contact_publish")
+                require(dependency(compiled,"shadow_ray_geometry.sh"),"Finite geometry changes do not invalidate the per-view shadow program.");
+        }
+    }
     require(dependency(modelFragment,"point_light_record.sh"),"Point record layout changes do not invalidate fragment shader reload.");
     {
         // V6 gives the former reserved record component GI-energy semantics.
@@ -338,23 +423,30 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
         // six-texel stride itself is unchanged.
         const auto clusteredSource=read(shadowSource/"clustered_lighting.sh");
         const auto assignmentSource=read(shadowSource/"cs_cluster_lights.sc");
+        const auto shadowGeometrySource=read(shadowSource/"shadow_ray_geometry.sh");
         const auto assignment=compileShader(shadows,"cs_cluster_lights");
         require(dependency(assignment,"point_light_record.sh"),"Point record layout changes do not invalidate compute shader reload.");
         require(preflightComputeShader(assignment.bytes,assignment.bytes,diagnostic),"Current clustered record layout failed its compute contract.");
-        const auto priorLayout=[](std::string text) {
+        const auto requireLayoutOwner=[](const std::string& text) {
             const std::string declaration="uniform vec4 u_clusterRecordLayoutV6;";
-            const auto at=text.find(declaration);
-            require(at!=std::string::npos,"Clustered ABI fixture has no reflected layout guard.");
+            require(text.find(declaration)!=std::string::npos,"Clustered ABI fixture has no reflected layout guard.");
             const std::string stride="int(u_clusterRecordLayoutV6.x)";
             require(text.find(stride)!=std::string::npos,"Clustered layout guard is declared but does not affect record indexing.");
+        };
+        requireLayoutOwner(clusteredSource);requireLayoutOwner(assignmentSource);
+        const auto priorLayoutReferences=[](std::string text) {
             const std::string current="u_clusterRecordLayoutV6",previous="u_clusterRecordLayoutV5";
+            require(text.find(current)!=std::string::npos,"Clustered ABI fixture has no layout reference to rename.");
             for(std::size_t offset=0;(offset=text.find(current,offset))!=std::string::npos;offset+=previous.size()) {
                 text.replace(offset,current.size(),previous);
             }
             return text;
         };
-        write(shadowSource/"clustered_lighting.sh",priorLayout(clusteredSource));
-        write(shadowSource/"cs_cluster_lights.sc",priorLayout(assignmentSource));
+        write(shadowSource/"clustered_lighting.sh",priorLayoutReferences(clusteredSource));
+        write(shadowSource/"cs_cluster_lights.sc",priorLayoutReferences(assignmentSource));
+        // Included readers must agree with the deliberately previous binding;
+        // otherwise compilation fails before publication can reject the ABI.
+        write(shadowSource/"shadow_ray_geometry.sh",priorLayoutReferences(shadowGeometrySource));
         const auto priorFragment=compileShader(shadows,"fs_model");
         const auto priorAssignment=compileShader(shadows,"cs_cluster_lights");
         require(!preflightShaderPair(modelVertex.bytes,modelFragment.bytes,modelVertex.bytes,priorFragment.bytes,diagnostic),
@@ -366,6 +458,7 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
             "A rebuilt engine accepted shaders without its required record layout binding.");
         write(shadowSource/"clustered_lighting.sh",clusteredSource);
         write(shadowSource/"cs_cluster_lights.sc",assignmentSource);
+        write(shadowSource/"shadow_ray_geometry.sh",shadowGeometrySource);
     }
     const auto pickFragment=compileShader(shadows,"fs_pick"),particleFragment=compileShader(shadows,"fs_particle"),presentFragment=compileShader(shadows,"fs_present");
     require(dependency(pickFragment,"material_mapping.sh") && dependency(particleFragment,"material_mapping.sh"),"Shared material mapping was absent from picking/sprite reload dependencies.");
@@ -504,8 +597,9 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
 }
 int main(int argc,char** argv) {
     try {
-        if (argc!=4) throw std::runtime_error("Pass compiler, engine source directory, and pinned include directory.");
-        run(pathFromUtf8(argv[1]),pathFromUtf8(argv[2]),pathFromUtf8(argv[3]));
+        if (argc!=4&&!(argc==5&&std::string_view(argv[4])=="--cache-publication-only"))
+            throw std::runtime_error("Pass compiler, engine source directory, pinned include directory and optional --cache-publication-only.");
+        run(pathFromUtf8(argv[1]),pathFromUtf8(argv[2]),pathFromUtf8(argv[3]),argc==5);
         std::cout<<"Shader compiler checks passed.\n"; return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

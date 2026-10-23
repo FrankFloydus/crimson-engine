@@ -1506,7 +1506,8 @@ std::uint8_t AssetLibrary::requiredGraphUvs(const std::shared_ptr<const Material
 }
 
 ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms& owner,const MaterialGraphShader& generated,const MaterialGraph& graph,std::uint32_t textureEdge,ResourcePriority priority) const {
-    const auto programs=owner.request(generated,priority);
+    const auto programs=owner.request(generated,priority,reflectionDemand_?
+        MaterialGraphUsage::SurfaceReflection:MaterialGraphUsage::Surface);
     if(!programs.current || !programs.programs) {
         // Unsupported graph/coverage expressions stay on the domain fallback;
         // published models retain their previous complete packet. Exact fixed

@@ -295,10 +295,12 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
 }
 #include "screen_lighting_editor_diagnostic.h"
 #include "ssr_performance_diagnostic.h"
+#include "light_leak_editor_diagnostic.h"
 
 int main(int argc,char** argv) {
     try {
         if(argc>1&&std::string(argv[1])=="--ssr-performance-project")return ssrPerformanceDiagnostic(argc,argv);
+        if(argc>1&&std::string(argv[1])=="--light-leak-project")return lightLeakEditorDiagnostic(argc,argv);
         if(argc>1&&(std::string(argv[1])=="--gi-project"||std::string(argv[1])=="--gi-point-project"))return screenLightingEditorDiagnostic(argc,argv);
         require(argc>=7,"Pass engine project, native project, native scene ID, shaderc, shader sources and shader include directory (optional --legacy, --saved, --cold, --capture, --presented-player, --key-light, --warmup N, --samples N, --output directory).");
         Options parameters;for(int i=7;i<argc;++i){const std::string option=argv[i];if(option=="--legacy")parameters.legacy=true;else if(option=="--saved")parameters.savedWorld=true;else if(option=="--cold")parameters.cold=true;else if(option=="--capture")parameters.capture=true;

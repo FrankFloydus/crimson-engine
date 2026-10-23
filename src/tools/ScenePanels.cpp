@@ -68,7 +68,7 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentGlowLevel1,EnvironmentGlowLevel2,EnvironmentGlowLevel3,EnvironmentGlowLevel4,
     EnvironmentGlowLevel5,EnvironmentGlowLevel6,EnvironmentGlowLevel7,EnvironmentGlowHdrLuminanceCap,
     EnvironmentPixelizationEnabled,EnvironmentPixelizationSize,EnvironmentPosterizationEnabled,EnvironmentPosterizationLevels,
-    EnvironmentDitherEnabled,EnvironmentDitherStrength,
+    EnvironmentDitherEnabled,EnvironmentDitherPattern,EnvironmentDitherSize,EnvironmentDitherStrength,
     EnvironmentVignetteEnabled,EnvironmentVignetteIntensity,EnvironmentVignetteRadius,EnvironmentVignetteSoftness,
     EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
     EnvironmentGiEnabled,EnvironmentGiStrength,EnvironmentGiDistance,EnvironmentGiThickness,EnvironmentGiQuality,EnvironmentGiBounces,EnvironmentGiTemporal,
@@ -847,6 +847,14 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
             ImGui::PushID("Dither");auto& dither=value.dither;
             field(Edit::EnvironmentDitherEnabled,"Toggle dither",resettableProperty(dither.enabled,DitherSettings{}.enabled,[&]{return ImGui::Checkbox("Enabled",&dither.enabled);}));
             ImGui::BeginDisabled(!dither.enabled);
+            int pattern=static_cast<int>(dither.pattern);
+            const char* patterns[]{"Bayer 2x2","Bayer 4x4","Bayer 8x8","Interleaved Gradient Noise"};
+            const bool patternChanged=resettableProperty(pattern,static_cast<int>(DitherSettings{}.pattern),[&]{return ImGui::Combo("Pattern",&pattern,patterns,4);},"Bayer 4x4");
+            if(patternChanged)dither.pattern=static_cast<DitherPattern>(pattern);
+            field(Edit::EnvironmentDitherPattern,"Change dither pattern",patternChanged);
+            field(Edit::EnvironmentDitherSize,"Change dither size",
+                resettableProperty(dither.size,DitherSettings{}.size,[&]{return ImGui::SliderInt("Size",&dither.size,1,16,"%d",ImGuiSliderFlags_AlwaysClamp);}));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Pixels per dither cell, or pixelization blocks when Pixelization is enabled.");
             field(Edit::EnvironmentDitherStrength,"Change dither strength",
                 resettableProperty(dither.strength,DitherSettings{}.strength,[&]{return ImGui::SliderFloat("Strength",&dither.strength,0,1,"%.2f",ImGuiSliderFlags_AlwaysClamp);}));
             ImGui::EndDisabled();

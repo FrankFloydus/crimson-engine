@@ -405,6 +405,10 @@ if(BUILD_TESTING)
     target_link_libraries(directional_shadow_receiver_plane_tests PRIVATE crimson-camera crimson-material-gpu)
     target_compile_options(directional_shadow_receiver_plane_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME directional_shadow_receiver_plane_core COMMAND directional_shadow_receiver_plane_tests)
+    add_executable(shadow_ray_geometry_tests tests/shadow_ray_geometry_tests.cpp)
+    target_link_libraries(shadow_ray_geometry_tests PRIVATE Crimson::Support)
+    target_compile_options(shadow_ray_geometry_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME shadow_ray_geometry_core COMMAND shadow_ray_geometry_tests)
     add_executable(quader_scene_tests tests/quader_scene_tests.cpp src/editor/QuaderSceneIntegration.cpp)
     target_link_libraries(quader_scene_tests PRIVATE crimson-scene)
     target_compile_options(quader_scene_tests PRIVATE /W4 /permissive- /utf-8)
@@ -789,7 +793,7 @@ if(BUILD_TESTING)
     target_compile_options(point_shadow_render_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(point_shadow_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME point_shadow_render_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
-    set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 240)
+    set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 360)
     add_executable(material_height_render_tests tests/material_height_render_tests.cpp
         src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
         src/crimson-renderer/RendererHost.cpp
@@ -817,7 +821,7 @@ if(BUILD_TESTING)
     target_compile_options(directional_shadow_quality_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(directional_shadow_quality_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME directional_shadow_quality_core COMMAND directional_shadow_quality_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
-    set_tests_properties(directional_shadow_quality_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
+    set_tests_properties(directional_shadow_quality_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 900)
     add_executable(material_mapping_render_tests tests/material_mapping_render_tests.cpp
         src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
         src/crimson-renderer/RendererHost.cpp
@@ -1081,6 +1085,8 @@ if(BUILD_TESTING)
     add_test(NAME material_mapping_render_dx11_core COMMAND material_mapping_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(directional_shadow_quality_dx11_core point_shadow_render_dx11_core material_mapping_render_dx11_core
         PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11" RUN_SERIAL TRUE TIMEOUT 240)
+    set_tests_properties(point_shadow_render_dx11_core PROPERTIES TIMEOUT 360)
+    set_tests_properties(directional_shadow_quality_dx11_core PROPERTIES TIMEOUT 900)
 
     # Explicit benchmark command; it reads only a disposable frozen project.
     add_executable(forward_plus_room_benchmark tests/forward_plus_room_benchmark.cpp

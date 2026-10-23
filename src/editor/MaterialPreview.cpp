@@ -125,6 +125,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     else if(!environmentRevision_)status_="Preparing preview environment...";
     if(!environment_.map.empty() && source.empty())status_="The assigned HDRI is unavailable; using the built-in studio.";
     const auto diagnose=[&](const std::string& message){if(!status_.empty())status_+='\n';status_+=message;};
+    const AssetLibrary::ReflectionDemandScope reflectionDemand(assets,!nodePreview_&&environment_.ssr.enabled&&environment_.ssr.strength>0);
     if(!nodePreview_)try {
         auto bindings=assets.materialPreviewBindings(material,textureEdge);
         if(!bindings.diagnostic.empty())diagnose(bindings.diagnostic);

@@ -1,6 +1,7 @@
 #include "crimson-renderer/RenderPassPlan.h"
 #include "crimson-renderer/RenderTypes.h"
 
+#include <bgfx/bgfx.h>
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -101,9 +102,18 @@ RenderResourceTable concrete(const RenderPassPlan& plan) {
         table.bindings[index(Resource::SsgiFilterB)].textures=table.bindings[index(Resource::SsgiTraceScratch)].textures;
         table.bindings[index(Resource::SsgiFilterC)].textures=table.bindings[index(Resource::SsgiFilterA)].textures;
     }
-    auto atlas=texture(500,64,64,4);
+    auto atlas=texture(500,64,plan.config.shadow_contact?128:64,4);
     auto& lighting=table.bindings[index(Resource::ClusteredLighting)];lighting.textures[0]=atlas;
     lighting.textures[0].range.texelCount=1024;
+    auto& shadowGeometry=table.bindings[index(Resource::ShadowRayGeometry)];shadowGeometry.textures[0]=atlas;
+    shadowGeometry.textures[0].range.firstTexel=1046;shadowGeometry.textures[0].range.texelCount=23;
+    if(plan.config.shadow_contact) {
+        constexpr auto format=static_cast<std::uint16_t>(bgfx::TextureFormat::RGBA32F);
+        for(const auto resource:{Resource::ReceiverPosition,Resource::ReceiverPlane,Resource::ShadowContactScratch})
+            table.bindings[index(resource)].textures[0].format=format;
+        auto& visibility=table.bindings[index(Resource::ShadowContactVisibility)];visibility.textures[0]=atlas;
+        visibility.textures[0].range.firstTexel=1069;visibility.textures[0].range.texelCount=4096;
+    }
     if(plan.config.ssgi) {
         auto& gi=table.bindings[index(Resource::SsgiIrradiance)];gi.textures[0]=atlas;
         gi.textures[0].range.firstTexel=1024;gi.textures[0].range.texelCount=17;
@@ -245,6 +255,57 @@ void effectTopology() {
         check(std::none_of(entry.uses().begin(),entry.uses().end(),[](const auto& item){return item.resource==Resource::ClusteredLighting;}),"Publication hides disjoint atlas writes behind whole-atlas ReadWrite.");
     }
 }
+void shadow_contact_contracts() {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool gi:{false,true})for(bool ao:{false,true}) {
+        RenderPassPlanConfig config;config.view={purpose,997};config.worldShadows=true;
+        config.shadow_contact=true;config.ssgi=gi;config.ssao=ao;config.refraction=true;
+        const auto plan=buildRenderPassPlan(config);const auto resources=concrete(plan);
+        check(bool(validateRenderPassPlan(plan,resources)),"Exact opaque shadow visibility has invalid pass/resource dependencies.");
+        check(plan.has(Kind::DepthPrepass)&&!plan.has(Kind::RefractionDepth),"Contact visibility did not force the early receiver prepass.");
+        const auto* depth=plan.find(Kind::DepthPrepass);const auto* trace=plan.find(Kind::ShadowContactTrace);
+        const auto* publish=plan.find(Kind::ShadowContactPublish);
+        check(depth->physicalView<trace->physicalView&&trace->physicalView==publish->physicalView&&trace<publish&&
+            publish->physicalView<plan.find(Kind::Opaque)->physicalView,"Contact visibility escaped the existing pre-color compute boundary.");
+        for(const auto resource:{Resource::ObjectMotion,Resource::ReceiverPosition,Resource::ReceiverPlane})
+            check(std::any_of(depth->uses().begin(),depth->uses().end(),[&](const auto& item){return item.resource==resource;}),
+                "Fixed receiver attachment indices omitted motion or exact FP32 plane inputs.");
+        auto broken=plan;erase(broken,Kind::DepthPrepass);
+        error(broken,Error::MissingProducer,"Geometry visibility accepted missing exact receiver inputs.");
+        broken=plan;erase(broken,Kind::ShadowContactTrace);
+        error(broken,Error::MissingProducer,"Contact publication sampled an unproduced scratch target.");
+        broken=plan;erase(broken,Kind::ShadowContactPublish);
+        error(broken,Error::MissingProducer,"Opaque lighting accepted an unpublished contact mask.");
+        broken=plan;std::swap(pass(broken,Kind::ShadowContactTrace),pass(broken,Kind::ShadowContactPublish));
+        error(broken,Error::MissingProducer,"Contact publication ran before tracing in the shared compute view.");
+        auto aliased=resources;
+        aliased.bindings[index(Resource::ShadowRayGeometry)].textures=aliased.bindings[index(Resource::ShadowContactScratch)].textures;
+        error(plan,aliased,Error::FeedbackLoop,"Contact tracing sampled and overwrote the geometry atlas.");
+        aliased=resources;aliased.bindings[index(Resource::ShadowContactVisibility)].textures[0].range.firstTexel=1046;
+        error(plan,aliased,Error::IncompatibleAlias,"Contact publication overlapped immutable caster geometry.");
+        auto missing=resources;missing.bindings[index(Resource::ShadowContactScratch)].textureCount=0;
+        error(plan,missing,Error::MissingBinding,"Contact tracing accepted a missing scratch allocation.");
+        auto resized=resources;resized.bindings[index(Resource::ReceiverPlane)].textures[0].width/=2;
+        error(plan,resized,Error::InvalidTexture,"Contact tracing accepted another receiver plane footprint.");
+        resized=resources;--resized.bindings[index(Resource::ShadowContactVisibility)].textures[0].range.texelCount;
+        error(plan,resized,Error::InvalidTexture,"Contact publication omitted a primary receiver pixel.");
+        resized=resources;resized.bindings[index(Resource::ShadowContactScratch)].textures[0].format=
+            static_cast<std::uint16_t>(bgfx::TextureFormat::RGBA16F);
+        error(plan,resized,Error::InvalidTexture,"Contact tracing lost exact RGBA32F scratch storage.");
+        auto prefix=resources;prefix.bindings[index(Resource::ShadowContactVisibility)].textureCount=0;
+        check(bool(validateRenderPassBindings(plan,prefix,Kind::ShadowContactTrace)),
+            "Tracing required a future visibility allocation before its publication boundary.");
+        config.shadow_contact=false;const auto off=buildRenderPassPlan(config);
+        check(!off.has(Kind::ShadowContactTrace)&&!off.has(Kind::ShadowContactPublish),"Disabled contact retained compute work.");
+        for(const auto& pass:off.passes())for(const auto use:pass.uses())
+            check(use.resource!=Resource::ReceiverPosition&&use.resource!=Resource::ReceiverPlane&&
+                use.resource!=Resource::ShadowContactScratch&&use.resource!=Resource::ShadowContactVisibility,
+                "Disabled contact retained exact receiver or visibility dependencies.");
+    }
+    for(const auto purpose:{RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
+        RenderPassPlanConfig config;config.view.purpose=purpose;config.shadow_contact=true;
+        error(buildRenderPassPlan(config),Error::UnsupportedFeature,"Opaque world contact leaked into an unsupported preview profile.");
+    }
+}
 void concreteHazards() {
     const auto plan=buildRenderPassPlan(fullConfig());const auto correct=concrete(plan);
     auto table=correct;table.bindings[index(Resource::SceneHdr)].view.instanceId++;error(plan,table,Error::InvalidOwner,"A view accepted another view's HDR allocation.");
@@ -266,6 +327,10 @@ void concreteHazards() {
     table=correct;table.bindings[index(Resource::Composite)].textures=table.bindings[index(Resource::SceneHdr)].textures;error(plan,table,Error::FeedbackLoop,"Tone mapping sampled its own attached output.");
     table=correct;table.bindings[index(Resource::PickColor)].textures=table.bindings[index(Resource::GlowUp0)].textures;error(plan,table,Error::IncompatibleAlias,"Unrelated picking and Glow allocations aliased silently.");
     table=correct;table.bindings[index(Resource::SsaoVisibility)].textures[0].range.firstTexel=1040;error(plan,table,Error::IncompatibleAlias,"GI and AO shared an overlapping packed atlas texel.");
+    table=correct;table.bindings[index(Resource::ShadowRayGeometry)].textures[0].range.firstTexel=1045;
+    error(plan,table,Error::IncompatibleAlias,"Shadow ray geometry overlapped the independently published AO atlas range.");
+    table=correct;table.bindings[index(Resource::ShadowRayGeometry)].readEnabled=false;
+    error(plan,table,Error::DisabledRead,"Shadow ray geometry bypassed its declared surface dependency.");
     table=correct;table.bindings[index(Resource::SsgiTemporalScratch)].textures=table.bindings[index(Resource::SsgiHistoryPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote its spatial feedback allocation.");
     table=correct;table.bindings[index(Resource::SsgiHistoryCurrent)].textures=table.bindings[index(Resource::SsgiTemporalScratch)].textures;error(plan,table,Error::FeedbackLoop,"Early reconstruction sampled and overwrote temporal scratch.");
     table=correct;table.bindings[index(Resource::SsgiMomentsCurrent)].textures=table.bindings[index(Resource::SsgiMomentsPrevious)].textures;error(plan,table,Error::FeedbackLoop,"Temporal compute sampled and overwrote independent raw moments.");
@@ -584,7 +649,9 @@ void ssrContracts() {
         check(!off.has(Kind::SsrPrepareDepth)&&!off.has(Kind::SsrTrace)&&!off.has(Kind::SsrReconstruct1)&&!off.has(Kind::SsrReconstruct2)&&!off.has(Kind::SsrReconstruct4)&&
             !off.has(Kind::SsrOpaque)&&!off.has(Kind::DepthPrepass)&&off.has(Kind::RefractionDepth),
             "Disabled SSR retained preparation or changed the ordinary late glass depth recipe.");
-        for(const auto& entry:off.passes())for(const auto& item:entry.uses())check(item.resource<Resource::SsrColorMip0,"Disabled SSR retained source or scratch resources.");
+        for(const auto& entry:off.passes())for(const auto& item:entry.uses())
+            check(item.resource<Resource::SsrColorMip0||item.resource>Resource::SsrFilterB,
+                "Disabled SSR retained source or scratch resources.");
         config.ssr=true;config.refraction=false;
         const auto standalone=buildRenderPassPlan(config);
         check(bool(validateRenderPassPlan(standalone,concrete(standalone)))&&!standalone.has(Kind::DepthPrepass)&&!standalone.has(Kind::RefractionDepth),
@@ -597,6 +664,10 @@ void ssrContracts() {
     const auto plan=buildRenderPassPlan(maximum);
     check(bool(validateRenderPassPlan(plan))&&plan.count<=RenderPassPlan::MaximumPasses,"Maximum SSR/lighting/Glow/AA/glass plan exceeds bounded capacity.");
     check(plan.find(Kind::Transparent)->resourceCount==59,"Worst-case transparent dependency count changed without updating its bounded capacity test.");
+    maximum.shadow_contact=true;const auto contact_maximum=buildRenderPassPlan(maximum);
+    check(bool(validateRenderPassPlan(contact_maximum))&&contact_maximum.count<=RenderPassPlan::MaximumPasses&&
+        contact_maximum.find(Kind::Transparent)->resourceCount<=RenderPass::MaximumResourceUses,
+        "Exact contact exceeded the bounded maximum complete lighting plan.");
     maximum.ssr_levels=0;error(buildRenderPassPlan(maximum),Error::InvalidPass,"SSR accepted no source/depth mip.");
     maximum.ssr_levels=MaximumSsrMipLevels+1;error(buildRenderPassPlan(maximum),Error::InvalidPass,"SSR accepted an unsupported seventeenth mip.");
     RenderPassPlanConfig one;one.ssr=true;const auto single=buildRenderPassPlan(one);
@@ -631,7 +702,7 @@ void ownershipAndOrderFailures() {
 }
 int main() {
     static_assert(std::is_trivially_copyable_v<RenderPassPlan> && std::is_trivially_copyable_v<RenderResourceTable>);
-    try { profiles();attachmentAndDependencyContracts();effectTopology();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();optionalPresentationContracts();refractionContracts();ssrContracts();ownershipAndOrderFailures(); }
+    try { profiles();attachmentAndDependencyContracts();effectTopology();shadow_contact_contracts();concreteHazards();glarePyramidContracts();spatialAntiAliasingContracts();optionalPresentationContracts();refractionContracts();ssrContracts();ownershipAndOrderFailures(); }
     catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
     std::cout<<"Render pass/resource contracts passed.\n";return 0;
 }

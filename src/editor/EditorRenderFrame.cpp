@@ -71,6 +71,10 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     EditorRenderFrameInput input,AssetLibrary& assets,EditorResources& resources,EditorRenderFramePreparationStats* stats) {
     using Clock=std::chrono::steady_clock;
     if(stats)*stats={};
+    const auto& ssr=input.settings.environment.ssr;
+    const AssetLibrary::ReflectionDemandScope reflectionDemand(assets,ssr.enabled&&ssr.strength>0&&
+        ((input.sceneVisible&&input.sceneWidth&&input.sceneHeight)||
+         (input.gameVisible&&input.gameWidth&&input.gameHeight&&input.gameCamera)));
     // Clocks were reconciled against the complete extraction. Hidden models
     // must not request receiver, caster, picking or material-preview resources.
     std::erase_if(input.extracted.models,[](const auto& model){return !model.visible;});

@@ -1318,6 +1318,7 @@ void environmentPostProcessingStorageAndHistory() {
     const auto id=document.createEnvironment("Post processing");const auto original=*document.scene().find(id);
     auto edited=original;auto& settings=edited.environment->environment;
     settings.pixelization={true,9};settings.dither={true,.6f};settings.posterization={true,6};settings.vignette={true,.7f,.6f,.3f};
+    settings.dither.pattern=DitherPattern::Bayer8x8;settings.dither.size=5;
     const auto history=document.history().size();
     require(document.begin("Tune post processing")&&document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==id)
         record.environment=edited.environment;})&&document.commit(),document.status());
@@ -1352,6 +1353,19 @@ void environmentPostProcessingStorageAndHistory() {
     require(!reopened.dirty()&&readText(project.root/missingId)==missingText&&restored.pixelization==defaults.pixelization&&
         restored.dither==defaults.dither&&restored.posterization==defaults.posterization&&restored.vignette==defaults.vignette,"Old scene load enabled effects, changed defaults, dirtied or rewrote the file.");
     const auto encoded=environmentSettingsJson(settings);
+    for(const auto pattern:{DitherPattern::Bayer2x2,DitherPattern::Bayer4x4,DitherPattern::Bayer8x8,DitherPattern::InterleavedGradientNoise})
+        for(const int size:{1,16}) {
+            auto value=settings;value.dither.pattern=pattern;value.dither.size=size;
+            require(readEnvironmentSettings(environmentSettingsJson(value))==value,"Dither pattern or size did not round trip.");
+        }
+    auto oldDither=encoded;oldDither["dither"].erase("pattern");oldDither["dither"].erase("size");
+    require(readEnvironmentSettings(oldDither).dither==DitherSettings{true,.6f},"Existing Dither did not retain Bayer4x4 and size1 defaults.");
+    for(const auto bad:{Json(true),Json(0),Json(nullptr),Json("unknown"),Json::array()})
+        rejects([&]{auto json=encoded;json["dither"]["pattern"]=bad;(void)readEnvironmentSettings(json);});
+    for(const auto bad:{Json(true),Json("2"),Json(2.0),Json(2.5),Json(0),Json(17),Json(nullptr)})
+        rejects([&]{auto json=encoded;json["dither"]["size"]=bad;(void)readEnvironmentSettings(json);});
+    for(const int bad:{0,17}) {auto value=settings;value.dither.size=bad;rejects([&]{validateEnvironmentSettings(value);});}
+    {auto value=settings;value.dither.pattern=static_cast<DitherPattern>(99);rejects([&]{validateEnvironmentSettings(value);});}
     for(const auto* effect:{"pixelization","dither","posterization","vignette"}) {
         for(const auto bad:{Json(true),Json(1),Json(nullptr),Json::array()})
             rejects([&]{auto json=encoded;json[effect]=bad;(void)readEnvironmentSettings(json);});

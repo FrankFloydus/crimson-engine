@@ -476,6 +476,7 @@ struct AssetPreviews::Impl {
         // stays stable when a scene's Glow is tuned in its full-size views.
         settings.environment.glow.enabled=false;
         settings.environment.ssgi.enabled=false;settings.environment.ssao.enabled=false;
+        const AssetLibrary::ReflectionDemandScope reflectionDemand(assets,settings.environment.ssr.enabled&&settings.environment.ssr.strength>0);
         const auto source=settings.environment.source==EnvironmentSource::Hdri?
             assets.references().resolveEnvironment(settings.environment.map):std::string{};
         if(!source.empty())validationFiles.push_back(sourceFile(source));

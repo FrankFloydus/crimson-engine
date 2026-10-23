@@ -35,6 +35,7 @@ const std::map<std::string,std::string> varying{
     {"cs_ssgi_trace","varying.def.sc"},{"cs_ssgi_temporal","varying.def.sc"},
     {"cs_ssgi_filter","varying.def.sc"},{"cs_ssgi_publish","varying.def.sc"},
     {"cs_ssao_evaluate","varying.def.sc"},{"cs_ssao_publish","varying.def.sc"},
+    {"cs_shadow_contact_trace","varying.def.sc"},{"cs_shadow_contact_publish","varying.def.sc"},
     {"cs_refraction_downsample","varying.def.sc"},
     {"cs_ssr_color","varying.def.sc"},{"cs_ssr_depth","varying.def.sc"},{"cs_ssr_reconstruct","varying.def.sc"},
     {"fs_model_reflection","model.varying.def.sc"},{"fs_pbr_reflection","varying.def.sc"},{"fs_particle_reflection","particle.varying.def.sc"},
@@ -241,8 +242,9 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& 
         if (token.stop_requested() || fingerprintFiles(actual)!=actualBefore) throw std::runtime_error("Shader source changed during compilation.");
         dependencies=std::move(actual); fingerprint=compileFingerprint(config,name,dependencies);
         target=config.cacheDirectory/(name+"-"+std::to_string(fingerprint)+".bin");
-        auto data=readBinary(stage); std::error_code error; std::filesystem::rename(stage,target,error);
-        if(error && !std::filesystem::is_regular_file(target)) throw std::runtime_error("Could not publish compiled shader cache.");
+        auto data=readBinary(stage);
+        streaming::detail::writeCacheFileAtomically(target,std::string_view(reinterpret_cast<const char*>(data.data()),data.size()));
+        std::error_code error;
         std::filesystem::remove(stage,error); std::filesystem::remove(std::filesystem::path(stage.wstring()+L".d"),error);
         saveDependencyIndex(config,name,dependencies);
         return {name,name.starts_with("vs_"),std::move(data),std::move(dependencies),fingerprint};
@@ -414,8 +416,8 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
         if(token.stop_requested() || fingerprintFiles(actual)!=before)throw std::runtime_error("Generated shader dependencies changed during compilation.");
         dependencies=std::move(actual);fingerprint=recipeFingerprint(config,identity,dependencies);
         target=config.cacheDirectory/(identity+"-"+std::to_string(fingerprint)+".bin");
-        auto data=readBinary(stage);std::error_code error;std::filesystem::rename(stage,target,error);
-        if(error && !std::filesystem::is_regular_file(target))throw std::runtime_error("Could not publish generated shader cache.");
+        auto data=readBinary(stage);
+        streaming::detail::writeCacheFileAtomically(target,std::string_view(reinterpret_cast<const char*>(data.data()),data.size()));
         nlohmann::json paths=nlohmann::json::array();for(const auto& file:dependencies)paths.push_back(utf8(file));
         streaming::detail::writeCacheFileAtomically(config.cacheDirectory/(identity+".recipe.json"),nlohmann::json{{"version",1},{"contract",config.buildContract},
             {"compiler",resourcePathKey(config.compiler)},{"source",resourcePathKey(config.sourceDirectory)},

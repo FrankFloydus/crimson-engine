@@ -494,6 +494,81 @@ void unsupportedHeightChecks(const fs::path& compiler,const fs::path& sources,co
     resources.stop();
 }
 
+void lazyReflectionChecks(ResourceManager& resources,const ShaderCompileConfig& config,const MaterialGraphShader& shader) {
+    // Only optional recipes change. Required stage identities and disk binaries
+    // stay warm, while a unique comment keeps repeat focused runs meaningful.
+    auto lazyShader=shader;lazyShader.topologyKey+="-lazy-reflection";
+    const auto marker="\n// Independent lazy reflection publication fixture "+
+        std::to_string(Clock::now().time_since_epoch().count())+".\n";
+    for(auto& variant:lazyShader.variants)
+        if(variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection)
+            variant.source+=marker;
+    MaterialGraphPrograms lazy(resources,config);
+    auto lazyGate=std::make_shared<WorkerGate>();
+    ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;
+    auto lazyBlocker=resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"lazy-reflection-worker-gate"},[lazyGate](std::stop_token stop) {
+        lazyGate->entered=true;while(!lazyGate->released&&!stop.stop_requested())std::this_thread::sleep_for(1ms);
+        return ResourceLoadResult<ShaderBinary>{std::make_shared<ShaderBinary>(),0,1,{}};
+    },options);
+    waitFor([&]{return lazyGate->entered.load();},"Could not establish optional reflection publication gate.");
+    const auto before=shaderCompilerMetrics();const auto queued=resources.stats().queued;
+    const auto base=lazy.request(lazyShader,ResourcePriority::Selected,MaterialGraphUsage::Surface);requireComplete(base);
+    check(base.programs->optimized&&!base.compiling&&!bgfx::isValid(base.programs->programs[7])&&!bgfx::isValid(base.programs->programs[8])&&
+        resources.stats().queued==queued&&shaderCompilerMetrics().compilerInvocations==before.compilerInvocations,
+        "SSR-off publication waited for or queued unused reflection programs.");
+    const auto pinnedPrograms=base.programs->programs;
+    const auto upgrading=lazy.request(lazyShader,ResourcePriority::Selected,MaterialGraphUsage::SurfaceReflection);
+    const auto upgradeQueued=resources.stats().queued-queued;
+    const auto upgradeState=Json{{"current",upgrading.current},{"compiling",upgrading.compiling},
+        {"sameBasePacket",upgrading.programs==base.programs},{"queuedJobs",upgradeQueued},
+        {"status",upgrading.diagnostic},{"metrics",metricDifference(before)}};
+    if(!upgrading.current||!upgrading.compiling||upgrading.programs!=base.programs)
+        throw std::runtime_error("Requesting SSR hid the ready base packet. "+upgradeState.dump());
+    // An optional fragment can also queue a cache-only vertex read if no ready
+    // ResourceManager vertex record exists. A warm disk cache does not imply
+    // that such a record survived an earlier epoch/publication test.
+    if(upgradeQueued<2||upgradeQueued>4||shaderCompilerMetrics().compilerInvocations!=before.compilerInvocations)
+        throw std::runtime_error("SSR upgrade queued work beyond its optional fragment/vertex pair. "+upgradeState.dump());
+    lazyGate->released=true;MaterialGraphProgramResult extended;
+    waitForCompilation(resources,[&] {
+        resources.pump();extended=lazy.request(lazyShader,ResourcePriority::Selected,MaterialGraphUsage::SurfaceReflection);bgfx::frame();
+        check(extended.current,"Optional reflection preparation made an existing surface unavailable.");
+        return bgfx::isValid(extended.programs->programs[7])&&bgfx::isValid(extended.programs->programs[8]);
+    },"optional reflection pair upgrade");
+    requireComplete(extended);
+    check(extended.programs!=base.programs&&bgfx::isValid(base.programs->programs[0]),
+        "Optional upgrade mutated or destroyed its pinned prior surface generation.");
+    for(std::size_t pass=0;pass<5;++pass)
+        check(base.programs->programs[pass].idx==pinnedPrograms[pass].idx&&bgfx::isValid(base.programs->programs[pass]),
+            "Optional SSR upgrade mutated or retired a pinned required program.");
+    check(lazy.request(lazyShader,ResourcePriority::Selected,MaterialGraphUsage::Surface).programs==base.programs,
+        "Turning SSR off replaced the unchanged required surface family.");
+    waitForCompilation(resources,[&]{resources.pump();return resources.idle();},"lazy reflection worker drain");
+    const auto metrics=metricDifference(before);
+    std::cout<<"Lazy reflection publication: "<<Json{{"upgrade",upgradeState},{"completedMetrics",metrics}}.dump()<<'\n';
+    check(shaderCompilerMetrics().compilerInvocations==before.compilerInvocations+2,
+        "Optional SSR upgrade did not compile exactly its two missing reflection stages.");
+}
+
+void focusedLazyReflectionChecks(const fs::path& compiler,const fs::path& sources,const fs::path& include,const fs::path& warmCache) {
+    TemporaryProject temporary;
+    const ShaderCompileConfig config{compiler,sources,include,warmCache.empty()?temporary.root/"cache":warmCache};
+    const auto shader=generateMaterialGraphShader(fixture());
+    // Prepare only the five required passes. A supplied matching warm cache
+    // makes this a cache-only setup; cold optional SSR and unrelated reload,
+    // recovery, preview and optimization fixtures are deliberately omitted.
+    const auto before=shaderCompilerMetrics();
+    for(const auto& variant:shader.variants) {
+        if(variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection)continue;
+        (void)compileShader(config,variant.vertexName);
+        (void)compileShader(config,materialGraphShaderRecipe(config,shader,variant));
+    }
+    std::cout<<"Lazy reflection required-stage setup: "<<metricDifference(before).dump()<<'\n';
+    ResourceConfig resourceConfig;resourceConfig.workers=1;ResourceManager resources{resourceConfig};
+    lazyReflectionChecks(resources,config,shader);resources.stop();
+    for(int frame=0;frame<3;++frame)bgfx::frame();
+}
+
 void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs::path& include) {
     TemporaryProject temporary;
     const auto copiedSources=temporary.root/"shaders";
@@ -641,8 +716,8 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                         "A settled interactive generation did not queue background optimization.");
                     const auto optimizeQueued=resources.stats().queued;
                     const auto secondOptimizing=secondOwner->request(structuralShader);
-                    check(secondOptimizing.current&&secondOptimizing.compiling&&optimizeQueued==4&&resources.stats().queued==optimizeQueued,
-                        "Sibling owners duplicated the same expensive optimized shader inputs.");
+                    check(secondOptimizing.current&&secondOptimizing.compiling&&optimizeQueued==1&&resources.stats().queued==optimizeQueued,
+                        "Background optimization occupied more than one worker slot or siblings duplicated its admitted stage.");
                     secondOwner.reset();
                     auto superseding=structural;
                     const auto extraFactor=addMaterialNode(superseding.graph,MaterialNodeKind::Scalar).id;
@@ -677,6 +752,7 @@ void publicationChecks(const fs::path& compiler,const fs::path& sources,const fs
                     "Warm material reopening preferred an interactive tier or queued optimization despite its complete optimized cache.");
                 waitForCompilation(resources,[&]{resources.pump();return resources.idle();},"warm-start shader worker drain");
             }
+            lazyReflectionChecks(resources,config,shader);
             {
                 auto previewOwner=programs.createSibling();
                 const auto texture=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Texture2D;});
@@ -767,12 +843,14 @@ int main(int argc,char** argv) {
         const bool profile=argc>=2&&std::string(argv[1])=="--profile-project";
         const bool engine=argc>=2&&std::string(argv[1])=="--profile-engine";
         const bool edit=argc>=2&&std::string(argv[1])=="--profile-edit";
-        check(profile?(argc==5||argc==6):(engine||edit)?argc==5:argc==4,"Expected shaderc/source/include, --profile-project projectRoot rendererBin output.json [--cold], --profile-edit projectRoot rendererBin output.json, or --profile-engine projectRoot rendererBin output.json.");
+        const bool lazy=argc>=2&&std::string(argv[1])=="--lazy-reflection-only";
+        check((profile||lazy)?(argc==5||argc==6):(engine||edit)?argc==5:argc==4,"Expected shaderc/source/include, --lazy-reflection-only shaderc/source/include [warm-cache-directory], --profile-project projectRoot rendererBin output.json [--cold], --profile-edit projectRoot rendererBin output.json, or --profile-engine projectRoot rendererBin output.json.");
         bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
         check(bgfx::init(init),"Could not initialize headless Noop graphics checks.");initialized=true;
         if(profile)profileProject(argv[2],argv[3],argv[4],argc==6&&std::string(argv[5])=="--cold");
         else if(engine)profileEngine(argv[2],argv[3],argv[4]);
         else if(edit)profileProject(argv[2],argv[3],argv[4],false,true);
+        else if(lazy)focusedLazyReflectionChecks(argv[2],argv[3],argv[4],argc==6?fs::path{argv[5]}:fs::path{});
         else {preparedSignatureChecks();preparedSourceCoherenceChecks();publicationChecks(argv[1],argv[2],argv[3]);unsupportedHeightChecks(argv[1],argv[2],argv[3]);}
         bgfx::shutdown();initialized=false;
         std::cout<<"Headless material shader publication, epoch, recovery and lease checks passed.\n";return 0;

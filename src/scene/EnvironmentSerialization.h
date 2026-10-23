@@ -4,11 +4,14 @@
 #include "math/Json.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <stdexcept>
 
 namespace crimson {
+
+inline constexpr std::array<const char*,4> DitherPatternNames{"Bayer2x2","Bayer4x4","Bayer8x8","InterleavedGradientNoise"};
 
 // Shared by scene documents and the compatible legacy environment file.
 // Scene-only entity references stay outside these render settings.
@@ -108,6 +111,19 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
             throw std::runtime_error("Dither strength must be numeric.");
         dither.enabled=source.value("enabled",dither.enabled);
         dither.strength=source.value("strength",dither.strength);
+        if(source.contains("pattern")) {
+            const auto& pattern=source.at("pattern");
+            if(!pattern.is_string())throw std::runtime_error("Dither pattern must be a supported name.");
+            const auto name=pattern.get<std::string>();
+            const auto found=std::find(DitherPatternNames.begin(),DitherPatternNames.end(),name);
+            if(found==DitherPatternNames.end())throw std::runtime_error("Dither pattern must be a supported name.");
+            dither.pattern=static_cast<DitherPattern>(found-DitherPatternNames.begin());
+        }
+        if(source.contains("size")) {
+            const auto& size=source.at("size");
+            if(!size.is_number_integer()||size<1||size>16)throw std::runtime_error("Dither size must be an integer between one and 16.");
+            dither.size=size.get<int>();
+        }
     }
     if (json.contains("posterization")) {
         const auto& source=effectObject("posterization");auto& posterization=value.posterization;
@@ -369,7 +385,8 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
             {"agxWhite",value.toneMappingParameters.agxWhite},{"agxContrast",value.toneMappingParameters.agxContrast}}},
         {"debanding",value.debanding},
         {"pixelization",{{"enabled",value.pixelization.enabled},{"pixelSize",value.pixelization.pixelSize}}},
-        {"dither",{{"enabled",value.dither.enabled},{"strength",value.dither.strength}}},
+        {"dither",{{"enabled",value.dither.enabled},{"strength",value.dither.strength},
+            {"pattern",DitherPatternNames[static_cast<std::size_t>(value.dither.pattern)]},{"size",value.dither.size}}},
         {"posterization",{{"enabled",value.posterization.enabled},{"levels",value.posterization.levels}}},
         {"vignette",{{"enabled",value.vignette.enabled},{"intensity",value.vignette.intensity},
             {"radius",value.vignette.radius},{"softness",value.vignette.softness}}},

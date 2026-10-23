@@ -53,6 +53,18 @@ struct PreparedParticleMaterial {
 
 class AssetLibrary {
 public:
+    // Material preparation can be nested (world, thumbnail, material preview).
+    // Each view admits SSR only for its own effective Environment settings.
+    class ReflectionDemandScope {
+    public:
+        ReflectionDemandScope(const AssetLibrary& owner,bool enabled):owner_(owner),previous_(owner.reflectionDemand_) {owner_.reflectionDemand_=enabled;}
+        ~ReflectionDemandScope(){owner_.reflectionDemand_=previous_;}
+        ReflectionDemandScope(const ReflectionDemandScope&)=delete;
+        ReflectionDemandScope& operator=(const ReflectionDemandScope&)=delete;
+    private:
+        const AssetLibrary& owner_;
+        bool previous_{};
+    };
     explicit AssetLibrary(std::filesystem::path projectRoot,ResourceManager* resources=nullptr);
     ~AssetLibrary();
     AssetLibrary(const AssetLibrary&) = delete;
@@ -304,6 +316,7 @@ private:
     GraphShaderCache& graphCache(const std::shared_ptr<const MaterialGraph>&) const;
     std::uint8_t requiredGraphUvs(const std::shared_ptr<const MaterialGraph>&) const;
     MaterialGraphPrograms* graphPrograms_{};
+    mutable bool reflectionDemand_{};
     mutable std::unordered_map<const MaterialAsset*,MaterialCompatibility> materialCompatibility_;
     void ensureModelMaterials(const ModelAsset& model);
     void ensureModelAnimations(const ModelAsset& model);

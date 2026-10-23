@@ -120,7 +120,7 @@ ModelStream buildModelCache(const ModelAsset& asset,const std::filesystem::path&
     if (writeMetadata) writeModelMetadataCache(asset,result,root);
     return result;
 }
-std::shared_ptr<const ModelGeometryLevel> loadModelLod(const ModelLod& info,std::uint32_t primitive,std::uint32_t level) {
+std::shared_ptr<const ModelGeometryLevel> loadModelLod(const ModelLod& info,std::uint32_t primitive,std::uint32_t level,bool prepareShadowRays,std::stop_token stop) {
     std::ifstream input(info.file,std::ios::binary);
     if (detail::read<std::array<char,8>>(input)!=Magic || detail::read<std::uint32_t>(input)!=ModelCacheVersion ||
         detail::read<std::uint64_t>(input)!=info.key) throw std::runtime_error("Stale or damaged model LOD cache.");
@@ -166,6 +166,7 @@ std::shared_ptr<const ModelGeometryLevel> loadModelLod(const ModelLod& info,std:
     if (!result->wideIndices)
         result->indices16.assign(result->geometry.indices.begin(),result->geometry.indices.end());
     result->validated=true;
+    if(prepareShadowRays&&level==0)result->shadowRays=build_shadow_ray_mesh(result->geometry,stop);
     return result;
 }
 

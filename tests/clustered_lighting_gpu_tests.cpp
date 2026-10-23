@@ -3,6 +3,8 @@
 #include "crimson-renderer/ClusteredLighting.h"
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/PointLightRecord.h"
+#include <crimson/renderer/forward/ModelData.h>
+#include <crimson/renderer/forward/ShadowRayGeometry.h>
 #include <bgfx/platform.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -290,6 +292,8 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
         "Odd-size SSGI and SSAO regions overlap or escape the atlas.");
     check(lighting.ssaoWidth()==screenWidth&&lighting.ssaoHeight()==screenHeight,
         "SSAO publication lost its odd viewport extent.");
+    check(!lighting.shadow_contact_enabled()&&!lighting.shadow_contact_base_texel()&&!lighting.shadow_contact_texels(),
+        "An existing prepare caller enabled contact visibility without requesting it.");
     for(unsigned i=0;i<4;++i)tick();
     const auto combinedBytes=lighting.residentBytes();
     check(withScreenEffects(false,true),lighting.status());
@@ -299,6 +303,61 @@ void exercise(std::vector<std::shared_ptr<Readback>>& outstandingDestinations) {
     for(unsigned i=0;i<4;++i)tick();
     check(!lighting.ssaoWidth()&&!lighting.ssaoHeight()&&!lighting.ssaoBaseTexel()&&
         lighting.residentBytes()<combinedBytes,"Disabled screen effects retained their atlas allocation.");
+
+    ModelPrimitive triangle;triangle.vertices.resize(3);triangle.indices={0,1,2};
+    triangle.vertices[0].position={-1,0,-1};triangle.vertices[1].position={1,0,-1};triangle.vertices[2].position={0,0,1};
+    ShadowRayInstance occurrence{build_shadow_ray_mesh(triangle),Mat4::identity(),1,true,true};
+    check(bool(occurrence.mesh),"Contact atlas fixture did not produce eligible original geometry.");
+    lighting.set_shadow_ray_scene(std::span{&occurrence,1});
+    const auto withContact=[&] {
+        return lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,
+            screenWidth,screenHeight,screenWidth,screenHeight,{},true);
+    };
+    check(withContact(),lighting.status());
+    check(lighting.shadow_contact_enabled()&&lighting.shadow_ray_enabled()&&
+        lighting.shadow_contact_width()==screenWidth&&lighting.shadow_contact_height()==screenHeight&&
+        lighting.shadow_contact_texels()==pixels&&lighting.shadow_contact_base_texel()==lighting.ssaoBaseTexel()+packed,
+        "Full-resolution contact visibility lost its extent or overlapped GI/AO.");
+    RenderResourceTable contactResources;lighting.bind_resources(contactResources);
+    const auto& contact=contactResources.bindings[static_cast<std::size_t>(RenderResource::ShadowContactVisibility)];
+    const auto& geometry=contactResources.bindings[static_cast<std::size_t>(RenderResource::ShadowRayGeometry)];
+    check(contact.textureCount==1&&geometry.textureCount==1&&
+        contact.textures[0].physicalId==geometry.textures[0].physicalId&&
+        contact.textures[0].generation==geometry.textures[0].generation&&
+        contact.textures[0].range.firstTexel==lighting.shadow_contact_base_texel()&&
+        contact.textures[0].range.texelCount==pixels&&
+        geometry.textures[0].range.firstTexel%lighting.atlasWidth()==0&&
+        geometry.textures[0].range.firstTexel>=std::uint64_t(lighting.shadow_contact_base_texel())+pixels&&
+        std::uint64_t(geometry.textures[0].range.firstTexel)+geometry.textures[0].range.texelCount<(1u<<24),
+        "Contact visibility and row-uploaded geometry aliases are not disjoint exact atlas ranges.");
+    const RenderResource atlasRegions[]{RenderResource::ClusteredLighting,RenderResource::SsgiIrradiance,
+        RenderResource::SsaoVisibility,RenderResource::ShadowContactVisibility,RenderResource::ShadowRayGeometry};
+    for(const auto a:atlasRegions)for(const auto b:atlasRegions)if(a<b) {
+        const auto& first=contactResources.bindings[static_cast<std::size_t>(a)].textures[0].range;
+        const auto& second=contactResources.bindings[static_cast<std::size_t>(b)].textures[0].range;
+        check(std::uint64_t(first.firstTexel)+first.texelCount<=second.firstTexel||
+            std::uint64_t(second.firstTexel)+second.texelCount<=first.firstTexel,
+            "Two live clustered atlas resources overlap after contact visibility allocation.");
+    }
+    const auto lastContact=lighting.shadow_contact_base_texel()+lighting.shadow_contact_texels()-1;
+    const Vec4 contactSentinel{.125f,.25f,.5f,1};
+    bgfx::updateTexture2D(lighting.texture(),0,0,static_cast<std::uint16_t>(lastContact%lighting.atlasWidth()),
+        static_cast<std::uint16_t>(lastContact/lighting.atlasWidth()),1,1,bgfx::copy(contactSentinel.data(),sizeof contactSentinel));
+    occurrence.casterMask=2;lighting.set_shadow_ray_scene(std::span{&occurrence,1});
+    check(withContact()&&lighting.shadow_ray_uploaded(),"Changed caster metadata did not republish its geometry rows.");
+    check((*read())[lastContact]==contactSentinel,"Padded geometry publication overwrote the last contact visibility pixel.");
+
+    check(lighting.prepare(camera,8192,4096,{}, {},brdf,ComputeView,false,0,0,0,0,{},true),lighting.status());
+    check(lighting.shadow_ray_enabled()&&!lighting.shadow_contact_enabled()&&!lighting.shadow_contact_base_texel()&&
+        !lighting.shadow_contact_texels()&&!lighting.shadow_contact_width()&&!lighting.shadow_contact_height(),
+        "An oversized contact range lost the CSM geometry fallback or published rounded/stale contact addresses.");
+    lighting.bind_resources(contactResources);
+    check(contactResources.bindings[static_cast<std::size_t>(RenderResource::ShadowContactVisibility)].textureCount==0,
+        "Disabled contact visibility retained a live logical texture range.");
+    check(withContact()&&lighting.shadow_contact_enabled(),"Contact visibility did not recover after an oversized request.");
+    check(withScreenEffects(false,false)&&!lighting.shadow_contact_enabled()&&!lighting.shadow_contact_texels(),
+        "A later default-off prepare retained contact visibility metadata.");
+    lighting.set_shadow_ray_scene({});
     check(!lighting.prepare(camera,screenWidth,screenHeight,{}, {},brdf,ComputeView,false,0,0,screenWidth,0),
         "An incomplete SSAO target extent was accepted.");
 

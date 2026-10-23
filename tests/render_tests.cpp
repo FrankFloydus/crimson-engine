@@ -115,52 +115,41 @@ template<class Sample> void sampleGridPolygon(const std::vector<ClippedGridVerte
 void collisionDepthContract() {
     using namespace crimson;
     using collision_rendering::collisionFragmentDepth;
-    constexpr double unit=1.0/16777215.0;
     for(const float homogeneous:{0.f,1.f}) {
-        const auto clipZ=[&](float depth,float w) {return (depth*(1+homogeneous)-homogeneous)*w;};
-        for(const float w:{.001f,1.f,25.f,2048.f})for(const float depth:{0.f,.25f,.5f,.99997f,1.f}) {
-            const float z=clipZ(depth,w);
-            const float unshifted=collisionFragmentDepth(z,w,0,homogeneous,0);
-            near(unshifted,depth,unit);
-            const float twoUnits=collisionFragmentDepth(z,w,2,homogeneous,0);
-            const float threeUnits=collisionFragmentDepth(z,w,3,homogeneous,0);
-            require(threeUnits<=twoUnits && twoUnits<=unshifted,"Collision precision allowance moved away from the camera or reversed depth-unit ordering.");
-            require(unshifted-threeUnits<=3.6*unit,"Collision bias exceeded its bounded D24 precision correction.");
-            near(twoUnits,std::max(0.0,double(unshifted)-2*unit),unit*.6);
-            near(threeUnits,std::max(0.0,double(unshifted)-3*unit),unit*.6);
-            require(collisionFragmentDepth(z,w,-1,homogeneous,0)==unshifted &&
-                collisionFragmentDepth(z,w,100,homogeneous,0)==threeUnits,"Collision bias did not retain its fixed 0–3 depth-unit bounds.");
+        const auto clipZ=[&](float depth,float w){return (depth*(1+homogeneous)-homogeneous)*w;};
+        for(const float w:{.001f,1.f,25.f,2048.f})for(const float depth:{0.f,.000007f,.25f,.5f,.99997f,1.f}) {
+            const float z=clipZ(depth,w),unshifted=collisionFragmentDepth(z,w,0,homogeneous,0);
+            near(unshifted,depth,1e-7);
+            const auto advance=[&](unsigned count){float value=unshifted;if(value<=0||value>=1)return value;
+                while(count--)value=std::nextafter(value,1.f);return value;};
+            const float twoUnits=collisionFragmentDepth(z,w,2,homogeneous,0),threeUnits=collisionFragmentDepth(z,w,3,homogeneous,0);
+            require(threeUnits>=twoUnits&&twoUnits>=unshifted,"Collision bias moved away from the reversed-depth camera.");
+            require(twoUnits==advance(2)&&threeUnits==advance(3),"Collision bias did not use the local floating-depth ULP.");
+            require(collisionFragmentDepth(z,w,-1,homogeneous,0)==unshifted&&collisionFragmentDepth(z,w,100,homogeneous,0)==threeUnits,
+                "Collision bias escaped its zero-to-three floating ULP bound.");
             for(const float slope:{1e-6f,4e-5f,.01f}) {
                 const auto corrected=collisionFragmentDepth(z,w,2,homogeneous,slope);
-                near(corrected,std::max(0.0,double(unshifted)-2*unit-double(slope)/256),unit);
-                require(corrected<=twoUnits,"Subpixel slope correction moved collision depth away from the camera.");
+                if(unshifted>0&&unshifted<1)near(corrected,std::min(1.,double(twoUnits)+double(slope)/256),1e-7);
+                require(corrected>=twoUnits,"Subpixel slope correction moved away from the reversed-depth camera.");
             }
-            require(collisionFragmentDepth(z,w,2,homogeneous,-1)==twoUnits,"Negative slope introduced a reverse collision bias.");
+            require(collisionFragmentDepth(z,w,2,homogeneous,-1)==twoUnits,"Negative slope changed collision bias.");
         }
-        require(collisionFragmentDepth(clipZ(-.1f,1),1,2,homogeneous,.01f)==0 &&
-            collisionFragmentDepth(clipZ(1.1f,1),1,2,homogeneous,.01f)==1,"Collision depth escaped the hardware depth range.");
+        require(collisionFragmentDepth(clipZ(-.1f,1),1,2,homogeneous,.01f)==0&&
+            collisionFragmentDepth(clipZ(1.1f,1),1,2,homogeneous,.01f)==1,"Collision depth escaped the hardware range.");
     }
-    // Reproduce the authored editor's tiny near plane. A fixed millimeter
-    // offset vanishes at room distance, while bounded depth units preserve a
-    // measurable foreground gap rather than making hidden collision visible.
-    for(const auto convention:{ClipDepth::ZeroToOne,ClipDepth::NegativeOneToOne}) {
-        Camera camera;camera.position={0,0,0};camera.target={0,0,-1};
-        camera.nearPlane=.0008660254f;camera.farPlane=2048;
-        const auto projection=camera.projectionMatrix(1,convention);
-        const float homogeneous=convention==ClipDepth::NegativeOneToOne?1.f:0.f;
-        for(const auto sample:std::array<std::array<float,3>,2>{{{1.f,.002f,4e-5f},{25.f,.3f,2e-7f}}}) {
-            const auto surface=shaderProject(projection,{0,0,-sample[0]});
-            const auto foreground=shaderProject(projection,{0,0,-(sample[0]-sample[1])});
-            const auto sceneDepth=collisionFragmentDepth(foreground[2],foreground[3],0,homogeneous,0);
-            for(const float bias:{2.f,3.f})require(collisionFragmentDepth(surface[2],surface[3],bias,homogeneous,sample[2])>sceneDepth,
-                "Collision precision correction exposed geometry behind a separated foreground surface.");
-        }
+    Camera camera;camera.position={0,0,0};camera.target={0,0,-1};camera.nearPlane=.0006994245f;camera.farPlane=2048;
+    const auto projection=camera.reverse_projection_matrix(1,ClipDepth::ZeroToOne);
+    for(const auto sample:std::array<std::array<float,3>,2>{{{1.f,.002f,4e-5f},{25.f,.3f,2e-7f}}}) {
+        const auto surface=shaderProject(projection,{0,0,-sample[0]}),foreground=shaderProject(projection,{0,0,-(sample[0]-sample[1])});
+        const auto sceneDepth=collisionFragmentDepth(foreground[2],foreground[3],0,0,0);
+        for(const float bias:{2.f,3.f})require(collisionFragmentDepth(surface[2],surface[3],bias,0,sample[2])<sceneDepth,
+            "Floating collision bias exposed a surface behind a real foreground gap.");
     }
 }
 
 void collisionWirePlaneContract() {
     using namespace crimson::collision_rendering;
-    constexpr float unit=1.f/16777215.f;
+    const float unit=std::nextafter(.5f,1.f)-.5f;
     // A front-facing plane z=-5 intersects the z=1 ray at negative view Z.
     near(collisionPlaneInverseViewDepth(-5,1,1,1),-.2);
     near(collisionPlaneInverseViewDepth(-10,2,2,1),-.2);
@@ -173,7 +162,7 @@ void collisionWirePlaneContract() {
     require(collisionPlaneInverseViewDepth(nan,1,1,1)==0&&collisionPlaneInverseViewDepth(-5,nan,1,1)==0,
         "Wire plane accepted an undefined ray or plane.");
     require(collisionWirePlaneAccepted(.5f,.5f+2*unit,0)&&!collisionWirePlaneAccepted(.5f,.5f+4*unit,0),
-        "Zero-slope wire correction escaped its D24 precision budget.");
+        "Zero-slope wire correction escaped its floating-depth precision budget.");
     require(collisionWirePlaneAccepted(.5f,.50049f,.001f)&&collisionWirePlaneAccepted(.5f,.49951f,.001f)&&
         !collisionWirePlaneAccepted(.5f,.50051f,.001f)&&!collisionWirePlaneAccepted(.5f,.49949f,.001f),
         "Wire plane correction did not stay within its half-pixel raster footprint.");
@@ -182,8 +171,8 @@ void collisionWirePlaneContract() {
         "Wire plane accepted a clipped or undefined surface depth.");
     // A convex solid enters only after both half-spaces; a reentrant union
     // enters at the first face. Picking the nearer convex face leaks corners.
-    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,true,false),.8);
-    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,true,true),.6);
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,true,false),.6);
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,true,true),.8);
     near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,false,false),.6);
     near(collisionWireSurfaceDepth(.7f,.6f,.8f,false,true,true),.8);
     near(collisionWireSurfaceDepth(.7f,.6f,.8f,false,false,false),.7);
@@ -193,58 +182,30 @@ void gridDepthSurvivesEyeCrossing() {
     using namespace crimson;
     using grid_rendering::gridFragmentDepth;
     const std::array<Vec3,4> corners{{{-512,0,-512},{512,0,-512},{512,0,512},{-512,0,512}}};
-    const std::array<std::array<unsigned,3>,2> triangles{{{0,2,1},{0,3,2}}};
-    unsigned samples=0,oldOcclusionFailures=0;
-    for(const auto depth:{ClipDepth::ZeroToOne,ClipDepth::NegativeOneToOne})
-    for(const float nearPlane:{.00001f,.000866f,.01f})for(const float distance:{4.f,10.f,50.f})
+    const std::array<std::array<unsigned,3>,2> triangles{{{0,2,1},{0,3,2}}};unsigned samples{};
+    for(const float nearPlane:{.00001f,.0006994245f,.01f})for(const float distance:{4.f,10.f,50.f})
     for(int pitch=5;pitch<=85;pitch+=20)for(int yaw=0;yaw<360;yaw+=15) {
         const double elevation=pitch*std::numbers::pi/180,azimuth=yaw*std::numbers::pi/180;
         Camera camera;camera.nearPlane=nearPlane;camera.farPlane=2048;camera.target={};camera.up={0,1,0};
         camera.position={distance*std::cos(elevation)*std::sin(azimuth),distance*std::sin(elevation),distance*std::cos(elevation)*std::cos(azimuth)};
-        const auto view=camera.viewMatrix(),projection=camera.projectionMatrix(1.6f,depth);
-        Mat4 matrix=Mat4::zero();
+        const auto projection=camera.reverse_projection_matrix(1.6f,ClipDepth::ZeroToOne),view=camera.viewMatrix();Mat4 matrix=Mat4::zero();
         for(unsigned row=0;row<4;++row)for(unsigned column=0;column<4;++column)for(unsigned i=0;i<4;++i)
             matrix.at(row,column)+=projection.at(row,i)*view.at(i,column);
-        const float homogeneous=depth==ClipDepth::NegativeOneToOne?1.f:0.f;
-        // Stay inside one original triangle; the shared diagonal's raster
-        // ownership is independent from the depth behavior under regression.
-        const Vec3 point{.5f,0,-.25f};
-        const auto projected=shaderProject(matrix,point);const Vec2 ndc{projected[0]/projected[3],projected[1]/projected[3]};
-        // The same viewing ray reaches this plane AFTER reaching the grid.
-        const auto lower=shaderProject(matrix,point+(point-camera.position)*(.118f/camera.position[1]));
-        const double floorDepth=(lower[2]/lower[3])*(1-.5*homogeneous)+.5*homogeneous;
-        std::array<ClippedGridVertex,4> vertices,oldVertices;
-        for(unsigned i=0;i<4;++i) {
-            auto clip=shaderProject(matrix,corners[i]);vertices[i]={clip,corners[i]};
-            // Frozen regression: the old vertex-depth bias is not sufficient
-            // after clipping amplifies forward-depth rounding at some angles.
-            const float normalized=(clip[2]/clip[3])*(1-.5f*homogeneous)+.5f*homogeneous;
-            const float bias=.000001f+(.005f-.000001f)*(1-std::clamp(normalized,0.f,1.f));
-            clip[2]-=clip[3]*bias*(1+homogeneous);
-            oldVertices[i]={clip,corners[i]};
-        }
-        unsigned visibleSamples=0;
-        for(const auto& triangle:triangles) {
-            sampleGridPolygon(clipGridTriangle({vertices[triangle[0]],vertices[triangle[1]],vertices[triangle[2]]},depth),ndc,
-                [&](const Vec3& world,double) {
-                    const auto clip=shaderProject(matrix,world);
-                    const float corrected=gridFragmentDepth(clip[2],clip[3],.005f,homogeneous);
-                    require(std::isfinite(corrected)&&corrected>=0&&corrected<=1,"Grid fragment depth left the hardware depth range.");
-                    require(corrected<floorDepth,"A physically lower floor occluded the grid after clipping.");
-                    ++visibleSamples;++samples;
-                });
-            sampleGridPolygon(clipGridTriangle({oldVertices[triangle[0]],oldVertices[triangle[1]],oldVertices[triangle[2]]},depth),ndc,
-                [&](const Vec3&,double raster) {if(raster*(1-.5*homogeneous)+.5*homogeneous>floorDepth)++oldOcclusionFailures;});
-        }
-        require(visibleSamples>0,"The angular regression did not cover its interior grid sample: depth="+std::to_string(static_cast<int>(depth))+
-            ", near="+std::to_string(nearPlane)+", distance="+std::to_string(distance)+", pitch="+std::to_string(pitch)+", yaw="+std::to_string(yaw));
+        const Vec3 point{.5f,0,-.25f};const auto projected=shaderProject(matrix,point);const Vec2 ndc{projected[0]/projected[3],projected[1]/projected[3]};
+        const auto lower=shaderProject(matrix,point+(point-camera.position)*(.118f/camera.position[1]));const double floorDepth=lower[2]/lower[3];
+        std::array<ClippedGridVertex,4> vertices;
+        for(unsigned i=0;i<4;++i)vertices[i]={shaderProject(matrix,corners[i]),corners[i]};unsigned visibleSamples{};
+        for(const auto& triangle:triangles)sampleGridPolygon(clipGridTriangle({vertices[triangle[0]],vertices[triangle[1]],vertices[triangle[2]]},ClipDepth::ZeroToOne),ndc,
+            [&](const Vec3& world,double){const auto clip=shaderProject(matrix,world);const float corrected=gridFragmentDepth(clip[2],clip[3],3,0,0);
+                require(std::isfinite(corrected)&&corrected>=0&&corrected<=1,"Grid depth left the hardware range.");
+                require(corrected>floorDepth,"A physically lower floor occluded the reversed-depth grid after eye-plane clipping.");++visibleSamples;++samples;});
+        require(visibleSamples>0,"The reversed-depth angular fixture lost its interior grid sample.");
     }
-    require(samples>2000&&oldOcclusionFailures>0,"The grid regression did not exercise the original clipping-depth loss.");
-    // Preserve occlusion by a genuinely nearer surface; this is not an always-on-top grid.
+    require(samples>1000,"Grid clipping did not cover the angular/near-plane matrix.");
     Camera camera;camera.position={0,5,10};camera.target={};camera.nearPlane=.01f;
-    const auto matrix=camera.projectionMatrix(1.6f,ClipDepth::ZeroToOne)*camera.viewMatrix();
+    const auto matrix=camera.reverse_projection_matrix(1.6f,ClipDepth::ZeroToOne)*camera.viewMatrix();
     const auto grid=shaderProject(matrix,{}),foreground=shaderProject(matrix,camera.position*.5);
-    require(gridFragmentDepth(grid[2],grid[3],.005f,0)>foreground[2]/foreground[3],"Grid bias pierced a foreground surface.");
+    require(gridFragmentDepth(grid[2],grid[3],3,0,0)<foreground[2]/foreground[3],"Grid ULP bias pierced a real foreground surface.");
 }
 
 void pointLightRadiusContract() {

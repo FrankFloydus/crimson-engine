@@ -4,6 +4,7 @@
 #include "crimson-renderer/RenderPassPlan.h"
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
+#include "fog_aerial_perspective_fixture.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -364,6 +365,7 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
         equivalent(debugFog[1],debugBaseline[1],"Game non-Lit background inspection");
         sceneSettings.environment.fog.enabled=gameSettings.environment.fog.enabled=false;
     }
+    fog_aerial_fixture::exercise(renderer,sceneSettings,gameSettings,scene,game,environment,capture);
     }
 
     // Presentation effects operate on the antialiased display image. A smooth
@@ -440,6 +442,45 @@ void exercise(SDL_Window* window,bool postProcessingOnly) {
     check(lighter&&darker,"Pixelization aliased the ordered Dither pattern to a constant threshold.");
     pixel.enabled=false;dither={true,0};const auto zeroDither=capture();
     equivalent(zeroDither[0],postBaseline[0],"Zero-strength Dither exact restoration");
+    // A constant unlit receiver covers the viewport so cell checks inspect
+    // the actual shader pattern, independently of scene gradients or edges.
+    const auto previousPostTransform=postInstance.model.transform;
+    postInstance.model.transform=math::scaling({100,100,1});dither.enabled=false;
+    const auto constantBaseline=capture();
+    solid(constantBaseline[0],{float(constantBaseline[0].rgba[0]),float(constantBaseline[0].rgba[1]),float(constantBaseline[0].rgba[2])},
+        "Constant unlit Dither receiver");
+    const auto uniformCells=[&](const DecodedImage& image,unsigned size,const char* label) {
+        for(unsigned firstY=0;firstY<Height;firstY+=size)for(unsigned firstX=0;firstX<Width;firstX+=size) {
+            const auto reference=(std::size_t(firstY)*Width+firstX)*4;
+            for(unsigned y=firstY;y<std::min(firstY+size,unsigned(Height));++y)
+                for(unsigned x=firstX;x<std::min(firstX+size,unsigned(Width));++x)for(unsigned channel=0;channel<3;++channel)
+                    check(image.rgba[(std::size_t(y)*Width+x)*4+channel]==image.rgba[reference+channel],label);
+        }
+    };
+    constexpr std::array patterns{DitherPattern::Bayer2x2,DitherPattern::Bayer4x4,DitherPattern::Bayer8x8,DitherPattern::InterleavedGradientNoise};
+    std::array<DecodedImage,patterns.size()> patternImages;
+    for(std::size_t index=0;index<patterns.size();++index) {
+        pixel.enabled=poster.enabled=false;dither={true,1,patterns[index],3};
+        const auto sized=capture();patternImages[index]=sized[0];
+        check(maxDifference(sized[0],constantBaseline[0])>=3,"A Dither pattern did not alter its constant receiver.");
+        equivalent(sized[1],constantBaseline[1],"Selectable Dither Game isolation");
+        uniformCells(sized[0],3,"Size 3 split a Dither threshold cell.");
+        dither.size=16;const auto largest=capture();
+        uniformCells(largest[0],16,"Size 16 split a Dither threshold cell.");
+        check(maxDifference(largest[0],sized[0])>=3,"Dither Size did not change the visible cell scale.");
+        pixel={true,4};dither.size=3;poster={true,7};const auto pixelPalette=capture();
+        uniformCells(pixelPalette[0],12,"Pattern or Size split a Pixelization block or Dither cell.");
+        for(std::size_t byte=0;byte<pixelPalette[0].rgba.size();++byte)if(byte%4!=3) {
+            const float code=pixelPalette[0].rgba[byte];const float level=std::round(code*6/255);
+            check(std::abs(code-level*255/6)<=1,"Selectable Dither escaped the Posterization palette.");
+        }
+    }
+    for(std::size_t a=0;a<patterns.size();++a)for(std::size_t b=a+1;b<patterns.size();++b)
+        check(maxDifference(patternImages[a],patternImages[b])>=1,"Two selectable Dither patterns rendered the same image.");
+    pixel.enabled=poster.enabled=false;dither={true,1,DitherPattern::InterleavedGradientNoise,3};
+    const auto stableNoise=capture();equivalent(stableNoise[0],patternImages.back(),"Interleaved gradient noise frame stability");
+    postInstance.model.transform=previousPostTransform;
+    dither={};
     dither.enabled=false;vignette={true,.8f,.6f,.3f};const auto vignetted=capture();
     equivalent(vignetted[1],postBaseline[1],"Vignette Game isolation");
     const auto center=(std::size_t(Height/2)*Width+Width/2)*4;

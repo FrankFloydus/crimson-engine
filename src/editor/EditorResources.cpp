@@ -174,11 +174,12 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
         request=resources_.request<ModelGeometryLevel>(AssetRef<ModelGeometryLevel>{asset.id},
             [descriptor,primitive,level](std::stop_token token) {
                 if (token.stop_requested()) throw std::runtime_error("Model LOD read canceled.");
-                auto data=streaming::loadModelLod(descriptor,primitive,level);
+                auto data=streaming::loadModelLod(descriptor,primitive,level,level==0,token);
                 if (token.stop_requested()) throw std::runtime_error("Model LOD read canceled.");
                 auto bytes=data->geometry.vertices.size()*sizeof(ModelVertex)+data->geometry.indices.size()*sizeof(uint32_t)+data->indices16.size()*sizeof(uint16_t)
                     +data->geometry.skinWeights.size()*sizeof(ModelSkinWeights)+data->geometry.morphTargets.size()*sizeof(ModelMorphTarget);
                 for(const auto& target:data->geometry.morphTargets)bytes+=(target.positions.size()+target.normals.size()+target.tangents.size())*sizeof(Vec3);
+                if(data->shadowRays)bytes+=data->shadowRays->bytes();
                 return ResourceLoadResult<ModelGeometryLevel>{data,bytes,descriptor.key,{descriptor.file}};
             },std::move(options));
     }

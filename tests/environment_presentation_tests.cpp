@@ -42,7 +42,7 @@ void postProcessingThumbnailIdentity() {
     EnvironmentSettings environment;const ProceduralSun sun;
     const auto inactive=thumbnailEnvironmentKey(environment,sun);
     environment.pixelization.pixelSize=12;environment.posterization.levels=5;
-    environment.dither.strength=.3f;
+    environment.dither.strength=.3f;environment.dither.pattern=DitherPattern::Bayer8x8;environment.dither.size=3;
     environment.vignette.intensity=.8f;environment.vignette.radius=.6f;environment.vignette.softness=.3f;
     check(thumbnailEnvironmentKey(environment,sun)==inactive,"Disabled post-processing tuning invalidated a thumbnail.");
     const auto lighting=procedural::cacheKey(environment.procedural,sun);
@@ -65,6 +65,10 @@ void postProcessingThumbnailIdentity() {
     check(dithered!=inactive,"Enabling Dither did not invalidate a thumbnail.");
     environment.dither.strength=.7f;
     check(thumbnailEnvironmentKey(environment,sun)!=dithered,"Active Dither strength did not invalidate a thumbnail.");
+    auto alternate=environment;alternate.dither.pattern=DitherPattern::Bayer2x2;
+    check(thumbnailEnvironmentKey(alternate,sun)!=thumbnailEnvironmentKey(environment,sun),"Active Dither pattern did not invalidate a thumbnail.");
+    alternate=environment;alternate.dither.size=8;
+    check(thumbnailEnvironmentKey(alternate,sun)!=thumbnailEnvironmentKey(environment,sun),"Active Dither size did not invalidate a thumbnail.");
     environment.dither.strength=0;
     check(thumbnailEnvironmentKey(environment,sun)==inactive,"Zero-strength Dither changed the inactive thumbnail identity.");
     environment.dither.enabled=false;
@@ -118,6 +122,27 @@ void postProcessingReferences() {
     for(unsigned channel=0;channel<3;++channel)
         check(ordered_dither({0,0,0},0,0,1)[channel]==0&&ordered_dither({1,1,1},0,1,1)[channel]==1,
             "Dither exceeded display black or white.");
+    for(const auto pattern:{DitherPattern::Bayer2x2,DitherPattern::Bayer4x4,DitherPattern::Bayer8x8}) {
+        const int extent=pattern==DitherPattern::Bayer2x2?2:pattern==DitherPattern::Bayer4x4?4:8;
+        std::array<bool,64> visited{};float sum{};
+        for(int y=0;y<extent;++y)for(int x=0;x<extent;++x) {
+            const float noise=dither_noise(x,y,pattern);sum+=noise;
+            const int rank=static_cast<int>((noise+.5f)*extent*extent);
+            check(rank>=0&&rank<extent*extent&&!visited[rank],"A selectable Bayer pattern repeats or loses a threshold.");visited[rank]=true;
+            near(dither_noise(x+extent,y+extent,pattern),noise);
+        }
+        near(sum,0);
+    }
+    for(const auto pattern:{DitherPattern::Bayer2x2,DitherPattern::Bayer4x4,DitherPattern::Bayer8x8,DitherPattern::InterleavedGradientNoise}) {
+        for(const int size:{1,3,16})for(int y=0;y<32;++y)for(int x=0;x<32;++x) {
+            const float noise=dither_noise(x,y,pattern,size);
+            check(noise>=-.5f&&noise<.5f,"Dither threshold exceeded its centered interval.");
+            near(noise,dither_noise((x/size)*size,(y/size)*size,pattern,size));
+            check(ordered_dither(source,x,y,0,0,pattern,size)==source,"Pattern or size changed zero-strength identity.");
+        }
+    }
+    check(dither_noise(1,2,DitherPattern::Bayer2x2)!=dither_noise(1,2,DitherPattern::Bayer8x8),"Bayer selections produced the same threshold.");
+    check(dither_noise(1,2,DitherPattern::InterleavedGradientNoise)!=dither_noise(1,2,DitherPattern::Bayer4x4),"Noise selection reused the ordered pattern.");
 }
 void fogComposition() {
     FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.density=0;

@@ -102,6 +102,8 @@ void ShaderReloadSession::pump() {
     pairs.push_back({RendererProgram::SsrColor,{},ready.at("cs_ssr_color")->bytes});
     pairs.push_back({RendererProgram::SsrDepth,{},ready.at("cs_ssr_depth")->bytes});
     pairs.push_back({RendererProgram::SsrReconstruct,{},ready.at("cs_ssr_reconstruct")->bytes});
+    pairs.push_back({RendererProgram::ShadowContactTrace,{},ready.at("cs_shadow_contact_trace")->bytes});
+    pairs.push_back({RendererProgram::ShadowContactPublish,{},ready.at("cs_shadow_contact_publish")->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }

@@ -816,17 +816,32 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     ShaderReloadSession reload(resources,renderer,tools,config,EmbeddedShaderSourceBaseline);
     check(!reload.pending()&&reload.revision()==0&&shaderCompilerMetrics().compilerInvocations==compileBeforeStartup.compilerInvocations,
         "Matching embedded shader sources queued an unnecessary startup compilation.");
-    const auto pump=[&] {const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{45};
+    const auto pump=[&](std::chrono::seconds timeout,const char* phase) {
+        const auto started=std::chrono::steady_clock::now(),deadline=started+timeout;
+        const auto before=shaderCompilerMetrics();const auto initial=resources.stats();
         do{tick();reload.pump();}while(reload.pending() && std::chrono::steady_clock::now()<deadline);
-        check(!reload.pending(),"Shadow shader reload timed out.");};
+        const auto metrics=shaderCompilerMetrics();const auto stats=resources.stats();
+        check(!reload.pending(),std::string("Shadow shader reload timed out during ")+phase+": "+reload.status()+
+            " [revision="+std::to_string(reload.revision())+
+            ", elapsedMs="+std::to_string(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count())+
+            ", queued="+std::to_string(stats.queued)+", running="+std::to_string(stats.running)+
+            ", completedLoads="+std::to_string(stats.loads-initial.loads)+", failedLoads="+std::to_string(stats.failures-initial.failures)+
+            ", compilerInvocations="+std::to_string(metrics.compilerInvocations-before.compilerInvocations)+
+            ", completedCompilerMs="+std::to_string((metrics.compilerNanoseconds-before.compilerNanoseconds)/1e6)+"]");
+    };
     const auto source=config.sourceDirectory/"fs_point_shadow.sc";std::ifstream input(source);
     const std::string original{std::istreambuf_iterator<char>(input),{}};input.close();
     writeFileAtomically(source,original+"\n// Actual source edit after embedded startup.\n");
     const std::array changed{source};reload.changed(changed);
-    pump();check(reload.revision()==1,"Valid shadow shader reload failed: "+reload.status());
+    // This first edit requests the full cold engine family on two workers,
+    // matching the native shader reload fixture's full-optimization allowance.
+    pump(std::chrono::seconds{180},"valid cold engine publication");
+    check(reload.revision()==1,"Valid shadow shader reload failed: "+reload.status());
     const auto healthySignature=renderer.shaderSignature();const auto healthy=capture();
-    writeFileAtomically(source,original+"\nINVALID_POINT_SHADOW_SHADER\n");reload.changed(changed);pump();
+    writeFileAtomically(source,original+"\nINVALID_POINT_SHADOW_SHADER\n");reload.changed(changed);
+    pump(std::chrono::seconds{30},"deliberately invalid caster rejection");
     check(reload.revision()==1 && renderer.shaderSignature()==healthySignature,"Failed caster reload replaced part of the live program group.");
+    check(reload.status().find("fs_point_shadow")!=std::string::npos,"Shadow reload failed outside its deliberately invalid caster: "+reload.status());
     check(capture().rgba==healthy.rgba,"Failed caster reload changed the rendered shadow.");
     // Scene and Game use four stable cascades in independent blocks of the
     // same comparison resource. Neither depends on a player body or focus map.

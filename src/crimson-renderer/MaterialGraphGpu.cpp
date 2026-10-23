@@ -39,6 +39,7 @@ std::shared_ptr<MaterialGraphProgramsVersion> createBundle(std::span<const Mater
 }
 struct MaterialGraphPrograms::Impl {
     struct ForegroundInterest {};
+    struct OptimizationStage {};
     struct OptimizationInterest {
         std::shared_ptr<std::stop_source> cancellation{std::make_shared<std::stop_source>()};
         std::uint64_t attempt{};
@@ -66,11 +67,12 @@ struct MaterialGraphPrograms::Impl {
         bool failed{};
     };
     struct SourceInputs {
-        std::uint64_t dependencyEpoch{},cacheReadEpoch{};
-        std::vector<std::filesystem::path> dependencyFiles;
+        std::uint64_t dependencyEpoch{},surfaceDependencyEpoch{},cacheReadEpoch{};
+        std::vector<std::filesystem::path> dependencyFiles,surfaceDependencyFiles;
         std::unique_ptr<ShaderCacheReadSession> cacheRead;
         std::vector<std::weak_ptr<ForegroundInterest>> foreground;
         std::weak_ptr<OptimizationInterest> optimization;
+        std::weak_ptr<OptimizationStage> optimizedStage;
         std::chrono::steady_clock::time_point lastEdit;
         bool foregroundBusy() {
             std::erase_if(foreground,[](const auto& interest){return interest.expired();});
@@ -97,10 +99,25 @@ std::unique_ptr<MaterialGraphPrograms> MaterialGraphPrograms::createSibling() co
     sibling->impl_->inputs=impl_->inputs;
     sibling->impl_->versions=impl_->versions;return sibling;
 }
-MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphShader& shader,ResourcePriority priority) {
+MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphShader& shader,ResourcePriority priority,MaterialGraphUsage usage) {
+    if(usage==MaterialGraphUsage::SurfaceReflection&&shader.reflection&&!shader.nodePreview) {
+        // Program ownership stays atomic: a separate complete generation can
+        // extend the ready surface packet without mutating submitted handles.
+        auto full=request(shader,priority,MaterialGraphUsage::Complete);
+        if(full.current)return full;
+        auto surface=request(shader,priority,MaterialGraphUsage::Surface);
+        if(!surface.current)return surface;
+        surface.compiling=full.compiling;
+        surface.diagnostic=full.diagnostic=="Compiling material graph..."?
+            "Preparing material reflections...":full.diagnostic;
+        return surface;
+    }
     constexpr auto quietInterval=std::chrono::milliseconds(750);
     auto& owner=*impl_;auto& inputs=*owner.inputs;
-    auto& entry=owner.entries[shader.topologyKey];
+    const bool surfaceOnly=usage==MaterialGraphUsage::Surface&&shader.reflection&&!shader.nodePreview;
+    // Usage describes an admitted program family, never a different generated
+    // stage. Source/recipe identities and their persistent caches stay shared.
+    auto& entry=owner.entries[shader.topologyKey+(surfaceOnly?";surface":"")];
     const auto now=std::chrono::steady_clock::now();entry.used=now;
     const std::string capabilityDiagnostic=shader.tessellation.enabled&&!bgfx::isTessellationSupported()?
         "Hardware tessellation requires Direct3D 12; this backend renders the base mesh.":"";
@@ -115,7 +132,7 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
         // workers when another graph needs its first usable generation.
         const auto queue=[&](Impl::Batch& batch,ResourcePriority jobPriority) {
             std::vector<std::filesystem::path> dependencies;
-            if(std::any_of(batch.cached.begin(),batch.cached.end(),[](const auto& pair){return !pair;}))dependencies=sourceDependencies();
+            if(std::any_of(batch.cached.begin(),batch.cached.end(),[](const auto& pair){return !pair;}))dependencies=sourceDependencies(surfaceOnly);
             if(batch.sourceFiles.empty()&&!dependencies.empty()) {
                 batch.sourceFiles=dependencies;batch.sourceState=fingerprintFileStates(batch.sourceFiles);
             }
@@ -127,10 +144,21 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
                 vertexOptions.dependencyValidation=DependencyValidation::FileState;
                 vertexOptions.variant="material-vertex-"+std::to_string((*owner.sourceEpoch));
                 vertexOptions.dependencies=dependencies;
-                batch.jobs[3*i]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-vertex:"+vertexName},
+                if(!batch.background||!batch.jobs[3*i])batch.jobs[3*i]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-vertex:"+vertexName},
                     [config,vertexName](std::stop_token stop){auto binary=std::make_shared<ShaderBinary>(compileShader(config,vertexName,stop));
                         return ResourceLoadResult<ShaderBinary>{binary,binary->bytes.size(),binary->fingerprint,binary->dependencies};},std::move(vertexOptions));
                 const auto requestGenerated=[&](ShaderCompileRecipe recipe,std::size_t slot) {
+                    if(batch.background&&batch.jobs[3*i+slot])return;
+                    std::shared_ptr<Impl::OptimizationStage> stageInterest;
+                    if(batch.background) {
+                        // The existing workers also load models and images.
+                        // Keep one free while an optional O3 stage is running;
+                        // its one-shot loader releases this shared permit at
+                        // publication, including cancellation and failure.
+                        if(!inputs.optimizedStage.expired())return;
+                        stageInterest=std::make_shared<Impl::OptimizationStage>();
+                        inputs.optimizedStage=stageInterest;
+                    }
                     if(!batch.background&&interactivePass(variant))recipe.optimization=ShaderCompileOptimization::Interactive;
                     ResourceRequestOptions options;options.priority=jobPriority;options.dependencyValidation=DependencyValidation::FileState;
                     options.variant="material-graph-"+std::to_string((*owner.sourceEpoch))+(batch.background?"-optimized-"+std::to_string(batch.attempt):
@@ -138,7 +166,8 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
                     options.dependencies=dependencies;options.retainLoader=!batch.background;
                     const auto cancellation=batch.cancellation;
                     batch.jobs[3*i+slot]=owner.resources.request<ShaderBinary>(AssetRef<ShaderBinary>{"material-shader:"+recipe.name},
-                        [config,recipe,cancellation](std::stop_token stop) {
+                        [config,recipe,cancellation,stageInterest](std::stop_token stop) {
+                            (void)stageInterest;
                             std::shared_ptr<ShaderBinary> binary;
                             if(cancellation) {
                                 std::stop_source combined;
@@ -210,6 +239,9 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
                     if(shader.variants[index].pass!=expected[index])throw std::runtime_error("Material graph contains missing, repeated or reordered program variants.");
             }
             entry.batch.reset();entry.variants=shader.variants;
+            if(surfaceOnly)std::erase_if(entry.variants,[](const auto& variant) {
+                return variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;
+            });
             // Native hull/domain execution is a DX12 capability. Other current
             // backends retain their ordinary graph programs without compiling
             // unsupported stages or replacing displacement with parallax.
@@ -229,6 +261,7 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
             if(!begin(true))return pending(true);
         }
         if(!entry.batch)return {entry.current,entry.error.empty()?capabilityDiagnostic:entry.error,current(),false};
+        if(entry.batch->background)queue(*entry.batch,ResourcePriority::Background);
         auto& batch=*entry.batch;
         std::vector<ResourceSnapshot<ShaderBinary>> snapshots;
         std::vector<const ShaderBinary*> pointers;
@@ -242,7 +275,7 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
             auto snapshot=job.snapshot();if(state!=ResourceState::Ready||!snapshot){ready=false;continue;}
             pointers.push_back(&*snapshot);snapshots.push_back(std::move(snapshot));
         }
-        if(!ready)return pending(active);
+        if(!ready)return pending(active||(batch.background&&!inputs.optimizedStage.expired()));
         if((inputs.cacheRead&&!inputs.cacheRead->unchanged()) ||
             (!batch.sourceFiles.empty()&&fingerprintFileStates(batch.sourceFiles)!=batch.sourceState)) {
             ++(*owner.sourceEpoch);inputs.cacheRead.reset();inputs.interruptOptimizations();return pending(true);
@@ -270,20 +303,24 @@ void MaterialGraphPrograms::trim() {
     std::erase_if(*impl_->versions,[](const auto& version){return version.expired();});
 }
 std::uint64_t MaterialGraphPrograms::revision()const {return (*impl_->sourceEpoch);}
-std::vector<std::filesystem::path> MaterialGraphPrograms::sourceDependencies()const {
+std::vector<std::filesystem::path> MaterialGraphPrograms::sourceDependencies()const {return sourceDependencies(false);}
+std::vector<std::filesystem::path> MaterialGraphPrograms::sourceDependencies(bool surfaceOnly)const {
     auto& inputs=*impl_->inputs;
-    if(inputs.dependencyEpoch==(*impl_->sourceEpoch))return inputs.dependencyFiles;
+    auto& epoch=surfaceOnly?inputs.surfaceDependencyEpoch:inputs.dependencyEpoch;
+    auto& files=surfaceOnly?inputs.surfaceDependencyFiles:inputs.dependencyFiles;
+    if(epoch==(*impl_->sourceEpoch))return files;
     // The static include family is shared across all graph topologies. Include
     // compiler/vertex/varying inputs in persistent thumbnail cache identity too.
     const auto shader=generateMaterialGraphShader(defaultMaterialAsset());
     std::vector<std::filesystem::path> result;
     for(const auto& variant:shader.variants) {
+        if(surfaceOnly&&(variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection))continue;
         const auto fragment=shaderDependencies(impl_->config,materialGraphShaderRecipe(impl_->config,shader,variant));
         const auto vs=shaderDependencies(impl_->config,variant.vertexName);
         result.insert(result.end(),fragment.begin(),fragment.end());result.insert(result.end(),vs.begin(),vs.end());
     }
     std::sort(result.begin(),result.end());result.erase(std::unique(result.begin(),result.end()),result.end());
-    inputs.dependencyEpoch=(*impl_->sourceEpoch);inputs.dependencyFiles=result;return result;
+    epoch=(*impl_->sourceEpoch);files=result;return result;
 }
 std::size_t MaterialGraphPrograms::residentBytes()const {
     std::size_t result{};for(const auto& weak:*impl_->versions)if(const auto version=weak.lock())result+=version->bytes;return result;

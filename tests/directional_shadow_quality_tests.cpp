@@ -1,12 +1,15 @@
 #include "crimson-renderer/Renderer.h"
+#include "crimson-renderer/RenderPassPlan.h"
 #include "GpuTestBackend.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/DirectionalShadowMath.h"
 #include "crimson-renderer/MaterialGraphShader.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
+#include <crimson/renderer/forward/ModelAnimation.h>
 #include "crimson-renderer/Picking.h"
 #include "assets/BuiltinGeometry.h"
 #include "resources/ResourceManager.h"
+#include "resources/ShaderCompiler.h"
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
 #include <d3d11.h>
@@ -19,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -86,82 +90,584 @@ double linearByte(unsigned value){
 double linearBrightness(const DecodedImage& image,unsigned offset){
     return (linearByte(image.rgba[offset])+linearByte(image.rgba[offset+1])+linearByte(image.rgba[offset+2]))/3;
 }
+// Separate, zero-thickness faces reproduce an imported inward-normal room.
+// Every edge is an exact floor/wall or wall/wall join, with no authored gaps.
+constexpr Vec3 RoomMinimum{-3,0,-3},RoomMaximum{3,3,3};
+std::array<std::shared_ptr<ModelAsset>,6> closedRoomGeometry(){
+    std::array<std::shared_ptr<ModelAsset>,6> result;
+    const auto center=(RoomMinimum+RoomMaximum)*.5,extent=(RoomMaximum-RoomMinimum)*.5;
+    for(unsigned axis=0;axis<3;++axis)for(unsigned side=0;side<2;++side){
+        const unsigned face=axis*2+side;auto mesh=std::make_shared<ModelAsset>();
+        mesh->id="directional-closed-room-face-"+std::to_string(face);
+        Vec3 normal{},u{};normal[axis]=side?-1.f:1.f;u[(axis+1)%3]=1;
+        const auto v=math::cross(normal,u);auto origin=center;origin[axis]=side?RoomMaximum[axis]:RoomMinimum[axis];
+        ModelPrimitive primitive;primitive.uvMask=3;primitive.tangentUv=0;
+        constexpr std::array<Vec2,4> corners{{{-1,-1},{1,-1},{1,1},{-1,1}}};
+        for(const auto corner:corners){
+            ModelVertex vertex;vertex.position=origin+u*(corner[0]*extent[(axis+1)%3])+v*(corner[1]*extent[(axis+2)%3]);
+            vertex.normal=normal;vertex.tangent={u[0],u[1],u[2],1};vertex.uv0=vertex.uv1={(corner[0]+1)*.5f,(corner[1]+1)*.5f};
+            primitive.vertices.push_back(vertex);math::include(mesh->bounds,vertex.position);
+        }
+        primitive.indices={0,1,2,0,2,3};mesh->primitives.push_back(std::move(primitive));
+        mesh->draws.push_back({0,{}});mesh->materials.emplace_back();result[face]=std::move(mesh);
+    }
+    return result;
+}
+struct RoomHit {Vec3 position{},normal{};double edgeDistance{};};
+std::optional<RoomHit> closedRoomHit(const Ray& ray){
+    std::optional<RoomHit> result;double nearest=1e30;
+    for(unsigned axis=0;axis<3;++axis)for(unsigned side=0;side<2;++side){
+        if(std::abs(ray.direction[axis])<1e-9)continue;
+        const double distance=((side?RoomMaximum[axis]:RoomMinimum[axis])-ray.origin[axis])/ray.direction[axis];
+        if(distance<=0||distance>=nearest)continue;
+        const auto point=ray.origin+ray.direction*distance;double edge=1e30;bool inside=true;
+        for(unsigned other=0;other<3;++other)if(other!=axis){
+            const double margin=std::min(point[other]-RoomMinimum[other],RoomMaximum[other]-point[other]);
+            inside&=margin>=-1e-5;edge=std::min(edge,margin);
+        }
+        if(!inside)continue;Vec3 normal{};normal[axis]=side?-1.f:1.f;
+        result=RoomHit{point,normal,edge};nearest=distance;
+    }
+    return result;
+}
+// Independent finite analytic box intersection in local space. Preserve the
+// inverse-transformed direction's length: the resulting t remains world t.
+// This oracle never uses uploaded triangles, BLAS bounds or shader helpers.
+std::optional<RoomHit> affineClosedRoomHit(const Ray& ray,const Mat4& inverse){
+    std::array<double,3> origin{},direction{};
+    for(unsigned row=0;row<3;++row){
+        origin[row]=inverse.at(row,3);
+        for(unsigned column=0;column<3;++column){
+            origin[row]+=double(inverse.at(row,column))*ray.origin[column];
+            direction[row]+=double(inverse.at(row,column))*ray.direction[column];
+        }
+    }
+    std::optional<RoomHit> result;double nearest=1e30;
+    for(unsigned axis=0;axis<3;++axis)for(unsigned side=0;side<2;++side){
+        if(std::abs(direction[axis])<1e-12)continue;
+        const double distance=((side?RoomMaximum[axis]:RoomMinimum[axis])-origin[axis])/direction[axis];
+        if(distance<=0||distance>=nearest)continue;
+        bool inside=true;double edge=1e30;
+        for(unsigned other=0;other<3;++other)if(other!=axis){
+            const double coordinate=origin[other]+direction[other]*distance;
+            inside&=coordinate>=RoomMinimum[other]-1e-8&&coordinate<=RoomMaximum[other]+1e-8;
+            double inverseLength{};for(unsigned column=0;column<3;++column)inverseLength+=double(inverse.at(other,column))*inverse.at(other,column);
+            edge=std::min(edge,std::min(coordinate-RoomMinimum[other],RoomMaximum[other]-coordinate)/std::sqrt(inverseLength));
+        }
+        if(!inside)continue;
+        Vec3 normal{};
+        for(unsigned row=0;row<3;++row)normal[row]=inverse.at(axis,row)*(side?-1.f:1.f);
+        result=RoomHit{ray.origin+ray.direction*distance,math::normalized(normal),edge};nearest=distance;
+    }
+    return result;
+}
+template<class Read,class Tick> void closedRoomLeakChecks(Renderer& renderer,const Read& read,const Tick& tick,
+    std::uint32_t& frame,const fs::path& capture,bool profile,bool exactFilter){
+    const auto meshes=closedRoomGeometry();
+    std::vector<ModelMaterial> materials(1);materials[0].baseColor={1,1,1,1};materials[0].roughness=1;
+    materials[0].metallic=materials[0].specular=0;materials[0].doubleSided=true;
+    std::vector<ModelMaterialTextures> bindings(1);std::array<RenderModelInstance,6> instances;
+    std::array<Aabb,6> bounds;
+    for(unsigned face=0;face<instances.size();++face){
+        require(renderer.prepareModel(*meshes[face]),renderer.modelStatus());
+        instances[face].entityId=810+face;instances[face].model.asset=meshes[face];instances[face].materials=&materials;
+        instances[face].textures=&bindings;instances[face].forceFullDetail=true;bounds[face]=meshes[face]->bounds;
+    }
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.fog.enabled=settings.environment.glow.enabled=settings.environment.ssgi.enabled=false;
+    settings.environment.ssao.enabled=settings.environment.ssr.enabled=false;settings.antiAliasing=AntiAliasing::Off;settings.exposure=1;
+    settings.camera.position={0,1.4f,0};settings.camera.fov=75;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.05f;
+    DirectionalLight sun;sun.entityId=820;sun.color={1,1,1};sun.intensity=1;sun.shadowDistance=100;
+    sun.shadowNormalBias=1;sun.shadowAngularDiameter=0;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;scene.shadowInstances=instances;
+    scene.directionalLights=std::span(&sun,1);scene.shadowWorldId=821;
+    const auto previousScene=renderer.debugView(RenderViewPurpose::Scene),previousGame=renderer.debugView(RenderViewPurpose::Game);
+    renderer.setDebugView(RenderViewPurpose::Scene,RenderDebugView::DirectLighting);
+    renderer.setDebugView(RenderViewPurpose::Game,RenderDebugView::DirectLighting);
+    // First is the saved Main.crimson-scene sun; the controls cover a roof
+    // blocker and the opposite wall, all outside the interior camera frustum.
+    constexpr std::array<Vec3,3> directions{{{-.835363f,-.384680f,.392668f},{-.15f,-.98f,-.12f},{.7f,-.2f,-.6f}}};
+    for(const unsigned resolution:{256u,1024u})for(unsigned direction=0;direction<directions.size();++direction)
+        for(const float bias:{.005f,0.f})for(bool game:{false,true}){
+        sun.direction=math::normalized(directions[direction]);sun.shadowDepthBias=bias;scene.shadowResolution=static_cast<std::uint16_t>(resolution);
+        settings.camera.target={sun.direction[0]<0?-3.f:3.f,.65f,.7f};
+        const auto label=std::string("closed-room-")+(game?"game-":"scene-")+std::to_string(resolution)+"-sun"+std::to_string(direction)+"-bias"+std::to_string(bias);
+        const auto render=[&](bool shadows){sun.castShadows=shadows;if(game)renderer.renderGame(scene);else renderer.render(scene);
+            require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+        const auto clear=render(false),shadowed=render(true);save(clear,capture,label+"-shadows-off");save(shadowed,capture,label+"-shadowed");
+        const auto fit=directional_shadow::build(sun,{settings.camera,1},resolution,bounds);require(fit.valid,label+": invalid cascade fit.");
+        unsigned interior{},interiorLeaks{},seam{},seamLeaks{},interiorMaximumByte{},seamMaximumByte{},seamByteLeaks{};
+        double interiorMaximum{},interiorSum{},seamMaximum{},farthestLeak{};
+        RoomHit worstJoin;unsigned worstX{},worstY{},worstCascade{};double worstReference{};
+        auto mask=shadowed;
+        for(unsigned y=3;y<Size-3;++y)for(unsigned x=3;x<Size-3;++x){
+            const unsigned offset=(y*Size+x)*4;const auto ray=settings.camera.screenRay(x+.5f,y+.5f,{0,0,Size,Size});
+            require(bool(ray),label+": invalid interior camera ray.");const auto hit=closedRoomHit(*ray);
+            require(bool(hit),label+": a camera ray escaped the watertight CPU room.");
+            const double reference=linearBrightness(clear,offset),incidence=math::dot(hit->normal,sun.direction*-1);
+            if(reference<.02||incidence<=.05)continue;
+            // Every exact sun ray from this surface is blocked by another
+            // room face. Exclude only a conservative six-texel projected PCF
+            // footprint around joins from the strict fully occluded oracle.
+            // Report that band separately instead of treating it as a hole.
+            const double depth=math::dot(settings.camera.forward(),hit->position-settings.camera.eye());
+            unsigned cascade{};while(cascade+1<directional_shadow::CascadeCount&&depth>=fit.splits[cascade])++cascade;
+            const auto& projection=fit.values[cascade];double texel=projection.texelWorld;
+            if(cascade+1<directional_shadow::CascadeCount&&depth>projection.splitFar-(projection.splitFar-projection.splitNear)*.1)
+                texel=std::max(texel,double(fit.values[cascade+1].texelWorld));
+            const double margin=(6/incidence+sun.shadowNormalBias)*texel+sun.shadowDepthBias;
+            const bool strict=hit->edgeDistance>margin;const double visibility=linearBrightness(shadowed,offset)/reference;
+            const unsigned maximumByte=std::max({shadowed.rgba[offset],shadowed.rgba[offset+1],shadowed.rgba[offset+2]});
+            if(strict){++interior;interiorSum+=visibility;interiorMaximum=std::max(interiorMaximum,visibility);interiorLeaks+=visibility>.08;interiorMaximumByte=std::max(interiorMaximumByte,maximumByte);}
+            else{++seam;seamByteLeaks+=maximumByte>1;seamMaximumByte=std::max(seamMaximumByte,maximumByte);if(visibility>seamMaximum){seamMaximum=visibility;worstJoin=*hit;worstX=x;worstY=y;worstCascade=cascade;worstReference=reference;}seamLeaks+=visibility>.08;}
+            if(visibility>.08)farthestLeak=std::max(farthestLeak,hit->edgeDistance);
+            mask.rgba[offset]=visibility>.08?255:0;mask.rgba[offset+1]=strict?255:100;mask.rgba[offset+2]=strict?0:255;
+        }
+        save(mask,capture,label+"-classification");
+        std::cout<<label<<" interior_samples="<<interior<<" interior_leaks="<<interiorLeaks
+            <<" interior_max_visibility="<<interiorMaximum<<" interior_mean_visibility="<<(interior?interiorSum/interior:0)<<" interior_max_byte="<<interiorMaximumByte
+            <<" join_samples="<<seam<<" join_leaks="<<seamLeaks<<" join_byte_leaks="<<seamByteLeaks<<" join_max_visibility="<<seamMaximum<<" join_max_byte="<<seamMaximumByte
+            <<" farthest_leak_from_join_m="<<farthestLeak<<std::endl;
+        if(seamMaximumByte>1){
+            const auto& projection=fit.values[worstCascade];const auto towardLight=sun.direction*-1;
+            const double depth=math::dot(settings.camera.forward(),worstJoin.position-settings.camera.eye());
+            const double begin=worstCascade?fit.splits[worstCascade-1]:0,end=fit.splits[worstCascade];
+            const double ramp=std::clamp((depth-(end-(end-begin)*.1))/((end-begin)*.1),0.,1.);
+            const double blend=worstCascade+1<directional_shadow::CascadeCount?ramp*ramp*(3-2*ramp):0;
+            double filterTexel=projection.texelWorld,normalTexel=projection.texelWorld,pixelRadius{};
+            if(blend>0){const double next=fit.values[worstCascade+1].texelWorld;filterTexel=std::max(filterTexel,next);normalTexel=normalTexel*(1-blend)+next*blend;}
+            for(unsigned corner=0;corner<4;++corner){
+                const auto ray=settings.camera.screenRay(float(worstX+(corner&1)),float(worstY+((corner>>1)&1)),{0,0,Size,Size});
+                if(ray)if(const auto point=math::intersectPlane(*ray,worstJoin.position,worstJoin.normal))pixelRadius=std::max(pixelRadius,math::length(*point-worstJoin.position));
+            }
+            const double incidence=math::dot(worstJoin.normal,towardLight);
+            const double range=(6*filterTexel+sun.shadowNormalBias*normalTexel+sun.shadowDepthBias+pixelRadius)/std::max(incidence,1e-4);
+            unsigned axis{};while(axis<2&&std::abs(worstJoin.normal[axis])<.5f)++axis;
+            // The six-plane room oracle is independent of raster depth/BVH.
+            // Start strictly inside its source face to identify the actual
+            // next finite blocker, rather than intersecting the receiver again.
+            const auto blocker=closedRoomHit({worstJoin.position+worstJoin.normal*1e-4,towardLight});
+            std::cout<<label<<" worst_join_pixel="<<worstX<<","<<worstY<<" visibility="<<seamMaximum<<" reference_linear="<<worstReference
+                <<" receiver_world="<<worstJoin.position[0]<<","<<worstJoin.position[1]<<","<<worstJoin.position[2]
+                <<" receiver_axis="<<axis<<" receiver_normal="<<worstJoin.normal[0]<<","<<worstJoin.normal[1]<<","<<worstJoin.normal[2]
+                <<" edge_distance_m="<<worstJoin.edgeDistance<<" light_direction="<<sun.direction[0]<<","<<sun.direction[1]<<","<<sun.direction[2]
+                <<" shadow_distance_m="<<sun.shadowDistance<<" cascade="<<worstCascade<<" filter_texel_world="<<filterTexel
+                <<" normal_offset_m="<<sun.shadowNormalBias*normalTexel<<" pixel_radius_m="<<pixelRadius<<" cpu_contact_range_estimate_m="<<range;
+            if(blocker)std::cout<<" finite_blocker_world="<<blocker->position[0]<<","<<blocker->position[1]<<","<<blocker->position[2]
+                <<" finite_blocker_normal="<<blocker->normal[0]<<","<<blocker->normal[1]<<","<<blocker->normal[2]
+                <<" finite_blocker_distance_m="<<math::length(blocker->position-worstJoin.position);
+            else std::cout<<" finite_blocker=missing";
+            std::cout<<std::endl;
+            if(!capture.empty()){
+                const auto purpose=game?RenderViewPurpose::Game:RenderViewPurpose::Scene;
+                renderer.setDebugView(purpose,RenderDebugView::Normal);const auto normalImage=render(true);
+                renderer.setDebugView(purpose,RenderDebugView::DirectLighting);save(normalImage,capture,label+"-worst-join-normal");
+                const unsigned offset=(worstY*Size+worstX)*4;
+                std::cout<<label<<" worst_join_normal_encoded_rgb="<<unsigned(normalImage.rgba[offset])<<","
+                    <<unsigned(normalImage.rgba[offset+1])<<","<<unsigned(normalImage.rgba[offset+2])<<std::endl;
+            }
+        }
+        require(interior>=100,label+": insufficient sunlit-reference samples outside the finite PCF join footprint.");
+        require(seam>=100,label+": insufficient sunlit-reference samples at the finite room joins.");
+        require(interiorLeaks==0,label+": direct sunlight crossed a closed double-sided wall outside the finite filter footprint.");
+        // Keep every interior sample occluded. The accepted numerical limit is
+        // one join pixel per case above one encoding byte, with peak at most16.
+        // Private CSM controls retain diagnostics and the strict interior guard.
+        if(exactFilter)require(interiorMaximumByte<=1&&seamByteLeaks<=1&&seamMaximumByte<=16,
+            label+": closed-room leakage exceeded one bounded join pixel (peak16), or reached the strict interior.");
+    }
+    {
+        // A reflected, rotated, nonuniform room exercises generic plane and
+        // inverse-affine traversal paths beyond the exact-axis shortcut.
+        const auto transform=math::translation({1.7f,-.6f,2.3f})*
+            math::eulerRotationXYZ({.23f,.41f,-.17f})*math::scaling({-1.1f,.8f,1.3f});
+        const auto inverse=math::inverse(transform);
+        require(bool(inverse)&&math::handedness(transform)<0,"Affine closed-room fixture lost its invertible reflection.");
+        const auto previousCamera=settings.camera;const auto previousSun=sun;
+        for(unsigned face=0;face<instances.size();++face){instances[face].model.transform=transform;bounds[face]=math::transformBounds(meshes[face]->bounds,transform);}
+        settings.camera.position=math::transformPoint(transform,{0,1.4f,0});
+        settings.camera.target=math::transformPoint(transform,{-3,.65f,.7f});
+        settings.camera.up=math::normalized(math::transformDirection(transform,{0,1,0}));
+        sun.direction=math::normalized(math::transformDirection(transform,directions[1]));
+        sun.shadowDepthBias=.005f;sun.shadowNormalBias=1;scene.shadowResolution=1024;
+        for(bool game:{false,true}){
+            const auto label=std::string("closed-room-affine-")+(game?"game":"scene");
+            const auto render=[&](bool shadows){sun.castShadows=shadows;if(game)renderer.renderGame(scene);else renderer.render(scene);
+                require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+            const auto clear=render(false),shadowed=render(true);save(clear,capture,label+"-shadows-off");save(shadowed,capture,label+"-shadowed");
+            const auto fit=directional_shadow::build(sun,{settings.camera,1},1024,bounds);require(fit.valid,label+": invalid affine cascade fit.");
+            unsigned samples{},maximumByte{},byteLeaks{},interiorByteLeaks{};double maximumVisibility{};
+            for(unsigned y=3;y<Size-3;++y)for(unsigned x=3;x<Size-3;++x){
+                const unsigned offset=(y*Size+x)*4;const auto ray=settings.camera.screenRay(x+.5f,y+.5f,{0,0,Size,Size});
+                require(bool(ray),label+": invalid camera ray.");const auto hit=affineClosedRoomHit(*ray,*inverse);
+                require(bool(hit),label+": a camera ray escaped the finite affine box oracle.");
+                const double reference=linearBrightness(clear,offset),incidence=math::dot(hit->normal,sun.direction*-1);
+                if(reference<.02||incidence<=.05)continue;
+                require(bool(affineClosedRoomHit({hit->position+hit->normal*1e-4,sun.direction*-1},*inverse)),
+                    label+": the independent finite box did not block the direct sun ray.");
+                ++samples;const unsigned value=std::max({shadowed.rgba[offset],shadowed.rgba[offset+1],shadowed.rgba[offset+2]});
+                maximumByte=std::max(maximumByte,value);byteLeaks+=value>1;
+                const double depth=math::dot(settings.camera.forward(),hit->position-settings.camera.eye());unsigned cascade{};
+                while(cascade+1<directional_shadow::CascadeCount&&depth>=fit.splits[cascade])++cascade;
+                const auto& projection=fit.values[cascade];double texel=projection.texelWorld;
+                if(cascade+1<directional_shadow::CascadeCount&&depth>projection.splitFar-(projection.splitFar-projection.splitNear)*.1)
+                    texel=std::max(texel,double(fit.values[cascade+1].texelWorld));
+                const double margin=(6/incidence+sun.shadowNormalBias)*texel+sun.shadowDepthBias;
+                interiorByteLeaks+=value>1&&hit->edgeDistance>margin;
+                maximumVisibility=std::max(maximumVisibility,linearBrightness(shadowed,offset)/reference);
+            }
+            std::cout<<label<<" reference_samples="<<samples<<" maximum_byte="<<maximumByte<<" byte_leaks="<<byteLeaks
+                <<" interior_byte_leaks="<<interiorByteLeaks<<" maximum_visibility="<<maximumVisibility<<" reflected=true nonuniform=true"<<std::endl;
+            require(samples>=100,label+": insufficient visible sunlit-reference samples.");
+            if(exactFilter)require(maximumByte<=16&&byteLeaks<=1&&interiorByteLeaks==0,
+                label+": affine leakage exceeded one bounded join pixel (peak16), or reached the strict interior.");
+        }
+        for(unsigned face=0;face<instances.size();++face){instances[face].model.transform={};bounds[face]=meshes[face]->bounds;}
+        settings.camera=previousCamera;sun=previousSun;
+    }
+    if(profile){
+        constexpr std::uint16_t ProfileWidth=1280,ProfileHeight=720;
+        renderer.resizeGameViewport(ProfileWidth,ProfileHeight);
+        scene.shadowResolution=1024;sun.direction=math::normalized(directions[0]);sun.shadowDepthBias=.005f;sun.castShadows=true;
+        settings.camera.target={-3,.65f,.7f};
+        const auto submit=[&]{renderer.renderGame(scene);tick();};
+        for(unsigned index=0;index<60;++index)submit();
+        constexpr unsigned Samples=240;const std::uint32_t first=frame+1,last=first+Samples-1;
+        std::set<std::uint32_t> observed;std::vector<double> gpu;
+        unsigned minimumDraws=UINT32_MAX,maximumDraws{};
+        const auto collect=[&]{const auto* stats=bgfx::getStats();
+            if(stats->gpuFrameNum<first||stats->gpuFrameNum>last||stats->gpuTimerFreq<=0||
+                stats->gpuTimeEnd<=stats->gpuTimeBegin||!observed.insert(stats->gpuFrameNum).second)return;
+            gpu.push_back(double(stats->gpuTimeEnd-stats->gpuTimeBegin)*1000./stats->gpuTimerFreq);
+        };
+        // Render-only cadence: no texture readback or explicit GPU fence in
+        // timed frames. tick only pumps publication/streaming and bgfx frame.
+        for(unsigned index=0;index<Samples;++index){submit();collect();const auto draws=bgfx::getStats()->numDraw;
+            minimumDraws=std::min(minimumDraws,draws);maximumDraws=std::max(maximumDraws,draws);}
+        for(unsigned index=0;index<16;++index){submit();collect();}
+        std::sort(gpu.begin(),gpu.end());const auto percentile=[&](double fraction){
+            if(gpu.empty())return 0.;const double position=(gpu.size()-1)*fraction;const auto lower=static_cast<std::size_t>(position);
+            return gpu[lower]+(gpu[std::min(lower+1,gpu.size()-1)]-gpu[lower])*(position-lower);
+        };
+        std::cout<<"closed-room-profile width="<<ProfileWidth<<" height="<<ProfileHeight<<" warmup_frames=60 measured_frames="<<Samples<<" first_measured_gpu_frame="<<first
+            <<" last_measured_gpu_frame="<<last<<" unique_gpu_samples="<<gpu.size()<<" gpu_p50_ms="<<percentile(.5)
+            <<" gpu_p95_ms="<<percentile(.95)<<" draws_min="<<minimumDraws<<" draws_max="<<maximumDraws<<std::endl;
+        require(gpu.size()>=Samples/2,"Closed-room GPU profile did not publish enough unique in-window queries.");
+        require(renderer.shadowStatus().empty(),renderer.shadowStatus());
+        renderer.resizeGameViewport(Size,Size);
+    }
+    renderer.setDebugView(RenderViewPurpose::Scene,previousScene);renderer.setDebugView(RenderViewPurpose::Game,previousGame);
+}
+template<class Read> void inclinedLocalSelfShadowCheck(Renderer& renderer,const Read& read,const fs::path& capture){
+    auto mesh=floorGeometry();mesh->id="directional-inclined-local-self-caster";
+    const auto rotation=math::eulerRotationXYZ({.31f,-.27f,.43f});const Vec3 center{.3f,1.8f,-.4f};
+    const auto normal=math::normalized(math::transformDirection(rotation,{0,1,0}));
+    const auto tangent=math::normalized(math::transformDirection(rotation,{1,0,0}));
+    const auto up=math::normalized(math::transformDirection(rotation,{0,0,-1}));mesh->bounds={};
+    // Bake the non-axis plane into LOCAL vertex positions and normals. Merely
+    // rotating an instance would leave its BLAS triangle/plane arithmetic axial.
+    for(auto& vertex:mesh->primitives[0].vertices){
+        vertex.position=math::transformPoint(rotation,vertex.position)+center;vertex.normal=normal;
+        vertex.tangent={tangent[0],tangent[1],tangent[2],-1};math::include(mesh->bounds,vertex.position);
+    }
+    require(std::abs(normal[0])>.1&&std::abs(normal[1])>.1&&std::abs(normal[2])>.1,"Inclined local fixture became axial.");
+    require(renderer.prepareModel(*mesh),renderer.modelStatus());
+    std::vector<ModelMaterial> materials(1);materials[0].baseColor={1,1,1,1};materials[0].roughness=1;
+    materials[0].metallic=materials[0].specular=0;materials[0].doubleSided=true;
+    std::vector<ModelMaterialTextures> bindings(1);RenderModelInstance instance;instance.entityId=861;
+    instance.model.asset=mesh;instance.materials=&materials;instance.textures=&bindings;instance.forceFullDetail=true;
+    SceneSettings settings;settings.environment.enabled=false;settings.environment.ambientLight.source=AmbientLightSource::Disabled;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.toneMapping=ToneMapping::Linear;
+    settings.environment.fog.enabled=settings.environment.glow.enabled=settings.environment.ssgi.enabled=false;
+    settings.environment.ssao.enabled=settings.environment.ssr.enabled=false;settings.antiAliasing=AntiAliasing::Off;settings.exposure=1;
+    settings.camera.position=center+normal*6+tangent*2.5+up*.8;settings.camera.target=center;settings.camera.up=up;
+    settings.camera.fov=75;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.0006994245f;settings.camera.farPlane=2048;
+    DirectionalLight sun;sun.entityId=862;sun.color={1,1,1};sun.intensity=1;sun.shadowDistance=100;
+    sun.shadowNormalBias=sun.shadowDepthBias=sun.shadowAngularDiameter=0;
+    sun.direction=math::normalized(normal*.45+tangent*.85+up*.25)*-1;
+    require(math::dot(normal,sun.direction*-1)>.4,"Inclined local fixture has insufficient direct reference lighting.");
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);scene.shadowInstances=scene.instances;
+    scene.directionalLights=std::span(&sun,1);scene.shadowWorldId=863;scene.shadowResolution=1024;
+    std::vector<Vec3> points;for(int y=-3;y<=3;++y)for(int x=-3;x<=3;++x)points.push_back(center+tangent*(x*.5)+up*(y*.5));
+    for(bool game:{false,true}){
+        const auto purpose=game?RenderViewPurpose::Game:RenderViewPurpose::Scene;const auto previous=renderer.debugView(purpose);
+        renderer.setDebugView(purpose,RenderDebugView::DirectLighting);
+        const auto label=std::string("inclined-local-self-")+(game?"game":"scene");
+        const auto render=[&](bool shadows){sun.castShadows=shadows;if(game)renderer.renderGame(scene);else renderer.render(scene);
+            // Streaming/frame advancement during asynchronous readback resets
+            // per-submission counters. Prove admission before that drain.
+            if(shadows)require(renderer.shadowStats().rayInstances==1&&renderer.shadowStats().rayTriangles==2,
+                label+": the original local self-caster was not admitted to exact geometry queries.");
+            require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+        const auto clear=render(false),shadowed=render(true);
+        save(clear,capture,label+"-reference");save(shadowed,capture,label+"-shadowed");
+        litSamples(clear,shadowed,settings.camera,points,label,36);renderer.setDebugView(purpose,previous);
+    }
+}
+// Keep the broad PCF contract on a CSM-only identity-pose
+// control; check contact visibility against independently unprojected finite
+// receiving-pixel rays. No production toggle or BVH reference is introduced.
+struct ContactRayD { std::array<double,3> origin{},direction{}; };
+struct ContactCoverage { double value{},lower{},upper{}; };
+std::array<ContactRayD,32> contactPixelRays(const Camera& camera,unsigned x,unsigned y,
+    Vec3 receiver,Vec3 receiverNormal,Vec3 towardLight,double angularDiameter){
+    std::array<ContactRayD,32> result;
+    const auto lightRight=math::normalized(math::cross(towardLight,std::abs(towardLight[1])<.99?Vec3{0,1,0}:Vec3{1,0,0}));
+    const auto lightUp=math::cross(lightRight,towardLight);
+    const double tangent=std::tan(angularDiameter*std::numbers::pi/360);
+    for(unsigned index=0;index<result.size();++index){
+        // The public quadrature has one Latinized sample in each 8x4 cell.
+        // Visibility itself comes from independent finite analytic OBB slabs,
+        // without calling the production BVH, triangle or plane helpers.
+        const unsigned ix=index&7,iy=index>>3;
+        const double sx=(ix+(iy+.5)/4)/8-.5,sy=(iy+(ix+.5)/8)/4-.5;
+        const auto ray=camera.screenRay(float(x+.5+sx),float(y+.5+sy),{0,0,Size,Size});
+        require(bool(ray),"Independent contact subpixel has no camera ray.");
+        const auto point=math::intersectPlane(*ray,receiver,receiverNormal);
+        require(bool(point),"Independent contact subpixel misses the finite receiver plane.");
+        const double radius=std::sqrt((index+.5)/32)*tangent,angle=index*2.399963230;
+        const auto direction=math::normalized(towardLight+lightRight*(std::cos(angle)*radius)+lightUp*(std::sin(angle)*radius));
+        for(unsigned axis=0;axis<3;++axis){result[index].origin[axis]=(*point)[axis];result[index].direction[axis]=direction[axis];}
+    }
+    return result;
+}
+ContactCoverage finiteBoxCoverage(std::span<const ContactRayD> rays,std::span<const Mat4> boxes,double maximum=1e100){
+    std::vector<Mat4> inverses;for(const auto& box:boxes){const auto inverse=math::inverse(box);require(bool(inverse),"Contact reference OBB is singular.");inverses.push_back(*inverse);}
+    unsigned hits{},expandedHits{},contractedHits{};
+    for(const auto& ray:rays){bool hit{},expanded{},contracted{};
+        for(const auto& inverse:inverses){
+            std::array<double,3> origin{},direction{};
+            for(unsigned row=0;row<3;++row){origin[row]=inverse.at(row,3);
+                for(unsigned column=0;column<3;++column){origin[row]+=double(inverse.at(row,column))*ray.origin[column];direction[row]+=double(inverse.at(row,column))*ray.direction[column];}}
+            double scale=1;for(double value:origin)scale=std::max(scale,std::abs(value));
+            // Bound a few float affine/unprojection ULPs, in local units. Only
+            // an actual finite-box boundary receives this uncertainty interval.
+            const double error=32*std::numeric_limits<float>::epsilon()*scale;
+            const auto intersects=[&](double margin){double nearDistance=-1e100,farDistance=1e100;
+                for(unsigned axis=0;axis<3;++axis){
+                    if(std::abs(direction[axis])<1e-30){if(std::abs(origin[axis])>.5+margin)return false;continue;}
+                    const double a=(-.5-margin-origin[axis])/direction[axis],b=(.5+margin-origin[axis])/direction[axis];
+                    nearDistance=std::max(nearDistance,std::min(a,b));farDistance=std::min(farDistance,std::max(a,b));if(nearDistance>farDistance)return false;
+                }
+                // A closed outward-wound box presents its exit face to the
+                // receiver-to-sun ray (N.direction > 0), matching sun culling.
+                return farDistance>1e-8&&nearDistance<maximum;
+            };
+            hit|=intersects(0);expanded|=intersects(error);contracted|=intersects(-error);
+        }
+        hits+=hit;expandedHits+=expanded;contractedHits+=contracted;
+    }
+    const double count=double(rays.size());require(count>0,"Finite coverage reference has no rays.");
+    return {1-hits/count,1-expandedHits/count,1-contractedHits/count};
+}
+std::array<double,2> contactLinearInterval(const DecodedImage& image,unsigned offset){
+    double low{},high{};for(unsigned channel=0;channel<3;++channel){const unsigned value=image.rgba[offset+channel];
+        low+=linearByte(value?value-1:0);high+=linearByte(std::min(255u,value+1));}
+    return {low/3,high/3};
+}
 template<class Read> void contactEdgeFiltering(Renderer& renderer,const std::shared_ptr<const ModelAsset>& floor,
     const std::shared_ptr<const ModelAsset>& box,const std::vector<ModelMaterial>& materials,
     const std::vector<ModelMaterialTextures>& textures,const Read& read,const fs::path& capture){
     SceneSettings settings;settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;
-    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.exposure=1;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.exposure=1;settings.antiAliasing=AntiAliasing::Off;
+    settings.environment.ambientLight.source=AmbientLightSource::Disabled;settings.environment.fog.enabled=settings.environment.glow.enabled=false;
+    settings.environment.ssgi.enabled=settings.environment.ssao.enabled=settings.environment.ssr.enabled=false;
     settings.camera.position={0,4,0};settings.camera.target={0,0,0};settings.camera.up={0,0,-1};
     settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;settings.camera.nearPlane=.05f;
     DirectionalLight sun;sun.entityId=701;sun.direction={0,-1,0};sun.intensity=1;sun.castShadows=true;
     sun.shadowDistance=20;sun.shadowDepthBias=0;sun.shadowNormalBias=0;
     RenderModelInstance receiver;receiver.entityId=702;receiver.model.asset=floor;
     receiver.materials=&materials;receiver.textures=&textures;receiver.forceFullDetail=true;
-    auto blocker=receiver;blocker.entityId=703;blocker.model.asset=box;
-    std::array casters{receiver,blocker};
+    auto blocker=receiver;blocker.entityId=703;blocker.model.asset=box;std::array casters{receiver,blocker};
+    const auto floorPose=std::make_shared<ModelPose>(evaluateModelPose(*floor)),boxPose=std::make_shared<ModelPose>(evaluateModelPose(*box));
+    require(floorPose->drawTransforms.size()==floor->draws.size()&&boxPose->drawTransforms.size()==box->draws.size(),"CSM control has different draw count.");
+    for(unsigned draw=0;draw<floor->draws.size();++draw)require(floorPose->drawTransforms[draw]==floor->draws[draw].transform,"CSM control changed a receiver draw transform.");
+    for(unsigned draw=0;draw<box->draws.size();++draw)require(boxPose->drawTransforms[draw]==box->draws[draw].transform,"CSM control changed a caster draw transform.");
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&receiver,1);
     scene.shadowInstances=casters;scene.directionalLights=std::span(&sun,1);scene.shadowWorldId=704;
-    constexpr unsigned SampleX=Size/2,SampleY=Size/2,StepsPerTexel=16,Steps=8*StepsPerTexel;
+    constexpr unsigned SampleX=Size/2,SampleY=Size/2,StepsPerTexel=16,Steps=8*StepsPerTexel,PhysicalSteps=64;
     constexpr unsigned sampleOffset=(SampleY*Size+SampleX)*4;
-    const auto ray=settings.camera.screenRay(SampleX+.5f,SampleY+.5f,{0,0,Size,Size});
-    require(bool(ray),"Contact edge pixel ray is invalid.");
-    const auto sample=math::intersectPlane(*ray,{0,0,0},{0,1,0});
-    require(bool(sample),"Contact edge pixel misses its receiver.");
-    // A 17-degree edge has six row-intercept phases fract(row*tan(17deg)).
-    // Their minimum circular spacing exceeds a 1/16-texel normal move divided
-    // by cos(17deg), plus both D3D n.8 vertex-conversion uncertainties. Thus at
-    // most ONE texel in the 6x6 bilinear footprint changes coverage per step.
-    constexpr double angle=17*std::numbers::pi/180;
-    const double cosine=std::cos(angle),sine=std::sin(angle);
-    std::array<double,6> phases{};
-    for(unsigned row=0;row<phases.size();++row){const double intercept=row*std::tan(angle);phases[row]=intercept-std::floor(intercept);}
+    const auto ray=settings.camera.screenRay(SampleX+.5f,SampleY+.5f,{0,0,Size,Size});require(bool(ray),"Contact edge pixel ray is invalid.");
+    const auto sample=math::intersectPlane(*ray,{0,0,0},{0,1,0});require(bool(sample),"Contact edge pixel misses its receiver.");
+    constexpr double angle=17*std::numbers::pi/180;const double cosine=std::cos(angle),sine=std::sin(angle);const Vec3 normal{cosine,0,-sine};
+    std::array<double,6> phases{};for(unsigned row=0;row<phases.size();++row){const double intercept=row*std::tan(angle);phases[row]=intercept-std::floor(intercept);}
     std::sort(phases.begin(),phases.end());double minimumPhaseGap=1+phases.front()-phases.back();
     for(unsigned row=1;row<phases.size();++row)minimumPhaseGap=std::min(minimumPhaseGap,phases[row]-phases[row-1]);
-    require(1./(StepsPerTexel*cosine)+2*(.6/256)<minimumPhaseGap,"Contact edge step can change more than one filter texel.");
-    const Vec3 normal{cosine,0,-sine};
+    require(1./(StepsPerTexel*cosine)+2*(.6/256)<minimumPhaseGap,"Contact baseline step can change more than one filter texel.");
+    double pixelLower=1e100,pixelUpper=-1e100;
+    for(unsigned corner=0;corner<4;++corner){const auto cornerRay=settings.camera.screenRay(float(SampleX+(corner&1)),float(SampleY+((corner>>1)&1)),{0,0,Size,Size});
+        require(bool(cornerRay),"Contact pixel corner has no ray.");const auto point=math::intersectPlane(*cornerRay,{0,0,0},{0,1,0});require(bool(point),"Contact pixel corner misses floor.");
+        const double distance=math::dot(*point-*sample,normal);pixelLower=std::min(pixelLower,distance);pixelUpper=std::max(pixelUpper,distance);}
+    const auto render=[&](bool baseline){receiver.pose=baseline?floorPose:nullptr;casters[0].pose=baseline?floorPose:nullptr;casters[1].pose=baseline?boxPose:nullptr;
+        renderer.render(scene);require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.viewportTexture());};
     for(const unsigned resolution:{256u,1024u})for(const float diameter:{0.f,.53f}){
         scene.shadowResolution=static_cast<std::uint16_t>(resolution);sun.shadowAngularDiameter=diameter;
-        const auto fit=directional_shadow::build(sun,{settings.camera,1},resolution);
-        require(fit.valid,"Contact edge cascade fit failed.");
-        const auto depth=math::dot(settings.camera.forward(),*sample-settings.camera.eye());
-        unsigned cascade{};while(cascade+1<directional_shadow::CascadeCount&&depth>=fit.splits[cascade])++cascade;
-        const auto& projection=fit.values[cascade];
-        require(depth<projection.splitFar-(projection.splitFar-projection.splitNear)*.1,
-            "Contact edge fixture unexpectedly entered a cascade overlap.");
+        const auto fit=directional_shadow::build(sun,{settings.camera,1},resolution);require(fit.valid,"Contact edge cascade fit failed.");
+        const auto depth=math::dot(settings.camera.forward(),*sample-settings.camera.eye());unsigned cascade{};
+        while(cascade+1<directional_shadow::CascadeCount&&depth>=fit.splits[cascade])++cascade;
+        const auto& projection=fit.values[cascade];require(depth<projection.splitFar-(projection.splitFar-projection.splitNear)*.1,"Contact fixture entered cascade overlap.");
         const double texel=projection.texelWorld;
-        const auto pose=[&](double shift){
-            const auto center=*sample+normal*((shift-8)*texel);
-            casters[1].model.transform=math::translation({center[0],.3*texel,center[2]})*
-                math::rotation(math::axisAngle({0,1,0},angle))*math::scaling({16*texel,.1*texel,16*texel});
-        };
-        const auto render=[&]{renderer.render(scene);require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.viewportTexture());};
-        pose(-4);receiver.receiveShadows=false;const auto clear=render();receiver.receiveShadows=true;
-        const double lit=linearBrightness(clear,sampleOffset);
-        require(lit>.05&&lit<.9,"Contact edge reference is dark or display-clipped.");
-        // The separable [1,3,4,3,1]/12 PCF kernel followed by bilinear sampling
-        // never assigns one raw depth texel more than (4/12)^2 = 1/9 weight.
-        // Add only the two RGBA8 readback quantization intervals to that bound.
+        const auto pose=[&](double edge){const auto center=*sample+normal*(edge-8*texel);
+            casters[1].model.transform=math::translation({center[0],.3*texel,center[2]})*math::rotation(math::axisAngle({0,1,0},angle))*math::scaling({16*texel,.1*texel,16*texel});};
+        pose(-4*texel);receiver.receiveShadows=false;const auto clear=render(false),controlClear=render(true);receiver.receiveShadows=true;
+        require(clear.rgba==controlClear.rgba,"Identity-pose CSM control changed shadow-off pixels.");
+        const double lit=linearBrightness(clear,sampleOffset);require(lit>.05&&lit<.9,"Contact edge reference is dark or clipped.");
         const auto encoded=*std::max_element(clear.rgba.begin()+sampleOffset,clear.rgba.begin()+sampleOffset+3);
         const double quantization=(linearByte(std::min(255u,unsigned(encoded)+1))-linearByte(encoded))/lit;
-        const double maximumStep=1./9+2*quantization;
-        double previous{},first{},last{},observedMaximum{};std::set<unsigned> partialLevels;
+        const double maximumPcfStep=1./9+2*quantization;double previous{},first{},last{},observedMaximum{};std::set<unsigned> partialLevels;
         const auto label="contact-edge-"+std::to_string(resolution)+"-angle"+std::to_string(diameter);
-        for(unsigned step=0;step<=Steps;++step){
-            pose(-4.+double(step)/StepsPerTexel);const auto image=render();
+        // Retain the original world-PCF proof unchanged on identical geometry
+        // excluded from the optional contact path by an explicit bind pose.
+        for(unsigned step=0;step<=Steps;++step){pose((-4.+double(step)/StepsPerTexel)*texel);const auto image=render(true);
             const double visibility=linearBrightness(image,sampleOffset)/lit;
             if(!step)first=visibility;else observedMaximum=std::max(observedMaximum,std::abs(visibility-previous));
-            if(visibility>.05&&visibility<.95)partialLevels.insert(image.rgba[sampleOffset]);
-            previous=last=visibility;
-            if(step==0||step==Steps/2||step==Steps)save(image,capture,label+"-step"+std::to_string(step));
+            if(visibility>.05&&visibility<.95)partialLevels.insert(image.rgba[sampleOffset]);previous=last=visibility;}
+        std::cout<<label<<" baseline_maximum_step="<<observedMaximum<<" weighted_PCF_bound="<<maximumPcfStep<<" baseline_partial_levels="<<partialLevels.size()<<std::endl;
+        require(first>.95&&last<.05,label+": broad CSM sweep did not bracket controls.");require(partialLevels.size()>=4,label+": baseline PCF became binary.");
+        require(observedMaximum<=maximumPcfStep,label+": CSM baseline discarded weighted PCF filtering.");
+        const auto rays=contactPixelRays(settings.camera,SampleX,SampleY,*sample,{0,1,0},{0,1,0},diameter);
+        const auto clearInterval=contactLinearInterval(clear,sampleOffset);
+        std::set<unsigned> physicalLevels;ContactCoverage previousCoverage;double previousBaseline{},previousRefined{},maximumMinError{},maximumPhysicalStep{};
+        for(unsigned step=0;step<=PhysicalSteps;++step){pose(pixelLower+(pixelUpper-pixelLower)*step/PhysicalSteps);
+            const std::array boxes{casters[1].model.transform};const auto coverage=finiteBoxCoverage(rays,boxes);
+            const auto baseline=render(true),refined=render(false);const auto baselineInterval=contactLinearInterval(baseline,sampleOffset),refinedInterval=contactLinearInterval(refined,sampleOffset);
+            const double b=linearBrightness(baseline,sampleOffset)/lit,v=linearBrightness(refined,sampleOffset)/lit;
+            // CSM and exact rays see the same blocker. Take the smaller
+            // visibility; multiplying would count its occlusion twice.
+            const double expectedLower=std::min(baselineInterval[0],clearInterval[0]*coverage.lower);
+            const double expectedUpper=std::min(baselineInterval[1],clearInterval[1]*coverage.upper);
+            require(refinedInterval[0]<=expectedUpper+1e-7&&refinedInterval[1]>=expectedLower-1e-7,label+": contact disagrees with captured CSM / independent finite-box visibility minimum.");
+            maximumMinError=std::max(maximumMinError,std::abs(v-std::min(b,coverage.value)));
+            if(v>.05&&v<.95)physicalLevels.insert(refined.rgba[sampleOffset]);
+            if(step){const double coverageDelta=std::max(std::abs(coverage.upper-previousCoverage.lower),std::abs(coverage.lower-previousCoverage.upper));
+                // Each move spans 1/64 of one physical receiver-pixel footprint.
+                // Use its independently measured finite coverage change rather
+                // than importing a shadow-map texel movement bound.
+                const double bound=std::abs(b-previousBaseline)+coverageDelta+4*quantization;
+                maximumPhysicalStep=std::max(maximumPhysicalStep,std::abs(v-previousRefined));
+                require(std::abs(v-previousRefined)<=bound,label+": contact coverage exceeded its physical subpixel movement bound.");}
+            else require(coverage.lower==1&&v>.1,label+": physical lit endpoint is invalid.");
+            if(step==PhysicalSteps)require(coverage.upper==0&&v<.02,label+": physical occluded endpoint is invalid.");
+            previousCoverage=coverage;previousBaseline=b;previousRefined=v;
+            if(step==0||step==PhysicalSteps/2||step==PhysicalSteps)save(refined,capture,label+"-physical-step"+std::to_string(step));
         }
-        std::cout<<label<<" maximum_step="<<observedMaximum<<" weighted_PCF_bound="<<maximumStep
-            <<" partial_levels="<<partialLevels.size()<<std::endl;
-        require(first>.95&&last<.05,label+": contact edge sweep did not bracket lit and shadowed controls.");
-        require(partialLevels.size()>=4,label+": contact filtering collapsed to binary shadow-map coverage.");
-        require(observedMaximum<=maximumStep,label+": contact edge discarded the minimum weighted PCF anti-aliasing footprint.");
+        std::cout<<label<<" physical_maximum_step="<<maximumPhysicalStep<<" physical_partial_levels="<<physicalLevels.size()
+            <<" min_max_error="<<maximumMinError<<std::endl;
+        require(physicalLevels.size()>=4,label+": real pixel-footprint contact coverage became binary.");
     }
+    // Four finite roof pieces surround a real opening. The fifth piece is an
+    // independent closed control; no extrapolated plane may seal the open gap.
+    sun.shadowAngularDiameter=0;scene.shadowResolution=1024;
+    const auto fit=directional_shadow::build(sun,{settings.camera,1},1024);require(fit.valid,"Light-opening fit failed.");
+    unsigned cascade{};const auto depth=math::dot(settings.camera.forward(),*sample-settings.camera.eye());
+    while(cascade+1<directional_shadow::CascadeCount&&depth>=fit.splits[cascade])++cascade;
+    const double texel=fit.values[cascade].texelWorld,gap=std::max(1.75*texel,1.5*(pixelUpper-pixelLower)),outer=32*texel,half=gap*.5;
+    std::array<RenderModelInstance,6> opening;opening[0]=receiver;
+    for(unsigned index=1;index<opening.size();++index){opening[index]=blocker;opening[index].entityId=730+index;}
+    std::array<Mat4,5> windowBoxes;
+    const auto windowBox=[&](double x,double z,double width,double length){return math::translation(*sample)*math::rotation(math::axisAngle({0,1,0},angle))*
+        math::translation({x,.3*texel,z})*math::scaling({width,.1*texel,length});};
+    windowBoxes[0]=windowBox(-(outer+half)*.5,0,outer-half,2*outer);windowBoxes[1]=windowBox((outer+half)*.5,0,outer-half,2*outer);
+    windowBoxes[2]=windowBox(0,-(outer+half)*.5,gap,outer-half);windowBoxes[3]=windowBox(0,(outer+half)*.5,gap,outer-half);windowBoxes[4]=windowBox(0,0,gap,gap);
+    for(unsigned index=0;index<windowBoxes.size();++index)opening[index+1].model.transform=windowBoxes[index];
+    const auto rays=contactPixelRays(settings.camera,SampleX,SampleY,*sample,{0,1,0},{0,1,0},0);
+    const auto openCoverage=finiteBoxCoverage(rays,std::span(windowBoxes).first(4)),closedCoverage=finiteBoxCoverage(rays,windowBoxes);
+    require(openCoverage.lower==1&&closedCoverage.upper==0,"Finite roof opening reference did not distinguish real light gap and closed control.");
+    const auto windowRender=[&](bool baseline,bool closed){receiver.pose=baseline?floorPose:nullptr;scene.shadowInstances=std::span(opening).first(closed?6:5);
+        for(unsigned index=0;index<opening.size();++index)opening[index].pose=baseline?(index?boxPose:floorPose):nullptr;
+        renderer.render(scene);require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.viewportTexture());};
+    receiver.receiveShadows=false;const auto clear=windowRender(false,false),controlClear=windowRender(true,false);receiver.receiveShadows=true;
+    require(clear.rgba==controlClear.rgba,"Opening CSM control changed shadow-off pixels.");
+    const double lit=linearBrightness(clear,sampleOffset);const auto baseline=windowRender(true,false),open=windowRender(false,false),closed=windowRender(false,true);
+    const auto baselineInterval=contactLinearInterval(baseline,sampleOffset),openInterval=contactLinearInterval(open,sampleOffset);
+    require(linearBrightness(baseline,sampleOffset)/lit>.03,"True light opening was unresolved by the baseline shadow map.");
+    require(openInterval[0]<=baselineInterval[1]&&openInterval[1]>=baselineInterval[0],"Contact refinement sealed or dimmed a fully visible finite light opening.");
+    require(linearBrightness(closed,sampleOffset)/lit<.02,"Opaque finite opening-fill control leaked direct sunlight.");
+    std::cout<<"finite-light-opening width_m="<<gap<<" baseline_visibility="<<linearBrightness(baseline,sampleOffset)/lit
+        <<" refined_open_visibility="<<linearBrightness(open,sampleOffset)/lit<<" closed_visibility="<<linearBrightness(closed,sampleOffset)/lit<<std::endl;
+    save(open,capture,"finite-light-opening-open");save(closed,capture,"finite-light-opening-closed");
+
+    // A visible finite corner covers some subpixels of the floor plane while
+    // leaving the actual center sample on the lit floor. Hidden floor samples
+    // must be removed from both halves of contact's visibility fraction.
+    // Its tiny map footprint keeps CSM sufficiently bright to expose a biased
+    // denominator; a large half-plane caster would mask that error through MIN.
+    sun.shadowDistance=500;scene.shadowResolution=256;
+    const auto cornerFit=directional_shadow::build(sun,{settings.camera,1},256);require(cornerFit.valid,"Visible-corner fit failed.");
+    unsigned cornerCascade{};while(cornerCascade+1<directional_shadow::CascadeCount&&depth>=cornerFit.splits[cornerCascade])++cornerCascade;
+    const double footprint=pixelUpper-pixelLower,cornerSize=1.5*footprint;
+    require(cornerSize*2<cornerFit.values[cornerCascade].texelWorld,"Visible-corner caster is not confined to one raw shadow texel per axis.");
+    double pixelRadius{};for(unsigned corner=0;corner<4;++corner){
+        const auto cameraRay=settings.camera.screenRay(float(SampleX+(corner&1)),float(SampleY+((corner>>1)&1)),{0,0,Size,Size});
+        require(bool(cameraRay),"Visible-corner pixel corner has no camera ray.");const auto point=math::intersectPlane(*cameraRay,*sample,{0,1,0});
+        require(bool(point),"Visible-corner pixel corner misses its floor.");pixelRadius=std::max(pixelRadius,double(math::length(*point-*sample)));}
+    const Vec3 tangent{sine,0,cosine};const auto cornerCenter=*sample+normal*(-.05*footprint-cornerSize*.5)+tangent*(.2*footprint-cornerSize*.5);
+    auto visibleBlocker=blocker;visibleBlocker.entityId=760;
+    visibleBlocker.model.transform=math::translation({cornerCenter[0],.2*pixelRadius,cornerCenter[2]})*
+        math::rotation(math::axisAngle({0,1,0},angle))*math::scaling({cornerSize,.2*pixelRadius,cornerSize});
+    auto redMaterials=materials;redMaterials[0].baseColor={1,.02f,.02f,1};visibleBlocker.materials=&redMaterials;
+    std::array visible{receiver,visibleBlocker};scene.instances=scene.shadowInstances=visible;
+    const std::array cornerBox{visibleBlocker.model.transform};
+    const auto cornerRays=contactPixelRays(settings.camera,SampleX,SampleY,*sample,{0,1,0},{0,1,0},0);
+    const auto cameraVisibility=[&](const ContactRayD& sunRay){ContactRayD cameraRay;cameraRay.origin=sunRay.origin;double distanceSquared{};
+        for(unsigned axis=0;axis<3;++axis){cameraRay.direction[axis]=double(settings.camera.eye()[axis])-cameraRay.origin[axis];distanceSquared+=cameraRay.direction[axis]*cameraRay.direction[axis];}
+        const double distance=std::sqrt(distanceSquared);for(auto& component:cameraRay.direction)component/=distance;
+        return finiteBoxCoverage(std::span(&cameraRay,1),cornerBox,distance);};
+    ContactRayD centerRay;for(unsigned axis=0;axis<3;++axis){centerRay.origin[axis]=(*sample)[axis];centerRay.direction[axis]=axis==1?1:0;}
+    require(cameraVisibility(centerRay).lower==1,"Visible-corner center is not an actual floor receiver.");
+    unsigned hiddenSunHits{},validLit{};
+    for(const auto& sunRay:cornerRays){const auto camera=cameraVisibility(sunRay),sunlight=finiteBoxCoverage(std::span(&sunRay,1),cornerBox);
+        require(camera.lower==camera.upper&&sunlight.lower==sunlight.upper,"Visible-corner analytic reference straddles an uncertain finite boundary.");
+        if(camera.value==0){hiddenSunHits+=sunlight.value==0;}else{require(sunlight.value==1,"A valid visible floor stratum is not sunlit.");++validLit;}}
+    require(hiddenSunHits>=6&&validLit>=6,"Visible-corner reference did not exercise hidden sun hits and visible lit floor strata.");
+    const auto cornerRender=[&](bool csm,bool shadows){visible[0].pose=csm?floorPose:nullptr;visible[1].pose=csm?boxPose:nullptr;
+        visible[0].receiveShadows=visible[1].receiveShadows=shadows;renderer.render(scene);require(renderer.shadowStatus().empty(),renderer.shadowStatus());return read(renderer.viewportTexture());};
+    const auto cornerClear=cornerRender(false,false),cornerControlClear=cornerRender(true,false);
+    require(cornerClear.rgba==cornerControlClear.rgba,"Visible-corner posed control changed shadow-off pixels.");
+    scene.instances=std::span(visible).subspan(1,1);renderer.render(scene);const auto cornerBoxOnly=read(renderer.viewportTexture());
+    scene.instances=std::span(visible).first(1);renderer.render(scene);const auto cornerFloorOnly=read(renderer.viewportTexture());scene.instances=visible;
+    Vec2 projectedMinimum{float(Size),float(Size)},projectedMaximum{};
+    for(const float x:{-.5f,.5f})for(const float y:{-.5f,.5f})for(const float z:{-.5f,.5f}){
+        const auto world=math::transformPoint(visibleBlocker.model.transform,{x,y,z});
+        const auto projected=math::project(world,settings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*settings.camera.viewMatrix(),{0,0,Size,Size},ClipDepth::ZeroToOne);
+        require(bool(projected),"Visible-corner projection has no finite bounds.");for(unsigned axis=0;axis<2;++axis){projectedMinimum[axis]=std::min(projectedMinimum[axis],(*projected)[axis]);projectedMaximum[axis]=std::max(projectedMaximum[axis],(*projected)[axis]);}}
+    unsigned predictedPixels{},boxPixels{},coverageMismatches{};
+    const auto pixelHitsBox=[&](float x,float y){const auto ray=settings.camera.screenRay(x,y,{0,0,Size,Size});require(bool(ray),"Finite corner coverage has no camera ray.");
+        ContactRayD reference;for(unsigned axis=0;axis<3;++axis){reference.origin[axis]=ray->origin[axis];reference.direction[axis]=ray->direction[axis];}
+        return finiteBoxCoverage(std::span(&reference,1),cornerBox,settings.camera.farPlane).value==0;};
+    for(unsigned y=0;y<Size;++y)for(unsigned x=0;x<Size;++x){const auto offset=(y*Size+x)*4;
+        const bool actual=brightness(cornerBoxOnly,offset)>4;boxPixels+=actual;
+        if(x+1<projectedMinimum[0]||x>projectedMaximum[0]+1||y+1<projectedMinimum[1]||y>projectedMaximum[1]+1)continue;
+        const bool expected=pixelHitsBox(x+.5f,y+.5f);predictedPixels+=expected;bool stable=true;
+        for(const float ox:{-.005f,.005f})for(const float oy:{-.005f,.005f})stable&=pixelHitsBox(x+.5f+ox,y+.5f+oy)==expected;
+        coverageMismatches+=stable&&actual!=expected;
+    }
+    unsigned redPixels{};for(unsigned offset=0;offset<cornerClear.rgba.size();offset+=4)redPixels+=cornerClear.rgba[offset]>cornerClear.rgba[offset+1]+20;
+    unsigned centerFloorDifference{};for(unsigned channel=0;channel<3;++channel)centerFloorDifference=std::max(centerFloorDifference,
+        unsigned(std::abs(int(cornerClear.rgba[sampleOffset+channel])-int(cornerFloorOnly.rgba[sampleOffset+channel]))));
+    std::cout<<"visible-finite-corner-precondition projected_bounds="<<projectedMinimum[0]<<","<<projectedMinimum[1]<<".."<<projectedMaximum[0]<<","<<projectedMaximum[1]
+        <<" predicted_pixels="<<predictedPixels<<" box_only_pixels="<<boxPixels<<" stable_coverage_mismatches="<<coverageMismatches<<" red_pixels="<<redPixels
+        <<" center_combined_rgb="<<unsigned(cornerClear.rgba[sampleOffset])<<","<<unsigned(cornerClear.rgba[sampleOffset+1])<<","<<unsigned(cornerClear.rgba[sampleOffset+2])
+        <<" center_floor_rgb="<<unsigned(cornerFloorOnly.rgba[sampleOffset])<<","<<unsigned(cornerFloorOnly.rgba[sampleOffset+1])<<","<<unsigned(cornerFloorOnly.rgba[sampleOffset+2])
+        <<" center_box_rgb="<<unsigned(cornerBoxOnly.rgba[sampleOffset])<<","<<unsigned(cornerBoxOnly.rgba[sampleOffset+1])<<","<<unsigned(cornerBoxOnly.rgba[sampleOffset+2])
+        <<" debug_mode="<<int(renderer.debugView(RenderViewPurpose::Scene))<<" scene_instances="<<scene.instances.size()<<" model_status="<<renderer.modelStatus()<<std::endl;
+    if(!predictedPixels||!boxPixels||coverageMismatches||brightness(cornerBoxOnly,sampleOffset)>4||centerFloorDifference>1){
+        const auto evidence=capture.empty()?fs::path(__FILE__).parent_path().parent_path()/"build/diagnostics/light-leaks"/(std::string("contact-corner-failure-")+renderer.backendName()):capture;
+        save(cornerClear,evidence,"corner-clear");save(cornerControlClear,evidence,"corner-control-clear");save(cornerBoxOnly,evidence,"corner-box-only");save(cornerFloorOnly,evidence,"corner-floor-only");
+        throw std::runtime_error("Finite corner raster coverage disagrees with its independent projected box/floor oracle; evidence="+evidence.string());
+    }
+    const auto cornerBaseline=cornerRender(true,true),cornerRefined=cornerRender(false,true);
+    const double cornerLit=linearBrightness(cornerClear,sampleOffset),baselineVisibility=linearBrightness(cornerBaseline,sampleOffset)/cornerLit;
+    require(cornerLit>.05&&baselineVisibility>1-hiddenSunHits/32.+.04,"Visible-corner CSM control cannot distinguish a biased contact denominator.");
+    const auto expected=contactLinearInterval(cornerBaseline,sampleOffset),actual=contactLinearInterval(cornerRefined,sampleOffset);
+    require(actual[0]<=expected[1]&&actual[1]>=expected[0],"Hidden sun-hit strata darkened an independently sunlit finite receiver corner.");
+    std::cout<<"visible-finite-corner hidden_sun_hits="<<hiddenSunHits<<" valid_lit="<<validLit<<" visible_red_pixels="<<redPixels
+        <<" csm_visibility="<<baselineVisibility<<" refined_visibility="<<linearBrightness(cornerRefined,sampleOffset)/cornerLit<<std::endl;
+    save(cornerClear,capture,"visible-finite-corner-clear");save(cornerBaseline,capture,"visible-finite-corner-csm");save(cornerRefined,capture,"visible-finite-corner-refined");
 }
-void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture){
+
+void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capture,bool closedRoomOnly,bool compiledModel,bool profileClosedRoom,bool contactOnly){
     // Readback storage survives exceptional renderer shutdown.
     std::vector<std::shared_ptr<DecodedImage>> destinations;
     ResourceManager resources;Renderer renderer(native_renderer_context(window,nullptr,selectedTestGraphicsBackend()));MaterialGraphPrograms programs(resources,config);
@@ -170,6 +676,12 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=0x4453485155;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.1f,.1f,.1f})},environment.settings);
     require(renderer.publishEnvironment(environment),renderer.environmentStatus());
+    if(compiledModel){
+        const RendererShaderPair pair{RendererProgram::Model,compileShader(config,"vs_model").bytes,compileShader(config,"fs_model").bytes};
+        require(renderer.reloadPrograms(std::span(&pair,1)),renderer.shaderStatus());
+        std::cout<<"compiled-model shader_status="<<(renderer.shaderStatus().empty()?"ok":renderer.shaderStatus())
+            <<" shader_sources="<<config.sourceDirectory.string()<<std::endl;
+    }
     std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();context.flush();};
     const auto read=[&](bgfx::TextureHandle source){
         Texture staging{bgfx::createTexture2D(Size,Size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
@@ -180,6 +692,14 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
         for(unsigned i=0;i<120;++i){tick();if(picking::frameReady(frame,ready))return *image;}
         throw std::runtime_error("Directional quality readback timed out.");
     };
+    if(contactOnly){const auto floor=floorGeometry();const auto box=builtinBoxGeometry();
+        require(renderer.prepareModel(*floor)&&renderer.prepareModel(*box),renderer.modelStatus());
+        std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=white[0].specular=0;
+        std::vector<ModelMaterialTextures> bindings(1);contactEdgeFiltering(renderer,floor,box,white,bindings,read,capture);
+        resources.stop();renderer.drainPending(frame);return;}
+    closedRoomLeakChecks(renderer,read,tick,frame,capture,profileClosedRoom,!compiledModel);
+    if(closedRoomOnly){resources.stop();renderer.drainPending(frame);return;}
+    inclinedLocalSelfShadowCheck(renderer,read,capture);
     const auto floor=floorGeometry();const auto pillar=builtinBoxGeometry();
     require(renderer.prepareModel(*floor)&&renderer.prepareModel(*pillar),renderer.modelStatus());
     std::vector<ModelMaterial> white(1);white[0].baseColor={1,1,1,1};white[0].roughness=1;white[0].metallic=0;white[0].specular=0;
@@ -217,10 +737,23 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
             MaterialAsset material;addMaterialNode(material.graph,MaterialNodeKind::Output);auto& output=materialOutputNode(material.graph).output;
             output.baseColor={1,1,1};output.roughness=1;output.metallic=0;output.specular=0;
             const auto shader=generateMaterialGraphShader(material);MaterialGraphProgramResult result;
-            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{45};
-            do{tick();result=programs.request(shader);if(!result.current)std::this_thread::sleep_for(std::chrono::milliseconds{1});}
-            while(!result.current&&std::chrono::steady_clock::now()<deadline);
-            require(result.current&&bool(result.programs),"Directional quality generated material failed: "+result.diagnostic);
+            const auto started=std::chrono::steady_clock::now(),deadline=started+std::chrono::seconds{360};
+            auto nextProgress=started;const auto initial=resources.stats();const auto compilerBefore=shaderCompilerMetrics();
+            bool optimizedReady{};
+            do{tick();result=programs.request(shader);const auto state=resources.stats();
+                require(state.failures==initial.failures,"Directional quality shader compilation failed: "+result.diagnostic);
+                require(result.compiling||result.diagnostic.empty(),"Directional quality shader publication failed: "+result.diagnostic);
+                optimizedReady=result.current&&result.programs&&result.programs->optimized&&!state.queued&&!state.running;
+                const auto now=std::chrono::steady_clock::now();
+                if(now>=nextProgress){const auto metrics=shaderCompilerMetrics();
+                    std::cout<<"directional-generated elapsed_s="<<std::chrono::duration_cast<std::chrono::seconds>(now-started).count()
+                        <<" compiler_processes="<<metrics.compilerInvocations-compilerBefore.compilerInvocations
+                        <<" queued="<<state.queued<<" running="<<state.running<<" failures="<<state.failures-initial.failures
+                        <<" current="<<result.current<<" optimized="<<(result.programs&&result.programs->optimized)<<std::endl;
+                    nextProgress=now+std::chrono::seconds{5};}
+                if(!optimizedReady)std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }while(!optimizedReady&&std::chrono::steady_clock::now()<deadline);
+            require(optimizedReady,"Directional quality generated material did not reach optimized idle publication within 360s: "+result.diagnostic);
             auto graph=std::make_shared<PreparedGraphMaterial>();graph->programs=result.programs;graph->uniforms=shader.uniforms;graph->sources=shader.textures;graph->signature=result.programs->signature;bindings[0].graph=std::move(graph);
         }
         for(const unsigned resolution:{256u,1024u})for(const float normalBias:{1.f,0.f})for(unsigned direction=0;direction<directions.size();++direction)for(bool game:{false,true}){
@@ -294,9 +827,20 @@ void exercise(SDL_Window* window,ShaderCompileConfig config,const fs::path& capt
 }
 }
 int main(int argc,char** argv){try{
-    require(argc==4||(argc==6&&std::string(argv[4])=="--capture"),"Pass shaderc, source, include directories; optionally --capture output-directory.");
+    require(argc>=4,"Pass shaderc, source, include directories; optionally --closed-room-only, --contact-only, --compiled-model, --profile-closed-room and --capture output-directory.");
+    bool closedRoomOnly{},compiledModel{},profileClosedRoom{},contactOnly{};fs::path capture;
+    for(int index=4;index<argc;++index){const std::string argument=argv[index];
+        if(argument=="--closed-room-only")closedRoomOnly=true;
+        else if(argument=="--contact-only")contactOnly=true;
+        else if(argument=="--compiled-model")compiledModel=true;
+        else if(argument=="--profile-closed-room")profileClosedRoom=true;
+        else if(argument=="--capture"&&index+1<argc)capture=argv[++index];
+        else throw std::runtime_error("Unknown directional quality argument: "+argument);
+    }
     Temporary temporary;ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary.path};Sdl sdl;
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson directional shadow quality checks",Size,Size,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
-    require(bool(window),SDL_GetError());exercise(window.get(),config,argc==6?fs::path(argv[5]):fs::path{});
-    std::cout<<"Directional Scene/Game oblique/grazing floor/wall acne, generated/fallback materials, contact edge filtering and near-contact checks passed.\n";return 0;
+    require(!(contactOnly&&(closedRoomOnly||profileClosedRoom)),"--contact-only cannot be combined with closed-room diagnostics.");
+    require(bool(window),SDL_GetError());exercise(window.get(),config,capture,closedRoomOnly,compiledModel,profileClosedRoom,contactOnly);
+    std::cout<<(contactOnly?"Directional physical contact edge, finite opening and visible-corner checks passed.\n":closedRoomOnly?"Directional closed inward-normal double-sided room checks passed.\n":
+        "Directional closed-room leaks, Scene/Game oblique/grazing floor/wall acne, generated/fallback materials, contact edge filtering and near-contact checks passed.\n");return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

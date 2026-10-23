@@ -13,6 +13,7 @@
 namespace {
 using namespace crimson;
 using Point=std::array<double,3>;
+using Pixel=std::array<double,2>;
 using Clip=std::array<double,4>;
 using DoubleMatrix=std::array<Clip,4>;
 std::string context;
@@ -106,7 +107,53 @@ Point project(const Mat4& matrix,Point p) {
     check(std::isfinite(clip[3]) && std::abs(clip[3])>1e-12,"Oracle projection produced an invalid homogeneous coordinate.");
     return {clip[0]/clip[3]*.5+.5,-clip[1]/clip[3]*.5+.5,clip[2]/clip[3]};
 }
-struct Counts {std::size_t projections{},planes{},wrongDiscrepancies{},footprints{};double maximumOldError{};};
+Pixel guardedCenter(Pixel p,Pixel origin,unsigned resolution) {
+    for(unsigned axis=0;axis<2;++axis)p[axis]=std::clamp(p[axis],origin[axis]+.5,origin[axis]+resolution+3.5);
+    return p;
+}
+template<class Sample> double bilinear(Pixel p,Pixel origin,unsigned resolution,const Sample& sample) {
+    p=guardedCenter(p,origin,resolution);
+    const Pixel lower{std::floor(p[0]-.5)+.5,std::floor(p[1]-.5)+.5},f{p[0]-lower[0],p[1]-lower[1]};
+    double result{};
+    for(unsigned y=0;y<2;++y)for(unsigned x=0;x<2;++x)
+        result+=(x?f[0]:1-f[0])*(y?f[1]:1-f[1])*
+            sample(guardedCenter({lower[0]+x,lower[1]+y},origin,resolution));
+    return result;
+}
+// Independent filter oracle: five nominal taps per axis, each reconstructed
+// bilinearly. This does not use the candidate's six combined weights.
+template<class Sample> double pcf25(Pixel p,Pixel origin,unsigned resolution,const Sample& sample) {
+    constexpr std::array<double,5> kernel{1,3,4,3,1};double result{};
+    for(int y=-2;y<=2;++y)for(int x=-2;x<=2;++x)
+        result+=kernel[x+2]*kernel[y+2]*bilinear({p[0]+x,p[1]+y},origin,resolution,sample);
+    return result/144;
+}
+template<class Sample> double pcf36(Pixel p,Pixel origin,unsigned resolution,const Sample& sample) {
+    const Pixel base{std::floor(p[0]+.5)-.5,std::floor(p[1]+.5)-.5},f{p[0]-base[0],p[1]-base[1]};
+    const auto weights=[](double s){return std::array<double,6>{1-s,3-2*s,4-s,3+s,1+2*s,s};};
+    const auto wx=weights(f[0]),wy=weights(f[1]);double result{};
+    for(unsigned y=0;y<6;++y)for(unsigned x=0;x<6;++x) {
+        check(wx[x]>=0 && wy[y]>=0,"Expanded PCF has a negative spatial weight.");
+        result+=wx[x]*wy[y]*sample(guardedCenter({base[0]+double(x)-2,base[1]+double(y)-2},origin,resolution));
+    }
+    return result/144;
+}
+// Deliberately incorrect historical implementation, used only as a negative
+// control: one shallow reference for all four centers of each compressed tap.
+template<class Stored> double shallowPcf9(Pixel p,Pixel origin,unsigned resolution,Pixel gradient,double depth,double tolerance,const Stored& stored) {
+    const Pixel base{std::floor(p[0]+.5)-.5,std::floor(p[1]+.5)-.5},f{p[0]-base[0],p[1]-base[1]};
+    const auto weights=[](double s){return std::array<double,3>{4-3*s,7,1+3*s};};
+    const auto positions=[](double s){return std::array<double,3>{(3-2*s)/(4-3*s)-2,(3+s)/7,s/(1+3*s)+2};};
+    const auto wx=weights(f[0]),wy=weights(f[1]),x=positions(f[0]),y=positions(f[1]);double result{};
+    for(unsigned iy=0;iy<3;++iy)for(unsigned ix=0;ix<3;++ix) {
+        const auto query=guardedCenter({base[0]+x[ix],base[1]+y[iy]},origin,resolution);
+        const Pixel shallow{std::floor(query[0]-.5)+.5+(gradient[0]<0?1:0),std::floor(query[1]-.5)+.5+(gradient[1]<0?1:0)};
+        const auto reference=depth+gradient[0]*(shallow[0]-p[0])+gradient[1]*(shallow[1]-p[1])-tolerance;
+        result+=wx[ix]*wy[iy]*bilinear(query,origin,resolution,[&](Pixel center){return reference<=stored(center)?1.:0.;});
+    }
+    return result/144;
+}
+struct Counts {std::size_t projections{},planes{},wrongDiscrepancies{},footprints{},centers{};double maximumOldError{};};
 
 void checkProjection(const directional_shadow::Cascade& fit,unsigned resolution,Counts& counts,bool footprints) {
     const auto& matrix=fit.receiverViewProjection;
@@ -147,24 +194,28 @@ void checkProjection(const directional_shadow::Cascade& fit,unsigned resolution,
         ++counts.planes;counts.maximumOldError=std::max(counts.maximumOldError,error);
         if(error>std::max(1e-6,.1*std::max(std::abs(expected[0]),std::abs(expected[1]))))++counts.wrongDiscrepancies;
         if(!footprints)continue;
-        // Exercise the fractional texel phases that made the incorrect gradient
-        // produce periodic acne. A bilinear comparison uses four centers; the
-        // reference must match the shallowest receiver depth among all four.
-        for(const auto phaseX:{.05,.3,.55,.95})for(const auto phaseY:{.1,.35,.6,.9})
-            for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x) {
-            const std::array<double,2> pixel{uv[0]*resolution+phaseX,uv[1]*resolution+phaseY};
-            const std::array<double,2> sample{pixel[0]+x,pixel[1]+y};
-            const std::array<double,2> lower{std::floor(sample[0]-.5)+.5,std::floor(sample[1]-.5)+.5};
-            const std::array<double,2> shallow{lower[0]+(expected[0]<0?1:0),lower[1]+(expected[1]<0?1:0)};
-            const auto center=receiverAt(inverse,pixel[0]/resolution,pixel[1]/resolution,origin,normal);
-            const double centerDepth=project(matrix,center)[2];
-            const double corrected=centerDepth+expected[0]*(shallow[0]-pixel[0])+expected[1]*(shallow[1]-pixel[1]);
-            double minimum=std::numeric_limits<double>::infinity();
-            for(unsigned corner=0;corner<4;++corner) {
-                const auto p=receiverAt(inverse,(lower[0]+(corner&1?1:0))/resolution,(lower[1]+(corner&2?1:0))/resolution,origin,normal);
-                minimum=std::min(minimum,project(matrix,p)[2]);
-            }
-            check(close(corrected-centerDepth,minimum-centerDepth),"PCF reference does not match the shallowest independently projected receiver depth.");
+        // Use a nonzero atlas tile with two rendered guard texels per side.
+        // Unprojection must remove both the tile origin and inner guard offset.
+        const Pixel tileOrigin{double(resolution+4),double(2*(resolution+4))};
+        const auto depthAt=[&](Pixel center){return project(matrix,receiverAt(inverse,
+            (center[0]-tileOrigin[0]-2)/resolution,(center[1]-tileOrigin[1]-2)/resolution,origin,normal))[2];};
+        for(const auto phaseX:{.05,.3,.55,.95})for(const auto phaseY:{.1,.35,.6,.9}) {
+            const Pixel pixel{tileOrigin[0]+2+uv[0]*resolution+phaseX,tileOrigin[1]+2+uv[1]*resolution+phaseY};
+            const double centerDepth=depthAt(pixel),tolerance=1e-7*(1+std::abs(centerDepth)+3*std::abs(expected[0])+3*std::abs(expected[1]));
+            const auto reference=[&](Pixel center){return centerDepth+expected[0]*(center[0]-pixel[0])+expected[1]*(center[1]-pixel[1]);};
+            const auto stored=[&](Pixel center){
+                const bool blocker=(static_cast<int>(center[0])+3*static_cast<int>(center[1]))%5<2;
+                return depthAt(center)+(blocker?-1:1)*(1e-4+8*tolerance);
+            };
+            const auto truth=pcf25(pixel,tileOrigin,resolution,[&](Pixel center){return depthAt(center)<=stored(center)+tolerance?1.:0.;});
+            const auto actual=pcf36(pixel,tileOrigin,resolution,[&](Pixel center){
+                check(close(reference(center)-centerDepth,depthAt(center)-centerDepth),
+                    "PCF reference disagrees with independently unprojected receiver depth at the same texel center.");
+                ++counts.centers;return reference(center)<=stored(center)+tolerance?1.:0.;
+            });
+            check(close(actual,truth,1e-12,0),"Expanded PCF disagrees with independent weighted25-tap same-center visibility.");
+            check(close(pcf36(pixel,tileOrigin,resolution,[&](Pixel center){return reference(center)<=depthAt(center)+tolerance?1.:0.;}),1,1e-12,0),
+                "A self-receiving planar surface acquired PCF acne.");
             ++counts.footprints;
         }
     }
@@ -183,11 +234,74 @@ void numericRegression() {
     check(std::abs(texelWorld(oldHlslColumns(matrix),1024)/texelWorld(portableRows(matrix),1024)-1)>.01,
         "The regression fixture does not expose the old world-texel normal-bias scale error.");
 }
+
+void kernelRegression() {
+    context="weighted PCF normalization, atlas guards and continuous phases";
+    constexpr unsigned resolution=16;const Pixel origin{37,91};
+    const auto field=[&](Pixel center){
+        check(center[0]>=origin[0]+.5 && center[0]<=origin[0]+resolution+3.5 &&
+            center[1]>=origin[1]+.5 && center[1]<=origin[1]+resolution+3.5,"PCF escaped its guarded atlas tile.");
+        const int x=static_cast<int>(center[0]-origin[0]-.5),y=static_cast<int>(center[1]-origin[1]-.5);
+        return (x+2*y)%5<2?0.:1.;
+    };
+    for(const auto x:{.5,1.3,2.,2.05,6.4,18.,19.5})for(const auto y:{.5,1.3,2.,2.05,6.4,18.,19.5}) {
+        const Pixel pixel{origin[0]+x,origin[1]+y};
+        check(close(pcf36(pixel,origin,resolution,field),pcf25(pixel,origin,resolution,field),1e-12,0),
+            "Clamped expanded PCF changed weighted bilinear spatial coverage.");
+        check(close(pcf36(pixel,origin,resolution,[](Pixel){return 1.;}),1,1e-12,0) &&
+            pcf36(pixel,origin,resolution,[](Pixel){return 0.;})==0,"PCF lost all-lit/all-blocked normalization at an atlas edge.");
+    }
+    check(pcf36({origin[0]+6.4,origin[1]+6.4},origin,resolution,field)>0 &&
+        pcf36({origin[0]+6.4,origin[1]+6.4},origin,resolution,field)<1,"PCF collapsed filtered coverage into a binary center result.");
+    for(unsigned axis=0;axis<2;++axis)for(unsigned boundary=0;boundary<=resolution+4;++boundary) {
+        Pixel before{origin[0]+6.75,origin[1]+6.75},after=before;
+        before[axis]=origin[axis]+boundary+.5-1e-7;after[axis]=origin[axis]+boundary+.5+1e-7;
+        check(close(pcf36(before,origin,resolution,field),pcf36(after,origin,resolution,field),2e-6,0),
+            "PCF coverage jumps when its six-center footprint crosses a texel boundary.");
+    }
+    context.clear();
+}
+
+void perpendicularJoinRegression() {
+    context="floor and perpendicular half-wall join";
+    constexpr unsigned resolution=512;const Pixel origin{1032,1548};
+    const auto direction=math::normalized(Vec3{.5f,-.8f,-.6f});
+    const auto right=math::normalized(math::cross(direction,{0,1,0})),up=math::normalized(math::cross(right,direction));
+    const auto matrix=math::orthographic(-16,16,-16,16,0,200,ClipDepth::ZeroToOne)*math::lookAt(direction*-100.f,{},up);
+    const auto inverse=inverseProjection(matrix);const auto slope=gradient(portableRows(matrix),{0,1,0},resolution);
+    const auto planeAt=[&](Pixel center,Point normal){return receiverAt(inverse,
+        (center[0]-origin[0]-2)/resolution,(center[1]-origin[1]-2)/resolution,{},normal);};
+    const auto floorDepth=[&](Pixel center){return project(matrix,planeAt(center,{0,1,0}))[2];};
+    const auto stored=[&](Pixel center){
+        // Floor y=0 and wall x=0,y>=0 meet at a real right angle. Intersect
+        // both independently; the first light-space surface supplies depth.
+        const auto wall=planeAt(center,{1,0,0});const auto floor=floorDepth(center);
+        return wall[1]>=0?std::min(floor,project(matrix,wall)[2]):floor;
+    };
+    constexpr double texelWorld=32./resolution,tolerance=1e-8;double maximumFalseVisibility{};unsigned filteredCases{};
+    for(unsigned x=1;x<=96;++x)for(unsigned phase=0;phase<8;++phase) {
+        const auto receiver=project(matrix,{texelWorld*x/32,0,texelWorld*phase/4});
+        const Pixel pixel{origin[0]+2+receiver[0]*resolution,origin[1]+2+receiver[1]*resolution};
+        const auto truth=pcf25(pixel,origin,resolution,[&](Pixel center){return floorDepth(center)<=stored(center)+tolerance?1.:0.;});
+        const auto actual=pcf36(pixel,origin,resolution,[&](Pixel center){
+            const double reference=receiver[2]+slope[0]*(center[0]-pixel[0])+slope[1]*(center[1]-pixel[1]);
+            return reference<=stored(center)+tolerance?1.:0.;
+        });
+        check(close(actual,truth,1e-12,0),"Same-center PCF disagrees with independent perpendicular-join geometry.");
+        const double old=shallowPcf9(pixel,origin,resolution,slope,receiver[2],tolerance,stored);
+        check(old+1e-12>=truth,"Shallow-reference negative control unexpectedly reduced join visibility.");
+        maximumFalseVisibility=std::max(maximumFalseVisibility,old-truth);
+        if(truth>0 && truth<1)++filteredCases;
+    }
+    check(filteredCases>0 && maximumFalseVisibility>.02,
+        "Perpendicular join does not distinguish shallowest-reference light leakage from same-center PCF.");
+    context.clear();
+}
 } // namespace
 
 int main() {
     try {
-        numericRegression();Counts counts;
+        numericRegression();kernelRegression();perpendicularJoinRegression();Counts counts;
         ShadowCamera camera;camera.camera.position={12,15,12};camera.camera.target={0,1,0};camera.camera.nearPlane=.1f;
         camera.camera.farPlane=250;camera.camera.fovAxis=CameraFovAxis::Vertical;camera.aspect=16.f/9;
         const std::array<Aabb,1> casters{{{{-12,-4,-12},{14,8,12},true}}};
@@ -211,12 +325,12 @@ int main() {
             }
         }
         context.clear();
-        check(counts.projections>=200 && counts.planes>=700 && counts.footprints>=10000,
+        check(counts.projections>=200 && counts.planes>=700 && counts.footprints>=2000 && counts.centers>=72000,
             "Receiver-plane coverage did not exercise the intended view, slope, resolution and sampling cases.");
         check(counts.wrongDiscrepancies>counts.planes/3 && counts.maximumOldError>1e-3,
             "The old HLSL column interpretation was not rejected by independent world-plane geometry.");
         std::cout<<"Directional receiver-plane checks passed: "<<counts.projections<<" projections, "<<counts.planes<<" planes, "
-            <<counts.footprints<<" PCF footprints; old column error up to "<<counts.maximumOldError<<" depth units.\n";
+            <<counts.footprints<<" weighted PCF footprints / "<<counts.centers<<" same-center references; old column error up to "<<counts.maximumOldError<<" depth units.\n";
         return 0;
     } catch(const std::exception& error) {
         std::cerr<<error.what()<<'\n';return 1;

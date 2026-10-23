@@ -473,6 +473,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     settings_.environment=extracted.environment.environment;settings_.exposure=extracted.environment.exposure;
     settings_.proceduralSun=extracted.proceduralSun;
     settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);
+    const AssetLibrary::ReflectionDemandScope reflectionDemand(assets,settings_.environment.ssr.enabled&&
+        settings_.environment.ssr.strength>0&&((frame.viewport.width>0&&frame.viewport.height>0)||
+        (gameOpen&&game.pixelWidth&&game.pixelHeight)));
     gameCamera=resolveGameCamera(renderScene);
     auto& sceneParticles=play_.playing()?play_.particles():particles_;
     if(!play_.playing() || frame.playParticleEntity)sceneParticles.reconcile(document.documentGeneration(),extracted.particles,[&](const std::string& id) {
