@@ -38,6 +38,8 @@ void geometryContract() {
         box->roots==std::vector<std::uint32_t>{0} && box->meshes.size()==1 && box->meshes[0].primitives==std::vector<std::uint32_t>{0},
         "Box hierarchy does not identify its primitive.");
     const auto& primitive=box->primitives[0];
+    require(primitive.bounds.valid && primitive.bounds.minimum==box->bounds.minimum && primitive.bounds.maximum==box->bounds.maximum,
+        "Box primitive lost the local bounds required by decal depth validation.");
     require(primitive.vertices.size()==24 && primitive.indices.size()==36,"Box must preserve six hard-edged faces and twelve triangles.");
     require(primitive.material==0 && primitive.uvMask==3 && primitive.tangentUv==0,"Box material/UV basis is not usable by the normal model path.");
     for(const auto& vertex:primitive.vertices) {
@@ -84,6 +86,8 @@ void sphereGeometryContract() {
         sphere->roots==std::vector<std::uint32_t>{0} && sphere->meshes.size()==1 && sphere->meshes[0].primitives==std::vector<std::uint32_t>{0},
         "Sphere hierarchy does not identify its primitive.");
     const auto& primitive=sphere->primitives.front();
+    require(primitive.bounds.valid && primitive.bounds.minimum==sphere->bounds.minimum && primitive.bounds.maximum==sphere->bounds.maximum,
+        "Sphere primitive lost the local bounds required by decal depth validation.");
     require(!primitive.vertices.empty() && !primitive.indices.empty() && primitive.indices.size()%3==0,
         "Sphere has no complete triangles.");
     require(primitive.sourceVertexCount==primitive.vertices.size() && primitive.sourceIndexCount==primitive.indices.size(),
@@ -137,6 +141,8 @@ void variantGeometryContract(const crimson::ModelAsset& model) {
     require(model.bounds.valid && model.primitives.size()==1 && model.materialIds==std::vector<std::string>{DefaultMaterialId},
         "Primitive variant lost its bounded single-slot geometry.");
     const auto& mesh=model.primitives.front();
+    require(mesh.bounds.valid && mesh.bounds.minimum==model.bounds.minimum && mesh.bounds.maximum==model.bounds.maximum,
+        "Primitive variant lost the local bounds required by decal depth validation.");
     for(const auto& vertex:mesh.vertices) {
         require(math::finite(vertex.position) && math::finite(vertex.normal) && math::finite(vertex.tangent),"Primitive variant contains nonfinite geometry.");
         near(math::length(vertex.normal),1);

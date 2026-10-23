@@ -443,7 +443,7 @@ void decalMaterialTransactions() {
     require(document.loadStaged(staged)&&document.editable()&&!document.dirty(),"Staged decal material was not clean and editable.");
     require(!fs::exists(materialAssetPath(project.root,staged.id))&&!document.externalFileChanged(),"Opening a staged decal material wrote a file or reported a false conflict.");
     const auto original=document.definition();
-    require(document.edit("Configure decal channels",[](auto& a){auto& output=materialOutputNode(a.graph).output;output.decalNormalEnabled=true;output.decalRoughnessEnabled=true;output.decalRoughnessStrength=.4f;}),"Decal output settings were rejected.");
+    require(document.edit("Configure decal channels",[](auto& a){auto& output=materialOutputNode(a.graph).output;output.decalNormalEnabled=true;output.decalRoughnessEnabled=true;output.decalRoughnessStrength=.4f;output.decalMetallicEnabled=true;output.metallic=.8f;output.decalMetallicStrength=.7f;}),"Decal output settings were rejected.");
     const auto configured=document.definition();
     require(document.undo()&&same(document.definition(),original)&&!document.dirty()&&document.redo()&&same(document.definition(),configured),"Decal settings did not undo/redo atomically.");
     require(decalMaterialCompatible(configured)&&!modelMaterialCompatible(configured)&&!particleMaterialCompatible(configured),"Decal graph was admitted to an ordinary surface consumer.");

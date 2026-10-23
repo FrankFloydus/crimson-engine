@@ -155,12 +155,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     const auto capture=[&](std::span<const RenderDecal> decals) {
         scene.instances=instances;scene.decals=decals;renderer.render(scene);return read();
     };
-    const auto decalGraph=[&](std::uint64_t fingerprint,bool color,bool normalEnabled,bool roughness,Vec3 rgb=Vec3{.75f,.015f,.01f},float normalOpacity=1.f) {
+    const auto decalGraph=[&](std::uint64_t fingerprint,bool color,bool normalEnabled,bool roughness,Vec3 rgb=Vec3{.75f,.015f,.01f},float normalOpacity=1.f,bool metallic=false) {
         MaterialAsset definition;definition.id="decal-domain-fixture-"+std::to_string(fingerprint);
         auto& out=addMaterialNode(definition.graph,MaterialNodeKind::Output);
         const auto decalOutput=out.id;out.output.shading=MaterialShading::Decal;out.output.baseColor=rgb;
         out.output.decalColorEnabled=color;out.output.decalNormalEnabled=normalEnabled;out.output.decalRoughnessEnabled=roughness;
-        out.output.decalNormalStrength=normalOpacity;out.output.roughness=.06f;
+        out.output.decalNormalStrength=normalOpacity;out.output.roughness=.06f;out.output.decalMetallicEnabled=metallic;out.output.metallic=.9f;
         if(normalEnabled) {
             const auto texture=addMaterialNode(definition.graph,MaterialNodeKind::Texture2D).id;
             findMaterialNode(definition.graph,texture)->texture.role=MaterialTextureRole::Normal;
@@ -182,11 +182,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     auto patch=flatPatch();auto red=decalGraph(1,true,false,false);
     auto normalOnly=decalGraph(2,false,true,false);
     auto wet=decalGraph(3,false,false,true);
-    auto all=decalGraph(4,true,true,true);
+    auto all=decalGraph(4,true,true,true,{.75f,.015f,.01f},1,true);
+    auto metal=decalGraph(7,false,false,false,{1,1,1},1,true);
     const auto fixedBase=capture({});instances[0].textures=&graphBindings;const auto graphBase=capture({});
     check(error(fixedBase,graphBase)<.2,"Fixed/generated base PBR surfaces diverged before decal testing.");
-    const std::array<std::shared_ptr<const PreparedDecalMaterial>,4> materials{red,normalOnly,wet,all};
-    const std::array<std::string,4> names{"color","normal","roughness","combined"};
+    const std::array<std::shared_ptr<const PreparedDecalMaterial>,5> materials{red,normalOnly,wet,all,metal};
+    const std::array<std::string,5> names{"color","normal","roughness","combined","metallic"};
     std::vector<RenderDecal> decals;
     for(unsigned channel=0;channel<materials.size();++channel) {
         decals={decal(patch,materials[channel])};instances[0].textures=nullptr;const auto fixed=capture(decals);

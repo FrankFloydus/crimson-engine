@@ -103,9 +103,10 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
         saveMaterialAsset(project.root,material);
     };
     auto surface=deserializeDecalAsset(assetBytes,DecalId);
-    if(surface.stagedMaterial){auto material=*surface.stagedMaterial;materialOutputNode(material.graph).output.decalColorEnabled=true;canonicalizeMaterialAsset(material);surface.stagedMaterial=std::make_shared<const MaterialAsset>(std::move(material));}
-    else copyMaterial(loadMaterialAsset(sourceRoot,surface.material.id));
+    if(const auto pending=stagedDecalMaterial(sourceRoot,surface))surface.stagedMaterial=pending;
+    else {copyMaterial(loadMaterialAsset(sourceRoot,surface.material.id));surface.stagedMaterial.reset();}
     saveDecalAsset(project.root,surface);
+    writeFileAtomically(output/"rendered-decal-material.json",serializeMaterialAsset(loadMaterialAsset(project.root,surface.material.id)));
     writeFileAtomically(output/"actual-source-decal.json",assetBytes);
     auto isolated=Json::parse(serializeSceneSnapshot({newAssetId(),"Actual saved cylinder",{},{}}));
     isolated["entities"]=Json::array();const auto authored=Json::parse(sceneBytes);
@@ -184,8 +185,36 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
                 render(selected,true,&prepared);const auto sceneImage=read(renderer.viewportTexture()),gameImage=read(renderer.gameViewportTexture());
                 saveImage(output/(name+"-"+suffix+"-scene.png"),sceneImage);saveImage(output/(name+"-"+suffix+"-game.png"),gameImage);
                 caseReport["views"][suffix]={{"camera",{{"position",selected.position},{"target",selected.target},{"fov",selected.fov}}},{"scene",stats(renderer.decalStats(RenderViewPurpose::Scene))},{"game",stats(renderer.decalStats(RenderViewPurpose::Game))}};
+                caseReport["views"][suffix]["diagnostic"]=renderer.decalStatus();
+                for(const auto& d:prepared.decals)if(d.material&&d.material->graph)caseReport["views"][suffix]["preparedMaterials"].push_back({{"channels",d.material->graph->decalChannels},{"signature",d.material->graph->signature},{"uniforms",d.material->graph->uniforms},{"sourceCount",d.material->graph->sources.size()}});
+                if(view==0)caseReport["changedPixels"]=changed(baselineScene,sceneImage);
+                report["cases"][name]=caseReport;writeFileAtomically(output/"host-report.json",report.dump(2));
                 check(sceneImage.rgba==gameImage.rgba,"The same host decal differs between Scene and Game.");
                 if(view==0){caseReport["changedPixels"]=changed(baselineScene,sceneImage);check(changed(baselineScene,sceneImage)>100,"The actual host dirt decal did not visibly affect the Cylinder.");}
+            }
+            // The ordinary close framing above is 2.5 m from the surface.
+            // Exercise the actual FPS lens and near-plane intersections too.
+            struct FpsView {const char* name;float distance,side,vertical;};
+            constexpr std::array<FpsView,9> fpsViews{{
+                {"fps-0055",.055f,0,0},{"fps-006",.06f,0,0},{"fps-010",.10f,0,0},{"fps-020",.20f,0,0},
+                {"fps-040",.40f,0,0},{"fps-080",.80f,0,0},
+                {"fps-grazing-left",.08f,-.24f,.03f},{"fps-grazing-right",.08f,.24f,-.03f},
+                {"fps-near-crossing",.03f,.16f,.025f}
+            }};
+            auto tangent=math::cross(Vec3{0,1,0},normal);
+            if(math::length(tangent)<1e-5)tangent={1,0,0};else tangent=math::normalized(tangent);
+            for(const auto& fps:fpsViews){
+                auto selected=camera;selected.position=point+normal*fps.distance+tangent*fps.side+Vec3{0,fps.vertical,0};
+                selected.fov=80;selected.nearPlane=.05f;selected.farPlane=2048;
+                render(selected,true,&prepared);const auto sceneImage=read(renderer.viewportTexture()),gameImage=read(renderer.gameViewportTexture());
+                check(sceneImage.rgba==gameImage.rgba,"Close-FPS decal differs between Scene and Game.");
+                check(renderer.decalStats(RenderViewPurpose::Scene).submitted>0,"Close-FPS camera dropped the prepared decal occurrence.");
+                render(selected,true,&prepared);const auto repeat=read(renderer.viewportTexture());
+                check(repeat.rgba==sceneImage.rgba,"Static close-FPS decal changed between frames.");
+                saveImage(output/(name+"-"+fps.name+"-scene.png"),sceneImage);
+                saveImage(output/(name+"-"+fps.name+"-game.png"),gameImage);
+                caseReport["views"][fps.name]={{"camera",{{"position",selected.position},{"target",selected.target},{"fov",selected.fov},{"near",selected.nearPlane},{"far",selected.farPlane}}},
+                    {"scene",stats(renderer.decalStats(RenderViewPurpose::Scene))},{"game",stats(renderer.decalStats(RenderViewPurpose::Game))},{"staticRepeatEqual",true}};
             }
         }
         if(ready&&name=="committed-cylinder") {

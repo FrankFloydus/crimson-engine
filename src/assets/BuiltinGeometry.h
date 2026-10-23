@@ -111,10 +111,11 @@ inline std::shared_ptr<const ModelAsset> create(const std::string& id,const Prim
         }
     }
     primitive.sourceVertexCount=primitive.vertices.size();primitive.sourceIndexCount=primitive.indices.size();
+    primitive.bounds=primitiveMeshBounds(base,settings);asset->bounds=primitive.bounds;
     asset->primitives.push_back(std::move(primitive));
     asset->materials.push_back(defaultMaterialAsset().surface);asset->materialIds.push_back(DefaultMaterialId);
     asset->meshes.push_back({asset->name,{0}});asset->nodes.push_back({asset->name,Mat4{}, {},0});
-    asset->roots={0};asset->draws.push_back({0,Mat4{}});asset->bounds=primitiveMeshBounds(base,settings);
+    asset->roots={0};asset->draws.push_back({0,Mat4{}});
     return asset;
 }
 }
