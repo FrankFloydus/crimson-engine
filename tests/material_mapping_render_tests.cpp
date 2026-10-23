@@ -1303,7 +1303,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     std::uint64_t serial{};
     const auto picked=[&](Vec3 p){
         const auto screen=math::project(p,settings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*settings.camera.viewMatrix(),{0,0,Size,Size},ClipDepth::ZeroToOne);
-        check(bool(screen),"Mask pick point failed projection.");check(renderer.requestPick({1,1,++serial,static_cast<std::uint32_t>((*screen)[0]),static_cast<std::uint32_t>((*screen)[1]),renderer.streamingSignature()}),renderer.pickingStatus());
+        check(bool(screen),"Mask pick point failed projection.");check(renderer.requestPick({1,1,++serial,static_cast<std::uint32_t>((*screen)[0]),static_cast<std::uint32_t>((*screen)[1]),renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());
         renderer.render(scene);std::optional<PickResult> result;for(unsigned i=0;i<120 && !result;++i){tick();result=renderer.pollPick(frame);}check(bool(result),"Mask pick timed out.");return result->entityId;
     };
     check(picked(position)==0,"Identity alpha mask returned a transparent entity.");material.uvOffset[0]=.5f;

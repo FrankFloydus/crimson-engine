@@ -116,6 +116,26 @@ bool texturesMatchSources(const AssetLibrary& assets,const std::filesystem::path
 }
 }
 struct AssetPreviews::Impl {
+    // Immutable scene inputs outlive retries for GPU uploads, shaders and decal
+    // charts. Publication/file/policy boundaries rebuild this plan; ordinary
+    // readiness polling must not traverse and hash the whole scene again.
+    struct ScenePlan {
+        PreviewValidationKey validation;
+        uint64_t catalog{},sourceKey{};
+        SceneSettings settings;
+        Aabb bounds;
+        std::shared_ptr<const SceneSnapshot> snapshot;
+        std::shared_ptr<Scene> scene;
+        ExtractedScene extraction;
+        std::vector<ExtractedModel> models;
+        std::vector<DirectionalLight> directions;
+        std::vector<PointLight> points;
+        std::vector<std::filesystem::path> files,validationFiles;
+        std::vector<PreviewMaterialFingerprint> materials;
+        std::vector<PreviewAnimationFingerprint> animations;
+        std::vector<PreviewDecalFingerprint> decals;
+        std::vector<PreviewSourceLocation> locations;
+    };
     struct Entry {
         AssetKind kind{AssetKind::Model};
         ResourceHandle<SceneSnapshot> scene;
@@ -137,6 +157,7 @@ struct AssetPreviews::Impl {
         bool wanted{},forceScene{},saveRequested{};
         std::string error;
         std::unique_ptr<DecalResources> decalResources;
+        std::unique_ptr<ScenePlan> scenePlan;
         DecalPreviewGeometry decalGeometry;
         std::chrono::steady_clock::time_point used{std::chrono::steady_clock::now()};
     };
@@ -355,6 +376,11 @@ struct AssetPreviews::Impl {
         shared::profiling::CpuZone requestZone{location};requestZone.text(id);
         ++statistics.requests;
         if (assets.references().deleted(id) || !entry.retry.ready(PreviewRetryState::Clock::now())) return;
+        // The submitted packet pins a complete exact generation until readback.
+        // Its unchanged inputs need no source traversal or new cache read while
+        // that same thumbnail is already being rendered.
+        if(entry.clean && entry.validated==validation && !entry.forceScene && entry.rendering &&
+            entry.rendering==entry.signature && renderer.thumbnailBusy())return;
         if(entry.clean && entry.validated==validation && !entry.forceScene && !entry.saveRequested)
             if(warmCache(id,entry,entry.signature))return;
         if(!entry.clean && indexedCache(id,entry))return;
@@ -404,6 +430,18 @@ struct AssetPreviews::Impl {
                 });
             }
         };
+        const bool reuseScenePlan=entry.kind==AssetKind::Scene && entry.scenePlan && !entry.forceScene &&
+            entry.scenePlan->validation==validation && entry.scenePlan->catalog==assets.catalogRevision() &&
+            entry.scene.state()==ResourceState::Ready && entry.scene.snapshot().shared()==entry.scenePlan->snapshot;
+        if(reuseScenePlan) {
+            ++statistics.sourcePlanHits;
+            const auto& plan=*entry.scenePlan;
+            settings=plan.settings;bounds=plan.bounds;sceneSnapshot=plan.snapshot;decalScene=plan.scene;
+            decalExtraction=plan.extraction;models=plan.models;directions=plan.directions;points=plan.points;
+            sourceKey=plan.sourceKey;files=plan.files;validationFiles=plan.validationFiles;
+            materialVersions=plan.materials;animationVersions=plan.animations;decalVersions=plan.decals;locations=plan.locations;
+        } else {
+        CRIMSON_PROFILE_ZONE("Thumbnail source planning");
         if (entry.kind==AssetKind::Scene) {
             const auto snapshot=scene(id,entry); if (!snapshot) return;
             validationFiles.push_back(sourceFile(id));
@@ -531,7 +569,23 @@ struct AssetPreviews::Impl {
             math::include(bounds,math::transformBounds(prepared.modelBounds(model,asset),model.world));
         }
         if (!loaded) return;
+        if(sceneSnapshot) {
+            auto plan=std::make_unique<ScenePlan>();
+            plan->validation=validation;plan->catalog=assets.catalogRevision();plan->sourceKey=sourceKey;
+            plan->settings=settings;plan->bounds=bounds;plan->snapshot=sceneSnapshot;plan->scene=decalScene;
+            plan->extraction=decalExtraction;plan->models=models;plan->directions=directions;plan->points=points;
+            plan->files=files;plan->validationFiles=validationFiles;plan->materials=materialVersions;
+            plan->animations=animationVersions;plan->decals=decalVersions;plan->locations=locations;
+            entry.scenePlan=std::move(plan);++statistics.sourcePlanBuilds;
+            // Pending charts/materials still need source-change notifications.
+            // Publish their dependency descriptors before they become drawable.
+            auto observed=files;observed.insert(observed.end(),validationFiles.begin(),validationFiles.end());
+            entry.files=uniqueFiles(std::move(observed));entry.locations=locations;
+            entry.materials=materialVersions;entry.animations=animationVersions;entry.decals=decalVersions;
+        }
+        }
         if(decalScene&&!decalExtraction.decals.empty()) {
+            CRIMSON_PROFILE_ZONE("Thumbnail decal preparation");
             if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
             entry.decalResources->collect();
             preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);
@@ -713,7 +767,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
             if(std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& source){
                 return !sources.matches(source.id,source.file);
             })) {
-                entry.scene={};entry.dependencies={};entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
+                entry.scene={};entry.scenePlan.reset();entry.dependencies={};entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
                 entry.clean=false;entry.indexChecked=true;entry.retry.reset();++impl_->statistics.invalidations;
             }
         }
@@ -745,7 +799,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
                 const auto current=impl_->assets.findAnimation(expected.id);return !current||impl_->animationHash(*current)!=expected.fingerprint;
             });
             if(changed) {
-                entry.clean=false;entry.indexChecked=true;entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
+                entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.sourceKey=0;entry.signature=0;
                 entry.retry.reset();++impl_->statistics.invalidations;
             }
         }
@@ -799,7 +853,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
         return !entry.rendering && !entry.writer && impl_->assets.references().deleted(item.first);
     });
     for(auto& [id,entry]:impl_->entries)if(!entry.wanted && !entry.rendering && !entry.writer && now-entry.used>=grace) {
-        (void)id;entry.scene={};entry.dependencies={};entry.cached={};entry.decalResources.reset();
+        (void)id;entry.scene={};entry.scenePlan.reset();entry.dependencies={};entry.cached={};entry.decalResources.reset();
         if(entry.diskIndex){entry.diskIndex={};entry.indexChecked=false;}
     }
     constexpr size_t MaximumRetainedDescriptors=4096;
@@ -813,7 +867,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
 }
 void AssetPreviews::requestSceneSave(const std::string& id) {
     if (id.empty()) return;
-    auto& entry=impl_->entries[id];entry.kind=AssetKind::Scene;entry.saveRequested=true;entry.forceScene=true;entry.clean=false;entry.indexChecked=true;entry.retry.reset();
+    auto& entry=impl_->entries[id];entry.kind=AssetKind::Scene;entry.saveRequested=true;entry.forceScene=true;entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.retry.reset();
 }
 void AssetPreviews::invalidate(const std::string& id) {
     const auto source=AssetSourceSnapshot(impl_->root).find(id);
@@ -824,7 +878,7 @@ void AssetPreviews::invalidate(const std::string& id) {
         const bool affected=assetId==id || std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& location){return location.id==id;});
         if(!affected)continue;
         entry.retry.reset();entry.cacheState.checked=0;entry.sourceKey=0;entry.signature=0;entry.error.clear();
-        entry.clean=false;entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
+        entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
         if(entry.kind==AssetKind::Scene)entry.forceScene=true;
     }
 }
@@ -836,7 +890,7 @@ void AssetPreviews::invalidateFile(const std::filesystem::path& file) {
         if(!affected && !id.empty())affected=std::any_of(entry.locations.begin(),entry.locations.end(),[&](const auto& source){return source.id==id;});
         if(!affected)continue;
         entry.retry.reset();entry.cacheState.checked=0;entry.sourceKey=0;entry.signature=0;entry.error.clear();
-        entry.clean=false;entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
+        entry.clean=false;entry.scenePlan.reset();entry.indexChecked=true;entry.diskIndex={};entry.cached={};++impl_->statistics.invalidations;
         if(entry.kind==AssetKind::Scene)entry.forceScene=true;
     }
 }

@@ -12,9 +12,12 @@ inline EntityId viewportSelectionEntity(const Scene& scene,EntityId hit) {
     return scene.contains(hit)?hit:NoEntity;
 }
 
-inline bool viewportEntityHasMarker(const EntityRecord& entity) {
+inline bool viewportEntityHasCenterMarker(const EntityRecord& entity) {
     return entity.directional || entity.point || entity.particle || entity.decal ||
-        entity.collider || entity.controller || entity.navigationVolume || entity.camera;
+        entity.camera;
+}
+inline bool viewportEntityHasMarker(const EntityRecord& entity) {
+    return viewportEntityHasCenterMarker(entity) || entity.collider || entity.controller || entity.navigationVolume;
 }
 
 inline bool selectViewportHit(SceneDocument& document,EntityId hit,bool toggle,bool append) {

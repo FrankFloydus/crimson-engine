@@ -587,13 +587,13 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     caster.model.transform=math::translation(right*.1)*caster.model.transform;capture();
     check(submittedStats.renderedFaces==6,"Caster movement did not invalidate all six faces.");
     check(renderer.streamingSignature()==streamingSignature,"Shadow-only caster pose changed the Scene picking resource signature.");orient(5);capture();
-    check(renderer.requestPick({1,1,1,ImageSize/2,ImageSize/2,renderer.streamingSignature()}),renderer.pickingStatus());
+    check(renderer.requestPick({1,1,1,ImageSize/2,ImageSize/2,renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());
     shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;renderer.render(scene);tick();
-    const auto queuedSignature=renderer.streamingSignature();
+    const auto queuedSignature=renderer.pickResourceSignature(PickMode::Selection);
     lights[0].position=right*.1;caster.model.transform=math::translation(right*.1)*caster.model.transform;capture();
     std::optional<PickResult> picked;
     for(unsigned i=0;i<120 && !picked;++i){picked=renderer.pollPick(frame);if(!picked)tick();}
-    check(picked && picked->entityId==receiver.entityId && picked->resourceSignature==queuedSignature && renderer.streamingSignature()==queuedSignature,
+    check(picked && picked->entityId==receiver.entityId && picked->resourceSignature==queuedSignature && renderer.pickResourceSignature(PickMode::Selection)==queuedSignature,
         "Shadow-only light/caster updates invalidated or corrupted a queued Scene pick.");
     lights[0].position={};orient(5);capture();
     caster.castShadows=false;const auto noCast=capture();check(brightness(noCast,settings.camera,center)>dark+60,"Cast Shadows disabled retained a stale tile.");
@@ -982,7 +982,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     const auto centerPoint=(reference->bounds.minimum+reference->bounds.maximum)*.5;
     const auto pickPixel=math::project(centerPoint,animationSettings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*animationSettings.camera.viewMatrix(),{0,0,ImageSize,ImageSize},ClipDepth::ZeroToOne);
     check(bool(pickPixel),"Animated picking fixture has no projected center.");
-    check(renderer.requestPick({1,1,700,static_cast<std::uint32_t>((*pickPixel)[0]),static_cast<std::uint32_t>((*pickPixel)[1]),renderer.streamingSignature()}),renderer.pickingStatus());
+    check(renderer.requestPick({1,1,700,static_cast<std::uint32_t>((*pickPixel)[0]),static_cast<std::uint32_t>((*pickPixel)[1]),renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());
     renderer.render(animationScene);tick();std::optional<PickResult> animationPick;
     for(unsigned i=0;i<120&&!animationPick;++i){animationPick=renderer.pollPick(frame);if(!animationPick)tick();}
     check(animationPick&&animationPick->entityId==animatedReceiver.entityId,"Picking did not use the animated visible silhouette.");
@@ -1021,7 +1021,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     equivalentAnimation(reflectedGpuColor,reflectedCpuColor,"Reflected GPU morph/skin geometry or readable depth differs from the CPU reference.");
     const auto reflectedPixel=math::project(reflectedCenter,animationSettings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*animationSettings.camera.viewMatrix(),{0,0,ImageSize,ImageSize},ClipDepth::ZeroToOne);
     check(bool(reflectedPixel),"Reflected picking fixture has no projected center.");
-    check(renderer.requestPick({1,1,701,static_cast<std::uint32_t>((*reflectedPixel)[0]),static_cast<std::uint32_t>((*reflectedPixel)[1]),renderer.streamingSignature()}),renderer.pickingStatus());
+    check(renderer.requestPick({1,1,701,static_cast<std::uint32_t>((*reflectedPixel)[0]),static_cast<std::uint32_t>((*reflectedPixel)[1]),renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());
     renderer.render(animationScene);tick();std::optional<PickResult> reflectedPick;
     for(unsigned i=0;i<120&&!reflectedPick;++i){reflectedPick=renderer.pollPick(frame);if(!reflectedPick)tick();}
     check(reflectedPick&&reflectedPick->entityId==reflectedGpu.entityId,"Picking did not use reflected GPU geometry.");

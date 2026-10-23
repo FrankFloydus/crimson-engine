@@ -661,7 +661,10 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     }
     visiblePreviewIds_=frame.visiblePreviewIds;viewportRegion_=frame.viewport;
     if(!play_.playing() && !document.assetId().empty() && !document.dirty()) try {
-        const auto fingerprint=sceneFileFingerprint(root_,document.assetId());
+        // Save/load publishes this exact saved-file identity. External source
+        // notifications invalidate the thumbnail directly; rereading a clean
+        // scene's complete JSON on every editor frame adds no new authority.
+        const auto fingerprint=document.loadedFingerprint();
         if(fingerprint!=savedPreviewFingerprint_) { savedPreviewFingerprint_=fingerprint;previews_->requestSceneSave(document.assetId()); }
     } catch(const std::exception& error){status_=error.what();}
     prepared_.endFrame();

@@ -1130,7 +1130,7 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     instance.model.transform={};materials[0].alphaMask=true;
     const auto mask=capture("cutout");check(component(mask,32,64,0)<30 && component(mask,96,64,0)>30,"Native cutout material did not discard its transparent region.");
     const auto pick=[&](unsigned x,std::uint64_t serial) {
-        check(renderer.requestPick({1,1,serial,x,64,renderer.streamingSignature()}),renderer.pickingStatus());renderer.render(scene);
+        check(renderer.requestPick({1,1,serial,x,64,renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());renderer.render(scene);
         for(unsigned i=0;i<50;++i){tick();if(auto result=renderer.pollPick(frame))return result->entityId;}
         throw std::runtime_error("Native entity picking readback did not complete.");
     };
@@ -1212,6 +1212,61 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     phase("persistent native surfaces");exercisePlatformWindows(renderer,tools,screenshots,frame,tick,window);
     validation.checkMessages();
 }
+void exerciseSelection(GraphicsBackend backend) {
+    SdlOwner sdl;
+    std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
+        SDL_CreateWindow("Crimson hidden selection check",128,128,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
+    check(bool(window),SDL_GetError());ScreenshotCallback callback;
+    Renderer renderer(native_renderer_context(window.get(),&callback,backend));
+    renderer.resizeViewport(128,128);renderer.setGridVisible(false);
+    check(renderer.publishEnvironment(environment()),renderer.environmentStatus());
+    auto asset=quad();check(renderer.prepareModel(*asset),renderer.modelStatus());
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.environment.enabled=false;
+    std::array<RenderModelInstance,2> instances{{
+        {77,{asset,math::translation({-.75f,0,0})*math::scaling({.3f,.3f,.3f})}},
+        {88,{asset,math::translation({.75f,0,0})*math::scaling({.3f,.3f,.3f})}}}};
+    for(auto& instance:instances)instance.shading=MaterialShading::Unlit;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=instances;
+    DecodedImage thumbnail{8,8,std::vector<std::uint8_t>(8*8*4,127)};
+    std::uint32_t frame{};std::uint64_t external{},thumbnailVersion{};
+    const auto tick=[&] {
+        renderer.advanceStreaming();
+        // EditorRenderFrame changes this for any playing model's pose, even
+        // when the queried entity and its source geometry are stable.
+        renderer.setExternalResourceSignature(++external);
+        check(renderer.setThumbnail("unrelated-selection-preview",++thumbnailVersion,thumbnail),renderer.thumbnailStatus());
+        renderer.render(scene);frame=renderer.advance_frame();
+    };
+    for(unsigned i=0;i<8;++i)tick();
+    const auto stableSignature=renderer.pickResourceSignature(PickMode::Selection);
+    const auto project=[&](float x) {
+        const auto point=math::project({x,0,0},settings.camera.projectionMatrix(1,ClipDepth::NegativeOneToOne)*settings.camera.viewMatrix(),
+            {0,0,128,128},ClipDepth::NegativeOneToOne);
+        check(point.has_value(),"Selection fixture target did not project.");return static_cast<std::uint32_t>((*point)[0]);
+    };
+    const auto pick=[&](unsigned x,unsigned y,std::uint64_t serial,bool explicitSignature) {
+        check(renderer.requestPick({1,1,serial,x,y,explicitSignature?stableSignature:0}),renderer.pickingStatus());
+        for(unsigned i=0;i<64;++i) {
+            tick();
+            check(renderer.pickResourceSignature(PickMode::Selection)==stableSignature,
+                "Unrelated preview or animation presentation changes invalidated the selection source signature.");
+            if(auto result=renderer.pollPick(frame)) {
+                check(result->serial==serial&&result->resourceSignature==stableSignature,"Selection returned a superseded readback or source signature.");
+                return result->entityId;
+            }
+        }
+        throw std::runtime_error("Animated presentation/thumbnail updates starved the asynchronous selection readback: serial="+
+            std::to_string(serial)+", frame="+std::to_string(frame)+", picking="+renderer.pickingStatus()+", cluster="+
+            renderer.clusteredLightingStatus()+", model="+renderer.modelStatus()+", callback="+callback.error);
+    };
+    check(pick(project(-.75f),64,1,false)==77,"Animated presentation prevented selection of the first child mesh.");
+    check(pick(4,4,2,true)==0,"An empty-space selection readback did not complete while presentation changed.");
+    check(pick(project(.75f),64,3,false)==88,"Animated presentation prevented selection of the next child mesh.");
+    check(renderer.requestPick({1,1,4,project(-.75f),64,0}),renderer.pickingStatus());tick();renderer.cancelPicking();
+    check(pick(project(.75f),64,5,false)==88,"A canceled in-flight readback blocked the next selection intent.");
+    renderer.evictThumbnail("unrelated-selection-preview");(void)renderer.drainPending(frame);
+    check(callback.error.empty(),callback.error);
+}
 void exerciseShutdown() {
     SdlOwner sdl;
     std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(
@@ -1249,7 +1304,7 @@ void exerciseShutdown() {
             // Queue both CPU readback destinations and shut down before a frame
             // advance can complete them. Device teardown must retain their data.
             check(renderer.publishEnvironment(environment()),renderer.environmentStatus());
-            check(renderer.requestPick({1,1,100+iteration,48,32,renderer.streamingSignature()}),renderer.pickingStatus());
+            check(renderer.requestPick({1,1,100+iteration,48,32,renderer.pickResourceSignature(PickMode::Selection)}),renderer.pickingStatus());
             renderer.render(scene);
             check(renderer.renderThumbnail("shutdown-pending",iteration+1,scene,32),renderer.thumbnailStatus());
             check(renderer.thumbnailBusy(),"Shutdown fixture did not leave a queued thumbnail readback.");
@@ -1269,6 +1324,15 @@ void exerciseShutdown() {
 }
 }
 int main(int argc,char** argv) {
+    if(argc>=2&&std::strcmp(argv[1],"--selection-only")==0) {
+        try {
+            auto backend=GraphicsBackend::Direct3D12;
+            if(argc==4&&std::strcmp(argv[2],"--backend")==0) {
+                const auto selected=parseGraphicsBackend(argv[3]);check(selected.has_value(),"Unknown selection-check backend.");backend=*selected;
+            } else check(argc==2,"Usage: native_resource_tests --selection-only [--backend dx11|dx12]");
+            exerciseSelection(backend);std::cout<<"Hidden selection readback, empty-space, changing presentation and unrelated preview checks passed.\n";return 0;
+        } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
+    }
     const bool shutdownOnly=argc==2&&std::strcmp(argv[1],"--shutdown-only")==0;
     if(shutdownOnly) {
         try {exerciseShutdown();std::cout<<"Hidden D3D11 shutdown, resource release and process-lifetime runtime mapping checks passed.\n";return 0;}

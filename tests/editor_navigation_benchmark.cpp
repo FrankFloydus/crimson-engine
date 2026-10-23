@@ -29,7 +29,8 @@ struct EditorPerformanceProbe {
         if constexpr(requires {previews.stats();}) {
             const auto s=previews.stats();
             return {{"requests",s.requests},{"validations",s.validations},{"resident_hits",s.residentHits},
-                {"disk_requests",s.diskRequests},{"render_requests",s.renderRequests},{"invalidations",s.invalidations}};
+                {"disk_requests",s.diskRequests},{"render_requests",s.renderRequests},{"invalidations",s.invalidations},
+                {"source_plan_builds",s.sourcePlanBuilds},{"source_plan_hits",s.sourcePlanHits}};
         } else return nlohmann::json::object();
     }
     static auto previews(const EditorSession& e) {return stats(*e.previews_);}

@@ -244,8 +244,9 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
     std::optional<EntityId> result;
     for(const auto& record:scene.records()) {
         if(!scene.isVisible(record.id))continue;
-        if(!record.collider && !record.controller && !record.navigationVolume)continue;
-        if(!includeCollisions&&!record.navigationVolume)continue;
+        // Navigation volumes are wire markers, not filled collision shapes.
+        // Their empty interiors must not replace a GPU background hit.
+        if(!includeCollisions || (!record.collider && !record.controller))continue;
         const auto world=scene.worldTransform(record.id);
         const auto inverse=world?math::inverse(*world):std::nullopt;
         if(!inverse)continue;
@@ -265,9 +266,9 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                 const auto distance=math::dot(other,q)/determinant;if(distance>=0)hit=std::min(hit,distance);
             }
         }
-        if(record.navigationVolume || (includeCollisions&&record.collider && record.collider->shape==ColliderShape::Box)) {
+        if(record.collider && record.collider->shape==ColliderShape::Box) {
             double first=0,last=closest;
-            const auto half=(record.navigationVolume?record.navigationVolume->size:record.collider->size)*.5f;
+            const auto half=record.collider->size*.5f;
             for(unsigned axis=0;axis<3 && first<=last;++axis) {
                 const double direction=local.direction[axis],origin=local.origin[axis];
                 if(std::abs(direction)<1e-12) {

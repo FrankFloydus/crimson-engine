@@ -1,9 +1,12 @@
 #include "scene/SceneDocument.h"
 #include "scene/SceneNames.h"
 #include "scene/EnvironmentSerialization.h"
+#include "scene/SceneExtraction.h"
 #include "editor/ViewportSelection.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
+#include "assets/MaterialGraphReferences.h"
+#include "assets/MaterialAsset.h"
 #include "resources/Paths.h"
 #include "resources/AssetId.h"
 #include "math/Json.h"
@@ -257,6 +260,10 @@ void viewportIndividualSelection() {
     const auto character=document.createPlayer();
     document.select({character});require(document.reparentSelection(other),document.status());
     require(parent && branch && model && collider && particle && light && camera && other && character,"Viewport selection fixture failed.");
+    require(!viewportEntityHasCenterMarker(*document.scene().find(collider)) &&
+        !viewportEntityHasCenterMarker(*document.scene().find(character)) &&
+        viewportEntityHasCenterMarker(*document.scene().find(camera)),
+        "An invisible collider/controller origin stole a visible child mesh hit.");
     require(!viewportEntityHasMarker(*document.scene().find(parent)) &&
         !viewportEntityHasMarker(*document.scene().find(branch)) &&
         !viewportEntityHasMarker(*document.scene().find(other)),
@@ -1878,8 +1885,48 @@ void inspectorZeroScaleHistory() {
 }
 }
 
-int main() {
+int main(int argc,char** argv) {
     try {
+        if(argc==5&&std::string_view(argv[1])=="--benchmark-scene") {
+            using Clock=std::chrono::steady_clock;
+            const auto root=std::filesystem::weakly_canonical(argv[2]);
+            const auto temp=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path());
+            require(root.parent_path()==temp&&root.filename().string().starts_with("crimson-editor-perf-"),
+                "The CPU scene benchmark requires a disposable crimson-editor-perf-* root under system temp.");
+            const auto snapshot=readSceneSnapshot(root,argv[3]);
+            constexpr unsigned Iterations=100;
+            const auto measure=[](auto&& action) {
+                std::vector<double> samples;samples.reserve(Iterations);
+                for(unsigned i=0;i<Iterations;++i) {
+                    const auto begin=Clock::now();action();
+                    samples.push_back(std::chrono::duration<double,std::milli>(Clock::now()-begin).count());
+                }
+                const auto mean=std::accumulate(samples.begin(),samples.end(),0.0)/samples.size();
+                std::sort(samples.begin(),samples.end());
+                return Json{{"iterations",Iterations},{"mean_ms",mean},{"p50_ms",samples[samples.size()/2]},
+                    {"p95_ms",samples[samples.size()*95/100]},{"max_ms",samples.back()}};
+            };
+            std::size_t observed{};Scene retained;retained.apply(snapshot.records,snapshot.properties);
+            Json report{{"scope","CPU-only saved scene snapshot parse, ECS replacement and render extraction; no renderer or desktop input"},
+                {"project",root.string()},{"scene",snapshot.id},{"entities",snapshot.records.size()}};
+            report["read_saved_snapshot"]=measure([&]{observed+=readSceneSnapshot(root,argv[3]).records.size();});
+            report["replace_existing_scene"]=measure([&]{retained.apply(snapshot.records,snapshot.properties);observed+=retained.records().size();});
+            report["construct_apply_extract"]=measure([&]{Scene scene;scene.apply(snapshot.records,snapshot.properties);observed+=extractScene(scene).models.size();});
+            report["extract_retained_scene"]=measure([&]{observed+=extractScene(retained).models.size();});
+            std::vector<MaterialAsset> materials;
+            for(const auto* folder:{"Content","Engine"})for(const auto& entry:std::filesystem::recursive_directory_iterator(root/folder))
+                if(entry.is_regular_file()&&entry.path().extension()==".crimson-material")
+                    materials.push_back(loadMaterialAsset(root,assetIdAtPath(root,entry.path())));
+            report["materials"]=materials.size();std::uint64_t observedHashes{};
+            report["hash_material_catalog"]=measure([&]{for(const auto& material:materials)observedHashes^=materialGraphRenderHash(material.surface);});
+            report["visit_material_catalog_textures"]=measure([&]{for(const auto& material:materials)
+                visitMaterialTextures(material.surface,true,[&](const auto&,auto){++observed;});});
+            report["observed_hashes"]=observedHashes;
+            report["observed_values"]=observed;
+            std::ofstream output(argv[4]);require(bool(output),"Cannot write CPU scene benchmark report.");output<<report.dump(2);
+            std::cout<<report.dump(2)<<'\n';return 0;
+        }
+        require(argc==1,"Usage: scene_tests [--benchmark-scene DISPOSABLE_ROOT SCENE_ID REPORT.json]");
         registryAndHierarchy();cachedHierarchicalVisibility();physicalSceneStorage();
         reparentPreservesAffine();
         transactionsAndSelection();

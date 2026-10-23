@@ -289,7 +289,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
                     intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision() || intentSerial_!=serial_)
                     pickIntent_=false;
-                else renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
+                else renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,0,PickMode::Selection});
             }
             const auto vp = projection*view;
             const Vec4 viewport{origin.x,origin.y,size.x,size.y};
@@ -389,7 +389,8 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const bool centerVisible=screen && (*screen)[2]>=0 && (*screen)[2]<=1;
                 const ImVec2 center=screen?ImVec2((*screen)[0],(*screen)[1]):ImVec2{};
                 const auto color = WireColor;
-                float distance = centerVisible?std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
+                float distance = centerVisible && viewportEntityHasCenterMarker(record)?
+                    std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
                 if(record.point && selected(document,record.id))pointLightRange(*draw,position,record.point->radius,vp,viewport,color);
                 if(record.navigationVolume) {
                     boxWireSegments(record.navigationVolume->size,[&](Vec3 a,Vec3 b) {
@@ -472,7 +473,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickX_=static_cast<uint32_t>(std::clamp((mouse.x-origin.x)/size.x*renderer.width(),0.0f,static_cast<float>(renderer.width()-1)));
                     pickY_=static_cast<uint32_t>(std::clamp((mouse.y-origin.y)/size.y*renderer.height(),0.0f,static_cast<float>(renderer.height()-1)));
                     intentGeneration_=document.scene().generation(); intentRevision_=document.scene().revision(); intentSerial_=++serial_;
-                    pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
+                    pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,0,PickMode::Selection});
                 }
             }
             frame.viewport.inputBlocked |= transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || frame.materialAssignment.has_value() || frame.decalPlacement.has_value() ||

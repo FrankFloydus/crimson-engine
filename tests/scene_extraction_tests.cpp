@@ -435,10 +435,13 @@ void collisionPicking() {
     auto parent=entity(1,"Parent",0,math::translation({3,0,-5})*math::scaling({2,3,.5f}));
     auto box=entity(2,"Box collider",1,Mat4{});box.collider=SceneCollider{{2,2,2}};
     auto distant=entity(3,"Distant collider",0,math::translation({3,0,-9}));distant.collider=SceneCollider{{2,2,2}};
-    scene.apply({parent,box,distant},{});
+    auto volume=entity(5,"Wire-only navigation volume",NoEntity,Mat4{});volume.navigationVolume.emplace();volume.navigationVolume->size={100,100,100};
+    scene.apply({parent,box,distant,volume},{});
     require(pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100)==2,"Clicking a box interior did not pick the closest affine collider.");
     require(!pickCollisionShape(scene,{{3,0,0},{0,0,-1}},4),"Collision picking exceeded the camera far distance.");
     require(!pickCollisionShape(scene,{{7,0,0},{0,0,-1}},100),"A ray outside the box selected its collider.");
+    require(!pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100,{}, {},false),
+        "An empty navigation-volume interior intercepted background deselection while collision overlays were hidden.");
     require(pickCollisionShape(scene,{{3,0,-5},{1,0,0}},100)==2,"A camera inside a collider could not select it.");
     box.local=math::scaling({0,1,1});scene.apply({parent,box,distant},{});
     require(pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100)==3,"A collapsed collider blocked the valid hit behind it.");

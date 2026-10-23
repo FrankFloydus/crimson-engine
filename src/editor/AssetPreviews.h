@@ -35,6 +35,7 @@ struct PreviewDependencies {
 };
 struct AssetPreviewStats {
     std::uint64_t requests{},validations{},residentHits{},diskRequests{},diskHits{},renderRequests{},invalidations{};
+    std::uint64_t sourcePlanBuilds{},sourcePlanHits{};
 };
 struct PreviewValidationKey {
     std::uint64_t catalog{},policy{},rendererShader{},materialShader{};
