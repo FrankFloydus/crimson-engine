@@ -22,8 +22,7 @@ struct ExtractedModel {
     EntityId actorOwner{};
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
-    EntityId quaderOwner{};
-    std::string sourceKey;
+    bool receiveDecals{true};
 };
 struct ExtractedDecal {EntityId id{};Mat4 world{};SceneDecal decal;bool visible{true};};
 struct ExtractedParticle {
@@ -31,6 +30,7 @@ struct ExtractedParticle {
     std::string assetId;
     Mat4 world{};
     bool visible{true}; // Retained for simulation; only presentation is hidden.
+    bool receiveDecals{true};
 };
 struct ExtractedScene {
     std::vector<ExtractedModel> models;

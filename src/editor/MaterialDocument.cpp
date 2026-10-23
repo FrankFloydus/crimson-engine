@@ -39,7 +39,7 @@ bool MaterialDocument::editable() const {
     // Imported model sidecars are the authored material, with a stable shared
     // identity. Their model origin is provenance, not an edit restriction.
     return open_ && !isEngineAssetId(working_.id) &&
-        (particleMaterialCompatible(working_) || modelMaterialCompatible(working_));
+        (particleMaterialCompatible(working_) || modelMaterialCompatible(working_) || decalMaterialCompatible(working_));
 }
 std::vector<std::string> MaterialDocument::historicalTextureReferences() const {
     std::vector<std::string> result;
@@ -112,7 +112,7 @@ void MaterialDocument::install(MaterialAsset asset,bool saved) {
     working_=std::move(asset); saved_=working_; committed_=std::move(prepared);
     history_.clear(); cursor_=0; transaction_.reset();
     state_=nextState_++; savedState_=saved?state_:0; fingerprint_=fingerprint;
-    open_=true; ++revision_; ++previewRevision_;
+    open_=true;staged_=false; ++revision_; ++previewRevision_;
 }
 bool MaterialDocument::create(const std::string& name) {
     if (transaction_) { status_="Finish the current material edit before creating another material."; return false; }
@@ -124,9 +124,14 @@ bool MaterialDocument::load(const std::string& id) {
     try { auto candidate=loadMaterialAsset(root_,id); install(std::move(candidate),true); status_="Opened "+working_.name+"."; return true; }
     catch (const std::exception& error) { status_="Could not open material: "+std::string(error.what()); return false; }
 }
+bool MaterialDocument::loadStaged(const MaterialAsset& material) {
+    if(transaction_){status_="Finish the current material edit before opening another material.";return false;}
+    try {install(material,false);savedState_=state_;staged_=true;status_.clear();return true;}
+    catch(const std::exception& error){status_="Could not open material: "+std::string(error.what());return false;}
+}
 bool MaterialDocument::save(const std::string& name,bool saveAs) {
     if (!open_) { status_="No material document is open."; return false; }
-    if ((!saveAs && !editable()) || (saveAs && !particleMaterialCompatible(working_) && !modelMaterialCompatible(working_))) { status_="This material is read-only."; return false; }
+    if ((!saveAs && !editable()) || (saveAs && !particleMaterialCompatible(working_) && !modelMaterialCompatible(working_) && !decalMaterialCompatible(working_))) { status_="This material is read-only."; return false; }
     if (transaction_ && !commit()) return false;
     if (!saveAs && !name.empty() && name!=working_.name)
         if (!edit("Rename material",[&](auto& asset){asset.name=name;})) return false;
@@ -149,7 +154,7 @@ bool MaterialDocument::save(const std::string& name,bool saveAs) {
             working_=saved;
             publish(); ++previewRevision_;
         }
-        saved_=working_; savedState_=state_; fingerprint_=fingerprint;
+        saved_=working_; savedState_=state_; fingerprint_=fingerprint;staged_=false;
         status_="Saved "+working_.name+".";
         return true;
     } catch (const std::exception& error) {
@@ -165,12 +170,17 @@ bool MaterialDocument::discard() {
     return true;
 }
 void MaterialDocument::close() {
-    open_=false; transaction_.reset(); history_.clear(); cursor_=0;
+    open_=false;staged_=false; transaction_.reset(); history_.clear(); cursor_=0;
     committed_.reset(); working_=defaultParticleMaterialAsset(); saved_=working_;
     ++revision_; ++previewRevision_; status_.clear();
 }
 bool MaterialDocument::externalFileChanged() const {
     if (!open_ || working_.id.empty()) return false;
+    if(staged_) {
+        try {const auto file=materialAssetPath(root_,working_.id);if(!std::filesystem::exists(file))return false;
+            return serializeMaterialAsset(loadMaterialAsset(root_,working_.id))!=serializeMaterialAsset(saved_);
+        }catch(...){return true;}
+    }
     try { return fileFingerprint(root_,working_.id)!=fingerprint_; }
     catch (...) { return true; }
 }

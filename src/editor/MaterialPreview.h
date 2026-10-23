@@ -6,6 +6,7 @@
 #include "crimson-renderer/MaterialGraphGpu.h"
 #include "resources/ResourceManager.h"
 #include "resources/TextureStreamer.h"
+#include "DecalPreview.h"
 namespace crimson {
 class AssetLibrary;
 enum class MaterialPreviewMode { TwoD, ThreeD };
@@ -57,5 +58,9 @@ private:
     PreparedTexture imageCurrent_;
     std::string imageDocumentId_;
     bool staticImage_{},displayingImage_{};
+    DecalPreviewGeometry decalGeometry_;
+    std::shared_ptr<const PreparedDecalMaterial> decalCurrent_;
+    std::shared_ptr<const DecalPatchData> decalSourcePatch_,decalTransformedPatch_;
+    Mat4 decalObjectTransform_{};
 };
 }

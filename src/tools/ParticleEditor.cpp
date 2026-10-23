@@ -280,7 +280,7 @@ void ParticleEditor::materialControls(AssetLibrary& assets,MaterialEditor& mater
     const auto material=assets.findMaterial(materialId);
     const auto assign=[&](const std::string& id) {
         const auto candidate=assets.findMaterial(id);
-        if(!candidate){message_="Choose a material asset.";return;}
+        if(!candidate||!particleMaterialCompatible(*candidate)){message_="Choose a Lit or Unlit material for particles.";return;}
         if(document_.transactionActive() && !document_.commit())return;
         document_.edit("Assign particle material",[&](auto& asset){asset.emitter.material.id=id;});message_.clear();
     };
@@ -316,7 +316,7 @@ void ParticleEditor::materialControls(AssetLibrary& assets,MaterialEditor& mater
     if(ImGui::BeginPopup("Select material")) {
         filter.Draw("Search");ImGui::BeginChild("Material choices",{320,ImGui::GetFontSize()*12});
         for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material && filter.PassFilter(assets.displayName(entry.id).c_str())) {
-            const auto candidate=assets.findMaterial(entry.id);if(!candidate)continue;
+            const auto candidate=assets.findMaterial(entry.id);if(!candidate||!particleMaterialCompatible(*candidate))continue;
             ImGui::PushID(entry.id.c_str());
             if(ImGui::Selectable(assets.displayName(entry.id).c_str(),entry.id==materialId)){assign(entry.id);ImGui::CloseCurrentPopup();}
             ImGui::PopID();

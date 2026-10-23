@@ -1126,6 +1126,20 @@ void shaderBlendCoverageMatrix() {
         "Opaque blending removed the dormant mask connection.");
 }
 
+void decalOutputPresentation() {
+    GraphUi ui;MaterialNodeId output{};
+    require(ui.document.edit("Decal graph fixture",[&](auto& asset){asset.graph={};auto& node=addMaterialNode(asset.graph,MaterialNodeKind::Output,{100,0});output=node.id;node.output.shading=MaterialShading::Decal;node.output.decalNormalEnabled=true;node.output.decalRoughnessEnabled=true;})&&ui.document.save(),"Could not create a Decal graph document.");
+    ui.frame(5);
+    const auto presented=[&](MaterialPin pin){const auto& pins=ui.editor.presentation().pins;return std::any_of(pins.begin(),pins.end(),[&](const auto& p){return p.node==output&&p.input&&p.pin==pin&&p.active;});};
+    for(auto pin:{MaterialPin::BaseColor,MaterialPin::Opacity,MaterialPin::Normal,MaterialPin::Roughness,MaterialPin::ColorOpacity,MaterialPin::NormalOpacity,MaterialPin::RoughnessOpacity})require(presented(pin),"Decal Output lost a dedicated surface channel.");
+    for(auto pin:{MaterialPin::Metallic,MaterialPin::Specular,MaterialPin::Emission,MaterialPin::Height,MaterialPin::OpacityMask,MaterialPin::Transmission})require(!presented(pin),"Decal Output exposed a Lit-only channel.");
+    const auto before=ui.snapshot();
+    require(ui.document.edit("Temporarily switch shader model",[](auto& asset){materialOutputNode(asset.graph).output.shading=MaterialShading::StandardPbr;}),"Could not switch Decal shader model.");
+    ui.frame(3);require(presented(MaterialPin::Metallic)&&!presented(MaterialPin::ColorOpacity),"Shader model switch did not change Output presentation.");
+    require(ui.document.undo(),"Could not undo shader model switch.");ui.frame(3);
+    require(ui.snapshot()==before&&presented(MaterialPin::ColorOpacity)&&!presented(MaterialPin::Metallic),"Undo did not restore the Decal Output presentation.");
+}
+
 void commonParticleSourceNodes() {
     GraphUi ui;MaterialNodeId output{};
     require(ui.document.edit("Common material fixture",[&](auto& asset) {
@@ -2154,5 +2168,5 @@ void boundedNodeSearchResults() {
 }
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();imageEffectPreviewsAndMask();materialGradientEditing();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();decalOutputPresentation();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();imageEffectPreviewsAndMask();materialGradientEditing();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

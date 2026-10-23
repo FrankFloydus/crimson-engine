@@ -9,6 +9,7 @@
 #include "vs_point_shadow.h"
 #include "vs_directional_shadow.h"
 #include "vs_particle.h"
+#include "vs_decal.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -19,6 +20,7 @@ namespace crimson {
 namespace {
 std::span<const std::uint8_t> embeddedVertex(MaterialGraphPass pass) {
     switch(pass){
+    case MaterialGraphPass::Decal:return cc_vs_decal;
     case MaterialGraphPass::Model:case MaterialGraphPass::ModelTransmission:case MaterialGraphPass::ModelReflection:return cc_vs_model;
     case MaterialGraphPass::Picking:return cc_vs_pick;
     case MaterialGraphPass::PointShadow:return cc_vs_point_shadow;

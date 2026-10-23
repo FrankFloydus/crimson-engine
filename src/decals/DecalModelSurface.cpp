@@ -55,6 +55,23 @@ bool commonBoundary(const SurfaceTriangle& a,Vec3 ab,const SurfaceTriangle& b,Ve
     }))++shared;
     return shared>=2;
 }
+Vec3 closestBarycentrics(Vec3 p,Vec3 a,Vec3 b,Vec3 c) {
+    const auto ab=b-a,ac=c-a,ap=p-a;const double d1=math::dot(ab,ap),d2=math::dot(ac,ap);
+    if(d1<=0&&d2<=0)return {1,0,0};
+    const auto bp=p-b;const double d3=math::dot(ab,bp),d4=math::dot(ac,bp);if(d3>=0&&d4<=d3)return {0,1,0};
+    const double vc=d1*d4-d3*d2;if(vc<=0&&d1>=0&&d3<=0){const double v=d1/(d1-d3);return {1-v,v,0};}
+    const auto cp=p-c;const double d5=math::dot(ab,cp),d6=math::dot(ac,cp);if(d6>=0&&d5<=d6)return {0,0,1};
+    const double vb=d5*d2-d1*d6;if(vb<=0&&d2>=0&&d6<=0){const double w=d2/(d2-d6);return {1-w,0,w};}
+    const double va=d3*d6-d5*d4;if(va<=0&&(d4-d3)>=0&&(d5-d6)>=0){const double w=(d4-d3)/((d4-d3)+(d5-d6));return {0,1-w,w};}
+    const double inverse=1/(va+vb+vc),v=vb*inverse,w=vc*inverse;return {1-v-w,v,w};
+}
+ModelSurfaceHit sourceHit(const ModelDrawSurface&draw,const SurfaceTriangle&triangle,uint64_t entity,Vec3 bary) {
+    ModelSurfaceHit hit;hit.seed={{entity,draw.surface.id.draw,draw.surface.id.primitive},triangle.triangle,bary};
+    hit.localPoint=math::transformPoint(draw.surface.localToWorld,triangle.positions[0]*bary[0]+triangle.positions[1]*bary[1]+triangle.positions[2]*bary[2]);
+    auto normal=triangle.normals[0]*bary[0]+triangle.normals[1]*bary[1]+triangle.normals[2]*bary[2];
+    if(const auto matrix=math::normalMatrix(draw.surface.localToWorld))normal=math::transformDirection(*matrix,normal);
+    hit.localNormal=safeNormal(normal,{0,1,0});return hit;
+}
 }
 size_t ModelSurface::bytes() const noexcept {
     size_t result=sizeof(*this)+draws.capacity()*sizeof(ModelDrawSurface)+diagnostic.capacity();
@@ -166,5 +183,30 @@ SurfaceHitResult resolveModelSurfaceHit(const ModelSurface& model,uint64_t entit
     hit.localPoint=math::transformPoint(draw.surface.localToWorld,local);
     if(const auto matrix=math::normalMatrix(draw.surface.localToWorld))normal=math::transformDirection(*matrix,normal);
     hit.localNormal=safeNormal(normal,{0,1,0});result.status=SurfaceHitStatus::Found;result.hit=hit;return result;
+}
+SurfaceHitResult projectModelSurfaceHit(const ModelSurface&model,uint64_t entity,const Mat4&world,
+    Vec3 point,float maximumDistance,const std::function<bool(uint32_t)>&materialAllowed) {
+    SurfaceHitResult result;if(!math::finite(point)||!std::isfinite(maximumDistance)||maximumDistance<=0||!math::inverse(world))return result;
+    const Vec3 extent{maximumDistance,maximumDistance,maximumDistance};const Aabb region{point-extent,point+extent,true};
+    double best=double(maximumDistance)*maximumDistance;const double tie=std::max(1e-12,best*1e-10);
+    const ModelDrawSurface* selectedDraw{};const SurfaceTriangle*selected{};Vec3 selectedBary{};bool ambiguous=false;
+    for(const auto&draw:model.draws){if(materialAllowed&&!materialAllowed(draw.material))continue;const auto transform=world*draw.surface.localToWorld;
+        for(const auto index:querySurfaceTriangles(draw,world,region)){const auto&triangle=draw.surface.triangles[index];const auto a=math::transformPoint(transform,triangle.positions[0]),b=math::transformPoint(transform,triangle.positions[1]),c=math::transformPoint(transform,triangle.positions[2]);const auto bary=closestBarycentrics(point,a,b,c),delta=a*bary[0]+b*bary[1]+c*bary[2]-point;const double distance=math::dot(delta,delta);
+            if(distance>best+tie)continue;
+            if(!selected||distance<best-tie){selected=&triangle;selectedDraw=&draw;selectedBary=bary;best=distance;ambiguous=false;}
+            else {
+                const bool vertexA=std::max({selectedBary[0],selectedBary[1],selectedBary[2]})>1-1e-5f,vertexB=std::max({bary[0],bary[1],bary[2]})>1-1e-5f;
+                const auto selectedTransform=world*selectedDraw->surface.localToWorld;
+                const auto previous=math::transformPoint(selectedTransform,selected->positions[0]*selectedBary[0]+selected->positions[1]*selectedBary[1]+selected->positions[2]*selectedBary[2]);
+                auto selectedWorld=*selected,triangleWorld=triangle;
+                for(auto& position:selectedWorld.positions)position=math::transformPoint(selectedTransform,position);
+                for(auto& position:triangleWorld.positions)position=math::transformPoint(transform,position);
+                const bool samePoint=math::length(previous-(point+delta))<1e-6;
+                if(!samePoint||(!commonBoundary(selectedWorld,selectedBary,triangleWorld,bary)&&(!vertexA||!vertexB)))ambiguous=true;
+            }
+        }
+    }
+    if(!selected)return result;if(ambiguous){result.status=SurfaceHitStatus::Ambiguous;return result;}
+    result.status=SurfaceHitStatus::Found;result.hit=sourceHit(*selectedDraw,*selected,entity,selectedBary);return result;
 }
 }

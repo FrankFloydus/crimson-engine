@@ -35,6 +35,7 @@ MaterialAsset defaultParticleMaterialAsset();
 void ensureEngineMaterialAssets(const std::filesystem::path& projectRoot);
 bool particleMaterialCompatible(const MaterialAsset& material);
 bool modelMaterialCompatible(const MaterialAsset& material);
+bool decalMaterialCompatible(const MaterialAsset& material);
 // One native sampler overrides all channels; legacy/imported materials keep
 // their original slot samplers until an explicit shared-sampler edit.
 ModelSampler materialSampler(const ModelMaterial&, const ModelTexture&);

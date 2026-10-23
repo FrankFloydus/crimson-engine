@@ -196,6 +196,7 @@ ImVec4 pinColor(MaterialValueType type) {
 }
 std::vector<MaterialPinDefinition> visibleInputs(const MaterialGraph& graph,const MaterialNode& node,const MaterialOutputNode& output) {
     if(node.kind==MaterialNodeKind::Output) {
+        if(output.shading==MaterialShading::Decal)return materialNodeInputs(graph,node,output.shading,output.blend);
         auto result=materialNodeInputs(graph,node,output.shading,output.blend,true);
         std::erase_if(result,[&](const auto& pin) {
             const bool retained=pin.pin==MaterialPin::Opacity||pin.pin==MaterialPin::OpacityMask||pin.pin==MaterialPin::Height||
@@ -543,7 +544,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         TexturePresentation sourceTexture;
         ed::BeginNode(s.node(node.id));
         ImGui::PushID(static_cast<int>(s.node(node.id).Get()));
-        const char* title=node.kind==MaterialNodeKind::Output?(output.shading==MaterialShading::StandardPbr?"Lit PBR Output":"Unlit Output"):
+        const char* title=node.kind==MaterialNodeKind::Output?(output.shading==MaterialShading::Decal?"Decal Output":output.shading==MaterialShading::StandardPbr?"Lit PBR Output":"Unlit Output"):
             node.name.empty()?materialNodeKindName(node.kind):node.name.c_str();
         float width=std::clamp(ImGui::CalcTextSize(title).x+24,220.f,320.f);
         if(node.kind==MaterialNodeKind::Grunge)width=std::max(width,300.f);

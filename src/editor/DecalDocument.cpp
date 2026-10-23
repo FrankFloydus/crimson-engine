@@ -26,12 +26,13 @@ bool DecalDocument::dirty() const {
 }
 std::string DecalDocument::undoLabel() const { return canUndo()?history_[cursor_-1].label:std::string{}; }
 std::string DecalDocument::redoLabel() const { return canRedo()?history_[cursor_].label:std::string{}; }
-std::vector<std::string> DecalDocument::historicalTextureReferences() const {
+std::vector<std::string> DecalDocument::historicalMaterialReferences() const {
     std::vector<std::string> references;
     const auto append=[&](const DecalAsset& definition) {
-        for(const auto& id:decalTextureReferences(definition))
+        for(const auto& id:decalMaterialReferences(definition))
             if(std::find(references.begin(),references.end(),id)==references.end())references.push_back(id);
     };
+    append(saved_);
     for (const auto& command:history_) { append(command.before);append(command.after); }
     if (transaction_) append(transaction_->before);
     return references;
@@ -39,6 +40,21 @@ std::vector<std::string> DecalDocument::historicalTextureReferences() const {
 void DecalDocument::publish() {
     committed_=std::make_shared<const DecalAsset>(working_);
     ++revision_;
+}
+bool DecalDocument::reconcileMaterialReferences(const std::function<std::string(const std::string&)>& resolve) {
+    if(!open_)return true;
+    try {
+        auto working=working_,saved=saved_;auto history=history_;auto transaction=transaction_;auto committed=committed_;
+        const auto rewrite=[&](DecalAsset& a){const auto id=resolve(a.material.id);if(id==a.material.id)return false;a.material.id=id;a.stagedMaterial.reset();validateDecalAsset(a);return true;};
+        const bool workingChanged=rewrite(working),savedChanged=rewrite(saved);bool changed=workingChanged||savedChanged,committedChanged=false;
+        for(auto& c:history){changed|=rewrite(c.before);changed|=rewrite(c.after);}if(transaction)changed|=rewrite(transaction->before);
+        if(committed){auto next=*committed;if(rewrite(next)){committed=std::make_shared<const DecalAsset>(std::move(next));committedChanged=changed=true;}}
+        if(!changed)return true;auto fingerprint=fingerprint_;
+        if(savedChanged){std::ifstream in(decalAssetPath(root_,saved.id),std::ios::binary);const std::string bytes{std::istreambuf_iterator<char>(in),{}};
+            if(in&&!in.bad()&&bytes==serializeDecalAsset(saved))fingerprint=fileFingerprint(root_,saved.id);}
+        std::swap(working_,working);std::swap(saved_,saved);history_.swap(history);transaction_.swap(transaction);committed_.swap(committed);fingerprint_=fingerprint;
+        if(workingChanged)++previewRevision_;if(committedChanged)++revision_;status_.clear();return true;
+    }catch(const std::exception& error){status_="Could not reconcile deleted decal materials: "+std::string(error.what());return false;}
 }
 void DecalDocument::install(DecalAsset asset,bool saved) {
     validateDecalAsset(asset);

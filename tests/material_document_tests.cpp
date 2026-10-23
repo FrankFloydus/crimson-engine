@@ -436,6 +436,20 @@ void refractionTransactions() {
     require(!document.edit("Invalid optical value",[](auto& asset){materialOutputNode(asset.graph).output.attenuationDistance=0;})&&
         same(document.definition(),optical)&&document.revision()==revision&&!document.dirty(),"Rejected optical edit changed document authority or history.");
 }
+void decalMaterialTransactions() {
+    Project project;MaterialDocument document(project.root);
+    auto staged=defaultParticleMaterialAsset();staged.id=newAssetId();staged.name="Staged decal";
+    materialOutputNode(staged.graph).output.shading=MaterialShading::Decal;canonicalizeMaterialAsset(staged);
+    require(document.loadStaged(staged)&&document.editable()&&!document.dirty(),"Staged decal material was not clean and editable.");
+    require(!fs::exists(materialAssetPath(project.root,staged.id))&&!document.externalFileChanged(),"Opening a staged decal material wrote a file or reported a false conflict.");
+    const auto original=document.definition();
+    require(document.edit("Configure decal channels",[](auto& a){auto& output=materialOutputNode(a.graph).output;output.decalNormalEnabled=true;output.decalRoughnessEnabled=true;output.decalRoughnessStrength=.4f;}),"Decal output settings were rejected.");
+    const auto configured=document.definition();
+    require(document.undo()&&same(document.definition(),original)&&!document.dirty()&&document.redo()&&same(document.definition(),configured),"Decal settings did not undo/redo atomically.");
+    require(decalMaterialCompatible(configured)&&!modelMaterialCompatible(configured)&&!particleMaterialCompatible(configured),"Decal graph was admitted to an ordinary surface consumer.");
+    require(document.save()&&document.load(staged.id)&&same(document.definition(),configured)&&!document.dirty(),"Decal graph failed explicit save and reopen.");
+    require(document.edit("Switch output model",[](auto& a){materialOutputNode(a.graph).output.shading=MaterialShading::StandardPbr;})&&document.undo()&&same(document.definition(),configured),"Shader model switching lost Decal output values.");
+}
 void usageBlendAndHdrTransactions() {
     Project project;MaterialDocument document(project.root);require(document.create("Coverage history"),"Coverage fixture creation failed.");
     const auto original=document.definition();const auto output=materialOutputNode(original.graph).id;
@@ -459,5 +473,5 @@ void usageBlendAndHdrTransactions() {
 }
 int main(int argc,char** argv){try{if(argc==4&&std::string(argv[1])=="--verify-material"){verifyActualMaterial(argv[2],argv[3]);return 0;}
     require(argc==1,"Expected --verify-material <project root> <material id>, or no arguments.");
-    publicationAndHistory();returningGestureAndDirtyState();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+    publicationAndHistory();returningGestureAndDirtyState();displacementTransactions();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();refractionTransactions();decalMaterialTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

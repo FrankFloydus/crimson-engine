@@ -123,7 +123,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     for(const auto& decal:input.decals) {
         using streaming::detail::hash;
         hash(signature,decal.entityId);hash(signature,decal.stableOrder);hash(signature,decal.layer);
-        hash(signature,decal.tint);hash(signature,decal.opacity);hash(signature,decal.edgeFeather);
+        hash(signature,decal.tint);hash(signature,decal.opacity);hash(signature,decal.edgeFeather);hash(signature,decal.frame);
         if(decal.patch)hash(signature,decal.patch->fingerprint);
         if(decal.material)hash(signature,decal.material->fingerprint);
     }
@@ -137,7 +137,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     auto scenePins=std::make_shared<ViewPins>();
     for(const auto& model:input.extracted.models) {
         const bool selected=std::find(input.selection.begin(),input.selection.end(),model.id)!=input.selection.end();
-        const bool receiveDecals=decalReceiver(model.id),fullDetail=selected||receiveDecals||input.surfacePickActive;
+        const bool participating=model.receiveDecals&&decalReceiver(model.id),receiveDecals=model.receiveDecals,fullDetail=selected||participating||input.surfacePickActive;
         if(!selected)if(const auto metadata=assets.findModel(model.assetId,model.primitive))
             if(!visibleBounds(resources.modelBounds(model,metadata),model.world,input.sceneCamera,input.sceneAspect))continue;
         auto prepared=resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,fullDetail,
@@ -170,14 +170,14 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
         const auto aspect=static_cast<float>(input.gameWidth)/input.gameHeight;
         auto gamePins=std::make_shared<ViewPins>();
         for(const auto& model:input.extracted.models) {
-            const bool receiveDecals=decalReceiver(model.id);
+            const bool participating=model.receiveDecals&&decalReceiver(model.id),receiveDecals=model.receiveDecals;
             if(const auto metadata=assets.findModel(model.assetId,model.primitive))
                 if(!visibleBounds(resources.modelBounds(model,metadata),model.world,*input.gameCamera,aspect))continue;
-            auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,receiveDecals,
+            auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,participating,
                 ResourcePriority::Visible,aspect,model.materialOverrides,0,&model);
             includePreparedModel(stats,prepared);
             if(prepared) {
-                appendModel(game,*gamePins,model,std::move(prepared),receiveDecals,receiveDecals,resources);
+                appendModel(game,*gamePins,model,std::move(prepared),participating,receiveDecals,resources);
             }
         }
         game.pinned=std::move(gamePins);frame->views.push_back(std::move(game));

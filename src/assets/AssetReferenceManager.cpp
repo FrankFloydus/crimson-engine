@@ -104,6 +104,12 @@ std::string AssetReferenceManager::resolveEnvironment(const std::string& id)cons
 std::string AssetReferenceManager::resolveDecal(const std::string& id)const {
     const auto result=resolve(id);if(!result.empty()&&!decalIdentity(root_,result))throw std::runtime_error("Decal replacement has an incompatible asset kind.");return result;
 }
+std::string AssetReferenceManager::resolveDecalMaterial(const std::string& id)const {
+    const auto result=resolveMaterial(id);
+    if(result.empty()||(deleted(id)&&result==DefaultMaterialId))return {};
+    if(isEngineAssetId(result))throw std::runtime_error("Decal material requires Decal shading.");
+    return result;
+}
 std::string AssetReferenceManager::resolveParticle(const std::string& id)const{
     auto result=resolve(id);if(result.empty())return result;
     if(!particleIdentity(root_,result))

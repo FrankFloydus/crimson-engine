@@ -61,7 +61,7 @@ ModelSampler readSampler(const Json& j) {
     return {static_cast<ModelWrap>(u),static_cast<ModelWrap>(v),static_cast<ModelFilter>(min),static_cast<ModelFilter>(mag)};
 }
 const char* shadingName(MaterialShading shading) {
-    switch(shading){case MaterialShading::StandardPbr:return "standard-pbr";case MaterialShading::Unlit:return "unlit";}
+    switch(shading){case MaterialShading::StandardPbr:return "standard-pbr";case MaterialShading::Unlit:return "unlit";case MaterialShading::Decal:return "decal";}
     throw std::runtime_error("Unsupported material shading mode.");
 }
 const char* blendName(MaterialBlend blend) {
@@ -69,7 +69,7 @@ const char* blendName(MaterialBlend blend) {
     throw std::runtime_error("Unsupported material blend mode.");
 }
 MaterialShading readShading(const std::string& value) {
-    if(value=="standard-pbr")return MaterialShading::StandardPbr;if(value=="unlit")return MaterialShading::Unlit;
+    if(value=="standard-pbr")return MaterialShading::StandardPbr;if(value=="unlit")return MaterialShading::Unlit;if(value=="decal")return MaterialShading::Decal;
     throw std::runtime_error("Unsupported material shading mode.");
 }
 MaterialBlend readBlend(const std::string& value) {
@@ -143,12 +143,16 @@ bool particleMaterialCompatible(const MaterialAsset& material) {
 }
 bool modelMaterialCompatible(const MaterialAsset& material) {
     try {
-        // Consumer compatibility is a graph property, independent of shading,
-        // blending, or the geometry that eventually supplies its inputs.
+        if((material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)==MaterialShading::Decal)return false;
         if(!material.graph.empty())validateMaterialGraph(material.graph);
         else {validateMaterialAsset(material);(void)materialGraphFromLegacy(material.surface,material.shading,material.blend);}
         return true;
     }catch(const std::exception&){return false;}
+}
+
+bool decalMaterialCompatible(const MaterialAsset& material) {
+    try {validateMaterialAsset(material);return (material.graph.empty()?material.shading:materialOutputNode(material.graph).output.shading)==MaterialShading::Decal;}
+    catch(const std::exception&){return false;}
 }
 
 void validateMaterialAsset(const MaterialAsset& a) {

@@ -3,11 +3,13 @@
 #include "crimson-renderer/Renderer.h"
 #include "crimson-renderer/Environment.h"
 #include "resources/ResourceManager.h"
+#include "editor/DecalPreview.h"
 #include <array>
 #include <span>
 namespace crimson {
 class AssetLibrary;
 class EditorResources;
+class MaterialEditor;
 class DecalEditor {
 public:
     explicit DecalEditor(const std::filesystem::path& root):document_(root){}
@@ -27,7 +29,7 @@ public:
     void requestExit();
     bool takeExitRequest(){const auto result=exitReady_;exitReady_=false;return result;}
     void save(AssetLibrary&,bool saveAs=false);
-    void draw(AssetLibrary&,Renderer&,ResourceManager&,EditorResources&);
+    void draw(AssetLibrary&,Renderer&,ResourceManager&,EditorResources&,MaterialEditor&);
     void filesChanged(std::span<const std::filesystem::path>);
     void setAntiAliasing(AntiAliasing value){settings_.antiAliasing=value;}
 private:
@@ -43,11 +45,13 @@ private:
     std::uint16_t displayedTarget_{UINT16_MAX};
     SceneSettings settings_;
     ResourceHandle<PreparedEnvironment> environment_;
+    MaterialPreviewMesh previewMesh_{MaterialPreviewMesh::Plane};
+    DecalPreviewGeometry previewGeometry_;
     void request(Pending,std::string,AssetLibrary*);
     void perform(AssetLibrary&);
     void publish(AssetLibrary&);
     void modals(AssetLibrary&);
-    void properties(AssetLibrary&,bool canceled);
+    void properties(AssetLibrary&,MaterialEditor&,bool canceled);
     void preview(AssetLibrary&,Renderer&,ResourceManager&,EditorResources&);
 };
 }

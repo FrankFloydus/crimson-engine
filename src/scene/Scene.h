@@ -34,6 +34,7 @@ inline constexpr size_t MaximumPointLights = MaximumClusteredPointLights;
 
 struct Identity { EntityId id{}; std::string name; };
 struct Transform { Mat4 local{}; };
+struct VisualSettings { bool receiveDecals{true}; };
 struct Relationship { EntityId parent{}; uint32_t order{}; };
 struct SceneModelAnimation {
     AssetRef<struct AnimationAsset> asset; // Empty selects the model's authored bind pose.
@@ -224,6 +225,7 @@ struct EntityRecord {
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
     std::optional<SceneDecal> decal;
+    bool receiveDecals{true}; // Per entity, including future visual capabilities.
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);

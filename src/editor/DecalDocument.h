@@ -32,7 +32,8 @@ public:
     bool canRedo() const { return cursor_ < history_.size() && !transaction_; }
     std::string undoLabel() const;
     std::string redoLabel() const;
-    std::vector<std::string> historicalTextureReferences() const;
+    std::vector<std::string> historicalMaterialReferences() const;
+    bool reconcileMaterialReferences(const std::function<std::string(const std::string&)>&);
     bool create(const std::string& name = "New Decal");
     bool load(const std::string& id);
     bool open(const std::string& id) { return load(id); }

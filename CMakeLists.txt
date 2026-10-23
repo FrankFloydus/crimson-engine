@@ -309,14 +309,21 @@ if(BUILD_TESTING)
     target_link_libraries(decal_viewport_tests PRIVATE crimson-math)
     target_compile_options(decal_viewport_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME decal_viewport_core COMMAND decal_viewport_tests)
+    add_executable(decal_preview_tests tests/decal_preview_tests.cpp src/editor/DecalPreview.cpp)
+    target_link_libraries(decal_preview_tests PRIVATE crimson-decal-resources Crimson::Renderer crimson-resources)
+    target_compile_definitions(decal_preview_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(decal_preview_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_preview_core COMMAND decal_preview_tests)
     add_library(decal_host_compile OBJECT EXCLUDE_FROM_ALL
         src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/DeletionPreparation.cpp
         src/editor/DecalResources.cpp src/editor/DecalPreview.cpp
         src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp
         src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
+        src/editor/MaterialPreview.cpp src/editor/MaterialDocument.cpp
         src/editor/ViewportAssetDrop.cpp src/tools/DecalEditor.cpp src/tools/TextureAssetField.cpp
-        src/tools/MaterialEditor.cpp src/tools/ScenePanels.cpp src/tools/AssetBrowser.cpp
-        src/resources/ShaderReloadSession.cpp)
+        src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/ScenePanels.cpp src/tools/AssetBrowser.cpp
+        src/resources/ShaderReloadSession.cpp src/resources/ProjectMaterialCache.cpp
+        src/crimson-renderer/MaterialGraphGpu.cpp src/crimson-renderer/MaterialGraphShader.cpp)
     target_include_directories(decal_host_compile PRIVATE src tests "${CC_GENERATED_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crimson-renderer/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crimson-renderer/include/crimson/renderer/forward"

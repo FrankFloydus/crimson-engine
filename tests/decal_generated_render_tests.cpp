@@ -135,7 +135,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
         packet->runtimeParameters=generated.runtimeParameters;packet->shading=output().shading;packet->blend=output().blend;
         packet->receiveFog=output().receiveFog;packet->refraction=generated.refraction;packet->tessellation=generated.tessellation;
         packet->dynamicCoverage=generated.dynamicCoverage;packet->constantRoughness=generated.constantRoughness;
-        packet->signature=result.programs->signature;
+        packet->signature=result.programs->signature;packet->decalChannels=generated.decalChannels;
         for(const auto& source:generated.textures){packet->textures[source.slot]=white.handle;packet->flags[source.slot]=Clamp;}
         check(packet->sources.size()==12,"Generated decal fixture lost part of the twelve-texture budget.");
         for(unsigned slot=0;slot<12;++slot)check(bgfx::isValid(packet->textures[slot])&&packet->flags[slot]!=UINT32_MAX,
@@ -155,12 +155,34 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     const auto capture=[&](std::span<const RenderDecal> decals) {
         scene.instances=instances;scene.decals=decals;renderer.render(scene);return read();
     };
-    auto patch=flatPatch();auto red=std::make_shared<PreparedDecalMaterial>();red->fingerprint=1;red->colorFactor={.75f,.015f,.01f};
-    auto normalOnly=std::make_shared<PreparedDecalMaterial>();normalOnly->fingerprint=2;normalOnly->colorEnabled=false;
-    normalOnly->normalEnabled=true;normalOnly->textures[2]=normal.handle;normalOnly->samplerFlags[2]=Clamp;
-    auto wet=std::make_shared<PreparedDecalMaterial>();wet->fingerprint=3;wet->colorEnabled=false;wet->roughnessEnabled=true;wet->roughness=.06f;
-    auto all=std::make_shared<PreparedDecalMaterial>(*red);all->fingerprint=4;all->normalEnabled=all->roughnessEnabled=true;
-    all->textures[2]=normal.handle;all->samplerFlags[2]=Clamp;all->roughness=.06f;
+    const auto decalGraph=[&](std::uint64_t fingerprint,bool color,bool normalEnabled,bool roughness,Vec3 rgb=Vec3{.75f,.015f,.01f},float normalOpacity=1.f) {
+        MaterialAsset definition;definition.id="decal-domain-fixture-"+std::to_string(fingerprint);
+        auto& out=addMaterialNode(definition.graph,MaterialNodeKind::Output);
+        const auto decalOutput=out.id;out.output.shading=MaterialShading::Decal;out.output.baseColor=rgb;
+        out.output.decalColorEnabled=color;out.output.decalNormalEnabled=normalEnabled;out.output.decalRoughnessEnabled=roughness;
+        out.output.decalNormalStrength=normalOpacity;out.output.roughness=.06f;
+        if(normalEnabled) {
+            const auto texture=addMaterialNode(definition.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(definition.graph,texture)->texture.role=MaterialTextureRole::Normal;
+            findMaterialNode(definition.graph,texture)->texture.image.id="assets/textures/decal-fixture-normal.png";
+            connectMaterialNodes(definition.graph,texture,MaterialPin::Normal,decalOutput,MaterialPin::Normal);
+        }
+        const auto generated=generateMaterialGraphShader(definition);MaterialGraphProgramResult result;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{180};
+        do {tick();result=programs.request(generated);if(!result.current&&!result.compiling)throw std::runtime_error(result.diagnostic);
+            if(!result.current)std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(!result.current&&std::chrono::steady_clock::now()<deadline);
+        check(result.current&&result.programs,"Decal domain graph compilation timed out: "+result.diagnostic);
+        auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=result.programs;packet->uniforms=generated.uniforms;
+        packet->sources=generated.textures;packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
+        packet->shading=MaterialShading::Decal;packet->signature=result.programs->signature;packet->decalChannels=generated.decalChannels;
+        for(const auto& source:generated.textures){packet->textures[source.slot]=normal.handle;packet->flags[source.slot]=Clamp;}
+        auto prepared=std::make_shared<PreparedDecalMaterial>();prepared->fingerprint=fingerprint;prepared->graph=std::move(packet);return prepared;
+    };
+    auto patch=flatPatch();auto red=decalGraph(1,true,false,false);
+    auto normalOnly=decalGraph(2,false,true,false);
+    auto wet=decalGraph(3,false,false,true);
+    auto all=decalGraph(4,true,true,true);
     const auto fixedBase=capture({});instances[0].textures=&graphBindings;const auto graphBase=capture({});
     check(error(fixedBase,graphBase)<.2,"Fixed/generated base PBR surfaces diverged before decal testing.");
     const std::array<std::shared_ptr<const PreparedDecalMaterial>,4> materials{red,normalOnly,wet,all};
@@ -176,7 +198,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
         write(artifacts,"generated-"+names[channel],generated);write(artifacts,"fixed-"+names[channel],fixed);
     }
     decals={decal(patch,normalOnly)};const auto lowerNormal=capture(decals);
-    auto zeroNormal=std::make_shared<PreparedDecalMaterial>(*normalOnly);zeroNormal->fingerprint=5;zeroNormal->normalStrength=0;
+    auto zeroNormal=decalGraph(5,false,true,false,{1,1,1},0);
     decals.push_back(decal(patch,zeroNormal,102,2));
     check(capture(decals).rgba==lowerNormal.rgba,"Zero normal strength erased a lower normal on a generated receiver.");
 
@@ -191,7 +213,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     const auto throughGlass=capture(decals);
     check(renderer.refractionStatus().empty()&&renderer.refractionResidentBytes()>0,"Generated glass did not publish an optical snapshot: "+renderer.refractionStatus());
     check(error(opaquePaint,throughGlass,true)<1.1,"Refraction snapshot omitted completed decal shading on the opaque receiver.");
-    auto blue=std::make_shared<PreparedDecalMaterial>(*red);blue->fingerprint=6;blue->colorFactor={.01f,.01f,.9f};
+    auto blue=decalGraph(6,true,false,false,{.01f,.01f,.9f});
     decals.push_back(decal(flatPatch(2,.3f),blue,103,3));
     check(capture(decals).rgba==throughGlass.rgba,"Unsupported translucent graph received a decal.");
     check(renderer.decalStats(RenderViewPurpose::Scene).submitted==1,"Translucent surface was admitted as a decal receiver.");

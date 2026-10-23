@@ -1,7 +1,7 @@
 #include "DecalEditor.h"
 #include "DocumentEditorMenu.h"
 #include "assets/AssetLibrary.h"
-#include "TextureAssetField.h"
+#include "MaterialEditor.h"
 #include "PropertyReset.h"
 #include "editor/DecalPreview.h"
 #include "editor/EditorResources.h"
@@ -64,7 +64,7 @@ void DecalEditor::perform(AssetLibrary& assets) {
     if(pending==Pending::Create) {
         loaded=document_.create();
         if(loaded) {
-            assets.noteAssetWrite(document_.assetId());assets.refreshDecals();
+            assets.noteAssetWrite(document_.assetId());assets.refreshMaterials();assets.refreshDecals();
             try {
                 if(!pendingFolder_.empty()) {
                     const std::array<std::string,1> ids{document_.assetId()};
@@ -89,7 +89,7 @@ void DecalEditor::save(AssetLibrary& assets,bool saveAs) {
         std::snprintf(saveName_.data(),saveName_.size(),"%s",document_.definition().name.c_str());savePopup_=true;return;
     }
     if(document_.externalFileChanged()) { externalPopup_=true;message_="The decal changed on disk. Choose Overwrite, Reload, or Save As.";return; }
-    if(document_.save()) { assets.noteAssetWrite(document_.assetId());assets.refreshDecals();message_.clear(); }
+    if(document_.save()) { assets.noteAssetWrite(document_.assetId());assets.refreshMaterials();assets.refreshDecals();message_.clear(); }
     else message_=document_.status();
 }
 void DecalEditor::filesChanged(std::span<const std::filesystem::path> paths) {
@@ -133,7 +133,7 @@ void DecalEditor::modals(AssetLibrary& assets) {
                     catch(...) { /* Missing/corrupt sources retain their saved generation. */ }
                     assets.publishDecal(std::make_shared<const DecalAsset>(std::move(source)));
                 }
-                publish(assets);assets.noteAssetWrite(document_.assetId());assets.refreshDecals();assets.select(document_.assetId());
+                publish(assets);assets.noteAssetWrite(document_.assetId());assets.refreshMaterials();assets.refreshDecals();assets.select(document_.assetId());
                 if(continueAfterSave_)perform(assets);
                 continueAfterSave_=false;
                 ImGui::CloseCurrentPopup();
@@ -148,7 +148,7 @@ void DecalEditor::modals(AssetLibrary& assets) {
         ImGui::TextUnformatted("The decal changed on disk.");
         if(ImGui::Button("Overwrite")) {
             if(document_.save()) {
-                assets.noteAssetWrite(document_.assetId());assets.refreshDecals();message_.clear();
+                assets.noteAssetWrite(document_.assetId());assets.refreshMaterials();assets.refreshDecals();message_.clear();
                 if(continueAfterSave_)perform(assets);
                 continueAfterSave_=false;ImGui::CloseCurrentPopup();
             }
@@ -171,73 +171,73 @@ void DecalEditor::modals(AssetLibrary& assets) {
 }
 void DecalEditor::publish(AssetLibrary& assets) {
     if(!document_.isOpen())return;
-    assets.setDecalDocumentReferences(decalTextureReferences(document_.definition()),document_.historicalTextureReferences());
+    if(!document_.reconcileMaterialReferences([&](const std::string& id){return assets.references().resolveDecalMaterial(id);})){message_=document_.status();return;}
+    assets.setDecalDocumentReferences(decalMaterialReferences(document_.definition()),document_.historicalMaterialReferences());
     if(publishedRevision_!=document_.revision() || publishedId_!=document_.assetId()) {
         if(document_.editable())assets.publishDecal(document_.committed());
         publishedRevision_=document_.revision();publishedId_=document_.assetId();
     }
 }
-void DecalEditor::properties(AssetLibrary& assets,bool canceled) {
-    auto value=document_.definition();const DecalAsset defaults;
-    const auto commit=[&](const char* label) {
+void DecalEditor::properties(AssetLibrary& assets,MaterialEditor& materials,bool canceled) {
+    const auto materialId=document_.definition().material.id;
+    const auto material=assets.findMaterial(materialId);
+    const auto assign=[&](const std::string& id) {
         if(canceled)return;
-        finishInteraction();document_.edit(label,[&](auto& definition){definition=value;});
-    };
-    const auto gesture=[&](bool changed,const char* label) {
-        if(canceled)return;
-        if((ImGui::IsItemActivated()||changed)&&!document_.transactionActive())document_.begin(label);
-        if(changed)document_.update([&](auto& definition){definition=value;});
-        if(ImGui::IsItemDeactivated()||(changed&&!ImGui::IsItemActive()))document_.commit();
-    };
-    const auto enabled=[&](const char* label,bool& field,bool initial) {
-        if(resettableProperty(field,initial,[&]{return ImGui::Checkbox(label,&field);}))commit(label);
-    };
-    const auto strength=[&](const char* label,float& field,float initial) {
-        gesture(resettableProperty(field,initial,[&]{return ImGui::SliderFloat(label,&field,0,1,"%.3f");}),label);
-    };
-    const auto texture=[&](const char* label,AssetRef<DecodedImage>& field,bool normal=false) {
-        return drawTextureAssetField(assets,label,field.id,message_,normal);
-    };
-    const auto channel=[&](const char* label,DecalTextureChannel& field,DecalTextureChannel initial) {
-        int selected=static_cast<int>(field);
-        if(resettableProperty(selected,static_cast<int>(initial),[&]{return ImGui::Combo(label,&selected,"Red\0Green\0Blue\0Alpha\0");})) {
-            field=static_cast<DecalTextureChannel>(selected);commit(label);
+        if(!id.empty()) {
+            const auto candidate=assets.findMaterial(id);
+            if(!candidate||materialOutputNode(candidate->graph).output.shading!=MaterialShading::Decal){message_="Choose a material with Shader Model: Decal.";return;}
         }
+        finishInteraction();
+        if(document_.edit("Assign decal material",[&](auto& value){value.material.id=id;value.stagedMaterial.reset();}))message_.clear();
+        else message_=document_.status();
     };
+    ImGui::SeparatorText("Material");
     ImGui::BeginDisabled(!document_.editable());
-    if(ImGui::CollapsingHeader("Color",ImGuiTreeNodeFlags_DefaultOpen)) {
-        enabled("Enabled##Color",value.colorEnabled,defaults.colorEnabled);
-        if(texture("Color Texture",value.colorTexture)) {if(!value.colorTexture.empty())value.colorEnabled=true;commit("Change decal color texture");}
-        gesture(resettableProperty(value.color,defaults.color,[&]{return ImGui::ColorEdit3("Color Multiplier",value.color.data(),ImGuiColorEditFlags_Float);}),"Change decal color");
-        strength("Color Strength",value.colorStrength,defaults.colorStrength);
+    ImGui::SetNextItemWidth(std::max(80.f,ImGui::GetContentRegionAvail().x-34));
+    const auto label=material?assets.displayName(materialId):materialId.empty()?std::string("None"):"Missing: "+assets.displayName(materialId);
+    if(ImGui::BeginCombo("##Decal material",label.c_str())) {
+        static ImGuiTextFilter filter;
+        if(ImGui::IsWindowAppearing())filter.Clear();
+        filter.Draw("Search");
+        ImGui::BeginChild("Decal material choices",{320,ImGui::GetFontSize()*12});
+        for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material) {
+            const auto candidate=assets.findMaterial(entry.id);
+            if(!candidate||materialOutputNode(candidate->graph).output.shading!=MaterialShading::Decal)continue;
+            const auto name=assets.displayName(entry.id);if(!filter.PassFilter(name.c_str()))continue;
+            ImGui::PushID(entry.id.c_str());
+            if(ImGui::Selectable(name.c_str(),entry.id==materialId)){assign(entry.id);ImGui::CloseCurrentPopup();}
+            ImGui::PopID();
+        }
+        ImGui::EndChild();ImGui::EndCombo();
     }
-    if(ImGui::CollapsingHeader("Coverage",ImGuiTreeNodeFlags_DefaultOpen)) {
-        if(texture("Coverage Texture",value.coverageTexture))commit("Change decal coverage texture");
-        if(ImGui::IsItemHovered())ImGui::SetTooltip("Without a coverage texture, use color alpha when a color texture is assigned, otherwise full coverage.");
-        if(!value.coverageTexture.empty())channel("Coverage Channel",value.coverageChannel,defaults.coverageChannel);
+    if(ImGui::BeginDragDropTarget()) {
+        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
+            const auto* bytes=static_cast<const char*>(payload->Data);
+            if(payload->DataSize>1&&bytes&&bytes[payload->DataSize-1]=='\0'&&std::find(bytes,bytes+payload->DataSize-1,'\0')==bytes+payload->DataSize-1)
+                assign(std::string(bytes,static_cast<std::size_t>(payload->DataSize-1)));
+            else message_="The material payload is invalid.";
+        }
+        ImGui::EndDragDropTarget();
     }
-    if(ImGui::CollapsingHeader("Normal",ImGuiTreeNodeFlags_DefaultOpen)) {
-        enabled("Enabled##Normal",value.normalEnabled,defaults.normalEnabled);
-        if(texture("Normal Texture",value.normalTexture,true)) {if(!value.normalTexture.empty())value.normalEnabled=true;commit("Change decal normal texture");}
-        strength("Normal Strength",value.normalStrength,defaults.normalStrength);
-    }
-    if(ImGui::CollapsingHeader("Roughness",ImGuiTreeNodeFlags_DefaultOpen)) {
-        enabled("Enabled##Roughness",value.roughnessEnabled,defaults.roughnessEnabled);
-        if(texture("Roughness Texture",value.roughnessTexture)) {if(!value.roughnessTexture.empty())value.roughnessEnabled=true;commit("Change decal roughness texture");}
-        if(value.roughnessTexture.empty())strength("Roughness",value.roughness,defaults.roughness);
-        else channel("Roughness Channel",value.roughnessChannel,defaults.roughnessChannel);
-        strength("Roughness Strength",value.roughnessStrength,defaults.roughnessStrength);
-    }
+    ImGui::SameLine();if(ImGui::SmallButton("x##Decal material"))assign({});
     ImGui::EndDisabled();
-    if(document_.transactionActive()&&!ImGui::IsAnyItemActive())finishInteraction();
+    ImGui::BeginDisabled(!material);
+    if(ImGui::Button("Edit Material"))materials.requestOpen(materialId,assets);
+    ImGui::EndDisabled();
 }
 void DecalEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared) {
     previewStatus_.clear();
+    constexpr const char* names[]{"Plane","Sphere","Cylinder","Cube","Rounded Cube"};
+    constexpr MaterialPreviewMesh meshes[]{MaterialPreviewMesh::Plane,MaterialPreviewMesh::Sphere,MaterialPreviewMesh::Cylinder,MaterialPreviewMesh::Cube,MaterialPreviewMesh::RoundedCube};
+    int selected=0;for(int i=0;i<5;++i)if(previewMesh_==meshes[i])selected=i;
+    ImGui::SetNextItemWidth(160);
+    if(resettableProperty(selected,0,[&]{return ImGui::Combo("##Preview mesh",&selected,names,5);},"Plane")){previewMesh_=meshes[selected];cameraInitialized_=false;previewGesture_=0;}
+    ImGui::SameLine();if(ImGui::Button("Reset view"))cameraInitialized_=false;
     const auto available=ImGui::GetContentRegionAvail();if(available.x<=0||available.y<=0)return;
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;
     const auto width=static_cast<std::uint32_t>(std::clamp(available.x*scale.x,1.f,16384.f));
     const auto height=static_cast<std::uint32_t>(std::clamp(available.y*scale.y,1.f,16384.f));
-    const auto& surface=decalPreviewSurface();
+    const auto& surface=previewGeometry_.prepare(previewMesh_,resources);
     if(!cameraInitialized_){settings_.camera=surface.camera;settings_.environment.glow.enabled=false;cameraInitialized_=true;}
     try {
         renderer.resizeDecalPreview(width,height);
@@ -281,6 +281,7 @@ void DecalEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceManage
         if(environment_.state()==ResourceState::Failed)previewStatus_=environment_.diagnostic();
         else if(!environmentRevision_)previewStatus_="Preparing preview environment...";
         if(material&&!material->diagnostic.empty())previewStatus_=material->diagnostic;
+        if(!previewGeometry_.diagnostic().empty())previewStatus_=previewGeometry_.diagnostic();
         if(modelReady&&environmentRevision_) {
             struct Pins {
                 std::shared_ptr<const ModelAsset> model;
@@ -289,19 +290,22 @@ void DecalEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceManage
                 std::vector<RenderDecal> decals;
             };
             auto pins=std::make_shared<Pins>();pins->model=surface.model;pins->environment=environment.shared();pins->textures=std::move(textures);
-            if(material&&material->ready&&material->render)
+            if(material&&material->ready&&material->render&&surface.patch) {
                 pins->decals.push_back({2,2,0,surface.patch,material->render});
+                pins->decals.back().frame=surface.frame;
+            }
             std::array<RenderModelInstance,1> instances{{{1,{surface.model,Mat4{}},&pins->textures,1,true,false,&surface.model->materials}}};
             instances.front().receiveDecals=true;instances.front().castShadows=false;
             const std::array<DirectionalLight,1> lights{{{{-.4f,-1,-.7f},{1,1,1},2,true}}};
             RenderScene scene{settings_,{},nullptr,nullptr,instances,lights,{},true,pins};scene.decals=pins->decals;
+            scene.materialContext={ImGui::GetTime(),ImGui::GetTime()};
             renderer.renderDecalPreview(scene);
         }
     }catch(const std::exception& error){previewStatus_=error.what();ImGui::Dummy(available);}
 }
-void DecalEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared) {
+void DecalEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared,MaterialEditor& materials) {
     if(!document_.isOpen()) {
-        renderer.releaseDecalPreview();displayedTarget_=UINT16_MAX;environment_={};environmentRevision_=0;
+        renderer.releaseDecalPreview();previewGeometry_.clear();displayedTarget_=UINT16_MAX;environment_={};environmentRevision_=0;
         modals(assets);return;
     }
     if(externalChanged_&&!document_.transactionActive()) {
@@ -327,7 +331,7 @@ void DecalEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager& 
         if(ImGui::BeginTable("Decal document",2,ImGuiTableFlags_Resizable)) {
             ImGui::TableSetupColumn("Properties",ImGuiTableColumnFlags_WidthFixed,310);
             ImGui::TableSetupColumn("Preview",ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableNextColumn();ImGui::BeginChild("Decal properties");properties(assets,canceled);
+            ImGui::TableNextColumn();ImGui::BeginChild("Decal properties");properties(assets,materials,canceled);
             if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());
             if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());
             ImGui::EndChild();ImGui::TableNextColumn();ImGui::BeginChild("Decal preview");

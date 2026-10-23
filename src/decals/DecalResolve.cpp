@@ -22,10 +22,15 @@ Mat4 reanchorDecalFrame(const Mat4& previousWorld,Vec3 previousNormal,const Mat4
     for(size_t axis=0;axis<3;++axis)result.at(axis,3)=point[axis];
     return result;
 }
-bool receiverPolicyAllows(const SceneDecalReceiverPolicy&p,uint64_t seed,uint64_t owner,uint64_t candidate,uint64_t candidateOwner){
-    if(!candidate||std::find(p.excluded.begin(),p.excluded.end(),candidate)!=p.excluded.end())return false;
-    if(candidate==seed||std::find(p.included.begin(),p.included.end(),candidate)!=p.included.end())return true;
-    return p.scope==SceneDecalReceiverScope::SeedQuaderScene&&owner&&candidateOwner==owner;
+std::optional<Mat4> conformDecalFrame(const Mat4&authored,Vec3 point,Vec3 normal) {
+    if(!math::isAffine(authored)||!math::finite(point)||!math::finite(normal))return {};
+    const auto x=math::transformDirection(authored,{1,0,0}),y=math::transformDirection(authored,{0,1,0}),z=math::normalized(normal);
+    const double lengthX=math::length(x),lengthY=math::length(y);if(lengthX<1e-6||lengthY<1e-6)return {};
+    const double shear=math::dot(x,y)/lengthX,orthogonal=std::sqrt(std::max(0.,lengthY*lengthY-shear*shear));if(orthogonal<1e-6)return {};
+    auto tangent=x-z*math::dot(x,z);if(math::length(tangent)<lengthX*1e-5)tangent=math::cross(y,z);
+    if(math::length(tangent)<1e-8)tangent=math::transformDirection(surfacePlacementFrame({},z),{1,0,0});tangent=math::normalized(tangent);
+    const auto first=tangent*lengthX,second=tangent*shear+math::cross(z,tangent)*(orthogonal*(math::handedness(authored)<0?-1:1));
+    Mat4 result;for(size_t axis=0;axis<3;++axis){result.at(axis,0)=first[axis];result.at(axis,1)=second[axis];result.at(axis,2)=z[axis];result.at(axis,3)=point[axis];}return result;
 }
 bool receiverMaterialEligible(const ModelMaterial&m,std::string* diagnostic){
     const auto reject=[&](const char*s){if(diagnostic)*diagnostic=s;return false;};
@@ -40,19 +45,5 @@ bool receiverMaterialEligible(const ModelMaterial&m,std::string* diagnostic){
         for(const auto&link:m.graph->links)if(link.toNode==id&&link.toPin==MaterialPin::Opacity)return reject("Runtime opacity receivers are unsupported.");
     }else if(m.alphaBlend)return reject("Transparent receivers are unsupported.");
     if(diagnostic)diagnostic->clear();return true;
-}
-SeedResolution resolveAuthoredSeed(const ModelSurface&surface,const SceneDecalSeed&seed,const Mat4&world,const Mat4&frame){
-    SeedResolution result;
-    if(!seed.receiver||!math::isAffine(frame)||!math::inverse(world)){result.diagnostic="Missing or invalid surface frame.";return result;}
-    const Vec3 center=math::transformPoint(frame,{}),x=math::transformDirection(frame,{1,0,0}),y=math::transformDirection(frame,{0,1,0});
-    const float limit=static_cast<float>(std::max(.002,.1*std::min(math::length(x),math::length(y))));
-    float tolerance=limit;
-    if(seed.fingerprint==surface.fingerprint){const Vec3 previous=math::transformPoint(world,seed.localPoint);if(math::length(previous-center)<1e-5)tolerance=0;}
-    auto hit=resolveModelSurfaceHit(surface,seed.receiver,world,seed.draw,seed.primitive,center,tolerance);
-    result.status=hit.status;result.hit=hit.hit;
-    if(!hit.hit){result.diagnostic=hit.status==SurfaceHitStatus::Ambiguous?"Ambiguous surface; place the decal again.":"Missing surface; place the decal again.";return result;}
-    const auto normal=math::normalMatrix(world);
-    if(!normal||math::dot(math::normalized(math::transformDirection(*normal,seed.localNormal)),math::normalized(math::transformDirection(*normal,hit.hit->localNormal)))<.5){result.hit.reset();result.status=SurfaceHitStatus::Missing;result.diagnostic="Surface orientation changed; place the decal again.";}
-    return result;
 }
 }

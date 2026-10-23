@@ -67,7 +67,13 @@ void MaterialEditor::perform(AssetLibrary& assets) {
     }
     message_.clear();
     bool loaded=false;
-    if(pending==Pending::Open) loaded=document_.load(pendingId_);
+    if(pending==Pending::Open) {
+        loaded=document_.load(pendingId_);
+        if(!loaded)if(const auto staged=assets.findMaterial(pendingId_);staged&&decalMaterialCompatible(*staged)) {
+            std::error_code error;
+            if(!std::filesystem::exists(materialAssetPath(assets.projectRoot(),pendingId_),error))loaded=document_.loadStaged(*staged);
+        }
+    }
     if(pending==Pending::Create) {
         loaded=document_.create();
         if(loaded) {
@@ -128,9 +134,10 @@ void MaterialEditor::save(AssetLibrary& assets,bool saveAs) {
 void MaterialEditor::filesChanged(std::span<const std::filesystem::path> paths) {
     if(!document_.isOpen()) return;
     if(isEngineAssetId(document_.assetId()))return;
-    const auto file=resolveAssetPath(document_.projectRoot(),document_.assetId()).lexically_normal();
-    for(const auto& path:paths) if(resourcePathKey(path)==resourcePathKey(file))
-        externalChanged_=true;
+    try {
+        const auto file=materialAssetPath(document_.projectRoot(),document_.assetId()).lexically_normal();
+        for(const auto& path:paths) if(resourcePathKey(path)==resourcePathKey(file))externalChanged_=true;
+    }catch(const std::exception& error){message_=error.what();}
 }
 void MaterialEditor::modals(AssetLibrary& assets) {
     if(dirtyPopup_) { ImGui::OpenPopup("Unsaved material");dirtyPopup_=false; }
@@ -245,11 +252,16 @@ void MaterialEditor::properties(AssetLibrary& assets) {
     if(node.kind==MaterialNodeKind::Output) {
         if(ImGui::TreeNodeEx("Material",ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth)) {
             control("Change shader model",[defaults](auto& n) {
-                int model=n.output.shading==MaterialShading::StandardPbr?0:1;
-                const bool changed=resettableProperty(model,static_cast<int>(defaults.output.shading),[&]{return ImGui::Combo("Shader Model",&model,"Lit (PBR)\0Unlit\0");});
-                if(changed)n.output.shading=model==0?MaterialShading::StandardPbr:MaterialShading::Unlit;
+                int model=static_cast<int>(n.output.shading);
+                const bool changed=resettableProperty(model,static_cast<int>(defaults.output.shading),[&]{return ImGui::Combo("Shader Model",&model,"Lit (PBR)\0Unlit\0Decal\0");});
+                if(changed)n.output.shading=static_cast<MaterialShading>(model);
                 return changed;
             });
+            if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::Decal) {
+                control("Toggle decal color",[defaults](auto& n){return resettableProperty(n.output.decalColorEnabled,defaults.output.decalColorEnabled,[&]{return ImGui::Checkbox("Affect Color",&n.output.decalColorEnabled);});});
+                control("Toggle decal normal",[defaults](auto& n){return resettableProperty(n.output.decalNormalEnabled,defaults.output.decalNormalEnabled,[&]{return ImGui::Checkbox("Affect Normal",&n.output.decalNormalEnabled);});});
+                control("Toggle decal roughness",[defaults](auto& n){return resettableProperty(n.output.decalRoughnessEnabled,defaults.output.decalRoughnessEnabled,[&]{return ImGui::Checkbox("Affect Roughness",&n.output.decalRoughnessEnabled);});});
+            } else {
             control("Change material blending",[defaults](auto& n) {
                 int blend=static_cast<int>(n.output.blend);
                 const bool changed=resettableProperty(blend,static_cast<int>(defaults.output.blend),[&]{return ImGui::Combo("Blend Mode",&blend,"Opaque\0Masked\0Translucent\0Additive\0");});
@@ -286,12 +298,18 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                     ImGui::TreePop();
                 }
             }
+            }
             ImGui::TreePop();
         }
         if(ImGui::TreeNodeEx("Default inputs",ImGuiTreeNodeFlags_SpanAvailWidth)) {
             const auto disconnected=[&](MaterialPin pin){return !materialInputLink(document_.definition().graph,selected,pin);};
-            if(disconnected(MaterialPin::BaseColor))hdr(node.output.shading==MaterialShading::Unlit?"Emissive Color":"Base Color","Change default base color",true);
-            if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr) {
+            if(disconnected(MaterialPin::BaseColor))hdr(node.output.shading==MaterialShading::Unlit?"Emissive Color":node.output.shading==MaterialShading::Decal?"Color":"Base Color","Change default base color",true);
+            if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::Decal) {
+                if(disconnected(MaterialPin::Roughness))control("Change default roughness",[defaults](auto& n){return resettableProperty(n.output.roughness,defaults.output.roughness,[&]{return ImGui::SliderFloat("Roughness",&n.output.roughness,0,1,"%.3f");});});
+                if(disconnected(MaterialPin::ColorOpacity))control("Change decal color opacity",[defaults](auto& n){return resettableProperty(n.output.decalColorStrength,defaults.output.decalColorStrength,[&]{return ImGui::SliderFloat("Color Opacity",&n.output.decalColorStrength,0,1,"%.3f");});});
+                if(disconnected(MaterialPin::NormalOpacity))control("Change decal normal opacity",[defaults](auto& n){return resettableProperty(n.output.decalNormalStrength,defaults.output.decalNormalStrength,[&]{return ImGui::SliderFloat("Normal Opacity",&n.output.decalNormalStrength,0,1,"%.3f");});});
+                if(disconnected(MaterialPin::RoughnessOpacity))control("Change decal roughness opacity",[defaults](auto& n){return resettableProperty(n.output.decalRoughnessStrength,defaults.output.decalRoughnessStrength,[&]{return ImGui::SliderFloat("Roughness Opacity",&n.output.decalRoughnessStrength,0,1,"%.3f");});});
+            } else if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr) {
                 if(disconnected(MaterialPin::Roughness))control("Change default roughness",[defaults](auto& n){return resettableProperty(n.output.roughness,defaults.output.roughness,[&]{return ImGui::SliderFloat("Roughness",&n.output.roughness,0,1,"%.3f");});});
                 if(disconnected(MaterialPin::Metallic))control("Change default metallic",[defaults](auto& n){return resettableProperty(n.output.metallic,defaults.output.metallic,[&]{return ImGui::SliderFloat("Metallic",&n.output.metallic,0,1,"%.3f");});});
                 if(!materialRefractionActive(materialOutputNode(document_.definition().graph).output)&&disconnected(MaterialPin::Specular))control("Change default specular",[defaults](auto& n){return resettableProperty(n.output.specular,defaults.output.specular,[&]{return ImGui::SliderFloat("Specular",&n.output.specular,0,1,"%.3f");});});
@@ -303,7 +321,7 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 control("Change default opacity",[defaults](auto& n){return resettableProperty(n.output.opacity,defaults.output.opacity,[&]{return ImGui::SliderFloat("Opacity",&n.output.opacity,0,1,"%.3f");});});
             if(materialPinActive(output.shading,output.blend,MaterialPin::OpacityMask) && disconnected(MaterialPin::OpacityMask))
                 control("Change default opacity mask",[defaults](auto& n){return resettableProperty(n.output.opacityMask,defaults.output.opacityMask,[&]{return ImGui::SliderFloat("Opacity Mask",&n.output.opacityMask,0,1,"%.3f");});});
-            if(output.tessellation.enabled && disconnected(MaterialPin::Height))
+            if(output.shading!=MaterialShading::Decal && output.tessellation.enabled && disconnected(MaterialPin::Height))
                 control("Change default height",[defaults](auto& n){return resettableProperty(n.output.height,defaults.output.height,[&]{return ImGui::SliderFloat("Height",&n.output.height,0,1,"%.3f");});});
             if(materialRefractionActive(output)) {
                 if(disconnected(MaterialPin::Transmission))control("Change default transmission",[defaults](auto& n){return resettableProperty(n.output.transmission,defaults.output.transmission,[&]{return ImGui::SliderFloat("Transmission",&n.output.transmission,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});

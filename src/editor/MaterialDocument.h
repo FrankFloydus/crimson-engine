@@ -39,6 +39,7 @@ public:
     std::string redoLabel() const;
     bool create(const std::string& name = "New Material");
     bool load(const std::string& id);
+    bool loadStaged(const MaterialAsset&);
     bool save(const std::string& name = {}, bool saveAs = false);
     bool discard();
     void close(); // Caller resolves Save / Discard / Cancel before closing.
@@ -72,7 +73,7 @@ private:
     std::optional<Transaction> transaction_;
     std::string status_;
     uint64_t revision_{}, previewRevision_{}, state_{1}, savedState_{1}, nextState_{2}, fingerprint_{};
-    bool open_{};
+    bool open_{},staged_{};
     void install(MaterialAsset asset, bool saved);
     void publish();
 };

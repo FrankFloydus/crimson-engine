@@ -14,24 +14,35 @@ ModelAsset plane() {
     }
     primitive.indices={0,1,2,0,2,3};model.primitives.push_back(std::move(primitive));model.draws.push_back({0});return model;
 }
-SceneDecalSeed seedAt(const ModelSurface&surface,Vec3 point) {
-    const auto hit=resolveModelSurfaceHit(surface,91,Mat4{},0,0,point);
-    check(hit.hit.has_value(),"Fixture seed did not resolve.");SceneDecalSeed seed;
-    seed.receiver=91;seed.fingerprint=surface.fingerprint;seed.draw=0;seed.primitive=0;
-    seed.triangle=hit.hit->seed.triangle;seed.barycentric=hit.hit->seed.barycentrics;
-    seed.localPoint=hit.hit->localPoint;seed.localNormal=hit.hit->localNormal;return seed;
+void boundedSurfaceProjection() {
+    auto model=plane();model.draws.push_back({0,math::translation({3,0,0})});const auto source=buildModelSurface(model,9,SourceNormals::UseMeshNormals);
+    const auto hit=projectModelSurfaceHit(source,91,Mat4{},{.4f,-.2f,.35f},.5f);
+    check(hit.hit&&math::length(hit.hit->localPoint-Vec3{.4f,-.2f,0})<1e-5,"Ordinary translation failed its bounded source reprojection.");
+    check(!projectModelSurfaceHit(source,91,Mat4{},{.4f,-.2f,.6f},.5f).hit,"Surface query crossed its authored projection envelope.");
+    const auto peer=projectModelSurfaceHit(source,91,Mat4{},{3.4f,-.2f,.2f},.5f);
+    check(peer.hit&&peer.hit->seed.receiver.draw==1,"Ordinary translation remained restricted to the old draw occurrence.");
+    check(projectModelSurfaceHit(source,91,Mat4{},{1,1,.2f},.5f).hit.has_value(),"A valid corner vertex became an ambiguous receiving surface.");
+    auto contact=plane();contact.draws.push_back({0,math::translation({1,0,-1})*math::eulerRotationXYZ({0,1.5707963268f,0})});
+    check(projectModelSurfaceHit(buildModelSurface(contact,10,SourceNormals::UseMeshNormals),91,Mat4{},{1,.3f,0},.5f).hit.has_value(),"A shared physical edge between transformed draw occurrences became ambiguous.");
+    const auto transformed=math::translation({8,-2,3})*math::eulerRotationXYZ({.4f,-.7f,.3f})*math::scaling({-2,.7f,1.4f});
+    const auto transformedPoint=math::transformPoint(transformed,{.4f,-.2f,0}),normal=math::normalized(math::transformDirection(*math::normalMatrix(transformed),{0,0,1}));
+    const auto mirrored=projectModelSurfaceHit(source,91,transformed,transformedPoint+normal*.2f,.5f);
+    check(mirrored.hit&&math::length(math::transformPoint(transformed,mirrored.hit->localPoint)-transformedPoint)<1e-5,"Closest-point reprojection lost a mirrored, rotated, nonuniform receiver transform.");
+    model.primitives[0].indices.insert(model.primitives[0].indices.end(),{0,1,2});
+    const auto ambiguous=projectModelSurfaceHit(buildModelSurface(model,10,SourceNormals::UseMeshNormals),91,Mat4{},{.4f,-.2f,.2f},.5f);
+    check(ambiguous.status==SurfaceHitStatus::Ambiguous&&!ambiguous.hit,"Closest-point query accepted coincident triangle interiors.");
 }
-void receiverPolicy() {
-    SceneDecalReceiverPolicy policy;
-    check(receiverPolicyAllows(policy,10,0,10,0),"Ordinary seed was excluded.");
-    check(!receiverPolicyAllows(policy,10,0,11,0),"Ordinary meshes unexpectedly share a receiver set.");
-    check(receiverPolicyAllows(policy,10,4,11,4),"Separate meshes in the same Quader import were excluded.");
-    check(!receiverPolicyAllows(policy,10,4,11,5),"Receiver policy crossed Quader occurrences.");
-    policy.included={19};check(receiverPolicyAllows(policy,10,4,19,0),"Explicit included peer was excluded.");
-    policy.excluded={10,11,19};
-    check(!receiverPolicyAllows(policy,10,4,10,4)&&!receiverPolicyAllows(policy,10,4,11,4)&&!receiverPolicyAllows(policy,10,4,19,0),"Exclusion must override seed, Quader, and explicit inclusion.");
-    policy={};policy.scope=SceneDecalReceiverScope::Explicit;
-    check(receiverPolicyAllows(policy,10,4,10,4)&&!receiverPolicyAllows(policy,10,4,11,4),"Explicit policy did not retain seed-only default.");
+void rotatedSurfaceFrameRetainsFootprint() {
+    for(const Vec3 angle:std::array<Vec3,4>{{{1.5707963268f,0,0},{0,1.5707963268f,0},{0,0,1.5707963268f},{.7f,1.2f,-.8f}}}) {
+        auto authored=math::eulerRotationXYZ(angle)*math::scaling({-2,3,.4f});authored.at(0,1)+=.15f;
+        const auto actual=conformDecalFrame(authored,{2,3,4},{0,0,1});check(actual.has_value(),"A valid XYZ rotation collapsed the derived footprint.");
+        check(math::length(math::transformPoint(*actual,{})-Vec3{2,3,4})<1e-5,"Derived frame did not use the receiving point.");
+        const auto x=math::transformDirection(*actual,{1,0,0}),y=math::transformDirection(*actual,{0,1,0});
+        check(std::abs(x[2])+std::abs(y[2])<1e-5,"Derived footprint is not tangent to the receiving surface.");
+        for(unsigned i=0;i<2;++i)for(unsigned j=0;j<2;++j){const Vec3 a{authored.at(0,i),authored.at(1,i),authored.at(2,i)},b{authored.at(0,j),authored.at(1,j),authored.at(2,j)},c{actual->at(0,i),actual->at(1,i),actual->at(2,i)},d{actual->at(0,j),actual->at(1,j),actual->at(2,j)};check(std::abs(math::dot(a,b)-math::dot(c,d))<2e-5,"Surface conformity changed authored size or shear.");}
+        check(math::handedness(*actual)==math::handedness(authored),"Derived frame lost the authored mirror.");
+    }
+    check(!conformDecalFrame(math::scaling({0,1,1}),{},{0,0,1}),"Collapsed footprint was accepted.");
 }
 void materialEligibility() {
     ModelMaterial material;check(receiverMaterialEligible(material),"Opaque imported material excluded.");
@@ -48,28 +59,12 @@ void materialEligibility() {
     check(!receiverMaterialEligible(material),"Runtime opacity graph admitted.");
     graph->links[0].toPin=MaterialPin::OpacityMask;check(receiverMaterialEligible(material),"Masked coverage incorrectly treated as runtime opacity.");
 }
-void boundedSameOccurrenceRebind() {
-    auto model=plane();auto surface=buildModelSurface(model,1,SourceNormals::UseMeshNormals);
-    const Vec3 point{.4f,-.2f,0};const auto seed=seedAt(surface,point);const Mat4 frame=math::translation(point);
-    const auto exact=resolveAuthoredSeed(surface,seed,Mat4{},frame);
-    check(exact.hit&&exact.hit->seed.triangle==seed.triangle,"Saved seed did not resolve against unchanged geometry.");
-    check(!resolveAuthoredSeed(surface,seed,math::translation({5,0,0}),frame).hit,"World-anchored decal silently followed a moved receiver.");
-    const Mat4 moved=math::translation({2,3,4})*math::scaling({-2,3,1});
-    check(resolveAuthoredSeed(surface,seed,moved,moved*frame).hit.has_value(),"A shared affine parent move lost the same receiver.");
-    auto changed=surface;changed.fingerprint=2;
-    for(auto&triangle:changed.draws[0].surface.triangles)triangle.triangle+=7;
-    const auto rebound=resolveAuthoredSeed(changed,seed,Mat4{},frame);
+void geometryChangeReprojection() {
+    auto changed=buildModelSurface(plane(),2,SourceNormals::UseMeshNormals);
+    for(auto& triangle:changed.draws[0].surface.triangles)triangle.triangle+=7;
+    const auto rebound=projectModelSurfaceHit(changed,91,Mat4{},{.4f,-.2f,0},.5f);
     check(rebound.hit&&rebound.hit->seed.triangle>=7,"Changed geometry reused stale triangle indices instead of bounded point matching.");
-    check(!resolveAuthoredSeed(changed,seed,Mat4{},math::translation(point+Vec3{0,0,.2f})).hit,"Rebind crossed the bounded receiver distance.");
-    for(auto&triangle:changed.draws[0].surface.triangles)for(auto&normal:triangle.normals)normal={0,0,-1};
-    check(!resolveAuthoredSeed(changed,seed,Mat4{},frame).hit,"Rebind jumped to an opposing surface.");
-}
-void ambiguousRebindStops() {
-    auto model=plane();const auto original=buildModelSurface(model,1,SourceNormals::UseMeshNormals);
-    const auto seed=seedAt(original,{.4f,-.2f,0});model.primitives[0].indices.insert(model.primitives[0].indices.end(),{0,1,2});
-    const auto overlapping=buildModelSurface(model,2,SourceNormals::UseMeshNormals);
-    const auto ambiguous=resolveAuthoredSeed(overlapping,seed,Mat4{},math::translation(seed.localPoint));
-    check(!ambiguous.hit&&ambiguous.status==SurfaceHitStatus::Ambiguous,"Ambiguous changed geometry silently rebound to one overlapping sheet.");
+    check(!projectModelSurfaceHit(changed,91,math::translation({5,0,0}),{.4f,-.2f,0},.5f).hit,"World-anchored decal silently followed a moved receiver.");
 }
 void reanchorRetainsAffineFootprint() {
     const Vec3 oldNormal=math::normalized({.2f,.1f,1}),newNormal={0,1,0};
@@ -93,7 +88,7 @@ void reanchorRetainsAffineFootprint() {
 }
 }
 int main() {
-    try {receiverPolicy();materialEligibility();boundedSameOccurrenceRebind();ambiguousRebindStops();reanchorRetainsAffineFootprint();
-        std::cout<<"decal_resolve: receiver policy, PBR coverage eligibility, affine anchored seed recovery and ambiguous rebind proofs passed\n";return 0;
+    try {boundedSurfaceProjection();rotatedSurfaceFrameRetainsFootprint();materialEligibility();geometryChangeReprojection();reanchorRetainsAffineFootprint();
+        std::cout<<"decal_resolve: generic closest-point projection, XYZ affine frames, PBR coverage eligibility, changed source provenance and ambiguous projection proofs passed\n";return 0;
     } catch(const std::exception&error){std::cerr<<error.what()<<'\n';return 1;}
 }

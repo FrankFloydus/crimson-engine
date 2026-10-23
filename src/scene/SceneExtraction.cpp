@@ -100,11 +100,11 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             result.models.back().meshShading=model->meshShading;
             result.models.back().primitive=model->primitive;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
-            if(const auto* generated=registry.try_get<QuaderGenerated>(entity)){result.models.back().quaderOwner=generated->owner;result.models.back().sourceKey=generated->sourceKey;}
+            result.models.back().receiveDecals=registry.get<VisualSettings>(entity).receiveDecals;
         }
         if(const auto* decal=registry.try_get<SceneDecal>(entity))result.decals.push_back({id,*world,*decal,visible});
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
-            result.particles.push_back({id,particle->assetId.id,*world,visible});
+            result.particles.push_back({id,particle->assetId.id,*world,visible,registry.get<VisualSettings>(entity).receiveDecals});
         if(!visible)continue;
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             const auto direction=directionalLightDirection(*world);

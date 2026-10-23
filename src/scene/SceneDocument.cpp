@@ -40,7 +40,7 @@ constexpr std::array<std::string_view,17> LegacyComponentTokens{
 void preserveAuthoredActorComponents(EntityRecord& target,const EntityRecord& previous) {
     target.actor=previous.actor;target.movement=previous.movement;target.controller=previous.controller;
     target.navigation=previous.navigation;target.enemy=previous.enemy;target.playerInput=previous.playerInput;
-    target.tags=previous.tags;target.effects=previous.effects;target.decal=previous.decal;
+    target.tags=previous.tags;target.effects=previous.effects;target.decal=previous.decal;target.receiveDecals=previous.receiveDecals;
     target.cameraFollow=previous.cameraFollow;
     if(previous.camera)target.camera=previous.camera;
 }
@@ -95,23 +95,19 @@ EntityId parseId(const Json& value) {
 }
 SceneDecal readDecal(const Json& json) {
     SceneDecal decal;decal.asset=json.at("asset").get<AssetRef<DecalAsset>>();
-    const auto& seed=json.at("seed");decal.seed.receiver=parseId(seed.at("receiver"));decal.seed.sourceKey=seed.at("sourceKey").get<std::string>();
+    const auto& seed=json.at("seed");decal.seed.receiver=parseId(seed.at("receiver"));
     decal.seed.modelId=seed.at("model").get<std::string>();decal.seed.fingerprint=parseId(seed.at("fingerprint"));
     decal.seed.draw=readCollisionBits(seed.at("draw"));decal.seed.primitive=readCollisionBits(seed.at("primitive"));decal.seed.triangle=readCollisionBits(seed.at("triangle"));
     decal.seed.barycentric=seed.at("barycentric").get<Vec3>();decal.seed.localPoint=seed.at("localPoint").get<Vec3>();decal.seed.localNormal=seed.at("localNormal").get<Vec3>();
     decal.tint=json.at("tint").get<Vec3>();decal.opacity=json.at("opacity").get<float>();decal.edgeFeather=json.at("edgeFeather").get<float>();
     const auto& priority=json.at("priority");if(!priority.is_number_integer()||(priority.is_number_unsigned()?priority.get<uint64_t>()>INT32_MAX:priority.get<int64_t>()<INT32_MIN||priority.get<int64_t>()>INT32_MAX))throw std::runtime_error("Decal layer priority must be a signed 32-bit integer.");
-    decal.priority=priority.get<int32_t>();const auto& receivers=json.at("receivers");const auto scope=receivers.at("scope").get<std::string>();
-    if(scope=="seed-quader-scene")decal.receivers.scope=SceneDecalReceiverScope::SeedQuaderScene;else if(scope=="explicit")decal.receivers.scope=SceneDecalReceiverScope::Explicit;else throw std::runtime_error("Unsupported decal receiver policy.");
-    const auto readList=[&](const char* field,std::vector<EntityId>& list){const auto& values=receivers.at(field);if(!values.is_array()||values.size()>4096)throw std::runtime_error("Decal receiver list must contain at most 4096 IDs.");for(const auto& value:values)list.push_back(parseId(value));};
-    readList("included",decal.receivers.included);readList("excluded",decal.receivers.excluded);return decal;
+    decal.priority=priority.get<int32_t>();return decal;
 }
 Json decalJson(const SceneDecal& decal) {
-    const auto& seed=decal.seed;Json included=Json::array(),excluded=Json::array();for(const auto id:decal.receivers.included)included.push_back(hexId(id));for(const auto id:decal.receivers.excluded)excluded.push_back(hexId(id));
-    return {{"asset",decal.asset},{"seed",{{"receiver",hexId(seed.receiver)},{"sourceKey",seed.sourceKey},{"model",seed.modelId},{"fingerprint",hexId(seed.fingerprint)},
+    const auto& seed=decal.seed;
+    return {{"asset",decal.asset},{"seed",{{"receiver",hexId(seed.receiver)},{"model",seed.modelId},{"fingerprint",hexId(seed.fingerprint)},
         {"draw",seed.draw},{"primitive",seed.primitive},{"triangle",seed.triangle},{"barycentric",seed.barycentric},{"localPoint",seed.localPoint},{"localNormal",seed.localNormal}}},
-        {"tint",decal.tint},{"opacity",decal.opacity},{"edgeFeather",decal.edgeFeather},{"priority",decal.priority},
-        {"receivers",{{"scope",decal.receivers.scope==SceneDecalReceiverScope::SeedQuaderScene?"seed-quader-scene":"explicit"},{"included",std::move(included)},{"excluded",std::move(excluded)}}}};
+        {"tint",decal.tint},{"opacity",decal.opacity},{"edgeFeather",decal.edgeFeather},{"priority",decal.priority}};
 }
 std::string uniqueToken() { return hexId(randomId()) + hexId(randomId()); }
 std::filesystem::path scenePath(const std::filesystem::path& root, const std::string& id) {
@@ -357,6 +353,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         } else if(entity.contains("modelMaterial"))
             setModelMaterialOverride(record.modelMaterials,0,entity.at("modelMaterial").get<AssetRef<MaterialAsset>>());
         record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
+        if(entity.contains("receiveDecals")&&!entity.at("receiveDecals").is_boolean())throw std::runtime_error("Receive Decals must be boolean.");record.receiveDecals=entity.value("receiveDecals",true);
         if(entity.contains("lightingScopes")) {
             const auto& scopes=entity.at("lightingScopes");
             if(!scopes.is_object())throw std::runtime_error("Surface lighting scopes must be an object.");
@@ -748,6 +745,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         auto materials=record.modelMaterials;trimModelMaterialOverrides(materials);
         if(!materials.empty())entity["modelMaterials"]=materials;
         if (record.particle) entity["particle"] = *record.particle;
+        if(!record.receiveDecals)entity["receiveDecals"]=false;
         if(record.decal)entity["decal"]=decalJson(*record.decal);
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
@@ -806,8 +804,8 @@ enum EntityField : uint64_t {
     PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
-    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,
-    AllEntityFields=((1ull<<37)-1)&~(1ull<<31)
+    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,ReceiveDecalsField=1ull<<37,
+    AllEntityFields=((1ull<<38)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -828,7 +826,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
     if(a.primitive!=b.primitive)fields|=PrimitiveMeshField;
-    if(a.decal!=b.decal)fields|=DecalField;
+    if(a.decal!=b.decal)fields|=DecalField;if(a.receiveDecals!=b.receiveDecals)fields|=ReceiveDecalsField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
@@ -856,7 +854,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
     if(fields&MeshShadingField)target.meshShading=source.meshShading;
     if(fields&PrimitiveMeshField)target.primitive=source.primitive;
-    if(fields&DecalField)target.decal=source.decal;
+    if(fields&DecalField)target.decal=source.decal;if(fields&ReceiveDecalsField)target.receiveDecals=source.receiveDecals;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
     if(fields&ControllerField)target.controller=source.controller;
@@ -1777,7 +1775,6 @@ bool SceneDocument::duplicateInTransaction(const std::vector<EntityId>& roots,st
             if(record.cameraFollow)if(const auto target=copied.find(record.cameraFollow->target);target!=copied.end())record.cameraFollow->target=target->second;
             if(record.decal) {
                 if(const auto target=copied.find(record.decal->seed.receiver);target!=copied.end())record.decal->seed.receiver=target->second;
-                for(auto* list:{&record.decal->receivers.included,&record.decal->receivers.excluded})for(auto& id:*list)if(const auto target=copied.find(id);target!=copied.end())id=target->second;
             }
             if(record.environment)if(const auto sun=copied.find(record.environment->sun);sun!=copied.end())record.environment->sun=sun->second;
             if(record.quaderGenerated) {

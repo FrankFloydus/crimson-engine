@@ -349,7 +349,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     animationEditor_.draw(assets,renderer,resources_,prepared_,simulationSeconds);
     if(frame.createDecal)decalEditor_.requestCreate(frame.decalFolder,assets);
     if(!frame.openDecal.empty())decalEditor_.requestOpen(frame.openDecal,assets);
-    decalEditor_.setAntiAliasing(editor_.antiAliasing());decalEditor_.draw(assets,renderer,resources_,prepared_);
+    decalEditor_.setAntiAliasing(editor_.antiAliasing());decalEditor_.draw(assets,renderer,resources_,prepared_,materialEditor_);
     status_=startupStatus_+playStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         cameraPilot_.sync(document,settings_.camera);
@@ -546,12 +546,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
                 }
         }
         if(show) {
-            const auto surface=assets.preparedDecalMaterial(value.asset.id,1024,ResourcePriority::Placement);
-            bgfx::TextureHandle texture{BGFX_INVALID_HANDLE};Vec4 color{.65f,.65f,.65f,.35f};
-            if(surface&&surface->ready&&surface->render) {
-                const auto& material=*surface->render;texture=material.textures[0];
-                color={material.colorFactor[0]*value.tint[0],material.colorFactor[1]*value.tint[1],material.colorFactor[2]*value.tint[2],value.opacity*.65f};
-            }
+            bgfx::TextureHandle texture{BGFX_INVALID_HANDLE};
+            const Vec4 color{value.tint[0],value.tint[1],value.tint[2],value.opacity*.28f};
             editor_.drawDecalPlacementPlane(previewFrame,sceneCamera,texture,color);
         }
     }

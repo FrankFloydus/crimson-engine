@@ -123,7 +123,7 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
         "Hardware tessellation requires Direct3D 12; this backend renders the base mesh.":"";
     const auto current=[&]{return entry.current&&entry.currentEpoch==(*owner.sourceEpoch);};
     const auto pending=[&](bool active) {return MaterialGraphProgramResult{entry.current,current()?capabilityDiagnostic:"Compiling material graph...",current(),active};};
-    const auto interactivePass=[](const auto& variant){return variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle||variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission||variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;};
+    const auto interactivePass=[](const auto& variant){return variant.pass==MaterialGraphPass::Decal||variant.pass==MaterialGraphPass::Model||variant.pass==MaterialGraphPass::Particle||variant.pass==MaterialGraphPass::ModelTransmission||variant.pass==MaterialGraphPass::ParticleTransmission||variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection;};
     try {
         const auto* caps=bgfx::getCaps();
         if(!caps || caps->limits.maxTextureSamplers<16)throw std::runtime_error("Material graphs require sixteen texture sampler stages.");
@@ -228,9 +228,11 @@ MaterialGraphProgramResult MaterialGraphPrograms::request(const MaterialGraphSha
             queue(*batch,background?ResourcePriority::Background:priority);entry.batch=std::move(batch);return true;
         };
         if(entry.epoch!=(*owner.sourceEpoch)) {
-            if(shader.nodePreview ? (shader.variants.size()!=1 || shader.variants.front().pass!=MaterialGraphPass::Model) : shader.variants.size()!=5u+(shader.refraction?2u:0u)+(shader.reflection?2u:0u))
+            const bool decal=!shader.nodePreview&&shader.variants.size()==1&&shader.variants.front().pass==MaterialGraphPass::Decal;
+            if(decal&&(shader.reflection||shader.refraction||shader.tessellation.enabled))throw std::runtime_error("Decal graph cannot publish model reflection, transmission or tessellation programs.");
+            if(shader.nodePreview ? (shader.variants.size()!=1 || shader.variants.front().pass!=MaterialGraphPass::Model) : !decal&&shader.variants.size()!=5u+(shader.refraction?2u:0u)+(shader.reflection?2u:0u))
                 throw std::runtime_error("Material graph pass bundle does not match its material/preview contract.");
-            if(!shader.nodePreview) {
+            if(!shader.nodePreview&&!decal) {
                 std::vector expected{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle,
                     MaterialGraphPass::DirectionalShadow};
                 if(shader.refraction){expected.push_back(MaterialGraphPass::ModelTransmission);expected.push_back(MaterialGraphPass::ParticleTransmission);}
@@ -311,7 +313,10 @@ std::vector<std::filesystem::path> MaterialGraphPrograms::sourceDependencies(boo
     if(epoch==(*impl_->sourceEpoch))return files;
     // The static include family is shared across all graph topologies. Include
     // compiler/vertex/varying inputs in persistent thumbnail cache identity too.
-    const auto shader=generateMaterialGraphShader(defaultMaterialAsset());
+    auto shader=generateMaterialGraphShader(defaultMaterialAsset());
+    auto decalMaterial=defaultMaterialAsset();canonicalizeMaterialAsset(decalMaterial);materialOutputNode(decalMaterial.graph).output.shading=MaterialShading::Decal;
+    const auto decalShader=generateMaterialGraphShader(decalMaterial);
+    shader.variants.insert(shader.variants.end(),decalShader.variants.begin(),decalShader.variants.end());
     std::vector<std::filesystem::path> result;
     for(const auto& variant:shader.variants) {
         if(surfaceOnly&&(variant.pass==MaterialGraphPass::ModelReflection||variant.pass==MaterialGraphPass::ParticleReflection))continue;

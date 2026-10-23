@@ -2257,18 +2257,38 @@ void animationAssetLibrary() {
 }
 
 void decalAssetLibraryDeletion() {
+    {
+        Project legacy;initializeContentStorage(legacy.root);const auto id=newAssetId(),image=newAssetId();
+        const auto imageFile=legacy.root/"Content/legacy-mask.png",decalFile=legacy.root/"Content/legacy.crimson-decal";
+        model_test::writeBytes(imageFile,model_test::png(1,1,{128,128,128,128}));registerAssetPath(legacy.root,image,imageFile);
+        const nlohmann::json json{{"version",1},{"type","crimson-decal"},{"id",id},{"name","Legacy decal"},
+            {"color",{{"enabled",true},{"factor",{1,1,1}},{"strength",1},{"texture",image}}},
+            {"coverage",{{"texture",""},{"channel","r"}}},{"normal",{{"enabled",false},{"strength",1},{"texture",""}}},
+            {"roughness",{{"enabled",false},{"value",1},{"strength",1},{"texture",""},{"channel","r"}}}};
+        const auto bytes=json.dump(2)+"\n";writeFileAtomically(decalFile,bytes);registerAssetPath(legacy.root,id,decalFile);
+        ResourceManager legacyResources;AssetLibrary migrating(legacy.root,&legacyResources);const auto pending=migrating.findDecal(id);require(pending&&pending->stagedMaterial&&migrating.findMaterial(pending->material.id)&&read(decalFile)==bytes,"Library initialization rewrote or failed to expose pending v1 graph migration.");
+        auto external=json;external["color"]["factor"]={.25f,.5f,.75f};const auto externalBytes=external.dump(2)+"\n";writeFileAtomically(decalFile,externalBytes);migrating.refreshDecals();
+        require(materialOutputNode(migrating.findMaterial(pending->material.id)->graph).output.baseColor==Vec3{.25f,.5f,.75f}&&read(decalFile)==externalBytes,"External v1 changes retained a stale staged graph or rewrote the source.");
+        const auto plan=migrating.planDeletion({image});require(plan.error.empty(),plan.error);require(plan.needsReferenceWarning(),"Pending v1 graph images were absent from deletion dependencies.");
+        finishDeletion(migrating,legacyResources,plan);const auto current=loadDecalAsset(legacy.root,id);const auto material=loadMaterialAsset(legacy.root,current.material.id);
+        require(nlohmann::json::parse(read(decalFile)).at("version")==2&&!current.stagedMaterial&&materialTextureReferences(material)==std::vector<std::string>{GrayTextureId},"Deleting a pending v1 source failed to atomically materialize its equivalent current graph and reference replacement.");
+        legacyResources.stop();
+    }
     Project project;auto surface=createDecalAsset(project.root,"Masked wetness");auto replacement=createDecalAsset(project.root,"Replacement wetness");
     const std::string legacyImage="assets/textures/decal-coverage.png";const auto image=canonicalAssetId(legacyImage);
     model_test::writeBytes(fixturePath(project.root,legacyImage),model_test::png(2,2,{255,255,255,255,128,128,128,128,64,64,64,64,0,0,0,0}));
-    surface.coverageTexture.id=image;surface.roughnessEnabled=true;surface.roughness=.15f;saveDecalAsset(project.root,surface);
-    replacement.roughnessEnabled=true;replacement.roughness=.3f;saveDecalAsset(project.root,replacement);
+    auto graphMaterial=loadMaterialAsset(project.root,surface.material.id);const auto output=materialOutputNode(graphMaterial.graph).id;
+    materialOutputNode(graphMaterial.graph).output.decalRoughnessEnabled=true;materialOutputNode(graphMaterial.graph).output.roughness=.15f;
+    const auto coverage=addMaterialNode(graphMaterial.graph,MaterialNodeKind::Texture2D,{-300,0}).id;findMaterialNode(graphMaterial.graph,coverage)->texture.image.id=image;
+    findMaterialNode(graphMaterial.graph,coverage)->texture.role=MaterialTextureRole::Data;connectMaterialNodes(graphMaterial.graph,coverage,MaterialPin::A,output,MaterialPin::Opacity);
+    canonicalizeMaterialAsset(graphMaterial);saveMaterialAsset(project.root,graphMaterial);
     SceneDocument active(project.root);const auto receiver=active.createBox("Receiver");SceneDecal decal;decal.asset.id=surface.id;
     decal.seed.receiver=receiver;decal.seed.modelId=active.scene().find(receiver)->model->id;decal.seed.fingerprint=123;decal.seed.localNormal={0,1,0};
     const auto entity=active.createDecal(decal,"Wrapped patch",math::translation({1,2,3}));const auto light=active.createPointLight("Saved light");require(active.save("Decal references"),active.status());
     const auto savedScene=read(resolveAssetPath(project.root,active.assetId()));auto changed=*active.scene().find(light);changed.name="Unrelated unsaved edit";require(active.updateEntity(light,changed),active.status());
     ResourceManager resources;AssetLibrary library(project.root,&resources);require(hasAsset(library,surface.id)&&library.findDecal(surface.id),"Decal catalog/lookup omitted its native surface.");
     const auto initialCatalogRevision=library.catalogRevision(),initialDecalRevision=library.decalRevision(surface.id);
-    auto parameterEdit=surface;parameterEdit.roughness=.21f;library.publishDecal(std::make_shared<const DecalAsset>(parameterEdit));
+    auto parameterEdit=surface;parameterEdit.material=replacement.material;library.publishDecal(std::make_shared<const DecalAsset>(parameterEdit));
     require(library.catalogRevision()>initialCatalogRevision&&library.decalRevision(surface.id)>initialDecalRevision,
         "A committed decal parameter edit did not invalidate dependent preview cards.");
     const auto editedCatalogRevision=library.catalogRevision(),editedDecalRevision=library.decalRevision(surface.id);
@@ -2276,13 +2296,16 @@ void decalAssetLibraryDeletion() {
     require(library.catalogRevision()==editedCatalogRevision&&library.decalRevision(surface.id)==editedDecalRevision,
         "Publishing an unchanged decal invalidated stable preview generations.");
     library.publishDecal(std::make_shared<const DecalAsset>(surface));
-    const auto revision=library.decalRevision(surface.id);const auto texturePlan=library.planDeletion({image},&active);
-    require(texturePlan.error.empty()&&texturePlan.needsReferenceWarning()&&std::any_of(texturePlan.warningUsages.begin(),texturePlan.warningUsages.end(),[&](const auto& usage){return usage.ownerId==surface.id;}),"Deleting decal coverage omitted its surviving surface owner warning.");
+    const auto texturePlan=library.planDeletion({image},&active);
+    require(texturePlan.error.empty()&&texturePlan.needsReferenceWarning()&&std::any_of(texturePlan.warningUsages.begin(),texturePlan.warningUsages.end(),[&](const auto& usage){return usage.ownerId==graphMaterial.id;}),"Deleting graph decal coverage omitted its surviving material owner warning.");
     finishDeletion(library,resources,texturePlan,{},&active);const auto cleared=loadDecalAsset(project.root,surface.id);
-    require(cleared.coverageTexture.empty()&&!cleared.colorEnabled&&!cleared.normalEnabled&&!cleared.roughnessEnabled,"Deleted coverage became an unmasked decal instead of disabling its influence.");
-    require(library.decalRevision(surface.id)>revision&&library.findDecal(surface.id)&&!library.findDecal(surface.id)->roughnessEnabled,"Texture deletion did not publish the replacement decal generation.");
-    const auto prepared=library.preparedDecalMaterial(surface.id);require(prepared->ready&&prepared->current&&prepared->render&&!prepared->render->colorEnabled&&!prepared->render->normalEnabled&&!prepared->render->roughnessEnabled,"Disabled decal material demanded missing textures or retained old coverage.");
+    require(cleared.material.id==graphMaterial.id&&findMaterialNode(loadMaterialAsset(project.root,graphMaterial.id).graph,coverage)->texture.image.id==GrayTextureId,"Texture deletion did not use ordinary graph reference replacement.");
+    require(library.findMaterial(graphMaterial.id)&&findMaterialNode(library.findMaterial(graphMaterial.id)->graph,coverage)->texture.image.id==GrayTextureId,"Texture deletion did not publish the rewritten graph material.");
     require(active.dirty()&&active.scene().find(light)->name==changed.name&&read(resolveAssetPath(project.root,active.assetId()))==savedScene,"Decal texture deletion changed unrelated scene bytes or unsaved edits.");
+    const auto wrong=library.createMaterial("Lit incompatible replacement");require(bool(wrong),library.status());
+    const auto candidates=library.fallbackCandidates(graphMaterial.id);require(std::none_of(candidates.begin(),candidates.end(),[&](const auto& e){return e.id==wrong->id;})&&std::any_of(candidates.begin(),candidates.end(),[&](const auto& e){return e.id==replacement.material.id;}),"Decal material fallback admitted Lit shading or omitted Decal shading.");
+    auto materialPlan=library.planDeletion({graphMaterial.id},&active);require(materialPlan.error.empty()&&materialPlan.needsReferenceWarning(),"Decal material deletion omitted the dependent decal warning.");
+    finishDeletion(library,resources,materialPlan,{{graphMaterial.id,replacement.material.id}},&active);require(loadDecalAsset(project.root,surface.id).material==replacement.material&&library.findDecal(surface.id)->material==replacement.material,"Material replacement did not rewrite the v2 decal reference.");
     auto plan=library.planDeletion({surface.id},&active);require(plan.error.empty()&&plan.needsReferenceWarning()&&plan.clearsActiveHistory,"Deleting a decal asset omitted saved scene/history impact.");
     finishDeletion(library,resources,plan,{{surface.id,replacement.id}},&active);
     require(active.scene().find(entity)->decal->asset.id==replacement.id&&active.scene().find(entity)->decal->seed==decal.seed&&active.scene().find(entity)->local==math::translation({1,2,3}),"Decal replacement lost scene placement or surface provenance.");

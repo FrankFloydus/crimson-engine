@@ -42,7 +42,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     }
     if(std::isfinite(dt)&&dt>0)materialContext_.gameSeconds+=std::min(dt,1.0);
     materialContext_.realSeconds=ImGui::GetTime();
-    if(imageDocumentId_!=material.id){imageCurrent_={};classifiedImageGraph_.reset();classifiedImageTarget_.reset();staticImage_=false;imageDocumentId_=material.id;mode_=MaterialPreviewMode::ThreeD;}
+    if(imageDocumentId_!=material.id){imageCurrent_={};classifiedImageGraph_.reset();classifiedImageTarget_.reset();staticImage_=false;imageDocumentId_=material.id;mode_=MaterialPreviewMode::ThreeD;decalCurrent_.reset();decalSourcePatch_.reset();decalTransformedPatch_.reset();decalGeometry_.clear();}
     if(nodePreview_) {
         const auto* node=findMaterialNode(material.graph,nodePreview_->node);
         const auto outputs=node?materialNodeOutputs(material.graph,*node):std::vector<MaterialPinDefinition>{};
@@ -54,6 +54,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
         if(ImGui::RadioButton("3D",mode_==MaterialPreviewMode::ThreeD))setMode(MaterialPreviewMode::ThreeD);
     }
     const bool flatNode=nodePreview_&&mode_==MaterialPreviewMode::TwoD;
+    const bool decalMaterial=!nodePreview_&&materialOutputNode(material.graph).output.shading==MaterialShading::Decal;
     if(!flatNode) {
         constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane","Sprite"};
         auto selected=static_cast<int>(mesh_);
@@ -126,7 +127,14 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(!environment_.map.empty() && source.empty())status_="The assigned HDRI is unavailable; using the built-in studio.";
     const auto diagnose=[&](const std::string& message){if(!status_.empty())status_+='\n';status_+=message;};
     const AssetLibrary::ReflectionDemandScope reflectionDemand(assets,!nodePreview_&&environment_.ssr.enabled&&environment_.ssr.strength>0);
-    if(!nodePreview_)try {
+    if(decalMaterial)try {
+        const auto packet=assets.preparedDecalMaterial(material,materialGraphRenderHash(material.surface),textureEdge,ResourcePriority::Selected);
+        if(packet&&!packet->diagnostic.empty())diagnose(packet->diagnostic);
+        if(packet&&packet->ready&&packet->render)decalCurrent_=packet->render;
+        decalGeometry_.prepare(mesh_,resources);
+        if(!decalGeometry_.diagnostic().empty())diagnose(decalGeometry_.diagnostic());
+    } catch(const std::exception& error){diagnose(error.what());}
+    else if(!nodePreview_)try {
         auto bindings=assets.materialPreviewBindings(material,textureEdge);
         if(!bindings.diagnostic.empty())diagnose(bindings.diagnostic);
         if(materialPreviewPacketReady(bindings) && (!bindings.graphPending || !current_ || !current_->bindings.graph)) {
@@ -154,7 +162,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     } catch(const std::exception& error) {diagnose(error.what());}
     const auto displayed=nodePreview_?nodeCurrent_:current_;
     const auto displayMesh=flatNode?MaterialPreviewMesh::Plane:mesh_;
-    const bool particlePreview=displayed && usesParticleMaterialPreview(displayMesh,displayed->bindings);
+    const bool particlePreview=!decalMaterial && displayed && usesParticleMaterialPreview(displayMesh,displayed->bindings);
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
     if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     if(!renderer.antiAliasingStatus().empty())ImGui::TextWrapped("%s",renderer.antiAliasingStatus().c_str());
@@ -169,7 +177,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     const auto texture=renderer.materialPreviewTexture();
     // The main tools view precedes the preview views. Do not sample a freshly
     // allocated target until its first submitted preview frame has completed.
-    if(bgfx::isValid(texture) && texture.idx==displayedTarget_ && displayed && environmentRevision_)ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)),size);
+    if(bgfx::isValid(texture) && texture.idx==displayedTarget_ && (decalMaterial?bool(decalCurrent_):bool(displayed)) && environmentRevision_)ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)),size);
     else ImGui::Dummy(size);
     displayedTarget_=texture.idx;
     auto& io=ImGui::GetIO();
@@ -188,16 +196,37 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(gesture_==1)navigation_.tumble(delta);
     if(gesture_==2)navigation_.translate(delta);
     if(gesture_==3)environment_.rotation=MaterialPreviewNavigation::rotateEnvironment(environment_.rotation,delta[0]);
-    if(!displayed)return;
+    if(!displayed&&!decalMaterial)return;
     SceneSettings settings;settings.camera.position=flatNode?Vec3{0,0,2.6f}:Vec3{navigation_.pan[0],navigation_.pan[1],navigation_.distance};
     settings.camera.target=flatNode?Vec3{}:Vec3{navigation_.pan[0],navigation_.pan[1],0};settings.camera.nearPlane=.1f;settings.camera.farPlane=30;
     settings.exposure=1;settings.environment=environment_;settings.antiAliasing=antiAliasing_;
-    renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,displayMesh,flatNode?Mat4{}:navigation_.objectTransform(),!flatNode && showBackground_ && environment_.enabled,displayed,materialContext_);
+    if(decalMaterial) {
+        const auto& surface=decalGeometry_.prepare(mesh_,resources);
+        const auto transform=navigation_.objectTransform();
+        if(surface.patch&&(decalSourcePatch_!=surface.patch||decalObjectTransform_!=transform)) {
+            auto patch=std::make_shared<DecalPatchData>(*surface.patch);patch->bounds={};
+            const auto normal=math::normalMatrix(transform).value_or(Mat4{});
+            for(auto& vertex:patch->vertices){vertex.position=math::transformPoint(transform,vertex.position);vertex.normal=math::normalized(math::transformDirection(normal,vertex.normal));math::include(patch->bounds,vertex.position);}
+            std::uint64_t fingerprint=surface.patch->fingerprint;
+            for(float value:transform.values){const auto* bytes=reinterpret_cast<const unsigned char*>(&value);for(unsigned i=0;i<sizeof(value);++i){fingerprint^=bytes[i];fingerprint*=1099511628211ull;}}
+            patch->fingerprint=fingerprint;decalTransformedPatch_=std::move(patch);decalSourcePatch_=surface.patch;decalObjectTransform_=transform;
+        }
+        struct Pins {std::shared_ptr<const ModelAsset> model;std::vector<ModelMaterialTextures> textures;std::vector<RenderDecal> decals;};
+        auto pins=std::make_shared<Pins>();pins->model=surface.model;pins->textures=assets.modelBindings(*surface.model,surface.model->materials);
+        if(!renderer.prepareModel(*surface.model)||!assets.modelBindingsReady(pins->textures))return;
+        if(decalCurrent_&&surface.patch&&decalTransformedPatch_){pins->decals.push_back({2,2,0,decalTransformedPatch_,decalCurrent_});pins->decals.back().frame=transform*surface.frame;}
+        std::array<RenderModelInstance,1> instances{{{1,{surface.model,transform},&pins->textures,1,true,false,&surface.model->materials}}};
+        instances.front().receiveDecals=true;instances.front().castShadows=false;
+        const std::array<DirectionalLight,1> lights{{{{-.4f,-1,-.7f},{1,1,1},2,true}}};
+        RenderScene scene{settings,{},nullptr,nullptr,instances,lights,{},showBackground_&&environment_.enabled,pins};
+        scene.decals=pins->decals;scene.materialContext=materialContext_;renderer.renderMaterialPreview(scene);
+    } else renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,displayMesh,flatNode?Mat4{}:navigation_.objectTransform(),!flatNode && showBackground_ && environment_.enabled,displayed,materialContext_);
 }
 void MaterialPreview::release(Renderer& renderer) {
     cancelInteraction();renderer.releaseMaterialPreview();current_.reset();nodeCurrent_.reset();nodePrograms_.reset();nodePreview_.reset();nodeDefinitionKey_.clear();definitionKey_.clear();environmentHandle_={};
     requestedEnvironment_.clear();environmentRevision_=0;displayedTarget_=UINT16_MAX;navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;materialContext_={};
     imageCurrent_={};imageGraph_.reset();classifiedImageGraph_.reset();classifiedImageTarget_.reset();imageDocumentId_.clear();staticImage_=displayingImage_=false;
     mode_=MaterialPreviewMode::ThreeD;
+    decalCurrent_.reset();decalSourcePatch_.reset();decalTransformedPatch_.reset();decalGeometry_.clear();
 }
 }

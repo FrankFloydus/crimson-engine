@@ -54,7 +54,7 @@ uint64_t materialPreviewHash(const MaterialAsset& material) {
     auto key=streaming::detail::HashSeed;hash(key,material.shading);hash(key,material.blend);materialHash(key,material.surface);return key;
 }
 uint64_t animationPreviewHash(const AnimationAsset& animation) {return textHash(serializeAnimationAsset(animation));}
-uint64_t decalPreviewHash(const DecalAsset& decal) {auto key=textHash(serializeDecalAsset(decal));hash(key,2u);return key;}
+uint64_t decalPreviewHash(const DecalAsset& decal) {auto key=textHash(serializeDecalAsset(decal));hash(key,3u);return key;}
 std::vector<std::filesystem::path> uniqueFiles(std::vector<std::filesystem::path> files) {
     std::sort(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)<resourcePathKey(b);});
     files.erase(std::unique(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)==resourcePathKey(b);}),files.end()); return files;
@@ -136,6 +136,7 @@ struct AssetPreviews::Impl {
         bool wanted{},forceScene{},saveRequested{};
         std::string error;
         std::unique_ptr<DecalResources> decalResources;
+        DecalPreviewGeometry decalGeometry;
         std::chrono::steady_clock::time_point used{std::chrono::steady_clock::now()};
     };
     struct EnvironmentEntry {
@@ -365,7 +366,8 @@ struct AssetPreviews::Impl {
         std::shared_ptr<Scene> decalScene;
         ExtractedScene decalExtraction;
         DecalPreparedScene preparedDecals;
-        bool spriteMaterial=false;
+        bool spriteMaterial=false,decalMaterialPreview=false;
+        const DecalPreviewSurface* decalGeometry=nullptr;
         std::vector<std::filesystem::path> files;
         std::vector<std::filesystem::path> validationFiles;
         std::vector<PreviewMaterialFingerprint> materialVersions;
@@ -380,7 +382,7 @@ struct AssetPreviews::Impl {
             const auto target=assets.references().resolveMaterial(source);
             if(const auto material=assets.peekMaterial(target)) {
                 materialVersions.push_back({target,materialPreviewHash(*material)});
-                if(!isEngineAssetId(target))validationFiles.push_back(sourceFile(target));
+                if(!isEngineAssetId(target))try{validationFiles.push_back(sourceFile(target));}catch(const std::exception&){}
             }
         };
         uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());hash(sourceKey,assets.materialShaderRevision());
@@ -389,9 +391,13 @@ struct AssetPreviews::Impl {
             const auto decal=assets.findDecal(source);if(!decal)return;
             const auto fingerprint=decalPreviewHash(*decal);hash(sourceKey,fingerprint);decalVersions.push_back({decal->id,fingerprint});
             validationFiles.push_back(sourceFile(decal->id));
-            for(const auto& map:decalTextureReferences(*decal)) {
-                const auto target=assets.references().resolveTexture(map,map==decal->normalTexture.id);
-                hash(sourceKey,target.data(),target.size());if(!target.empty()&&!isEngineAssetId(target))files.push_back(sourceFile(target));
+            const auto materialId=assets.references().resolveDecalMaterial(decal->material.id);includeMaterial(materialId);
+            if(const auto material=assets.findMaterial(materialId)) {
+                const auto materialKey=materialPreviewHash(*material);hash(sourceKey,materialKey);
+                visitMaterialTextures(material->surface,true,[&](const auto& image,MaterialTextureRole role){
+                    const auto target=assets.references().resolveTexture(image,role==MaterialTextureRole::Normal);
+                    hash(sourceKey,target.data(),target.size());if(!target.empty()&&!isEngineAssetId(target))files.push_back(sourceFile(target));
+                });
             }
         };
         if (entry.kind==AssetKind::Scene) {
@@ -422,14 +428,16 @@ struct AssetPreviews::Impl {
             if (snapshot->previewCamera) settings.camera=*snapshot->previewCamera;
         } else if(entry.kind==AssetKind::Decal) {
             decalAsset=assets.findDecal(id);if(!decalAsset){entry.error="Decal is unavailable.";return;}
-            includeDecal(id);materialGeometry=decalPreviewSurface().model;settings.camera=decalPreviewSurface().camera;
+            includeDecal(id);decalGeometry=&decalPreviewSurface();materialGeometry=decalGeometry->model;settings.camera=decalGeometry->camera;
             directions={DirectionalLight{{-.4f,-1,-.7f},{1,1,1},2,true}};
         } else if (entry.kind==AssetKind::Material) {
             materialAsset=assets.findMaterial(id);
             if (!materialAsset) { entry.error="Material is unavailable."; return; }
             includeMaterial(id);
             spriteMaterial=materialAsset->id==DefaultParticleMaterialId;
-            if (!spriteMaterial) {
+            decalMaterialPreview=decalMaterialCompatible(*materialAsset);
+            if(decalMaterialPreview){decalGeometry=&entry.decalGeometry.prepare(MaterialPreviewMesh::Sphere,resources);if(!decalGeometry->patch){entry.error=entry.decalGeometry.diagnostic();return;}materialGeometry=decalGeometry->model;}
+            if (!spriteMaterial&&!decalMaterialPreview) {
                 ModelAsset probe; probe.materialIds={id};
                 if (!assets.modelMaterialsReady(probe)) {
                     const auto diagnostic=assets.modelMaterialsDiagnostic(probe);
@@ -450,6 +458,7 @@ struct AssetPreviews::Impl {
             });
             settings.camera.position={0,0,3}; settings.camera.target={0,0,0}; settings.camera.up={0,1,0};
             settings.camera.fov=45; settings.camera.nearPlane=.1f; settings.camera.farPlane=10;
+            if(decalMaterialPreview)settings.camera=decalGeometry->camera;
             directions={DirectionalLight{{-1,-1,-1},{1,1,1},1,true},DirectionalLight{{0,1,0},{.7f,.7f,.7f},1,true}};
         } else {
             models.push_back({0,id,Mat4{}}); settings.camera.position={4,3,5}; settings.camera.target={0,0,0};
@@ -591,16 +600,16 @@ struct AssetPreviews::Impl {
         std::vector<RenderModelInstance> instances;
         std::vector<RenderParticle> particles;
         std::vector<RenderParticleMaterial> particleMaterials;
-        if(decalAsset) {
+        if(decalAsset||decalMaterialPreview) {
             auto candidate=std::make_shared<PreparedEditorModel>();candidate->asset=materialGeometry;
             candidate->materials=materialGeometry->materials;candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
-            const auto material=assets.preparedDecalMaterial(id,previewSize,ResourcePriority::Preview);
-            if(!material||!material->ready||!material->current||!material->render||!assets.modelBindingsReady(candidate->textures))return;
+            const auto material=decalAsset?assets.preparedDecalMaterial(id,previewSize,ResourcePriority::Preview):assets.preparedDecalMaterial(*materialAsset,assets.materialRevision(id),previewSize,ResourcePriority::Preview);
+            if(!material||!material->ready||!material->current||!material->render||!assets.modelBindingsReady(candidate->textures)||!decalTexturesMatch(*material,*dependencies))return;
             prepared.retainExternalModelForFrame(materialGeometry->id);
             if(!renderer.prepareModel(*materialGeometry)){entry.error=renderer.modelStatus();return;}
             candidate->revision=1;candidate->ready=candidate->refined=true;pins->models.push_back(candidate);
             instances.push_back({1,{materialGeometry,Mat4{}},&candidate->textures,1,true,false,&candidate->materials});instances.back().receiveDecals=true;
-            pins->decals.push_back({2,2,0,decalPreviewSurface().patch,material->render});
+            pins->decals.push_back({2,2,0,decalGeometry->patch,material->render});pins->decals.back().frame=decalGeometry->frame;
         }
         if (spriteMaterial) {
             assets.setTextureDemand(previewSize);
@@ -629,7 +638,7 @@ struct AssetPreviews::Impl {
             particles.push_back({{0,0,0},2,{1,1,1,1},0,0,ParticleBillboardMode::Enabled});
             if(!material->diagnostic.empty())entry.error=material->diagnostic;
         }
-        if (materialAsset && !spriteMaterial) {
+        if (materialAsset && !spriteMaterial&&!decalMaterialPreview) {
             assets.setTextureDemand(previewSize);
             auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=materialGeometry;
             candidate->materials={materialAsset->surface}; candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
@@ -659,13 +668,13 @@ struct AssetPreviews::Impl {
         }
         for (const auto& model:models) {
             if (!assets.findModel(model.assetId,model.primitive) && !assets.modelLoading(model.assetId)) continue;
-            const bool receiveDecals=std::find(preparedDecals.receivers.begin(),preparedDecals.receivers.end(),model.id)!=preparedDecals.receivers.end();
-            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,previewSize,receiveDecals,ResourcePriority::Preview,0,model.materialOverrides,0,&model);
+            const bool participating=std::find(preparedDecals.receivers.begin(),preparedDecals.receivers.end(),model.id)!=preparedDecals.receivers.end();
+            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,previewSize,participating,ResourcePriority::Preview,0,model.materialOverrides,0,&model);
             if (!ready || !ready->ready || !ready->refined) return;
             if (!texturesMatchSources(assets,root,*dependencies,ready->materials,ready->textures,resources,refreshedSources)) return;
             pins->models.push_back(ready);
-            instances.push_back({model.id,{ready->asset,model.world},&ready->textures,ready->revision,receiveDecals,false,&ready->materials});
-            instances.back().receiveDecals=receiveDecals;
+            instances.push_back({model.id,{ready->asset,model.world},&ready->textures,ready->revision,participating,false,&ready->materials});
+            instances.back().receiveDecals=model.receiveDecals;
             instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
             instances.back().lightingScopes=model.lightingScopes;
             instances.back().lightingCategory=model.lightingCategory;

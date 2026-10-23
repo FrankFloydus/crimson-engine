@@ -40,8 +40,8 @@ struct PreparedDecalSurface {
     bool ready{},current{};
     std::uint64_t signature{},sourceFingerprint{};
     std::string diagnostic;
-    std::array<std::string,4> sourceIds;
-    std::array<std::uint64_t,4> sourceFingerprints{};
+    std::array<std::string,12> sourceIds;
+    std::array<std::uint64_t,12> sourceFingerprints{};
 };
 
 enum class MaterialSlot { Albedo, Roughness, Metallic, Normal };
@@ -133,6 +133,7 @@ public:
     }
     std::shared_ptr<const PreparedDecalSurface> preparedDecalMaterial(const std::string& id,std::uint32_t textureEdge=1024,ResourcePriority=ResourcePriority::Visible) const;
     std::shared_ptr<const PreparedDecalSurface> preparedDecalMaterial(const DecalAsset&,std::uint64_t previewRevision,std::uint32_t textureEdge=1024,ResourcePriority=ResourcePriority::Selected) const;
+    std::shared_ptr<const PreparedDecalSurface> preparedDecalMaterial(const MaterialAsset&,std::uint64_t previewRevision,std::uint32_t textureEdge=1024,ResourcePriority=ResourcePriority::Selected) const;
     std::shared_ptr<const ParticleEffectAsset> findParticle(const std::string& id) const;
     std::uint64_t particleRevision(const std::string& id) const;
     std::string particleDiagnostic(const std::string& id) const;
@@ -243,6 +244,7 @@ private:
     mutable std::unordered_map<std::string,std::shared_ptr<const PreparedDecalSurface>> preparedDecalMaterials_;
     mutable std::unordered_map<std::string,std::chrono::steady_clock::time_point> decalMaterialInterest_;
     std::shared_ptr<const PreparedDecalSurface> prepareDecalSurface(const DecalAsset&,const std::string& key,std::uint64_t,std::uint32_t,ResourcePriority) const;
+    std::shared_ptr<const PreparedDecalSurface> prepareDecalGraph(const MaterialAsset&,const std::string& key,std::uint64_t,std::uint32_t,ResourcePriority) const;
     struct ParticleVersion { std::shared_ptr<const ParticleEffectAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,ParticleVersion> particles_;
     std::uint64_t nextParticleRevision_{1};

@@ -119,7 +119,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
-        a.modelAnimation==b.modelAnimation && a.visible==b.visible &&
+        a.modelAnimation==b.modelAnimation && a.visible==b.visible && a.receiveDecals==b.receiveDecals &&
         a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
@@ -144,6 +144,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
     record.visible=registry_.get<Visibility>(entity).authored;
+    record.receiveDecals=registry_.get<VisualSettings>(entity).receiveDecals;
     record.outlinerStyle=registry_.get<OutlinerStyle>(entity).value;
     if (const auto* model = registry_.try_get<ModelReference>(entity)) {
         record.model=model->assetId;record.modelMaterials=model->materials;
@@ -299,7 +300,6 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             const auto& decal=*record.decal;const auto& seed=decal.seed;
             if(!decal.asset.empty()&&(!isAssetUuid(decal.asset.id)||isEngineAssetId(decal.asset.id)))throw std::runtime_error("Decal reference requires a writable managed decal UUID.");
             if(!seed.modelId.empty()&&!isAssetUuid(seed.modelId))throw std::runtime_error("Decal seed geometry requires a managed model UUID.");
-            if(seed.sourceKey.size()>4096||seed.sourceKey.find('\0')!=std::string::npos)throw std::runtime_error("Decal source identity is too long or invalid.");
             if(!math::finite(seed.barycentric)||!math::finite(seed.localPoint)||!math::finite(seed.localNormal)||math::length(seed.localNormal)<1e-8)
                 throw std::runtime_error("Decal seed requires finite barycentrics, point and nonzero normal.");
             if(std::abs(seed.barycentric[0]+seed.barycentric[1]+seed.barycentric[2]-1)>1e-4||
@@ -307,11 +307,6 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             const auto unit=[](float x){return math::finite(x)&&x>=0&&x<=1;};
             if(!std::all_of(decal.tint.begin(),decal.tint.end(),unit)||!unit(decal.opacity)||!math::finite(decal.edgeFeather)||decal.edgeFeather<0||decal.edgeFeather>.5f)
                 throw std::runtime_error("Decal tint/opacity requires zero to one, and edge feather zero to one half.");
-            if(decal.receivers.scope!=SceneDecalReceiverScope::SeedQuaderScene&&decal.receivers.scope!=SceneDecalReceiverScope::Explicit)throw std::runtime_error("Unsupported decal receiver policy.");
-            for(const auto* list:{&decal.receivers.included,&decal.receivers.excluded}) {
-                if(list->size()>4096)throw std::runtime_error("Decal receiver policy exceeds 4096 entries.");
-                std::unordered_set<EntityId> unique;for(const auto id:*list)if(!id||!unique.insert(id).second)throw std::runtime_error("Decal receiver lists require unique nonzero entity IDs.");
-            }
         }
         if(record.outlinerStyle) {
             const auto validColor=[](const auto& color) {
@@ -531,6 +526,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
+        candidate.emplace<VisualSettings>(entity,record.receiveDecals);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);

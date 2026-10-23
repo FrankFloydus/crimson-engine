@@ -20,14 +20,20 @@
 namespace crimson {
 namespace {
 void canceled(std::stop_token stop){if(stop.stop_requested())throw std::runtime_error("Asset deletion preparation canceled.");}
-void materialDependencies(const std::filesystem::path& root,const MaterialAsset& definition,const AssetReferenceManager& policy,std::vector<std::filesystem::path>& result) {
-    if(!isEngineAssetId(definition.id))result.push_back(checkedManagedAssetPath(root,definition.id));
+void materialDependencies(const std::filesystem::path& root,const MaterialAsset& definition,const AssetReferenceManager& policy,std::vector<std::filesystem::path>& result,bool staged=false) {
+    if(!staged&&!isEngineAssetId(definition.id))result.push_back(checkedManagedAssetPath(root,definition.id));
     visitMaterialTextures(definition.surface,false,[&](const auto& id,MaterialTextureRole role){
         const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);
         if(image.empty()||isEngineAssetId(image))return;
         const auto file=checkedManagedAssetPath(root,image);auto extension=file.extension().string();std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
         if(extension==".hdr")throw std::runtime_error("A material cannot use HDR images in material slots.");result.push_back(file);
     });
+}
+std::shared_ptr<const MaterialAsset> decalMaterial(const std::filesystem::path& root,const DecalAsset& decal,const AssetReferenceManager& policy) {
+    const auto id=policy.resolveDecalMaterial(decal.material.id);if(id.empty())return {};
+    auto m=id==decal.material.id?stagedDecalMaterial(root,decal):nullptr;
+    if(!m)m=std::make_shared<const MaterialAsset>(loadMaterialAsset(root,id));
+    if(!decalMaterialCompatible(*m))throw std::runtime_error("Assigned decal material requires Decal shading.");return m;
 }
 std::vector<std::filesystem::path> dependencies(const std::filesystem::path& root,std::span<const AssetEntry> models,const AssetReferenceManager& policy,std::span<const AssetEntry> particles,std::span<const AssetEntry> decals){
     std::vector<std::filesystem::path> result;
@@ -60,8 +66,7 @@ std::vector<std::filesystem::path> dependencies(const std::filesystem::path& roo
     }
     for(const auto& entry:decals) {
         result.push_back(checkedManagedAssetPath(root,entry.id));auto asset=loadDecalAsset(root,entry.id);
-        rewriteDecalTextureReferences(asset,[&](const std::string& id,bool){const auto target=policy.resolve(id);return policy.deleted(id)&&(target==GrayTextureId||target==NeutralNormalTextureId)?std::string{}:target;});
-        for(const auto& id:decalTextureReferences(asset))if(!isEngineAssetId(id))result.push_back(checkedManagedAssetPath(root,id));
+        if(const auto material=decalMaterial(root,asset,policy))materialDependencies(root,*material,policy,result,bool(stagedDecalMaterial(root,asset))&&material->id==asset.material.id);
     }
     std::sort(result.begin(),result.end());result.erase(std::unique(result.begin(),result.end()),result.end());return result;
 }
@@ -109,10 +114,10 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
     }
     for(const auto& entry:decals) {
         canceled(stop);auto asset=loadDecalAsset(root,entry.id);
-        rewriteDecalTextureReferences(asset,[&](const std::string& id,bool){const auto target=policy.resolve(id);return policy.deleted(id)&&(target==GrayTextureId||target==NeutralNormalTextureId)?std::string{}:target;});
-        for(const auto& id:decalTextureReferences(asset))if(!isEngineAssetId(id)) {
-            const auto file=checkedManagedAssetPath(root,id);if(file.extension()==".hdr")throw std::runtime_error("Decal maps cannot use HDR environments.");(void)decodeManagedImage(file);
-        }
+        if(const auto material=decalMaterial(root,asset,policy))visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
+            const auto image=policy.resolveTexture(id,role==MaterialTextureRole::Normal);if(image.empty()||isEngineAssetId(image))return;
+            const auto file=checkedManagedAssetPath(root,image);if(file.extension()==".hdr")throw std::runtime_error("Decal materials cannot use HDR environments.");(void)decodeManagedImage(file);
+        });
         result->bytes+=sizeof(DecalAsset)+asset.id.size()+asset.name.size();if(progress)progress->completed.fetch_add(1);
     }
     canceled(stop);result->fileStateFingerprint=fingerprintFileStates(result->dependencies);

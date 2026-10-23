@@ -50,7 +50,7 @@ enum class Edit { None, Name, InlineName, Visible,
     PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointIndirectEnergy,PointAttenuation,
     DirectionReceivers,DirectionCasters,
     PointReceivers,PointCasters,
-    ModelCastShadows, ModelReceiveShadows,ModelShading,
+    ModelCastShadows, ModelReceiveShadows,VisualReceiveDecals,ModelShading,
     PrimitiveSizeX,PrimitiveSizeY,PrimitiveSizeZ,PrimitiveRadius,PrimitiveHeight,PrimitiveSides,PrimitiveRings,
     ModelDirectReceivers,ModelCasterScope,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
@@ -1573,6 +1573,10 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 const bool receiveChanged=resettableProperty(receiveShadows,ModelReference{}.receiveShadows,[&]{return ImGui::Checkbox("Receive Shadows",&receiveShadows);});
                 propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
                     changeEntity(record.id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
+                auto receiveDecals=record.receiveDecals;
+                const bool receiveDecalsChanged=resettableProperty(receiveDecals,true,[&]{return ImGui::Checkbox("Receive Decals##model",&receiveDecals);});
+                propertyEdit(document,state,Edit::VisualReceiveDecals,"Toggle decal receiving",receiveDecalsChanged,
+                    changeEntity(record.id,[receiveDecals](auto& entity){entity.receiveDecals=receiveDecals;}));
                 auto scopes=record.lightingScopes;
                 bool activeScopeDrawn=false;
                 const auto scopeEdit=[&](Edit property,const char* label,bool changed) {
@@ -1638,26 +1642,6 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     ImGui::Text("Surface: %s",receiver?receiver->name.c_str():"Unresolved");
                     if(decals.placeEntity&&ImGui::Button("Place on Surface")) {finishScenePanelEdit(document);*decals.placeEntity=record.id;}
                     if(ImGui::IsItemHovered())ImGui::SetTooltip("Click a visible surface in the viewport to place this decal there.");
-                    int scope=static_cast<int>(value.receivers.scope);
-                    if(resettableProperty(scope,static_cast<int>(defaults.receivers.scope),[&]{return ImGui::Combo("Receiver Scope",&scope,"Seed Quader Scene\0Explicit\0");})) {
-                        value.receivers.scope=static_cast<SceneDecalReceiverScope>(scope);atomic("Change decal receiver scope");
-                    }
-                    const auto receiverList=[&](const char* title,std::vector<EntityId>& ids) {
-                        if(!ImGui::TreeNode(title))return;
-                        for(const auto& candidate:document.scene().records())if(candidate.model) {
-                            ImGui::PushID(static_cast<int>(candidate.id>>32));ImGui::PushID(static_cast<int>(candidate.id));
-                            const auto found=std::find(ids.begin(),ids.end(),candidate.id);bool included=found!=ids.end();
-                            if(ImGui::Checkbox(candidate.name.c_str(),&included)) {
-                                if(included)ids.push_back(candidate.id);else ids.erase(found);
-                                atomic("Change decal receiver policy");
-                            }
-                            ImGui::PopID();ImGui::PopID();
-                        }
-                        for(const auto id:ids)if(!document.scene().contains(id))ImGui::TextDisabled("Missing receiver: %llu",static_cast<unsigned long long>(id));
-                        ImGui::TreePop();
-                    };
-                    receiverList("Include Receivers",value.receivers.included);
-                    receiverList("Exclude Receivers",value.receivers.excluded);
                     if(decals.status)if(const auto diagnostic=decals.status(record.id);!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
                 }else if(state.active>=Edit::DecalTint&&state.active<=Edit::DecalPriority)finishEdit(document,state,state.active);
             }
@@ -1689,6 +1673,11 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     ImGui::EndPopup();
                 }
                 if(changed) { auto next=record;next.particle=AssetRef<ParticleEffectAsset>{assigned};document.updateEntity(record.id,next,"Assign particle effect"); }
+                auto receiveDecals=record.receiveDecals;
+                const bool receiveDecalsChanged=resettableProperty(receiveDecals,true,[&]{return ImGui::Checkbox("Receive Decals##particle",&receiveDecals);});
+                propertyEdit(document,state,Edit::VisualReceiveDecals,"Toggle decal receiving",receiveDecalsChanged,
+                    changeEntity(record.id,[receiveDecals](auto& entity){entity.receiveDecals=receiveDecals;}));
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Billboard particle surfaces do not support decals yet.");
                 ImGui::BeginDisabled(!effect);
                 if(ImGui::Button("Play Effect") && playParticle) *playParticle=record.id;
                 ImGui::SameLine();if(ImGui::Button("Edit Effect") && openParticle) *openParticle=resolved;

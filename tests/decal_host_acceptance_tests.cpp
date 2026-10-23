@@ -1,6 +1,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
+#include "assets/ModelAsset.h"
 #include "editor/DecalResources.h"
 #include "editor/EditorRenderFrame.h"
 #include "editor/EditorSession.h"
@@ -38,7 +39,6 @@ namespace fs=std::filesystem;
 using Json=nlohmann::json;
 using Clock=std::chrono::steady_clock;
 constexpr std::uint16_t Width=640,Height=480;
-constexpr EntityId ActualReceiver=UINT64_C(0x0602e6df2ed4062d),ActualDecal=UINT64_C(0x97de220348c80ba4);
 constexpr const char* TextureId="737de3e1-9ff3-498f-93f0-f0b6207fad13";
 constexpr const char* DecalId="db6e9555-b494-48fc-9715-a78208e0e8eb";
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
@@ -93,12 +93,32 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
     const auto sceneBytes=readText(sourceScene),assetBytes=readText(sourceAsset);const auto sourceImageFingerprint=fingerprintFiles({sourceImage});
     const auto imageFile=project.root/"Content/dirt_03.png";
     fs::copy_file(sourceImage,imageFile);registerAssetPath(project.root,TextureId,imageFile);
-    auto surface=deserializeDecalAsset(assetBytes,DecalId);surface.colorEnabled=true;surface.colorTexture.id=TextureId;
+    const auto copyMaterial=[&](const MaterialAsset& material){
+        for(const auto& id:materialTextureReferences(material)){
+            if(id==TextureId||isEngineAssetId(id))continue;
+            const auto source=resolveAssetPath(sourceRoot,id);check(fs::is_regular_file(source),"Missing authored material image "+id);
+            const auto target=project.root/"Content/dependencies"/(id+source.extension().string());fs::create_directories(target.parent_path());
+            if(!fs::exists(target))fs::copy_file(source,target);registerAssetPath(project.root,id,target);
+        }
+        saveMaterialAsset(project.root,material);
+    };
+    auto surface=deserializeDecalAsset(assetBytes,DecalId);
+    if(surface.stagedMaterial){auto material=*surface.stagedMaterial;materialOutputNode(material.graph).output.decalColorEnabled=true;canonicalizeMaterialAsset(material);surface.stagedMaterial=std::make_shared<const MaterialAsset>(std::move(material));}
+    else copyMaterial(loadMaterialAsset(sourceRoot,surface.material.id));
     saveDecalAsset(project.root,surface);
     writeFileAtomically(output/"actual-source-decal.json",assetBytes);
     auto isolated=Json::parse(serializeSceneSnapshot({newAssetId(),"Actual saved cylinder",{},{}}));
     isolated["entities"]=Json::array();const auto authored=Json::parse(sceneBytes);
-    for(const auto& entity:authored.at("entities"))if(entity.at("id")=="0602e6df2ed4062d"||entity.at("id")=="97de220348c80ba4")isolated["entities"].push_back(entity);
+    EntityId actualReceiver{},actualDecal{};
+    for(const auto& entity:authored.at("entities")){
+        if(!entity.contains("decal")||entity.at("decal").at("asset")!=DecalId)continue;
+        const auto receiver=entity.at("decal").at("seed").at("receiver").get<std::string>();
+        const auto model=std::find_if(authored.at("entities").begin(),authored.at("entities").end(),[&](const auto& value){return value.at("id")==receiver&&value.contains("model")&&value.at("model")==BuiltinCylinderModelId;});
+        if(model==authored.at("entities").end())continue;
+        if(model->contains("modelMaterials"))for(const auto& material:model->at("modelMaterials"))if(!material.get<std::string>().empty())copyMaterial(loadMaterialAsset(sourceRoot,material.get<std::string>()));
+        isolated["entities"].push_back(*model);isolated["entities"].push_back(entity);
+        actualReceiver=std::stoull(receiver,nullptr,16);actualDecal=std::stoull(entity.at("id").get<std::string>(),nullptr,16);break;
+    }
     check(isolated["entities"].size()==2,"Actual saved Cylinder/decal pair is unavailable.");
     const auto isolatedId=isolated.at("id").get<std::string>();const auto isolatedFile=project.root/"Content/actual.crimson-scene";
     writeFileAtomically(isolatedFile,isolated.dump(2));registerAssetPath(project.root,isolatedId,isolatedFile);
@@ -148,7 +168,7 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
         }
         DecalPreparedScene prepared;const auto end=Clock::now()+std::chrono::seconds{30};bool ready=false;
         do{tick();render(camera,true,&prepared);ready=prepared.ready&&prepared.refined&&!prepared.decals.empty();if(ready)break;
-            if(!prepared.status.empty()&&prepared.status.find("Preparing")==std::string::npos)break;
+            if(!prepared.status.empty()&&prepared.status.find("Preparing")==std::string::npos&&prepared.status.find("Compiling")==std::string::npos&&prepared.status.find("Queued")==std::string::npos)break;
             std::this_thread::sleep_for(std::chrono::milliseconds{1});}while(Clock::now()<end);
         auto extraction=extractScene(document.scene());const auto model=std::find_if(extraction.models.begin(),extraction.models.end(),[&](const auto& m){return m.id==receiver;});check(model!=extraction.models.end(),"Receiver extraction lost Cylinder.");
         DecalSourceResult source;until([&]{source=decals.modelSurface(*model);return source.current;},"Cylinder source never became ready.");
@@ -157,22 +177,6 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
         try{exportGeometry(caseReport,*source.surface,receiverWorld,patch.get(),placement);}
         catch(const std::exception& e){caseReport["geometryError"]=e.what();ready=false;}
         if(ready) {
-            std::optional<DecodedImage> beforeGpuFix;
-            const auto shaderDirectory=sourceRoot/"build/diagnostics/decal-baseline-shaders";
-            if(name=="actual-saved-cylinder"&&fs::is_regular_file(shaderDirectory/"fs_decal_before.bin")&&fs::is_regular_file(shaderDirectory/"fs_decal_after.bin")) {
-                const auto vertex=readText(shaderDirectory/"vs_decal.bin");
-                const auto publish=[&](const char* file) {
-                    const auto fragment=readText(shaderDirectory/file);
-                    const std::array<RendererShaderPair,1> pair{{{RendererProgram::DecalRaster,
-                        std::vector<std::uint8_t>(vertex.begin(),vertex.end()),std::vector<std::uint8_t>(fragment.begin(),fragment.end())}}};
-                    check(renderer.reloadPrograms(pair),"Decal A/B shader publication failed: "+renderer.shaderStatus());
-                };
-                publish("fs_decal_before.bin");render(camera,true,&prepared);
-                beforeGpuFix=read(renderer.viewportTexture());const auto beforeGame=read(renderer.gameViewportTexture());
-                saveImage(output/(name+"-before-gpu-fix-scene.png"),*beforeGpuFix);saveImage(output/(name+"-before-gpu-fix-game.png"),beforeGame);
-                check(beforeGpuFix->rgba==beforeGame.rgba,"Before-fix Scene/Game acceptance images differ.");
-                publish("fs_decal_after.bin");
-            }
             for(unsigned view=0;view<3;++view) {
                 auto selected=camera;std::string suffix="close";
                 if(view==1){selected.position=point+math::normalized(normal+Vec3{.4f,0,.2f})*2.5f;suffix="oblique";}
@@ -181,16 +185,73 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
                 saveImage(output/(name+"-"+suffix+"-scene.png"),sceneImage);saveImage(output/(name+"-"+suffix+"-game.png"),gameImage);
                 caseReport["views"][suffix]={{"camera",{{"position",selected.position},{"target",selected.target},{"fov",selected.fov}}},{"scene",stats(renderer.decalStats(RenderViewPurpose::Scene))},{"game",stats(renderer.decalStats(RenderViewPurpose::Game))}};
                 check(sceneImage.rgba==gameImage.rgba,"The same host decal differs between Scene and Game.");
-                if(view==0){caseReport["changedPixels"]=changed(baselineScene,sceneImage);check(changed(baselineScene,sceneImage)>100,"The actual host dirt decal did not visibly affect the Cylinder.");
-                    if(beforeGpuFix)caseReport["gpuFixChangedPixels"]=changed(*beforeGpuFix,sceneImage);}
+                if(view==0){caseReport["changedPixels"]=changed(baselineScene,sceneImage);check(changed(baselineScene,sceneImage)>100,"The actual host dirt decal did not visibly affect the Cylinder.");}
             }
+        }
+        if(ready&&name=="committed-cylinder") {
+            const auto original=*document.scene().find(decalId);
+            const std::array<std::pair<const char*,Mat4>,7> transforms{{
+                {"move",math::translation({.12f,.035f,.02f})*original.local},
+                {"rotate-x",original.local*math::eulerRotationXYZ({1.5707963268f,0,0})},
+                {"rotate-y",original.local*math::eulerRotationXYZ({0,1.5707963268f,0})},
+                {"rotate-z",original.local*math::eulerRotationXYZ({0,0,1.1f})},
+                {"nonuniform-scale",original.local*math::scaling({.65f,1.15f,2.f})},
+                {"negative-scale",original.local*math::scaling({-.8f,.7f,1.f})},
+                {"restore",original.local}
+            }};
+            for(const auto&[label,transform]:transforms) {
+                auto edited=*document.scene().find(decalId);edited.local=transform;check(document.updateEntity(decalId,edited,label),document.status());
+                until([&]{render(camera,true,&prepared);return prepared.ready&&prepared.refined&&!prepared.decals.empty();},std::string("Decal disappeared after ")+label+": "+prepared.status);
+                const auto transformed=decals.patch(decalId);check(bool(transformed),std::string("No prepared patch after ")+label);
+                Json geometry;exportGeometry(geometry,*source.surface,receiverWorld,transformed.get(),transform);geometry["status"]=prepared.status;
+                check(document.scene().find(decalId)->local==transform,"Surface reprojection changed the authored transform.");
+                const auto sceneImage=read(renderer.viewportTexture()),gameImage=read(renderer.gameViewportTexture());check(sceneImage.rgba==gameImage.rgba,"Transformed decal differs between Scene and Game.");
+                saveImage(output/(name+"-"+label+"-scene.png"),sceneImage);saveImage(output/(name+"-"+label+"-game.png"),gameImage);
+                report["transformCases"][label]=std::move(geometry);
+            }
+            auto receiverRecord=*document.scene().find(receiver);receiverRecord.receiveDecals=false;
+            check(document.updateEntity(receiver,receiverRecord,"Disable receiving decals"),document.status());render(camera,true,&prepared);
+            check(prepared.decals.empty(),"Disabled receiver still published a decal patch.");
+            SceneDocument playCopy(project.root);check(playCopy.resetTransientFrom(document)&&!playCopy.scene().find(receiver)->receiveDecals,"Play copy lost the authored receiver setting.");
+            auto live=*playCopy.scene().find(receiver);live.receiveDecals=true;check(playCopy.updateEntity(receiver,live)&&!document.scene().find(receiver)->receiveDecals,"Play receiver edits leaked into Edit.");
+            check(document.undo()&&document.scene().find(receiver)->receiveDecals,"Receive Decals did not undo.");
+            until([&]{render(camera,true,&prepared);return prepared.ready&&!prepared.decals.empty();},"Undo did not restore decal reception.");
+            const auto meshFile=project.root/"ordinary_receiver.gltf";
+            const std::array<float,12> positions{-.5f,.5f,-.5f,-.5f,.5f,.5f,.5f,.5f,.5f,.5f,.5f,-.5f},normals{0,1,0,0,1,0,0,1,0,0,1,0};
+            const std::array<std::uint16_t,6> indices{0,1,2,0,2,3};std::string buffer;
+            buffer.append(reinterpret_cast<const char*>(positions.data()),sizeof(positions));buffer.append(reinterpret_cast<const char*>(normals.data()),sizeof(normals));buffer.append(reinterpret_cast<const char*>(indices.data()),sizeof(indices));
+            writeFileAtomically(project.root/"ordinary_receiver.bin",buffer);
+            const Json mesh{{"asset",{{"version","2.0"}}},{"scene",0},{"scenes",Json::array({{{"nodes",{0}}}})},{"nodes",Json::array({{{"mesh",0}}})},
+                {"meshes",Json::array({{{"primitives",Json::array({{{"attributes",{{"POSITION",0},{"NORMAL",1}}},{"indices",2}}})}}})},
+                {"buffers",Json::array({{{"uri","ordinary_receiver.bin"},{"byteLength",buffer.size()}}})},
+                {"bufferViews",Json::array({{{"buffer",0},{"byteOffset",0},{"byteLength",48}},{{"buffer",0},{"byteOffset",48},{"byteLength",48}},{{"buffer",0},{"byteOffset",96},{"byteLength",12}}})},
+                {"accessors",Json::array({{{"bufferView",0},{"componentType",5126},{"count",4},{"type","VEC3"},{"min",{-.5,.5,-.5}},{"max",{.5,.5,.5}}},{{"bufferView",1},{"componentType",5126},{"count",4},{"type","VEC3"}},{{"bufferView",2},{"componentType",5123},{"count",6},{"type","SCALAR"}}})}};
+            writeFileAtomically(meshFile,mesh.dump());
+            const auto ordinary=importModelPackage(meshFile,project.root);
+            const auto left=document.createModel(ordinary->id,"Ordinary left receiver"),right=document.createModel(ordinary->id,"Ordinary right receiver");
+            auto leftRecord=*document.scene().find(left);leftRecord.local=math::translation({3.5f,0,0});check(document.updateEntity(left,leftRecord),document.status());
+            auto rightRecord=*document.scene().find(right);rightRecord.local=math::translation({4.5f,0,0});check(document.updateEntity(right,rightRecord),document.status());
+            DecalPlacementResult ordinaryPlacement;until([&]{ordinaryPlacement=decals.resolvePlacement(document.scene(),left,0,0,0,{3.85f,.5f,0});check(!ordinaryPlacement.failed,ordinaryPlacement.diagnostic);return ordinaryPlacement.ready;},"Ordinary mesh seed did not resolve.");
+            SceneDecal stain;stain.asset.id=surface.id;stain.seed=ordinaryPlacement.seed;const auto across=document.createDecal(stain,"Across ordinary meshes",ordinaryPlacement.frame);check(across!=0,document.status());
+            until([&]{render(camera,true,&prepared);return prepared.ready&&bool(decals.patch(across));},"Ordinary cross-mesh patch did not become ready.");
+            const auto crosses=[&]{const auto patch=decals.patch(across);return patch&&std::any_of(patch->receivers.begin(),patch->receivers.end(),[&](const auto&span){return span.entityId==right;});};
+            check(crosses(),"Default decals did not cross a contact between ordinary mesh entities.");
+            auto moved=*document.scene().find(across);moved.local=math::translation({.7f,0,0})*moved.local;check(document.updateEntity(across,moved,"Move decal onto adjacent mesh"),document.status());
+            until([&]{render(camera,true,&prepared);return prepared.ready&&crosses();},"Moving onto a different receiver lost the decal.");
+            const auto movedPatch=decals.patch(across);check(std::all_of(movedPatch->receivers.begin(),movedPatch->receivers.end(),[&](const auto&span){return span.entityId==right;}),"Moved decal remained anchored to its previous mesh.");
+            check(document.scene().find(across)->decal->seed.receiver==left,"Ordinary movement rewrote the authored provenance hint.");
+            check(document.undo(),document.status());until([&]{render(camera,true,&prepared);return prepared.ready&&crosses();},"Undo did not restore the cross-mesh footprint.");
+            rightRecord.receiveDecals=false;check(document.updateEntity(right,rightRecord,"Exclude ordinary receiver"),document.status());
+            until([&]{render(camera,true,&prepared);return prepared.ready&&bool(decals.patch(across));},"Opt-out patch did not finish rebuilding.");check(!crosses(),"Receive Decals=false did not exclude an adjacent mesh.");
+            check(document.undo(),document.status());until([&]{render(camera,true,&prepared);return prepared.ready&&crosses();},"Undo did not restore the adjacent receiver.");
+            report["genericReceivers"]={{"ordinaryMeshContact",true},{"moveOntoAdjacentMesh",true},{"receiverOptOut",true},{"undo",true},{"playIsolation",true}};
         }
         caseReport["ready"]=ready;report["cases"][name]=std::move(caseReport);writeFileAtomically(output/"host-report.json",report.dump(2));
         std::cout<<name<<": ready="<<ready<<", status="<<prepared.status<<", vertices="<<(patch?patch->vertices.size():0)<<", sceneSubmitted="<<renderer.decalStats(RenderViewPurpose::Scene).submitted<<'\n';
         return ready;
     };
     SceneDocument builtin(project.root);const auto cylinder=builtin.createCylinder("Real host Cylinder");const bool freshReady=run(builtin,cylinder,0,"committed-cylinder",true);
-    SceneDocument actual(project.root);check(actual.load(isolatedId),actual.status());const bool actualReady=run(actual,ActualReceiver,ActualDecal,"actual-saved-cylinder",false);
+    SceneDocument actual(project.root);check(actual.load(isolatedId),actual.status());const bool actualReady=run(actual,actualReceiver,actualDecal,"actual-saved-cylinder",false);
     check(readText(sourceScene)==sceneBytes&&readText(sourceAsset)==assetBytes&&fingerprintFiles({sourceImage})==sourceImageFingerprint,"Read-only source project changed during acceptance.");
     runtime.stop();resources.stop();renderer.drainPending(frame);check(freshReady&&actualReady,"Host Cylinder surface wrapping failed; see host-report.json and baseline screenshots.");
 }

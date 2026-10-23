@@ -794,12 +794,14 @@ void AssetLibrary::publishMaterial(std::shared_ptr<const MaterialAsset> material
     validateMaterialAsset(*material);
     if(isEngineAssetId(material->id)||references_.deleted(material->id))throw std::runtime_error("Protected or deleted material cannot be published.");
     (void)materialAssetPath(projectRoot_,material->id);auto& version=authoredMaterials_[material->id];
-    if(version.definition&&serializeMaterialAsset(*version.definition)==serializeMaterialAsset(*material)){version.diagnostic.clear();return;}
+    if(version.definition&&serializeMaterialAsset(*version.definition)==serializeMaterialAsset(*material)){
+        version.diagnostic.clear();if(std::filesystem::is_regular_file(materialAssetPath(projectRoot_,material->id))&&std::none_of(catalog_.begin(),catalog_.end(),[&](const auto& e){return e.id==material->id;})){catalog_.push_back({material->id,material->name,AssetKind::Material});++catalogRevision_;}return;
+    }
     version.definition=material;version.revision=nextMaterialRevision_++;version.diagnostic.clear();
     const auto old=std::find_if(materials_.begin(),materials_.end(),[&](const auto& value){return value->id==material->id;});
     if(old==materials_.end())materials_.push_back(material);else *old=material;
     const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& value){return value.id==material->id;});
-    if(entry==catalog_.end())catalog_.push_back({material->id,material->name,AssetKind::Material});else entry->name=material->name;
+    if(entry==catalog_.end()){if(std::filesystem::is_regular_file(materialAssetPath(projectRoot_,material->id)))catalog_.push_back({material->id,material->name,AssetKind::Material});}else entry->name=material->name;
     ++catalogRevision_;
 }
 std::shared_ptr<const MaterialAsset> AssetLibrary::createMaterial(const std::string& name) {
@@ -1075,6 +1077,10 @@ void AssetLibrary::refreshMaterials() {
         catalog_.push_back({id,std::move(name),AssetKind::Material});
     }
     std::erase_if(authoredMaterials_,[&](const auto& entry){return !present.contains(entry.first)&&entry.first!=materialDocumentId_;});
+    for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-decal"&&!references_.deleted(file.id))try {
+        const auto decal=loadDecalAsset(projectRoot_,file.id);
+        if(!references_.deleted(decal.material.id)&&decal.material.id!=materialDocumentId_)if(const auto staged=stagedDecalMaterial(projectRoot_,decal))publishMaterial(staged);
+    }catch(const std::exception& e){status_+=std::string(e.what())+'\n';}
     materialCatalogDirty_=false;
     ++catalogRevision_;
 }
@@ -1550,6 +1556,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
     packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
     packet->dynamicCoverage=generated.dynamicCoverage;
     packet->dynamicHeight=generated.dynamicHeight;
+    packet->decalChannels=generated.decalChannels;
     packet->constantRoughness=generated.constantRoughness;
     packet->tessellation=generated.tessellation;
     const auto& output=materialOutputNode(graph).output;
@@ -2209,8 +2216,8 @@ size_t replaceDeletedAnimations(SceneSnapshot& snapshot,const AssetReferenceMana
 void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::vector<AssetUsage> usages;
     std::unordered_set<std::string> usableMaterials;
-    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableMaterials.insert(entry.id);
-    for(const auto& stored:materials_){const auto material=stored->id==materialDocumentId_?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
+    for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material)try{if(std::filesystem::is_regular_file(resolveAssetPath(projectRoot_,entry.id)))usableMaterials.insert(entry.id);}catch(const std::exception&){}
+    for(const auto& stored:materials_){const auto material=stored->id==materialDocumentId_&&std::filesystem::is_regular_file(materialAssetPath(projectRoot_,stored->id))?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
         visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
             usages.push_back({id,material->id,material->name,role==MaterialTextureRole::Normal?"Normal texture":"Graph texture",false,false,!usableMaterials.contains(material->id)});
         });
@@ -2218,10 +2225,12 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle){const auto effect=loadParticleAsset(projectRoot_,entry.id);
         if(!effect.emitter.material.empty()&&!isEngineAssetId(effect.emitter.material.id))usages.push_back({effect.emitter.material.id,effect.id,effect.name,"Particle material"});}
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Decal) {
-        const auto decal=loadDecalAsset(projectRoot_,entry.id);for(const auto& id:decalTextureReferences(decal))usages.push_back({id,decal.id,decal.name,"Decal texture"});
+        const auto decal=loadDecalAsset(projectRoot_,entry.id);for(const auto& id:decalMaterialReferences(decal))usages.push_back({id,decal.id,decal.name,"Decal material"});
+        if(!references_.deleted(decal.material.id))if(const auto stage=stagedDecalMaterial(projectRoot_,decal))
+            for(const auto& image:materialTextureReferences(*stage))usages.push_back({image,decal.id,decal.name,"Decal material texture"});
     }
-    for(const auto& id:decalDocumentReferences_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal texture",true,false});
-    for(const auto& id:decalDocumentHistory_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal texture undo / redo history",true,true});
+    for(const auto& id:decalDocumentReferences_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material",true,false});
+    for(const auto& id:decalDocumentHistory_)if(!id.empty())usages.push_back({id,decalDocumentId_,"Open decal surface","Decal material undo / redo history",true,true});
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Animation) {
         const auto animation=loadAnimationAsset(projectRoot_,entry.id);
         usages.push_back({animation.sourceModel.id,animation.id,animation.name,"Animation source model"});
@@ -2404,12 +2413,13 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
 std::vector<AssetEntry> AssetLibrary::fallbackCandidates(const std::string& id)const{
     std::vector<AssetEntry> result;const auto source=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& e){return e.id==id;});if(source==catalog_.end())return result;
     if(source->kind==AssetKind::Scene)return result;
-    bool sprite=false,model=false;
+    bool sprite=false,model=false,decal=false;
+    if(source->kind==AssetKind::Material)if(const auto original=findMaterial(id))decal=decalMaterialCompatible(*original);
     if(source->kind==AssetKind::Material)for(const auto& usage:references_.users(id))if(usage.targetId==id||references_.resolve(usage.targetId)==id){
         const auto owner=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& e){return e.id==usage.ownerId;});
-        sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||retainedQuaderModels_.contains(usage.ownerId)||usage.slot.find(" / Material slot")!=std::string::npos;}
+        decal|=owner!=catalog_.end()&&owner->kind==AssetKind::Decal;sprite|=owner!=catalog_.end()&&owner->kind==AssetKind::Particle;model|=(owner!=catalog_.end()&&owner->kind==AssetKind::Model)||retainedQuaderModels_.contains(usage.ownerId)||usage.slot.find(" / Material slot")!=std::string::npos;}
     for(const auto& entry:catalog_)if(entry.id!=id&&(entry.kind==source->kind||(source->kind==AssetKind::Environment&&entry.kind==AssetKind::Texture))){
-        if(source->kind==AssetKind::Material){const auto material=findMaterial(entry.id);if(!material||(sprite&&!particleMaterialCompatible(*material))||(model&&!modelMaterialCompatible(*material)))continue;}
+        if(source->kind==AssetKind::Material){const auto material=findMaterial(entry.id);if(!material||(sprite&&!particleMaterialCompatible(*material))||(model&&!modelMaterialCompatible(*material))||(decal?!decalMaterialCompatible(*material):!modelMaterialCompatible(*material)))continue;}
         if(source->kind==AssetKind::Animation){const auto original=findAnimation(id),candidate=findAnimation(entry.id);if(!original||!candidate||original->bindingSignature!=candidate->bindingSignature)continue;}
         result.push_back(entry);}
     return result;
@@ -2513,10 +2523,23 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         }
         for(const auto& entry:survivingDecals) {
             auto decal=loadDecalAsset(projectRoot_,entry.id);
-            const bool changed=rewriteDecalTextureReferences(decal,[&](const std::string& id,bool){
-                if(!deletedIds.contains(references_.resolve(id)))return id;const auto replacement=nextReferences.resolve(id);
-                return replacement==GrayTextureId||replacement==NeutralNormalTextureId?std::string{}:replacement;
-            });
+            bool changed=false;
+            if(deletedMaterials.contains(references_.resolve(decal.material.id))) {decal.material.id=nextReferences.resolveDecalMaterial(decal.material.id);decal.stagedMaterial.reset();changed=true;}
+            if(!decal.material.empty())if(const auto stage=stagedDecalMaterial(projectRoot_,decal)) {
+                auto material=*stage;
+                rewriteMaterialGraphTextures(material.graph,[&](const auto& id,MaterialTextureRole role){
+                    if(!deletedIds.contains(references_.resolve(id)))return id;
+                    const auto replacement=nextReferences.resolveTexture(id,role==MaterialTextureRole::Normal);changed|=replacement!=id;return replacement;
+                });
+                if(changed) {
+                    canonicalizeMaterialAsset(material);const auto file=materialAssetPath(projectRoot_,material.id);
+                    if(std::filesystem::exists(file))throw std::runtime_error("Unregistered migrated material already exists; deletion canceled.");
+                    changes.push_back({utf8(file.lexically_relative(projectRoot_)),serializeMaterialAsset(material)});profileRegistrations.push_back({material.id,file});
+                    auto definition=std::make_shared<const MaterialAsset>(std::move(material));preparedAuthoredMaterials[definition->id]={definition,preparedMaterialRevision++,{}};
+                    const auto old=std::find_if(preparedMaterials.begin(),preparedMaterials.end(),[&](const auto& m){return m->id==definition->id;});if(old==preparedMaterials.end())preparedMaterials.push_back(definition);else *old=definition;
+                    decal.stagedMaterial.reset();
+                }
+            }
             if(changed){changes.push_back({entry.id,serializeDecalAsset(decal)});if(entry.id!=decalDocumentId_)preparedDecals[entry.id]={std::make_shared<const DecalAsset>(std::move(decal)),preparedDecalRevision++,{}};}
         }
         for(auto scene:savedScenes(projectRoot_))if(!deletedIds.contains(scene.id)){
@@ -2595,6 +2618,9 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         const bool locationsChanged=!profileRegistrations.empty()||!removedLocations.empty();
         if(locationsChanged)unique.push_back({".crimson/asset-locations.json",prepareAssetPathRegistration(projectRoot_,profileRegistrations,removedLocations)});
         auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;
+        for(const auto& registration:profileRegistrations)if(registration.file.extension()==".crimson-material") {
+            const auto m=preparedAuthoredMaterials.find(registration.id);if(m!=preparedAuthoredMaterials.end()&&std::none_of(preparedCatalog.begin(),preparedCatalog.end(),[&](const auto& e){return e.id==registration.id;}))preparedCatalog.push_back({registration.id,m->second.definition->name,AssetKind::Material});
+        }
         auto preparedInactiveQuaderModels=inactiveQuaderModels_,preparedRetainedQuaderModels=retainedQuaderModels_;
         for(const auto& id:deletedBundleModels){preparedInactiveQuaderModels.insert(id);preparedRetainedQuaderModels.erase(id);}
         std::erase_if(preparedCatalog,[&](const auto& entry){return deletedIds.contains(entry.id);});

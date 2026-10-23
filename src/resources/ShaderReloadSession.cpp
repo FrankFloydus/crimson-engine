@@ -75,8 +75,7 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,23> definitions{{
-        {RendererProgram::DecalRaster,"vs_decal","fs_decal"},
+    constexpr std::array<Pair,22> definitions{{
         {RendererProgram::ModelReflection,"vs_model","fs_model_reflection"},
         {RendererProgram::InstancedReflection,"vs_model_instanced","fs_model_reflection"},
         {RendererProgram::SphereReflection,"vs_pbr","fs_pbr_reflection"},

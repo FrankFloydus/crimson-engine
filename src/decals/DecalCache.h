@@ -5,7 +5,7 @@
 
 namespace crimson::decals {
 // Bump for any change to topology, chart construction, or cached representation.
-inline constexpr uint32_t DecalChartCacheVersion=2;
+inline constexpr uint32_t DecalChartCacheVersion=3;
 std::filesystem::path decalCachePath(const std::filesystem::path& projectRoot,uint64_t recipe);
 // Cache data is disposable. A missing, obsolete, malformed, or incompatible
 // entry is a miss; callers then run the normal bounded chart builder.

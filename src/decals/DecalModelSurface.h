@@ -45,5 +45,10 @@ struct SurfaceHitResult {
 // Match an actual GPU-visible position, not the nearest geometric intersection before alpha coverage.
 SurfaceHitResult resolveModelSurfaceHit(const ModelSurface&,uint64_t entity,const Mat4& entityWorld,
     uint32_t draw,uint32_t primitive,Vec3 visibleWorldPoint,float tolerance=0);
+// Bounded closest-point reprojection for authored transforms. Searches original
+// draw occurrences, retaining source barycentrics and rejecting coincident
+// interior ambiguity; unlike a GPU-visible seed query, distance is intentional.
+SurfaceHitResult projectModelSurfaceHit(const ModelSurface&,uint64_t entity,const Mat4& entityWorld,
+    Vec3 worldPoint,float maximumDistance,const std::function<bool(uint32_t material)>& materialAllowed={});
 }
 }

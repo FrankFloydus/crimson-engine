@@ -1,4 +1,5 @@
 #include "decals/DecalSurface.h"
+#include "decals/DecalResolve.h"
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
@@ -35,7 +36,7 @@ void nondevelopable(){
     DecalSurfaceSnapshot s;SurfaceReceiver receiver;receiver.id.entity=1;receiver.generation=1;
     const auto p=[](double x,double y){return Vec3{x,y,.1*(x*x+y*y)};};
     for(int y=0;y<6;++y)for(int x=0;x<6;++x){double a=-1.5+x*.5,b=-1.5+y*.5;auto q=quad(1,p(a,b),p(a+.5,b),p(a+.5,b+.5),p(a,b+.5));for(auto&t:q.triangles){t.triangle=static_cast<uint32_t>(receiver.triangles.size());receiver.triangles.push_back(t);}}
-    s.receivers.push_back(receiver);auto r=request();r.seed.triangle=42;r.seed.barycentrics={1,0,0};r.frame.at(0,0)=.8f;r.frame.at(1,1)=.8f;auto result=build(s,r,"nondevelopable bowl AffineLocal");require(result.usable(),result.message);require(!result.statistics.usedDevelopableUnfolding,"Curved bowl incorrectly accepted as developable");provenance(s,result);
+    s.receivers.push_back(receiver);auto r=request();r.seed.triangle=42;r.seed.barycentrics={1,0,0};r.frame.at(0,0)=.8f;r.frame.at(1,1)=.8f;auto result=build(s,r,"nondevelopable bowl AffineAdaptive");require(result.usable(),result.message);require(!result.statistics.usedDevelopableUnfolding,"Curved bowl incorrectly accepted as developable");provenance(s,result);
 }
 void closedBuiltinCylinder(){
     // Match the editor's default builtin cylinder, including its separate cap
@@ -52,6 +53,18 @@ void closedBuiltinCylinder(){
     double closest=1,furthest=-1;for(const auto&c:p.chunks)for(const auto&v:c.vertices){const auto distance=math::dot(v.position-center,normal);closest=std::min(closest,distance);furthest=std::max(furthest,distance);}require(furthest-closest>.05f,"Closed cylinder decal stayed on its flat seed tangent plane.");
     double area=0;Vec2 lo{1,1},hi{};for(const auto&chunk:p.chunks)for(size_t i=0;i<chunk.indices.size();i+=3){const auto a=chunk.vertices[chunk.indices[i]].uv,b=chunk.vertices[chunk.indices[i+1]].uv,c=chunk.vertices[chunk.indices[i+2]].uv;area+=std::abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))*.5;for(const auto uv:{a,b,c})for(unsigned axis=0;axis<2;++axis){lo[axis]=std::min(lo[axis],uv[axis]);hi[axis]=std::max(hi[axis],uv[axis]);}}
     std::cout<<"closed cylinder footprint UV coverage="<<area<<", depth extent="<<furthest-closest<<'\n';require(area>.8&&lo[0]<.05f&&hi[0]>.95f&&lo[1]<.05f&&hi[1]>.95f,"Closed cylinder retained only a small seed blob instead of the authored image.");
+    if(height==0)for(const auto&[label,edit]:std::array<std::pair<const char*,Mat4>,5>{{
+        {"X90",math::eulerRotationXYZ({1.5707963268f,0,0})},
+        {"Y90",math::eulerRotationXYZ({0,1.5707963268f,0})},
+        {"Z63",math::eulerRotationXYZ({0,0,1.1f})},
+        {"nonuniform",math::scaling({.65f,.7f,2})},
+        {"mirrored",math::scaling({-.8f,.7f,1})}
+    }}){
+        auto transformed=r;const auto frame=conformDecalFrame(r.frame*edit,center,normal);require(frame.has_value(),"A valid cylinder transform lost its tangent frame.");transformed.frame=*frame;
+        const auto name=std::string("closed builtin cylinder transform ")+label;const auto patch=build(s,transformed,name.c_str());require(patch.usable(),patch.message);provenance(s,patch);
+        double uvArea=0;float minDepth=1,maxDepth=-1;for(const auto& chunk:patch.chunks){for(const auto& vertex:chunk.vertices){const auto depth=math::dot(vertex.position-center,normal);minDepth=std::min(minDepth,float(depth));maxDepth=std::max(maxDepth,float(depth));}for(size_t index=0;index<chunk.indices.size();index+=3){const auto a=chunk.vertices[chunk.indices[index]].uv,b=chunk.vertices[chunk.indices[index+1]].uv,c=chunk.vertices[chunk.indices[index+2]].uv;uvArea+=.5*std::abs((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]));}}
+        require(uvArea>.7&&maxDepth-minDepth>.04f,"A transformed cylinder decal published only a seed blob or tangent plane.");
+    }
     }
 }
 void failures(){DecalSurfaceSnapshot s{{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0})}};auto r=request();std::stop_source stop;stop.request_stop();require(buildDecalPatch(s,r,stop.get_token()).status==DecalPatchStatus::Cancelled,"Cancellation ignored");r.limits.maximumTriangles=5;require(buildDecalPatch(s,r).status==DecalPatchStatus::LimitExceeded,"Geometry cap silently truncated");r=request();r.frame.at(0,0)=0;require(buildDecalPatch(s,r).status==DecalPatchStatus::InvalidInput,"Singular frame accepted");r=request();r.seed.receiver.entity=99;require(buildDecalPatch(s,r).status==DecalPatchStatus::MissingSeed,"Missing seed invented surface");}
