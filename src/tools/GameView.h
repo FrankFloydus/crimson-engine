@@ -37,9 +37,11 @@ inline Aabb attributeDebugActorBounds(const Scene& scene,EntityId target,
         const auto id=pending.back();pending.pop_back();
         const auto record=scene.find(id);
         if(!record || !scene.isVisible(id) || (id!=target && record->actor))continue;
-        if(record->model && modelBounds)if(const auto bounds=modelBounds(record->model->id);
-            bounds && bounds->valid && math::finite(bounds->minimum) && math::finite(bounds->maximum)) {
-            if(const auto transform=scene.worldTransform(id))math::include(result,math::transformBounds(*bounds,*transform));
+        if(record->model) {
+            const auto primitive=record->primitive?primitiveMeshBounds(record->model->id,*record->primitive):Aabb{};
+            const auto bounds=primitive.valid?std::optional<Aabb>{primitive}:modelBounds?modelBounds(record->model->id):std::nullopt;
+            if(bounds && bounds->valid && math::finite(bounds->minimum) && math::finite(bounds->maximum))
+                if(const auto transform=scene.worldTransform(id))math::include(result,math::transformBounds(*bounds,*transform));
         }
         const auto children=scene.children(id);pending.insert(pending.end(),children.begin(),children.end());
     }

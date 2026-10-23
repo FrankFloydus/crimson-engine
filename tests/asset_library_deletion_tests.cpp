@@ -1345,6 +1345,66 @@ void gameplayEffectDeletion() {
     require(!library.findGameplayEffect(first->id)&&!library.findGameplayEffect(replacement->id),"Deleted effect aliases resurrected a managed definition.");
     require(!library.deleteAssets(library.planDeletion({PlayerStartingEffectId}),{}),"Protected Player starting effect was deleted.");
 }
+void editableGameplayDefaults() {
+    Project p;initializeContentStorage(p.root);ensureEngineGameplayEffects(p.root);
+    const auto setSpeed=[](GameplayEffectAsset& effect,double speed) {
+        const auto modifier=std::find_if(effect.modifiers.begin(),effect.modifiers.end(),[](const auto& value){return value.attribute==stats::MovementSpeed;});
+        require(modifier!=effect.modifiers.end(),"Starter effect is missing its MovementSpeed modifier.");
+        modifier->magnitude.literal=speed;
+    };
+    auto player=*playerStartingEffect(),enemy=*enemyStartingEffect();setSpeed(player,7.25);setSpeed(enemy,3.5);
+    saveGameplayEffectAsset(p.root,player);saveGameplayEffectAsset(p.root,enemy);
+    SceneDocument source(p.root);const auto playerEntity=source.createPlayer("Player using shared defaults"),enemyEntity=source.createEnemy("Enemy using shared defaults");
+    require(source.save("Shared defaults users"),source.status());
+    const auto sceneFile=sceneAssetPath(p.root,source.assetId());const auto sceneBytes=read(sceneFile);
+    ResourceManager resources;AssetLibrary library(p.root,&resources);
+    require(library.findGameplayEffect(player.id)&&*library.findGameplayEffect(player.id)==player&&
+        library.findGameplayEffect(enemy.id)&&*library.findGameplayEffect(enemy.id)==enemy,
+        "AssetLibrary replaced authored Player/Enemy defaults with compiled starter values.");
+    const auto locations=read(p.root/".crimson"/"asset-locations.json");
+    for(const auto& authored:{player,enemy}) {
+        const auto beforeRevision=library.gameplayEffectRevision(authored.id);const auto pinned=library.findGameplayEffect(authored.id);
+        auto edited=authored;setSpeed(edited,authored.id==PlayerStartingEffectId?8.5:4.25);
+        library.protectGameplayEffectDocument(authored.id);
+        library.publishGameplayEffect(std::make_shared<const GameplayEffectAsset>(edited));
+        const auto editedRevision=library.gameplayEffectRevision(authored.id);
+        require(editedRevision>beforeRevision&&*library.findGameplayEffect(authored.id)==edited&&*pinned==authored,
+            "Editable starter publication lost its immutable generation or did not advance revision.");
+        library.refreshGameplayEffects();
+        require(library.gameplayEffectRevision(authored.id)==editedRevision&&*library.findGameplayEffect(authored.id)==edited,
+            "Refreshing the catalog overwrote an open starter effect's committed generation.");
+        auto disk=edited;setSpeed(disk,authored.id==PlayerStartingEffectId?9.75:5.5);saveGameplayEffectAsset(p.root,disk);
+        require(loadGameplayEffectAsset(p.root,authored.id)==disk,"Saving an editable starter did not persist its assigned identity and values.");
+        library.refreshGameplayEffects();
+        require(library.gameplayEffectRevision(authored.id)==editedRevision&&*library.findGameplayEffect(authored.id)==edited,
+            "An external starter write replaced an open document's published definition.");
+        library.protectGameplayEffectDocument({});library.refreshGameplayEffects();
+        const auto diskRevision=library.gameplayEffectRevision(authored.id);
+        require(diskRevision>editedRevision&&*library.findGameplayEffect(authored.id)==disk,
+            "Closing the starter document did not load the saved values as a new library generation.");
+        const auto savedBytes=read(gameplayEffectAssetPath(p.root,authored.id));ensureEngineGameplayEffects(p.root);library.refreshGameplayEffects();
+        require(library.gameplayEffectRevision(authored.id)==diskRevision&&*library.findGameplayEffect(authored.id)==disk&&
+            read(gameplayEffectAssetPath(p.root,authored.id))==savedBytes,
+            "Warm starter initialization or an unchanged refresh reset authored defaults or advanced their revision.");
+        require(isEngineAssetId(authored.id)&&!library.deleteAssets(library.planDeletion({authored.id},&source),{},&source)&&
+            library.findGameplayEffect(authored.id)&&fs::is_regular_file(gameplayEffectAssetPath(p.root,authored.id)),
+            "Editable starter values made the reserved role asset deletable.");
+    }
+    require(read(sceneFile)==sceneBytes&&read(p.root/".crimson"/"asset-locations.json")==locations&&
+        source.scene().find(playerEntity)->effects->starting==std::vector<AssetRef<GameplayEffectAsset>>{AssetRef<GameplayEffectAsset>{PlayerStartingEffectId}}&&
+        source.scene().find(enemyEntity)->effects->starting==std::vector<AssetRef<GameplayEffectAsset>>{AssetRef<GameplayEffectAsset>{EnemyStartingEffectId}},
+        "Editing shared defaults changed existing actor references, saved scenes or asset locations.");
+    const auto rejects=[](auto&& action,const char* message) {
+        bool rejected=false;try{action();}catch(const std::exception&){rejected=true;}require(rejected,message);
+    };
+    for(const auto& protectedId:std::array<std::string,2>{DefaultMaterialId,DefaultNavigationAgentProfileId}) {
+        const auto file=resolveAssetPath(p.root,protectedId);const auto before=read(file);auto wrong=player;wrong.id=protectedId;
+        rejects([&]{library.publishGameplayEffect(std::make_shared<const GameplayEffectAsset>(wrong));},
+            "An unrelated protected engine asset was publishable as a Gameplay Effect.");
+        rejects([&]{saveGameplayEffectAsset(p.root,wrong);},"An unrelated protected engine asset was writable as a Gameplay Effect.");
+        require(read(file)==before&&!library.findGameplayEffect(protectedId),"Rejected effect writes changed an unrelated engine default.");
+    }
+}
 void unrelatedDeletionMaterializesLegacyEffects(bool independentlySaved) {
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);const auto material=library.createMaterial("Delete unrelated material");
     SceneDocument source(p.root);const auto first=source.createEnemy("First legacy"),second=source.createEnemy("Second legacy"),box=source.createBox();
@@ -2199,6 +2259,9 @@ void animationAssetLibrary() {
 int main(int argc,char** argv){try{
     if(argc==2&&std::string(argv[1])=="--animation-assets") {
         animationAssetLibrary();std::cout<<"Animation import, authoring retention, typed references and transactional deletion passed.\n";return 0;
+    }
+    if(argc==2&&std::string(argv[1])=="--gameplay-defaults") {
+        editableGameplayDefaults();std::cout<<"Editable Gameplay Effect defaults, library publication and reserved reference protection passed.\n";return 0;
     }
     if(argc==5&&std::string(argv[1])=="--material-preview-input-lifetime") {
         bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;

@@ -31,7 +31,7 @@ public:
     bool canRedo() const { return cursor_ < history_.size() && !transaction_; }
     std::string undoLabel() const;
     std::string redoLabel() const;
-    bool editable() const { return open_ && !isEngineAssetId(working_.id); }
+    bool editable() const { return open_ && editableGameplayEffect(working_.id); }
     bool create(const std::string& name = "New Gameplay Effect");
     bool load(const std::string& id);
     bool loadSnapshot(const GameplayEffectAsset&);

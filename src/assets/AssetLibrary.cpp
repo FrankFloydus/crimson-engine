@@ -523,7 +523,11 @@ std::shared_ptr<const NavigationAgentProfile> AssetLibrary::copyNavigationAgentP
 void AssetLibrary::refreshGameplayEffects() {
     std::erase_if(catalog_,[](const auto& entry){return entry.kind==AssetKind::GameplayEffect;});
     std::unordered_set<std::string> present;
-    for(const auto& builtin:{playerStartingEffect(),enemyStartingEffect()}) { gameplayEffects_[builtin->id]={builtin,1,{}};present.insert(builtin->id); }
+    for(const auto& builtin:{playerStartingEffect(),enemyStartingEffect()}) {
+        auto& entry=gameplayEffects_[builtin->id];
+        if(!entry.definition){entry.definition=builtin;entry.revision=nextGameplayEffectRevision_++;}
+        present.insert(builtin->id);
+    }
     for(const auto& file:storedAssetPaths(projectRoot_))if(file.file.extension()==".crimson-effect"&&!references_.deleted(file.id)) {
         present.insert(file.id);auto& entry=gameplayEffects_[file.id];
         if(file.id!=gameplayEffectDocumentId_)try {
@@ -555,7 +559,7 @@ std::string AssetLibrary::gameplayEffectDiagnostic(const std::string& id) const 
 }
 void AssetLibrary::publishGameplayEffect(std::shared_ptr<const GameplayEffectAsset> profile) {
     if(!profile)return;validateGameplayEffectAsset(*profile);
-    if(isEngineAssetId(profile->id)||references_.deleted(profile->id))throw std::runtime_error("Protected or deleted Gameplay Effect cannot be published.");
+    if(!editableGameplayEffect(profile->id)||references_.deleted(profile->id))throw std::runtime_error("Protected or deleted Gameplay Effect cannot be published.");
     auto& entry=gameplayEffects_[profile->id];if(!entry.definition||*entry.definition!=*profile){entry.definition=std::move(profile);entry.revision=nextGameplayEffectRevision_++;}
     entry.diagnostic.clear();++catalogRevision_;
 }
@@ -635,6 +639,8 @@ void AssetLibrary::publishParticle(std::shared_ptr<const ParticleEffectAsset> ef
 
 std::string AssetLibrary::displayName(const std::string& id) const {
     if(id==BuiltinBoxModelId)return "Box";
+    if(id==BuiltinSphereModelId)return "Sphere";
+    if(id==BuiltinCylinderModelId)return "Cylinder";
     const auto name=browserCatalog_.name(id);
     if (!name.empty()) return name;
     const auto found=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==id;});
@@ -669,10 +675,21 @@ TextureAsset* AssetLibrary::findMutable(const std::string& id) const {
     return nullptr;
 }
 
-std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id) const {
+std::shared_ptr<const ModelAsset> AssetLibrary::primitiveModel(const std::string& id,const PrimitiveMeshSettings& settings) const {
+    const auto key=builtinModelGeometryId(id,settings);
+    if(const auto found=primitiveModels_.find(key);found!=primitiveModels_.end())
+        if(const auto model=found->second.lock())return model;
+    std::erase_if(primitiveModels_,[](const auto& entry){return entry.second.expired();});
+    auto model=builtinModelGeometry(id,settings);primitiveModels_[key]=model;return model;
+}
+bool AssetLibrary::primitiveModelAlive(const std::string& geometryId) const {
+    const auto found=primitiveModels_.find(geometryId);
+    return found!=primitiveModels_.end() && !found->second.expired();
+}
+std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id,const std::optional<PrimitiveMeshSettings>& primitive) const {
     const auto resolved=references_.resolve(id);
     if(resolved.empty()) return {};
-    if(resolved==BuiltinBoxModelId) return builtinBoxGeometry();
+    if(isBuiltinModel(resolved))return primitiveModel(resolved,primitive.value_or(PrimitiveMeshSettings{}));
     if(resources_) {
         modelInterest_[resolved]=std::chrono::steady_clock::now();
         auto found=modelResources_.find(resolved);
@@ -821,27 +838,29 @@ std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset
         for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture})
             if(!slot->image.empty() && (slot->texCoord>1 || !(primitive.uvMask&(1u<<slot->texCoord))))
                 throw std::runtime_error("Material replacement requires an unavailable UV set: "+material.name);
-        // The Box provides identical UV0/UV1, hence the same tangent basis.
-        if(!material.normalTexture.image.empty() && primitive.tangentUv!=material.normalTexture.texCoord && !isBuiltinModel(model.id))
+        // Built-in primitives provide identical UV0/UV1, hence the same tangent basis.
+        if(!material.normalTexture.image.empty() && primitive.tangentUv!=material.normalTexture.texCoord && model.format!="BUILTIN")
             throw std::runtime_error("Material replacement requires a different tangent UV basis: "+material.name);
     }
     return result;
 }
 std::uint64_t AssetLibrary::modelRevision(const std::string& id) const {
-    if(id==BuiltinBoxModelId)return 1;
+    if(isBuiltinModel(id))return 1;
     const auto resolved=references_.resolve(id); const auto found=modelResources_.find(resolved);
     return found==modelResources_.end() ? 0 : found->second.snapshot().revision();
 }
 std::uint64_t AssetLibrary::modelFingerprint(const std::string& id) const {
     if(id==BuiltinBoxModelId)return 0x424f5801;
+    if(id==BuiltinSphereModelId)return 0x53504801;
+    if(id==BuiltinCylinderModelId)return 0x43594c01;
     const auto found=modelResources_.find(references_.resolve(id));return found==modelResources_.end()?0:found->second.snapshot().fingerprint();
 }
 std::vector<std::filesystem::path> AssetLibrary::modelDependencies(const std::string& id) const {
     const auto found=modelResources_.find(references_.resolve(id));return found==modelResources_.end()?std::vector<std::filesystem::path>{}:found->second.dependencies();
 }
-std::shared_ptr<const ModelAsset> AssetLibrary::peekModel(const std::string& id) const {
+std::shared_ptr<const ModelAsset> AssetLibrary::peekModel(const std::string& id,const std::optional<PrimitiveMeshSettings>& primitive) const {
     const auto resolved=references_.resolve(id);if(resolved.empty())return {};
-    if(resolved==BuiltinBoxModelId)return builtinBoxGeometry();
+    if(isBuiltinModel(resolved))return primitiveModel(resolved,primitive.value_or(PrimitiveMeshSettings{}));
     if(const auto found=modelResources_.find(resolved);found!=modelResources_.end())if(auto snapshot=found->second.snapshot())return snapshot.shared();
     const auto found=std::find_if(models_.begin(),models_.end(),[&](const auto& model){return model->id==resolved;});return found==models_.end()?nullptr:*found;
 }
@@ -1420,7 +1439,7 @@ std::vector<ModelMaterialTextures> AssetLibrary::modelBindings(const ModelAsset&
             // instead reconstruct another UV basis, so certify this per mesh.
             bool compatible=true;
             if(!material.triplanar && !material.normalTexture.image.empty())for(const auto& primitive:model.primitives)
-                if(primitive.material==index && primitive.tangentUv!=material.normalTexture.texCoord && !isBuiltinModel(model.id))compatible=false;
+                if(primitive.material==index && primitive.tangentUv!=material.normalTexture.texCoord && model.format!="BUILTIN")compatible=false;
             result.push_back(graphMaterialBindings(material.graph,nativeTextures_?UINT32_MAX:textureDemand_,
                 nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible,compatible));
         } else result.push_back(materialBindings(material));

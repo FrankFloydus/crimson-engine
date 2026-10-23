@@ -15,6 +15,10 @@ namespace {
 using namespace crimson;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 void near(double actual,double expected,const char* message){require(std::abs(actual-expected)<1e-6,message);}
+void setLiteral(GameplayEffectAsset& effect,const GameplayTag& attribute,double value) {
+    const auto modifier=std::find_if(effect.modifiers.begin(),effect.modifiers.end(),[&](const auto& candidate){return candidate.attribute==attribute;});
+    require(modifier!=effect.modifiers.end(),"Starter effect is missing the tested attribute.");modifier->magnitude.literal=value;
+}
 struct Project {
     std::filesystem::path root=std::filesystem::temp_directory_path()/("cc-fx-play-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     ~Project(){std::error_code error;const auto resolved=std::filesystem::weakly_canonical(root,error);
@@ -97,6 +101,58 @@ void legacyActorMigration(){
         "Legacy migration wrote authored data while loading or starting Play.");
     require(!std::filesystem::exists(project.root/"Content"),"Loading or Play materialized pending effects before an explicit save.");
 }
+void authoredDefaultsApplyOnNextSpawn() {
+    Project project;initializeContentStorage(project.root);ensureEngineGameplayEffects(project.root);
+    SceneDocument source(project.root);const auto existingPlayer=source.createPlayer("Existing Player"),existingEnemy=source.createEnemy("Existing Enemy");
+    require(source.save("Starter defaults references"),source.status());
+    const auto savedScene=sceneAssetPath(project.root,source.assetId());std::ifstream beforeFile(savedScene,std::ios::binary);
+    const std::string savedBytes{std::istreambuf_iterator<char>(beforeFile),{}};beforeFile.close();
+    auto player=loadGameplayEffectAsset(project.root,PlayerStartingEffectId),enemy=loadGameplayEffectAsset(project.root,EnemyStartingEffectId);
+    setLiteral(player,stats::Vitality,30);setLiteral(player,stats::MovementSpeed,7);
+    setLiteral(enemy,stats::MaxHealth,245);setLiteral(enemy,stats::MovementSpeed,3.5);
+    saveGameplayEffectAsset(project.root,player);saveGameplayEffectAsset(project.root,enemy);
+    SceneDocument authored(project.root);require(authored.load(source.assetId()),authored.status());
+    const auto newPlayer=authored.createPlayer("New Player"),newEnemy=authored.createEnemy("New Enemy");
+    const auto references=[&](const Scene& scene,EntityId entity,const std::string& expected) {
+        const auto record=scene.find(entity);require(record&&record->effects&&record->effects->starting.size()==1&&record->effects->starting.front().id==expected,
+            "Editing starter defaults replaced an actor's shared effect reference.");
+    };
+    for(const auto entity:{existingPlayer,newPlayer})references(authored.scene(),entity,PlayerStartingEffectId);
+    for(const auto entity:{existingEnemy,newEnemy})references(authored.scene(),entity,EnemyStartingEffectId);
+    require(authored.gameplayEffect(PlayerStartingEffectId)&&*authored.gameplayEffect(PlayerStartingEffectId)==player&&
+        authored.gameplayEffect(EnemyStartingEffectId)&&*authored.gameplayEffect(EnemyStartingEffectId)==enemy,
+        "Scene effect lookup returned compiled starters instead of saved authored defaults.");
+    PlaySession play(project.root);require(play.start(authored),play.status());
+    const auto playerValues=[&](EntityId entity,double vitality,double speed) {
+        near(play.attributeValue(entity,stats::Vitality)->current,vitality,"Player spawn ignored authored starter Vitality.");
+        near(play.attributeValue(entity,stats::MaxHealth)->current,vitality*2,"Player starter capacity did not use native Vitality calculation.");
+        near(play.attributeValue(entity,stats::Health)->current,vitality*2,"Player spawn did not fill authored starter capacity.");
+        near(play.attributeValue(entity,stats::MovementSpeed)->current,speed,"Player spawn ignored authored starter movement speed.");
+    };
+    const auto enemyValues=[&](EntityId entity,double health,double speed) {
+        near(play.attributeValue(entity,stats::MaxHealth)->current,health,"Enemy spawn ignored authored starter capacity.");
+        near(play.attributeValue(entity,stats::Health)->current,health,"Enemy spawn did not fill authored starter capacity.");
+        near(play.attributeValue(entity,stats::MovementSpeed)->current,speed,"Enemy spawn ignored authored starter movement speed.");
+    };
+    for(const auto entity:{existingPlayer,newPlayer})playerValues(entity,30,7);
+    for(const auto entity:{existingEnemy,newEnemy})enemyValues(entity,245,3.5);
+    setLiteral(player,stats::Vitality,40);setLiteral(player,stats::MovementSpeed,9);
+    setLiteral(enemy,stats::MaxHealth,375);setLiteral(enemy,stats::MovementSpeed,2);
+    saveGameplayEffectAsset(project.root,player);saveGameplayEffectAsset(project.root,enemy);play.advance(0,Vec2{},Camera{});
+    for(const auto entity:{existingPlayer,newPlayer})playerValues(entity,30,7);
+    for(const auto entity:{existingEnemy,newEnemy})enemyValues(entity,245,3.5);
+    const auto spawnedPlayer=play.document().createPlayer("Spawned Player"),spawnedEnemy=play.document().createEnemy("Spawned Enemy");
+    require(spawnedPlayer&&spawnedEnemy,play.document().status());play.advance(0,Vec2{},Camera{});
+    playerValues(spawnedPlayer,40,9);enemyValues(spawnedEnemy,375,2);
+    references(play.document().scene(),spawnedPlayer,PlayerStartingEffectId);references(play.document().scene(),spawnedEnemy,EnemyStartingEffectId);
+    play.stop();require(play.start(authored),play.status());
+    for(const auto entity:{existingPlayer,newPlayer})playerValues(entity,40,9);
+    for(const auto entity:{existingEnemy,newEnemy})enemyValues(entity,375,2);
+    for(const auto entity:{existingPlayer,newPlayer})references(authored.scene(),entity,PlayerStartingEffectId);
+    for(const auto entity:{existingEnemy,newEnemy})references(authored.scene(),entity,EnemyStartingEffectId);
+    std::ifstream afterFile(savedScene,std::ios::binary);
+    require(std::string{std::istreambuf_iterator<char>(afterFile),{}}==savedBytes,"Editing default effects rewrote the saved scene or its actor references.");
 }
-int main(){try{playFacade();legacyActorMigration();std::cout<<"Effects Play integration checks passed.\n";return 0;}
+}
+int main(){try{playFacade();legacyActorMigration();authoredDefaultsApplyOnNextSpawn();std::cout<<"Effects Play integration checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

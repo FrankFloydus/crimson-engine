@@ -22,6 +22,7 @@ bool sameCameraTemplateName(std::string_view,std::string_view);
 Vec3 cameraTemplateRotationDegrees(const CameraTemplate&);
 bool setCameraTemplateRotationDegrees(CameraTemplate&,const Vec3& degrees);
 // No target captures absolute world placement; a target captures a world offset.
+// An owned FPS camera captures identity basis: Player root rotation owns forward.
 std::optional<CameraTemplate> captureCameraTemplate(const Scene&,EntityId camera,EntityId target=NoEntity,std::string name={});
 
 std::filesystem::path cameraTemplatesPath(const std::filesystem::path& projectRoot);

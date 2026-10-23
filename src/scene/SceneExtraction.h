@@ -21,6 +21,7 @@ struct ExtractedModel {
     bool visible{true}; // Hidden models retain transient animation clocks.
     EntityId actorOwner{};
     MeshShading meshShading{MeshShading::UseMeshNormals};
+    std::optional<PrimitiveMeshSettings> primitive;
 };
 struct ExtractedParticle {
     EntityId id{};

@@ -98,6 +98,7 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;
             result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
             result.models.back().meshShading=model->meshShading;
+            result.models.back().primitive=model->primitive;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
         }
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
@@ -141,8 +142,10 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                     if(const auto geometry=colliderMeshResult(*record->collider,meshCollision);geometry.mesh)bounds=geometry.mesh->bounds;
                 bounds=math::transformBounds(bounds,*world);math::include(result,bounds);hasBounds=bounds.valid;
             }
-            if (record->model && modelBounds) {
-                if (const auto local = modelBounds(record->model->id)) {
+            if (record->model) {
+                const auto primitive=primitiveMeshBounds(record->model->id,record->primitive.value_or(PrimitiveMeshSettings{}));
+                const auto local=primitive.valid?std::optional<Aabb>{primitive}:modelBounds?modelBounds(record->model->id):std::nullopt;
+                if (local) {
                     const auto bounds = math::transformBounds(*local,*world);
                     math::include(result,bounds);
                     hasBounds = hasBounds || bounds.valid;
@@ -190,8 +193,11 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
             const auto marker=inverse?math::transformBounds(Aabb{{-.5f,-.5f,-.5f},{.5f,.5f,.5f},true},*inverse*math::translation(position)):
                 math::transformBounds(Aabb{{-.5f,-.5f,-.5f},{.5f,.5f,.5f},true},local);
             math::include(markers,marker);
-            if(record->model&&modelBounds)if(const auto bounds=modelBounds(record->model->id);bounds&&usable(*bounds))
-                math::include(visuals,math::transformBounds(*bounds,local));
+            if(record->model) {
+                const auto primitive=primitiveMeshBounds(record->model->id,record->primitive.value_or(PrimitiveMeshSettings{}));
+                const auto bounds=primitive.valid?std::optional<Aabb>{primitive}:modelBounds?modelBounds(record->model->id):std::nullopt;
+                if(bounds&&usable(*bounds))math::include(visuals,math::transformBounds(*bounds,local));
+            }
             if(record->particle)math::include(visuals,marker);
         }
         // Do not load collision geometry or inflate an ordinary mesh outline

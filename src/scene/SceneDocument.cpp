@@ -278,6 +278,29 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         record.local = entity.at("local").get<Mat4>();
         if(version>=14)record.visible=entity.value("visible",true);
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
+        if(entity.contains("primitive")) {
+            const auto& source=entity.at("primitive");
+            if(!source.is_object() || !record.model || !isBuiltinModel(record.model->id))
+                throw std::runtime_error("Primitive geometry settings require a built-in mesh and an object.");
+            auto& primitive=record.primitive.emplace();
+            const auto integer=[&](const char* field,std::uint32_t fallback) {
+                if(!source.contains(field))return fallback;
+                const auto& value=source.at(field);
+                if(!value.is_number_integer() ||
+                    (value.is_number_unsigned()?value.get<std::uint64_t>()>std::numeric_limits<std::uint32_t>::max():
+                        value.get<std::int64_t>()<0 || value.get<std::int64_t>()>std::numeric_limits<std::uint32_t>::max()))
+                    throw std::runtime_error("Primitive sides and rings must be nonnegative integers.");
+                return value.get<std::uint32_t>();
+            };
+            const auto base=canonicalAssetId(record.model->id);
+            if(base==BuiltinBoxModelId)primitive.size=source.value("size",primitive.size);
+            else {
+                primitive.radius=source.value("radius",primitive.radius);
+                primitive.sides=integer("sides",primitive.sides);
+                if(base==BuiltinSphereModelId)primitive.rings=integer("rings",primitive.rings);
+                else primitive.height=source.value("height",primitive.height);
+            }
+        }
         if(entity.contains("meshShading")) {
             const auto& shading=entity.at("meshShading");
             if(!shading.is_number_integer() ||
@@ -611,20 +634,34 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         if (!validCamera(camera)) throw std::runtime_error("Scene preview camera is invalid.");
         result.previewCamera=camera;
     }
+    constexpr float cameraRadians=3.14159265358979323846f/180.f;
+    const auto oldPlayerCameraBasis=math::eulerRotationXYZ(Vec3{-55,45,0}*cameraRadians);
+    const auto legacyPlayerCamera=[&](const EntityRecord& camera) {
+        return legacyPlayerInputs.contains(result.properties.playerCharacter) &&
+            camera.camera==std::optional<SceneCamera>{SceneCamera{35.f}} && camera.cameraFollow &&
+            camera.cameraFollow->target==result.properties.playerCharacter && camera.cameraFollow->offset==Vec3{6.5f,13.1f,6.5f} &&
+            camera.cameraFollow->worldBasis==oldPlayerCameraBasis;
+    };
     if(version<=16 && result.properties.playerCharacter && result.properties.activeCamera) {
         const auto actor=std::find_if(result.records.begin(),result.records.end(),[&](const auto& record){return record.id==result.properties.playerCharacter;});
         const auto camera=std::find_if(result.records.begin(),result.records.end(),[&](const auto& record){return record.id==result.properties.activeCamera;});
         if(actor!=result.records.end() && actor->actor && camera!=result.records.end() && !camera->parent &&
            camera->cameraFollow && camera->cameraFollow->target==actor->id) {
-            // Earlier player scenes kept their following camera at scene root.
-            // Adopt that same camera, including its exact resolved affine view,
-            // rather than adding a second camera or resetting authored framing.
+            // Adopt a root-facing eye camera or the proven built-in recipe.
+            // Custom world-facing cameras remain standalone follows so making
+            // the Player's own eye root-oriented cannot change their view.
             Scene previous;previous.apply(result.records,result.properties);
             const auto parentWorld=previous.worldTransform(actor->id),cameraWorld=previous.worldTransform(camera->id);
             const auto inverseParent=parentWorld?math::inverse(*parentWorld):std::nullopt;
             if(!inverseParent || !cameraWorld)throw std::runtime_error("The legacy player camera has an invalid parent transform.");
-            camera->parent=actor->id;camera->order=nextOrder(result.records,actor->id);
-            camera->local=*inverseParent * *cameraWorld;
+            const auto rootBasis=firstPersonCameraBasis(*parentWorld);
+            const auto basis=math::withAffinePosition(*cameraWorld,{});
+            bool rootFacing=basis.has_value();
+            if(basis)for(unsigned index=0;index<16;++index)rootFacing=rootFacing && std::abs((*basis)[index]-rootBasis[index])<=1e-5f;
+            if(rootFacing || legacyPlayerCamera(*camera)) {
+                camera->parent=actor->id;camera->order=nextOrder(result.records,actor->id);
+                camera->local=*inverseParent * *cameraWorld;
+            }
         }
     }
     if(version<=19)for(auto& record:result.records)if(record.controller)
@@ -632,12 +669,8 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
     if(legacyPlayerInputs.contains(result.properties.playerCharacter)) {
         // Only the exact former built-in recipe is safe to replace. Custom
         // camera framing, standalone overrides and all authored entities survive.
-        constexpr float radians=3.14159265358979323846f/180.f;
-        const auto oldBasis=math::eulerRotationXYZ(Vec3{-55,45,0}*radians);
         for(auto& camera:result.records)if(camera.id==result.properties.activeCamera&&camera.parent==result.properties.playerCharacter&&
-            camera.camera==std::optional<SceneCamera>{SceneCamera{35.f}}&&camera.cameraFollow&&
-            camera.cameraFollow->target==result.properties.playerCharacter&&camera.cameraFollow->offset==Vec3{6.5f,13.1f,6.5f}&&
-            camera.cameraFollow->worldBasis==oldBasis) {
+            legacyPlayerCamera(camera)) {
             Scene previous;previous.apply(result.records,result.properties);
             const auto targetWorld=previous.worldTransform(camera.cameraFollow->target),parentWorld=previous.worldTransform(camera.parent);
             const auto inverseParent=parentWorld?math::inverse(*parentWorld):std::nullopt;
@@ -674,6 +707,13 @@ Json writeScene(const SceneSnapshot& snapshot) {
 
         if (record.model) {
             entity["model"] = *record.model;
+            if(record.primitive) {
+                const auto& primitive=*record.primitive;
+                const auto base=canonicalAssetId(record.model->id);
+                if(base==BuiltinBoxModelId)entity["primitive"]={{"size",primitive.size}};
+                else if(base==BuiltinSphereModelId)entity["primitive"]={{"radius",primitive.radius},{"sides",primitive.sides},{"rings",primitive.rings}};
+                else entity["primitive"]={{"radius",primitive.radius},{"height",primitive.height},{"sides",primitive.sides}};
+            }
             entity["meshShading"]=static_cast<unsigned>(record.meshShading);
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
             entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
@@ -743,7 +783,8 @@ enum EntityField : uint64_t {
     PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
-    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,AllEntityFields=((1ull<<35)-1)&~(1ull<<31)
+    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,
+    AllEntityFields=((1ull<<36)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -763,6 +804,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
+    if(a.primitive!=b.primitive)fields|=PrimitiveMeshField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
@@ -789,6 +831,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
     if(fields&MeshShadingField)target.meshShading=source.meshShading;
+    if(fields&PrimitiveMeshField)target.primitive=source.primitive;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
     if(fields&ControllerField)target.controller=source.controller;
@@ -883,12 +926,13 @@ void updateFollowOffsets(const Scene& previous,std::vector<EntityRecord>& record
         if(!before || before->cameraFollow!=record.cameraFollow || before->parent!=record.parent || before->local==record.local)continue;
         // Only a deliberate camera-local pose edit changes follow settings.
         // Editing an ancestor/target leaves local untouched and retains the
-        // captured world orientation and world-space target offset.
+        // captured world-space target offset. An FPS camera's root owns its
+        // orientation; generic follows retain their captured world basis.
         const auto world=rawWorld(record.id),target=rawWorld(record.cameraFollow->target);
         const auto basis=math::withAffinePosition(world,{0,0,0});
         if(!basis)throw std::runtime_error("Camera Follow edit produced an invalid world basis.");
         record.cameraFollow->offset=math::transformPoint(world,{0,0,0})-math::transformPoint(target,{0,0,0});
-        record.cameraFollow->worldBasis=*basis;
+        record.cameraFollow->worldBasis=isFirstPersonCamera(previous,record.id)?Mat4{}:*basis;
     }
 }
 }
@@ -1080,7 +1124,10 @@ std::vector<std::string> SceneDocument::historicalNavigationAgentProfileReferenc
     std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
 }
 std::shared_ptr<const GameplayEffectAsset> SceneDocument::gameplayEffect(const std::string& id) const {
-    if(const auto builtin=engineGameplayEffect(id))return builtin;
+    if(engineGameplayEffect(id)) {
+        try {return std::make_shared<const GameplayEffectAsset>(loadGameplayEffectAsset(projectRoot_,id));}
+        catch(const std::exception&) {return nullptr;}
+    }
     const auto found=stagedGameplayEffects_.find(id);if(found==stagedGameplayEffects_.end())return nullptr;
     if(contentStorageReady(projectRoot_))for(const auto& entry:storedAssetPaths(projectRoot_))if(entry.id==id)return nullptr;
     if(std::filesystem::exists(projectRoot_/"Content"/"Gameplay"/fromUtf8(id+".crimson-effect")))return nullptr;
@@ -1599,6 +1646,12 @@ EntityId SceneDocument::createCamera(const Camera& view,float aspect,const std::
 }
 EntityId SceneDocument::createBox(const std::string& name) {
     return createModel(BuiltinBoxModelId,name);
+}
+EntityId SceneDocument::createSphere(const std::string& name) {
+    return createModel(BuiltinSphereModelId,name);
+}
+EntityId SceneDocument::createCylinder(const std::string& name) {
+    return createModel(BuiltinCylinderModelId,name);
 }
 bool SceneDocument::setActiveEnvironment(EntityId id) {
     return edit("Activate environment",[id](auto&,auto& properties){properties.activeEnvironment=id;});

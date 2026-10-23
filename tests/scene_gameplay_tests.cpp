@@ -129,14 +129,14 @@ void composedPlayerRecipeAndMigration() {
     const auto thirdCamera=document.createCamera("Chosen camera");require(document.setActiveCamera(thirdCamera),document.status());
     const auto third=document.createPlayer("Third");require(third&&document.scene().properties().activeCamera==thirdCamera,
         "Create Player replaced an explicitly active camera.");
-    const auto viewBefore=*document.scene().worldTransform(camera);
     Scene runtime;runtime.apply(document.scene().records(),document.scene().properties());
     const auto moved=math::translation({5,2,-3})*math::eulerRotationXYZ({0,1.2f,0})*math::scaling({2,1.5f,.7f});
     const std::array poses{ScenePoseUpdate{player,moved}};runtime.applyRuntimePoses(poses);
     near(position(runtime,camera),Vec3{5,2,-3}+child.cameraFollow->offset);
     const auto runtimeWorld=*runtime.worldTransform(camera);
+    const auto rootOrientation=math::orthonormalFrame(moved);
     for(unsigned axis=0;axis<3;++axis)near(math::transformDirection(runtimeWorld,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}),
-        math::transformDirection(viewBefore,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}));
+        math::transformDirection(rootOrientation,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}));
     const auto json=Json::parse(serializeSceneSnapshot({{},"Composed",document.scene().records(),document.scene().properties()}));
     require(json.at("version")==23,"Component scene writer did not use schema23.");
     for(const auto& entity:json.at("entities")) {
@@ -581,6 +581,112 @@ void parentFollowKeepsWorldOffset(){
     const auto expectedDirection=math::normalized(math::transformDirection(worldBefore,{0,0,-1}));
     const auto game=resolveGameCamera(document.scene());near(math::normalized(game->target-game->position),expectedDirection);
     require(document.undo(),document.status());near(position(document.scene(),camera),offset);
+}
+void sphereCreationMaterialsAndStorage(){
+    TempProject project;SceneDocument document(project.root);
+    const auto marker=document.createEmpty("Marker");const auto initialHistory=document.history().size();
+    const auto sphere=document.createSphere();
+    require(sphere && document.scene().find(sphere)->name=="Sphere" && document.scene().find(sphere)->model->id==BuiltinSphereModelId,
+        "Sphere creation did not use the named built-in geometry.");
+    require(document.selection().ids==std::vector<EntityId>{sphere} && document.selection().primary==sphere &&
+        document.history().size()==initialHistory+1,"Sphere creation did not select the new mesh as one history command.");
+    require(document.scene().find(sphere)->local==Mat4{} && !document.scene().find(sphere)->collider && !document.scene().find(sphere)->actor,
+        "Sphere creation did not follow ordinary mesh defaults.");
+    require(document.undo() && !document.scene().contains(sphere) && document.selection().primary==marker,
+        "Undo did not remove the Sphere and restore the prior selection.");
+    require(document.redo() && document.scene().find(sphere)->model->id==BuiltinSphereModelId && document.selection().primary==sphere,
+        "Redo did not restore the Sphere with its persistent identity.");
+    const auto second=document.createSphere("Other sphere");
+    const std::string material=canonicalAssetId("tests/sphere/surface.crimson-material");
+    auto edited=*document.scene().find(sphere);edited.modelMaterials={AssetRef<MaterialAsset>{material}};
+    edited.primitive.emplace();edited.primitive->radius=1.25f;edited.primitive->sides=12;edited.primitive->rings=6;
+    edited.local=math::translation({2,3,4})*math::scaling({2,1,3});
+    require(document.updateEntity(sphere,edited),document.status());
+    require(document.scene().find(second)->name=="Other sphere" && document.scene().find(second)->modelMaterials.empty(),
+        "A Sphere material assignment changed another instance.");
+    require(document.undo() && document.scene().find(sphere)->modelMaterials.empty() && document.redo() &&
+        document.scene().find(sphere)->modelMaterials==edited.modelMaterials,"Sphere material/transform edits did not round-trip through history.");
+    auto invalid=edited;setModelMaterialOverride(invalid.modelMaterials,1,AssetRef<MaterialAsset>{material});
+    require(!document.updateEntity(sphere,invalid),"Sphere accepted a nonexistent second material slot.");
+    document.select({sphere});require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
+    require(document.scene().find(duplicate)->model->id==BuiltinSphereModelId &&
+        document.scene().find(duplicate)->modelMaterials==edited.modelMaterials && document.scene().find(duplicate)->local==edited.local &&
+        document.scene().find(duplicate)->primitive==edited.primitive,
+        "Duplicating a Sphere lost its model, material assignment or transform.");
+    const auto extracted=extractScene(document.scene());
+    require(extracted.models.size()==3,"Sphere instances did not use ordinary model extraction.");
+    for(const auto& model:extracted.models) {
+        require(model.assetId==BuiltinSphereModelId,"Sphere extraction lost the built-in identity.");
+        require(model.materialOverrides==(model.id==second?ModelMaterialOverrides{}:edited.modelMaterials),
+            "Sphere extraction lost a per-instance material assignment.");
+        require(model.primitive==(model.id==second?document.scene().find(second)->primitive:edited.primitive),"Sphere extraction lost authored primitive parameters.");
+    }
+    require(document.save("Sphere primitives"),document.status());
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==23,"Sphere primitive unnecessarily changed the scene schema.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    same(document.scene().records(),reopened.scene().records());require(!reopened.dirty(),"Loading a Sphere scene dirtied its authored document.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    auto live=*runtime.scene().find(sphere);live.modelMaterials.clear();
+    require(runtime.updateEntity(sphere,live) && runtime.scene().find(sphere)->model->id==BuiltinSphereModelId,
+        "Sphere was lost from the transient Play document.");
+    require(document.scene().find(sphere)->modelMaterials==edited.modelMaterials && !document.dirty(),
+        "Runtime Sphere edits changed the authored scene.");
+}
+void primitiveParametersStorageHistoryAndRuntime(){
+    TempProject project;SceneDocument document(project.root);
+    const auto box=document.createBox(),sphere=document.createSphere(),cylinder=document.createCylinder(),empty=document.createEmpty("Marker");
+    require(cylinder && document.scene().find(cylinder)->name=="Cylinder" && document.scene().find(cylinder)->model->id==BuiltinCylinderModelId,
+        "Cylinder creation did not use its ordinary named mesh identity.");
+    for(const auto id:{box,sphere,cylinder})require(document.scene().find(id)->primitive.value_or(PrimitiveMeshSettings{})==PrimitiveMeshSettings{},
+        "New primitives did not retain shared default parameters.");
+    auto boxRecord=*document.scene().find(box);boxRecord.primitive.emplace();boxRecord.primitive->size={2,3,4};
+    auto sphereRecord=*document.scene().find(sphere);sphereRecord.primitive.emplace();sphereRecord.primitive->radius=2;sphereRecord.primitive->sides=9;sphereRecord.primitive->rings=5;
+    auto cylinderRecord=*document.scene().find(cylinder);cylinderRecord.primitive.emplace();cylinderRecord.primitive->radius=1.5f;cylinderRecord.primitive->height=4;cylinderRecord.primitive->sides=7;
+    for(const auto& record:{boxRecord,sphereRecord,cylinderRecord})require(document.updateEntity(record.id,record),document.status());
+    require(document.undo() && document.scene().find(cylinder)->primitive.value_or(PrimitiveMeshSettings{})==PrimitiveMeshSettings{} &&
+        document.redo() && document.scene().find(cylinder)->primitive==cylinderRecord.primitive,"Primitive parameters were omitted from history fields.");
+    document.select({cylinder});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->primitive==cylinderRecord.primitive,"Cylinder duplication lost its authored geometry parameters.");
+    require(document.save("Authored primitive parameters"),document.status());
+    const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    require(json.at("version")==23,"Primitive parameters unnecessarily changed the scene schema.");
+    for(const auto& entity:json.at("entities"))if(entity.contains("model")) {
+        const auto& value=entity.at("primitive");
+        if(entity.at("name")=="Box")require(value.at("size")==Json::array({2,3,4}) && !value.contains("radius") && !value.contains("sides"),
+            "Box writer retained inactive primitive fields.");
+        else if(entity.at("name")=="Sphere")require(value.at("radius")==2 && value.at("sides")==9 && value.at("rings")==5 && !value.contains("height") && !value.contains("size"),
+            "Sphere writer lost active parameters or retained inactive dimensions.");
+        else require(value.at("radius")==1.5f && value.at("height")==4 && value.at("sides")==7 && !value.contains("rings") && !value.contains("size"),
+            "Cylinder writer lost active parameters or retained Sphere/Box fields.");
+    }
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
+    const auto records=document.scene().records();const auto history=document.history().size();
+    auto invalid=boxRecord;invalid.primitive->size[1]=0;require(!document.updateEntity(box,invalid),"Zero Box size was published.");
+    invalid=sphereRecord;invalid.primitive->rings=1;require(!document.updateEntity(sphere,invalid),"Sphere accepted too few rings.");
+    invalid=cylinderRecord;invalid.primitive->sides=257;require(!document.updateEntity(cylinder,invalid),"Cylinder accepted too many sides.");
+    invalid=*document.scene().find(empty);invalid.primitive.emplace();require(!document.updateEntity(empty,invalid),"A non-mesh entity accepted primitive parameters.");
+    same(records,document.scene().records());require(document.history().size()==history && !document.dirty(),"Rejected primitive edits changed scene state/history.");
+    for(const auto& code:std::array<Json,8>{Json(-1),Json(2),Json(257),Json(1.5),Json(true),Json("32"),Json(nullptr),Json(std::numeric_limits<std::uint64_t>::max())}) {
+        auto malformed=json;for(auto& entity:malformed["entities"])if(entity["name"]=="Sphere")entity["primitive"]["sides"]=code;
+        const std::string id="assets/scenes/invalid-primitive-parameters.crimson-scene";writeSceneFixture(project.root,id,malformed);
+        const auto before=reopened.scene().records();require(!reopened.load(id),"Malformed saved primitive side count was accepted.");same(before,reopened.scene().records());
+    }
+    auto legacy=json;for(auto& entity:legacy["entities"])entity.erase("primitive");
+    const std::string legacyId="assets/scenes/default-primitive-parameters.crimson-scene";writeSceneFixture(project.root,legacyId,legacy);
+    const auto legacyFile=sceneAssetPath(project.root,legacyId);std::ifstream beforeFile(legacyFile,std::ios::binary);
+    const std::string beforeBytes((std::istreambuf_iterator<char>(beforeFile)),{});
+    require(reopened.load(legacyId) && !reopened.dirty(),"Missing primitive parameters dirtied the loaded scene.");
+    for(const auto& record:reopened.scene().records())require(record.primitive.value_or(PrimitiveMeshSettings{})==PrimitiveMeshSettings{},"Missing primitive parameters did not default to original geometry.");
+    std::ifstream afterFile(legacyFile,std::ios::binary);const std::string afterBytes((std::istreambuf_iterator<char>(afterFile)),{});
+    require(beforeBytes==afterBytes,"Defaulting primitive parameters rewrote authored scene bytes.");
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    auto live=*runtime.scene().find(cylinder);live.primitive->height=8;
+    require(runtime.updateEntity(cylinder,live),runtime.status());pose(runtime,cylinder,{6,7,8});
+    require(runtime.undo() && runtime.scene().find(cylinder)->primitive==cylinderRecord.primitive && runtime.redo() &&
+        runtime.scene().find(cylinder)->primitive==live.primitive,"Live primitive parameter history lost its patch.");
+    near(position(runtime.scene(),cylinder),{6,7,8});same(records,document.scene().records());
+    require(!document.dirty() && document.history().size()==history,"Live primitive parameters leaked into the authored scene.");
 }
 void boxMaterialAndPointRadius(){
     TempProject project;SceneDocument document(project.root);
@@ -1316,4 +1422,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentGlowLevelsRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();meshShadingStorageHistoryAndRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();sphereCreationMaterialsAndStorage();primitiveParametersStorageHistoryAndRuntime();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentGlowLevelsRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();meshShadingStorageHistoryAndRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

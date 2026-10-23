@@ -61,6 +61,16 @@ void unavailableAndHiddenTargetsDoNotInventBounds() {
     root.visible=false;scene.apply({root},{});require(!attributeDebugActorBounds(scene,2,profiles()).valid,
         "A hidden target retained a diagnostic model/capsule box.");
 }
+void authoredPrimitiveVisualBounds() {
+    auto root=actor();root.controller.reset();
+    auto visual=entity(3,root.id,{2,1,-1});visual.model=AssetRef<ModelAsset>{BuiltinBoxModelId};
+    visual.primitive.emplace();visual.primitive->size={4,3,2};visual.local=visual.local*math::scaling({2,1,.5f});
+    Scene scene;scene.apply({root,visual},{});unsigned queries{};
+    const auto bounds=attributeDebugActorBounds(scene,root.id,{},[&](const std::string&)->std::optional<Aabb>{++queries;return Aabb{{-.5f,-.5f,-.5f},{.5f,.5f,.5f},true};});
+    const auto expected=math::transformBounds(Aabb{{-2,-1.5f,-1},{2,1.5f,1},true},*scene.worldTransform(visual.id));
+    require(queries==0 && bounds.valid && near(bounds.minimum,expected.minimum) && near(bounds.maximum,expected.maximum),
+        "Attribute debug overlay ignored a custom-sized primitive attached to its actor.");
+}
 void attributeOnlyActorGetsCompactMarker() {
     auto root=actor();root.controller.reset();
     Scene scene;scene.apply({root},{});const auto bounds=attributeDebugActorBounds(scene,2);
@@ -71,7 +81,7 @@ void attributeOnlyActorGetsCompactMarker() {
 }
 }
 int main(){
-    try{uprightCapsuleUsesAcceptedDimensions();ownedVisualsExcludeHelpersAndNestedActors();unavailableAndHiddenTargetsDoNotInventBounds();attributeOnlyActorGetsCompactMarker();
+    try{uprightCapsuleUsesAcceptedDimensions();ownedVisualsExcludeHelpersAndNestedActors();authoredPrimitiveVisualBounds();unavailableAndHiddenTargetsDoNotInventBounds();attributeOnlyActorGetsCompactMarker();
         std::cout<<"Attribute debug actor bounds checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

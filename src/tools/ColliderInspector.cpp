@@ -97,7 +97,12 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
         ImGui::TextUnformatted("Source");ImGui::TextUnformatted("Imported collision");
     } else {
         ImGui::TextUnformatted("Source");
-        const auto name=[&](const std::string& id){return isBuiltinModel(id)?std::string("Box"):models.name?models.name(id):id;};
+        const auto name=[&](const std::string& id) {
+            if(id==BuiltinSphereModelId || id=="builtin:mesh-sphere-v1")return std::string("Sphere");
+            if(id==BuiltinCylinderModelId || id=="builtin:mesh-cylinder-v1")return std::string("Cylinder");
+            if(isBuiltinModel(id))return std::string("Box");
+            return models.name?models.name(id):id;
+        };
         const auto accepts=[&](const std::string& id){return isBuiltinModel(id)||std::any_of(models.entries.begin(),models.entries.end(),[&](const auto& entry){return entry.kind==AssetKind::Model&&entry.id==id;});};
         bool sourceChanged=false,open=false;
         const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
@@ -133,6 +138,8 @@ void drawColliderInspector(SceneDocument& document,ColliderInspectorState& state
             };
             ImGui::BeginChild("Models",{320,ImGui::GetFontSize()*12});
             choice(BuiltinBoxModelId);
+            choice(BuiltinSphereModelId);
+            choice(BuiltinCylinderModelId);
             for(const auto& entry:models.entries)if(entry.kind==AssetKind::Model&&!isBuiltinModel(entry.id))choice(entry.id);
             ImGui::EndChild();ImGui::EndPopup();
         }

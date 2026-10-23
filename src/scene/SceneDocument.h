@@ -183,6 +183,8 @@ public:
     EntityId createCamera(const std::string& name = "Camera");
     EntityId createCamera(const Camera& view,float aspect,const std::string& name = "Camera");
     EntityId createBox(const std::string& name = "Box");
+    EntityId createSphere(const std::string& name = "Sphere");
+    EntityId createCylinder(const std::string& name = "Cylinder");
     bool setActiveEnvironment(EntityId id);
     bool setActiveCamera(EntityId id);
     bool setPlayerCharacter(EntityId id);

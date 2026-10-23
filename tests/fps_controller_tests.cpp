@@ -104,6 +104,58 @@ void lookCameraAuthoringAndEdits() {
     require(edited&&std::abs(edited->position[1]-position(play.presentationScene())[1]-1.4f)<1e-4,
         "Runtime camera did not accept an editor adjustment.");
 }
+void playerRootRotationDefinesCameraForward() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-fps-runtime";
+    SceneDocument authored(root);fixture(authored);
+    constexpr double quarterTurn=std::numbers::pi/2;
+    require(authored.edit("Rotate Player",[](auto& records,auto&){
+        for(auto& record:records)if(record.id==2)
+            record.local=math::translation({0,.05f,0})*math::rotation(math::axisAngle({0,1,0},quarterTurn));
+    }),"Could not rotate the authored Player.");
+    auto settings=defaultPlayerCameraTemplate();settings.offset[1]=1.73f;settings.lens.verticalFov=86;
+    require(updateCameraAuthoring(authored,3,settings),"Could not author a rotated Player's eye height and FOV.");
+    const auto authoredView=resolveGameCamera(authored.scene());
+    require(authoredView&&math::length(math::normalized(authoredView->target-authoredView->position)-Vec3{-1,0,0})<1e-5,
+        "The authored FPS camera did not face the rotated Player's forward direction.");
+    PlaySession play(root);require(play.start(authored),"Could not start a rotated FPS Player.");GameInput input;
+    play.advance(0,input,Camera{});
+    const auto initial=resolveGameCamera(play.presentationScene());
+    require(initial&&math::length(math::normalized(initial->target-initial->position)-Vec3{-1,0,0})<1e-5&&play.tickCount()==0,
+        "Play ignored the Player's root rotation before input acquisition.");
+    require(std::abs(initial->position[1]-position(play.presentationScene())[1]-settings.offset[1])<1e-5&&
+        std::abs(initial->fov-settings.lens.verticalFov)<1e-5,"Root rotation lost authored eye height or FOV.");
+    activate(input);ticks(play,input,20);key(input,SDL_SCANCODE_W);ticks(play,input,60);
+    require(position(play.document().scene())[0]<-4.4f&&std::abs(position(play.document().scene())[2])<.001f,
+        "W moved along the old camera direction instead of the rotated Player's forward direction.");
+    key(input,SDL_SCANCODE_W,false);ticks(play,input,90);
+    look(input,-450,0);const auto beforeLook=play.tickCount();play.advance(0,input,Camera{});
+    const auto turned=resolveGameCamera(play.presentationScene());
+    require(turned&&math::normalized(turned->target-turned->position)[2]>.7f&&play.tickCount()==beforeLook,
+        "Rotated Player mouse look waited for a physics tick or applied root yaw twice.");
+    key(input,SDL_SCANCODE_W);
+    require(play.document().edit("Rotate Player during Play",[](auto& records,auto&){
+        for(auto& record:records)if(record.id==2)
+            record.local=math::translation(math::transformPoint(record.local,{}))*math::rotation(math::axisAngle({0,1,0},-.6));
+    }),"Could not rotate the Player during Play.");
+    play.advance(0,input,Camera{});
+    const auto edited=resolveGameCamera(play.presentationScene());
+    const Vec3 editedForward{static_cast<float>(std::sin(.6)),0,static_cast<float>(-std::cos(.6))};
+    require(!input.ownsKeyboard()&&input.movement()==Vec2{},"Player rotation retained captured movement input.");
+    require(edited&&math::length(math::normalized(edited->target-edited->position)-editedForward)<1e-5,
+        "Live Player rotation retained the old camera yaw or transient look.");
+    require(play.document().edit("Rotate Player without Game input",[](auto& records,auto&){
+        for(auto& record:records)if(record.id==2)
+            record.local=math::translation(math::transformPoint(record.local,{}))*math::rotation(math::axisAngle({0,1,0},-quarterTurn));
+    }),"Could not rotate the Player with Game input released.");
+    play.advance(0,input,Camera{});
+    const auto released=resolveGameCamera(play.presentationScene());
+    require(released&&math::length(math::normalized(released->target-released->position)-Vec3{1,0,0})<1e-5&&
+        std::abs(released->position[1]-position(play.presentationScene())[1]-settings.offset[1])<1e-5&&
+        std::abs(released->fov-settings.lens.verticalFov)<1e-5,
+        "Player rotation with input released lost camera forward, eye height or FOV.");
+    require(authored.scene().find(2)->local==math::translation({0,.05f,0})*math::rotation(math::axisAngle({0,1,0},quarterTurn)),
+        "Live root rotation changed the authored Player.");
+}
 void diagonalAndFrameRateIndependence() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-fps-runtime";SceneDocument authored(root);fixture(authored);
     PlaySession a(root),b(root),c(root);require(a.start(authored)&&b.start(authored)&&c.start(authored),"Could not start FPS timing worlds.");
@@ -494,7 +546,7 @@ void staircaseStrafingAndDiagonalInput() {
     }
 }
 }
-int main(){try{movementJumpAndOwnership();lookCameraAuthoringAndEdits();diagonalAndFrameRateIndependence();cancellationAndCameraLifetime();
+int main(){try{movementJumpAndOwnership();lookCameraAuthoringAndEdits();playerRootRotationDefinesCameraForward();diagonalAndFrameRateIndependence();cancellationAndCameraLifetime();
     staircaseAscentDescentAndSettling();staircaseRenderTimingAndJumpIsolation();staircaseCameraResets();
     staircaseAuthoredResponseAndDisable();staircaseLiveResponseEditing();compactStaircaseCameraContinuity();staircaseStrafingAndDiagonalInput();
     std::cout<<"FPS controller checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

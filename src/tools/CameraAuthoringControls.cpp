@@ -17,7 +17,8 @@ Vec3 degrees(const Vec3& value) {
 }
 }
 void drawCameraAuthoringControls(CameraAuthoringControlsState& state,EntityId camera,CameraTemplate& value,
-                                 const CameraAuthoringCallback& callback) {
+                                 const CameraAuthoringCallback& callback,bool firstPerson) {
+    if(firstPerson)state.rotationEditing=false;
     if(state.camera!=camera || (state.rotationEditing&&state.activeRotationItem!=ImGui::GetActiveID())) {
         state.rotationEditing=false;state.valid=false;
     }
@@ -37,24 +38,26 @@ void drawCameraAuthoringControls(CameraAuthoringControlsState& state,EntityId ca
     if(offsetChanged)value.offset=offset;
     callback(CameraAuthoringControl::Offset,offsetChanged);
 
-    ImGui::BeginDisabled(!state.valid);
-    auto requested=state.degrees;
-    const bool rotationEdited=resettableProperty(requested,Vec3{},[&]{return ImGui::DragFloat3("Rotation (deg)",requested.data(),.25f,0,0,"%.3f");});
-    if(ImGui::IsItemActivated() || (rotationEdited&&!state.rotationEditing)) {
-        state.rotationBaseline=value.worldBasis;
-        if(const auto captured=math::affineTransformFields(value.worldBasis,&state.rotationFields))state.rotationFields=*captured;
-        state.activeRotationItem=ImGui::GetItemID();state.rotationEditing=true;
-    }
-    bool rotationChanged=false;
-    if(rotationEdited&&state.valid&&math::finite(requested)) {
-        const auto candidate=math::withAffineRotation(state.rotationBaseline,state.rotationFields,requested*ToRadians);
-        if(candidate) {
-            value.worldBasis=*candidate;state.shownBasis=*candidate;state.degrees=requested;rotationChanged=true;
+    if(!firstPerson) {
+        ImGui::BeginDisabled(!state.valid);
+        auto requested=state.degrees;
+        const bool rotationEdited=resettableProperty(requested,Vec3{},[&]{return ImGui::DragFloat3("Rotation (deg)",requested.data(),.25f,0,0,"%.3f");});
+        if(ImGui::IsItemActivated() || (rotationEdited&&!state.rotationEditing)) {
+            state.rotationBaseline=value.worldBasis;
+            if(const auto captured=math::affineTransformFields(value.worldBasis,&state.rotationFields))state.rotationFields=*captured;
+            state.activeRotationItem=ImGui::GetItemID();state.rotationEditing=true;
         }
+        bool rotationChanged=false;
+        if(rotationEdited&&state.valid&&math::finite(requested)) {
+            const auto candidate=math::withAffineRotation(state.rotationBaseline,state.rotationFields,requested*ToRadians);
+            if(candidate) {
+                value.worldBasis=*candidate;state.shownBasis=*candidate;state.degrees=requested;rotationChanged=true;
+            }
+        }
+        callback(CameraAuthoringControl::Rotation,rotationChanged);
+        if(ImGui::IsItemDeactivated())state.rotationEditing=false;
+        ImGui::EndDisabled();
     }
-    callback(CameraAuthoringControl::Rotation,rotationChanged);
-    if(ImGui::IsItemDeactivated())state.rotationEditing=false;
-    ImGui::EndDisabled();
 
     auto fov=value.lens.verticalFov;
     const bool fovEdited=resettableProperty(fov,defaults.lens.verticalFov,[&]{return ImGui::DragFloat("Vertical FOV",&fov,.2f,1.f,179.f,"%.2f deg",ImGuiSliderFlags_AlwaysClamp);});

@@ -1,6 +1,7 @@
 #include "editor/CameraPilot.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
+#include "scene/CameraAuthoring.h"
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -44,6 +45,35 @@ void selectionAndModes() {
     sameCamera(view,*resolveSceneCamera(document.scene(),second),"Stopping pilot did not retain the scene camera POV.");
     pilot.useEditorCamera(document,view);sameCamera(view,free,"Editor Camera did not restore the exact saved free view.");
     require(!pilot.selectedCamera()&&!pilot.freeCamera()&&document.history().size()==history,"Returning to Editor Camera authored an edit or retained state.");
+}
+void firstPersonCameraRemainsRootOriented() {
+    Project project;SceneDocument document(project.root);const auto player=document.createPlayer();
+    const auto camera=resolveOwnedActorCamera(document.scene(),player);
+    auto settings=defaultPlayerCameraTemplate();settings.offset={0,1.43f,0};settings.lens={86,.04f,1500};
+    require(updateCameraAuthoring(document,camera,settings),document.status());
+    const auto authored=*document.scene().find(camera);const auto history=document.history().size();
+    CameraPilot pilot;auto view=editorView();const auto free=view;
+    require(pilot.selectCamera(document,camera,view),pilot.status());
+    sameCamera(view,*resolveSceneCamera(document.scene(),camera),"First-person camera could not be viewed without piloting.");
+    require(!pilot.setPiloting(document,view,true)&&!pilot.piloting()&&!document.transactionActive()&&
+        document.history().size()==history&&sameEntity(*document.scene().find(camera),authored),
+        "Rejected first-person piloting changed the camera or scene history.");
+    require(pilot.selectedCamera()==camera&&!pilot.status().empty(),"Rejected first-person piloting lost the read-only camera or its action hint.");
+    view.target=view.position+Vec3{1,0,0};
+    require(!pilot.apply(document,view,true)&&document.history().size()==history,
+        "Read-only first-person viewing accepted an independent camera rotation.");
+    sameCamera(view,*resolveSceneCamera(document.scene(),camera),"Rejected first-person navigation retained a temporary orientation.");
+    auto actor=*document.scene().find(player);
+    actor.local=math::translation({8,2,-3})*math::eulerRotationXYZ({0,.8f,0});
+    require(document.updateEntity(player,actor)&&pilot.sync(document,view),document.status());
+    near(view.forward(),math::normalized(math::transformDirection(actor.local,{0,0,-1})),
+        "Viewing a first-person camera did not follow the Player root rotation.");
+    near(view.position,math::transformPoint(actor.local,{})+settings.offset,
+        "Rotating the Player root changed the authored first-person eye offset.");
+    require(view.fov==settings.lens.verticalFov&&view.nearPlane==settings.lens.nearPlane&&view.farPlane==settings.lens.farPlane&&
+        document.scene().find(camera)->cameraFollow==authored.cameraFollow&&document.history().size()==history+1,
+        "First-person viewing changed authored camera settings or added history.");
+    pilot.useEditorCamera(document,view);sameCamera(view,free,"Leaving the first-person view lost the saved editor camera.");
 }
 void gesturesAndCancellation() {
     Project project;SceneDocument document(project.root);const auto camera=document.createCamera();require(document.save("Pilot gestures"),document.status());
@@ -150,6 +180,6 @@ void createAtViewport() {
     require(document.history().size()==count&&!document.transactionActive()&&document.scene().records().size()==records.size(),"Rejected camera creation changed history, ownership or entity count.");
 }
 }
-int main(){try{selectionAndModes();gesturesAndCancellation();affineParentAndFollow();externalChangesAndTokens();createAtViewport();
+int main(){try{selectionAndModes();firstPersonCameraRemainsRootOriented();gesturesAndCancellation();affineParentAndFollow();externalChangesAndTokens();createAtViewport();
     std::cout<<"Camera selection, pilot gestures, affine/follow transforms, cancellation, identity guards and viewport creation checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

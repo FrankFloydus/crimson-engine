@@ -121,7 +121,7 @@ void GameplayEffectEditor::modals(AssetLibrary& assets) {
             const auto previousSaved=document_.savedDefinition();
             if(document_.save(saveName_.data(),true)) {
                 assets.protectGameplayEffectDocument(document_.assetId());
-                if(!isEngineAssetId(previous)) {
+                if(editableGameplayEffect(previous)) {
                     auto source=previousSaved;
                     try {source=loadGameplayEffectAsset(assets.projectRoot(),previous);}
                     catch(...) { /* Missing/corrupt sources retain their saved generation. */ }

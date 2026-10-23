@@ -58,6 +58,7 @@ private:
         uint64_t geometryRevision{};
         uint64_t repairRevision{};
         std::string geometryAssetId;
+        std::weak_ptr<const ModelAsset> geometrySource;
         std::string sourceId;
         std::unordered_map<std::string,ResourceHandle<ModelGeometryLevel>> geometry;
         std::chrono::steady_clock::time_point used;
@@ -70,6 +71,7 @@ private:
     ResourceManager& resources_;
     std::filesystem::path root_;
     std::unordered_map<std::string,Entry> entries_;
+    std::unordered_map<std::string,std::weak_ptr<const ModelAsset>> retiredPrimitiveModels_;
     // Shared by Scene/Game/shadow admission within a frame. Includes the last
     // coherent packet while a changed material is still compiling.
     std::unordered_map<std::string,std::optional<float>> displacementExtents_;
@@ -89,5 +91,6 @@ private:
     std::string status_;
     MaterialEvaluationContext materialContext_{};
     void requestGeometry(Entry&,const ModelAsset&,uint64_t revision,uint32_t primitive,uint32_t level,ResourcePriority,bool smoothNormals=false);
+    void collectPrimitiveModels();
 };
 } // namespace crimson

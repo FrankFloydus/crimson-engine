@@ -43,11 +43,12 @@ std::string canonicalAssetId(std::string_view value) {
     return named(assetNamespace(),value);
 }
 bool isEngineAssetId(std::string_view value) {
-    static const std::array<std::string,14> protectedIds{
+    static const std::array<std::string,16> protectedIds{
         canonicalAssetId("builtin:gameplay-effect/player-defaults"),canonicalAssetId("builtin:gameplay-effect/enemy-defaults"),
         canonicalAssetId("builtin:material/default"),canonicalAssetId("builtin:material/particle"),canonicalAssetId("builtin:navigation-agent/default"),
         canonicalAssetId("builtin:texture/gray"),canonicalAssetId("builtin:texture/normal"),
-        canonicalAssetId("builtin:environment/studio"),canonicalAssetId("builtin:mesh-box-v1"),
+        canonicalAssetId("builtin:environment/studio"),canonicalAssetId("builtin:mesh-box-v1"),canonicalAssetId("builtin:mesh-sphere-v1"),
+        canonicalAssetId("builtin:mesh-cylinder-v1"),
         canonicalAssetId("builtin:material-preview-cube-v1"),canonicalAssetId("builtin:material-preview-rounded-cube-v1"),
         canonicalAssetId("builtin:material-preview-cylinder-v1"),canonicalAssetId("builtin:material-preview-plane-v1"),
         canonicalAssetId("builtin:material-preview-sphere-v1")};

@@ -11,6 +11,7 @@
 #include "CameraAuthoringControls.h"
 #include "InspectorTransform.h"
 #include "ColliderInspector.h"
+#include "PrimitiveMeshInspector.h"
 #include "Tools.h"
 #include "QuaderInspector.h"
 #include "LightingControls.h"
@@ -50,6 +51,7 @@ enum class Edit { None, Name, InlineName, Visible,
     DirectionReceivers,DirectionCasters,
     PointReceivers,PointCasters,
     ModelCastShadows, ModelReceiveShadows,ModelShading,
+    PrimitiveSizeX,PrimitiveSizeY,PrimitiveSizeZ,PrimitiveRadius,PrimitiveHeight,PrimitiveSides,PrimitiveRings,
     ModelDirectReceivers,ModelCasterScope,
     ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
     Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentSpecularAA, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
@@ -109,6 +111,7 @@ struct PanelsState {
     EntityId inspectorEntity{},editingEntity{};
     std::optional<SceneComponentTarget> removeComponent;
     std::unordered_map<EntityId,ColliderInspectorState> colliders;
+    std::unordered_map<EntityId,PrimitiveMeshInspectorState> primitives;
     std::unordered_map<EntityId,GameplayTagPickerState> tags;
     std::string materialDiagnostic;
     SceneOutlinerColorPopupState outlinerColor;
@@ -119,8 +122,9 @@ struct PanelsState {
     bool cameraTemplatesLoaded{};
     bool cameraTemplatesAvailable{};
 };
-void releasePanelColliders(PanelsState& state) {
+void releasePanelInputs(PanelsState& state) {
     for(auto& [id,collider]:state.colliders)releaseColliderInspector(collider);
+    for(auto& [id,primitive]:state.primitives)releasePrimitiveMeshInspector(primitive);
 }
 PanelsState& stateFor(SceneDocument& document) {
     static PanelsState state;
@@ -134,8 +138,12 @@ PanelsState& stateFor(SceneDocument& document) {
         if(document.scene().contains(it->first)){++it;continue;}
         releaseColliderInspector(it->second);it=state.colliders.erase(it);
     }
+    for(auto it=state.primitives.begin();it!=state.primitives.end();) {
+        if(document.scene().contains(it->first)){++it;continue;}
+        releasePrimitiveMeshInspector(it->second);it=state.primitives.erase(it);
+    }
     if (!document.transactionActive()) {
-        releasePanelColliders(state);
+        releasePanelInputs(state);
         // An editor-level cancel/open can end our transaction before this panel
         // runs. Never revive the buffered inline rename after that boundary.
         if (state.active==Edit::InlineName) { state.renameId=NoEntity; state.renameFocus=false; }
@@ -194,6 +202,8 @@ void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool to
 }
 void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
     if (ImGui::MenuItem("Box")) document.createBox();
+    if (ImGui::MenuItem("Sphere")) document.createSphere();
+    if (ImGui::MenuItem("Cylinder")) document.createCylinder();
     if (ImGui::MenuItem("Collider")) document.createCollider("Collider",parent);
     const auto records=document.scene().records();
     const bool hasVolume=std::any_of(records.begin(),records.end(),[](const auto& record){return record.navigationVolume && record.navigationVolume->enabled;});
@@ -488,7 +498,7 @@ void materialSlotControl(SceneDocument& document,PanelsState& state,const Entity
     }
 }
 void modelAnimationControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,const AssetLibrary& assets,std::string* openAnimation) {
-    const auto model=assets.findModel(record.model->id);
+    const auto model=assets.findModel(record.model->id,record.primitive);
     const bool available=model&&(!model->animations.empty()||!model->skins.empty()||!record.modelAnimation.asset.empty()||
         std::any_of(model->primitives.begin(),model->primitives.end(),[](const auto& primitive){return !primitive.morphTargets.empty();}));
     bool activeDrawn=false;
@@ -555,7 +565,7 @@ void modelAnimationControls(SceneDocument& document,PanelsState& state,const Ent
 }
 void modelInformation(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,
     const Renderer& renderer,std::string* openMaterial) {
-    const auto model=assets.findModel(record.model->id);
+    const auto model=assets.findModel(record.model->id,record.primitive);
     if (!model) {
         ImGui::TextWrapped("Model unavailable: %s",record.model->id.c_str());
         return;
@@ -912,6 +922,7 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
     else if(ImGui::Button("Set Active Camera")) {finishScenePanelEdit(document);document.setActiveCamera(cameraId);}
     const auto captured=captureCameraTemplate(document.scene(),cameraId,camera->cameraFollow?camera->cameraFollow->target:NoEntity,"");
     if(!captured){ImGui::PopID();ImGui::PopID();return;}
+    const bool firstPerson=isFirstPersonCamera(document.scene(),cameraId);
     auto value=*captured;
     if(!state.cameraTemplatesLoaded) {
         state.cameraTemplatesLoaded=true;
@@ -920,7 +931,7 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
     }
     const auto builtIn=defaultPlayerCameraTemplate();
     const auto matches=[&](const CameraTemplate& candidate) {
-        return candidate.offset==value.offset && candidate.worldBasis==value.worldBasis && candidate.lens==value.lens;
+        return candidate.offset==value.offset && (firstPerson || candidate.worldBasis==value.worldBasis) && candidate.lens==value.lens;
     };
     const char* currentTemplate=matches(builtIn)?builtIn.name.c_str():"Custom";
     for(const auto& candidate:state.cameraTemplates)if(matches(candidate)){currentTemplate=candidate.name.c_str();break;}
@@ -930,7 +941,8 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
             if(ImGui::Selectable(candidate.name.c_str(),matches(candidate))) {
                 finishScenePanelEdit(document);
                 if(updateCameraAuthoring(document,cameraId,candidate,"Apply camera template")) {
-                    value=candidate;if(state.cameraTemplatesAvailable)state.cameraTemplateStatus.clear();
+                    value=candidate;if(firstPerson)value.worldBasis=Mat4{};
+                    if(state.cameraTemplatesAvailable)state.cameraTemplateStatus.clear();
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -967,7 +979,7 @@ void drawCameraSection(SceneDocument& document,PanelsState& state,EntityId camer
         if((ImGui::IsItemActivated() || changed) && beginEdit(document,state,property,labels[index]) && changed)
             updateCameraAuthoring(document,cameraId,value,labels[index]);
         if(ImGui::IsItemDeactivated() || (changed && !ImGui::IsItemActive()))finishEdit(document,state,property);
-    });
+    },firstPerson);
     if(!actorShortcut) {
         ImGui::Separator();
         const auto current=document.scene().find(cameraId);
@@ -1126,8 +1138,8 @@ void startingEffectControls(SceneDocument& document,AssetLibrary& assets,const E
     for(std::size_t index=0;index<starting.size();++index) {
         ImGui::PushID(static_cast<int>(index));
         const auto& id=starting[index].id;
-        const auto staged=document.gameplayEffect(id);
         const auto managed=assets.findGameplayEffect(id);
+        const auto staged=managed?nullptr:document.gameplayEffect(id);
         const auto definition=managed?managed:staged;
         const auto name=managed?assets.displayName(id):staged?staged->name:std::string("Missing Effect");
         const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
@@ -1271,7 +1283,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
 namespace {
 bool cancelPanelEdit(SceneDocument& document, PanelsState& state, Panel panel, bool allowEdits) {
     if (owner(state.active)!=panel || (allowEdits && !ImGui::IsKeyPressed(ImGuiKey_Escape,false) && !ImGui::GetIO().AppFocusLost)) return false;
-    releasePanelColliders(state);
+    releasePanelInputs(state);
     if(cameraEdit(state.active)){ImGui::ClearActiveID();state.cameraControls={};}
     document.cancel(); state.active=Edit::None; state.nameId=NoEntity;
     for(auto& [id,transform]:state.transforms)if(transform.editing) {
@@ -1327,7 +1339,7 @@ bool finishScenePanelEdit(SceneDocument& document) {
         const auto cached=state.transforms.find(state.editingEntity);
         if(cached==state.transforms.end() || !finishInspectorTransform(document,cached->second))return false;
     } else {
-        releasePanelColliders(state);
+        releasePanelInputs(state);
         if (!document.commit()) return false;
     }
     state.active=Edit::None; state.nameId=NoEntity;
@@ -1463,7 +1475,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
     const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if(!ImGui::Begin("Inspector")) {
-        releasePanelColliders(state);
+        releasePanelInputs(state);
         if(owner(state.active)==Panel::Inspector){document.cancel();state.active=Edit::None;state.nameId=NoEntity;}
         ImGui::End();return;
     }
@@ -1539,6 +1551,14 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                         (state.active>=Edit::PointReceivers && state.active<=Edit::PointCasters))finishEdit(document,state,state.active);
             }
             if (section==SceneComponentKind::Model && record.model && componentHeader(state,record,SceneComponentKind::Model)) {
+                if(isBuiltinModel(record.model->id)) {
+                    static_assert(static_cast<unsigned>(Edit::PrimitiveRings)-static_cast<unsigned>(Edit::PrimitiveSizeX)==static_cast<unsigned>(PrimitiveMeshControl::Rings));
+                    const auto property=[](PrimitiveMeshControl control){return static_cast<Edit>(static_cast<unsigned>(Edit::PrimitiveSizeX)+static_cast<unsigned>(control));};
+                    const PrimitiveMeshInspectorTransactions transactions{
+                        [&](PrimitiveMeshControl control,const char* label){return beginEdit(document,state,property(control),label);},
+                        [&](PrimitiveMeshControl control){finishEdit(document,state,property(control));}};
+                    drawPrimitiveMeshInspector(document,state.primitives[record.id],record,transactions);
+                }
                 auto shading=static_cast<int>(record.meshShading);
                 const bool shadingChanged=resettableProperty(shading,static_cast<int>(MeshShading::UseMeshNormals),[&]{return ImGui::Combo("Shading",&shading,"Use Mesh Normals\0Flat\0Smooth\0");},"Use Mesh Normals");
                 propertyEdit(document,state,Edit::ModelShading,"Change mesh shading",shadingChanged,
@@ -1566,7 +1586,9 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                    (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
                 modelAnimationControls(document,state,record,assets,openAnimation);
                 modelInformation(document,state,record,assets,renderer,openMaterial);
-            } else if(section==SceneComponentKind::Model && record.model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart)finishEdit(document,state,state.active);
+            } else if(section==SceneComponentKind::Model && record.model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart) {
+                releasePrimitiveMeshInspector(state.primitives[record.id]);finishEdit(document,state,state.active);
+            }
             if(section==SceneComponentKind::Particle && record.particle && componentHeader(state,record,SceneComponentKind::Particle)) {
                 auto assigned=record.particle->id;
                 const auto resolved=assets.references().resolve(assigned);

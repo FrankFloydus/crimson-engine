@@ -79,9 +79,10 @@ bool setCameraTemplateRotationDegrees(CameraTemplate& value,const Vec3& degrees)
 std::optional<CameraTemplate> captureCameraTemplate(const Scene& scene,EntityId camera,EntityId target,std::string name) {
     const auto record=scene.find(camera);
     if(record&&record->camera&&record->cameraFollow&&target&&record->cameraFollow->target==target) {
-        // Follow owns these exact authored world values. Reconstructing through
-        // an affine parent would add roundoff and break template identification.
-        CameraTemplate value{trimmedName(name),record->cameraFollow->offset,record->cameraFollow->worldBasis,*record->camera};
+        // Preserve exact authored offset/lens values without parent roundoff.
+        // FPS orientation belongs to the root, never to a reusable template.
+        CameraTemplate value{trimmedName(name),record->cameraFollow->offset,
+            isFirstPersonCamera(scene,camera)?Mat4{}:record->cameraFollow->worldBasis,*record->camera};
         return validCameraTemplate(value)?std::optional<CameraTemplate>{std::move(value)}:std::nullopt;
     }
     const auto world=scene.worldTransform(camera);

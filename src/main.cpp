@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
         std::ofstream log("renderer.log", std::ios::app);
         log << "Renderer ERROR: " << error.what() << '\n';
         log.close();
-        if (argc == 1) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "crimson-renderer error", error.what(), nullptr);
+        if (argc == 1) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Crimson Engine error", error.what(), nullptr);
         return 1;
     }
 }

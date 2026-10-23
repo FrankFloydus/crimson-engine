@@ -14,9 +14,11 @@
 #include "AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
+#include "scene/PrimitiveMesh.h"
 #include <filesystem>
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -74,7 +76,7 @@ public:
     const std::vector<AssetEntry>& catalog() const { return catalog_; }
     std::uint64_t catalogRevision() const { return catalogRevision_; }
     const TextureAsset* find(const std::string& id) const;
-    std::shared_ptr<const ModelAsset> findModel(const std::string& id) const;
+    std::shared_ptr<const ModelAsset> findModel(const std::string& id,const std::optional<PrimitiveMeshSettings>& primitive={}) const;
     std::shared_ptr<const MaterialAsset> findMaterial(const std::string& id) const;
     std::uint64_t materialRevision(const std::string& id) const;
     std::string materialDiagnostic(const std::string& id) const;
@@ -147,7 +149,8 @@ public:
     std::uint64_t modelRevision(const std::string& id) const;
     std::uint64_t modelFingerprint(const std::string& id) const;
     std::vector<std::filesystem::path> modelDependencies(const std::string& id) const;
-    std::shared_ptr<const ModelAsset> peekModel(const std::string& id) const;
+    std::shared_ptr<const ModelAsset> peekModel(const std::string& id,const std::optional<PrimitiveMeshSettings>& primitive={}) const;
+    bool primitiveModelAlive(const std::string& geometryId) const;
     std::shared_ptr<const MaterialAsset> peekMaterial(const std::string& id) const;
     bool modelLoading(const std::string& id) const;
     std::string modelDiagnostic(const std::string& id) const;
@@ -262,6 +265,8 @@ private:
     mutable std::unordered_map<std::string,NodeImagePreview> nodeImagePreviews_;
     mutable unsigned nodeImageStarts_{};
     mutable std::unordered_map<std::string,ResourceHandle<ModelAsset>> modelResources_;
+    mutable std::unordered_map<std::string,std::weak_ptr<const ModelAsset>> primitiveModels_;
+    std::shared_ptr<const ModelAsset> primitiveModel(const std::string& id,const PrimitiveMeshSettings&) const;
     mutable std::unordered_set<std::string> modelCacheRebuilds_;
     mutable std::unordered_map<std::string,ResourceHandle<MaterialAsset>> materialResources_;
     mutable std::unordered_map<std::string,std::chrono::steady_clock::time_point> modelInterest_,materialInterest_;

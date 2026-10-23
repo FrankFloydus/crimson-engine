@@ -33,9 +33,9 @@ PlaySession::PlaySession(std::filesystem::path projectRoot):projectRoot_(std::mo
             auto result=effectDefinitions_(id);
             if(result.definition||!result.diagnostic.empty()||result.readiness==EffectReadiness::Preparing)return result;
         }
-        if(document_)if(auto staged=document_->gameplayEffect(id))return EffectDefinitionSnapshot{std::move(staged),1,{}};
-        if(auto engine=engineGameplayEffect(id))return EffectDefinitionSnapshot{std::move(engine),1,{}};
-        if(!effectDefinitions_)try {
+        const bool starter=id==PlayerStartingEffectId || id==EnemyStartingEffectId;
+        if(document_ && !starter)if(auto staged=document_->gameplayEffect(id))return EffectDefinitionSnapshot{std::move(staged),1,{}};
+        if(!effectDefinitions_ || starter)try {
             auto definition=std::make_shared<const GameplayEffectAsset>(loadGameplayEffectAsset(projectRoot_,id));
             std::uint64_t generation=14695981039346656037ull;
             for(const auto byte:serializeGameplayEffectAsset(*definition)){generation^=static_cast<unsigned char>(byte);generation*=1099511628211ull;}

@@ -1,0 +1,17 @@
+{
+  "bindingSignature": "f11dae6b-00a9-5fe2-8964-eb8ef73b98d2",
+  "endTime": 1.9583333730697632,
+  "forceRootLock": false,
+  "id": "e9bbaa61-e0bc-5b76-a44b-16e831eaa799",
+  "loop": true,
+  "name": "Idle loop.001",
+  "playbackRate": 1.0,
+  "rootLockReference": 0,
+  "rootNode": 60,
+  "sourceClip": 0,
+  "sourceClipIdentity": "9dc191c5-08ce-561b-a4c2-2fa4ebaf970a",
+  "sourceModel": "e6f20144-8525-5ec1-b10a-76d428fd8ccc",
+  "startTime": 0.0,
+  "type": "crimson-animation",
+  "version": 1
+}

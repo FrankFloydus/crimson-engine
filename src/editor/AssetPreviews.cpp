@@ -411,17 +411,18 @@ struct AssetPreviews::Impl {
         const auto shaderFiles=assets.materialShaderDependencies();files.insert(files.end(),shaderFiles.begin(),shaderFiles.end());
         bool loaded=true;
         for (const auto& model:models) {
-            const auto asset=assets.findModel(model.assetId);
+            const auto asset=assets.findModel(model.assetId,model.primitive);
             if (!asset) {
                 if (assets.modelLoading(model.assetId)) loaded=false;
                 else entry.error=assets.modelDiagnostic(model.assetId).empty() ? "Missing model: "+model.assetId : assets.modelDiagnostic(model.assetId);
                 continue;
             }
             const auto fingerprint=assets.modelFingerprint(model.assetId); hash(sourceKey,fingerprint); hash(sourceKey,model.world);
+            hash(sourceKey,asset->id.data(),asset->id.size());
             // Saved scene references retain their authored identity after a
             // deletion fallback. Only the resolved model owns current files;
             // the original bundled UUID may no longer have a registration.
-            if(!isBuiltinModel(asset->id)) {
+            if(asset->format!="BUILTIN") {
                 validationFiles.push_back(sourceFile(asset->id));
                 const auto dependencies=assets.modelDependencies(model.assetId);
                 validationFiles.insert(validationFiles.end(),dependencies.begin(),dependencies.end());
@@ -519,7 +520,7 @@ struct AssetPreviews::Impl {
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         if(sceneSnapshot) {
             ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;shadowScene.directional=directions;
-            std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId) && !assets.modelLoading(model.assetId);});
+            std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId,model.primitive) && !assets.modelLoading(model.assetId);});
             const std::array<ShadowCamera,1> shadowCameras{{{settings.camera,1.f}}};
             pins->shadows=prepared.prepareShadows(shadowScene,256,ResourcePriority::Preview,shadowCameras);
             if(!pins->shadows->refined)return;
@@ -585,7 +586,7 @@ struct AssetPreviews::Impl {
             instances.push_back({0,{materialGeometry,Mat4{}},&candidate->textures,1,true,false,&candidate->materials});
         }
         for (const auto& model:models) {
-            if (!assets.findModel(model.assetId) && !assets.modelLoading(model.assetId)) continue;
+            if (!assets.findModel(model.assetId,model.primitive) && !assets.modelLoading(model.assetId)) continue;
             const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,previewSize,false,ResourcePriority::Preview,0,model.materialOverrides,0,&model);
             if (!ready || !ready->ready || !ready->refined) return;
             if (!texturesMatchSources(assets,root,*dependencies,ready->materials,ready->textures,resources,refreshedSources)) return;

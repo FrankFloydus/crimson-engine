@@ -17,6 +17,10 @@ using namespace crimson;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 template<class F>void rejects(F&& f,const char* message){bool rejected=false;try{f();}catch(const std::exception&){rejected=true;}require(rejected,message);}
 std::string read(const std::filesystem::path& file){std::ifstream input(file,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
+void setLiteral(GameplayEffectAsset& effect,const GameplayTag& attribute,double value) {
+    const auto modifier=std::find_if(effect.modifiers.begin(),effect.modifiers.end(),[&](const auto& candidate){return candidate.attribute==attribute;});
+    require(modifier!=effect.modifiers.end(),"Starter effect is missing the tested attribute.");modifier->magnitude.literal=value;
+}
 struct Project {
     std::filesystem::path root=std::filesystem::temp_directory_path()/("ce-effect-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Project(){std::filesystem::create_directories(root);initializeContentStorage(root);}
@@ -55,7 +59,8 @@ void codecAndStorage() {
     auto copy=copyGameplayEffectAsset(project.root,effect,"Independent");require(copy.id!=effect.id&&copy.modifiers==effect.modifiers,"Effect duplication reused UUID or changed modifiers.");
     effect.modifiers[0].attribute=GameplayTag{"Stats.Future.Unregistered"};effect.modifiers[0].magnitude.calculation="FutureCalculation";
     require(deserializeGameplayEffectAsset(serializeGameplayEffectAsset(effect))==effect,"Unknown native identities did not survive codec.");
-    rejects([&]{saveGameplayEffectAsset(project.root,*playerStartingEffect());},"Protected starter accepted authored Save.");
+    auto protectedEffect=*playerStartingEffect();protectedEffect.id=canonicalAssetId("builtin:material/default");
+    rejects([&]{saveGameplayEffectAsset(project.root,protectedEffect);},"Effect Save accepted another protected engine identity.");
     auto json=nlohmann::json::parse(serializeGameplayEffectAsset(effect));json["modifiers"][0]["operation"]="unknown";
     rejects([&]{deserializeGameplayEffectAsset(json.dump());},"Unknown operation was accepted.");
     rejects([&]{deserializeGameplayEffectAsset(serializeGameplayEffectAsset(effect),copy.id);},"Expected identity was ignored.");
@@ -78,12 +83,56 @@ void documentOwnership() {
     auto external=loadGameplayEffectAsset(project.root,copyId);external.name="External";saveGameplayEffectAsset(project.root,external);
     require(document.externalFileChanged(),"External replacement was not detected.");
     require(document.load(copyId)&&document.definition().name=="External",document.status());
-    require(document.load(PlayerStartingEffectId)&&!document.editable()&&!document.begin("Protected"),"Engine effect document allowed editing.");
+    require(document.load(PlayerStartingEffectId)&&document.editable(),"Player Defaults did not open as an editable effect.");
+    const auto starterFile=gameplayEffectAssetPath(project.root,PlayerStartingEffectId);
+    require(!std::filesystem::exists(starterFile)&&!document.externalFileChanged(),"An absent starter was materialized or falsely reported as an external conflict.");
+    require(document.edit("Materialize starter",[](auto& effect){setLiteral(effect,stats::MovementSpeed,6);})&&document.save(),document.status());
+    require(document.assetId()==PlayerStartingEffectId&&std::filesystem::exists(starterFile)&&
+        loadGameplayEffectAsset(project.root,PlayerStartingEffectId)==document.definition(),"Saving fallback starter values lost their reserved identity.");
     require(document.save("Editable Player",true)&&document.editable(),document.status());
     auto seed=*enemyStartingEffect();seed.id=newAssetId();seed.name="Pending";require(document.loadSnapshot(seed)&&document.dirty(),document.status());
     require(!std::filesystem::exists(project.root/"Content"/"Gameplay"/(seed.id+".crimson-effect")),"Loading a staged effect wrote an asset.");
     auto edited=seed;edited.name="Independently saved";saveGameplayEffectAsset(project.root,edited);
     require(document.externalFileChanged(),"Materialized edited seed did not report conflict.");
+}
+void editableStarterDocuments() {
+    Project project;ensureEngineGameplayEffects(project.root);
+    for(const auto& id:{PlayerStartingEffectId,EnemyStartingEffectId}) {
+        GameplayEffectDocument document(project.root);require(document.load(id)&&document.editable(),document.status());
+        require(isEngineAssetId(id)&&editableGameplayEffect(id),"Editable starter lost its reserved engine identity.");
+        const auto original=document.definition();const auto file=gameplayEffectAssetPath(project.root,id);
+        const auto originalBytes=read(file),indexBefore=read(project.root/".crimson"/"asset-locations.json");
+        const auto revision=document.revision();require(document.begin("Cancel starter change"),"Starter property gesture could not start.");
+        require(document.update([](auto& effect){setLiteral(effect,stats::MovementSpeed,8);}),document.status());
+        require(document.dirty()&&document.revision()==revision&&*document.committed()==original,
+            "An uncommitted starter edit escaped its document.");
+        document.cancel();require(document.definition()==original&&!document.dirty()&&!document.canUndo(),"Cancel changed starter defaults or history.");
+        require(document.edit("Tune starter speed",[](auto& effect){setLiteral(effect,stats::MovementSpeed,7);}),document.status());
+        const auto changed=document.definition();require(document.dirty()&&changed.id==id,"Starter editing changed identity or failed to mark the document dirty.");
+        require(document.undo()&&document.definition()==original&&document.redo()&&document.definition()==changed,"Starter undo/redo lost its authored settings.");
+        require(document.save()&&!document.dirty()&&document.assetId()==id,document.status());
+        require(gameplayEffectAssetPath(project.root,id)==file&&loadGameplayEffectAsset(project.root,id)==changed&&read(file)!=originalBytes,
+            "Starter Save did not replace its own persisted definition.");
+        require(read(project.root/".crimson"/"asset-locations.json")==indexBefore,"Saving a starter rewrote the managed location index.");
+        const auto savedBytes=read(file);ensureEngineGameplayEffects(project.root);initializeContentStorage(project.root);ensureEngineGameplayEffects(project.root);
+        require(read(file)==savedBytes&&loadGameplayEffectAsset(project.root,id)==changed,"Initialization overwrote customized starter defaults.");
+        GameplayEffectDocument reopened(project.root);require(reopened.load(id)&&reopened.definition()==changed&&!reopened.externalFileChanged(),reopened.status());
+        require(reopened.edit("Discard starter change",[](auto& effect){setLiteral(effect,stats::MovementSpeed,9);})&&reopened.discard()&&
+            reopened.definition()==changed&&!reopened.dirty(),"Discard did not restore the starter's saved definition.");
+        auto external=changed;setLiteral(external,stats::MovementSpeed,6);saveGameplayEffectAsset(project.root,external);
+        require(reopened.externalFileChanged(),"An externally edited starter did not report a conflict.");
+        require(reopened.load(id)&&reopened.definition()==external,reopened.status());
+        const auto sourceBytes=read(file);require(reopened.save("Independent starter",true)&&reopened.assetId()!=id&&reopened.editable(),reopened.status());
+        require(read(file)==sourceBytes&&loadGameplayEffectAsset(project.root,id)==external,"Save As overwrote the source starter.");
+        writeFileAtomically(file,"{malformed starter");
+        rejects([&]{loadGameplayEffectAsset(project.root,id);},"A corrupt authored starter silently used compiled defaults.");
+        writeFileAtomically(file,sourceBytes);
+    }
+    // Copies add Content assets; saving each reserved starter itself does not
+    // replace its identity or move its registered Engine file.
+    for(const auto& id:{PlayerStartingEffectId,EnemyStartingEffectId})
+        require(gameplayEffectAssetPath(project.root,id).parent_path()==project.root/"Engine"/"gameplay","Starter Save moved its fixed managed file.");
+    require(!editableGameplayEffect(canonicalAssetId("builtin:material/default")),"Gameplay Effect editing unlocked another engine role.");
 }
 void replacementPolicy() {
     Project project;auto first=createGameplayEffectAsset(project.root,"First"),second=createGameplayEffectAsset(project.root,"Second");
@@ -91,6 +140,8 @@ void replacementPolicy() {
     policy.replace(deleted,{{first.id,second.id}});require(policy.resolveGameplayEffect(first.id)==second.id,"Typed effect replacement failed.");
     AssetReferenceManager cleared(project.root);cleared.replace(deleted,{});require(cleared.resolveGameplayEffect(first.id).empty(),"Cleared effect selected a hidden default.");
     AssetReferenceManager wrong(project.root);rejects([&]{wrong.replace(deleted,{{first.id,canonicalAssetId("builtin:navigation-agent/default")}});},"Effect replacement accepted another asset type.");
+    AssetReferenceManager protectedRole(project.root);const std::array<AssetEntry,1> starter{{{EnemyStartingEffectId,"Enemy Defaults",AssetKind::GameplayEffect}}};
+    rejects([&]{protectedRole.replace(starter,{});},"Editable starter defaults became deletable engine roles.");
 }
 }
-int main(){try{codecAndStorage();documentOwnership();replacementPolicy();std::cout<<"Gameplay Effect asset checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{codecAndStorage();documentOwnership();editableStarterDocuments();replacementPolicy();std::cout<<"Gameplay Effect asset checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

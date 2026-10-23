@@ -197,6 +197,7 @@ add_executable(crimson-renderer WIN32
     src/tools/CameraAuthoringControls.cpp
     src/tools/SceneOutlinerColor.cpp
     src/tools/ColliderInspector.cpp
+    src/tools/PrimitiveMeshInspector.cpp
     src/tools/AssetBrowser.cpp
     src/tools/AssetBrowserPaths.cpp
     src/tools/ParticleEditor.cpp
@@ -427,6 +428,11 @@ if(BUILD_TESTING)
     target_link_libraries(collider_inspector_tests PRIVATE crimson-scene imgui::imgui)
     target_compile_options(collider_inspector_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME collider_inspector_core COMMAND collider_inspector_tests)
+    add_executable(primitive_mesh_inspector_tests tests/primitive_mesh_inspector_tests.cpp src/tools/PrimitiveMeshInspector.cpp)
+    target_include_directories(primitive_mesh_inspector_tests PRIVATE src)
+    target_link_libraries(primitive_mesh_inspector_tests PRIVATE crimson-scene imgui::imgui)
+    target_compile_options(primitive_mesh_inspector_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME primitive_mesh_inspector_core COMMAND primitive_mesh_inspector_tests)
     add_executable(quader_bridge_tests tests/quader_bridge_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp)
     target_compile_definitions(quader_bridge_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_definitions(quader_bridge_tests PRIVATE CRIMSON_QUADER_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/quader")

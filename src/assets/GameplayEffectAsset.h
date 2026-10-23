@@ -9,6 +9,8 @@ namespace crimson {
 std::shared_ptr<const GameplayEffectAsset> playerStartingEffect();
 std::shared_ptr<const GameplayEffectAsset> enemyStartingEffect();
 std::shared_ptr<const GameplayEffectAsset> engineGameplayEffect(const std::string& id);
+// Starter effects keep their reserved identities while their game values remain editable.
+bool editableGameplayEffect(const std::string& id);
 void validateGameplayEffectAsset(const GameplayEffectAsset&);
 std::string serializeGameplayEffectAsset(const GameplayEffectAsset&);
 GameplayEffectAsset deserializeGameplayEffectAsset(std::string_view,const std::string& expectedId={});

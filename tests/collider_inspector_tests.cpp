@@ -62,6 +62,9 @@ void sourceInferenceAndFallbacks() {
     auto authored=*collision.collider;authored.size={3,4,5};authored.radius=2;authored.height=1;
     const auto mesh=colliderForShape(scene,2,authored,ColliderShape::Trimesh);
     require(mesh.source.id==BuiltinBoxModelId&&mesh.size==authored.size&&mesh.radius==2,"Trimesh did not infer its visual ancestor or preserve primitive fields.");
+    model.model=AssetRef<ModelAsset>{BuiltinSphereModelId};scene.apply({model,collision},{});
+    require(colliderForShape(scene,2,authored,ColliderShape::Trimesh).source.id==BuiltinSphereModelId,
+        "Trimesh did not retain the Sphere visual ancestor as its source.");
     const auto capsule=colliderForShape(scene,2,mesh,ColliderShape::Capsule);
     require(capsule.radius==2&&capsule.height==4&&capsule.source==mesh.source,"Capsule selection lost its source or violated height>=diameter.");
     require(colliderForShape(scene,2,capsule,ColliderShape::Sphere).height==4,"Changing shape discarded disconnected dimension fallbacks.");

@@ -16,6 +16,7 @@ struct CameraAuthoringControlsState {
 // Called immediately after each real property widget so the owning panel can
 // start/update/finish its scene transaction using that item's activation state.
 using CameraAuthoringCallback=std::function<void(CameraAuthoringControl,bool changed)>;
+// First-person cameras take orientation from their Player root.
 void drawCameraAuthoringControls(CameraAuthoringControlsState&,EntityId camera,CameraTemplate&,
-                                 const CameraAuthoringCallback&);
+                                 const CameraAuthoringCallback&,bool firstPerson=false);
 }

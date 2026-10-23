@@ -34,11 +34,21 @@ void GameplayEffectDocument::install(GameplayEffectAsset asset,bool saved) {
     validateGameplayEffectAsset(asset);
     asset.id=canonicalAssetId(asset.id);
     auto prepared=std::make_shared<const GameplayEffectAsset>(asset);
-    const auto fingerprint=saved && !isEngineAssetId(asset.id)?fileFingerprint(root_,asset.id):0;
+    bool persisted=saved;
+    if(saved && engineGameplayEffect(asset.id)) {
+        // Headless/new projects can expose a compiled starter before its file
+        // exists. Opening that seed stays clean; Save materializes its edits.
+        try { persisted=std::filesystem::exists(gameplayEffectAssetPath(root_,asset.id)); }
+        catch(const std::exception&) {
+            if(contentStorageReady(root_))throw;
+            persisted=false;
+        }
+    }
+    const auto fingerprint=persisted && editableGameplayEffect(asset.id)?fileFingerprint(root_,asset.id):0;
     working_=std::move(asset); saved_=working_; committed_=std::move(prepared);
     history_.clear(); cursor_=0; transaction_.reset();
     state_=nextState_++; savedState_=saved?state_:0; fingerprint_=fingerprint;
-    open_=true;persisted_=saved; ++revision_; ++previewRevision_;
+    open_=true;persisted_=persisted; ++revision_; ++previewRevision_;
 }
 bool GameplayEffectDocument::create(const std::string& name) {
     if (transaction_) { status_="Finish the current Gameplay Effect edit before creating another effect."; return false; }
@@ -91,7 +101,8 @@ bool GameplayEffectDocument::save(const std::string& name,bool saveAs) {
 bool GameplayEffectDocument::discard() {
     if (!open_) return false;
     transaction_.reset(); working_=saved_; history_.clear(); cursor_=0;
-    state_=nextState_++; savedState_=persisted_?state_:0;
+    const bool savedBaseline=savedState_!=0;
+    state_=nextState_++; savedState_=savedBaseline?state_:0;
     publish(); ++previewRevision_; status_="Discarded unsaved Gameplay Effect edits.";
     return true;
 }
@@ -107,7 +118,10 @@ bool GameplayEffectDocument::externalFileChanged() const {
         // Equal original seed bytes are safe; independently edited or corrupt
         // materializations require the ordinary explicit conflict resolution.
         if(contentStorageReady(root_))for(const auto& entry:storedAssetPaths(root_))if(entry.id==working_.id) {
-            try {return loadGameplayEffectAsset(root_,working_.id)!=saved_;}
+            try {
+                if(!std::filesystem::exists(entry.file))return false;
+                return loadGameplayEffectAsset(root_,working_.id)!=saved_;
+            }
             catch(...) {return true;}
         }
         return false;

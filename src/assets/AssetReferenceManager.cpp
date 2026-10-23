@@ -92,7 +92,7 @@ std::string AssetReferenceManager::resolveTexture(const std::string& id,bool nor
 std::string AssetReferenceManager::resolveMaterial(const std::string& id)const{const auto result=resolve(id);validateMaterialTarget(root_,result);return result;}
 std::string AssetReferenceManager::resolveModelMaterial(const std::string& id)const{
     const auto result=resolveMaterial(id);
-    if(result==DefaultParticleMaterialId)throw std::runtime_error("Box material replacement requires a Standard PBR material.");
+    if(result==DefaultParticleMaterialId)throw std::runtime_error("Model material replacement requires a Standard PBR material.");
     return result.empty()?std::string(DefaultMaterialId):result;
 }
 std::string AssetReferenceManager::resolveEnvironment(const std::string& id)const{const auto result=resolve(id);return result==StudioEnvironmentId?std::string{}:result;}

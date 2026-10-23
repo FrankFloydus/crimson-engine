@@ -82,7 +82,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     if(input.materialPreview)for(auto& model:input.extracted.models) {
         const auto& preview=*input.materialPreview;
         if(model.id!=preview.entityId)continue;
-        const auto asset=assets.findModel(model.assetId);
+        const auto asset=assets.findModel(model.assetId,model.primitive);
         if(!asset || preview.slot>=asset->materials.size() || preview.materialId.empty())break;
         // Keep requesting the authored packet so cancel/exit restores it at
         // once, and a pending shader/texture never hides the original mesh.
@@ -125,7 +125,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     auto scenePins=std::make_shared<ViewPins>();
     for(const auto& model:input.extracted.models) {
         const bool selected=std::find(input.selection.begin(),input.selection.end(),model.id)!=input.selection.end();
-        if(!selected)if(const auto metadata=assets.findModel(model.assetId))
+        if(!selected)if(const auto metadata=assets.findModel(model.assetId,model.primitive))
             if(!visibleBounds(resources.modelBounds(model,metadata),model.world,input.sceneCamera,input.sceneAspect))continue;
         auto prepared=resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,selected,
             ResourcePriority::Visible,input.sceneAspect,model.materialOverrides,0,&model);
@@ -157,7 +157,7 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
         const auto aspect=static_cast<float>(input.gameWidth)/input.gameHeight;
         auto gamePins=std::make_shared<ViewPins>();
         for(const auto& model:input.extracted.models) {
-            if(const auto metadata=assets.findModel(model.assetId))
+            if(const auto metadata=assets.findModel(model.assetId,model.primitive))
                 if(!visibleBounds(resources.modelBounds(model,metadata),model.world,*input.gameCamera,aspect))continue;
             auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,false,
                 ResourcePriority::Visible,aspect,model.materialOverrides,0,&model);

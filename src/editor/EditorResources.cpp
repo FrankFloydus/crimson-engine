@@ -155,7 +155,18 @@ void EditorResources::endFrame() {
             if (!entry.diagnostic.empty()) status_+=assets_.displayName(entry.sourceId)+": "+entry.diagnostic+"\n";
         }
     }
-    std::erase_if(entries_,[&](const auto& pair){return !pair.second.wanted && now-pair.second.used>resources_.config().idleGrace;});
+    std::erase_if(entries_,[&](const auto& pair) {
+        const auto& entry=pair.second;
+        if(entry.wanted)return false;
+        const bool variant=isBuiltinModel(entry.sourceId) && !entry.geometryAssetId.empty() && !isBuiltinModel(entry.geometryAssetId);
+        if(variant)retiredPrimitiveModels_[entry.geometryAssetId]=entry.geometrySource;
+        return variant || now-entry.used>resources_.config().idleGrace;
+    });
+    // Parameter drags create immutable geometry identities. The renderer's
+    // unstreamed cache is fixed storage, so retire abandoned variants here;
+    // Separate preparation owners and submitted frame/readback packets retain
+    // the same CPU geometry, protecting variants until every owner releases it.
+    collectPrimitiveModels();
     // The retention target controls evictable caches. Fixed render targets
     // (including shadows) must not evict the model/texture working set.
     const auto reserved=renderer_.thumbnailResidentBytes();
@@ -197,19 +208,20 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     // Geometry identity remains shared. Immutable binding packets are keyed by
     // the complete slot assignment so instances cannot overwrite each other.
     // Canonicalize trailing inherited slots; embedded separators retain slot order.
-    const auto key=materialPreparationKey(id,materialOverrides);
+    const auto asset=assets_.findModel(id,presentation?presentation->primitive:std::optional<PrimitiveMeshSettings>{});
+    const auto key=materialPreparationKey(asset?asset->id:id,materialOverrides);
     auto& entry=entries_[key];entry.sourceId=id;entry.wanted=true; entry.used=std::chrono::steady_clock::now();
     entry.failed=false;
     const auto retain=[&](std::shared_ptr<const PreparedEditorModel> model) {
         if (model) framePins_.push_back(model); return model;
     };
     if (assets_.references().resolve(id).empty()) { entry.current.reset(); entry.geometry.clear(); entry.failed=true; return {}; }
-    const auto asset=assets_.findModel(id);
     entry.diagnostic=assets_.modelDiagnostic(id);
     if (!asset) { entry.failed=!assets_.modelLoading(id); if (entry.diagnostic.empty()) entry.diagnostic=assets_.modelLoading(id) ? "Loading model..." : "Model is unavailable."; return retain(entry.current); }
     if (!entry.diagnostic.empty() && !assets_.modelLoading(id)) entry.failed=true;
     const auto revision=std::max<uint64_t>(1,assets_.modelRevision(id));
     entry.geometryAssetId=asset->id;
+    entry.geometrySource=asset;
     try {
         const auto presentedPose=presentation?pose(*presentation,asset):std::shared_ptr<const ModelPose>{};
         const auto fov=verticalFov(camera,renderer_,priority,aspect);
@@ -293,11 +305,13 @@ std::shared_ptr<const ModelPose> EditorResources::pose(const ExtractedModel& mod
     entry.seconds=model.animationSeconds;entry.loop=model.animation.loopOverride;entry.wanted=true;
     return value;
 }
-Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {
-    if(!asset)return {};
+Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& source) {
+    if(!source)return {};
+    const auto asset=model.primitive && source->id==model.assetId && isBuiltinModel(model.assetId)?
+        assets_.findModel(model.assetId,model.primitive):source;
     const auto value=pose(model,asset);
     auto bounds=value?value->bounds:asset->bounds;
-    const auto key=materialPreparationKey(model.assetId,model.materialOverrides);
+    const auto key=materialPreparationKey(asset->id,model.materialOverrides);
     auto [cached,inserted]=displacementExtents_.try_emplace(key);
     if(inserted)try {
         // Unknown material metadata cannot establish a safe displaced bound.
@@ -338,7 +352,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
     if(directional)allBounds.reserve(scene.models.size());
     if(directional)for(const auto& model:scene.models) {
         if(!model.visible)continue;
-        const auto asset=assets_.findModel(model.assetId);
+        const auto asset=assets_.findModel(model.assetId,model.primitive);
         const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
         if(model.castShadows)allBounds.push_back(bounds);
     }
@@ -348,7 +362,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
     std::vector<Aabb> footprintBounds;
     for(const auto& model:scene.models) {
         if(!model.visible || !model.castShadows)continue;
-        const auto asset=assets_.findModel(model.assetId);
+        const auto asset=assets_.findModel(model.assetId,model.primitive);
         const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
         footprintBounds.clear();footprintBounds.push_back(bounds);
         if(asset && asset->stream && !pose(model,asset)) {
@@ -396,7 +410,19 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
 void EditorResources::invalidate(const std::string& id) {
     for(auto& [key,entry]:entries_)if(entry.sourceId==id) {entry.geometry.clear();entry.geometryRevision=0;}
 }
-void EditorResources::clear() { entries_.clear();poses_.clear();displacementExtents_.clear(); framePins_.clear(); externalModels_.clear(); status_.clear(); }
+void EditorResources::collectPrimitiveModels() {
+    std::erase_if(retiredPrimitiveModels_,[&](const auto& entry) {
+        if(!entry.second.expired() || assets_.primitiveModelAlive(entry.first))return false;
+        renderer_.evictModel(entry.first);return true;
+    });
+}
+void EditorResources::clear() {
+    for(const auto& [key,entry]:entries_)
+        if(isBuiltinModel(entry.sourceId) && !entry.geometryAssetId.empty() && !isBuiltinModel(entry.geometryAssetId))
+            retiredPrimitiveModels_[entry.geometryAssetId]=entry.geometrySource;
+    entries_.clear();poses_.clear();displacementExtents_.clear();framePins_.clear();externalModels_.clear();status_.clear();
+    collectPrimitiveModels();
+}
 bool EditorResources::failed(const std::string& id) const {
     const auto found=entries_.find(id+std::string(1,'\0')); return found!=entries_.end() && found->second.failed;
 }

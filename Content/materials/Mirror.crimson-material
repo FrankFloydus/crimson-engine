@@ -1,0 +1,192 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 9,
+        "fromPin": 1,
+        "id": 8,
+        "toNode": 10,
+        "toPin": 8
+      },
+      {
+        "fromNode": 10,
+        "fromPin": 0,
+        "id": 9,
+        "toNode": 1,
+        "toPin": 11
+      }
+    ],
+    "nextLinkId": 10,
+    "nextNodeId": 11,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 2,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 1.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 0.0,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          723.0,
+          -7.0
+        ]
+      },
+      {
+        "id": 7,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -750.0,
+          0.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 9,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -29.6666259765625,
+          -55.33331298828125
+        ],
+        "texture": {
+          "image": "ce5567e1-9463-54f7-aa04-fdcfa20c9d21",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "alpha": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 10,
+        "image": {
+          "blendMode": 0,
+          "brightness": 0.0,
+          "contrast": 0.0,
+          "featureSize": 12.0,
+          "gamma": 0.5600000023841858,
+          "grayMode": 0,
+          "inputBlack": 0.2070000022649765,
+          "inputWhite": 1.0,
+          "noiseContrast": 0.5,
+          "noisePattern": 0,
+          "normalFlipY": false,
+          "normalStrength": 1.0,
+          "opacity": 1.0,
+          "outputBlack": 0.2529999911785126,
+          "outputWhite": 0.7139999866485596,
+          "radius": 0.0009765625,
+          "roughness": 0.5,
+          "seed": 0,
+          "sharpen": 1.0
+        },
+        "kind": 20,
+        "left": {
+          "type": 0,
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "name": "Levels",
+        "position": [
+          318.3333740234375,
+          193.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 13
+  },
+  "id": "b93da72a-168a-4d53-9b8d-1e15c981f78d",
+  "name": "New Material 4",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

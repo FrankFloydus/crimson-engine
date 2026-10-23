@@ -313,7 +313,7 @@ void inlineVisualTransform(const fs::path& root){
 
 class CameraUi {
 public:
-    explicit CameraUi(const fs::path& root):document(root) {
+    explicit CameraUi(const fs::path& root,bool firstPerson=true):document(root) {
         context_=ImGui::CreateContext();auto& io=ImGui::GetIO();io.IniFilename=nullptr;
         io.DisplaySize={960,640};io.DeltaTime=1.f/60;io.ConfigInputTrickleEventQueue=false;
         unsigned char* pixels{};int width{},height{};io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
@@ -323,7 +323,15 @@ public:
         require(sceneOutlinerRows(document.scene())==std::vector<SceneOutlinerRow>{{player,NoEntity}}&&
             sceneEntityOwner(document.scene(),camera)==player&&sceneEntityParts(document.scene(),player)==std::vector<EntityId>{player,camera},
             "Selecting the consolidated Player would expose a separate Camera row.");
+        if(!firstPerson) {
+            require(document.edit("Prepare generic actor camera controls",[&](auto& records,auto& properties) {
+                for(auto& actor:records)if(actor.id==player)actor.playerInput.reset();
+                properties.playerCharacter=NoEntity;
+            }),"Could not prepare generic actor camera controls.");
+        }
         playerMatrix=document.scene().find(player)->local;tick();tick();
+        require(shown[static_cast<std::size_t>(CameraAuthoringControl::Rotation)]==!firstPerson,
+            "Camera rotation controls did not follow the first-person camera policy.");
     }
     ~CameraUi(){ImGui::DestroyContext(context_);}
     void tick() {
@@ -334,8 +342,10 @@ public:
         ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({760,570});
         ImGui::Begin("Inspector",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
         auto value=capture();
+        shown.fill(false);
         drawCameraAuthoringControls(state,camera,value,[&](CameraAuthoringControl control,bool changed) {
             const auto index=static_cast<std::size_t>(control);
+            shown[index]=true;
             const auto low=ImGui::GetItemRectMin(),high=ImGui::GetItemRectMax();
             const float inputWidth=ImGui::CalcItemWidth();
             const bool vector=control==CameraAuthoringControl::Offset||control==CameraAuthoringControl::Rotation;
@@ -350,7 +360,7 @@ public:
             if(active==control&&ImGui::IsItemDeactivated()) {
                 document.commit();active.reset();
             }
-        });
+        },isFirstPersonCamera(document.scene(),camera));
         ImGui::End();ImGui::Render();
     }
     CameraTemplate capture()const {
@@ -380,6 +390,7 @@ public:
     Mat4 playerMatrix{};
     CameraAuthoringControlsState state;
     std::array<ImVec2,5> centers{};
+    std::array<bool,5> shown{};
     std::optional<CameraAuthoringControl> active;
 private:
     ImGuiContext* context_{};
@@ -388,12 +399,13 @@ bool closeMatrix(const Mat4& first,const Mat4& second) {
     for(std::size_t index=0;index<first.size();++index)if(std::abs(first[index]-second[index])>1e-5f)return false;
     return true;
 }
-void inlineOwnedCamera(const fs::path& root) {
-    CameraUi ui(root);
+void inlineOwnedCamera(const fs::path& root,bool firstPerson) {
+    CameraUi ui(root,firstPerson);
     const std::pair<CameraAuthoringControl,const char*> changes[]{
         {CameraAuthoringControl::Offset,"9"},{CameraAuthoringControl::Rotation,"-40"},
         {CameraAuthoringControl::Fov,"50"},{CameraAuthoringControl::Near,"0.2"},{CameraAuthoringControl::Far,"300"}};
     for(const auto& [control,text]:changes) {
+        if(firstPerson&&control==CameraAuthoringControl::Rotation)continue;
         const auto before=ui.capture();const auto history=ui.document.history().size();
         ui.text(control,text);require(ui.document.transactionActive(),"Inline camera committed before numeric entry was accepted.");
         const auto live=ui.capture();
@@ -411,11 +423,13 @@ void inlineOwnedCamera(const fs::path& root) {
         require(ui.document.redo(),"Inline camera change did not redo.");ui.tick();ui.unchangedOwner();
     }
     const auto before=ui.capture();const auto history=ui.document.history().size();
-    ui.text(CameraAuthoringControl::Rotation,"-75");ui.key(ImGuiKey_Escape);ui.unchangedOwner();
+    ui.text(firstPerson?CameraAuthoringControl::Fov:CameraAuthoringControl::Rotation,firstPerson?"75":"-75");ui.key(ImGuiKey_Escape);ui.unchangedOwner();
     const auto canceled=ui.capture();
-    require(!ui.document.transactionActive()&&ui.document.history().size()==history&&closeMatrix(canceled.worldBasis,before.worldBasis),
-        "Escape did not cancel the child camera rotation gesture without adding history.");
-    ui.tick();require(closeMatrix(ui.capture().worldBasis,before.worldBasis),"The camera rotation buffer reapplied a canceled value.");
+    require(!ui.document.transactionActive()&&ui.document.history().size()==history&&canceled.lens==before.lens&&closeMatrix(canceled.worldBasis,before.worldBasis),
+        "Escape did not cancel the child camera gesture without adding history.");
+    ui.tick();require(ui.capture().lens==before.lens&&closeMatrix(ui.capture().worldBasis,before.worldBasis),"The camera buffer reapplied a canceled value.");
+    require(ui.shown[static_cast<std::size_t>(CameraAuthoringControl::Rotation)]==!firstPerson,
+        "Camera edits changed whether independent camera rotation is available.");
 }
 
 class ColorPopupUi {
@@ -652,7 +666,7 @@ int main(){
     try{
         Project project;directEntitySelectionAndSections(project.root);directEnvironmentProperties(project.root);
         preserveRealHierarchy(project.root);reparentedPlayerChildrenStaySelectable(project.root);inlineVisualTransform(project.root);
-        inlineOwnedCamera(project.root);entityColorPopup(project.root);enemyInspector(project.root);firstPersonInspector(project.root);
+        inlineOwnedCamera(project.root,true);inlineOwnedCamera(project.root,false);entityColorPopup(project.root);enemyInspector(project.root);firstPersonInspector(project.root);
         std::cout<<"Direct entity selection, retained hierarchy, complete Inspector sections, owned visual/Camera gestures and entity colors passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

@@ -1,0 +1,200 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 1,
+        "id": 2,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 4,
+        "fromPin": 0,
+        "id": 3,
+        "toNode": 1,
+        "toPin": 11
+      },
+      {
+        "fromNode": 5,
+        "fromPin": 0,
+        "id": 4,
+        "toNode": 1,
+        "toPin": 12
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 1,
+        "id": 5,
+        "toNode": 1,
+        "toPin": 14
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 5,
+        "id": 6,
+        "toNode": 1,
+        "toPin": 17
+      }
+    ],
+    "nextLinkId": 7,
+    "nextNodeId": 7,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "attenuationColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "attenuationDistance": 1.0,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "height": 0.5,
+          "ior": 1.5,
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "refraction": false,
+          "roughness": 0.8999999761581421,
+          "shading": 0,
+          "specular": 0.5,
+          "tessellation": {
+            "amount": 0.10000000149011612,
+            "enabled": false,
+            "heightLod": 0.0,
+            "maxFactor": 8,
+            "midpoint": 0.5
+          },
+          "thickness": 0.0,
+          "transmission": 1.0
+        },
+        "position": [
+          700.0,
+          80.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -750.0,
+          0.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -450.0,
+          0.0
+        ],
+        "texture": {
+          "image": "c57aec15-f049-5253-8bc1-1d20d2a4869b",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 4,
+        "kind": 3,
+        "name": "Roughness",
+        "position": [
+          -120.0,
+          390.0
+        ],
+        "range": [
+          0.0,
+          1.0
+        ],
+        "scalar": 0.8999999761581421
+      },
+      {
+        "id": 5,
+        "kind": 3,
+        "name": "Metallic",
+        "position": [
+          -120.0,
+          620.0
+        ],
+        "range": [
+          0.0,
+          1.0
+        ],
+        "scalar": 0.0
+      },
+      {
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 6,
+        "kind": 4,
+        "name": "Emissive Color",
+        "position": [
+          -120.0,
+          1310.0
+        ]
+      }
+    ],
+    "version": 13
+  },
+  "id": "b57f88aa-d530-53f1-9dae-ff9a53d4760d",
+  "name": "tripo_mat_5889793b-432b-47b0-ba33-fa229275c2d1",
+  "originModel": "e6f20144-8525-5ec1-b10a-76d428fd8ccc",
+  "type": "crimson-material",
+  "version": 6
+}

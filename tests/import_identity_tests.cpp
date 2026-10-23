@@ -464,6 +464,52 @@ void collisionResourceIntegration() {
         CollisionMeshResult builtin;
         until([&]{builtin=collisions.query(BuiltinBoxModelId);return builtin.current;},[](bool ready){return ready;},"Builtin Box Trimesh collision did not prepare.");
         require(builtin.mesh&&builtin.mesh->indices.size()==36,"Builtin Box collision omitted its original triangle geometry.");
+        const auto sphere=library.findModel(BuiltinSphereModelId);
+        require(sphere && library.peekModel(BuiltinSphereModelId)==sphere && library.findModel(BuiltinSphereModelId)==sphere &&
+            library.displayName(BuiltinSphereModelId)=="Sphere","AssetLibrary did not expose shared built-in Sphere geometry and its name.");
+        require(library.modelRevision(BuiltinSphereModelId)>0 && library.modelFingerprint(BuiltinSphereModelId)!=0 &&
+            library.modelFingerprint(BuiltinSphereModelId)!=library.modelFingerprint(BuiltinBoxModelId) &&
+            library.modelDependencies(BuiltinSphereModelId).empty() && !library.modelLoading(BuiltinSphereModelId) && library.modelDiagnostic(BuiltinSphereModelId).empty(),
+            "Sphere resource identity depends on imported files or collides with Box invalidation.");
+        CollisionMeshResult sphereCollision;
+        until([&]{sphereCollision=collisions.query(BuiltinSphereModelId);return sphereCollision.current;},[](bool ready){return ready;},
+            "Builtin Sphere Trimesh collision did not prepare.");
+        require(sphereCollision.mesh && sphereCollision.mesh->indices==sphere->primitives.front().indices &&
+            sphereCollision.mesh->positions.size()==sphere->primitives.front().vertices.size(),
+            "Builtin Sphere collision omitted its original geometry.");
+        PrimitiveMeshSettings coarseSettings;coarseSettings.radius=2;coarseSettings.sides=5;coarseSettings.rings=3;
+        auto fineSettings=coarseSettings;fineSettings.sides=16;fineSettings.rings=8;
+        const auto coarseSphere=library.findModel(BuiltinSphereModelId,coarseSettings),fineSphere=library.findModel(BuiltinSphereModelId,fineSettings);
+        require(coarseSphere && fineSphere && coarseSphere!=fineSphere && coarseSphere->id!=fineSphere->id &&
+            coarseSphere->id!=BuiltinSphereModelId && library.findModel(BuiltinSphereModelId,coarseSettings)==coarseSphere &&
+            library.peekModel(BuiltinSphereModelId,fineSettings)==fineSphere,
+            "Concurrent Sphere variants collided or failed to reuse their immutable AssetLibrary entries.");
+        require(coarseSphere->primitives.front().indices.size()<fineSphere->primitives.front().indices.size() &&
+            coarseSphere->bounds.maximum==Vec3{2,2,2} && sphere->bounds.maximum==Vec3{.5f,.5f,.5f} &&
+            library.findModel(BuiltinSphereModelId)==sphere && library.resolvedModelMaterials(*coarseSphere).size()==1,
+            "Preparing a Sphere variant changed another variant/default or lost its material binding.");
+        auto inactiveSettings=fineSettings;inactiveSettings.height=9;
+        require(library.findModel(BuiltinSphereModelId,inactiveSettings)==fineSphere,"Inactive Sphere dimensions prevented variant cache reuse.");
+        const auto cylinder=library.findModel(BuiltinCylinderModelId,coarseSettings);
+        require(cylinder && cylinder->name=="Cylinder" && cylinder->id!=coarseSphere->id &&
+            library.peekModel(BuiltinCylinderModelId,coarseSettings)==cylinder &&
+            library.modelFingerprint(BuiltinCylinderModelId)!=library.modelFingerprint(BuiltinSphereModelId),
+            "Cylinder variant reused a Sphere entry or omitted its source fingerprint.");
+        PrimitiveMeshSettings transientSettings;transientSettings.radius=3.125f;transientSettings.sides=11;transientSettings.rings=13;
+        std::weak_ptr<const ModelAsset> retiredVariant;std::string transientGeometryId;
+        {
+            const auto temporary=library.findModel(BuiltinSphereModelId,transientSettings);
+            require(bool(temporary),"Transient primitive cache fixture did not prepare.");
+            transientGeometryId=temporary->id;retiredVariant=temporary;
+            require(library.primitiveModelAlive(transientGeometryId),"A strongly held primitive variant was reported dead.");
+        }
+        require(retiredVariant.expired()&&!library.primitiveModelAlive(transientGeometryId),"The primitive cache retained an unused variant or reported an expired geometry owner alive.");
+        {
+            const auto recreated=library.findModel(BuiltinSphereModelId,transientSettings);
+            require(recreated && recreated->id==transientGeometryId && library.primitiveModelAlive(transientGeometryId) &&
+                (retiredVariant.owner_before(recreated)||recreated.owner_before(retiredVariant)),
+                "Recreating a primitive variant failed to restore its stable identity with a fresh geometry owner.");
+        }
         until([&]{accepted=collisions.query(imported->id);return accepted.current;},[](bool ready){return ready;},"Original collision resource failed to load/recover: "+library.modelDiagnostic(imported->id));
         requireOriginalCollision(accepted);
         if(damageCache) {

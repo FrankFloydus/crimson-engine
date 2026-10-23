@@ -46,6 +46,9 @@ std::shared_ptr<const GameplayEffectAsset> enemyStartingEffect(){static const au
 std::shared_ptr<const GameplayEffectAsset> engineGameplayEffect(const std::string& id) {
     if(id==PlayerStartingEffectId)return playerStartingEffect();if(id==EnemyStartingEffectId)return enemyStartingEffect();return {};
 }
+bool editableGameplayEffect(const std::string& id) {
+    return id==PlayerStartingEffectId || id==EnemyStartingEffectId || !isEngineAssetId(id);
+}
 void validateGameplayEffectAsset(const GameplayEffectAsset& asset) {
     if(!isAssetUuid(asset.id)||asset.name.empty()||asset.name.size()>1024||asset.name.find_first_not_of(" \t\r\n")==std::string::npos)
         throw std::runtime_error("Gameplay Effect requires a UUID and a nonempty name of at most 1024 bytes.");
@@ -97,14 +100,22 @@ std::filesystem::path gameplayEffectAssetPath(const std::filesystem::path& root,
     if(file.extension()!=".crimson-effect")throw std::runtime_error("Gameplay Effect reference has an incompatible asset kind.");return file;
 }
 GameplayEffectAsset loadGameplayEffectAsset(const std::filesystem::path& root,const std::string& id) {
-    if(const auto engine=engineGameplayEffect(id))return *engine;const auto file=gameplayEffectAssetPath(root,id);
+    const auto starter=engineGameplayEffect(id);
+    if(starter && !contentStorageReady(root))return *starter;
+    const auto file=gameplayEffectAssetPath(root,id);
+    if(starter && !std::filesystem::exists(file))return *starter;
     if(std::filesystem::file_size(file)>MaximumEffectBytes)throw std::runtime_error("Gameplay Effect exceeds 1 MiB.");
     std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read Gameplay Effect.");
     return deserializeGameplayEffectAsset(std::string{std::istreambuf_iterator<char>(input),{}},id);
 }
 void saveGameplayEffectAsset(const std::filesystem::path& root,const GameplayEffectAsset& asset) {
-    if(isEngineAssetId(asset.id))throw std::runtime_error("Engine Gameplay Effects are read-only.");
+    if(!editableGameplayEffect(asset.id))throw std::runtime_error("This engine asset cannot be saved as a Gameplay Effect.");
     if(!contentStorageReady(root))initializeContentStorage(root);const auto contents=serializeGameplayEffectAsset(asset);
+    if(engineGameplayEffect(asset.id)) {
+        // These two registered role assets are editable game defaults. Their
+        // fixed identities/locations do not require an index mutation.
+        writeFileAtomically(gameplayEffectAssetPath(root,asset.id),contents);return;
+    }
     const auto entries=storedAssetPaths(root);const auto existing=std::find_if(entries.begin(),entries.end(),[&](const auto& entry){return entry.id==asset.id;});
     const auto file=existing==entries.end()?checkedContentPath(root,root/"Content"/"Gameplay"/fromUtf8(asset.id+".crimson-effect")):gameplayEffectAssetPath(root,asset.id);
     (void)checkedContentPath(root,file);if(existing==entries.end()&&std::filesystem::exists(file))throw std::runtime_error("An unregistered Gameplay Effect destination already exists.");

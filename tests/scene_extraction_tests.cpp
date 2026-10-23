@@ -145,6 +145,32 @@ void orientedSelectionBoxes() {
     const auto edge=math::transformDirection(chestBoxes[0].world,{chestLocal.maximum[0]-chestLocal.minimum[0],0,0});
     require(std::abs(math::length(edge)-1.74419023)<1e-4,"Chest selection edge no longer follows its transformed mesh axes.");
 }
+void authoredPrimitiveBounds() {
+    Scene scene;Mat4 shear;shear[4]=.25f;
+    auto parent=entity(1,"Parent",0,math::translation({4,2,-3})*shear*math::scaling({-2,3,.5f}));
+    auto box=entity(2,"Box",1,math::translation({2,0,1})*math::eulerRotationXYZ({.1f,.4f,.2f}));
+    box.model=AssetRef<ModelAsset>{BuiltinBoxModelId};box.primitive.emplace();box.primitive->size={2,3,4};
+    auto sphere=entity(3,"Sphere",0,math::translation({-4,1,2}));
+    sphere.model=AssetRef<ModelAsset>{BuiltinSphereModelId};sphere.primitive.emplace();sphere.primitive->radius=2;
+    auto cylinder=entity(4,"Cylinder",0,math::translation({8,0,3}));
+    cylinder.model=AssetRef<ModelAsset>{BuiltinCylinderModelId};cylinder.primitive.emplace();cylinder.primitive->radius=1.5f;cylinder.primitive->height=5;
+    scene.apply({parent,box,sphere,cylinder},{});
+    const std::array<Aabb,3> localBounds{{{{-1,-1.5f,-2},{1,1.5f,2},true},{{-2,-2,-2},{2,2,2},true},{{-1.5f,-2.5f,-1.5f},{1.5f,2.5f,1.5f},true}}};
+    unsigned queries{};
+    const ModelBoundsQuery query=[&](const std::string&)->std::optional<Aabb>{++queries;return Aabb{{-100,-100,-100},{100,100,100},true};};
+    for(std::size_t index=0;index<localBounds.size();++index) {
+        const auto id=static_cast<EntityId>(index+2);const auto world=*scene.worldTransform(id);
+        const auto boxes=selectionBoxes(scene,std::array<EntityId,1>{id},query);
+        require(boxes.size()==1 && close(boxes[0].local.minimum,localBounds[index].minimum) && close(boxes[0].local.maximum,localBounds[index].maximum) && close(boxes[0].world,world),
+            "Primitive selection outline ignored authored geometry dimensions or applied its transform twice.");
+        const auto bounds=selectionBounds(scene,std::array<EntityId,1>{id},query),expected=math::transformBounds(localBounds[index],world);
+        require(bounds.valid && close(bounds.minimum,expected.minimum) && close(bounds.maximum,expected.maximum),
+            "Primitive focus bounds ignored authored dimensions under affine parenting.");
+    }
+    require(queries==0,"Built-in primitive bounds depended on imported model readiness.");
+    const auto extracted=extractScene(scene);
+    for(const auto& model:extracted.models)require(model.primitive==scene.find(model.id)->primitive,"Render extraction lost per-entity primitive dimensions.");
+}
 void lightOrientation() {
     const double quarter=std::numbers::pi/2;
     const std::array<std::pair<Vec3,Vec3>,3> axes{{
@@ -513,6 +539,6 @@ void collisionFaces() {
 }
 }
 int main() {
-    try { run(); orientedSelectionBoxes();lightOrientation(); proceduralSunExtraction();independentActorOwnership();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); orientedSelectionBoxes();authoredPrimitiveBounds();lightOrientation(); proceduralSunExtraction();independentActorOwnership();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

@@ -48,6 +48,9 @@ bool CameraPilot::setPiloting(SceneDocument& document,Camera& viewport,bool enab
         if(!finishGesture(document,viewport))return false;
         piloting_=false;sync(document,viewport);lastView_=viewport;status_.clear();return true;
     }
+    if(isFirstPersonCamera(document.scene(),camera_)) {
+        status_="Rotate the Player root to orient its first-person camera.";return false;
+    }
     if(piloting_)return true;
     if(document.transactionActive()){status_="Finish the active scene edit before piloting.";return false;}
     if(!sceneCameraLocalTransform(document.scene(),camera_,viewport)) {

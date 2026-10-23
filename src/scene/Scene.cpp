@@ -119,7 +119,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation && a.visible==b.visible &&
-        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading;
+        a.outlinerStyle==b.outlinerStyle && a.meshShading==b.meshShading && a.primitive==b.primitive;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -150,6 +150,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.lightingScopes=model->lightingScopes;
         record.modelAnimation=model->animation;
         record.meshShading=model->meshShading;
+        record.primitive=model->primitive;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
@@ -261,6 +262,8 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Entity local transform must be a finite affine matrix.");
         if (record.model && !isBuiltinModel(record.model->id) && (isEngineAssetId(record.model->id) || record.model->id.starts_with("builtin:") || !safeReference(record.model->id)))
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
+        if(record.primitive && (!record.model || !validPrimitiveMeshSettings(record.model->id,*record.primitive)))
+            throw std::runtime_error("Primitive geometry requires a built-in mesh, finite dimensions from 0.001 to 100000 meters, sides from 3 to 256 and rings from 2 to 256.");
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
         if(!validMeshShading(record.meshShading))
@@ -278,7 +281,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if(!record.modelMaterials.empty() && !record.model)
             throw std::runtime_error("Material slot assignment requires a model entity.");
         if(record.model && isBuiltinModel(record.model->id) && record.modelMaterials.size()>1)
-            throw std::runtime_error("The built-in Box has only one material slot.");
+            throw std::runtime_error("Built-in meshes have only one material slot.");
         for(const auto& material:record.modelMaterials)if(!material.empty()) {
             const auto& id=material.id;
             const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));
@@ -509,7 +512,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
@@ -591,13 +594,27 @@ bool Scene::resolveCameraFollow() {
         const auto parentWorld=parent?worldTransform(parent):std::optional<Mat4>{Mat4{}};
         const auto inverse=parentWorld?math::inverse(*parentWorld):std::nullopt;
         if(!target || !inverse)throw std::runtime_error("Cannot resolve camera follow through an invalid transform.");
-        const auto world=math::withAffinePosition(follow.worldBasis,math::transformPoint(*target,{0,0,0})+follow.offset);
+        const auto basis=isFirstPersonCamera(*this,id)?firstPersonCameraBasis(*target):follow.worldBasis;
+        const auto world=math::withAffinePosition(basis,math::transformPoint(*target,{0,0,0})+follow.offset);
         auto& local=registry_.get<Transform>(entity).local;
         const auto next=world?std::optional<Mat4>{*inverse * *world}:std::nullopt;
         if(!next || !math::finite(*next) || !math::isAffine(*next))throw std::runtime_error("Camera follow produces a nonfinite transform.");
         if(*next!=local){local=*next;changed=true;}
     }
     return changed;
+}
+
+bool isFirstPersonCamera(const Scene& scene,EntityId camera) {
+    const auto record=scene.find(camera);
+    if(!record || !record->camera || !record->cameraFollow || record->parent!=record->cameraFollow->target)return false;
+    const auto target=scene.find(record->cameraFollow->target);
+    return target && target->actor && target->playerInput;
+}
+
+Mat4 firstPersonCameraBasis(const Mat4& rootWorld) {
+    const auto forward=math::transformDirection(rootWorld,{0,0,-1});
+    const auto up=math::transformDirection(rootWorld,{0,1,0});
+    return math::inverse(math::lookAt({},forward,up)).value_or(Mat4{});
 }
 
 } // namespace crimson

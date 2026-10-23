@@ -3,6 +3,7 @@
 #include "math/Math.h"
 #include "CollisionMesh.h"
 #include "SceneComponentKind.h"
+#include "PrimitiveMesh.h"
 #include "crimson-renderer/RenderTypes.h"
 #include <crimson/renderer/forward/MeshShading.h>
 #include "resources/AssetRef.h"
@@ -47,6 +48,7 @@ struct ModelReference {
     SurfaceLightingScopes lightingScopes{};
     SceneModelAnimation animation{};
     MeshShading meshShading{MeshShading::UseMeshNormals};
+    std::optional<PrimitiveMeshSettings> primitive;
 };
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
@@ -175,7 +177,7 @@ struct SceneCamera {
 struct SceneCameraFollow {
     EntityId target{NoEntity};
     Vec3 offset{}; // World-space positional offset, independent of target rotation.
-    Mat4 worldBasis{}; // Translation-free full affine world basis, including stretch/reflection.
+    Mat4 worldBasis{}; // Translation-free generic affine basis; FPS facing belongs to the Player root.
     bool operator==(const SceneCameraFollow&) const = default;
 };
 struct SceneOutlinerStyle {
@@ -219,6 +221,7 @@ struct EntityRecord {
     bool visible{true}; // Authored rendering visibility, inherited by descendants.
     std::optional<SceneOutlinerStyle> outlinerStyle;
     MeshShading meshShading{MeshShading::UseMeshNormals};
+    std::optional<PrimitiveMeshSettings> primitive;
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);
@@ -275,6 +278,11 @@ private:
 };
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b);
+// A Player's following child camera faces the root's local -Z direction.
+// Input enablement and active-camera selection do not change authored placement.
+bool isFirstPersonCamera(const Scene&,EntityId camera);
+// Unit eye frame aligned with the root's transformed -Z and +Y axes.
+Mat4 firstPersonCameraBasis(const Mat4& rootWorld);
 bool sameProperties(const SceneProperties& a, const SceneProperties& b);
 bool sameEnvironment(const SceneEnvironment& a, const SceneEnvironment& b);
 // No active entity resolves to the built-in studio environment and exposure 1.

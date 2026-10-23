@@ -110,7 +110,7 @@ int run(const AppOptions& options) {
     const auto windowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
         (options.hidden || persistWindow ? SDL_WINDOW_HIDDEN : 0);
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
-        SDL_CreateWindow("crimson-renderer | Crimson Engine", static_cast<int>(options.width),
+        SDL_CreateWindow("Crimson Engine", static_cast<int>(options.width),
                          static_cast<int>(options.height), windowFlags), &SDL_DestroyWindow);
     if (!window) throw std::runtime_error(std::string("SDL window creation failed: ") + SDL_GetError());
     SDL_SetWindowMinimumSize(window.get(), 640, 480);
