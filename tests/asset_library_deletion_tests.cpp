@@ -8,6 +8,7 @@
 #include "assets/MaterialAsset.h"
 #include "assets/BuiltinGeometry.h"
 #include "assets/GrungeGenerator.h"
+#include <crimson/renderer/forward/DecalRenderTypes.h>
 #include "resources/TextureStreamer.h"
 #include "resources/StreamingModel.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
@@ -1320,7 +1321,7 @@ void gameplayEffectDeletion() {
     SceneDocument active(p.root);const auto actor=active.createEnemy("Saved effect owner");auto value=*active.scene().find(actor);
     value.effects->starting=refs({first->id,middle->id,first->id,replacement->id});require(active.updateEntity(actor,value)&&active.save("Effect owners"),active.status());
     const auto currentFormat=nlohmann::json::parse(read(sceneAssetPath(p.root,active.assetId())));
-    require(currentFormat.at("version")==23&&std::none_of(currentFormat.at("entities").begin(),currentFormat.at("entities").end(),[](const auto& entity){return entity.contains("attributes");}),
+    require(currentFormat.at("version")==24&&std::none_of(currentFormat.at("entities").begin(),currentFormat.at("entities").end(),[](const auto& entity){return entity.contains("attributes");}),
         "Current scene wrote an authored attribute membership/value table.");
     SceneDocument other(p.root);const auto otherActor=other.createEnemy("Other owner");value=*other.scene().find(otherActor);
     value.effects->starting=refs({first->id,first->id});require(other.updateEntity(otherActor,value)&&other.save("Other effects"),other.status());
@@ -2254,9 +2255,49 @@ void animationAssetLibrary() {
     require(!hasAsset(library,model->id)&&!hasAsset(library,second)&&!active.scene().find(entity),"Deleting a model with all its clips left source-dependent assets behind.");
     resources.stop();
 }
+
+void decalAssetLibraryDeletion() {
+    Project project;auto surface=createDecalAsset(project.root,"Masked wetness");auto replacement=createDecalAsset(project.root,"Replacement wetness");
+    const std::string legacyImage="assets/textures/decal-coverage.png";const auto image=canonicalAssetId(legacyImage);
+    model_test::writeBytes(fixturePath(project.root,legacyImage),model_test::png(2,2,{255,255,255,255,128,128,128,128,64,64,64,64,0,0,0,0}));
+    surface.coverageTexture.id=image;surface.roughnessEnabled=true;surface.roughness=.15f;saveDecalAsset(project.root,surface);
+    replacement.roughnessEnabled=true;replacement.roughness=.3f;saveDecalAsset(project.root,replacement);
+    SceneDocument active(project.root);const auto receiver=active.createBox("Receiver");SceneDecal decal;decal.asset.id=surface.id;
+    decal.seed.receiver=receiver;decal.seed.modelId=active.scene().find(receiver)->model->id;decal.seed.fingerprint=123;decal.seed.localNormal={0,1,0};
+    const auto entity=active.createDecal(decal,"Wrapped patch",math::translation({1,2,3}));const auto light=active.createPointLight("Saved light");require(active.save("Decal references"),active.status());
+    const auto savedScene=read(resolveAssetPath(project.root,active.assetId()));auto changed=*active.scene().find(light);changed.name="Unrelated unsaved edit";require(active.updateEntity(light,changed),active.status());
+    ResourceManager resources;AssetLibrary library(project.root,&resources);require(hasAsset(library,surface.id)&&library.findDecal(surface.id),"Decal catalog/lookup omitted its native surface.");
+    const auto initialCatalogRevision=library.catalogRevision(),initialDecalRevision=library.decalRevision(surface.id);
+    auto parameterEdit=surface;parameterEdit.roughness=.21f;library.publishDecal(std::make_shared<const DecalAsset>(parameterEdit));
+    require(library.catalogRevision()>initialCatalogRevision&&library.decalRevision(surface.id)>initialDecalRevision,
+        "A committed decal parameter edit did not invalidate dependent preview cards.");
+    const auto editedCatalogRevision=library.catalogRevision(),editedDecalRevision=library.decalRevision(surface.id);
+    library.publishDecal(std::make_shared<const DecalAsset>(parameterEdit));
+    require(library.catalogRevision()==editedCatalogRevision&&library.decalRevision(surface.id)==editedDecalRevision,
+        "Publishing an unchanged decal invalidated stable preview generations.");
+    library.publishDecal(std::make_shared<const DecalAsset>(surface));
+    const auto revision=library.decalRevision(surface.id);const auto texturePlan=library.planDeletion({image},&active);
+    require(texturePlan.error.empty()&&texturePlan.needsReferenceWarning()&&std::any_of(texturePlan.warningUsages.begin(),texturePlan.warningUsages.end(),[&](const auto& usage){return usage.ownerId==surface.id;}),"Deleting decal coverage omitted its surviving surface owner warning.");
+    finishDeletion(library,resources,texturePlan,{},&active);const auto cleared=loadDecalAsset(project.root,surface.id);
+    require(cleared.coverageTexture.empty()&&!cleared.colorEnabled&&!cleared.normalEnabled&&!cleared.roughnessEnabled,"Deleted coverage became an unmasked decal instead of disabling its influence.");
+    require(library.decalRevision(surface.id)>revision&&library.findDecal(surface.id)&&!library.findDecal(surface.id)->roughnessEnabled,"Texture deletion did not publish the replacement decal generation.");
+    const auto prepared=library.preparedDecalMaterial(surface.id);require(prepared->ready&&prepared->current&&prepared->render&&!prepared->render->colorEnabled&&!prepared->render->normalEnabled&&!prepared->render->roughnessEnabled,"Disabled decal material demanded missing textures or retained old coverage.");
+    require(active.dirty()&&active.scene().find(light)->name==changed.name&&read(resolveAssetPath(project.root,active.assetId()))==savedScene,"Decal texture deletion changed unrelated scene bytes or unsaved edits.");
+    auto plan=library.planDeletion({surface.id},&active);require(plan.error.empty()&&plan.needsReferenceWarning()&&plan.clearsActiveHistory,"Deleting a decal asset omitted saved scene/history impact.");
+    finishDeletion(library,resources,plan,{{surface.id,replacement.id}},&active);
+    require(active.scene().find(entity)->decal->asset.id==replacement.id&&active.scene().find(entity)->decal->seed==decal.seed&&active.scene().find(entity)->local==math::translation({1,2,3}),"Decal replacement lost scene placement or surface provenance.");
+    require(active.dirty()&&active.scene().find(light)->name==changed.name&&active.history().size()==0,"Global decal replacement changed unrelated unsaved edits or retained invalid undo history.");
+    const auto saved=readSceneSnapshot(project.root,active.assetId());require(record(saved,entity).decal->asset.id==replacement.id,"Saved scene kept a deleted decal reference.");
+    library.protectDecalDocument(replacement.id);plan=library.planDeletion({replacement.id},&active);require(!library.deleteAssets(plan,{},&active)&&!library.deletionPending()&&fs::is_regular_file(decalAssetPath(project.root,replacement.id)),"Open decal document did not protect its source asset.");
+    library.protectDecalDocument({});plan=library.planDeletion({replacement.id},&active);finishDeletion(library,resources,plan,{},&active);
+    require(active.scene().find(entity)->decal&&active.scene().find(entity)->decal->asset.empty()&&active.scene().find(entity)->decal->seed==decal.seed,"Deleting the last surface destroyed the repairable decal entity.");
+    require(record(readSceneSnapshot(project.root,active.assetId()),entity).decal->asset.empty(),"Saved scene did not clear the deleted decal surface.");resources.stop();
+}
+
 }
 
 int main(int argc,char** argv){try{
+    if(argc==2&&std::string(argv[1])=="--decal-assets") {decalAssetLibraryDeletion();std::cout<<"Decal typed assets, coverage deletion, replacement and scene/history retention passed.\n";return 0;}
     if(argc==2&&std::string(argv[1])=="--animation-assets") {
         animationAssetLibrary();std::cout<<"Animation import, authoring retention, typed references and transactional deletion passed.\n";return 0;
     }

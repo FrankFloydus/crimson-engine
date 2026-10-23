@@ -391,7 +391,7 @@ void sourceHiddenMeshesRemainEditable() {
 void directionalCompatibilityAndMeshDefaults() {
     Project project;SceneDocument document(project.root);const auto sun=document.createDirectionalLight();
     require(document.scene().find(sun)->directional->castShadows,"New directional lights must enable shadows.");
-    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==23,"New scenes did not use schema 23.");
+    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==24,"New scenes did not use schema 24.");
     serialized["version"]=8;
     for(auto& entity:serialized["entities"])if(entity.contains("directional")) {
         entity["directional"].erase("castShadows");entity["directional"].erase("shadowDistance");

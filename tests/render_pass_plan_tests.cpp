@@ -564,7 +564,7 @@ void ssrContracts() {
         const auto slots=renderViewPassSlots(purpose);
         const std::array<std::uint16_t,5> expectedTrace{116,372,338,162,300};
         const auto first=expectedTrace[static_cast<std::size_t>(purpose)];
-        check(RenderViewLayoutVersion==3&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
+        check(RenderViewLayoutVersion==4&&slots.ssr_prepare==first&&slots.ssr_trace==first&&slots.ssr_reconstruct==first+1&&
             slots.ssr_opaque==first+2&&slots.refraction_capture==first+3&&slots.refraction_capture<slots.transparent,
             "SSR reconstruction escaped reserved view gaps or changed the numeric profile layout.");
         check(plan.has(Kind::DepthPrepass)&&!plan.has(Kind::RefractionDepth)&&plan.find(Kind::DepthPrepass)->physicalView<plan.find(Kind::Background)->physicalView,

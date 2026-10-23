@@ -8,9 +8,10 @@
 #include <vector>
 
 namespace crimson {
-inline constexpr unsigned AssetPreviewImageVersion=12,AssetPreviewIndexVersion=2;
+inline constexpr unsigned AssetPreviewImageVersion=13,AssetPreviewIndexVersion=3;
 struct PreviewMaterialFingerprint { std::string id; std::uint64_t fingerprint{}; };
 struct PreviewAnimationFingerprint { std::string id; std::uint64_t fingerprint{}; };
+struct PreviewDecalFingerprint { std::string id; std::uint64_t fingerprint{}; };
 struct PreviewSourceLocation { std::string id; std::filesystem::path file; };
 struct CachedAssetPreview {
     std::uint64_t signature{},shaderSignature{},policyFingerprint{};
@@ -21,6 +22,7 @@ struct CachedAssetPreview {
     std::vector<PreviewAnimationFingerprint> animations;
     std::vector<PreviewSourceLocation> locations;
     std::shared_ptr<const DecodedImage> image;
+    std::vector<PreviewDecalFingerprint> decals;
 };
 // CPU-only persistent preview lookup. The stable descriptor is validated before
 // decoding its PNG; it never requires a model, environment bake, or GPU owner.

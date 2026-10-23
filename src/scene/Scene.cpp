@@ -93,6 +93,7 @@ bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
     case SceneComponentKind::Environment:return record.environment.has_value();
     case SceneComponentKind::Particle:return record.particle.has_value();
     case SceneComponentKind::Quader:return record.quader.has_value();
+    case SceneComponentKind::Decal:return record.decal.has_value();
     }
     return false;
 }
@@ -110,7 +111,7 @@ void normalizeSceneOutlinerStyle(EntityRecord& record) {
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
-        a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
+        a.local == b.local && a.model == b.model && a.particle == b.particle && a.decal==b.decal && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
         a.actor==b.actor && a.movement==b.movement && a.controller==b.controller && a.navigation==b.navigation && a.enemy==b.enemy && a.navigationVolume==b.navigationVolume &&
         a.tags==b.tags && a.effects==b.effects &&
@@ -153,6 +154,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
         record.primitive=model->primitive;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
+    if (const auto* decal = registry_.try_get<SceneDecal>(entity)) record.decal = *decal;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
     if (const auto* light = registry_.try_get<ScenePointLight>(entity)) record.point = *light;
     if (const auto* environment = registry_.try_get<SceneEnvironment>(entity)) record.environment = *environment;
@@ -292,6 +294,24 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(record.particle->id.data()),record.particle->id.size()));
             if (isEngineAssetId(record.particle->id) || (!isAssetUuid(record.particle->id) && (!safeReference(record.particle->id) || path.parent_path()!=std::filesystem::path("assets/particles") || path.extension()!=".crimson-particle")))
                 throw std::runtime_error("Particle asset reference must be a managed .crimson-particle path under assets/particles.");
+        }
+        if(record.decal) {
+            const auto& decal=*record.decal;const auto& seed=decal.seed;
+            if(!decal.asset.empty()&&(!isAssetUuid(decal.asset.id)||isEngineAssetId(decal.asset.id)))throw std::runtime_error("Decal reference requires a writable managed decal UUID.");
+            if(!seed.modelId.empty()&&!isAssetUuid(seed.modelId))throw std::runtime_error("Decal seed geometry requires a managed model UUID.");
+            if(seed.sourceKey.size()>4096||seed.sourceKey.find('\0')!=std::string::npos)throw std::runtime_error("Decal source identity is too long or invalid.");
+            if(!math::finite(seed.barycentric)||!math::finite(seed.localPoint)||!math::finite(seed.localNormal)||math::length(seed.localNormal)<1e-8)
+                throw std::runtime_error("Decal seed requires finite barycentrics, point and nonzero normal.");
+            if(std::abs(seed.barycentric[0]+seed.barycentric[1]+seed.barycentric[2]-1)>1e-4||
+                std::any_of(seed.barycentric.begin(),seed.barycentric.end(),[](float x){return x<0||x>1;}))throw std::runtime_error("Decal seed barycentrics must lie in its source triangle.");
+            const auto unit=[](float x){return math::finite(x)&&x>=0&&x<=1;};
+            if(!std::all_of(decal.tint.begin(),decal.tint.end(),unit)||!unit(decal.opacity)||!math::finite(decal.edgeFeather)||decal.edgeFeather<0||decal.edgeFeather>.5f)
+                throw std::runtime_error("Decal tint/opacity requires zero to one, and edge feather zero to one half.");
+            if(decal.receivers.scope!=SceneDecalReceiverScope::SeedQuaderScene&&decal.receivers.scope!=SceneDecalReceiverScope::Explicit)throw std::runtime_error("Unsupported decal receiver policy.");
+            for(const auto* list:{&decal.receivers.included,&decal.receivers.excluded}) {
+                if(list->size()>4096)throw std::runtime_error("Decal receiver policy exceeds 4096 entries.");
+                std::unordered_set<EntityId> unique;for(const auto id:*list)if(!id||!unique.insert(id).second)throw std::runtime_error("Decal receiver lists require unique nonzero entity IDs.");
+            }
         }
         if(record.outlinerStyle) {
             const auto validColor=[](const auto& color) {
@@ -514,6 +534,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<OutlinerStyle>(entity,record.outlinerStyle);
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.meshShading,record.primitive);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
+        if (record.decal) candidate.emplace<SceneDecal>(entity,*record.decal);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
         if (record.environment) candidate.emplace<SceneEnvironment>(entity,*record.environment);

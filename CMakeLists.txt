@@ -58,6 +58,11 @@ target_compile_definitions(imgui_gradient PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
 add_library(crimson-math INTERFACE)
 target_include_directories(crimson-math INTERFACE src)
 target_link_libraries(crimson-math INTERFACE Crimson::Support)
+find_package(Eigen3 CONFIG REQUIRED)
+find_package(GeometryCentral CONFIG REQUIRED)
+include(cmake/Decals.cmake)
+target_sources(crimson-decals PRIVATE src/decals/DecalModelSurface.cpp)
+target_link_libraries(crimson-decals PUBLIC crimson-math)
 add_library(crimson-camera INTERFACE)
 target_link_libraries(crimson-camera INTERFACE crimson-math)
 
@@ -66,6 +71,7 @@ target_link_libraries(crimson-storage PUBLIC nlohmann_json::nlohmann_json PRIVAT
 target_include_directories(crimson-storage PUBLIC src)
 target_compile_definitions(crimson-storage PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-storage PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(crimson-decals PRIVATE crimson-storage)
 
 add_executable(crimson-content-migrate src/commandlets/MigrateContent.cpp)
 target_link_libraries(crimson-content-migrate PRIVATE crimson-storage)
@@ -94,7 +100,7 @@ target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-s
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp)
+add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/GrungeGenerator.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp src/assets/DecalAsset.cpp src/editor/DecalDocument.cpp)
 target_include_directories(crimson-materials PUBLIC src)
 target_link_libraries(crimson-materials PUBLIC crimson-math crimson-storage nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-materials PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -180,6 +186,12 @@ target_compile_definitions(crimson-quader PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-quader PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-quader PUBLIC crimson-scene crimson-materials crimson-resources PRIVATE crimson-storage nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng)
 
+add_library(crimson-decal-resources src/editor/DecalResources.cpp)
+target_include_directories(crimson-decal-resources PUBLIC src)
+target_link_libraries(crimson-decal-resources PUBLIC crimson-decals crimson-scene crimson-materials crimson-resources PRIVATE Crimson::Renderer)
+target_compile_definitions(crimson-decal-resources PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-decal-resources PRIVATE /W4 /permissive- /utf-8)
+
 add_library(crimson-profiling src/profiling/CaptureController.cpp)
 target_include_directories(crimson-profiling PUBLIC src)
 target_link_libraries(crimson-profiling PUBLIC Crimson::Profiler PRIVATE crimson-storage nlohmann_json::nlohmann_json)
@@ -199,7 +211,7 @@ add_executable(crimson-renderer WIN32
     src/profiling/EngineProfile.cpp src/tools/ProfilingMenu.cpp
     src/editor/EditorSession.cpp src/editor/CameraPilot.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/ViewportTransformGesture.cpp
-    src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
+    src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/DecalPreview.cpp src/editor/AssetPreviewCache.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/NavigationVolumeGizmo.cpp src/editor/NavigationPreview.cpp src/editor/NavigationAgentProfileDocument.cpp
     src/editor/CollisionLayersDocument.cpp src/editor/GameplayEffectDocument.cpp src/editor/AnimationDocument.cpp
@@ -235,10 +247,10 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleGradientEditor.cpp
     src/tools/ColorGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
-    src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp
+    src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp src/tools/TextureAssetField.cpp src/tools/DecalEditor.cpp
     src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
-    src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
+    src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
     src/assets/BrowserCatalog.cpp
     src/assets/ModelAsset.h src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
@@ -250,7 +262,7 @@ target_compile_definitions(crimson-renderer PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
 target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaderc.exe" CC_STAGED_SHADER_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaders" CC_STAGED_SHADER_INCLUDE_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/include")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
-target_link_libraries(crimson-renderer PRIVATE crimson-quader crimson-material-gpu crimson-node-editor crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer)
+target_link_libraries(crimson-renderer PRIVATE crimson-decals crimson-quader crimson-material-gpu crimson-node-editor crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer)
 target_link_libraries(crimson-renderer PRIVATE shell32 dxgi crimson-profiling)
 add_dependencies(crimson-renderer crimson-tracy-capture)
 
@@ -293,6 +305,55 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(decal_viewport_tests tests/decal_viewport_tests.cpp)
+    target_link_libraries(decal_viewport_tests PRIVATE crimson-math)
+    target_compile_options(decal_viewport_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_viewport_core COMMAND decal_viewport_tests)
+    add_library(decal_host_compile OBJECT EXCLUDE_FROM_ALL
+        src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/DeletionPreparation.cpp
+        src/editor/DecalResources.cpp src/editor/DecalPreview.cpp
+        src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp
+        src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
+        src/editor/ViewportAssetDrop.cpp src/tools/DecalEditor.cpp src/tools/TextureAssetField.cpp
+        src/tools/MaterialEditor.cpp src/tools/ScenePanels.cpp src/tools/AssetBrowser.cpp
+        src/resources/ShaderReloadSession.cpp)
+    target_include_directories(decal_host_compile PRIVATE src tests "${CC_GENERATED_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crimson-renderer/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crimson-renderer/include/crimson/renderer/forward"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/crimson-renderer/src/modeling/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui_node_editor"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui_gradient/include"
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include/tracy"
+        "${CRIMSON_FORWARD_GENERATED_DIR}" "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include")
+    target_compile_definitions(decal_host_compile PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX BX_CONFIG_DEBUG=$<IF:$<CONFIG:Debug>,1,0>)
+    target_compile_options(decal_host_compile PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /Zc:preprocessor)
+    add_executable(decal_resolve_tests tests/decal_resolve_tests.cpp)
+    target_link_libraries(decal_resolve_tests PRIVATE crimson-decals)
+    target_compile_options(decal_resolve_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_resolve_core COMMAND decal_resolve_tests)
+    add_executable(decal_cache_tests tests/decal_cache_tests.cpp)
+    target_link_libraries(decal_cache_tests PRIVATE crimson-decals)
+    target_compile_options(decal_cache_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_cache_core COMMAND decal_cache_tests)
+    add_executable(decal_asset_tests tests/decal_asset_tests.cpp src/assets/AssetReferenceManager.cpp src/assets/BrowserCatalog.cpp)
+    target_link_libraries(decal_asset_tests PRIVATE crimson-materials crimson-scene crimson-storage Crimson::Support nlohmann_json::nlohmann_json)
+    target_compile_options(decal_asset_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_asset_core COMMAND decal_asset_tests)
+    add_executable(decal_surface_tests tests/decal_surface_tests.cpp)
+    target_link_libraries(decal_surface_tests PRIVATE crimson-decals)
+    target_compile_options(decal_surface_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_surface_core COMMAND decal_surface_tests)
+    add_executable(decal_model_surface_tests tests/decal_model_surface_tests.cpp)
+    target_link_libraries(decal_model_surface_tests PRIVATE crimson-decals)
+    target_compile_options(decal_model_surface_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_model_surface_core COMMAND decal_model_surface_tests)
+    add_executable(decal_quader_tests tests/decal_quader_tests.cpp src/assets/ModelAsset.cpp
+        src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp src/editor/QuaderSceneIntegration.cpp)
+    target_link_libraries(decal_quader_tests PRIVATE crimson-decals crimson-scene crimson-materials crimson-resources
+        mikktspace::mikktspace assimp::assimp bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng)
+    target_compile_definitions(decal_quader_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(decal_quader_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME decal_quader_core COMMAND decal_quader_tests)
     add_executable(profiling_capture_tests tests/profiling_capture_tests.cpp)
     target_link_libraries(profiling_capture_tests PRIVATE crimson-profiling nlohmann_json::nlohmann_json)
     target_compile_options(profiling_capture_tests PRIVATE /W4 /permissive- /utf-8)
@@ -894,8 +955,8 @@ if(BUILD_TESTING)
     add_test(NAME preview_dependencies_core COMMAND preview_dependencies_tests)
 
     add_executable(asset_deletion_runtime_tests tests/asset_deletion_runtime_tests.cpp
-        src/editor/ResourceRuntime.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp src/editor/EditorResources.cpp
-        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
+        src/editor/ResourceRuntime.cpp src/editor/AssetPreviews.cpp src/editor/DecalPreview.cpp src/editor/AssetPreviewCache.cpp src/editor/EditorResources.cpp
+        src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/AsyncImports.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
         src/assets/AssetReferenceManager.cpp src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
          src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
         src/crimson-renderer/RendererHost.cpp
@@ -912,8 +973,22 @@ if(BUILD_TESTING)
     add_test(NAME asset_deletion_runtime_core COMMAND asset_deletion_runtime_tests)
     set_tests_properties(asset_deletion_runtime_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
 
+    get_target_property(CC_DECAL_ACCEPTANCE_SOURCES asset_deletion_runtime_tests SOURCES)
+    list(REMOVE_ITEM CC_DECAL_ACCEPTANCE_SOURCES tests/asset_deletion_runtime_tests.cpp)
+    # Project-specific acceptance diagnostic: explicit target/CLI, since its
+    # actual authored cylinder and dirt image are not portable test fixtures.
+    add_executable(decal_host_acceptance_tests EXCLUDE_FROM_ALL tests/decal_host_acceptance_tests.cpp
+        ${CC_DECAL_ACCEPTANCE_SOURCES} src/editor/EditorRenderFrame.cpp)
+    get_target_property(CC_DECAL_ACCEPTANCE_INCLUDES asset_deletion_runtime_tests INCLUDE_DIRECTORIES)
+    get_target_property(CC_DECAL_ACCEPTANCE_DEFINITIONS asset_deletion_runtime_tests COMPILE_DEFINITIONS)
+    get_target_property(CC_DECAL_ACCEPTANCE_LINKS asset_deletion_runtime_tests LINK_LIBRARIES)
+    target_include_directories(decal_host_acceptance_tests PRIVATE ${CC_DECAL_ACCEPTANCE_INCLUDES})
+    target_compile_definitions(decal_host_acceptance_tests PRIVATE ${CC_DECAL_ACCEPTANCE_DEFINITIONS})
+    target_compile_options(decal_host_acceptance_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(decal_host_acceptance_tests PRIVATE ${CC_DECAL_ACCEPTANCE_LINKS} crimson-decal-resources)
+
     add_executable(asset_library_deletion_tests tests/asset_library_deletion_tests.cpp
-        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
+        src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
         src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
         src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
     target_include_directories(asset_library_deletion_tests PRIVATE src tests)
@@ -921,6 +996,7 @@ if(BUILD_TESTING)
     target_compile_options(asset_library_deletion_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(asset_library_deletion_tests PRIVATE crimson-material-gpu crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
+    add_test(NAME decal_asset_library_core COMMAND asset_library_deletion_tests --decal-assets)
     add_test(NAME animation_library_core COMMAND asset_library_deletion_tests --animation-assets)
     set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
     add_test(NAME material_preview_resource_core COMMAND asset_library_deletion_tests --material-preview-resources "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
@@ -928,7 +1004,7 @@ if(BUILD_TESTING)
 
     add_executable(import_identity_tests tests/import_identity_tests.cpp
         src/editor/CollisionResources.cpp
-        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
+        src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
         src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
         src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
     target_include_directories(import_identity_tests PRIVATE src tests)
@@ -1055,6 +1131,16 @@ if(BUILD_TESTING)
     set_tests_properties(material_refraction_render_core material_refraction_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
     set_tests_properties(material_refraction_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
 
+    add_executable(decal_generated_render_tests tests/decal_generated_render_tests.cpp ${CC_FOG_BACKGROUND_TEST_SOURCES})
+    target_include_directories(decal_generated_render_tests PRIVATE src tests "${CC_GENERATED_DIR}")
+    target_compile_definitions(decal_generated_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(decal_generated_render_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(decal_generated_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng d3d11)
+    add_test(NAME decal_generated_render_core COMMAND decal_generated_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/verification/generated-decals")
+    add_test(NAME decal_generated_render_dx11_core COMMAND decal_generated_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}" "${CMAKE_CURRENT_BINARY_DIR}/verification/generated-decals")
+    set_tests_properties(decal_generated_render_core decal_generated_render_dx11_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
+    set_tests_properties(decal_generated_render_dx11_core PROPERTIES ENVIRONMENT "CRIMSON_TEST_RENDERER=dx11")
+
     add_executable(ssr_render_tests tests/ssr_render_tests.cpp ${CC_FOG_BACKGROUND_TEST_SOURCES})
     target_include_directories(ssr_render_tests PRIVATE src tests "${CC_GENERATED_DIR}")
     target_compile_definitions(ssr_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -1145,7 +1231,7 @@ if(BUILD_TESTING)
         src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/PlatformSurface.cpp
         src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
         src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/QuaderSceneIntegration.cpp
-        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
+        src/assets/AssetLibrary.cpp src/assets/AssetLibraryDecals.cpp src/assets/AsyncImports.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
         src/assets/AssetReferenceManager.cpp src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
         ${CC_SHADER_HEADERS})
     target_include_directories(forward_plus_room_benchmark PRIVATE src tests "${CC_GENERATED_DIR}")
@@ -1164,7 +1250,7 @@ if(BUILD_TESTING)
     target_link_libraries(ssgi_scene_motion_capture PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 endif()
 
-foreach(CC_TARGET crimson-renderer gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests point_shadow_render_tests material_height_render_tests material_refraction_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
+foreach(CC_TARGET crimson-renderer gpu_streaming_tests float_texture_streaming_tests environment_tests clustered_lighting_gpu_tests material_graph_publication_tests asset_library_deletion_tests native_resource_tests asset_deletion_runtime_tests decal_host_acceptance_tests point_shadow_render_tests material_height_render_tests material_refraction_render_tests decal_generated_render_tests ssr_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests ssgi_render_tests glow_render_tests ssao_render_tests fog_background_render_tests smaa_render_tests mesh_instancing_render_tests player_parenting_render_tests forward_plus_room_benchmark renderer_backend_benchmark ssgi_scene_motion_capture)
     if(TARGET ${CC_TARGET})
         target_link_libraries(${CC_TARGET} PRIVATE Crimson::Renderer Crimson::HostShaders d3d12 dxgi)
         target_include_directories(${CC_TARGET} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")
@@ -1175,6 +1261,12 @@ foreach(CC_SHADER_HOST IN ITEMS crimson-material-gpu crimson-project-material-ca
     if(TARGET ${CC_SHADER_HOST})
         target_link_libraries(${CC_SHADER_HOST} PRIVATE Crimson::HostShaders)
         target_include_directories(${CC_SHADER_HOST} BEFORE PRIVATE "${CRIMSON_FORWARD_GENERATED_DIR}")
+    endif()
+endforeach()
+
+foreach(CC_DECAL_HOST IN ITEMS crimson-renderer asset_deletion_runtime_tests forward_plus_room_benchmark ssgi_scene_motion_capture)
+    if(TARGET ${CC_DECAL_HOST})
+        target_link_libraries(${CC_DECAL_HOST} PRIVATE crimson-decal-resources)
     endif()
 endforeach()
 

@@ -45,6 +45,7 @@ public:
     std::string resolveTexture(const std::string& id, bool normal=false) const;
     std::string resolveEnvironment(const std::string& id) const;
     std::string resolveParticle(const std::string& id) const;
+    std::string resolveDecal(const std::string& id) const;
     std::string resolveNavigationAgentProfile(const std::string& id) const;
     std::string resolveGameplayEffect(const std::string& id) const;
     std::string resolveAnimation(const std::string& id) const;

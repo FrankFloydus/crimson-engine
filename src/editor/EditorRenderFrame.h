@@ -29,10 +29,11 @@ inline std::shared_ptr<const RenderWorldSnapshot> freezeEditorRenderWorld(
     ExtractedScene& extracted,std::vector<RenderParticle> particles,
     std::vector<RenderParticleMaterial> materials,std::shared_ptr<const EditorRenderWorldPins> pins,
     std::uint64_t worldId,std::uint16_t shadowResolution,MaterialEvaluationContext context,
-    std::optional<Vec3> priorityOrigin={}) {
+    std::optional<Vec3> priorityOrigin={},std::vector<RenderDecal> decals={}) {
     auto world=std::make_shared<RenderWorldSnapshot>();
     world->directional=std::move(extracted.directional);world->points=std::move(extracted.points);
     world->particles=std::move(particles);world->particleMaterials=std::move(materials);
+    world->decals=std::move(decals);
     if(pins && pins->shadows) {
         world->shadowInstances=pins->shadows->instances;
     }
@@ -58,6 +59,9 @@ struct EditorRenderFrameInput {
     std::vector<RenderParticle> particles;
     std::vector<RenderParticleMaterial> particleMaterials;
     std::vector<std::shared_ptr<const PreparedParticleMaterial>> particlePins;
+    std::vector<RenderDecal> decals;
+    std::vector<EntityId> decalReceivers;
+    bool surfacePickActive{};
     std::uint64_t worldId{};
     std::uint64_t giWorldId{},gameCameraId{},environmentId{};
     std::uint16_t shadowResolution{1024};

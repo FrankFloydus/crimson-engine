@@ -45,7 +45,7 @@ void writeAssetPreviewCache(const std::filesystem::path& root,const std::filesys
     checkCanceled(token);
     if(!preview.image || preview.edge<16 || preview.edge>512 || preview.image->width!=preview.edge || preview.image->height!=preview.edge)
         throw std::runtime_error("Preview cache dimensions are invalid.");
-    if(preview.files.size()>8192 || preview.materials.size()>8192 || preview.animations.size()>8192 || preview.locations.size()>8192)
+    if(preview.files.size()>8192 || preview.materials.size()>8192 || preview.animations.size()>8192 || preview.decals.size()>8192 || preview.locations.size()>8192)
         throw std::runtime_error("Preview cache descriptor is too large.");
     if(publishIndex && preview.sourceFingerprints.size()!=preview.files.size())
         throw std::runtime_error("Preview cache publication requires exact render-time source versions.");
@@ -67,14 +67,15 @@ void writeAssetPreviewCache(const std::filesystem::path& root,const std::filesys
     writeFileAtomically(imageFile,std::string(reinterpret_cast<const char*>(encoded.data()),encoded.size()));
     writeFileAtomically(std::filesystem::path(imageFile.wstring()+L".json"),Json{{"version",ImageVersion},{"id",id},{"signature",preview.signature},{"width",preview.edge},{"height",preview.edge}}.dump()+"\n");
     if(!publishIndex)return;
-    Json materials=Json::array(),animations=Json::array(),locations=Json::array();
+    Json materials=Json::array(),animations=Json::array(),decals=Json::array(),locations=Json::array();
     for(const auto& material:preview.materials)materials.push_back({{"id",material.id},{"hash",material.fingerprint}});
     for(const auto& animation:preview.animations)animations.push_back({{"id",animation.id},{"hash",animation.fingerprint}});
+    for(const auto& decal:preview.decals)decals.push_back({{"id",decal.id},{"hash",decal.fingerprint}});
     for(const auto& location:preview.locations)locations.push_back({{"id",location.id},{"file",storedPath(root,location.file)}});
     checkCanceled(token);
     writeFileAtomically(assetPreviewIndexPath(folder,id,preview.edge),Json{{"version",IndexVersion},{"id",id},{"signature",preview.signature},
         {"edge",preview.edge},{"shader",preview.shaderSignature},{"policy",preview.policyFingerprint},
-        {"sources",std::move(sources)},{"materials",std::move(materials)},{"animations",std::move(animations)},{"locations",std::move(locations)}}.dump()+"\n");
+        {"sources",std::move(sources)},{"materials",std::move(materials)},{"animations",std::move(animations)},{"decals",std::move(decals)},{"locations",std::move(locations)}}.dump()+"\n");
 }
 CachedAssetPreview readAssetPreviewCache(const std::filesystem::path& root,const std::filesystem::path& folder,const std::string& id,
                                         std::uint32_t edge,std::uint64_t shaderSignature,std::uint64_t policyFingerprint,std::stop_token token) {
@@ -83,7 +84,8 @@ CachedAssetPreview readAssetPreviewCache(const std::filesystem::path& root,const
        record.at("shader")!=shaderSignature || record.at("policy")!=policyFingerprint)
         throw std::runtime_error("Preview cache descriptor is stale.");
     const auto animations=record.value("animations",Json::array());
-    if(!animations.is_array() || record.at("sources").size()>8192 || record.at("materials").size()>8192 || animations.size()>8192 || record.at("locations").size()>8192)
+    const auto decals=record.value("decals",Json::array());
+    if(!animations.is_array() || !decals.is_array() || record.at("sources").size()>8192 || record.at("materials").size()>8192 || animations.size()>8192 || decals.size()>8192 || record.at("locations").size()>8192)
         throw std::runtime_error("Preview cache descriptor is too large.");
     CachedAssetPreview result;result.signature=record.at("signature");result.edge=edge;result.shaderSignature=shaderSignature;result.policyFingerprint=policyFingerprint;
     std::vector<std::pair<std::uintmax_t,std::filesystem::file_time_type>> states;
@@ -96,6 +98,7 @@ CachedAssetPreview readAssetPreviewCache(const std::filesystem::path& root,const
     }
     for(const auto& material:record.at("materials"))result.materials.push_back({material.at("id"),material.at("hash")});
     for(const auto& animation:animations)result.animations.push_back({animation.at("id"),animation.at("hash")});
+    for(const auto& decal:decals)result.decals.push_back({decal.at("id"),decal.at("hash")});
     for(const auto& location:record.at("locations"))result.locations.push_back({location.at("id"),restoredPath(root,location.at("file"))});
     checkCanceled(token);auto image=std::make_shared<DecodedImage>(decodeManagedImage(assetPreviewImagePath(folder,id,result.signature)));
     if(image->width!=edge || image->height!=edge)throw std::runtime_error("Preview cache image dimensions are invalid.");

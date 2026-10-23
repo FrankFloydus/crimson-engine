@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crimson-renderer/RenderTypes.h"
+#include <crimson/renderer/forward/ForwardTypes.hpp>
 #include "scene/MaterialSlotAssignment.h"
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,12 @@ namespace crimson {
 namespace shared { class Renderer; } using Renderer=shared::Renderer;
 class AssetLibrary;
 struct ModelInstance;
+struct DecalAsset;
+struct DecalSurfacePlacement {
+    AssetRef<DecalAsset> asset;
+    std::uint64_t replaceEntity{};
+    PickResult hit;
+};
 
 enum class EditorCameraAction { None, EditorCamera, SelectCamera, TogglePilot, CreateCamera };
 
@@ -53,6 +60,13 @@ struct EditorFrame {
     bool createGameplayEffect{false};
     std::string openGameplayEffect,gameplayEffectFolder;
     std::string openAnimation;
+    bool createDecal{};
+    std::string openDecal,decalFolder;
+    AssetRef<DecalAsset> decalDragId;
+    Vec2 decalDragPosition{};
+    bool decalDropDelivered{},surfacePickActive{},decalPlacementRejected{};
+    std::string decalPlacementDiagnostic;
+    std::optional<DecalSurfacePlacement> decalPlacement,decalPreview;
 };
 
 struct BrowserActions {
@@ -70,6 +84,8 @@ struct BrowserActions {
     bool createGameplayEffect{false};
     std::string openGameplayEffect,gameplayEffectFolder;
     std::string openAnimation;
+    bool createDecal{};
+    std::string openDecal,decalFolder;
 };
 
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);

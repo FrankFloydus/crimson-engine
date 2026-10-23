@@ -4,6 +4,8 @@
 #include "AssetSourceSnapshot.h"
 #include "crimson-renderer/EnvironmentPresentation.h"
 #include "EditorResources.h"
+#include "DecalResources.h"
+#include "DecalPreview.h"
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialGraphReferences.h"
 #include "assets/MaterialPreviewGeometry.h"
@@ -52,6 +54,7 @@ uint64_t materialPreviewHash(const MaterialAsset& material) {
     auto key=streaming::detail::HashSeed;hash(key,material.shading);hash(key,material.blend);materialHash(key,material.surface);return key;
 }
 uint64_t animationPreviewHash(const AnimationAsset& animation) {return textHash(serializeAnimationAsset(animation));}
+uint64_t decalPreviewHash(const DecalAsset& decal) {auto key=textHash(serializeDecalAsset(decal));hash(key,2u);return key;}
 std::vector<std::filesystem::path> uniqueFiles(std::vector<std::filesystem::path> files) {
     std::sort(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)<resourcePathKey(b);});
     files.erase(std::unique(files.begin(),files.end(),[](const auto& a,const auto& b){return resourcePathKey(a)==resourcePathKey(b);}),files.end()); return files;
@@ -63,6 +66,7 @@ struct PreviewPins {
     std::shared_ptr<const PreparedEnvironment> environment;
     std::shared_ptr<const PreparedParticleMaterial> particle;
     std::shared_ptr<const PreparedEditorShadows> shadows;
+    std::vector<RenderDecal> decals;
 };
 bool texturesMatchSources(const AssetLibrary& assets,const std::filesystem::path& root,const PreviewDependencies& expected,
     std::span<const ModelMaterial> materials,std::span<const ModelMaterialTextures> bindings,ResourceManager& resources,
@@ -126,10 +130,12 @@ struct AssetPreviews::Impl {
         std::vector<std::filesystem::path> files;
         std::vector<PreviewMaterialFingerprint> materials;
         std::vector<PreviewAnimationFingerprint> animations;
+        std::vector<PreviewDecalFingerprint> decals;
         std::vector<PreviewSourceLocation> locations;
         bool clean{},indexChecked{};
         bool wanted{},forceScene{},saveRequested{};
         std::string error;
+        std::unique_ptr<DecalResources> decalResources;
         std::chrono::steady_clock::time_point used{std::chrono::steady_clock::now()};
     };
     struct EnvironmentEntry {
@@ -174,7 +180,7 @@ struct AssetPreviews::Impl {
         entry.writePin=std::make_shared<DecodedImage>(result.image);
         const std::weak_ptr<const DecodedImage> weak=entry.writePin;
         CachedAssetPreview record;record.signature=signature;record.edge=result.image.width;record.shaderSignature=renderer.shaderSignature();
-        record.policyFingerprint=policyFingerprint;record.files=entry.files;record.materials=entry.materials;record.animations=entry.animations;record.locations=entry.locations;
+        record.policyFingerprint=policyFingerprint;record.files=entry.files;record.materials=entry.materials;record.animations=entry.animations;record.decals=entry.decals;record.locations=entry.locations;
         const auto expected=entry.dependencies.snapshot();const auto folder=cacheFolder,project=root;
         if(expected && expected->files==record.files)record.sourceFingerprints=expected->sourceFingerprints;
         ResourceRequestOptions options; options.variant="preview-write:"+std::to_string(signature); options.priority=ResourcePriority::Background;
@@ -193,6 +199,10 @@ struct AssetPreviews::Impl {
             }
             for(const auto& animation:record.animations) {
                 try {if(animationPreviewHash(loadAnimationAsset(project,animation.id))!=animation.fingerprint)saved=false;}
+                catch(const std::exception&){saved=false;}
+            }
+            for(const auto& decal:record.decals) {
+                try {if(decalPreviewHash(loadDecalAsset(project,decal.id))!=decal.fingerprint)saved=false;}
                 catch(const std::exception&){saved=false;}
             }
             record.image=pixels;writeAssetPreviewCache(project,folder,id,record,saved,token);
@@ -233,9 +243,13 @@ struct AssetPreviews::Impl {
                 const auto animation=assets.findAnimation(expected.id);
                 if(!animation||animationHash(*animation)!=expected.fingerprint){current=false;break;}
             }
+            for(const auto& expected:cached.decals) {
+                const auto decal=assets.findDecal(expected.id);
+                if(!decal||decalPreviewHash(*decal)!=expected.fingerprint){current=false;break;}
+            }
             if(current && renderer.setThumbnail(id,cached.signature,*cached.image)) {
                 entry.signature=cached.signature;entry.cacheState.published=cached.signature;
-                entry.files=cached.files;entry.materials=cached.materials;entry.animations=cached.animations;entry.locations=cached.locations;
+                entry.files=cached.files;entry.materials=cached.materials;entry.animations=cached.animations;entry.decals=cached.decals;entry.locations=cached.locations;
                 entry.clean=true;entry.validated=validation;entry.retry.reset();entry.error.clear();entry.diskIndex={};
                 ++statistics.diskHits;return true;
             }
@@ -276,6 +290,20 @@ struct AssetPreviews::Impl {
             return source.empty() ? nullptr : environment({},entry);
         }
         return handle.state()==ResourceState::Ready ? handle.snapshot().shared() : nullptr;
+    }
+    bool decalTexturesMatch(const PreparedDecalSurface& surface,const PreviewDependencies& expected) {
+        for(std::size_t slot=0;slot<surface.sourceIds.size();++slot) {
+            const auto& id=surface.sourceIds[slot];if(id.empty()||isEngineAssetId(id))continue;
+            if(assets.references().resolve(id)!=id)return false;
+            const auto file=resolveAssetPath(root,id);
+            if(!expected.sourceMatches(file,surface.sourceFingerprints[slot])) {
+                if(const auto fingerprint=expected.sourceFingerprint(file);fingerprint&&refreshedSources[resourcePathKey(file)]!=*fingerprint) {
+                    refreshedSources[resourcePathKey(file)]=*fingerprint;resources.invalidatePath(file);
+                }
+                return false;
+            }
+        }
+        return true;
     }
     bool warmCache(const std::string& id,Entry& entry,uint64_t signature) {
         if (bgfx::isValid(renderer.thumbnailTexture(id,signature))) { ++statistics.residentHits;entry.cacheState.published=signature;entry.retry.reset();entry.error.clear();return true; }
@@ -332,12 +360,17 @@ struct AssetPreviews::Impl {
         std::vector<ExtractedModel> models; std::vector<DirectionalLight> directions; std::vector<PointLight> points;
         std::shared_ptr<const SceneSnapshot> sceneSnapshot; Aabb bounds;
         std::shared_ptr<const MaterialAsset> materialAsset;
+        std::shared_ptr<const DecalAsset> decalAsset;
         std::shared_ptr<const ModelAsset> materialGeometry;
+        std::shared_ptr<Scene> decalScene;
+        ExtractedScene decalExtraction;
+        DecalPreparedScene preparedDecals;
         bool spriteMaterial=false;
         std::vector<std::filesystem::path> files;
         std::vector<std::filesystem::path> validationFiles;
         std::vector<PreviewMaterialFingerprint> materialVersions;
         std::vector<PreviewAnimationFingerprint> animationVersions;
+        std::vector<PreviewDecalFingerprint> decalVersions;
         std::vector<PreviewSourceLocation> locations;
         const auto sourceFile=[&](const std::string& source) {
             auto file=resolveAssetPath(root,source);locations.push_back({source,file});return file;
@@ -352,6 +385,15 @@ struct AssetPreviews::Impl {
         };
         uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());hash(sourceKey,assets.materialShaderRevision());
         hash(sourceKey,previewSize);
+        const auto includeDecal=[&](const std::string& source) {
+            const auto decal=assets.findDecal(source);if(!decal)return;
+            const auto fingerprint=decalPreviewHash(*decal);hash(sourceKey,fingerprint);decalVersions.push_back({decal->id,fingerprint});
+            validationFiles.push_back(sourceFile(decal->id));
+            for(const auto& map:decalTextureReferences(*decal)) {
+                const auto target=assets.references().resolveTexture(map,map==decal->normalTexture.id);
+                hash(sourceKey,target.data(),target.size());if(!target.empty()&&!isEngineAssetId(target))files.push_back(sourceFile(target));
+            }
+        };
         if (entry.kind==AssetKind::Scene) {
             const auto snapshot=scene(id,entry); if (!snapshot) return;
             validationFiles.push_back(sourceFile(id));
@@ -369,13 +411,19 @@ struct AssetPreviews::Impl {
                 hash(sourceKey,profile->traversal.maxSlope);hash(sourceKey,profile->traversal.maxStep);
                 if(!isEngineAssetId(profile->id)&&std::any_of(profileLocations.begin(),profileLocations.end(),[&](const auto& entry){return entry.id==profile->id;}))validationFiles.push_back(sourceFile(profile->id));
             }
-            Scene candidate; candidate.apply(snapshot->records,snapshot->properties); auto extracted=extractScene(candidate,profileQuery);
+            decalScene=std::make_shared<Scene>();decalScene->apply(snapshot->records,snapshot->properties);auto extracted=extractScene(*decalScene,profileQuery);
+            decalExtraction=extracted;
+            for(const auto& decal:extracted.decals)if(decal.visible)includeDecal(decal.decal.asset.id);
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
             std::erase_if(models,[](const auto& model){return !model.visible;});
             for(auto& model:models)model.animationSeconds=model.animation.startTime;
             settings.environment=extracted.environment.environment; settings.exposure=extracted.environment.exposure;
             settings.proceduralSun=extracted.proceduralSun;
             if (snapshot->previewCamera) settings.camera=*snapshot->previewCamera;
+        } else if(entry.kind==AssetKind::Decal) {
+            decalAsset=assets.findDecal(id);if(!decalAsset){entry.error="Decal is unavailable.";return;}
+            includeDecal(id);materialGeometry=decalPreviewSurface().model;settings.camera=decalPreviewSurface().camera;
+            directions={DirectionalLight{{-.4f,-1,-.7f},{1,1,1},2,true}};
         } else if (entry.kind==AssetKind::Material) {
             materialAsset=assets.findMaterial(id);
             if (!materialAsset) { entry.error="Material is unavailable."; return; }
@@ -470,6 +518,12 @@ struct AssetPreviews::Impl {
             math::include(bounds,math::transformBounds(prepared.modelBounds(model,asset),model.world));
         }
         if (!loaded) return;
+        if(decalScene&&!decalExtraction.decals.empty()) {
+            if(!entry.decalResources)entry.decalResources=std::make_unique<DecalResources>(assets,resources);
+            entry.decalResources->collect();
+            preparedDecals=entry.decalResources->prepare(*decalScene,decalExtraction,ResourcePriority::Preview);
+            if(!preparedDecals.ready||!preparedDecals.refined){entry.error=preparedDecals.status;return;}
+        }
         if (entry.kind==AssetKind::Model && !bounds.valid) {
             entry.error="Model bounds are unavailable.";entry.retry.failed(PreviewRetryState::Clock::now());return;
         }
@@ -513,11 +567,18 @@ struct AssetPreviews::Impl {
         validationFiles.insert(validationFiles.end(),dependencies->files.begin(),dependencies->files.end());
         std::sort(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
         animationVersions.erase(std::unique(animationVersions.begin(),animationVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),animationVersions.end());
-        entry.files=uniqueFiles(std::move(validationFiles));entry.materials=std::move(materialVersions);entry.animations=std::move(animationVersions);entry.locations=std::move(locations);
+        std::sort(decalVersions.begin(),decalVersions.end(),[](const auto& a,const auto& b){return a.id<b.id;});
+        decalVersions.erase(std::unique(decalVersions.begin(),decalVersions.end(),[](const auto& a,const auto& b){return a.id==b.id;}),decalVersions.end());
+        entry.files=uniqueFiles(std::move(validationFiles));entry.materials=std::move(materialVersions);entry.animations=std::move(animationVersions);entry.decals=std::move(decalVersions);entry.locations=std::move(locations);
         entry.clean=true;entry.validated=validation;
         if (warmCache(id,entry,signature)) { if (entry.cacheState.published==signature) entry.saveRequested=false; return; }
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
+        pins->decals=std::move(preparedDecals.decals);
+        for(const auto& definition:entry.decals) {
+            const auto material=assets.preparedDecalMaterial(definition.id,decalAsset?previewSize:1024,ResourcePriority::Preview);
+            if(!material||!material->ready||!material->current||!decalTexturesMatch(*material,*dependencies))return;
+        }
         if(sceneSnapshot) {
             ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;shadowScene.directional=directions;
             std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId,model.primitive) && !assets.modelLoading(model.assetId);});
@@ -530,6 +591,17 @@ struct AssetPreviews::Impl {
         std::vector<RenderModelInstance> instances;
         std::vector<RenderParticle> particles;
         std::vector<RenderParticleMaterial> particleMaterials;
+        if(decalAsset) {
+            auto candidate=std::make_shared<PreparedEditorModel>();candidate->asset=materialGeometry;
+            candidate->materials=materialGeometry->materials;candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
+            const auto material=assets.preparedDecalMaterial(id,previewSize,ResourcePriority::Preview);
+            if(!material||!material->ready||!material->current||!material->render||!assets.modelBindingsReady(candidate->textures))return;
+            prepared.retainExternalModelForFrame(materialGeometry->id);
+            if(!renderer.prepareModel(*materialGeometry)){entry.error=renderer.modelStatus();return;}
+            candidate->revision=1;candidate->ready=candidate->refined=true;pins->models.push_back(candidate);
+            instances.push_back({1,{materialGeometry,Mat4{}},&candidate->textures,1,true,false,&candidate->materials});instances.back().receiveDecals=true;
+            pins->decals.push_back({2,2,0,decalPreviewSurface().patch,material->render});
+        }
         if (spriteMaterial) {
             assets.setTextureDemand(previewSize);
             const auto material=assets.preparedParticleMaterial(id);
@@ -587,11 +659,13 @@ struct AssetPreviews::Impl {
         }
         for (const auto& model:models) {
             if (!assets.findModel(model.assetId,model.primitive) && !assets.modelLoading(model.assetId)) continue;
-            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,previewSize,false,ResourcePriority::Preview,0,model.materialOverrides,0,&model);
+            const bool receiveDecals=std::find(preparedDecals.receivers.begin(),preparedDecals.receivers.end(),model.id)!=preparedDecals.receivers.end();
+            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,previewSize,receiveDecals,ResourcePriority::Preview,0,model.materialOverrides,0,&model);
             if (!ready || !ready->ready || !ready->refined) return;
             if (!texturesMatchSources(assets,root,*dependencies,ready->materials,ready->textures,resources,refreshedSources)) return;
             pins->models.push_back(ready);
-            instances.push_back({model.id,{ready->asset,model.world},&ready->textures,ready->revision,false,false,&ready->materials});
+            instances.push_back({model.id,{ready->asset,model.world},&ready->textures,ready->revision,receiveDecals,false,&ready->materials});
+            instances.back().receiveDecals=receiveDecals;
             instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
             instances.back().lightingScopes=model.lightingScopes;
             instances.back().lightingCategory=model.lightingCategory;
@@ -604,6 +678,7 @@ struct AssetPreviews::Impl {
             thumbnailEnvironment=bake->key;
         }
         RenderScene renderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials};
+        renderScene.decals=pins->decals;
         if(pins->shadows) {
             renderScene.shadowInstances=pins->shadows->instances;
             renderScene.shadowWorldId=textHash(id);renderScene.shadowResolution=256;
@@ -651,6 +726,8 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
             (void)id;
             const auto changed=std::any_of(entry.materials.begin(),entry.materials.end(),[&](const auto& expected){
                 const auto current=impl_->assets.peekMaterial(expected.id);return current && materialPreviewHash(*current)!=expected.fingerprint;
+            })||std::any_of(entry.decals.begin(),entry.decals.end(),[&](const auto& expected){
+                const auto current=impl_->assets.findDecal(expected.id);return !current||decalPreviewHash(*current)!=expected.fingerprint;
             })||std::any_of(entry.animations.begin(),entry.animations.end(),[&](const auto& expected){
                 const auto current=impl_->assets.findAnimation(expected.id);return !current||impl_->animationHash(*current)!=expected.fingerprint;
             });
@@ -680,7 +757,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
     }
     for (const auto& id:visible) {
         const auto asset=impl_->catalogKinds.find(id);
-        if (asset==impl_->catalogKinds.end() || (asset->second!=AssetKind::Model && asset->second!=AssetKind::Scene && asset->second!=AssetKind::Material)) continue;
+        if (asset==impl_->catalogKinds.end() || (asset->second!=AssetKind::Model && asset->second!=AssetKind::Scene && asset->second!=AssetKind::Material && asset->second!=AssetKind::Decal)) continue;
         auto& entry=impl_->entries[id]; entry.kind=asset->second; entry.wanted=true;
     }
     impl_->validationDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds{2};
@@ -700,7 +777,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
         return !entry.rendering && !entry.writer && impl_->assets.references().deleted(item.first);
     });
     for(auto& [id,entry]:impl_->entries)if(!entry.wanted && !entry.rendering && !entry.writer && now-entry.used>=grace) {
-        (void)id;entry.scene={};entry.dependencies={};entry.cached={};
+        (void)id;entry.scene={};entry.dependencies={};entry.cached={};entry.decalResources.reset();
         if(entry.diskIndex){entry.diskIndex={};entry.indexChecked=false;}
     }
     constexpr size_t MaximumRetainedDescriptors=4096;

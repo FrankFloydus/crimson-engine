@@ -40,7 +40,7 @@ constexpr std::array<std::string_view,17> LegacyComponentTokens{
 void preserveAuthoredActorComponents(EntityRecord& target,const EntityRecord& previous) {
     target.actor=previous.actor;target.movement=previous.movement;target.controller=previous.controller;
     target.navigation=previous.navigation;target.enemy=previous.enemy;target.playerInput=previous.playerInput;
-    target.tags=previous.tags;target.effects=previous.effects;
+    target.tags=previous.tags;target.effects=previous.effects;target.decal=previous.decal;
     target.cameraFollow=previous.cameraFollow;
     if(previous.camera)target.camera=previous.camera;
 }
@@ -92,6 +92,26 @@ EntityId parseId(const Json& value) {
     if (text.size() != 16 || parsed.ec != std::errc{} || parsed.ptr != text.data()+text.size())
         throw std::runtime_error("Scene has an invalid entity ID.");
     return result;
+}
+SceneDecal readDecal(const Json& json) {
+    SceneDecal decal;decal.asset=json.at("asset").get<AssetRef<DecalAsset>>();
+    const auto& seed=json.at("seed");decal.seed.receiver=parseId(seed.at("receiver"));decal.seed.sourceKey=seed.at("sourceKey").get<std::string>();
+    decal.seed.modelId=seed.at("model").get<std::string>();decal.seed.fingerprint=parseId(seed.at("fingerprint"));
+    decal.seed.draw=readCollisionBits(seed.at("draw"));decal.seed.primitive=readCollisionBits(seed.at("primitive"));decal.seed.triangle=readCollisionBits(seed.at("triangle"));
+    decal.seed.barycentric=seed.at("barycentric").get<Vec3>();decal.seed.localPoint=seed.at("localPoint").get<Vec3>();decal.seed.localNormal=seed.at("localNormal").get<Vec3>();
+    decal.tint=json.at("tint").get<Vec3>();decal.opacity=json.at("opacity").get<float>();decal.edgeFeather=json.at("edgeFeather").get<float>();
+    const auto& priority=json.at("priority");if(!priority.is_number_integer()||(priority.is_number_unsigned()?priority.get<uint64_t>()>INT32_MAX:priority.get<int64_t>()<INT32_MIN||priority.get<int64_t>()>INT32_MAX))throw std::runtime_error("Decal layer priority must be a signed 32-bit integer.");
+    decal.priority=priority.get<int32_t>();const auto& receivers=json.at("receivers");const auto scope=receivers.at("scope").get<std::string>();
+    if(scope=="seed-quader-scene")decal.receivers.scope=SceneDecalReceiverScope::SeedQuaderScene;else if(scope=="explicit")decal.receivers.scope=SceneDecalReceiverScope::Explicit;else throw std::runtime_error("Unsupported decal receiver policy.");
+    const auto readList=[&](const char* field,std::vector<EntityId>& list){const auto& values=receivers.at(field);if(!values.is_array()||values.size()>4096)throw std::runtime_error("Decal receiver list must contain at most 4096 IDs.");for(const auto& value:values)list.push_back(parseId(value));};
+    readList("included",decal.receivers.included);readList("excluded",decal.receivers.excluded);return decal;
+}
+Json decalJson(const SceneDecal& decal) {
+    const auto& seed=decal.seed;Json included=Json::array(),excluded=Json::array();for(const auto id:decal.receivers.included)included.push_back(hexId(id));for(const auto id:decal.receivers.excluded)excluded.push_back(hexId(id));
+    return {{"asset",decal.asset},{"seed",{{"receiver",hexId(seed.receiver)},{"sourceKey",seed.sourceKey},{"model",seed.modelId},{"fingerprint",hexId(seed.fingerprint)},
+        {"draw",seed.draw},{"primitive",seed.primitive},{"triangle",seed.triangle},{"barycentric",seed.barycentric},{"localPoint",seed.localPoint},{"localNormal",seed.localNormal}}},
+        {"tint",decal.tint},{"opacity",decal.opacity},{"edgeFeather",decal.edgeFeather},{"priority",decal.priority},
+        {"receivers",{{"scope",decal.receivers.scope==SceneDecalReceiverScope::SeedQuaderScene?"seed-quader-scene":"explicit"},{"included",std::move(included)},{"excluded",std::move(excluded)}}}};
 }
 std::string uniqueToken() { return hexId(randomId()) + hexId(randomId()); }
 std::filesystem::path scenePath(const std::filesystem::path& root, const std::string& id) {
@@ -241,7 +261,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>23) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>24) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     std::unordered_map<EntityId,AttributeSeeds> legacyAttributes;
@@ -347,6 +367,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
         if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"),version>=6);
         if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
+        if(version>=24&&entity.contains("decal"))record.decal=readDecal(entity.at("decal"));
         if (version>=4 && version<=15 && entity.contains("character")) {
             const auto& c=entity.at("character");
             record.actor.emplace();record.movement.emplace();
@@ -689,6 +710,7 @@ void canonicalizeSceneAssetRefs(SceneSnapshot& snapshot) {
         if(record.model)record.model->id=canonicalAssetId(record.model->id);
         for(auto& material:record.modelMaterials)material.id=canonicalAssetId(material.id);
         if(record.particle)record.particle->id=canonicalAssetId(record.particle->id);
+        if(record.decal){record.decal->asset.id=canonicalAssetId(record.decal->asset.id);record.decal->seed.modelId=canonicalAssetId(record.decal->seed.modelId);}
         if(record.collider)record.collider->source.id=canonicalAssetId(record.collider->source.id);
         if(record.controller)record.controller->profile.id=canonicalAssetId(record.controller->profile.id);
         if(record.navigationVolume)for(auto& profile:record.navigationVolume->profiles)profile.id=canonicalAssetId(profile.id);
@@ -726,6 +748,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         auto materials=record.modelMaterials;trimModelMaterialOverrides(materials);
         if(!materials.empty())entity["modelMaterials"]=materials;
         if (record.particle) entity["particle"] = *record.particle;
+        if(record.decal)entity["decal"]=decalJson(*record.decal);
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
@@ -762,7 +785,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",23},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",24},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
@@ -783,8 +806,8 @@ enum EntityField : uint64_t {
     PlayerInputField=1ull<<24,CameraFollowField=1ull<<27,
     OutlinerStyleField=1ull<<28,NavigationVolumeField=1ull<<29,EnemyField=1ull<<30,
     // Bit31 was authored Attributes; it is permanently reserved.
-    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,
-    AllEntityFields=((1ull<<36)-1)&~(1ull<<31)
+    TagsField=1ull<<32,EffectsField=1ull<<33,MeshShadingField=1ull<<34,PrimitiveMeshField=1ull<<35,DecalField=1ull<<36,
+    AllEntityFields=((1ull<<37)-1)&~(1ull<<31)
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -805,6 +828,7 @@ uint64_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     if(a.meshShading!=b.meshShading)fields|=MeshShadingField;
     if(a.primitive!=b.primitive)fields|=PrimitiveMeshField;
+    if(a.decal!=b.decal)fields|=DecalField;
     if(a.visible!=b.visible)fields|=VisibleField;
     if(a.movement!=b.movement)fields|=MotorField;
     if(a.controller!=b.controller)fields|=ControllerField;
@@ -832,6 +856,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint64_t fields)
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
     if(fields&MeshShadingField)target.meshShading=source.meshShading;
     if(fields&PrimitiveMeshField)target.primitive=source.primitive;
+    if(fields&DecalField)target.decal=source.decal;
     if(fields&VisibleField)target.visible=source.visible;
     if(fields&MotorField)target.movement=source.movement;
     if(fields&ControllerField)target.controller=source.controller;
@@ -1243,6 +1268,7 @@ std::vector<std::string> SceneDocument::historicalModelReferences() const {
     const auto add=[&](const EntityRecord& record) {
         if (record.model) references.insert(record.model->id);
         if(record.collider && !record.collider->source.empty())references.insert(record.collider->source.id);
+        if(record.decal&&!record.decal->seed.modelId.empty())references.insert(record.decal->seed.modelId);
     };
     for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
         if (change.before) add(*change.before); if (change.after) add(*change.after);
@@ -1256,6 +1282,12 @@ bool SceneDocument::reloadFromDisk() {
     const auto selection=selection_; const auto id=assetId_;
     if (!load(id)) return false;
     selection_=selection; sanitizeSelection(); return true;
+}
+std::vector<std::string> SceneDocument::historicalDecalReferences() const {
+    std::unordered_set<std::string> references;const auto add=[&](const EntityRecord& record){if(record.decal&&!record.decal->asset.empty())references.insert(record.decal->asset.id);};
+    for(const auto& command:history_.commands_)for(const auto& change:command.entities){if(change.before)add(*change.before);if(change.after)add(*change.after);}
+    if(transaction_)for(const auto& change:transaction_->command.entities){if(change.before)add(*change.before);if(change.after)add(*change.after);}
+    std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
 }
 std::vector<std::string> SceneDocument::historicalParticleReferences() const {
     std::unordered_set<std::string> references;
@@ -1537,6 +1569,9 @@ EntityId SceneDocument::createModel(const std::string& assetId, const std::strin
     EntityRecord record; record.name = name; record.model=AssetRef<ModelAsset>{assetId}; record.local = local;
     return create(std::move(record),"Place model");
 }
+EntityId SceneDocument::createDecal(const SceneDecal& decal,const std::string& name,const Mat4& local) {
+    EntityRecord record;record.name=name;record.local=local;record.decal=decal;return create(std::move(record),"Place decal");
+}
 EntityId SceneDocument::createParticle(const std::string& assetId, const std::string& name, const Mat4& local) {
     EntityRecord record; record.name=name; record.particle=AssetRef<ParticleEffectAsset>{assetId}; record.local=local;
     return create(std::move(record),"Place particle effect");
@@ -1740,6 +1775,10 @@ bool SceneDocument::duplicateInTransaction(const std::vector<EntityId>& roots,st
         }
         for(auto& record:records)if(copiedIds.contains(record.id)) {
             if(record.cameraFollow)if(const auto target=copied.find(record.cameraFollow->target);target!=copied.end())record.cameraFollow->target=target->second;
+            if(record.decal) {
+                if(const auto target=copied.find(record.decal->seed.receiver);target!=copied.end())record.decal->seed.receiver=target->second;
+                for(auto* list:{&record.decal->receivers.included,&record.decal->receivers.excluded})for(auto& id:*list)if(const auto target=copied.find(id);target!=copied.end())id=target->second;
+            }
             if(record.environment)if(const auto sun=copied.find(record.environment->sun);sun!=copied.end())record.environment->sun=sun->second;
             if(record.quaderGenerated) {
                 const auto owner=copied.find(record.quaderGenerated->owner);
@@ -1823,7 +1862,7 @@ bool SceneDocument::ungroupSelection() {
     std::vector<EntityId> groups;
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
-        if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment &&
+        if (record && !record->model && !record->particle && !record->decal && !record->directional && !record->point && !record->environment &&
             !record->actor && !record->movement && !record->controller && !record->navigation && !record->tags && !record->effects && !record->playerInput && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }

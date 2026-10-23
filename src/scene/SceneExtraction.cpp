@@ -100,7 +100,9 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
             result.models.back().meshShading=model->meshShading;
             result.models.back().primitive=model->primitive;
             result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
+            if(const auto* generated=registry.try_get<QuaderGenerated>(entity)){result.models.back().quaderOwner=generated->owner;result.models.back().sourceKey=generated->sourceKey;}
         }
+        if(const auto* decal=registry.try_get<SceneDecal>(entity))result.decals.push_back({id,*world,*decal,visible});
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
             result.particles.push_back({id,particle->assetId.id,*world,visible});
         if(!visible)continue;
@@ -122,7 +124,7 @@ ExtractedScene extractScene(const Scene& scene,const NavigationAgentProfileQuery
 }
 
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles) {
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles,const DecalBoundsQuery& decalBounds) {
     Aabb result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
     for (auto root : scene.topmost(selected)) {
@@ -156,6 +158,11 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                     math::include(result,*bounds);hasBounds=true;
                 }
             }
+            if(record->decal) {
+                auto bounds=decalBounds?decalBounds(id):std::nullopt;
+                if(!bounds||!bounds->valid||!math::finite(bounds->minimum)||!math::finite(bounds->maximum))bounds=math::transformBounds(Aabb{{-.5f,-.5f,0},{.5f,.5f,0},true},*world);
+                math::include(result,*bounds);hasBounds=true;
+            }
             if (!hasBounds || record->directional || record->point) {
                 const auto position = math::transformPoint(*world,{0,0,0});
                 if (!math::finite(position)) continue;
@@ -170,7 +177,7 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
 }
 
 std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const EntityId> selection,
-    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles) {
+    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision,const NavigationAgentProfileQuery& profiles,const DecalBoundsQuery& decalBounds) {
     std::vector<SelectionBox> result;
     if(selection.empty())return result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
@@ -199,6 +206,11 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
                 if(bounds&&usable(*bounds))math::include(visuals,math::transformBounds(*bounds,local));
             }
             if(record->particle)math::include(visuals,marker);
+            if(record->decal) {
+                const auto bounds=decalBounds?decalBounds(id):std::nullopt;
+                if(bounds&&usable(*bounds)&&inverse)math::include(visuals,math::transformBounds(*bounds,*inverse));
+                else math::include(visuals,math::transformBounds(Aabb{{-.5f,-.5f,0},{.5f,.5f,0},true},local));
+            }
         }
         // Do not load collision geometry or inflate an ordinary mesh outline
         // merely because a larger, editable collision child exists beneath it.

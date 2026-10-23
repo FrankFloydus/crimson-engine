@@ -8,6 +8,7 @@
 #include "resources/AssetId.h"
 #include "MaterialAsset.h"
 #include "ParticleAsset.h"
+#include "DecalAsset.h"
 #include "NavigationAgentProfile.h"
 #include "GameplayEffectAsset.h"
 #include "AnimationAsset.h"
@@ -33,6 +34,15 @@ class TextureStreamer;
 struct PreparedTexture;
 class MaterialGraphPrograms;
 struct MaterialGraphResizeBinding;
+struct PreparedDecalMaterial;
+struct PreparedDecalSurface {
+    std::shared_ptr<const PreparedDecalMaterial> render;
+    bool ready{},current{};
+    std::uint64_t signature{},sourceFingerprint{};
+    std::string diagnostic;
+    std::array<std::string,4> sourceIds;
+    std::array<std::uint64_t,4> sourceFingerprints{};
+};
 
 enum class MaterialSlot { Albedo, Roughness, Metallic, Normal };
 struct TextureAsset {
@@ -109,6 +119,20 @@ public:
         materialDocumentReferences_=std::move(active);materialDocumentHistory_=std::move(history);
     }
     const std::filesystem::path& projectRoot() const { return projectRoot_; }
+    std::shared_ptr<const DecalAsset> findDecal(const std::string& id) const;
+    std::uint64_t decalRevision(const std::string& id) const;
+    std::string decalDiagnostic(const std::string& id) const;
+    void publishDecal(std::shared_ptr<const DecalAsset>);
+    void refreshDecals();
+    std::shared_ptr<const DecalAsset> createDecal(const std::string& name="New Decal");
+    std::shared_ptr<const DecalAsset> copyDecal(const std::string& id,const std::string& name={});
+    void protectDecalDocument(std::string id) {decalDocumentId_=std::move(id);}
+    void setDecalDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
+        if(active!=decalDocumentReferences_||history!=decalDocumentHistory_)++catalogRevision_;
+        decalDocumentReferences_=std::move(active);decalDocumentHistory_=std::move(history);
+    }
+    std::shared_ptr<const PreparedDecalSurface> preparedDecalMaterial(const std::string& id,std::uint32_t textureEdge=1024,ResourcePriority=ResourcePriority::Visible) const;
+    std::shared_ptr<const PreparedDecalSurface> preparedDecalMaterial(const DecalAsset&,std::uint64_t previewRevision,std::uint32_t textureEdge=1024,ResourcePriority=ResourcePriority::Selected) const;
     std::shared_ptr<const ParticleEffectAsset> findParticle(const std::string& id) const;
     std::uint64_t particleRevision(const std::string& id) const;
     std::string particleDiagnostic(const std::string& id) const;
@@ -211,6 +235,14 @@ private:
     struct ImportQueue;
     std::shared_ptr<ImportQueue> imports_;
     std::filesystem::path projectRoot_;
+    struct DecalVersion {std::shared_ptr<const DecalAsset> definition;std::uint64_t revision{};std::string diagnostic;};
+    std::unordered_map<std::string,DecalVersion> decals_;
+    std::uint64_t nextDecalRevision_{1};
+    std::string decalDocumentId_;
+    std::vector<std::string> decalDocumentReferences_,decalDocumentHistory_;
+    mutable std::unordered_map<std::string,std::shared_ptr<const PreparedDecalSurface>> preparedDecalMaterials_;
+    mutable std::unordered_map<std::string,std::chrono::steady_clock::time_point> decalMaterialInterest_;
+    std::shared_ptr<const PreparedDecalSurface> prepareDecalSurface(const DecalAsset&,const std::string& key,std::uint64_t,std::uint32_t,ResourcePriority) const;
     struct ParticleVersion { std::shared_ptr<const ParticleEffectAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,ParticleVersion> particles_;
     std::uint64_t nextParticleRevision_{1};

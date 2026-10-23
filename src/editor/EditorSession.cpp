@@ -1,4 +1,5 @@
 #include "EditorSession.h"
+#include "decals/DecalResolve.h"
 #include "EditorRenderFrame.h"
 #include "input/Navigation.h"
 #include "scene/SceneExtraction.h"
@@ -23,7 +24,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),navigationProfileEditor_(root),collisionLayersEditor_(root),gameplayEffectEditor_(root),animationEditor_(root),decalEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),decals_(assets,resources_),navigationPreview_(resources_,root),collisionOverlays_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -35,6 +36,8 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     });
     play_.setCollisionMeshDefinitions([this](const std::string& id){return collisions_.query(id);});
     editor_.setCollisionMeshQuery([this](const std::string& id){return collisions_.query(id);});
+    editor_.setDecalStatusQuery([this](EntityId id){return decals_.status(id);});
+    editor_.setDecalPatchQuery([this](EntityId id){return decals_.patch(id);});
     editor_.setQuaderBridge(&quader_);
     const NavigationAgentProfileQuery agentProfiles=[this,&assets](const std::string& id) {
         try {
@@ -133,7 +136,7 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     materialEditor_.filesChanged(paths);
     navigationProfileEditor_.filesChanged(paths);
     gameplayEffectEditor_.filesChanged(paths);
-    animationEditor_.filesChanged(paths);
+    animationEditor_.filesChanged(paths);decalEditor_.filesChanged(paths);
     collisionLayersEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
@@ -144,7 +147,7 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     }
 }
 void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::uint32_t bgfxFrame) {
-    collisions_.collect();
+    collisions_.collect();decals_.collect();
     std::vector<QuaderTarget> targets;
     const auto records=document_.scene().records();
     for(const auto& record:records) {
@@ -225,7 +228,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;
-    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
+    editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();navigationProfileEditor_.cancelInteraction();collisionLayersEditor_.cancelInteraction();gameplayEffectEditor_.cancelInteraction();animationEditor_.cancelInteraction();decalEditor_.cancelInteraction();gameInput_.cancel();pendingDecalPlacement_.reset();decals_.clear();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
@@ -234,7 +237,7 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
     playAnimations_.clear();animationPlayTick_=0;
     waitingForCollision_=false;
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
-    pendingDrops_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
+    pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
     if(play_.playing()) {
         play_.stop();settings_.camera=editCameraBeforePlay_;
         if(deferredSceneReload_ && !document_.assetId().empty())changedFiles_.push_back(resolveAssetPath(root_,document_.assetId()));
@@ -323,7 +326,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             }
         }
     }
-    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,gameplay,captures);
+    const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_,navigationProfileEditor_,collisionLayersEditor_,gameplayEffectEditor_,animationEditor_,decalEditor_,gameplay,captures);
     const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
     if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
@@ -344,13 +347,16 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!frame.openAnimation.empty())animationEditor_.requestOpen(frame.openAnimation,assets);
     animationEditor_.setAntiAliasing(editor_.antiAliasing());
     animationEditor_.draw(assets,renderer,resources_,prepared_,simulationSeconds);
+    if(frame.createDecal)decalEditor_.requestCreate(frame.decalFolder,assets);
+    if(!frame.openDecal.empty())decalEditor_.requestOpen(frame.openDecal,assets);
+    decalEditor_.setAntiAliasing(editor_.antiAliasing());decalEditor_.draw(assets,renderer,resources_,prepared_);
     status_=startupStatus_+playStatus_;
     if (!play_.playing() && (frame.documentReplaced || document.assetId() != cameraScene_ || document.documentGeneration()!=documentEpoch_)) {
         cameraPilot_.sync(document,settings_.camera);
         if (!previousAsset.empty()) cameras_[previousAsset]=previousCamera;
         cameraScene_=document.assetId(); navigation.cancel(); renderer.cancelPicking();
-        unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();
-        if(document.documentGeneration()!=documentEpoch_) { documentEpoch_=document.documentGeneration();pendingDrops_.clear(); }
+        unresolvedScene_.clear(); startupStatus_.clear(); status_.clear();materialDropStatus_.clear();decalDropStatus_.clear();
+        if(document.documentGeneration()!=documentEpoch_) { documentEpoch_=document.documentGeneration();pendingDrops_.clear();pendingDecalPlacement_.reset();decals_.clear(); }
         externalScene_={};savedPreviewFingerprint_=0;
         if (frame.documentReplaced) {
             settings_.camera=Camera{};
@@ -392,12 +398,65 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             materialDropStatus_.clear();renderer.cancelPicking();
         } catch(const std::exception& error) { materialDropStatus_="Material assignment: "+std::string(error.what())+'\n'; }
     }
+    const auto decalCamera=frame.viewportCamera.value_or(sceneCamera);
+    const Vec2 decalViewport{frame.viewport.width,frame.viewport.height};
+    const auto decalProjection=decalCamera.projectionMatrix(std::max(1.f,decalViewport[0])/std::max(1.f,decalViewport[1]),ClipDepth::NegativeOneToOne);
+    if(!frame.decalDragId.empty())decalDropStatus_.clear();
+    if(frame.decalPlacementRejected)decalDropStatus_="Decal placement: "+
+        (frame.decalPlacementDiagnostic.empty()?std::string("Choose a visible mesh surface."):frame.decalPlacementDiagnostic)+'\n';
+    if(frame.decalPlacement&&materialDocumentCurrent) {
+        pendingDecalPlacement_=PendingDecalPlacement{*frame.decalPlacement,document.documentGeneration(),
+            document.scene().generation(),document.scene().revision(),decalCamera.viewMatrix(),decalProjection,decalViewport};
+    }
+    if(pendingDecalPlacement_) {
+        const auto pending=*pendingDecalPlacement_;
+        const bool current=materialDocumentCurrent&&pending.document==document.documentGeneration()&&
+            pending.generation==document.scene().generation()&&pending.revision==document.scene().revision()&&
+            pending.view==decalCamera.viewMatrix()&&pending.projection==decalProjection&&pending.viewportSize==decalViewport&&
+            !ImGui::IsKeyPressed(ImGuiKey_Escape,false)&&!ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        if(!current){pendingDecalPlacement_.reset();decalDropStatus_.clear();}
+        else {
+            const auto& hit=pending.intent.hit;
+            const auto resolved=decals_.resolvePlacement(document.scene(),hit.entityId,hit.drawIndex,hit.primitive,hit.resourceRevision,hit.worldPosition);
+            if(resolved.failed) {decalDropStatus_="Decal placement: "+resolved.diagnostic+'\n';pendingDecalPlacement_.reset();}
+            else if(!resolved.ready)decalDropStatus_=resolved.diagnostic.empty()?"Preparing decal surface...\n":resolved.diagnostic+'\n';
+            else try {
+                SceneDecal value;
+                const auto replace=pending.intent.replaceEntity;
+                if(replace) {
+                    const auto record=document.scene().find(replace);
+                    if(!record||!record->decal)throw std::runtime_error("The decal is no longer available.");
+                    value=*record->decal;
+                }else value.asset=pending.intent.asset;
+                if(value.asset.empty()||!assets.findDecal(value.asset.id))throw std::runtime_error("The decal asset is unavailable.");
+                const auto previousSeed=value.seed;
+                value.seed=resolved.seed;
+                if(replace) {
+                    const auto record=document.scene().find(replace);
+                    const auto previousWorld=document.scene().worldTransform(replace);
+                    if(!previousWorld)throw std::runtime_error("The decal has an invalid world transform.");
+                    auto oldNormal=math::transformDirection(*previousWorld,{0,0,1});
+                    if(const auto oldReceiver=document.scene().worldTransform(previousSeed.receiver))
+                        if(const auto normals=math::normalMatrix(*oldReceiver))oldNormal=math::transformDirection(*normals,previousSeed.localNormal);
+                    const auto reanchored=decals::reanchorDecalFrame(*previousWorld,oldNormal,resolved.frame);
+                    const auto parent=record->parent?document.scene().worldTransform(record->parent):std::optional{Mat4{}};
+                    const auto inverse=parent?math::inverse(*parent):std::nullopt;
+                    if(!inverse)throw std::runtime_error("The decal parent has a singular transform.");
+                    const auto local=*inverse*reanchored;
+                    if(!document.edit("Place decal on surface",[&](auto& records,auto&) {
+                        for(auto& entity:records)if(entity.id==replace){entity.decal=value;entity.local=local;break;}
+                    }))throw std::runtime_error(document.status());
+                }else if(!document.createDecal(value,assets.displayName(value.asset.id),resolved.frame))throw std::runtime_error(document.status());
+                pendingDecalPlacement_.reset();decalDropStatus_.clear();renderer.cancelPicking();
+            }catch(const std::exception& error){decalDropStatus_="Decal placement: "+std::string(error.what())+'\n';pendingDecalPlacement_.reset();}
+        }
+    }
     bool gameOpen=editor_.panels().game;
     const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes(),attributeDebug_.enabled());
     if(captures)gameView_.drawCaptureStatus(captures->status());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
-        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive()});
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive() || navigationProfileEditor_.transactionActive() || collisionLayersEditor_.transactionActive() || gameplayEffectEditor_.transactionActive() || animationEditor_.transactionActive() || decalEditor_.transactionActive()});
     if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
@@ -466,6 +525,36 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const MaterialEvaluationContext materialContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};
     prepared_.setMaterialContext(materialContext);
     auto extracted=extractScene(renderScene,agentProfiles);
+    auto decalScene=decals_.prepare(renderScene,extracted);
+    if(!frame.decalPlacement&&materialDocumentCurrent&&!pendingDecalPlacement_&&(frame.decalPreview||!frame.decalDragId.empty())) {
+        SceneDecal value;Mat4 previewFrame;bool show=false;
+        if(frame.decalPreview) {
+            const auto& preview=*frame.decalPreview;const auto& hit=preview.hit;
+            const auto resolved=decals_.resolvePlacement(document.scene(),hit.entityId,hit.drawIndex,hit.primitive,hit.resourceRevision,hit.worldPosition);
+            previewFrame=resolved.ready?resolved.frame:decals::surfacePlacementFrame(hit.worldPosition,-sceneCamera.forward());
+            value.asset=preview.asset;show=true;
+            if(preview.replaceEntity)if(const auto record=document.scene().find(preview.replaceEntity);record&&record->decal) {
+                value=*record->decal;
+                if(const auto old=document.scene().worldTransform(preview.replaceEntity))
+                    previewFrame=decals::reanchorDecalFrame(*old,math::transformDirection(*old,{0,0,1}),previewFrame);
+            }
+        }else {
+            value.asset=frame.decalDragId;
+            if(const auto ray=sceneCamera.screenRay(frame.decalDragPosition[0],frame.decalDragPosition[1],frame.viewport))
+                if(const auto point=math::intersectPlane(*ray,sceneCamera.target,-sceneCamera.forward())) {
+                    previewFrame=decals::surfacePlacementFrame(*point,-sceneCamera.forward());show=true;
+                }
+        }
+        if(show) {
+            const auto surface=assets.preparedDecalMaterial(value.asset.id,1024,ResourcePriority::Placement);
+            bgfx::TextureHandle texture{BGFX_INVALID_HANDLE};Vec4 color{.65f,.65f,.65f,.35f};
+            if(surface&&surface->ready&&surface->render) {
+                const auto& material=*surface->render;texture=material.textures[0];
+                color={material.colorFactor[0]*value.tint[0],material.colorFactor[1]*value.tint[1],material.colorFactor[2]*value.tint[2],value.opacity*.65f};
+            }
+            editor_.drawDecalPlacementPlane(previewFrame,sceneCamera,texture,color);
+        }
+    }
     if(play_.playing()) {
         const auto ticks=play_.tickCount();
         const auto elapsed=ticks>=animationPlayTick_?(ticks-animationPlayTick_)*PlaySession::FixedStep:0.;
@@ -512,6 +601,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     }
     EditorRenderFrameInput renderInput;
     renderInput.extracted=std::move(extracted);renderInput.settings=settings_;
+    renderInput.decals=std::move(decalScene.decals);renderInput.decalReceivers=std::move(decalScene.receivers);
+    renderInput.surfacePickActive=frame.surfacePickActive||pendingDecalPlacement_.has_value();
     renderInput.settings.antiAliasing=editor_.antiAliasing();
     renderInput.sceneCamera=sceneCamera;renderInput.gameCamera=gameCamera;
     renderInput.sceneWidth=renderer.width();renderInput.sceneHeight=renderer.height();
@@ -573,6 +664,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!renderer.antiAliasingStatus().empty())status_+=renderer.antiAliasingStatus()+'\n';
     if(!renderer.refractionStatus().empty())status_+=renderer.refractionStatus()+'\n';
     if(!renderer.ssrStatus().empty())status_+=renderer.ssrStatus()+'\n';
+    if(!renderer.decalStatus().empty())status_+=renderer.decalStatus()+'\n';
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
     if(play_.playing()) {
         status_+=play_.status();
@@ -590,6 +682,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         status_+=environmentStatus+'\n';
     if(!resourceStatus_.empty()) { if(!status_.empty())status_+='\n';status_+=resourceStatus_; }
     status_+=materialDropStatus_;
+    status_+=decalDropStatus_;
+    if(!decalScene.status.empty())status_+=decalScene.status+'\n';
     if(!cameraPilot_.status().empty())status_+=cameraPilot_.status()+'\n';
     drawSceneDiagnostics(status_,renderer.pickingStatus(),renderer.modelStatus(),&renderer.shadowStats());
 }

@@ -5,7 +5,7 @@
 
 namespace crimson {
 bool isSceneGroup(const EntityRecord& record) {
-    return !record.model&&!record.particle&&!record.directional&&!record.point&&!record.environment&&
+    return !record.model&&!record.particle&&!record.decal&&!record.directional&&!record.point&&!record.environment&&
         !record.actor&&!record.movement&&!record.controller&&!record.navigation&&!record.playerInput&&
         !record.collider&&!record.camera&&!record.cameraFollow&&
         !record.quader&&!record.quaderGenerated;
@@ -38,7 +38,7 @@ Projection project(const Scene& scene) {
         // Visual models and emitters are authored entities, even when they are
         // attached to a character. Only the recipe's following camera is an
         // inline authoring part rather than an Outliner child.
-        const auto owner=actor&&!record.model&&!record.particle&&record.camera&&record.cameraFollow&&record.cameraFollow->target==record.parent&&
+        const auto owner=actor&&!record.model&&!record.particle&&!record.decal&&record.camera&&record.cameraFollow&&record.cameraFollow->target==record.parent&&
             record.parent==actor?actor:record.id;
         const auto inspectorOwner=!record.actor&&!group&&actor&&(record.model||record.particle||record.camera)?actor:record.id;
         result.order.push_back(record.id);result.owners.emplace(record.id,owner);

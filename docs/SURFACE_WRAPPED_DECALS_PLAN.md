@@ -1,6 +1,6 @@
 # Surface-wrapped PBR decals: implementation plan
 
-Status: proposed implementation, not implemented. Prepared 2026-10-23 after checkpoint `cb7e108` was pushed to `origin/codex/material-atomic-nodes`. Renderer baseline: `881de829bb37ce46fb043c6bd775691bf6b46ef8` on canonical shared `main`.
+Status: implemented and Release integration built, 2026-10-23. The CPU solver, separate-Quader-mesh proof, renderer, assets, persistence and editor integration are implemented. The real cylinder/drop/texture acceptance diagnostic passes on DX11 and DX12; interactive feature acceptance belongs to the user. The original plan was prepared after checkpoint `cb7e108` was pushed to `origin/codex/material-atomic-nodes`, against renderer baseline `881de829bb37ce46fb043c6bd775691bf6b46ef8`.
 
 ## 1. Intended result and decisions
 
@@ -21,9 +21,9 @@ Surface wrapping is a mapping problem; clustering alone does not solve it. Gener
 
 Large sphere/saddle patches cannot generally flatten without distortion. This feature promises bounded, validated local wrapping, not an arbitrary distortion-free global unwrap. Skinning/morphs, material Height/tessellation, Unlit/Additive/translucent/partially faded receivers, flowing liquid, thick liquid geometry, full live decal material graphs and manual seam editing are outside this first slice. These exclusions must be visible as concise placement diagnostics, not approximated with floating geometry or planar fallback.
 
-## 2. Current code constraints
+## 2. Implementation anchors
 
-The existing system has no decals. Important implementation anchors are:
+These were the baseline constraints for the implementation; the new surface-pick and decal paths extend these owners:
 
 | Existing code | Consequence |
 | --- | --- |
@@ -40,15 +40,15 @@ Follow [the architecture](ENGINE_ARCHITECTURE.md), [lighting guide](RENDERER_AND
 
 ## 3. CPU chart solver and dependency gate
 
-Use a private `DecalChartSolver` adapter around geometry-central's intrinsic Delaunay triangulation and `VectorHeatMethodSolver::computeLogMap(seed, LogMapStrategy::AffineLocal)`. Insert the seed into the derived patch, solve on the intrinsic triangulation, transfer coordinates back to the source subdivision and align them to the authored tangent direction. The library documents intrinsic geometry and improved local coordinates with Delaunay triangulations. [Algorithm documentation](https://geometry-central.net/surface/algorithms/vector_heat_method/)
+`DecalChart.cpp` first attempts exact intrinsic triangle unfolding on developable patches, accepting it only when all edge metrics and cycle coordinates agree. Nondevelopable patches use geometry-central's integer-coordinate intrinsic Delaunay triangulation and `VectorHeatMethodSolver::computeLogMap(seed, LogMapStrategy::AffineAdaptive)`. The seed is inserted into the derived patch; common-subdivision transfer returns coordinates to original source triangles and aligns them to the authored tangent direction. Neither path uses planar projection. The library documents intrinsic geometry and improved local coordinates with Delaunay triangulations. [Algorithm documentation](https://geometry-central.net/surface/algorithms/vector_heat_method/)
 
-Candidate source revision: `019669ddabda05e0f71fa3587cfb3c1dadf19cb8`, obtained from upstream HEAD during planning. This is a reproducible candidate, not a tested integration. MIT license and notices must accompany it. [Pinned source](https://github.com/nmwsharp/geometry-central/tree/019669ddabda05e0f71fa3587cfb3c1dadf19cb8), [license](https://github.com/nmwsharp/geometry-central/blob/019669ddabda05e0f71fa3587cfb3c1dadf19cb8/LICENSE)
+Selected and tested source revision: `019669ddabda05e0f71fa3587cfb3c1dadf19cb8`. The overlay installs its MIT license and notices. [Pinned source](https://github.com/nmwsharp/geometry-central/tree/019669ddabda05e0f71fa3587cfb3c1dadf19cb8), [license](https://github.com/nmwsharp/geometry-central/blob/019669ddabda05e0f71fa3587cfb3c1dadf19cb8/LICENSE)
 
 Add a project overlay port with exact archive SHA512 values for that source revision and its `happly` gitlink `88f79725d32d78e0e637ebf42d8432d519e1c7d0`. Keep the existing vcpkg baseline. Use one static library, existing vcpkg Eigen, `SUITESPARSE=OFF`, no example viewer/upstream test suite and no configure-time downloads. Ensure `Eigen3::Eigen` exists before configuring the library and reject fallback downloads. Geometry-central supports this dependency resolution, although its documented Windows verification predates our current toolchain. [Dependencies](https://geometry-central.net/build/dependencies/), [Windows build instructions](https://geometry-central.net/build/building/)
 
-The baseline currently offers Eigen 5.0.1; compatibility with the candidate solver revision is unverified. Milestone 1 must compile and exercise this combination before any editor/renderer integration. Build this proof as an isolated CPU target, not by relinking the official running application. Reuse the build wrapper's MSVC initialization; if target dispatch is needed, add a narrow CPU-fixture entry point without changing the existing Release/test/configure meanings. Do not upgrade the entire vcpkg baseline to accommodate this one dependency. A narrowly justified dependency patch/version override is preferable; record it explicitly.
+The dependency gate passed with MSVC/C++20 and the existing baseline's Eigen 5.0.1. A narrow package-config patch removes the restrictive Eigen 3.3 compatibility request while preserving the already installed `Eigen3::Eigen` target. No baseline upgrade or configure-time dependency download is used. `Build.cmd Release decal-proof` builds and runs the isolated solver, source adapter, resolution and cache fixtures without linking the official application. `Build.cmd Release decal-compile-proof` checks changed host translation units without linking it; `decal-host-proof` builds the focused CPU integration fixtures. The ordinary Release/test/configure meanings remain unchanged.
 
-If the gate fails, the named alternative is a narrow C++20 port of the Boost-1.0 Robust ExpMap core, behind the same adapter. Do not import the old full libgeometry distribution. That change must update this plan's selected solver and repeat the same geometric acceptance fixtures; it is not a silent runtime fallback. [Author's implementation and downloads](https://www.dgp.toronto.edu/~rms/software/expmapdemo.html)
+The contingency considered during planning was a narrow C++20 port of the Boost-1.0 Robust ExpMap core. It was not needed and is not included as a runtime fallback. [Author's implementation and downloads](https://www.dgp.toronto.edu/~rms/software/expmapdemo.html)
 
 No Eigen or geometry-central types escape the adapter. Public data uses Crimson math and plain indices; derived topology/solves use double precision. Existing resource workers own CPU preparation, with cancellation checks between bounded stages and stale-result rejection after a non-interruptible solver stage. No new worker pool or renderer threading rewrite is needed.
 
@@ -68,11 +68,11 @@ Introduce `.crimson-decal`, native version 1, with a UUID and typed texture refe
 
 Channel coverage is `textureCoverage * instanceOpacity * enabledChannelStrength`, clamped to [0,1]. Instance tint affects color only; opacity fades all enabled channels. Missing maps must not accidentally paint white or reset normals/roughness: channel enable state is explicit. A roughness-only wet patch is valid without a color image. Do not add metallic/emission/AO channels until their feature slice requests them.
 
-Extend ContentStorage recognition, BrowserCatalog types, creation/rename/move/duplicate, resource dependency scanning, thumbnails and project reference/deletion transactions. Decal texture references must be visited in saved scenes/assets and relevant undo history. Reuse the shared document-editor menu and concise property controls; preview on a simple folded/corner receiver.
+Extend ContentStorage recognition, BrowserCatalog types, creation/rename/move/duplicate, resource dependency scanning, thumbnails and project reference/deletion transactions. Decal texture references must be visited in saved scenes/assets and relevant undo history. Reuse the shared document-editor menu and concise property controls; preview on a simple flat receiver.
 
 ### Authored scene capability
 
-Proposed `SceneDecal` contains asset reference, surface seed, instance tint/opacity, edge feather, stable layer priority and receiver policy. There is no new special entity class or extra source component row.
+`SceneDecal` contains asset reference, surface seed, instance tint/opacity, edge feather, stable layer priority and receiver policy. There is no new special entity class or extra source component row.
 
 The surface seed records scene receiver EntityId, Quader occurrence/source key where applicable, asset UUID and geometry fingerprint, draw/primitive/triangle identity, barycentrics, and receiver-local fallback point/normal. Triangle indices are exact only while the fingerprint matches. They are not permanent semantic face IDs.
 
@@ -110,7 +110,7 @@ Cache shared local contact neighborhoods and acceleration structures. A bounded 
 1. Insert the seed into the derived sheet, retaining barycentric provenance.
 2. Adaptively refine coarse triangles and seam segments in the analysis patch. A small mark on a two-triangle wall must not inherit the wall's enormous sampling scale. Retain a working halo to reduce boundary influence.
 3. Build the intrinsic triangulation, flip to Delaunay and solve the selected local log map. Align its tangent direction to the authored frame and apply the inverse in-plane affine footprint matrix once to obtain normalized UVs.
-4. Transfer the chart through the common subdivision back to source triangles. Every generated output point must be reconstructible barycentrically on its own receiver; intrinsic edges may not become straight chords across the rendered surface. At the selected library revision, the signpost header warns that some common-subdivision orientation fields are incomplete. Compute orientation from reconstructed source geometry/barycentrics and the chart; do not trust that field. [Pinned header](https://github.com/nmwsharp/geometry-central/blob/019669ddabda05e0f71fa3587cfb3c1dadf19cb8/include/geometrycentral/surface/signpost_intrinsic_triangulation.h)
+4. Transfer the chart through the common subdivision back to source triangles. Every generated output point must be reconstructible barycentrically on its own receiver; intrinsic edges may not become straight chords across the rendered surface. The implementation uses integer-coordinate intrinsic triangulation and computes orientation from reconstructed source geometry/barycentrics and the chart rather than relying on incomplete signpost common-subdivision orientation metadata. [Integer-coordinate implementation](https://github.com/nmwsharp/geometry-central/blob/019669ddabda05e0f71fa3587cfb3c1dadf19cb8/include/geometrycentral/surface/integer_coordinates_intrinsic_triangulation.h)
 5. Validate finite coordinates, orientation, source correspondence, seam continuity, per-triangle Jacobian singular values and nonadjacent UV overlaps. Reject local foldovers and degenerate mappings relative to the expected authored handedness; a consistent intentional mirror is valid. Measure solver distortion in the intrinsic metre chart, accounting for the intentional footprint scale/shear when checking final UVs. Curvature/cut loci can require a smaller footprint.
 6. Clip output to the footprint and apply a short UV-edge feather plus texture coverage. Feathering must not conceal a discontinuous seam. Emit one or more render chunks per source receiver identity.
 
@@ -186,7 +186,7 @@ Apply the same resolved surface in fixed and generated opaque shaders, SSR recei
 
 Require original LOD0 for participating receiver occurrences while visible decals need matching coverage; restore ordinary residency when released. This has an explicit residency/performance cost. Height/skinning/morphs remain ineligible until a matching geometry path exists. Unsupported surfaces still occlude eligible ones.
 
-Scene, Game, saved-scene thumbnails and the decal preview use independent inputs/resources; ordinary material/particle/node previews allocate nothing for decals. No visible enabled decal means no decal prepass, raster, publication or retained optional allocation beyond normal retirement. Shader initialization/reload, embedded programs, manifests, source baselines and generated material cache identity change coherently. Plan for the next material ABI/generator identity if the new uniform interface changes it; current identities are ABI35/generator36, not numbers to preserve across an incompatible change.
+Scene, Game, saved-scene thumbnails and the decal preview use independent inputs/resources; ordinary material/particle/node previews allocate nothing for decals. No visible enabled decal means no decal prepass, raster, publication or retained optional allocation beyond normal retirement. Shader initialization/reload, embedded programs, manifests, source baselines and generated material cache identity change coherently. The implementation advances material ABI35/generator36 to ABI36/generator37, and render-view layout to revision 4.
 
 ## 8. Reimport, edits, deletion and recovery
 
@@ -204,7 +204,7 @@ Scene, Game, saved-scene thumbnails and the decal preview use independent inputs
 2. Drag onto visible eligible geometry. Resolve the render seed and show a pending footprint/preview without committing partial authored data. Commit one entity creation with Transform + seed + asset.
 3. Surface-drag to reposition; ordinary Transform rotation/scale edits rebuild the chart around the new frame. A cancelled drag restores the original seed/frame/history state.
 4. Inspector has Transform followed by one Decal section: Surface, Tint, Opacity, Edge Feather, Receivers and Layer. Width/height are the effective in-plane Transform dimensions, not an additional competing size control. Keep mapping algorithm and numerical solver settings out of panel bodies.
-5. One Outliner row and ordinary selection. Clicking a decal footprint should select its decal entity, while the surface-placement tool can explicitly acquire the underlying receiver. Use a separate decal pick operation/handle after scene picking, without replacing the receiver ID used by PBR composition.
+5. One Outliner row and ordinary selection. The center diamond and footprint edges select the decal entity; the surface-placement tool explicitly acquires the underlying receiver. These editor handles do not replace the receiver ID used by PBR composition.
 6. A concise status reports Preparing, Incomplete footprint, Unsupported receiver or Missing surface. Surface re-placement is the repair path; use short tooltips for operation details.
 
 No brush painter, scatter tool, new general attachment framework or gameplay controls are needed for this slice.
@@ -249,4 +249,19 @@ Native diagnostic fixtures (generated/disposable; do not modify the user's Main 
 
 During implementation, owners finish first, then perform one incremental integration build and focused CPU tests. Dependency/preset changes require the wrapper's configure path; `test` and `configure` remain alternative second arguments. Ask the user to save/close a running renderer only immediately before a build that needs its executable, never while implementing or for this plan. Do not expand into a general renderer performance suite.
 
-Renderer work is committed and pushed to canonical shared `main`, then Engine records the exact pin and host integration. Generated shaders are regenerated, never edited manually. Update implemented architecture status, the lighting guide, shader startup contract where relevant and README controls when the feature lands. This document must remain clearly marked as a plan until the implementation and acceptance evidence exist.
+Renderer work is committed and pushed to canonical shared `main`, then Engine records the exact pin and host integration. Generated shaders are regenerated, never edited manually. Update implemented architecture status, the lighting guide, shader startup contract where relevant and README controls when the feature lands. Implementation evidence follows; the design sections above retain their original milestone structure.
+
+## 13. Implemented acceptance evidence
+
+The first open-strip solver and manually supplied GPU patch fixtures missed two defects exposed by the user's closed cylinder. Chart preparation included the complete circumference and both caps, then discarded the entire stamp on a cap-rim distortion failure. The material raster depth gate also rejected geometrically matching clipped triangles because its slope tolerance was below Direct3D raster precision.
+
+The implementation now bounds the local chart by intrinsic edge distance, uses AffineAdaptive, and retains only validated seed-connected output at chart boundaries. Cache recipe version 2 rebuilds older data. The raster gate uses sixteen FP32 depth ULPs or a 1/256-pixel depth-slope allowance, whichever is larger, while retaining exact receiver identity. It adds no geometry offset or scene-depth writes.
+
+- The exact closed default Cylinder fixture retains 99.901% of UV area; the non-centered seed height 0.0441694 retains 97.4717%. Both publish source-exact curved geometry and diagnose the excluded cap-rim boundary as Incomplete footprint. The 1.25 stretch limit remains enforced.
+- The curved GPU oracle previously lost 2,835 of 5,134 interior pixels; the corrected shader loses zero on both DX12 and DX11. A hidden rear patch in the same receiver primitive remains blocked.
+- The explicit `decal_host_acceptance_tests` diagnostic copies the actual saved Cylinder/decal records and exact project `dirt_03.png` into a disposable project. A fresh case runs GPU Surface picking, release-state resolution, source preparation, entity creation and the ordinary immutable host-frame path. The saved case verifies the existing authored seed/frame directly. The target is excluded from ordinary builds/tests because these are project-specific inputs.
+- Both host cases pass on DX11 and DX12. The saved patch has 2,868 published vertices across 32 original source triangles, a 0.252726 m departure from its placement plane and a maximum source correspondence error of 0.000002384 m. Scene/Game images match at close, oblique and distant views. The matched old/new shader comparison corrects 2,054 pixels on each API with the same actual host patch.
+- Raw reports, source/patch exports and before/after images are in `build/Release/verification/decal-host-dx12` and `decal-host-dx11`; the independent geometric oracle is in `build/diagnostics/curved-decal-before-dx12` and `curved-decal-after-dx12`/`-dx11`. These are diagnostic artifacts, not authored Content.
+- The final official Release executable linked successfully. Seven focused main-tree decal CPU checks and five isolated dependency/solver/source/cache checks pass. Generated-material twelve-texture PBR, normal/roughness composition and refraction-source fixtures also passed on DX11 and DX12 before the cylinder-specific correction.
+
+The asset document/card preview is a flat plane. A flat textured footprint follows dragging; release builds the conforming patch. The comparison with [Three.js mesh decals](https://github.com/mrdoob/three.js/blob/dev/examples/jsm/geometries/DecalGeometry.js) and [Driven Decals](https://github.com/Anatta336/driven-decals) confirms that their boxes bound source-triangle clipping, while projection UVs can still distort at corners. Crimson retains intrinsic mapping and receiver-material composition. Geometry-central documents [AffineAdaptive](https://geometry-central.net/surface/algorithms/vector_heat_method/) as its highest-quality log-map strategy, with roughly similar cost for a single solve.

@@ -9,6 +9,7 @@
 #include "tools/CollisionLayersEditor.h"
 #include "tools/GameplayEffectEditor.h"
 #include "tools/AnimationEditor.h"
+#include "tools/DecalEditor.h"
 #include "NavigationPreview.h"
 #include "SceneParticles.h"
 #include "PlayShortcuts.h"
@@ -19,6 +20,7 @@
 #include "tools/CommandBar.h"
 #include "AttributeDebug.h"
 #include "CollisionResources.h"
+#include "DecalResources.h"
 #include "CollisionOverlays.h"
 #include "quader/QuaderBridge.h"
 #include "profiling/CaptureController.h"
@@ -84,6 +86,7 @@ private:
     CollisionLayersEditor collisionLayersEditor_;
     GameplayEffectEditor gameplayEffectEditor_;
     AnimationEditor animationEditor_;
+    DecalEditor decalEditor_;
     SceneParticles particles_;
     SceneAnimations editAnimations_,playAnimations_;
     std::uint64_t animationPlayTick_{};
@@ -91,6 +94,7 @@ private:
     ResourceManager& resources_;
     EditorResources prepared_;
     CollisionResources collisions_;
+    DecalResources decals_;
     NavigationPreview navigationPreview_;
     CollisionOverlays collisionOverlays_;
     QuaderBridge quader_;
@@ -105,8 +109,15 @@ private:
     ViewportRegion viewportRegion_;
     struct PendingDrop { std::vector<std::string> ids;Vec3 position;std::uint64_t documentEpoch{}; };
     std::vector<PendingDrop> pendingDrops_;
+    struct PendingDecalPlacement {
+        DecalSurfacePlacement intent;
+        std::uint64_t document{},generation{},revision{};
+        Mat4 view,projection;
+        Vec2 viewportSize;
+    };
+    std::optional<PendingDecalPlacement> pendingDecalPlacement_;
     std::unordered_map<std::string,Camera> cameras_;
-    std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_,materialDropStatus_;
+    std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_,materialDropStatus_,decalDropStatus_;
     bool recoveredLegacy_{false};
     bool simulationSuspended_{},skipSimulationTime_{true};
     PlayAction playActionPending_{PlayAction::None};

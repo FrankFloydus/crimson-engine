@@ -136,6 +136,7 @@ public:
     uint64_t documentGeneration() const { return documentGeneration_; }
     std::vector<std::string> historicalModelReferences() const;
     std::vector<std::string> historicalParticleReferences() const;
+    std::vector<std::string> historicalDecalReferences() const;
     std::vector<std::string> historicalAnimationReferences() const;
     std::vector<std::string> historicalMaterialReferences() const;
     std::vector<std::string> historicalNavigationAgentProfileReferences() const;
@@ -171,6 +172,7 @@ public:
     bool replaceQuaderImport(EntityId owner,const QuaderLink&,const std::vector<EntityRecord>& generated,
         const ModelMaterialRemap& remapMaterials={});
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
+    EntityId createDecal(const SceneDecal&,const std::string& name="Decal",const Mat4& local=Mat4{});
     EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models,EntityId parent=NoEntity);
     EntityId createDirectionalLight(const std::string& name = "Directional Light");

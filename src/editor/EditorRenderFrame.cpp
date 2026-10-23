@@ -35,6 +35,7 @@ void includeMeshPopulation(PreparedRenderView& view,const PreparedEditorModel& p
     auto& revision=view.meshPopulationRevision;
     hash(revision,prepared.signature);hash(revision,instance.entityId);hash(revision,instance.model.transform);
     hash(revision,instance.resourceRevision);hash(revision,instance.forceFullDetail);hash(revision,instance.pickable);
+    hash(revision,instance.receiveDecals);
     hash(revision,instance.shading);hash(revision,instance.blend);hash(revision,instance.castShadows);hash(revision,instance.receiveShadows);
     hash(revision,instance.meshShading);
     hash(revision,instance.lightingScopes.directReceiverMask);hash(revision,instance.lightingScopes.shadowCasterMask);
@@ -44,8 +45,9 @@ void includeMeshPopulation(PreparedRenderView& view,const PreparedEditorModel& p
 }
 
 void appendModel(PreparedRenderView& view,ViewPins& pins,const ExtractedModel& model,
-                 std::shared_ptr<const PreparedEditorModel> prepared,bool selected,EditorResources& resources) {
-    view.instances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,selected,true,&prepared->materials});
+                 std::shared_ptr<const PreparedEditorModel> prepared,bool fullDetail,bool receiveDecals,EditorResources& resources) {
+    view.instances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,fullDetail,true,&prepared->materials});
+    view.instances.back().receiveDecals=receiveDecals;
     view.instances.back().castShadows=model.castShadows;view.instances.back().receiveShadows=model.receiveShadows;
     view.instances.back().lightingScopes=model.lightingScopes;
     view.instances.back().lightingCategory=model.lightingCategory;
@@ -118,6 +120,14 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     const auto receiverStarted=stats?Clock::now():Clock::time_point{};
     std::uint64_t signature=14695981039346656037ull;
     for(const auto& material:worldPins->particles)signature=(signature^material->signature)*1099511628211ull;
+    for(const auto& decal:input.decals) {
+        using streaming::detail::hash;
+        hash(signature,decal.entityId);hash(signature,decal.stableOrder);hash(signature,decal.layer);
+        hash(signature,decal.tint);hash(signature,decal.opacity);hash(signature,decal.edgeFeather);
+        if(decal.patch)hash(signature,decal.patch->fingerprint);
+        if(decal.material)hash(signature,decal.material->fingerprint);
+    }
+    const auto decalReceiver=[&](EntityId id){return std::find(input.decalReceivers.begin(),input.decalReceivers.end(),id)!=input.decalReceivers.end();};
 
     PreparedRenderView scene;
     scene.identity={RenderViewPurpose::Scene,0};scene.settings=input.settings;scene.settings.camera=input.sceneCamera;
@@ -127,15 +137,16 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     auto scenePins=std::make_shared<ViewPins>();
     for(const auto& model:input.extracted.models) {
         const bool selected=std::find(input.selection.begin(),input.selection.end(),model.id)!=input.selection.end();
+        const bool receiveDecals=decalReceiver(model.id),fullDetail=selected||receiveDecals||input.surfacePickActive;
         if(!selected)if(const auto metadata=assets.findModel(model.assetId,model.primitive))
             if(!visibleBounds(resources.modelBounds(model,metadata),model.world,input.sceneCamera,input.sceneAspect))continue;
-        auto prepared=resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,selected,
+        auto prepared=resources.prepare(model.assetId,model.world,input.sceneCamera,input.sceneHeight,fullDetail,
             ResourcePriority::Visible,input.sceneAspect,model.materialOverrides,0,&model);
         includePreparedModel(stats,prepared);
         if(prepared) {
             signature=(signature^prepared->signature)*1099511628211ull;
             if(const auto pose=resources.pose(model,prepared->asset))signature=(signature^pose->signature)*1099511628211ull;
-            appendModel(scene,*scenePins,model,std::move(prepared),selected,resources);
+            appendModel(scene,*scenePins,model,std::move(prepared),fullDetail,receiveDecals,resources);
         }
     }
     for(const auto& id:input.placementIds) {
@@ -159,20 +170,21 @@ std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
         const auto aspect=static_cast<float>(input.gameWidth)/input.gameHeight;
         auto gamePins=std::make_shared<ViewPins>();
         for(const auto& model:input.extracted.models) {
+            const bool receiveDecals=decalReceiver(model.id);
             if(const auto metadata=assets.findModel(model.assetId,model.primitive))
                 if(!visibleBounds(resources.modelBounds(model,metadata),model.world,*input.gameCamera,aspect))continue;
-            auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,false,
+            auto prepared=resources.prepare(model.assetId,model.world,*input.gameCamera,input.gameHeight,receiveDecals,
                 ResourcePriority::Visible,aspect,model.materialOverrides,0,&model);
             includePreparedModel(stats,prepared);
             if(prepared) {
-                appendModel(game,*gamePins,model,std::move(prepared),false,resources);
+                appendModel(game,*gamePins,model,std::move(prepared),receiveDecals,receiveDecals,resources);
             }
         }
         game.pinned=std::move(gamePins);frame->views.push_back(std::move(game));
     }
     if(stats)stats->receiverPreparationMs=std::chrono::duration<double,std::milli>(Clock::now()-receiverStarted).count();
     frame->world=freezeEditorRenderWorld(input.extracted,std::move(input.particles),std::move(input.particleMaterials),
-        std::move(worldPins),input.worldId,input.shadowResolution,input.materialContext,priorityOrigin);
+        std::move(worldPins),input.worldId,input.shadowResolution,input.materialContext,priorityOrigin,std::move(input.decals));
     return frame;
 }
 } // namespace crimson

@@ -52,6 +52,13 @@ void acceptViewportModelDrop(EditorFrame& frame) {
             frame.materialDropDelivered=material->IsDelivery();
             if(frame.materialDropDelivered)ImGui::SetWindowFocus();
         }
+    } else if(const auto* decal=ImGui::AcceptDragDropPayload("CC_DECAL_ASSET",ImGuiDragDropFlags_AcceptBeforeDelivery)) {
+        auto ids=decode(*decal,false);
+        if(ids.size()==1) {
+            frame.decalDragId=AssetRef<DecalAsset>{std::move(ids.front())};
+            const auto mouse=ImGui::GetIO().MousePos;frame.decalDragPosition={mouse.x,mouse.y};
+            frame.decalDropDelivered=decal->IsDelivery();if(frame.decalDropDelivered)ImGui::SetWindowFocus();
+        }
     } else if (const auto* particle=ImGui::AcceptDragDropPayload("CC_PARTICLE_ASSET")) {
         auto ids=decode(*particle,false);
         if (particle->IsDelivery() && ids.size()==1) {

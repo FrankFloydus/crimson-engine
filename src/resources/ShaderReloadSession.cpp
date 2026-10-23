@@ -75,7 +75,8 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,22> definitions{{
+    constexpr std::array<Pair,23> definitions{{
+        {RendererProgram::DecalRaster,"vs_decal","fs_decal"},
         {RendererProgram::ModelReflection,"vs_model","fs_model_reflection"},
         {RendererProgram::InstancedReflection,"vs_model_instanced","fs_model_reflection"},
         {RendererProgram::SphereReflection,"vs_pbr","fs_pbr_reflection"},
@@ -105,6 +106,7 @@ void ShaderReloadSession::pump() {
     pairs.push_back({RendererProgram::SsrTraceCompute,{},ready.at("cs_ssr_trace")->bytes});
     pairs.push_back({RendererProgram::ShadowContactTrace,{},ready.at("cs_shadow_contact_trace")->bytes});
     pairs.push_back({RendererProgram::ShadowContactPublish,{},ready.at("cs_shadow_contact_publish")->bytes});
+    pairs.push_back({RendererProgram::DecalPublish,{},ready.at("cs_decal_publish")->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }

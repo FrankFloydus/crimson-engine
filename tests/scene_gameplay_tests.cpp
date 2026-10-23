@@ -138,7 +138,7 @@ void composedPlayerRecipeAndMigration() {
     for(unsigned axis=0;axis<3;++axis)near(math::transformDirection(runtimeWorld,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}),
         math::transformDirection(rootOrientation,axis==0?Vec3{1,0,0}:axis==1?Vec3{0,1,0}:Vec3{0,0,1}));
     const auto json=Json::parse(serializeSceneSnapshot({{},"Composed",document.scene().records(),document.scene().properties()}));
-    require(json.at("version")==23,"Component scene writer did not use schema23.");
+    require(json.at("version")==24,"Component scene writer did not use schema24.");
     for(const auto& entity:json.at("entities")) {
         require(!entity.contains("character"),"Current scene writer retained the removed Character representation.");
         if(entity.contains("camera"))require(!entity.at("camera").contains("followTarget")&&!entity.at("camera").contains("followOffset"),
@@ -174,7 +174,7 @@ void composedPlayerRecipeAndMigration() {
     const auto convertedWorld=*migrated.worldTransform(legacyCamera);
     for(unsigned index=0;index<16;++index)require(std::abs(convertedWorld[index]-legacyWorld[index])<.0002f,"Legacy follow migration changed the visible camera pose.");
     {std::ifstream file(sceneAssetPath(project.root,legacyId),std::ios::binary);const std::string unchanged{std::istreambuf_iterator<char>(file),{}};require(unchanged==bytes,"Read migration rewrote the saved legacy scene.");}
-    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==23,"Migrated scene did not write only the current representation.");
+    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==24,"Migrated scene did not write only the current representation.");
     for(const auto& entity:current.at("entities"))require(!entity.contains("character"),"Saving migrated components retained Character data.");
 }
 
@@ -344,7 +344,7 @@ void nativeColliderStorageAndValidation() {
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     require(snapshot.records.size()==2&&sameCollisionMesh(snapshot.records[0].collider->mesh,geometry)&&snapshot.records[0].collider->source.empty(),"Native collision persistence required a model asset or changed its triangles.");
     auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==23&&json["entities"][0]["collider"].contains("mesh"),"Native collision did not write schema21 triangle data.");
+    require(json.at("version")==24&&json["entities"][0]["collider"].contains("mesh"),"Native collision did not write schema21 triangle data.");
     for(const auto index:Json::array({-1,4294967296ull,.5})) {
         auto malformed=json;malformed["entities"][0]["collider"]["mesh"]["indices"][0]=index;
         {std::ofstream output(sceneAssetPath(project.root,document.assetId()),std::ios::binary);output<<malformed.dump();}
@@ -374,7 +374,7 @@ void componentsAndStorage(){
     require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==23,"Scene writer did not use version 23.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==24,"Scene writer did not use version 24.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=legacyComposition(Json::parse(serializeSceneSnapshot(snapshot)));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -458,7 +458,7 @@ void unifiedColliderStorageHistoryAndCompatibility() {
         require(document.save("Unified colliders"),document.status());SceneDocument loaded(project.root);
         require(loaded.load(document.assetId())&&loaded.scene().find(id)->collider==authored.collider,"A collider shape lost retained dimensions/source/display on save/reopen.");
         const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-        require(json.at("version")==23&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
+        require(json.at("version")==24&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
         SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&runtime.scene().find(id)->collider==authored.collider,"Play copy lost unified collider settings.");
     }
     auto invalid=authored;invalid.collider->shape=static_cast<ColliderShape>(255);
@@ -484,7 +484,7 @@ void unifiedColliderStorageHistoryAndCompatibility() {
     writeLegacy();loaded=readSceneSnapshot(project.root,legacyId);
     require(loaded.records[0].collider&&loaded.records[0].collider->shape==ColliderShape::Trimesh&&loaded.records[0].collider->showCollisionInGame&&
         loaded.records[0].collider->collisionColor==Vec4{.2f,.3f,.4f,.5f}&&!loaded.records[0].collider->source.empty(),"A v11 meshCollider did not migrate its source/display to Trimesh.");
-    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==23&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
+    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==24&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
 }
 
 void runtimePatches(){
@@ -623,7 +623,7 @@ void sphereCreationMaterialsAndStorage(){
     }
     require(document.save("Sphere primitives"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==23,"Sphere primitive unnecessarily changed the scene schema.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==24,"Sphere primitive unnecessarily changed the scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());require(!reopened.dirty(),"Loading a Sphere scene dirtied its authored document.");
     SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
@@ -650,7 +650,7 @@ void primitiveParametersStorageHistoryAndRuntime(){
     require(document.scene().find(document.selection().primary)->primitive==cylinderRecord.primitive,"Cylinder duplication lost its authored geometry parameters.");
     require(document.save("Authored primitive parameters"),document.status());
     const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(json.at("version")==23,"Primitive parameters unnecessarily changed the scene schema.");
+    require(json.at("version")==24,"Primitive parameters unnecessarily changed the scene schema.");
     for(const auto& entity:json.at("entities"))if(entity.contains("model")) {
         const auto& value=entity.at("primitive");
         if(entity.at("name")=="Box")require(value.at("size")==Json::array({2,3,4}) && !value.contains("radius") && !value.contains("sides"),
@@ -786,7 +786,7 @@ void obsoleteModelFadeSettingsAreIgnored() {
         std::ifstream file(project.root/id);const std::string retained{std::istreambuf_iterator<char>(file),{}};
         require(retained==bytes,"Loading obsolete fading rewrote authored scene bytes.");
         const auto current=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,id)));
-        require(current.at("version")==23,"Removed fading changed the current scene schema.");
+        require(current.at("version")==24,"Removed fading changed the current scene schema.");
         for(const auto& entity:current.at("entities"))require(!entity.contains("fadeWhenOccluding"),"Scene writer retained removed model fading.");
     }
 }
@@ -803,7 +803,7 @@ void directionalAngularDiameterStorageHistoryAndRuntime() {
         "Directional angular diameter undo/redo lost its exact authored value.");
     require(document.save("Angular directional light"),document.status());
     const auto saved=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(saved.at("version")==23&&saved.at("entities").front().at("directional").at("shadowAngularDiameter")==1.25f,
+    require(saved.at("version")==24&&saved.at("entities").front().at("directional").at("shadowAngularDiameter")==1.25f,
         "Directional angular diameter did not use the optional v23 light representation.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const auto angle:{0.f,2.f}) {
@@ -867,7 +867,7 @@ void entityVisibilityStorageAndRuntime() {
         "Showing the original group ignored child overrides or changed its independent duplicate.");
     require(document.save(),document.status());require(sceneFileFingerprint(project.root,document.assetId())!=initialFingerprint,"Visibility save left the scene fingerprint unchanged.");
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==23,"Entity visibility did not write scene schema 23.");
+    require(serialized.at("version")==24,"Entity visibility did not write scene schema 24.");
     for(const auto& entity:serialized.at("entities"))require(entity.at("visible").is_boolean(),"An entity did not write its authored visibility flag.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(reopened.scene().isVisible(actor)&&!reopened.scene().isVisible(model)&&!reopened.scene().isVisible(duplicate),"Save/load lost effective hierarchy visibility.");
@@ -907,7 +907,7 @@ void pointFalloffAndSpecularStorageAndRuntime() {
         "Point falloff/specular redo lost the authored values.");
     require(document.save("Point falloff"),document.status());const auto authored=document.scene().records();
     const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(serialized.at("version")==23&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
+    require(serialized.at("version")==24&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
         serialized["entities"][0]["point"].at("specularStrength")==.35f&&serialized["entities"][0]["point"].at("attenuation")==1.25f,
         "Point falloff/specular fields did not persist in the current scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
@@ -1002,7 +1002,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==23,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==24,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=legacyComposition(serialized);legacy["version"]=version;
@@ -1316,7 +1316,7 @@ void meshShadingStorageHistoryAndRuntime() {
         document.redo(),"Mesh replacement undo changed the retained shading policy.");
     require(document.save("Mesh shading"),document.status());
     const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(json.at("version")==23,"Mesh shading unnecessarily changed the scene schema.");
+    require(json.at("version")==24,"Mesh shading unnecessarily changed the scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());require(!reopened.dirty(),"Reading mesh shading dirtied the scene.");
     const auto records=document.scene().records();const auto history=document.history().size();
@@ -1369,7 +1369,7 @@ void modelAnimationStorageAndRuntime() {
         "Animation controls did not participate in scene history.");
     require(document.save("Animated scene"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==23,"Animation writer did not use scene schema 23.");
+    require(json.at("version")==24,"Animation writer did not use scene schema 24.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());
     const auto history=document.history().size();const auto records=document.scene().records();

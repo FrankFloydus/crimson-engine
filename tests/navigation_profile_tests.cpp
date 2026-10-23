@@ -65,12 +65,14 @@ void legacyProfilesAndExplicitVolume() {
     require(document.createNavigationVolume()==volume&&document.history().size()==history+1,"A second active volume was created.");
     require(document.undo()&&!document.scene().find(volume)&&document.redo(),"Navigation Volume creation did not undo/redo atomically.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document)&&play.navigationAgentProfile(first.controller->profile.id),"Play lost unsaved converted profile definitions.");
-    require(removeSceneComponent(document,player,SceneComponentKind::Navigation),"Cannot remove Navigation Agent.");
-    require(document.scene().find(player)->controller->profile==first.controller->profile,"Removing Navigation changed the physical capsule profile.");
+    require(!document.scene().find(player)->navigation,"First-person Player unexpectedly requires a Navigation Agent.");
+    require(removeSceneComponent(document,enemy,SceneComponentKind::Navigation),"Cannot remove the Enemy Navigation Agent.");
+    require(document.scene().find(enemy)->controller->profile==second.controller->profile&&
+        document.scene().find(player)->controller->profile==first.controller->profile,"Removing Navigation changed a physical capsule profile.");
     require(document.save(),document.status());
     const auto materialized=loadNavigationAgentProfile(project.root,first.controller->profile.id);
     require(materialized.traversal==definition->traversal&&!document.navigationAgentProfile(first.controller->profile.id),"Scene Save did not materialize/retire its staged definition.");
-    const auto saved=Json::parse(read(sceneAssetPath(project.root,document.assetId())));require(saved.at("version")==23,"Profile scene did not write schema 23.");
+    const auto saved=Json::parse(read(sceneAssetPath(project.root,document.assetId())));require(saved.at("version")==24,"Profile scene did not write schema 24.");
     for(const auto& entity:saved["entities"])if(entity.contains("controller"))require(entity["controller"].contains("profile")&&!entity["controller"].contains("height")&&!entity["controller"].contains("radius"),"Current scene wrote obsolete inline capsule dimensions.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&reopened.stagedNavigationAgentProfiles().empty(),"Current scene recreated legacy conversion state.");
     auto edited=materialized;edited.traversal.height=3;saveNavigationAgentProfile(project.root,edited);

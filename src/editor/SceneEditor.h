@@ -19,6 +19,7 @@ class NavigationAgentProfileEditor;
 class CollisionLayersEditor;
 class GameplayEffectEditor;
 class AnimationEditor;
+class DecalEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
 struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true},navigationMesh{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
@@ -26,7 +27,7 @@ class SceneEditor {
     friend struct EditorPerformanceProbe;
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
-                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,AnimationEditor&,
+                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,AnimationEditor&,DecalEditor&,
                      const GameplayInspectorContext& gameplay={}, profiling::CaptureController* captures=nullptr);
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
@@ -54,6 +55,9 @@ public:
     void setQuaderBridge(QuaderBridge* bridge){quader_=bridge;}
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { viewport_.setAgentProfileQuery(std::move(query)); }
     void setNavigationBuildStatus(std::function<std::string(const std::string&)> query) { navigationBuildStatus_=std::move(query); }
+    void setDecalStatusQuery(std::function<std::string(EntityId)> query) { decalStatus_=std::move(query); }
+    void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { viewport_.setDecalPatchQuery(std::move(query)); }
+    void drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) { viewport_.drawDecalPlacementPlane(frame,camera,texture,color); }
     const std::string& navigationPreviewProfile() const { return navigationPreviewProfile_; }
 private:
     enum class Pending { None, New, Open, Exit };
@@ -85,7 +89,8 @@ private:
     std::uint64_t navigationPreviewGeneration_{};
     EntityId navigationPreviewVolume_{};
     std::function<std::string(const std::string&)> navigationBuildStatus_;
-    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Game };
+    std::function<std::string(EntityId)> decalStatus_;
+    enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Decal,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }
     void cancelOpen();

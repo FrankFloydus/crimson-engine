@@ -5,6 +5,7 @@
 #include "resources/AssetId.h"
 #include "MaterialGraphReferences.h"
 #include "ParticleAsset.h"
+#include "DecalAsset.h"
 #include "resources/Paths.h"
 #include "resources/ResourceManager.h"
 #include "resources/StreamingModel.h"
@@ -28,7 +29,7 @@ void materialDependencies(const std::filesystem::path& root,const MaterialAsset&
         if(extension==".hdr")throw std::runtime_error("A material cannot use HDR images in material slots.");result.push_back(file);
     });
 }
-std::vector<std::filesystem::path> dependencies(const std::filesystem::path& root,std::span<const AssetEntry> models,const AssetReferenceManager& policy,std::span<const AssetEntry> particles){
+std::vector<std::filesystem::path> dependencies(const std::filesystem::path& root,std::span<const AssetEntry> models,const AssetReferenceManager& policy,std::span<const AssetEntry> particles,std::span<const AssetEntry> decals){
     std::vector<std::filesystem::path> result;
     for(const auto& model:models){const auto file=checkedManagedAssetPath(root,model.id);result.push_back(file);std::ifstream input(file);if(!input)throw std::runtime_error("Model manifest is unavailable: "+model.id);
         if(const auto bundle=quaderBundleSource(root,model.id))result.push_back(*bundle);
@@ -57,12 +58,17 @@ std::vector<std::filesystem::path> dependencies(const std::filesystem::path& roo
         const auto material=loadMaterialAsset(root,policy.resolveParticleMaterial(effect.emitter.material.id));
         materialDependencies(root,material,policy,result);
     }
+    for(const auto& entry:decals) {
+        result.push_back(checkedManagedAssetPath(root,entry.id));auto asset=loadDecalAsset(root,entry.id);
+        rewriteDecalTextureReferences(asset,[&](const std::string& id,bool){const auto target=policy.resolve(id);return policy.deleted(id)&&(target==GrayTextureId||target==NeutralNormalTextureId)?std::string{}:target;});
+        for(const auto& id:decalTextureReferences(asset))if(!isEngineAssetId(id))result.push_back(checkedManagedAssetPath(root,id));
+    }
     std::sort(result.begin(),result.end());result.erase(std::unique(result.begin(),result.end()),result.end());return result;
 }
 }
 std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem::path& root,std::span<const AssetEntry> models,const AssetReferenceManager& policy,
-    std::stop_token stop,const std::shared_ptr<DeletionProgress>& progress,std::span<const AssetEntry> particles){
-    canceled(stop);auto result=std::make_shared<DeletionValidation>();result->dependencies=dependencies(root,models,policy,particles);
+    std::stop_token stop,const std::shared_ptr<DeletionProgress>& progress,std::span<const AssetEntry> particles,std::span<const AssetEntry> decals){
+    canceled(stop);auto result=std::make_shared<DeletionValidation>();result->dependencies=dependencies(root,models,policy,particles,decals);
     std::sort(result->dependencies.begin(),result->dependencies.end());
     result->dependencies.erase(std::unique(result->dependencies.begin(),result->dependencies.end()),result->dependencies.end());
     const auto before=fingerprintFileStates(result->dependencies);
@@ -100,6 +106,14 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
         });
         result->bytes+=sizeof(ParticleEffectAsset)+definition.id.size()+definition.name.size();
         if(progress)progress->completed.fetch_add(1);
+    }
+    for(const auto& entry:decals) {
+        canceled(stop);auto asset=loadDecalAsset(root,entry.id);
+        rewriteDecalTextureReferences(asset,[&](const std::string& id,bool){const auto target=policy.resolve(id);return policy.deleted(id)&&(target==GrayTextureId||target==NeutralNormalTextureId)?std::string{}:target;});
+        for(const auto& id:decalTextureReferences(asset))if(!isEngineAssetId(id)) {
+            const auto file=checkedManagedAssetPath(root,id);if(file.extension()==".hdr")throw std::runtime_error("Decal maps cannot use HDR environments.");(void)decodeManagedImage(file);
+        }
+        result->bytes+=sizeof(DecalAsset)+asset.id.size()+asset.name.size();if(progress)progress->completed.fetch_add(1);
     }
     canceled(stop);result->fileStateFingerprint=fingerprintFileStates(result->dependencies);
     if(before!=result->fileStateFingerprint)throw std::runtime_error("Asset dependencies changed during deletion validation.");

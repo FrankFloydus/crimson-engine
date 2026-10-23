@@ -62,7 +62,7 @@ void effectsAndTagsStorageHistory(){
     require(document.begin("Change references")&&document.update([&](auto& records,auto&){records.front().effects->starting.clear();records.front().tags->remove(stats::Health);}),document.status());
     document.cancel();require(sameEntity(*document.scene().find(id),authored),"Canceled effect/tag gesture changed the entity.");
     require(document.save("Effect and tag authoring"),document.status());const auto file=sceneAssetPath(project.root,document.assetId());const auto bytes=read(file);const auto json=Json::parse(bytes);
-    require(json.at("version")==23&&!json["entities"][0].contains("attributes")&&json["entities"][0]["effects"]["starting"].size()==2,"Current scene retained authored membership or omitted repeated effects.");
+    require(json.at("version")==24&&!json["entities"][0].contains("attributes")&&json["entities"][0]["effects"]["starting"].size()==2,"Current scene retained authored membership or omitted repeated effects.");
     SceneDocument opened(project.root);require(opened.load(document.assetId())&&!opened.dirty()&&read(file)==bytes&&sameEntity(*opened.scene().find(id),authored),"Current scene changed values or wrote during load.");
     document.select({id},id);require(document.duplicateSelection(),document.status());const auto copy=document.selection().primary;
     require(document.scene().find(copy)->effects==authored.effects&&document.scene().find(copy)->tags==authored.tags,"Duplication lost Effects/Tags.");
@@ -74,6 +74,8 @@ void privateLegacySpeedConversion(){
     const auto current=Json::parse(serializeSceneSnapshot({{},"Legacy values",{actor},{}}));
     for(const auto version:{4,10,15,16,17,18,19,20,21}){
         Project project;auto json=current;json["version"]=version;auto& entity=json["entities"][0];
+        entity.erase("movement");
+        if(version>=16)entity["motor"]={{"enabled",true}};
         if(version<=15){entity["character"]={{"height",1.8},{"radius",.3},{"moveSpeed",8.25}};entity.erase("controller");entity.erase("motor");}
         else if(version<=20){entity["motor"]["moveSpeed"]=8.25;entity["motor"]["enabled"]=false;if(version<=17){entity["controller"]["height"]=1.8;entity["controller"]["radius"]=.3;}}
         else entity["attributes"]=Json::array({{{"tag","Stats.MovementSpeed"},{"startingBase",8.25}},{{"tag","Project.Zero"},{"startingBase",0}}});
@@ -84,7 +86,10 @@ void privateLegacySpeedConversion(){
         else require(!startingOverride(document,actor.id,stats::Vitality),"A legacy Actor acquired Player values from its name.");
         if(version==21)require(startingOverride(document,actor.id,GameplayTag{"Project.Zero"})==0,"Legacy zero-valued unresolved data was dropped.");
         require(document.save(),document.status());const auto saved=Json::parse(read(sceneAssetPath(project.root,document.assetId())));
-        require(saved.at("version")==23&&!saved["entities"][0].contains("attributes")&&saved["entities"][0].at("motor").size()==1&&startingOverride(document,actor.id,stats::MovementSpeed)==8.25,"Explicit Save retained membership/legacy speed or lost the converted value.");
+        const auto& savedActor=saved["entities"][0];
+        require(saved.at("version")==24&&!savedActor.contains("attributes")&&!savedActor.contains("motor")&&
+            savedActor.at("movement").contains("jumpHeight")&&!savedActor.at("movement").contains("moveSpeed")&&
+            startingOverride(document,actor.id,stats::MovementSpeed)==8.25,"Explicit Save retained membership/legacy speed or lost current Movement and the converted value.");
     }
 }
 void tagsAndEffectsQuaderPreservation(){

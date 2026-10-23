@@ -60,7 +60,7 @@ void persistenceAndLegacyCompatibility() {
     const std::array behaviours{EnemyBehaviour::Idle,EnemyBehaviour::ChasePlayer,EnemyBehaviour::RandomMove};std::array<EntityId,3> ids{};
     for(std::size_t i=0;i<behaviours.size();++i){ids[i]=document.createEnemy("Enemy "+std::to_string(i));auto entity=*document.scene().find(ids[i]);entity.enemy=SceneEnemy{behaviours[i],float(i)+.5f,float(i),float(i)+2};require(document.updateEntity(ids[i],entity),document.status());}
     require(document.save("Enemy definitions"),document.status());auto file=sceneAssetPath(project.root,document.assetId());const auto bytes=read(file);const auto json=Json::parse(bytes);
-    require(json.at("version")==23,"Enemy scene did not write the current schema.");
+    require(json.at("version")==24,"Enemy scene did not write the current schema.");
     const auto loaded=readSceneSnapshot(project.root,document.assetId());Scene copy;copy.apply(loaded.records,loaded.properties);
     for(const auto id:ids)require(copy.find(id)->enemy==document.scene().find(id)->enemy,"Enemy settings did not round-trip through the scene registry.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&read(file)==bytes,"Opening Enemy definitions rewrote the scene or marked it dirty.");
@@ -68,7 +68,7 @@ void persistenceAndLegacyCompatibility() {
     SceneDocument legacy(project.root);require(legacy.load(document.assetId()),legacy.status());
     for(const auto id:ids)require(!legacy.scene().find(id)->enemy&&legacy.scene().find(id)->actor&&legacy.scene().find(id)->navigation,"An old actor was implicitly converted to Enemy based on its name or capabilities.");
     require(!legacy.dirty()&&read(file)==oldBytes,"Opening a version-18 scene persisted an Enemy conversion.");
-    require(legacy.save(),legacy.status());file=sceneAssetPath(project.root,legacy.assetId());require(Json::parse(read(file)).at("version")==23,"Explicit legacy save retained the old schema.");
+    require(legacy.save(),legacy.status());file=sceneAssetPath(project.root,legacy.assetId());require(Json::parse(read(file)).at("version")==24,"Explicit legacy save retained the old schema.");
     auto malformed=json;malformed["entities"][0]["enemy"]["behaviour"]="unknown";writeFileAtomically(file,malformed.dump());
     require(!reopened.load(document.assetId())&&reopened.scene().find(ids[0])->enemy==document.scene().find(ids[0])->enemy,"Unknown Enemy behaviour loaded or partially replaced the active scene.");
 }

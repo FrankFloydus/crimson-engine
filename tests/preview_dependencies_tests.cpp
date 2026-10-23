@@ -87,7 +87,7 @@ void persistentCache() {
     try {
         write(source,"model source");write(shader,"shader source");write(animation,"saved root lock settings");write(animationSource,"retained animation tracks");
         crimson::CachedAssetPreview preview;preview.signature=42;preview.shaderSignature=101;preview.policyFingerprint=202;preview.edge=32;
-        preview.files={source,shader,animation,animationSource};preview.materials={{"surface",303}};preview.animations={{"walk",404}};
+        preview.files={source,shader,animation,animationSource};preview.materials={{"surface",303}};preview.animations={{"walk",404}};preview.decals={{"wall-stain",505}};
         preview.locations={{"model",source},{"walk",animation},{"walk-source",animationSource}};
         for(const auto& file:preview.files)preview.sourceFingerprints.push_back(crimson::fingerprintFiles({file}));
         preview.image=std::make_shared<crimson::DecodedImage>(crimson::DecodedImage{32,32,std::vector<std::uint8_t>(32*32*4,127)});
@@ -99,6 +99,8 @@ void persistentCache() {
         require(cached.locations.front().id=="model" && cached.locations.front().file==source,"Persistent previews lost stable source locations.");
         require(cached.animations.size()==1&&cached.animations.front().id=="walk"&&cached.animations.front().fingerprint==404,
             "Persistent scene previews lost their authored Animation versions.");
+        require(cached.decals.size()==1&&cached.decals.front().id=="wall-stain"&&cached.decals.front().fingerprint==505,
+            "Persistent scene previews lost their authored decal versions.");
         {
             std::ifstream metadata(std::filesystem::path(crimson::assetPreviewImagePath(folder,"model",42).wstring()+L".json"));
             const auto record=nlohmann::json::parse(metadata);

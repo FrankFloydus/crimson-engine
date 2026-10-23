@@ -22,7 +22,10 @@ struct ExtractedModel {
     EntityId actorOwner{};
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
+    EntityId quaderOwner{};
+    std::string sourceKey;
 };
+struct ExtractedDecal {EntityId id{};Mat4 world{};SceneDecal decal;bool visible{true};};
 struct ExtractedParticle {
     EntityId id{};
     std::string assetId;
@@ -36,6 +39,7 @@ struct ExtractedScene {
     SceneEnvironment environment;
     ProceduralSun proceduralSun;
     std::vector<ExtractedParticle> particles;
+    std::vector<ExtractedDecal> decals;
 };
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,
@@ -61,10 +65,11 @@ using ModelBoundsQuery = std::function<std::optional<Aabb>(const std::string&)>;
 // runtime. Use these for explicit focus/framing, not selection wires or pivots.
 // Missing/stopped effects fall back to their authored marker position.
 using ParticleBoundsQuery = std::function<std::optional<Aabb>(EntityId)>;
+using DecalBoundsQuery = std::function<std::optional<Aabb>(EntityId)>; // Prepared patch bounds in world space.
 // Parent selections include descendants once. Missing models, empty entities
 // and lights get a small, fixed world-space box around their world position.
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {},const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={});
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {},const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={},const DecalBoundsQuery& decalBounds={});
 
 struct SelectionBox { EntityId id{};Aabb local;Mat4 world{}; };
 // Outlines keep the selected root's local axes, including affine parenting.
@@ -72,7 +77,7 @@ struct SelectionBox { EntityId id{};Aabb local;Mat4 world{}; };
 // empty hierarchy markers. Nonvisual selections fall back to their own shapes.
 // Particle markers are authored/stable; live effect bounds belong to framing.
 std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const EntityId> selection,
-    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={});
+    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision = {},const NavigationAgentProfileQuery& profiles={},const DecalBoundsQuery& decalBounds={});
 
 // Collision interiors are editor-selectable even without a rendered model.
 // Used only when the material-aware GPU model pick reports background.

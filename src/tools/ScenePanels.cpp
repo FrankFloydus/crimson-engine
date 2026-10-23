@@ -85,7 +85,8 @@ enum class Edit { None, Name, InlineName, Visible,
     EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
     VolumeEnabled,VolumeSize,VolumeCellSize,VolumeCellHeight,VolumeSimplification,VolumeProfiles,
     ColliderShape,ColliderSizeX,ColliderSizeY,ColliderSizeZ,ColliderRadius,ColliderHeight,ColliderSource,ColliderVisible,ColliderColor,
-    CameraOffset,CameraRotation,CameraFov,CameraNear,CameraFar };
+    CameraOffset,CameraRotation,CameraFov,CameraNear,CameraFar,
+    DecalTint,DecalOpacity,DecalFeather,DecalPriority };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -165,6 +166,7 @@ bool selected(const SceneDocument& document, EntityId id) {
     return std::find(ids.begin(),ids.end(),id)!=ids.end();
 }
 const char* kind(const EntityRecord& record) {
+    if(record.decal)return "Decal";
     if(record.quader)return "Quader";
     if(record.navigationVolume)return "NavigationVolume";
     if(record.enemy)return "Enemy";
@@ -1470,7 +1472,7 @@ void drawSceneOutliner(SceneDocument& document,AssetLibrary& assets,bool allowEd
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial,const NavigationInspectorContext& navigation,const std::array<std::string,32>* collisionLayerNames,const GameplayInspectorContext& gameplay,std::string* openAnimation,const DecalInspectorContext& decals) {
     auto& state=stateFor(document);
     const auto& collisionNames=collisionLayerNames?*collisionLayerNames:defaultCollisionLayerNames();
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
@@ -1588,6 +1590,76 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 modelInformation(document,state,record,assets,renderer,openMaterial);
             } else if(section==SceneComponentKind::Model && record.model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart) {
                 releasePrimitiveMeshInspector(state.primitives[record.id]);finishEdit(document,state,state.active);
+            }
+            if(section==SceneComponentKind::Decal && record.decal) {
+                if(componentHeader(state,record,SceneComponentKind::Decal)) {
+                    auto value=*record.decal;const SceneDecal defaults;
+                    const auto atomic=[&](const char* label) {
+                        finishScenePanelEdit(document);document.edit(label,changeEntity(record.id,[value](auto& entity){entity.decal=value;}));
+                    };
+                    const auto assigned=assets.findDecal(value.asset.id);
+                    const auto label=assigned?assets.displayName(value.asset.id):value.asset.empty()?std::string("None (Decal)"):"Missing: "+value.asset.id;
+                    const float height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+                    const float width=std::max(height,ImGui::GetContentRegionAvail().x-height*2-gap*2);
+                    if(ImGui::Button(label.c_str(),{width,height})&&assigned&&decals.openAsset)*decals.openAsset=value.asset.id;
+                    if(ImGui::BeginDragDropTarget()) {
+                        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_DECAL_ASSET")) {
+                            const auto* bytes=static_cast<const char*>(payload->Data);
+                            if(bytes&&payload->DataSize>1&&bytes[payload->DataSize-1]=='\0'&&
+                               std::find(bytes,bytes+payload->DataSize-1,'\0')==bytes+payload->DataSize-1) {
+                                const std::string id(bytes,static_cast<std::size_t>(payload->DataSize-1));
+                                if(assets.findDecal(id)){value.asset=AssetRef<DecalAsset>{id};atomic("Assign decal asset");}
+                            }
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+                    ImGui::SameLine(0,gap);if(ImGui::Button("...##decal-picker",{height,height}))ImGui::OpenPopup("Select decal");
+                    ImGui::SameLine(0,gap);ImGui::BeginDisabled(value.asset.empty());
+                    if(ImGui::Button("x##decal-clear",{height,height})){value.asset={};atomic("Clear decal asset");}ImGui::EndDisabled();
+                    if(ImGui::BeginPopup("Select decal")) {
+                        static ImGuiTextFilter filter;if(ImGui::IsWindowAppearing())filter.Clear();filter.Draw("Search");
+                        for(const auto& item:assets.catalog())if(item.kind==AssetKind::Decal&&filter.PassFilter(item.name.c_str())) {
+                            ImGui::PushID(item.id.c_str());
+                            if(ImGui::Selectable(item.name.c_str(),item.id==value.asset.id)) {
+                                value.asset=AssetRef<DecalAsset>{item.id};atomic("Assign decal asset");ImGui::CloseCurrentPopup();
+                            }
+                            ImGui::PopID();
+                        }
+                        ImGui::EndPopup();
+                    }
+                    const auto property=[&](Edit edit,const char* name,bool changed) {
+                        propertyEdit(document,state,edit,name,changed,changeEntity(record.id,[value](auto& entity){entity.decal=value;}));
+                    };
+                    property(Edit::DecalTint,"Change decal tint",resettableProperty(value.tint,defaults.tint,[&]{return ImGui::ColorEdit3("Tint",value.tint.data(),ImGuiColorEditFlags_Float);}));
+                    property(Edit::DecalOpacity,"Change decal opacity",resettableProperty(value.opacity,defaults.opacity,[&]{return ImGui::SliderFloat("Opacity",&value.opacity,0,1,"%.3f");}));
+                    property(Edit::DecalFeather,"Change decal edge feather",resettableProperty(value.edgeFeather,defaults.edgeFeather,[&]{return ImGui::SliderFloat("Edge Feather",&value.edgeFeather,0,.5f,"%.3f");}));
+                    property(Edit::DecalPriority,"Change decal priority",resettableProperty(value.priority,defaults.priority,[&]{return ImGui::DragInt("Priority",&value.priority,1);}));
+                    const auto receiver=document.scene().find(value.seed.receiver);
+                    ImGui::Text("Surface: %s",receiver?receiver->name.c_str():"Unresolved");
+                    if(decals.placeEntity&&ImGui::Button("Place on Surface")) {finishScenePanelEdit(document);*decals.placeEntity=record.id;}
+                    if(ImGui::IsItemHovered())ImGui::SetTooltip("Click a visible surface in the viewport to place this decal there.");
+                    int scope=static_cast<int>(value.receivers.scope);
+                    if(resettableProperty(scope,static_cast<int>(defaults.receivers.scope),[&]{return ImGui::Combo("Receiver Scope",&scope,"Seed Quader Scene\0Explicit\0");})) {
+                        value.receivers.scope=static_cast<SceneDecalReceiverScope>(scope);atomic("Change decal receiver scope");
+                    }
+                    const auto receiverList=[&](const char* title,std::vector<EntityId>& ids) {
+                        if(!ImGui::TreeNode(title))return;
+                        for(const auto& candidate:document.scene().records())if(candidate.model) {
+                            ImGui::PushID(static_cast<int>(candidate.id>>32));ImGui::PushID(static_cast<int>(candidate.id));
+                            const auto found=std::find(ids.begin(),ids.end(),candidate.id);bool included=found!=ids.end();
+                            if(ImGui::Checkbox(candidate.name.c_str(),&included)) {
+                                if(included)ids.push_back(candidate.id);else ids.erase(found);
+                                atomic("Change decal receiver policy");
+                            }
+                            ImGui::PopID();ImGui::PopID();
+                        }
+                        for(const auto id:ids)if(!document.scene().contains(id))ImGui::TextDisabled("Missing receiver: %llu",static_cast<unsigned long long>(id));
+                        ImGui::TreePop();
+                    };
+                    receiverList("Include Receivers",value.receivers.included);
+                    receiverList("Exclude Receivers",value.receivers.excluded);
+                    if(decals.status)if(const auto diagnostic=decals.status(record.id);!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
+                }else if(state.active>=Edit::DecalTint&&state.active<=Edit::DecalPriority)finishEdit(document,state,state.active);
             }
             if(section==SceneComponentKind::Particle && record.particle && componentHeader(state,record,SceneComponentKind::Particle)) {
                 auto assigned=record.particle->id;

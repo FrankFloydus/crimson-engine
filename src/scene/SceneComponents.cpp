@@ -39,6 +39,7 @@ const char* sceneComponentName(SceneComponentKind kind) {
     case SceneComponentKind::Environment:return "Environment";
     case SceneComponentKind::Particle:return "Particle effect";
     case SceneComponentKind::Quader:return "Quader";
+    case SceneComponentKind::Decal:return "Decal";
     }
     return "Component";
 }

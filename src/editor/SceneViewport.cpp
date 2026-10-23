@@ -16,11 +16,11 @@
 namespace crimson {
 namespace {
 constexpr ImU32 WireColor=IM_COL32(255,166,26,255);
-Aabb boundsOf(const SceneDocument& document, const AssetLibrary& assets,const ParticleBoundsQuery& particles = {},const CollisionMeshQuery& meshes = {},const NavigationAgentProfileQuery& profiles = {}) {
+Aabb boundsOf(const SceneDocument& document, const AssetLibrary& assets,const ParticleBoundsQuery& particles = {},const CollisionMeshQuery& meshes = {},const NavigationAgentProfileQuery& profiles = {},const DecalBoundsQuery& decals={}) {
     return selectionBounds(document.scene(), document.selection().ids, [&](const std::string& id)->std::optional<Aabb> {
         const auto model = assets.findModel(id);
         return model ? std::optional<Aabb>{model->bounds} : std::nullopt;
-    },particles,meshes,profiles);
+    },particles,meshes,profiles,decals);
 }
 bool selected(const SceneDocument& document, EntityId id) {
     const auto& ids = document.selection().ids;
@@ -108,14 +108,36 @@ void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     renderer.cancelPicking(); ++serial_;
     pickIntent_=false;
     materialDrop_.cancel();
+    decalDrop_.cancel();
+    decalPlacementJustArmed_=false;
 }
 void SceneViewport::focus(Camera& camera, const SceneDocument& document, const AssetLibrary& assets, float aspect, bool preserveLens) {
-    const auto bounds = boundsOf(document,assets,particleBounds_,collisionMeshes_,agentProfiles_);
+    const auto bounds = boundsOf(document,assets,particleBounds_,collisionMeshes_,agentProfiles_,[&](EntityId id)->std::optional<Aabb> {
+        const auto patch=decalPatches_?decalPatches_(id):nullptr;return patch?std::optional{patch->bounds}:std::nullopt;
+    });
     if (bounds.valid) {
         const auto nearPlane=camera.nearPlane,farPlane=camera.farPlane;
         camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
         if(preserveLens){camera.nearPlane=nearPlane;camera.farPlane=farPlane;}
     }
+}
+void SceneViewport::drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) {
+    if(!imageDrawList_||imageRegion_.width<=0||imageRegion_.height<=0)return;
+    const Vec4 viewport{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
+    const auto vp=camera.projectionMatrix(viewport[2]/viewport[3],ClipDepth::NegativeOneToOne)*camera.viewMatrix();
+    constexpr std::array<Vec3,4> local{{{-.5f,-.5f,0},{.5f,-.5f,0},{.5f,.5f,0},{-.5f,.5f,0}}};
+    std::array<ImVec2,4> points;
+    for(unsigned i=0;i<4;++i) {
+        const auto p=math::project(math::transformPoint(frame,local[i]),vp,viewport,ClipDepth::NegativeOneToOne);
+        if(!p||(*p)[2]<0||(*p)[2]>1)return;
+        points[i]={(*p)[0],(*p)[1]};
+    }
+    imageDrawList_->PushClipRect({viewport[0],viewport[1]},{viewport[0]+viewport[2],viewport[1]+viewport[3]},true);
+    const auto fill=ImGui::ColorConvertFloat4ToU32({color[0],color[1],color[2],std::clamp(color[3],0.f,.65f)});
+    if(bgfx::isValid(texture))imageDrawList_->AddImageQuad(ImTextureRef(ImGuiBgfx::textureId(texture)),points[0],points[1],points[2],points[3],{0,1},{1,1},{1,0},{0,0},fill);
+    else imageDrawList_->AddQuadFilled(points[0],points[1],points[2],points[3],fill);
+    imageDrawList_->AddQuad(points[0],points[1],points[2],points[3],WireColor,1.5f);
+    imageDrawList_->PopClipRect();
 }
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
                                 Renderer& renderer, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked,
@@ -128,21 +150,23 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     gizmoStyle.Colors[ImGuizmo::TEXT].w=0;
     gizmoStyle.Colors[ImGuizmo::TEXT_SHADOW].w=0;
     const auto cameraView = camera.viewMatrix();
-    if (previousSelection_ != document.selection().ids || previousView_ != cameraView ||
-        (!transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && selectionGeneration_ != document.scene().generation()) ||
-        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    const bool changedContext=previousSelection_ != document.selection().ids || previousView_ != cameraView ||
+        (!transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && selectionGeneration_ != document.scene().generation());
+    if (changedContext || ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         // A new click supersedes the prior asynchronous intent before its
         // readback can clear selection or let a newly appeared gizmo claim it.
         renderer.cancelPicking(); ++serial_;
         pickIntent_=false;
         materialDrop_.cancel();
+        if(changedContext&&!decalPlacementJustArmed_)decalDrop_.cancel();else decalDrop_.clearPick();
     }
+    decalPlacementJustArmed_=false;
     previousSelection_ = document.selection().ids;
     previousView_ = cameraView;
     selectionGeneration_ = document.scene().generation();
     const auto pendingPick = renderer.pollPick(bgfxFrame);
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) waitForRelease_ = false;
-    if(!ImGui::GetDragDropPayload())materialDropCanceled_=false;
+    if(!ImGui::GetDragDropPayload()){materialDropCanceled_=false;decalDropCanceled_=false;}
     if (ImGui::Begin("Viewport",nullptr,ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         drawRenderDebugControls(renderer,RenderViewPurpose::Scene);
         const bool blockKeys = ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
@@ -164,7 +188,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             if(transformDrag_.active() && (!transformDrag_.valid(document) || !editorFocus || ImGui::GetIO().AppFocusLost ||
                 blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false)))cancel(document,renderer);
-            if (!keyboardBlocked && !blockKeys && !transformDrag_.active() && !document.transactionActive() && !materialDrop_.active() &&
+            if (!keyboardBlocked && !blockKeys && !transformDrag_.active() && !document.transactionActive() && !materialDrop_.active() && !decalDrop_.active() &&
                 ImGui::GetDragDropPayload()==nullptr && (imageHovered || editorFocus)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_T,false)) operation_ = ImGuizmo::TRANSLATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_R,false)) operation_ = ImGuizmo::ROTATE;
@@ -208,7 +232,48 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 }
             }
             frame.materialPreview=frame.materialAssignment ? frame.materialAssignment : materialDrop_.preview();
-            if (pendingPick && pendingPick->mode==PickMode::Selection && !materialDrop_.active() &&
+            const bool decalContextChanged=decalDrop_.active()&&!decalDrop_.awaitingClick()&&
+                (pickSize_!=Vec2{size.x,size.y}||pickProjection_!=projection||pickView_!=view||
+                 intentGeneration_!=document.scene().generation()||intentRevision_!=document.scene().revision());
+            if((decalDrop_.active()||!frame.decalDragId.empty())&&ImGui::IsKeyPressed(ImGuiKey_Escape,false))decalDropCanceled_=true;
+            const bool decalBlocked=blockKeys||keyboardBlocked||transformDrag_.active()||colliderDrag_.active()||volumeDrag_.active()||
+                materialDrop_.active()||document.transactionActive()||decalDropCanceled_;
+            if(decalDrop_.active()&&(decalBlocked||decalContextChanged||
+                (frame.decalDragId.empty()&&!decalDrop_.delivered()&&!decalDrop_.awaitingClick()))) {
+                decalDrop_.cancel();renderer.cancelPicking();++serial_;
+            }
+            const auto decalPixel=[&](Vec2 screen) {return ViewportDecalDrop::Pixel{
+                static_cast<std::uint32_t>(std::clamp((screen[0]-origin.x)/size.x*renderer.width(),0.f,float(renderer.width()-1))),
+                static_cast<std::uint32_t>(std::clamp((screen[1]-origin.y)/size.y*renderer.height(),0.f,float(renderer.height()-1)))};};
+            const auto captureDecalContext=[&] {
+                pickProjection_=projection;pickView_=view;pickSize_={size.x,size.y};
+                intentGeneration_=document.scene().generation();intentRevision_=document.scene().revision();pickIntent_=false;
+            };
+            if(!frame.decalDragId.empty()&&!decalBlocked&&!decalContextChanged) {
+                if(!decalDrop_.active())captureDecalContext();
+                if(decalDrop_.update(frame.decalDragId,decalPixel(frame.decalDragPosition),frame.decalDropDelivered)) {
+                    renderer.cancelPicking();++serial_;pickIntent_=false;
+                }
+            }
+            if(decalDrop_.awaitingClick()&&imageHovered&&ImGui::IsMouseClicked(ImGuiMouseButton_Left)&&!decalBlocked) {
+                captureDecalContext();const auto mouse=ImGui::GetIO().MousePos;
+                decalDrop_.click(decalPixel({mouse.x,mouse.y}));renderer.cancelPicking();++serial_;
+            }
+            if(pendingPick&&pendingPick->mode==PickMode::Surface&&decalDrop_.active()&&
+                pendingPick->generation==intentGeneration_&&pendingPick->revision==intentRevision_) {
+                const bool delivered=decalDrop_.delivered();frame.decalPlacement=decalDrop_.resolve(*pendingPick);
+                frame.decalPlacementRejected=delivered&&!decalDrop_.active()&&!frame.decalPlacement;
+                if(!decalDrop_.pending())renderer.cancelPicking();
+            }
+            if(decalDrop_.needsPick())decalDrop_.request(++serial_);
+            if(const auto& request=decalDrop_.pending())
+                if(!renderer.requestPick({intentGeneration_,intentRevision_,request->serial,request->pixel.x,request->pixel.y,0,PickMode::Surface})) {
+                    frame.decalPlacementRejected=true;frame.decalPlacementDiagnostic=renderer.pickingStatus();
+                    decalDrop_.cancel();decalDropCanceled_=true;renderer.cancelPicking();++serial_;
+                }
+            frame.decalPreview=frame.decalPlacement?frame.decalPlacement:decalDrop_.preview();
+            frame.surfacePickActive=decalDrop_.active();
+            if (pendingPick && pendingPick->mode==PickMode::Selection && !materialDrop_.active() && !decalDrop_.active() &&
                 pickSize_ == Vec2{size.x,size.y} && pickProjection_ == projection && pickView_ == view &&
                 pendingPick->generation == document.scene().generation() && pendingPick->revision == document.scene().revision() &&
                 pendingPick->serial == serial_ && !blockKeys && !document.transactionActive()) {
@@ -238,13 +303,13 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             draw->ChannelsSetCurrent(1);
             bool overGizmo = false;
             const auto volumeHandles=drawNavigationVolumeGizmo(*draw,document,volumeDrag_,vp,viewport,
-                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !colliderDrag_.active() && !materialDrop_.active() &&
+                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !colliderDrag_.active() && !materialDrop_.active() && !decalDrop_.active() &&
                 !frame.materialAssignment && ImGui::GetDragDropPayload()==nullptr && (!document.transactionActive() || volumeDrag_.active()),
                 editorFocus,blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false));
             if(volumeHandles.started || volumeHandles.canceled) {renderer.cancelPicking();pickIntent_=false;++serial_;}
             if(volumeHandles.canceled)waitForRelease_=true;
             const auto colliderHandles=drawColliderGizmo(*draw,document,colliderDrag_,vp,viewport,showCollisions,
-                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !volumeDrag_.active() && !volumeHandles.hovered && !materialDrop_.active() &&
+                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !volumeDrag_.active() && !volumeHandles.hovered && !materialDrop_.active() && !decalDrop_.active() &&
                 !frame.materialAssignment && ImGui::GetDragDropPayload()==nullptr && (!document.transactionActive() || colliderDrag_.active()),
                 editorFocus,blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false));
             if(colliderHandles.started || colliderHandles.canceled) {renderer.cancelPicking();pickIntent_=false;++serial_;}
@@ -256,7 +321,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const bool transformVisible=showTransformGizmo && !transformRoots.empty();
             if (!transformVisible && transformDrag_.active()) cancel(document,renderer);
             if (!transformVisible) ImGuizmo::Enable(false);
-            if (transformVisible && !waitForRelease_ && !colliderHandles.hovered && !volumeHandles.hovered && !colliderDrag_.active() && !volumeDrag_.active() && !materialDrop_.active() && !frame.materialAssignment &&
+            if (transformVisible && !waitForRelease_ && !colliderHandles.hovered && !volumeHandles.hovered && !colliderDrag_.active() && !volumeDrag_.active() && !materialDrop_.active() && !decalDrop_.active() && !frame.materialAssignment &&
                 !navigationActive && !keyboardBlocked && !ImGui::GetIO().AppFocusLost && (!document.transactionActive() || transformDrag_.active())) {
                 if (!transformDrag_.active()) {
                     const auto bounds = boundsOf(document,assets,{},collisionMeshes_,agentProfiles_);
@@ -298,7 +363,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
                 if(!document.scene().isVisible(record.id))continue;
-                if (!record.directional && !record.point && !record.particle && !record.collider && !record.controller && !record.navigationVolume && !record.camera && (record.model || record.parent)) continue;
+                if (!record.directional && !record.point && !record.particle && !record.decal && !record.collider && !record.controller && !record.navigationVolume && !record.camera && (record.model || record.parent)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -332,6 +397,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     draw->AddCircleFilled({center.x-5,center.y-9},2,color,8);
                     draw->AddCircleFilled({center.x+5,center.y-13},2,color,8);
                 }
+                else if(record.decal) {
+                    draw->AddQuad({center.x,center.y-7},{center.x+7,center.y},{center.x,center.y+7},{center.x-7,center.y},color,1.5f);
+                }
                 else draw->AddRect(ImVec2(center.x-5,center.y-5),ImVec2(center.x+5,center.y+5),color);
                 if (centerVisible && selected(document,record.id)) draw->AddCircle(center,11,color,16);
                 if (distance < iconDistance) { iconDistance=distance; iconHit=record.id; }
@@ -345,16 +413,35 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             });
             if(!pointLightsOnly)for(const auto& box:selectionBoxes(document.scene(),selection,[&](const std::string& id)->std::optional<Aabb> {
                 const auto model=assets.findModel(id);return model?std::optional<Aabb>{model->bounds}:std::nullopt;
-            },collisionMeshes_,agentProfiles_)) {
+            },collisionMeshes_,agentProfiles_,[&](EntityId id)->std::optional<Aabb> {
+                const auto patch=decalPatches_?decalPatches_(id):nullptr;return patch?std::optional{patch->bounds}:std::nullopt;
+            })) {
+                if(decalPatches_&&decalPatches_(box.id))continue;
                 const auto center=(box.local.minimum+box.local.maximum)*.5f;
                 boxWireSegments(box.local.maximum-box.local.minimum,[&](Vec3 a,Vec3 b) {
                     if(const auto line=projectClippedSegment(math::transformPoint(box.world,center+a),math::transformPoint(box.world,center+b),vp,viewport))
                         draw->AddLine({(*line)[0][0],(*line)[0][1]},{(*line)[1][0],(*line)[1][1]},WireColor);
                 });
             }
+            if(decalPatches_)for(const auto& record:document.scene().records())if(record.decal&&document.scene().isVisible(record.id))if(const auto patch=decalPatches_(record.id)) {
+                const bool decalSelected=selected(document,record.id);
+                for(std::size_t i=0;i+2<patch->indices.size();i+=3)for(unsigned edge=0;edge<3;++edge) {
+                    const auto& a=patch->vertices[patch->indices[i+edge]];
+                    const auto& b=patch->vertices[patch->indices[i+(edge+1)%3]];
+                    const bool boundary=(a.uv[0]<=1e-5f&&b.uv[0]<=1e-5f)||(a.uv[0]>=1-1e-5f&&b.uv[0]>=1-1e-5f)||
+                        (a.uv[1]<=1e-5f&&b.uv[1]<=1e-5f)||(a.uv[1]>=1-1e-5f&&b.uv[1]>=1-1e-5f);
+                    if(boundary)if(const auto line=projectClippedSegment(a.position,b.position,vp,viewport)) {
+                        const ImVec2 from{(*line)[0][0],(*line)[0][1]},to{(*line)[1][0],(*line)[1][1]};
+                        const auto distance=segmentDistance(ImGui::GetIO().MousePos,from,to);
+                        const bool hovered=distance<7&&imageHovered&&!decalDrop_.active()&&!materialDrop_.active();
+                        if(hovered&&distance<iconDistance){iconHit=record.id;iconDistance=distance;}
+                        if(decalSelected||hovered)draw->AddLine(from,to,WireColor,1.5f);
+                    }
+                }
+            }
             draw->ChannelsMerge();
             draw->PopClipRect();
-            if (imageHovered && !blockKeys && !overGizmo && !transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
+            if (imageHovered && !blockKeys && !overGizmo && !transformDrag_.active() && !colliderDrag_.active() && !volumeDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !decalDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
                 ImGui::GetDragDropPayload() == nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 ImGui::SetWindowFocus();
                 if (iconHit) { renderer.cancelPicking(); select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift); }
@@ -371,7 +458,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
                 }
             }
-            frame.viewport.inputBlocked |= transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || frame.materialAssignment.has_value() ||
+            frame.viewport.inputBlocked |= transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active() || frame.materialAssignment.has_value() || frame.decalPlacement.has_value() ||
                 (overGizmo && !blockKeys) || (document.transactionActive() && !cameraGestureActive) || ImGui::GetDragDropPayload() != nullptr;
         }
     }
@@ -379,6 +466,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     if((transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
     if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
         materialDrop_.cancel();renderer.cancelPicking();++serial_;
+    }
+    if(decalDrop_.active()&&(frame.viewport.width<=0||frame.viewport.height<=0)) {
+        decalDrop_.cancel();renderer.cancelPicking();++serial_;
     }
     previousSelection_=document.selection().ids;
     previousView_=camera.viewMatrix();

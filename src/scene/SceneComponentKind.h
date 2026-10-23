@@ -12,7 +12,7 @@ enum class SceneComponentKind : std::uint8_t {
     Camera=8, CameraFollow=9, Model=10, Collider=11,
     Directional=12, Point=13, Environment=14, Particle=15, Quader=16, NavigationVolume=17, Enemy=18,
     Attributes=19, // Retired; never reuse this persistent identity.
-    Tags=20, Effects=21
+    Tags=20, Effects=21, Decal=22
 };
 inline constexpr std::array AllSceneComponentKinds{
     SceneComponentKind::Transform,SceneComponentKind::Actor,SceneComponentKind::Movement,
@@ -21,5 +21,5 @@ inline constexpr std::array AllSceneComponentKinds{
     SceneComponentKind::CameraFollow,SceneComponentKind::Model,SceneComponentKind::Collider,
     SceneComponentKind::Directional,SceneComponentKind::Point,SceneComponentKind::Environment,
     SceneComponentKind::Particle,SceneComponentKind::Quader,SceneComponentKind::NavigationVolume,SceneComponentKind::Enemy,
-    SceneComponentKind::Tags,SceneComponentKind::Effects};
+    SceneComponentKind::Tags,SceneComponentKind::Effects,SceneComponentKind::Decal};
 }

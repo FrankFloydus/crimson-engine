@@ -3,6 +3,7 @@
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "ViewportMaterialDrop.h"
+#include "ViewportDecalDrop.h"
 #include "ColliderGizmo.h"
 #include "NavigationVolumeGizmo.h"
 #include "ViewportTransformGesture.h"
@@ -18,11 +19,14 @@ public:
                      bool showCollisions=true, bool showTransformGizmo=true, bool allowCameraNavigation=true,
                      bool cameraGestureActive=false, bool preserveCameraLens=false);
     void cancel(SceneDocument&, Renderer&);
-    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active(); }
+    bool interacting() const { return transformDrag_.active() || colliderDrag_.active() || volumeDrag_.active() || materialDrop_.active() || decalDrop_.active(); }
+    void beginDecalPlacement(EntityId entity) { decalDrop_.beginReplace(entity);decalPlacementJustArmed_=true; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
+    void drawDecalPlacementPlane(const Mat4&,const Camera&,bgfx::TextureHandle,const Vec4&);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { agentProfiles_=std::move(query); }
+    void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { decalPatches_=std::move(query); }
 private:
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
     bool pickCtrl_{false}, pickShift_{false}, waitForRelease_{false};
@@ -35,13 +39,17 @@ private:
     EntityId pickCollisionFallback_{};
     bool pickIntent_{};
     ViewportMaterialDrop materialDrop_;
+    ViewportDecalDrop decalDrop_;
     ColliderGizmoDrag colliderDrag_;
     NavigationVolumeGizmoDrag volumeDrag_;
     ViewportTransformGesture transformDrag_;
     bool materialDropCanceled_{};
+    bool decalDropCanceled_{};
+    bool decalPlacementJustArmed_{};
     ParticleBoundsQuery particleBounds_;
     CollisionMeshQuery collisionMeshes_;
     NavigationAgentProfileQuery agentProfiles_;
+    std::function<std::shared_ptr<const DecalPatchData>(EntityId)> decalPatches_;
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;
     void select(SceneDocument&, EntityId, bool toggle, bool append);

@@ -3,6 +3,7 @@
 #include "math/Math.h"
 #include "CollisionMesh.h"
 #include "SceneComponentKind.h"
+#include "SceneDecal.h"
 #include "PrimitiveMesh.h"
 #include "crimson-renderer/RenderTypes.h"
 #include <crimson/renderer/forward/MeshShading.h>
@@ -222,6 +223,7 @@ struct EntityRecord {
     std::optional<SceneOutlinerStyle> outlinerStyle;
     MeshShading meshShading{MeshShading::UseMeshNormals};
     std::optional<PrimitiveMeshSettings> primitive;
+    std::optional<SceneDecal> decal;
 };
 bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
 std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);

@@ -1,0 +1,19 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -49,2 +49,5 @@
+ ### Do anything needed for dependencies and bring their stuff in to scope
++# Crimson: vcpkg owns Eigen. Never use upstream's configure-time download.
++find_package(Eigen3 CONFIG REQUIRED)
++set(GC_ALWAYS_DOWNLOAD_EIGEN OFF CACHE BOOL "" FORCE)
+ add_subdirectory(deps)
+diff --git a/cmake/GeometryCentralConfig.cmake.in b/cmake/GeometryCentralConfig.cmake.in
+--- a/cmake/GeometryCentralConfig.cmake.in
++++ b/cmake/GeometryCentralConfig.cmake.in
+@@ -3,5 +3,5 @@
+ include(CMakeFindDependencyMacro)
+ 
+-find_dependency(Eigen3 3.3 REQUIRED NO_MODULE)
++find_dependency(Eigen3 REQUIRED NO_MODULE)
+ 
+ include("${CMAKE_CURRENT_LIST_DIR}/GeometryCentralTargets.cmake")
