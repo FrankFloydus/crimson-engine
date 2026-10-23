@@ -15,6 +15,7 @@
 #include "GrungeGenerator.h"
 #include <crimson/renderer/forward/MaterialGraphImageBake.h>
 #include <crimson/renderer/forward/MaterialProcedural.h>
+#include <crimson/renderer/core/Profiler.hpp>
 #include "ContentStorage.h"
 #include "QuaderSceneBundle.h"
 #include "ModelMaterialSlots.h"
@@ -343,6 +344,7 @@ struct AssetLibrary::ImportQueue {
 
 AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources)
     : imports_(std::make_shared<ImportQueue>()), projectRoot_(initializedProjectRoot(std::move(root))),resources_(resources), references_(projectRoot_),browserCatalog_(projectRoot_) {
+    CRIMSON_PROFILE_ZONE("Asset library initialization");
     if(resources_) { textureStreamer_=std::make_unique<TextureStreamer>(*resources_,projectRoot_);asyncImports_=std::make_unique<AsyncImports>(projectRoot_,*resources_); }
     if(!references_.status().empty()) status_=references_.status();
     try{discoverContentFiles(projectRoot_);}catch(const std::exception& error){status_+=std::string(error.what())+'\n';}
@@ -879,6 +881,7 @@ std::string AssetLibrary::modelDiagnostic(const std::string& id) const {
     const auto found=modelResources_.find(references_.resolve(id)); return found==modelResources_.end() ? std::string{} : found->second.diagnostic();
 }
 void AssetLibrary::updateResources(std::uint32_t bgfxFrame) {
+    CRIMSON_PROFILE_ZONE("Asset resource publication");
     (void)bgfxFrame;
     const auto locationRevision=contentStorageRevision(projectRoot_);
     if(storageRevision_!=locationRevision) {
@@ -1525,6 +1528,7 @@ std::uint8_t AssetLibrary::requiredGraphUvs(const std::shared_ptr<const Material
 }
 
 ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms& owner,const MaterialGraphShader& generated,const MaterialGraph& graph,std::uint32_t textureEdge,ResourcePriority priority) const {
+    CRIMSON_PROFILE_ZONE("Material binding preparation");
     const auto programs=owner.request(generated,priority,reflectionDemand_?
         MaterialGraphUsage::SurfaceReflection:MaterialGraphUsage::Surface);
     if(!programs.current || !programs.programs) {
@@ -1725,6 +1729,7 @@ PreparedTexture AssetLibrary::preparedResizeTexture(const MaterialGraphResizeBin
     },extent[0],extent[1],true,textureEdge,priority);
 }
 std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMaterial(const std::string& id) const {
+    CRIMSON_PROFILE_ZONE("Particle material preparation");
     std::string resolved;
     try{resolved=references_.resolveParticleMaterial(id);}catch(const std::exception& error){auto failed=std::make_shared<PreparedParticleMaterial>();failed->diagnostic=error.what();return failed;}
     const auto now=std::chrono::steady_clock::now();materialInterest_[resolved]=now;
@@ -2268,6 +2273,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     references_.setUsages(std::move(usages));
 }
 void AssetLibrary::refreshQuaderModelCatalog(){
+    CRIMSON_PROFILE_ZONE("Quader bundle catalog refresh");
     // Keep pruned IDs retired for this session as well: a completed background
     // snapshot must not republish a card after its unused source was reclaimed.
     auto inactive=inactiveQuaderModels_;std::unordered_set<std::string> retained;

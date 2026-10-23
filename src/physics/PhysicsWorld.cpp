@@ -1,5 +1,6 @@
 #include "PhysicsWorld.h"
 #include "ColliderGeometry.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -542,6 +543,7 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
     if(collidersChanged||charactersChanged)for(auto& [id,character]:state.characters){(void)id;state.refresh(*character.motor);}
 }
 std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId controlled,const Vec3& desired,float seconds,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes) {
+    CRIMSON_PROFILE_ZONE("Physics and character movement");
     reconcile(scene,locks,meshes);std::vector<ScenePoseUpdate> poses;
     for(auto& [id,character]:impl_->characters){(void)id;character.stepHeight=0;}
     if(!std::isfinite(seconds) || seconds<=0)return poses;auto& state=*impl_;

@@ -18,9 +18,9 @@ public:
 
     void fatal(const char*, uint16_t, bgfx::Fatal::Enum, const char*) override;
     void traceVargs(const char*, uint16_t, const char*, va_list) override;
-    void profilerBegin(const char*, uint32_t, const char*, uint16_t) override {}
-    void profilerBeginLiteral(const char*, uint32_t, const char*, uint16_t) override {}
-    void profilerEnd() override {}
+    void profilerBegin(const char*, uint32_t, const char*, uint16_t) override;
+    void profilerBeginLiteral(const char*, uint32_t, const char*, uint16_t) override;
+    void profilerEnd() override;
     uint32_t cacheReadSize(uint64_t) override { return 0; }
     bool cacheRead(uint64_t, void*, uint32_t) override { return false; }
     void cacheWrite(uint64_t, const void*, uint32_t) override {}

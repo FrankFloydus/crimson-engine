@@ -18,7 +18,8 @@
         "VCPKG_HOST_TRIPLET": "x64-windows",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
         "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=${sourceDir}/build/vcpkg_buildtrees;--x-packages-root=${sourceDir}/build/vcpkg_packages",
-        "CMAKE_CXX_STANDARD": "20"
+        "CMAKE_CXX_STANDARD": "20",
+        "CRIMSON_ENABLE_PROFILING": "ON"
       }
     },
     {

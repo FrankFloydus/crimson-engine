@@ -534,7 +534,14 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     }
     renderInput.sceneCollisionOverlays=std::move(collisionOverlays.scene);
     renderInput.gameCollisionOverlays=std::move(collisionOverlays.game);
-    renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
+    profileFrame_.sceneWidth=renderInput.sceneVisible?renderInput.sceneWidth:0;
+    profileFrame_.sceneHeight=renderInput.sceneVisible?renderInput.sceneHeight:0;
+    profileFrame_.gameWidth=renderInput.gameVisible?renderInput.gameWidth:0;
+    profileFrame_.gameHeight=renderInput.gameVisible?renderInput.gameHeight:0;
+    profileFrame_.playing=play_.playing();
+    EditorRenderFramePreparationStats preparation;
+    renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_,profilePreparationActive_?&preparation:nullptr));
+    profileFrame_.materialsReady=profilePreparationActive_ && preparation.ready;
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         if(play_.playing()) {
             for(const auto& actor:renderScene.records())if(actor.navigation && actor.navigation->enabled && actor.navigation->showRoute && renderScene.isVisible(actor.id)) {

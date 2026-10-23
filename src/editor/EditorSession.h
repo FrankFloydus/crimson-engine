@@ -21,6 +21,7 @@
 #include "CollisionResources.h"
 #include "CollisionOverlays.h"
 #include "quader/QuaderBridge.h"
+#include "profiling/CaptureController.h"
 #include <filesystem>
 #include <unordered_map>
 
@@ -58,7 +59,14 @@ public:
     void setResourceStatus(std::string value) { resourceStatus_=std::move(value); }
     void setFrameTiming(FrameTiming timing) { gameView_.setFrameTiming(timing); }
     bool exitAccepted() const { return editor_.exitAccepted(); }
+    bool playing() const noexcept { return play_.playing(); }
+    void setProfilingActive(bool active) noexcept { profilePreparationActive_=active; }
+    const profiling::CaptureFrame& profileFrame() const noexcept { return profileFrame_; }
+    SceneSettings profileSettings() const { auto value=settings_;value.antiAliasing=editor_.antiAliasing();return value; }
+    const SceneDocument& profileDocument() const noexcept { return activeDocument(); }
 private:
+    profiling::CaptureFrame profileFrame_;
+    bool profilePreparationActive_{};
     std::filesystem::path root_;
     SceneDocument document_;
     PlaySession play_;

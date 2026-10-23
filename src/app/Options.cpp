@@ -74,6 +74,7 @@ SceneSettings diagnosticSettings(const std::string& scenario) {
 
 AppOptions parseOptions(int argc, char** argv) {
     AppOptions options;
+    bool profileDurationSpecified=false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view argument(argv[i]);
         if (argument == "--hidden") { options.hidden = true; continue; }
@@ -88,6 +89,19 @@ AppOptions parseOptions(int argc, char** argv) {
         else if (argument == "--scenario") options.scenario = std::string(value);
         else if (argument == "--project-root") options.projectRoot = std::string(value);
         else if (argument == "--frame-profile") options.frameProfile = std::string(value);
+        else if (argument == "--profile") {
+            if(value!="startup" && value!="gameplay")throw std::runtime_error("Profile mode must be startup or gameplay.");
+            options.profileMode=std::string(value);
+        }
+        else if (argument == "--profile-duration") {
+            options.profileDuration=parseUnsigned(value,3600);
+            if(!options.profileDuration)throw std::runtime_error("Profile duration must be between 1 and 3600 seconds.");
+            profileDurationSpecified=true;
+        }
+        else if (argument == "--profile-output") {
+            if(value.empty())throw std::runtime_error("Profile output directory cannot be empty.");
+            options.profileOutput=std::string(value);
+        }
         else if (argument == "--renderer") {
             options.rendererBackend=parseGraphicsBackend(value);
             if(!options.rendererBackend)throw std::runtime_error("Renderer must be dx11 or dx12.");
@@ -114,6 +128,8 @@ AppOptions parseOptions(int argc, char** argv) {
     if (options.modelSmoke && options.projectRoot.empty()) throw std::runtime_error("--model-smoke requires an isolated --project-root.");
     if (options.modelSmoke && (options.iblSmoke || options.editorSmoke || options.scenario != "default"))
         throw std::runtime_error("--model-smoke uses its own default scene and cannot be combined with other smoke modes.");
+    if(profileDurationSpecified && options.profileMode.empty())throw std::runtime_error("--profile-duration requires --profile startup or gameplay.");
+    if(options.profileMode=="gameplay" && !profileDurationSpecified)options.profileDuration=10;
     diagnosticSettings(options.scenario); // Reject invalid QA arguments before opening a window.
     return options;
 }

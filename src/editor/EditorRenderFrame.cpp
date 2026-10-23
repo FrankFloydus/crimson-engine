@@ -3,6 +3,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/ModelAnimation.h"
 #include "resources/CacheIO.h"
+#include <crimson/renderer/core/Profiler.hpp>
 
 #include <algorithm>
 #include <array>
@@ -69,6 +70,7 @@ void includePreparedModel(EditorRenderFramePreparationStats* stats,const std::sh
 
 std::shared_ptr<const PreparedRenderFrame> prepareEditorRenderFrame(
     EditorRenderFrameInput input,AssetLibrary& assets,EditorResources& resources,EditorRenderFramePreparationStats* stats) {
+    CRIMSON_PROFILE_ZONE("Scene and Game frame preparation");
     using Clock=std::chrono::steady_clock;
     if(stats)*stats={};
     const auto& ssr=input.settings.environment.ssr;

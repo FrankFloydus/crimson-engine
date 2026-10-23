@@ -1,4 +1,5 @@
 #include "Diagnostics.h"
+#include <crimson/renderer/core/Profiler.hpp>
 
 #include <lodepng.h>
 #include <cstdio>
@@ -10,6 +11,14 @@
 namespace crimson {
 
 Diagnostics::Diagnostics() : logFile_("renderer.log", std::ios::trunc) {}
+
+void Diagnostics::profilerBegin(const char* name,uint32_t color,const char* file,uint16_t line) {
+    shared::profiling::bgfx_zone_begin(name,color,file,line);
+}
+void Diagnostics::profilerBeginLiteral(const char* name,uint32_t color,const char* file,uint16_t line) {
+    shared::profiling::bgfx_zone_begin(name,color,file,line);
+}
+void Diagnostics::profilerEnd() { shared::profiling::bgfx_zone_end(); }
 
 void Diagnostics::log(const std::string& message) {
     std::lock_guard lock(mutex_);

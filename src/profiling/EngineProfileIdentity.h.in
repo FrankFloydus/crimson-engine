@@ -1,0 +1,7 @@
+#pragma once
+namespace crimson::profiling {
+inline constexpr char kEngineProfileCommit[]="@CC_ENGINE_PROFILE_COMMIT@";
+inline constexpr bool kEngineProfileDirty=@CC_ENGINE_PROFILE_DIRTY@;
+inline constexpr char kEngineProfileSourceSha256[]="@CC_ENGINE_PROFILE_SOURCE_SHA256@";
+inline constexpr char kEngineProfileConfiguration[]="@CMAKE_BUILD_TYPE@";
+}

@@ -10,6 +10,7 @@
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/PointShadowMath.h"
 #include "crimson-renderer/DirectionalShadowMath.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -173,6 +174,7 @@ void EditorResources::endFrame() {
     renderer_.trimModelCache(reserved>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-reserved,live);
 }
 void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint64_t revision,uint32_t primitive,uint32_t level,ResourcePriority priority,bool smoothNormals) {
+    CRIMSON_PROFILE_ZONE("Model geometry demand");
     if (!asset.stream || primitive>=asset.stream->primitives.size() || level>=asset.stream->primitives[primitive].levels.size()) return;
     const auto key=std::to_string(primitive)+":"+std::to_string(level);
     if (renderer_.modelLodReady(asset.id,revision,primitive,level,smoothNormals)) { entry.geometry.erase(key); return; }
@@ -205,6 +207,7 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
 }
 std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::string& id,const Mat4& world,const Camera& camera,
     uint32_t height,bool selected,ResourcePriority priority,float aspect,std::span<const AssetRef<MaterialAsset>> materialOverrides,float shadowTexelWorld,const ExtractedModel* presentation) {
+    CRIMSON_PROFILE_ZONE("Model packet preparation");
     // Geometry identity remains shared. Immutable binding packets are keyed by
     // the complete slot assignment so instances cannot overwrite each other.
     // Canonicalize trailing inherited slots; embedded separators retain slot order.
@@ -343,6 +346,7 @@ Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_
 }
 std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(const ExtractedScene& scene,std::uint16_t resolution,
     ResourcePriority priority,std::span<const ShadowCamera> cameras,std::optional<Vec3> priorityOrigin) {
+    CRIMSON_PROFILE_ZONE("Shadow caster preparation");
     auto result=std::make_shared<PreparedEditorShadows>();
     const auto shadowSelection=selectPointShadowLights(scene.points,priorityOrigin);
     const bool directional=std::any_of(scene.directional.begin(),scene.directional.end(),[](const auto& light){return light.enabled&&light.castShadows;});

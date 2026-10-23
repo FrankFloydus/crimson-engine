@@ -22,6 +22,9 @@ struct AppOptions {
     std::string scenario{"default"};
     std::string projectRoot; // Optional isolated project for focused verification.
     std::string frameProfile; // Optional user-driven frame report; no automatic input.
+    std::string profileMode; // Explicit Tracy startup capture or arm the next real Play session.
+    uint32_t profileDuration{15};
+    std::string profileOutput; // Capture directory; empty uses <project>/captures/profiling.
     std::optional<GraphicsBackend> rendererBackend; // Launch override; never persists to editor preferences.
 };
 

@@ -11,6 +11,7 @@
 #include "resources/ShaderReloadSession.h"
 #include "resources/Paths.h"
 #include "ShaderSourceBaseline.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <unordered_map>
 
@@ -21,6 +22,7 @@ bool inside(const std::filesystem::path& file,const std::filesystem::path& folde
     return value==root || (value.size()>root.size() && value.compare(0,root.size(),root)==0 && value[root.size()]=='/');
 }
 ShaderCompileConfig shaderConfig(const std::filesystem::path& root) {
+    CRIMSON_PROFILE_ZONE("Shader runtime path selection");
     const ShaderRuntimePaths live{CC_SHADER_SOURCE_DIR,CC_SHADER_INCLUDE_DIR},staged{CC_STAGED_SHADER_DIR,CC_STAGED_SHADER_INCLUDE_DIR};
 #ifdef NDEBUG
     constexpr bool development=false;
@@ -57,6 +59,7 @@ struct ResourceRuntime::Impl {
         :root(std::filesystem::absolute(project).lexically_normal()),resources(manager),assets(library),renderer(graphics),
         shaderCompile(shaderConfig(root)),watcher(shaderRuntimeWatchedRoots(root,{shaderCompile.sourceDirectory,shaderCompile.includeDirectory})),
         shaders(manager,graphics,tools,shaderCompile,EmbeddedShaderSourceBaseline),materialPrograms(manager,shaderCompile) {
+        CRIMSON_PROFILE_ZONE("Resource runtime catalog registration");
         assets.setMaterialGraphPrograms(&materialPrograms);
         (void)catalog.update(root,assets.catalog());
         catalogRevision=assets.catalogRevision();
@@ -135,11 +138,16 @@ ResourceRuntime::ResourceRuntime(const std::filesystem::path& root,ResourceManag
     :impl_(std::make_unique<Impl>(root,manager,assets,renderer,tools)) {}
 ResourceRuntime::~ResourceRuntime(){stop();impl_->assets.setMaterialGraphPrograms(nullptr);}
 void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
+    CRIMSON_PROFILE_ZONE("Resource runtime pre-frame");
     if(impl_->stopped)return;
     // Native notifications are the storage refresh boundary. Steady frames use
     // the validated in-memory location snapshot without filesystem polling.
-    auto changed=impl_->watcher.poll();
-    std::erase_if(changed,[&](const auto& file){return impl_->ownChange(file);});
+    auto changed=[&] {
+        CRIMSON_PROFILE_ZONE("Resource file notification polling");
+        auto paths=impl_->watcher.poll();
+        std::erase_if(paths,[&](const auto& file){return impl_->ownChange(file);});
+        return paths;
+    }();
     bool refreshStorage=false;
     for(const auto& file:changed) {
         if(file==impl_->root/".crimson/asset-locations.json") {refreshStorage=true;break;}
@@ -152,18 +160,21 @@ void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
         }
     }
     if(refreshStorage) {
+        CRIMSON_PROFILE_ZONE("Content storage refresh");
         try {refreshContentStorage(impl_->root);impl_->storageBlocked=false;}
         catch(const std::exception& error) {impl_->error=error.what();impl_->storageBlocked=true;return;}
     }
     if(impl_->storageBlocked)return;
-    auto relocated=impl_->observeLocations();
+    auto relocated=[&]{CRIMSON_PROFILE_ZONE("Resource location observation");return impl_->observeLocations();}();
     if(editor && !relocated.empty())editor->filesChanged(relocated);
     impl_->resources.pump();
     // This coordinator observes current snapshots directly. Consume notification
     // metadata each frame so long editor sessions cannot accumulate an event log.
     (void)impl_->resources.takePublications();
-    acknowledge(impl_->assets.takeOwnWrites());
-    impl_->observeCatalog(true);
+    {CRIMSON_PROFILE_ZONE("Own asset write acknowledgement");acknowledge(impl_->assets.takeOwnWrites());}
+    {CRIMSON_PROFILE_ZONE("Asset catalog observation");impl_->observeCatalog(true);}
+    {
+    CRIMSON_PROFILE_ZONE("External resource change publication");
     std::vector<std::filesystem::path> assetChanges;
     for(const auto& file:changed)if(impl_->managedFile(file)) {
         impl_->assets.onFileChanged(file);assetChanges.push_back(file);
@@ -174,12 +185,16 @@ void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
     impl_->shaders.changed(changed);
     impl_->materialPrograms.changed(changed);
     for(const auto& file:changed)if(!impl_->managedFile(file))impl_->resources.invalidatePath(file);
-    impl_->materialPrograms.trim();
-    impl_->assets.processImports();
+    }
+    {CRIMSON_PROFILE_ZONE("Material shader retention");impl_->materialPrograms.trim();}
+    {CRIMSON_PROFILE_ZONE("Import publication");impl_->assets.processImports();}
     impl_->assets.updateResources(frame);
-    impl_->observeCatalog(true);
-    impl_->shaders.pump();
-    if(editor) { editor->setResourceStatus(status());editor->prepareFrame(impl_->assets,impl_->renderer,frame); }
+    {CRIMSON_PROFILE_ZONE("Asset catalog observation");impl_->observeCatalog(true);}
+    {CRIMSON_PROFILE_ZONE("Fixed shader publication");impl_->shaders.pump();}
+    if(editor) {
+        CRIMSON_PROFILE_ZONE("Editor resource preparation");
+        editor->setResourceStatus(status());editor->prepareFrame(impl_->assets,impl_->renderer,frame);
+    }
 }
 void ResourceRuntime::acknowledge(std::span<const std::filesystem::path> paths) {for(const auto& path:paths)impl_->acknowledgeFile(path);}
 void ResourceRuntime::stop() {

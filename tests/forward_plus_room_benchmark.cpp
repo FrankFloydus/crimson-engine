@@ -296,9 +296,11 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
 #include "screen_lighting_editor_diagnostic.h"
 #include "ssr_performance_diagnostic.h"
 #include "light_leak_editor_diagnostic.h"
+#include "tracy_capture_diagnostic.h"
 
 int main(int argc,char** argv) {
     try {
+        if(argc>1&&std::string(argv[1])=="--tracy-project")return tracyCaptureDiagnostic(argc,argv);
         if(argc>1&&std::string(argv[1])=="--ssr-performance-project")return ssrPerformanceDiagnostic(argc,argv);
         if(argc>1&&std::string(argv[1])=="--light-leak-project")return lightLeakEditorDiagnostic(argc,argv);
         if(argc>1&&(std::string(argv[1])=="--gi-project"||std::string(argv[1])=="--gi-point-project"))return screenLightingEditorDiagnostic(argc,argv);

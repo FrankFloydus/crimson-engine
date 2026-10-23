@@ -30,6 +30,7 @@ crimson_validate_consumer_provenance("${CMAKE_CURRENT_SOURCE_DIR}"
 set(bgfx_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/bgfx" CACHE PATH
     "Matching canonical Crimson Renderer bgfx package" FORCE)
 find_package(bgfx CONFIG REQUIRED PATHS "${bgfx_DIR}" NO_DEFAULT_PATH)
+option(CRIMSON_ENABLE_PROFILING "Compile Engine CPU/GPU Tracy instrumentation" ON)
 add_subdirectory("${CC_RENDERER_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/crimson-renderer")
 find_package(imgui CONFIG REQUIRED)
 find_package(implot CONFIG REQUIRED)
@@ -129,6 +130,23 @@ set(CC_BGFX_SHADER_INCLUDE "${CRIMSON_SHADER_INCLUDE_DIR}")
 set(CC_SHADER_HEADERS ${CRIMSON_FORWARD_SHADER_HEADERS})
 set(CC_SHADER_BASELINE_HEADER "${CRIMSON_FORWARD_GENERATED_DIR}/ShaderSourceBaseline.h")
 file(MAKE_DIRECTORY "${CC_GENERATED_DIR}")
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE CC_ENGINE_PROFILE_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND git status --porcelain --untracked-files=normal WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE CC_ENGINE_PROFILE_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+set(CC_ENGINE_PROFILE_DIRTY false)
+if(NOT CC_ENGINE_PROFILE_STATUS STREQUAL "")
+    set(CC_ENGINE_PROFILE_DIRTY true)
+endif()
+file(GLOB_RECURSE CC_ENGINE_PROFILE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*")
+set(CC_ENGINE_PROFILE_DIGEST_INPUT "")
+foreach(CC_PROFILE_SOURCE IN LISTS CC_ENGINE_PROFILE_SOURCES)
+    file(SHA256 "${CC_PROFILE_SOURCE}" CC_PROFILE_SOURCE_HASH)
+    file(RELATIVE_PATH CC_PROFILE_SOURCE_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CC_PROFILE_SOURCE}")
+    string(APPEND CC_ENGINE_PROFILE_DIGEST_INPUT "${CC_PROFILE_SOURCE_RELATIVE}:${CC_PROFILE_SOURCE_HASH}\n")
+endforeach()
+string(SHA256 CC_ENGINE_PROFILE_SOURCE_SHA256 "${CC_ENGINE_PROFILE_DIGEST_INPUT}")
+configure_file(src/profiling/EngineProfileIdentity.h.in "${CC_GENERATED_DIR}/EngineProfileIdentity.h" @ONLY)
 configure_file(src/platform/CrimsonResources.rc.in "${CC_GENERATED_DIR}/CrimsonResources.rc" @ONLY)
 set_source_files_properties("${CC_GENERATED_DIR}/CrimsonResources.rc" PROPERTIES
     OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/crimson-engine.ico")
@@ -162,11 +180,23 @@ target_compile_definitions(crimson-quader PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-quader PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-quader PUBLIC crimson-scene crimson-materials crimson-resources PRIVATE crimson-storage nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng)
 
+add_library(crimson-profiling src/profiling/CaptureController.cpp)
+target_include_directories(crimson-profiling PUBLIC src)
+target_link_libraries(crimson-profiling PUBLIC Crimson::Profiler PRIVATE crimson-storage nlohmann_json::nlohmann_json)
+target_compile_definitions(crimson-profiling PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-profiling PRIVATE /W4 /permissive- /utf-8)
+# The console broker deliberately has no dependency on the application or a
+# Tracy client. Its private console permits an official, graceful SIGINT save.
+add_executable(crimson-tracy-capture src/profiling/CaptureHelperMain.cpp)
+set_target_properties(crimson-tracy-capture PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/profiling")
+target_compile_options(crimson-tracy-capture PRIVATE /W4 /permissive- /utf-8)
+
 add_executable(crimson-renderer WIN32
     "${CC_SHADER_BASELINE_HEADER}"
     src/main.cpp
     src/App.cpp src/App.h
     src/app/Options.cpp src/app/DiagnosticSession.cpp src/app/FrameProfile.cpp
+    src/profiling/EngineProfile.cpp src/tools/ProfilingMenu.cpp
     src/editor/EditorSession.cpp src/editor/CameraPilot.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/ViewportTransformGesture.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
@@ -220,7 +250,8 @@ target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CUR
 target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaderc.exe" CC_STAGED_SHADER_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaders" CC_STAGED_SHADER_INCLUDE_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/include")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
 target_link_libraries(crimson-renderer PRIVATE crimson-quader crimson-material-gpu crimson-node-editor crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer)
-target_link_libraries(crimson-renderer PRIVATE shell32)
+target_link_libraries(crimson-renderer PRIVATE shell32 dxgi crimson-profiling)
+add_dependencies(crimson-renderer crimson-tracy-capture)
 
 # A payload-only update must stage even when neither executable needs linking.
 # One shared target also prevents concurrent renderer/test copies into bin.
@@ -234,6 +265,15 @@ add_custom_target(crimson-quader-reader-payload
 add_dependencies(crimson-renderer crimson-quader-reader-payload)
 
 find_program(CC_POWERSHELL NAMES powershell.exe REQUIRED)
+if(CRIMSON_ENABLE_PROFILING)
+    add_custom_target(crimson-tracy-tools
+        COMMAND "${CC_POWERSHELL}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/Prepare-Tracy.ps1"
+            -Configuration "${CMAKE_BUILD_TYPE}" -Build
+        COMMENT "Preparing the pinned Tracy 0.14.1 capture and MCP tools"
+        VERBATIM)
+    add_dependencies(crimson-renderer crimson-tracy-tools)
+endif()
 add_custom_command(TARGET crimson-renderer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:crimson-renderer> $<TARGET_FILE_DIR:crimson-renderer>
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:crimson-renderer>/shader-tools"
@@ -252,6 +292,10 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(profiling_capture_tests tests/profiling_capture_tests.cpp)
+    target_link_libraries(profiling_capture_tests PRIVATE crimson-profiling nlohmann_json::nlohmann_json)
+    target_compile_options(profiling_capture_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME profiling_capture_core COMMAND profiling_capture_tests)
     add_executable(animation_asset_tests tests/animation_asset_tests.cpp src/assets/AssetReferenceManager.cpp)
     target_link_libraries(animation_asset_tests PRIVATE crimson-scene)
     target_compile_options(animation_asset_tests PRIVATE /W4 /permissive- /utf-8)
@@ -1106,7 +1150,7 @@ if(BUILD_TESTING)
     target_include_directories(forward_plus_room_benchmark PRIVATE src tests "${CC_GENERATED_DIR}")
     target_compile_definitions(forward_plus_room_benchmark PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(forward_plus_room_benchmark PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(forward_plus_room_benchmark PRIVATE crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
+    target_link_libraries(forward_plus_room_benchmark PRIVATE crimson-profiling crimson-quader crimson-material-gpu crimson-resources crimson-scene crimson-particles crimson-runtime crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode bgfx::bimg imgui::imgui lodepng mikktspace::mikktspace assimp::assimp meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json d3d11)
 
     # Explicit saved-project capture diagnostic; never a routine CTest. It
     # snapshots authored Content before initializing any resource/asset stores.

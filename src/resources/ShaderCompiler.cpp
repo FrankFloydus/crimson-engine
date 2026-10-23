@@ -3,6 +3,7 @@
 #include "Paths.h"
 #include "CacheIO.h"
 #include "assets/AtomicFile.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -101,6 +102,7 @@ std::wstring quoted(const std::filesystem::path& path) {
     output.append(slashes*2,L'\\'); output+=L'"'; return output;
 }
 std::string runCompiler(const std::filesystem::path& executable,std::wstring arguments,std::stop_token token) {
+    CRIMSON_PROFILE_ZONE("Shader compiler process");
     MetricTimer timing{metrics.compilerNanoseconds};
     SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES),nullptr,TRUE}; NativeHandle readPipe,writePipe;
     if(!CreatePipe(&readPipe.value,&writePipe.value,&attributes,0) || !SetHandleInformation(readPipe.value,HANDLE_FLAG_INHERIT,0))
@@ -159,6 +161,7 @@ std::vector<std::filesystem::path> parseShaderDependencyFile(const std::filesyst
     return result;
 }
 std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig& config,const std::string& name) {
+    CRIMSON_PROFILE_ZONE("Fixed shader dependencies");
     metrics.dependencyRequests.fetch_add(1,std::memory_order_relaxed);MetricTimer timing{metrics.dependencyNanoseconds};
     const auto spec=varying.find(name); if(spec==varying.end()) throw std::runtime_error("Unknown engine shader.");
     std::vector<std::filesystem::path> pending{config.sourceDirectory/(name+".sc"),config.sourceDirectory/spec->second};
@@ -194,6 +197,8 @@ std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig&
     result.push_back(config.compiler); return sortedDependencies(std::move(result));
 }
 ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& name,std::stop_token token) {
+    static shared::profiling::CpuLocation location{"Fixed shader cache or compile",__func__,__FILE__,__LINE__};
+    shared::profiling::CpuZone zone{location};zone.text(name);
     metrics.workerRequests.fetch_add(1,std::memory_order_relaxed);
     if(!std::filesystem::is_regular_file(config.compiler)) throw std::runtime_error("Pinned shader compiler is unavailable; embedded shaders remain active.");
     auto dependencies=shaderDependencies(config,name);const auto dependencyState=fingerprintFileStates(dependencies);
@@ -315,6 +320,7 @@ std::uint64_t recipeFingerprint(const ShaderCompileConfig& config,const std::str
 }
 }
 std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe) {
+    CRIMSON_PROFILE_ZONE("Material shader dependencies");
     metrics.dependencyRequests.fetch_add(1,std::memory_order_relaxed);MetricTimer timing{metrics.dependencyNanoseconds};
     const auto identity=recipeIdentity(recipe);
     std::vector<std::filesystem::path> pending{recipe.varyingDefinition};
@@ -356,6 +362,8 @@ std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig&
     result.push_back(config.compiler);return sortedDependencies(std::move(result));
 }
 ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe,std::stop_token token) {
+    static shared::profiling::CpuLocation location{"Material shader cache or compile",__func__,__FILE__,__LINE__};
+    shared::profiling::CpuZone zone{location};zone.text(recipe.name);
     metrics.workerRequests.fetch_add(1,std::memory_order_relaxed);
     if(token.stop_requested())throw std::runtime_error("Shader compilation canceled.");
     if(!std::filesystem::is_regular_file(config.compiler))throw std::runtime_error("Pinned shader compiler is unavailable.");

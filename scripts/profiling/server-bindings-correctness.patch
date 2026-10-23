@@ -1,0 +1,42 @@
+--- a/python/bindings/ServerModule.cpp
++++ b/python/bindings/ServerModule.cpp
+@@ -471,7 +471,6 @@
+             // Returns list of (start_ns, duration_ns, thread_id) — thread_id is the OS thread ID
+         std::vector<std::tuple<int64_t, int64_t, uint64_t>> result;
+ #ifndef TRACY_NO_STATISTICS
+-        const auto& threads = w.GetThreadData();
+         for( const auto& kv : w.GetSourceLocationZones() )
+         {
+             if( std::string( w.GetZoneName( w.GetSourceLocation( kv.first ) ) ) != name ) continue;
+@@ -480,8 +479,7 @@
+                 if( result.size() >= maxSamples ) goto done_occ_thread;
+                 const auto* z = ztd.Zone();
+                 if( !z || !z->IsEndValid() ) continue;
+-                const uint16_t tidx = ztd.Thread();
+-                const uint64_t tid = ( tidx < threads.size() && threads[tidx] ) ? threads[tidx]->id : 0;
++                const uint64_t tid = w.DecompressThread( ztd.Thread() );
+                 result.emplace_back( z->Start(), z->End() - z->Start(), tid );
+             }
+         }
+@@ -832,9 +830,18 @@
+                 const auto* z = ztd.Zone();
+                 if( !z || z->GpuEnd() < 0 || z->Child() < 0 ) continue;
+                 parentCount++;
+-                for( const auto& cptr : w.GetGpuChildren( z->Child() ) )
+-                {
+-                    if( const GpuEvent* c = cptr.get() ) accumChild( *c );
++                const auto& children = w.GetGpuChildren( z->Child() );
++                if( children.is_magic() )
++                {
++                    const auto& events = reinterpret_cast<const Vector<GpuEvent>&>( children );
++                    for( const auto& child : events ) accumChild( child );
++                }
++                else
++                {
++                    for( const auto& cptr : children )
++                    {
++                        if( const GpuEvent* child = cptr.get() ) accumChild( *child );
++                    }
+                 }
+             }
+         }

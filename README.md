@@ -50,6 +50,8 @@ For recovery or a temporary comparison, launch the executable with an explicit b
 
 Backend performance depends on the scene, GPU and driver. Selecting Direct3D 12 does not enable additional bloom, GI, antialiasing or upscaling features by itself.
 
+**Profiling → Capture gameplay (10 s)** records CPU workers, simulation and native DX11/DX12 GPU passes while Play is running. Launch with `--profile startup` to record initialization or `--profile gameplay` to arm the next Play session. Native traces and manifests are saved under `captures/profiling`. The [profiling guide](docs/PROFILING.md) covers duration/output options, JSON/CSV analysis and the official Tracy 0.14.1 MCP server for AI analysis.
+
 The application embeds [`assets/branding/crimson-engine.ico`](assets/branding/crimson-engine.ico) unchanged for Explorer, desktop shortcuts, the taskbar, and the title bar. A user-supplied ICO is authoritative; replacing it requires a rebuild. The transparent 512×512 PNG in [`assets/branding/crimson-engine.png`](assets/branding/crimson-engine.png) is also retained. Use `.\scripts\Convert-AppIcon.ps1` only when generating a new ICO from a PNG is explicitly intended. Successful links notify Windows to refresh the application's cached icon. Run `.\scripts\Create-DesktopShortcut.ps1` to create or refresh the **Crimson Engine** desktop shortcut to the Release executable; this also refreshes its cached icon. `.\scripts\Refresh-AppIcon.ps1` repeats just the targeted icon notification when needed.
 
 ## Editor panels

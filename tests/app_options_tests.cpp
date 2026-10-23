@@ -29,6 +29,18 @@ void run() {
     }
     bool missingRejected=false;try {parse({"--renderer"});}catch(const std::runtime_error&) {missingRejected=true;}
     require(missingRejected,"Renderer override without a value was accepted.");
+    require(parse({"--profile","startup"}).profileDuration==15,"Startup capture default duration changed.");
+    require(parse({"--profile","gameplay"}).profileDuration==10,"Gameplay capture default duration changed.");
+    const auto profile=parse({"--profile","startup","--profile-duration","37","--profile-output","capture directory"});
+    require(profile.profileMode=="startup" && profile.profileDuration==37 && profile.profileOutput=="capture directory",
+        "Tracy capture options were not retained.");
+    for(const auto invalid: {std::initializer_list<const char*>{"--profile","cpu"},
+                            {"--profile","startup","--profile-duration","0"},
+                            {"--profile","startup","--profile-duration","3601"},
+                            {"--profile-duration","2"}, {"--profile-output",""}, {"--profile"}}) {
+        bool rejected=false;try {parse(invalid);}catch(const std::runtime_error&) {rejected=true;}
+        require(rejected,"Invalid or incomplete Tracy capture options were accepted.");
+    }
     require(!parseGraphicsBackend("vulkan")&&!validGraphicsBackend(static_cast<GraphicsBackend>(99)),"Unsupported backend was accepted.");
     for(const auto backend:{GraphicsBackend::Direct3D11,GraphicsBackend::Direct3D12})
         require(parseGraphicsBackend(graphicsBackendKey(backend))==backend,"Graphics backend key does not round-trip.");

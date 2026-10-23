@@ -79,6 +79,9 @@ These checkpoints describe the implementation as of 2026-10-20. Preserve them wh
 
 ## Build, run, and verify
 
+- Performance investigations use integrated Tracy 0.14.1 and the official MCP/server bindings; start with [PROFILING.md](docs/PROFILING.md). Preserve native `.tracy`, versioned manifest and relevant logs/reports. `scripts/Start-TracyMcp.ps1 -Background` starts the official local HTTP server; `.codex/config.toml` registers `crimson_tracy` for trusted fresh/reloaded sessions. Read `tracy://prompt` and `tracy://eval-guide`, wait for background statistics, query CPU and native GPU zones, then unload captures. `scripts/Analyze-Profile.ps1` provides official offline-binding or real-MCP analysis when this session has no loaded connector.
+- Normal launches start no collector or capture handshake. `--profile startup` records startup; `--profile gameplay` arms the next real Play session. Do not automate user input or alter authored scenes/caches merely to obtain a trace. Use disposable snapshots for cache experiments. Never relabel CPU submission timers/asynchronous elapsed samples as calibrated GPU execution, sum overlapping inclusive zone totals, or call startup coverage complete merely because a file exists.
+
 Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use it instead of assuming an ordinary shell has the compiler environment.
 
 | Purpose                                                        | Command                                                       |

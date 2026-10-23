@@ -1,4 +1,5 @@
 #include "ResourceManager.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -13,6 +14,7 @@ std::string resourcePathKey(const std::filesystem::path& path) {
     return result;
 }
 std::uint64_t fingerprintFiles(const std::vector<std::filesystem::path>& files) {
+    CRIMSON_PROFILE_ZONE("Resource dependency hashing");
     std::uint64_t hash=14695981039346656037ull;
     const auto append=[&](const char* bytes,std::size_t count) { for(std::size_t i=0;i<count;++i) { hash^=static_cast<unsigned char>(bytes[i]); hash*=1099511628211ull; } };
     std::array<char,64*1024> buffer{};
@@ -60,6 +62,7 @@ void ResourceManager::complete(std::function<void()> operation) {
     std::lock_guard lock(completionMutex_); completions_.push_back(std::move(operation));
 }
 void ResourceManager::worker(std::stop_token token) {
+    shared::profiling::thread_name("Resource worker");
     while(!token.stop_requested()) {
         Task task{};
         {
@@ -73,10 +76,24 @@ void ResourceManager::worker(std::stop_token token) {
             });
             task=std::move(*best); tasks_.erase(best); running_.fetch_add(1);
         }
-        task.run(); running_.fetch_sub(1);
+        {
+            static shared::profiling::CpuLocation location{"Resource job",__func__,__FILE__,__LINE__};
+            shared::profiling::CpuZone zone{location};
+            if(shared::profiling::connected())try {if(const auto record=task.record.lock()) {
+                std::string annotation;
+                {
+                    std::lock_guard lock(record->mutex);
+                    annotation="id="+record->id+"; kind="+std::to_string(static_cast<unsigned>(record->kind))+"; variant="+record->variant;
+                }
+                zone.text(annotation);
+            }}catch(...){} // Optional trace text must not fail a resource job.
+            task.run();
+        }
+        running_.fetch_sub(1);
     }
 }
 void ResourceManager::pump() {
+    CRIMSON_PROFILE_ZONE("Resource publication and scheduling");
     std::deque<std::function<void()>> ready;
     { std::lock_guard lock(completionMutex_); ready.swap(completions_); }
     for(auto& operation:ready) operation();
@@ -133,6 +150,7 @@ void ResourceManager::retire(const std::string& id,bool preventReload) {
     }
 }
 void ResourceManager::trim() {
+    CRIMSON_PROFILE_ZONE("Resource retention trim");
     std::lock_guard lock(storesMutex_);
     std::vector<std::pair<std::chrono::steady_clock::time_point,std::shared_ptr<resource_detail::Header>>> candidates;
     for(const auto& record:headers_) { std::lock_guard stateLock(record->mutex); candidates.emplace_back(record->used,record); }

@@ -1,0 +1,6 @@
+# Run scripts/Start-TracyMcp.ps1 -Background before a profiling-analysis chat.
+# Tracy's official 0.14.1 server supports local HTTP, not stdio.
+[mcp_servers.crimson_tracy]
+url = "http://127.0.0.1:47380/mcp"
+startup_timeout_sec = 15
+tool_timeout_sec = 120

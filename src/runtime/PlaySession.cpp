@@ -4,6 +4,7 @@
 #include "physics/CharacterMotor.h"
 #include "scene/CameraAuthoring.h"
 #include "assets/GameplayEffectAsset.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -57,6 +58,7 @@ NavigationProjection PlaySession::projectToNavigation(const std::string& profile
     return navigation_?navigation_->project(profile,point):NavigationProjection{NavigationStatus::Unavailable,{},"Play is not active."};
 }
 bool PlaySession::start(const SceneDocument& authored) {
+    CRIMSON_PROFILE_ZONE("Play session startup");
     if(playing())return true;
     try {
         auto document=std::make_unique<SceneDocument>(projectRoot_);
@@ -76,6 +78,7 @@ bool PlaySession::start(const SceneDocument& authored) {
     } catch(const std::exception& error){stop();status_="Cannot enter Play: "+std::string(error.what());return false;}
 }
 void PlaySession::stop() {
+    CRIMSON_PROFILE_ZONE("Play session teardown");
     effects_.clear();
     attributes_.clear();
     triggerEvents_.clear();
@@ -408,6 +411,7 @@ void PlaySession::advance(double seconds,Vec2 movement,const Camera& camera,bool
     advanceInternal(seconds,movement,camera,active);
 }
 void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& camera,bool active,GameInput* input) {
+    CRIMSON_PROFILE_ZONE("Play frame");
     triggerEvents_.clear();
     if(!document_ || failed_)return;
     try {
@@ -465,6 +469,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         const auto available=static_cast<std::uint64_t>(std::floor((remainder_+1e-12)/FixedStep));
         const auto executed=std::min(available,MaximumCatchUpTicks);
         for(std::uint64_t tick=0;tick<executed;++tick) {
+            CRIMSON_PROFILE_ZONE("Fixed simulation tick");
             previous_=characterPoses(document_->scene());
             if(!effects_.step(FixedStep))throw std::runtime_error(effects_.status());
             advanceEnemies(FixedStep);

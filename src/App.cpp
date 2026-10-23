@@ -15,6 +15,9 @@
 #include "app/DiagnosticSession.h"
 #include "app/FrameProfile.h"
 #include "gameplay/Attributes.h"
+#include "profiling/EngineProfile.h"
+#include "tools/ProfilingMenu.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <implot.h>
@@ -29,6 +32,7 @@ namespace {
 class SdlLifetime {
 public:
     SdlLifetime() {
+        CRIMSON_PROFILE_ZONE("SDL initialization");
         if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) throw std::runtime_error(SDL_GetError());
     }
     ~SdlLifetime() { SDL_Quit(); }
@@ -37,6 +41,7 @@ public:
 class ImGuiLifetime {
 public:
     explicit ImGuiLifetime(SDL_Window* window, const std::filesystem::path& root) {
+        CRIMSON_PROFILE_ZONE("ImGui initialization and layout");
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImPlot::CreateContext();
@@ -90,10 +95,14 @@ bool secondaryWindowDrawable() {
 
 }
 int run(const AppOptions& options) {
+    // Explicit startup capture connects before SDL, assets or the renderer.
+    // Ordinary startup starts no collector and performs no connection wait.
+    profiling::EngineProfile profile(options);
+    std::optional<shared::profiling::CpuZone> startupZone;
+    startupZone.emplace("Engine startup",0,std::source_location::current());
     // Validate the immutable native vocabulary before any scene is loaded.
     (void)nativeAttributeCatalog();
-    const auto root = options.projectRoot.empty() ? std::filesystem::path(CC_PROJECT_ROOT) :
-        std::filesystem::absolute(std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(options.projectRoot.data()), options.projectRoot.size())));
+    const auto& root=profile.projectRoot();
     std::filesystem::create_directories(root);
     if ((options.iblSmoke || options.modelSmoke || options.scenario == "model-sphere") &&
         std::filesystem::equivalent(root, std::filesystem::path(CC_PROJECT_ROOT)))
@@ -125,6 +134,7 @@ int run(const AppOptions& options) {
     {
         ResourceManager resources;
         Renderer renderer(native_renderer_context(window.get(), &diagnostics, graphicsBackend));
+        profile.backendInitialized(graphicsBackend);
         diagnostics.log(std::string("Shared Crimson renderer source ")+shared::kRendererSourceCommit+
             "; manifest "+shared::kRendererManifestSha256+
             "; modified="+(shared::kRendererWorkingTreeDirty?"true":"false"));
@@ -145,10 +155,14 @@ int run(const AppOptions& options) {
         if(!options.frameProfile.empty())frameProfile=std::make_unique<FrameProfile>(std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(options.frameProfile.data()),options.frameProfile.size())));
         bool running=true,captureRequested=false,cycleMinimized=false,pendingQuit=false;
         uint64_t cycleRestoreTime=0;
+        startupZone.reset();
         while (running && (!options.frameLimit || frame < options.frameLimit)) {
+            CRIMSON_PROFILE_ZONE("Engine frame");
             const auto frameStarted=std::chrono::steady_clock::now();
             SDL_Event event;
             bool focusLossEvent=false;
+            {
+            CRIMSON_PROFILE_ZONE("Input and window events");
             while (SDL_PollEvent(&event)) {
                 // Game relative mouse input and FPS press edges must not
                 // activate widgets beneath the captured platform cursor.
@@ -159,6 +173,7 @@ int run(const AppOptions& options) {
                 }
                 if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
                     event.window.windowID==SDL_GetWindowID(window.get()))) pendingQuit=true;
+            }
             }
             const bool focused=editorHasFocus(window.get());
             if(editor && focusLossEvent && !focused)editor->cancelInteraction(renderer);
@@ -193,34 +208,59 @@ int run(const AppOptions& options) {
                 continue;
             }
             renderer.resize(mainDrawable?static_cast<uint32_t>(pixelWidth):0,mainDrawable?static_cast<uint32_t>(pixelHeight):0);
-            if(resourceRuntime)resourceRuntime->preFrame(editor.get(),bgfxFrame);
-            else assets.processImports();
+            {
+                CRIMSON_PROFILE_ZONE("Resource publication");
+                if(resourceRuntime)resourceRuntime->preFrame(editor.get(),bgfxFrame);
+                else assets.processImports();
+            }
 
+            {
+            CRIMSON_PROFILE_ZONE("Editor and simulation");
             toolsRenderer.newFrame(bgfxFrame);
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             if (editor) {
+                editor->setProfilingActive(profile.observing(editor->playing()));
                 editor->frame(assets,renderer,navigation,window.get(),bgfxFrame,pendingQuit);
                 pendingQuit=false;
                 running=!editor->exitAccepted();
             } else { renderer.advanceStreaming();diagnostic->frame(assets,renderer,navigation,window.get()); }
+            if(editor)drawProfilingMenu(profile.captures(),editor->playing());
+            }
+            {
+            CRIMSON_PROFILE_ZONE("UI rendering and platform windows");
             ImGui::Render();
             bgfx::setViewClear(ToolsView,BGFX_CLEAR_COLOR,0x202020ff);
             toolsRenderer.render(ImGui::GetDrawData());
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
+            }
             if (!captureRequested && !options.capture.empty() && frame+5 >= options.frameLimit) {
                 bgfx::requestScreenShot(BGFX_INVALID_HANDLE,options.capture.c_str()); captureRequested=true;
             }
             const auto cpuSubmitted=std::chrono::steady_clock::now();
-            bgfxFrame=renderer.advance_frame();
-            const bool nativeSynchronized=toolsRenderer.postFrame(bgfxFrame,!mainDrawable);
+            bool nativeSynchronized{};
+            {
+                CRIMSON_PROFILE_ZONE("Backend submission and presentation");
+                bgfxFrame=renderer.advance_frame();
+                nativeSynchronized=toolsRenderer.postFrame(bgfxFrame,!mainDrawable);
+            }
             if(!mainDrawable && !nativeSynchronized)SDL_Delay(16);
             const FrameTiming frameTiming{
                 std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStarted).count(),
                 std::chrono::duration<double,std::milli>(cpuSubmitted-frameStarted).count()};
             if(editor)editor->setFrameTiming(frameTiming);
             if(frameProfile)frameProfile->record(frameTiming,navigation.active(),static_cast<std::uint32_t>(pixelWidth),static_cast<std::uint32_t>(pixelHeight));
+            if(profile.observing(editor && editor->playing())) {
+                CRIMSON_PROFILE_ZONE("Profiling capture bookkeeping");
+                auto sample=editor?editor->profileFrame():profiling::CaptureFrame{};
+                sample.appFrame=frame;sample.bgfxFrame=bgfxFrame;
+                const auto resourceStats=resources.stats();
+                sample.materialsReady=(editor?sample.materialsReady:true) && !resourceStats.queued && !resourceStats.running;
+                if(!editor) {sample.sceneWidth=renderer.width();sample.sceneHeight=renderer.height();}
+                const auto profileSettings=editor?std::optional{editor->profileSettings()}:std::nullopt;
+                profile.frame(sample,profileSettings?&*profileSettings:nullptr,&resourceStats,editor?&editor->profileDocument():nullptr);
+            }
             ++frame;
         }
         if(resourceRuntime)resourceRuntime->stop();else resources.stop();
@@ -243,8 +283,12 @@ int run(const AppOptions& options) {
     }
     const bool failed = diagnostics.hadRenderError() || diagnostics.captureFailed() ||
         (!options.capture.empty() && !diagnostics.captureSucceeded());
+    profile.captures().finish();
+    const auto profileStatus=profile.captures().status();
+    if(profileStatus.state==profiling::CaptureState::Saved)diagnostics.log("Tracy capture saved: "+profileStatus.trace.string());
+    else if(profileStatus.state==profiling::CaptureState::Failed)diagnostics.log("Tracy capture failed: "+profileStatus.detail);
     diagnostics.log(failed ? "Renderer verification failed." : "Renderer shut down cleanly.");
-    return failed ? 1 : 0;
+    return failed || (!options.profileMode.empty() && profileStatus.state==profiling::CaptureState::Failed) ? 1 : 0;
 }
 
 } // namespace crimson
