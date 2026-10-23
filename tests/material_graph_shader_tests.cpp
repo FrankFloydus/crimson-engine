@@ -718,6 +718,85 @@ void stylizationCompileChecks(const std::filesystem::path& compiler,const std::f
     struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-stylization-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
     compileStylization({compiler,source,include,root});
 }
+MaterialAsset imageStyleFixture(MaterialNodeKind kind) {
+    MaterialAsset material;auto& graph=material.graph;
+    const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id,texture=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    const auto effect=addMaterialNode(graph,kind).id;
+    findMaterialNode(graph,texture)->texture.image.id="assets/textures/image-style.png";
+    materialOutputNode(graph).output.tessellation.enabled=true;materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    connectMaterialNodes(graph,texture,MaterialPin::RGBA,effect,MaterialPin::Left);
+    if(kind==MaterialNodeKind::ColorRangeMask)connectMaterialNodes(graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    else connectMaterialNodes(graph,effect,kind==MaterialNodeKind::GradientMap?MaterialPin::RGB:MaterialPin::Value,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,effect,kind==MaterialNodeKind::GradientMap?MaterialPin::A:MaterialPin::Value,output,MaterialPin::OpacityMask);
+    connectMaterialNodes(graph,effect,kind==MaterialNodeKind::GradientMap?MaterialPin::R:MaterialPin::Value,output,MaterialPin::Height);
+    return material;
+}
+void imageStyleShaderChecks() {
+    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask}) {
+        auto material=imageStyleFixture(kind);const auto generated=generateMaterialGraphShader(material);
+        const auto effect=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[&](const auto& n){return n.kind==kind;})->id;
+        check(generated.textures.size()==1,"Image-style lowering duplicated a shared source sampler.");
+        auto* node=findMaterialNode(material.graph,effect);
+        if(kind==MaterialNodeKind::Kuwahara){node->kuwahara.radius=7;node->kuwahara.mix=.4f;}
+        else if(kind==MaterialNodeKind::GradientMap){node->gradientMap.stops={{1,0,{2,0,.5f}},{3,.4f,{0,3,.25f}},{2,1,{.5f,.25f,4}}};node->gradientMap.nextStopId=4;node->gradientMap.interpolation=MaterialGradientInterpolation::Smooth;}
+        else {node->colorRangeMask.color={.3f,.6f,.2f};node->colorRangeMask.tolerance=.25f;node->colorRangeMask.softness=.35f;node->colorRangeMask.invert=true;}
+        const auto edited=generateMaterialGraphShader(material);
+        check(edited.topologyKey==generated.topologyKey,"Image-style numeric values, ramp stop count or interpolation changed shader topology.");
+        if(kind==MaterialNodeKind::Kuwahara) {
+            check(generated.textures[0].resize&&edited.textures[0].resize&&edited.uniforms==generated.uniforms&&
+                edited.textures[0].resize->definitionKey!=generated.textures[0].resize->definitionKey,
+                "Kuwahara parameter edits failed independent cached-image content invalidation.");
+        } else check(!generated.textures[0].resize&&edited.uniforms!=generated.uniforms,
+            "Gradient Map or Color Range Mask failed direct point-shader uniform publication.");
+        if(kind==MaterialNodeKind::GradientMap) {
+            const auto before=serializeMaterialGraph(material.graph);const auto layout=materialGraphLayoutHash(material.graph);
+            const auto values=materialGraphValueHash(material.graph,MaterialShading::StandardPbr,MaterialBlend::Mask);
+            for(auto& stop:node->gradientMap.stops)stop.id+=100;node->gradientMap.nextStopId+=100;
+            const auto identities=generateMaterialGraphShader(material);
+            check(identities.topologyKey==edited.topologyKey&&identities.uniforms==edited.uniforms&&identities.runtimeDefinitionSignature==edited.runtimeDefinitionSignature&&
+                materialGraphValueHash(material.graph,MaterialShading::StandardPbr,MaterialBlend::Mask)==values&&
+                materialGraphLayoutHash(material.graph)!=layout&&serializeMaterialGraph(material.graph)!=before,
+                "Transient ramp stop identities affected rendered values or failed authored-history persistence.");
+            node->gradientMap.stops.clear();for(unsigned i=0;i<16;++i)node->gradientMap.stops.push_back({i+1,i/15.f,{i/15.f,1-i/15.f,2}});node->gradientMap.nextStopId=17;
+            const auto maximum=generateMaterialGraphShader(material);
+            check(maximum.topologyKey==generated.topologyKey&&maximum.uniforms.size()==generated.uniforms.size(),
+                "The sixteen-stop ramp exceeded its fixed parameter packet or compiled another topology.");
+        }
+        for(const auto& pin:materialNodeOutputs(material.graph,*node)) {
+            const auto preview=generateMaterialGraphPreviewShader(material,{effect,pin.pin});
+            check(preview.textures.size()==1&&preview.textures[0].resize.has_value()==(kind==MaterialNodeKind::Kuwahara),
+                "An image-style output preview changed the direct/cached sampling contract.");
+        }
+    }
+}
+void compileImageStyle(const ShaderCompileConfig& config) {
+    unsigned fragments{},domains{};
+    const auto compile=[&](const MaterialGraphShader& generated) {
+        for(const auto& variant:generated.variants) {
+            const auto fragment=compileShader(config,materialGraphShaderRecipe(config,generated,variant));
+            const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+            if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))throw std::runtime_error("Image-style material: "+diagnostic);
+            ++fragments;
+            if(variant.tessellation) {
+                const auto domain=compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant));
+                if(!preflightGeneratedTessellationDomain(domain.bytes,vertex.bytes,variant.domainManifest,diagnostic))throw std::runtime_error("Image-style domain: "+diagnostic);
+                ++domains;
+            }
+        }
+    };
+    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask}) {
+        const auto material=imageStyleFixture(kind);compile(generateMaterialGraphShader(material));
+        const auto* node=&*std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[&](const auto& n){return n.kind==kind;});
+        for(const auto& pin:materialNodeOutputs(material.graph,*node))compile(generateMaterialGraphPreviewShader(material,{node->id,pin.pin}));
+    }
+    check(fragments>0&&domains>0,"Image-style native checks omitted fragment or domain coverage.");
+    std::cout<<"Image-style materials compiled "<<fragments<<" fragments and "<<domains<<" native domain stages.\n";
+}
+void imageStyleCompileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+    const auto root=std::filesystem::temp_directory_path()/("crimson-image-style-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-image-style-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
+    compileImageStyle({compiler,source,include,root});
+}
 void imageFoundationShaderChecks() {
     auto material=imageFoundationFixture();const auto generated=generateMaterialGraphShader(material);check(generated.textures.size()==1,"Procedural Noise allocated a sampler or split/merge duplicated image resources.");
     check(generated.variants.front().source.find("ccImageOffsetContext")!=std::string::npos&&generated.variants.front().source.find("dFdx(context.uv.zw)")!=std::string::npos,"Spatial image operations omitted the UV0-to-UV1 Jacobian.");
@@ -921,7 +1000,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
-    compileStylization(config);
+    compileStylization(config);compileImageStyle(config);
     {
         auto material=refractionFixture();const auto ordinary=generateMaterialGraphShader(material);compileGenerated(ordinary);
         // The matte transport target is a required part of the transmission
@@ -1258,11 +1337,12 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        stylizationShaderChecks();constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
+        imageStyleShaderChecks();stylizationShaderChecks();constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
         if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         else if(argc==5&&std::string_view(argv[1])=="--ssr")ssrCompileChecks(argv[2],argv[3],argv[4]);
         else if(argc==5&&std::string_view(argv[1])=="--stylization")stylizationCompileChecks(argv[2],argv[3],argv[4]);
-        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization] <shaderc> <source-dir> <include-dir>");
+        else if(argc==5&&std::string_view(argv[1])=="--image-style")imageStyleCompileChecks(argv[2],argv[3],argv[4]);
+        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization|--image-style] <shaderc> <source-dir> <include-dir>");
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

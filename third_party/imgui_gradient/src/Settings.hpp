@@ -53,6 +53,10 @@ struct Settings {
     // hooks affect only display swatches and the selected mark's popup editor.
     std::function<ColorRGBA(const ColorRGBA&)> display_color;
     std::function<bool(ColorRGBA&,bool& interaction_active)> color_picker_widget;
+    // Optional transformed-canvas integration. Popup origins are converted at
+    // opening; only their contents are submitted in the host's normal space.
+    std::function<ImVec2(ImVec2)> popup_position;
+    std::function<void()> begin_popup_context,end_popup_context;
 
     std::function<bool()> plus_button_widget = []() {
         return ImGui::Button("+", internal::button_size());

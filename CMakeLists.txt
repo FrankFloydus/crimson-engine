@@ -233,6 +233,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleEditor.cpp
     src/tools/ParticleAppearanceEditor.cpp
     src/tools/ParticleGradientEditor.cpp
+    src/tools/ColorGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp
     src/tools/NavigationAgentProfileEditor.cpp src/tools/CollisionLayersEditor.cpp src/tools/GameplayEffectEditor.cpp src/tools/AnimationEditor.cpp
@@ -592,7 +593,7 @@ if(BUILD_TESTING)
     target_link_libraries(particle_step4_scene_tests PRIVATE crimson-particles)
     target_compile_options(particle_step4_scene_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME particle_step4_scene_core COMMAND particle_step4_scene_tests)
-    add_executable(particle_appearance_editor_tests tests/particle_appearance_editor_tests.cpp src/tools/ParticleAppearanceEditor.cpp src/tools/ParticleGradientEditor.cpp src/tools/HdrColorEditor.cpp)
+    add_executable(particle_appearance_editor_tests tests/particle_appearance_editor_tests.cpp src/tools/ParticleAppearanceEditor.cpp src/tools/ParticleGradientEditor.cpp src/tools/ColorGradientEditor.cpp src/tools/HdrColorEditor.cpp)
     target_link_libraries(particle_appearance_editor_tests PRIVATE crimson-particles imgui::imgui implot::implot imgui_gradient::imgui_gradient)
     target_compile_options(particle_appearance_editor_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME particle_appearance_editor_core COMMAND particle_appearance_editor_tests)
@@ -629,8 +630,8 @@ if(BUILD_TESTING)
     target_link_libraries(material_graph_actions_tests PRIVATE crimson-materials)
     target_compile_options(material_graph_actions_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME material_graph_actions_core COMMAND material_graph_actions_tests)
-    add_executable(material_graph_editor_tests tests/material_graph_editor_tests.cpp src/tools/MaterialGraphEditor.cpp src/tools/HdrColorEditor.cpp)
-    target_link_libraries(material_graph_editor_tests PRIVATE crimson-materials crimson-node-editor)
+    add_executable(material_graph_editor_tests tests/material_graph_editor_tests.cpp src/tools/MaterialGraphEditor.cpp src/tools/ColorGradientEditor.cpp src/tools/HdrColorEditor.cpp)
+    target_link_libraries(material_graph_editor_tests PRIVATE crimson-materials crimson-node-editor imgui_gradient::imgui_gradient)
     target_compile_options(material_graph_editor_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME material_graph_editor_core COMMAND material_graph_editor_tests)
     add_executable(material_graph_publication_tests tests/material_graph_publication_tests.cpp)

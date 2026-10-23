@@ -93,8 +93,14 @@ static auto color_button(
     if (settings.color_picker_widget)
     {
         const auto display = settings.display_color ? settings.display_color(selected_mark.color) : selected_mark.color;
-        if (ImGui::ColorButton("##colorpicker1", display, settings.color_edit_flags))
+        if (ImGui::ColorButton("##colorpicker1", display, settings.color_edit_flags)) {
             ImGui::OpenPopup("SelectedMarkColorPicker");
+            if (settings.popup_position) {
+                auto& popup=GImGui->OpenPopupStack.back();
+                popup.OpenPopupPos=settings.popup_position(popup.OpenPopupPos);
+                popup.OpenMousePos=settings.popup_position(popup.OpenMousePos);
+            }
+        }
         interaction_active |= ImGui::IsItemActive();
         return false;
     }
@@ -115,6 +121,8 @@ static auto open_color_picker_popup(
     bool&                     interaction_active
 ) -> bool
 {
+    const bool host_context = settings.begin_popup_context && ImGui::IsPopupOpen("SelectedMarkColorPicker");
+    if (host_context)settings.begin_popup_context();
     if (ImGui::BeginPopup("SelectedMarkColorPicker"))
     {
         ImGui::SetNextItemWidth(popup_size);
@@ -127,10 +135,12 @@ static auto open_color_picker_popup(
             );
         interaction_active |= ImGui::IsItemActive();
         ImGui::EndPopup();
+        if (host_context && settings.end_popup_context)settings.end_popup_context();
         return modified;
     }
     else
     {
+        if (host_context && settings.end_popup_context)settings.end_popup_context();
         return false;
     }
 }
@@ -166,7 +176,8 @@ static auto handle_interactions_with_hovered_mark(
     MarkId& dragged_mark,
     MarkId& selected_mark,
     MarkId& mark_to_delete,
-    MarkId  hovered_mark
+    MarkId  hovered_mark,
+    Settings const& settings
 ) -> bool
 {
     bool interacted{false};
@@ -179,6 +190,11 @@ static auto handle_interactions_with_hovered_mark(
     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
     {
         ImGui::OpenPopup("SelectedMarkColorPicker");
+        if (settings.popup_position) {
+            auto& popup=GImGui->OpenPopupStack.back();
+            popup.OpenPopupPos=settings.popup_position(popup.OpenPopupPos);
+            popup.OpenMousePos=settings.popup_position(popup.OpenMousePos);
+        }
         selected_mark = hovered_mark;
         dragged_mark.reset();
         interacted = true;
@@ -223,7 +239,7 @@ auto GradientWidget::draw_gradient_marks(
                     _dragged_mark,
                     _selected_mark,
                     mark_to_delete,
-                    current_mark_id
+                    current_mark_id,settings
                 );
             }
         }
@@ -417,6 +433,7 @@ auto GradientWidget::widget(
     const auto res = draw_gradient_marks(mark_to_delete, gradient_bar_position, gradient_size, settings);
 
     const auto mark_hitbox_is_hovered = res.hitbox_is_hovered;
+    _mark_hovered = mark_hitbox_is_hovered;
     modified |= res.selected_mark_changed;
 
     if (wants_to_add_mark && !mark_hitbox_is_hovered)

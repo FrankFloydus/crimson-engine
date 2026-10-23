@@ -48,6 +48,7 @@ public:
     auto active_item_id() const -> ImGuiID { return _active_item; }
     auto bar_minimum() const -> ImVec2 { return _bar_minimum; }
     auto bar_maximum() const -> ImVec2 { return _bar_maximum; }
+    auto mark_hovered() const -> bool { return _mark_hovered; }
 
     auto widget(
         const char*     label,
@@ -88,6 +89,7 @@ private:
 
     internal::HoverChecker _hover_checker{};
     bool _interaction_active{};
+    bool _mark_hovered{};
     ImGuiID _active_item{};
     ImVec2 _bar_minimum{}, _bar_maximum{};
 };

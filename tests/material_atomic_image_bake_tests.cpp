@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <thread>
@@ -34,6 +35,145 @@ struct Fixture {
     }
     MaterialNode& node(){return *findMaterialNode(graph,root);}
 };
+Vec4 kuwaharaReference(const FloatImage& source,unsigned x,unsigned y,int radius,bool grayscale,float mix) {
+    const auto sample=[&](int sx,int sy,unsigned channel){return static_cast<double>(source.rgba[(static_cast<std::size_t>(repeat(sy,source.height))*source.width+repeat(sx,source.width))*4+(grayscale?0:channel)]);};
+    Vec4 result{};double lowest=std::numeric_limits<double>::infinity();
+    constexpr int signs[4][2]{{-1,-1},{1,-1},{-1,1},{1,1}};
+    for(const auto& sign:signs) {
+        double sum[3]{},square[3]{};const unsigned channels=grayscale?1u:3u;
+        for(int v=0;v<=radius;++v)for(int u=0;u<=radius;++u)for(unsigned c=0;c<channels;++c) {
+            const auto value=sample(static_cast<int>(x)+sign[0]*u,static_cast<int>(y)+sign[1]*v,c);sum[c]+=value;square[c]+=value*value;
+        }
+        const double count=static_cast<double>((radius+1)*(radius+1));double variance=0;
+        for(unsigned c=0;c<channels;++c){sum[c]/=count;variance+=std::max(0.,square[c]/count-sum[c]*sum[c]);}
+        if(variance<lowest){lowest=variance;for(unsigned c=0;c<3;++c)result[c]=static_cast<float>(sum[grayscale?0:c]);}
+    }
+    for(unsigned c=0;c<3;++c)result[c]=static_cast<float>(sample(x,y,c)+(result[c]-sample(x,y,c))*mix);
+    result[3]=source.rgba[(static_cast<std::size_t>(y)*source.width+x)*4+3];return result;
+}
+void kuwaharaPixels() {
+    for(const auto pin:{MaterialPin::R,MaterialPin::RGBA}) {
+        Fixture fixture(17,11,MaterialNodeKind::Kuwahara,pin);
+        fixture.node().kuwahara.radius=0;const auto source=fixture.bake();
+        // Radius0 captures the completed upstream image. Odd 17x11 native UV
+        // centers can introduce tiny linear-sampling differences from decoded
+        // bytes; a variance winner can amplify them into a different quadrant.
+        // Validate source sampling separately, then test the kernel against its
+        // actual float input without changing its strict variance comparison.
+        for(std::size_t i=0;i<source.rgba.size();++i) {
+            const auto channel=i%4;const float expected=pin==MaterialPin::RGBA?fixture.image->rgba[i]/255.f:
+                channel==3?1.f:fixture.image->rgba[i-channel]/255.f;
+            near(source.rgba[i],expected,1e-6f,"Kuwahara Radius0 source sampling differs from decoded image values beyond native-UV float tolerance.");
+        }
+        for(const int radius:{0,1,4,32})for(const float mix:{0.f,.4f,1.f}) {
+            fixture.node().kuwahara.radius=radius;fixture.node().kuwahara.mix=mix;const auto actual=fixture.bake();
+            check(actual.width==17&&actual.height==11,"Kuwahara changed the completed source lattice.");
+            if(radius==0||mix==0)check(actual.rgba==source.rgba,"Neutral Kuwahara did not retain its completed source pixels exactly.");
+            for(unsigned y=0;y<11;++y)for(unsigned x=0;x<17;++x) {
+                const auto expected=kuwaharaReference(source,x,y,radius,pin==MaterialPin::R,mix);
+                for(unsigned c=0;c<4;++c)if(std::abs(actual.rgba[(y*17+x)*4+c]-expected[c])>3e-6f)
+                    throw std::runtime_error("Kuwahara reference mismatch radius="+std::to_string(radius)+" mix="+std::to_string(mix)+
+                        " source="+(pin==MaterialPin::R?std::string("Scalar"):std::string("RGBA"))+" x="+std::to_string(x)+" y="+std::to_string(y)+
+                        " channel="+std::to_string(c)+" actual="+std::to_string(actual.rgba[(y*17+x)*4+c])+" expected="+std::to_string(expected[c]));
+            }
+        }
+    }
+    Fixture flat(19,13,MaterialNodeKind::Kuwahara,MaterialPin::RGBA);flat.node().kuwahara.radius=0;
+    for(std::size_t i=0;i<flat.image->rgba.size();i+=4){flat.image->rgba[i]=173;flat.image->rgba[i+1]=51;flat.image->rgba[i+2]=229;flat.image->rgba[i+3]=static_cast<unsigned char>(i%251);}
+    const auto flatSource=flat.bake();flat.node().kuwahara.radius=16;
+    const auto constant=flat.bake();
+    for(std::size_t i=0;i<constant.rgba.size();++i)near(constant.rgba[i],flatSource.rgba[i],i%4==3?0:2e-6f,"Kuwahara changed a uniform color, blurred alpha or discarded transparent RGB.");
+    Fixture edge(19,13,MaterialNodeKind::Kuwahara,MaterialPin::RGBA);edge.node().kuwahara.radius=0;
+    for(unsigned y=0;y<13;++y)for(unsigned x=0;x<19;++x){const auto i=(y*19+x)*4;edge.image->rgba[i]=edge.image->rgba[i+1]=edge.image->rgba[i+2]=x<9?32:224;edge.image->rgba[i+3]=static_cast<unsigned char>(x*11+y*3);}
+    const auto edgeSource=edge.bake();edge.node().kuwahara.radius=3;
+    const auto preserved=edge.bake();
+    for(unsigned y=3;y<10;++y)for(const unsigned x:{8u,9u}) {
+        const auto i=(y*19+x)*4;
+        near(preserved.rgba[i],edgeSource.rgba[i],1e-6f,"Kuwahara averaged across a sharp color boundary instead of selecting the low-variance quadrant.");
+        near(preserved.rgba[i+3],edgeSource.rgba[i+3],0,"Kuwahara changed the center pixel's alpha at a color edge.");
+    }
+    const auto preview=bakeMaterialGraphImagePreview(edge.graph,{edge.root,MaterialPin::Value},
+        [&](const std::string&)->std::shared_ptr<const DecodedImage>{return edge.image;},{19,13,0});
+    check(preview.rgba==preserved.rgba,"Kuwahara preview uses different source pixels from the cached material image.");
+    std::stop_source stop;stop.request_stop();bool canceled=false;
+    try{edge.bake(nullptr,stop.get_token());}catch(const std::exception&){canceled=true;}
+    check(canceled,"Kuwahara ignored a canceled bake request.");
+    MaterialGraph graph;addMaterialNode(graph,MaterialNodeKind::Output);
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id,resize=addMaterialNode(graph,MaterialNodeKind::Resize).id,filter=addMaterialNode(graph,MaterialNodeKind::Kuwahara).id;
+    findMaterialNode(graph,color)->color={-2,4,.25f,0};findMaterialNode(graph,resize)->resize={5,3,MaterialResizeFilter::Nearest};
+    connectMaterialNodesData(graph,color,MaterialPin::RGBA,resize,MaterialPin::Left);connectMaterialNodesData(graph,resize,MaterialPin::Value,filter,MaterialPin::Left);
+    const auto hdr=bakeMaterialCachedImage(graph,filter,{});
+    for(std::size_t i=0;i<hdr.rgba.size();i+=4)check(hdr.rgba[i]==-2&&hdr.rgba[i+1]==4&&hdr.rgba[i+2]==.25f&&hdr.rgba[i+3]==0,
+        "Kuwahara clipped HDR/signed values or multiplied RGB by alpha.");
+}
+Vec3 gradientReference(double value,const MaterialGradientMapNode& ramp) {
+    if(value<=ramp.stops.front().position)return ramp.stops.front().color;
+    if(value>=ramp.stops.back().position)return ramp.stops.back().color;
+    for(std::size_t i=1;i<ramp.stops.size();++i)if(value<ramp.stops[i].position) {
+        const auto& a=ramp.stops[i-1];const auto& b=ramp.stops[i];
+        double t=(value-a.position)/(b.position-a.position);
+        if(ramp.interpolation==MaterialGradientInterpolation::Constant)t=0;
+        else if(ramp.interpolation==MaterialGradientInterpolation::Smooth)t=t*t*(3-2*t);
+        Vec3 result;for(unsigned c=0;c<3;++c)result[c]=static_cast<float>(a.color[c]*(1-t)+b.color[c]*t);return result;
+    }
+    throw std::runtime_error("Gradient reference has no interval.");
+}
+float colorRangeReference(Vec3 input,const MaterialColorRangeMaskNode& settings) {
+    double squared=0;for(unsigned c=0;c<3;++c){const double delta=static_cast<double>(input[c])-settings.color[c];squared+=delta*delta;}
+    const double distance=std::sqrt(squared/3);double mask=distance<=settings.tolerance?1:0;
+    if(settings.softness>0){const double t=std::clamp((distance-settings.tolerance)/settings.softness,0.,1.);mask=1-t*t*(3-2*t);}
+    return static_cast<float>(settings.invert?1-mask:mask);
+}
+void imageStylePointPixels() {
+    for(const auto source:{MaterialPin::R,MaterialPin::RGB,MaterialPin::RGBA}) {
+        Fixture gradient(17,11,MaterialNodeKind::GradientMap,source);
+        auto& ramp=gradient.node().gradientMap;ramp.stops={{1,.2f,{-1,4,.25f}},{3,.55f,{.5f,.25f,2}},{2,.85f,{3,-.5f,0}}};ramp.nextStopId=4;
+        const auto resolve=[&](const std::string&)->std::shared_ptr<const DecodedImage>{return gradient.image;};
+        const auto completedSource=bakeMaterialGraphImagePreview(gradient.graph,{gradient.texture,MaterialPin::RGBA},resolve,{17,11,0});
+        for(std::size_t i=0;i<completedSource.rgba.size();++i)near(completedSource.rgba[i],gradient.image->rgba[i]/255.f,1e-6f,"Gradient Map source sampling exceeded native-UV float tolerance.");
+        for(const auto mode:{MaterialGradientInterpolation::Linear,MaterialGradientInterpolation::Constant,MaterialGradientInterpolation::Smooth}) {
+            ramp.interpolation=mode;
+            const auto rgba=bakeMaterialGraphImagePreview(gradient.graph,{gradient.root,MaterialPin::RGBA},resolve,{17,11,0});
+            const auto rgb=bakeMaterialGraphImagePreview(gradient.graph,{gradient.root,MaterialPin::RGB},resolve,{17,11,0});
+            for(std::size_t i=0;i<rgba.rgba.size();i+=4) {
+                const float r=completedSource.rgba[i],g=completedSource.rgba[i+1],b=completedSource.rgba[i+2];
+                const float value=source==MaterialPin::R?r:r*.2126f+g*.7152f+b*.0722f;
+                const auto expected=gradientReference(value,ramp);
+                for(unsigned c=0;c<3;++c){near(rgba.rgba[i+c],expected[c],3e-6f,"Gradient Map preview differs from independent ramp interpolation, endpoint clamping or luminance evaluation.");near(rgb.rgba[i+c],expected[c],3e-6f,"Gradient Map RGB and RGBA previews disagree on ramp color.");}
+                near(rgba.rgba[i+3],source==MaterialPin::RGBA?completedSource.rgba[i+3]:1.f,0,"Gradient Map changed the source alpha contract.");
+                near(rgb.rgba[i+3],1,0,"Gradient Map RGB output is not opaque.");
+            }
+        }
+        const auto alpha=bakeMaterialGraphImagePreview(gradient.graph,{gradient.root,MaterialPin::A},resolve,{17,11,0});
+        for(std::size_t i=0;i<alpha.rgba.size();i+=4)near(alpha.rgba[i],source==MaterialPin::RGBA?completedSource.rgba[i+3]:1.f,0,"Gradient Map A output did not expose the retained source alpha.");
+    }
+    for(const auto source:{MaterialPin::R,MaterialPin::RGBA}) {
+        Fixture range(17,11,MaterialNodeKind::ColorRangeMask,source);
+        auto& settings=range.node().colorRangeMask;settings.color={.25f,.4f,.6f};
+        const auto resolve=[&](const std::string&)->std::shared_ptr<const DecodedImage>{return range.image;};
+        const auto completedSource=bakeMaterialGraphImagePreview(range.graph,{range.texture,MaterialPin::RGBA},resolve,{17,11,0});
+        for(std::size_t i=0;i<completedSource.rgba.size();++i)near(completedSource.rgba[i],range.image->rgba[i]/255.f,1e-6f,"Color Range Mask source sampling exceeded native-UV float tolerance.");
+        for(const float tolerance:{0.f,.15f,.8f})for(const float softness:{0.f,.2f,1.f})for(const bool invert:{false,true}) {
+            settings.tolerance=tolerance;settings.softness=softness;settings.invert=invert;
+            const auto actual=bakeMaterialGraphImagePreview(range.graph,{range.root,MaterialPin::Value},resolve,{17,11,0});
+            for(std::size_t i=0;i<actual.rgba.size();i+=4) {
+                const float red=completedSource.rgba[i];
+                const Vec3 input=source==MaterialPin::R?Vec3{red,red,red}:Vec3{red,completedSource.rgba[i+1],completedSource.rgba[i+2]};
+                const auto expected=colorRangeReference(input,settings);
+                for(unsigned c=0;c<3;++c)near(actual.rgba[i+c],expected,2e-6f,"Color Range Mask differs from independent normalized distance, smooth threshold or inversion.");
+                near(actual.rgba[i+3],1,0,"A color mask scalar preview acquired source alpha.");
+            }
+        }
+        const std::size_t picked=(5*17+7)*4;settings.color={completedSource.rgba[picked],completedSource.rgba[picked+1],completedSource.rgba[picked+2]};
+        if(source==MaterialPin::R)settings.color={settings.color[0],settings.color[0],settings.color[0]};
+        settings.tolerance=settings.softness=0;settings.invert=false;
+        const auto selected=bakeMaterialGraphImagePreview(range.graph,{range.root,MaterialPin::Value},resolve,{17,11,0});
+        near(selected.rgba[picked],1,0,"Picking an exact source color with zero Tolerance/Softness did not select that color.");
+        for(std::size_t i=3;i<range.image->rgba.size();i+=4)range.image->rgba[i]=static_cast<unsigned char>(255-range.image->rgba[i]);
+        const auto changedAlpha=bakeMaterialGraphImagePreview(range.graph,{range.root,MaterialPin::Value},resolve,{17,11,0});
+        check(changedAlpha.rgba==selected.rgba,"Color Range Mask used source alpha when measuring RGB similarity.");
+    }
+}
 void stylizationPixels() {
     Fixture pixels(17,11,MaterialNodeKind::Pixelization,MaterialPin::RGBA);
     pixels.node().stylization.pixelSize=4;
@@ -489,6 +629,6 @@ void benchmark(const std::filesystem::path& file) {
 }
 }
 int main(int argc,char** argv) {
-    try{stylizationPixels();morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
+    try{kuwaharaPixels();imageStylePointPixels();stylizationPixels();morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

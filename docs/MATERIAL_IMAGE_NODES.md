@@ -6,7 +6,7 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema 14 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below, and appends Pixelization, Posterization and Dither without renumbering existing nodes. Readers accept schemas 1–14 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
+Current graph schema 15 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below, including Pixelization, Posterization and Dither, and appends Kuwahara, Gradient Map and Color Range Mask without renumbering existing nodes. Readers accept schemas 1–15 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 
@@ -78,6 +78,23 @@ Do not interpret a packed roughness or metallic map as sRGB color.
 | Pixelization | Completed static image to square source-pixel blocks; same Scalar/RGB/RGBA family | Pixel Size (1–128, default 4) |
 | Posterization | Perceptual color quantization; same Scalar/RGB/RGBA family, alpha preserved | Levels (2–256, default 8) |
 | Dither | Stable threshold pattern on the source image lattice; same family, alpha preserved | Pattern, Size (1–16), Strength (0–1), Levels (2–256, default 17) |
+| Kuwahara | Completed static Scalar/RGB/RGBA image to the same family; center alpha preserved | Radius (0–32 source pixels, default 4), Mix (0–1, default 1) |
+| Gradient Map | Scalar or RGB/RGBA luminance to an editable color ramp; RGB/RGBA and component outputs | 2–16 color stops, positions, interpolation |
+| Color Range Mask | Scalar/RGB/RGBA color selection to a scalar mask; input alpha ignored | Color, Tolerance, Softness, Invert |
+
+## Painterly filtering and color selection
+
+**Kuwahara** simplifies small image variations while retaining stronger boundaries. This implementation uses the classic four overlapping square regions around each source pixel. It compares their summed RGB variances (the scalar variance for grayscale), selects the region with the lowest variance, and mixes its mean into the original color. Alpha stays at the original center pixel. Radius counts source-image pixels; Radius 0 and Mix 0 preserve the input. Periodic sampling agrees with the other cached spatial filters. Large invented seams and UV atlas boundaries can remain visible; this filter has no knowledge of geometry or UV islands. It is the classic filter, not an anisotropic direction-field filter. See the [Kuwahara reference](https://reference.wolfram.com/language/ref/KuwaharaFilter.html).
+
+Kuwahara uses the same static UV0 image pipeline, source-resolution evaluation, cancellation, memory budget and last-good publication rules as Blur and Resize. Changing Radius or Mix regenerates pixels without changing shader topology. Its rolling region statistics avoid a radius-squared scan for every pixel. Apply Image Transform after the completed image for runtime mapping; animated and surface-dependent sources cannot be placed upstream of this cached boundary.
+
+**Gradient Map** maps a scalar, or the linear luminance of an RGB/RGBA input, onto an editable linear RGB ramp. The default black-to-white ramp has two stops. Add, move, recolor or remove stops directly in the ramp editor, keeping 2–16 stops in increasing position order from 0 to 1, with at least 0.0001 spacing. Linear interpolates neighboring colors, Smooth uses smoothstep interpolation, and Constant holds the left color until the next stop. Values outside the ramp's first/last positions use the endpoint colors. RGB and R/G/B outputs use the mapped color; RGBA and A preserve the source alpha (opaque for scalar/RGB sources). Stop colors retain HDR values. Stop selection is transient, while ramp changes use ordinary document transactions and Escape cancellation.
+
+For an aged-metal palette, start with dark umber at 0, bronze in the middle and pale gold at 1, then Blend the mapped result with the original texture. Input luminance is a material value, not scene lighting; a Gradient Map does not recover real lighting from painted highlights. The inline ramp and Properties edit the same authored stops. RGB/RGBA outputs have color previews; component outputs have numerical grayscale previews. Gradient stop identity and selection do not affect rendered pixels. Adding/removing stops and changing colors, positions or interpolation update fixed-size parameter data without selecting a new shader program.
+
+**Color Range Mask** produces white near its selected linear RGB Color and black outside it. Tolerance defaults to 0.1 and Softness to 0.1, both in 0–1; Color defaults to white and Invert defaults off. Its normalized distance is `length(input.rgb - Color) / sqrt(3)`. Distances at or below Tolerance are selected; the following Softness interval fades through smoothstep to black. Softness 0 gives an inclusive hard cutoff. Invert reverses the mask. Scalar inputs broadcast to RGB; input alpha does not affect selection.
+
+Connect the mask to Blend's Mask input to replace a selected tint or pale artifact with a cleaner material color. Colors shared by wanted and unwanted features receive the same selection. Gradient Map and Color Range Mask remain direct point operations: uniform inputs remain uniform, and varying/animated inputs use generated shaders. Their CPU evaluation, image previews, cached upstream evaluation and fragment/domain expressions share the same equations.
 
 ## Material stylization
 

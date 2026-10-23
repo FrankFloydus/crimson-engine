@@ -12,6 +12,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <set>
 #include <source_location>
@@ -1618,11 +1619,12 @@ void requestedImageAndChannelControls() {
         blend=addMaterialNode(asset.graph,MaterialNodeKind::Blend,{-250,220}).id;
         connectMaterialNodes(asset.graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);
     })&&ui.document.save(),"Could not configure image authoring controls.");ui.frame(24);
-    const std::array<std::pair<const char*,MaterialNodeKind>,17> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
+    const std::array<std::pair<const char*,MaterialNodeKind>,20> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
         {"image blend",MaterialNodeKind::Blend},{"luminance",MaterialNodeKind::Grayscale},{"to color",MaterialNodeKind::ToColor},{"procedural clouds",MaterialNodeKind::Noise},
         {"brightness contrast",MaterialNodeKind::BrightnessContrast},{"unsharp",MaterialNodeKind::Sharpen},{"height normal",MaterialNodeKind::HeightToNormal},
         {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge},{"resample",MaterialNodeKind::Resize},
-        {"pixelate mosaic",MaterialNodeKind::Pixelization},{"posterize quantize",MaterialNodeKind::Posterization},{"ordered dither",MaterialNodeKind::Dither}}};
+        {"pixelate mosaic",MaterialNodeKind::Pixelization},{"posterize quantize",MaterialNodeKind::Posterization},{"ordered dither",MaterialNodeKind::Dither},
+        {"kuwahara painterly",MaterialNodeKind::Kuwahara},{"gradient ramp",MaterialNodeKind::GradientMap},{"color range mask",MaterialNodeKind::ColorRangeMask}}};
     for(const auto& [alias,kind]:searches) {
         const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
         const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
@@ -1662,11 +1664,12 @@ void requestedImageAndChannelControls() {
     require(ui.editor.status().empty(),"Image/channel controls left an editor diagnostic.");
 }
 void imageNodeParameterTransactions() {
-    const std::array<std::pair<MaterialNodeKind,const char*>,12> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
+    const std::array<std::pair<MaterialNodeKind,const char*>,16> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
         {MaterialNodeKind::BrightnessContrast,"Brightness"},{MaterialNodeKind::Sharpen,"Amount"},{MaterialNodeKind::HeightToNormal,"Strength"},
         {MaterialNodeKind::Resize,"Width"},{MaterialNodeKind::Resize,"Height"},
         {MaterialNodeKind::Pixelization,"Pixel Size"},{MaterialNodeKind::Posterization,"Levels"},
-        {MaterialNodeKind::Dither,"Size"},{MaterialNodeKind::Dither,"Strength"},{MaterialNodeKind::Dither,"Levels"}}};
+        {MaterialNodeKind::Dither,"Size"},{MaterialNodeKind::Dither,"Strength"},{MaterialNodeKind::Dither,"Levels"},
+        {MaterialNodeKind::Kuwahara,"Radius"},{MaterialNodeKind::Kuwahara,"Mix"},{MaterialNodeKind::ColorRangeMask,"Tolerance"},{MaterialNodeKind::ColorRangeMask,"Softness"}}};
     for(const auto& [kind,label]:cases) {
         GraphUi ui;MaterialNodeId id{};
         require(ui.document.edit("Image parameter fixture",[&](auto& asset){asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});auto& node=addMaterialNode(asset.graph,kind,{-100,0});id=node.id;if(kind==MaterialNodeKind::Dither)node.stylization.strength=.25f;})&&ui.document.save(),"Could not configure image parameter fixture.");ui.frame(24);
@@ -1835,6 +1838,114 @@ void typedPinColorsConversionsAndResize() {
     const auto beforeFilter=ui.snapshot();ui.click(filterPoint);require(ui.popup()&&!ui.document.transactionActive(),"Opening Resize filters started an authored edit.");
     ui.click(ui.popupItem(2));require(findMaterialNode(ui.document.definition().graph,resize)->resize.filter==MaterialResizeFilter::Area,
         "Resize filter selection did not choose Area.");ui.oneUndo(beforeFilter);
+}
+
+void imageEffectPreviewsAndMask() {
+    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask}) {
+        GraphUi ui;MaterialNodeId effect{};
+        require(ui.document.edit("Image effect preview fixture",[&](auto& asset) {
+            asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{550,0});
+            const auto color=addMaterialNode(asset.graph,MaterialNodeKind::Color,{-500,0}).id;findMaterialNode(asset.graph,color)->color={.2f,.4f,.6f,.3f};
+            effect=addMaterialNode(asset.graph,kind,{-100,0}).id;connectMaterialNodes(asset.graph,color,MaterialPin::RGBA,effect,MaterialPin::Left);
+        })&&ui.document.save(),"Could not configure image-effect preview.");
+        const auto primary=kind==MaterialNodeKind::GradientMap?MaterialPin::RGB:MaterialPin::Value;unsigned requests{};
+        ui.assets.nodeImage=[&](MaterialGraphPreviewTarget target,unsigned edge) {
+            if(target.node==effect){require(target.pin==primary&&edge==128,"New material effect requested an incorrect primary preview.");++requests;}
+            MaterialGraphEditor::TexturePresentation image;image.available=true;image.textureId=77;image.width=image.height=edge;return image;
+        };
+        const auto before=ui.snapshot();const auto revision=ui.document.revision();ui.frame(24);
+        require(requests>0&&std::any_of(ui.editor.presentation().images.begin(),ui.editor.presentation().images.end(),[&](const auto& image){return image.node==effect&&image.textureId==77;}),"New material effect did not show its inline preview.");
+        ui.click(ui.pin(effect,primary,false),ImGuiMouseButton_Right);require(ui.popup(),"New material effect omitted output preview actions.");ui.click(ui.popupItem(0));
+        require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{effect,primary}&&ui.snapshot()==before&&ui.document.revision()==revision,"Starting an effect preview changed material history.");
+        if(kind==MaterialNodeKind::ColorRangeMask) {
+            const auto control=[&](const char* label) {
+                for(const auto& value:ui.editor.presentation().controls)if(value.node==effect&&value.label==label)return value;
+                throw std::runtime_error("Color Range Mask omitted a requested control.");
+            };
+            const auto invert=control("Invert");ui.click({invert.minimum[0]+8,(invert.minimum[1]+invert.maximum[1])*.5f});
+            require(findMaterialNode(ui.document.definition().graph,effect)->colorRangeMask.invert,"Color Range Mask inversion was not editable inline.");ui.oneUndo(before);
+            const auto color=control("Color");const auto stable=ui.snapshot();ui.click({(color.minimum[0]+color.maximum[0])*.5f,(color.minimum[1]+color.maximum[1])*.5f});
+            require(ui.popup()&&ui.snapshot()==stable&&!ui.document.transactionActive(),"Opening the mask reference color changed the material.");ui.key(ImGuiKey_Escape);
+            require(!ui.popup()&&ui.snapshot()==stable,"Closing the mask reference color changed authored values.");
+        }
+    }
+}
+
+void materialGradientEditing() {
+    GraphUi ui;MaterialNodeId gradient{};
+    require(ui.document.edit("Gradient Map UI fixture",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{500,0});gradient=addMaterialNode(asset.graph,MaterialNodeKind::GradientMap,{-150,0}).id;
+        auto& ramp=findMaterialNode(asset.graph,gradient)->gradientMap;
+        ramp.stops={{11,.1f,{4,.2f,.1f}},{12,.5f,{4,2,.3f}},{13,.9f,{.1f,.2f,8}}};ramp.nextStopId=14;
+    })&&ui.document.save(),"Could not configure Gradient Map UI.");ui.frame(24);
+    const auto ramp=[&]()->const MaterialGradientMapNode& {return findMaterialNode(ui.document.definition().graph,gradient)->gradientMap;};
+    const auto view=[&] {
+        for(const auto& value:ui.editor.presentation().gradients)if(value.node==gradient)return value;
+        throw std::runtime_error("Gradient Map did not present its ramp editor.");
+    };
+    const auto stop=[&](std::size_t index) {
+        const auto value=view();return ImVec2{value.minimum[0]+ramp().stops[index].position*(value.maximum[0]-value.minimum[0]),value.maximum[1]+.3f*ImGui::GetFontSize()*ui.editor.presentation().zoom};
+    };
+    const auto bar=[&](float position) {const auto value=view();return ImVec2{value.minimum[0]+position*(value.maximum[0]-value.minimum[0]),(value.minimum[1]+value.maximum[1])*.5f};};
+    auto before=ui.snapshot();const auto revision=ui.document.revision();ui.frame(8);
+    require(ui.snapshot()==before&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Passive Gradient Map frames changed HDR colors or history.");
+    ui.click(bar(.3f));require(ramp().stops.size()==4&&ramp().nextStopId==15,"Clicking a material gradient did not add one stable stop.");ui.oneUndo(before);
+    require(ui.document.undo(),"Could not restore ramp after insertion.");ui.frame(3);
+    before=ui.snapshot();ui.click(stop(1));
+    require(view().selected==12&&ui.snapshot()==before&&!ui.document.transactionActive(),"Selecting a ramp stop changed material data or began a transaction.");
+    // The next press is a separate drag, not a double-click on this stop.
+    auto& io=ImGui::GetIO();ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);
+    const auto start=stop(1);ui.drag(start,{start.x+35,start.y});
+    require(ramp().stops[1].id==12&&ramp().stops[1].position>.5f,"Ramp stop drag lost identity or did not move.");ui.oneUndo(before);
+    require(ui.document.undo(),"Could not restore ramp for Escape.");ui.frame(3);
+    ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);
+    before=ui.snapshot();auto position=stop(1);ui.move(position);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);ui.frame();ui.move({position.x+45,position.y});
+    require(ui.document.transactionActive()&&ui.snapshot()!=before,"Ramp drag did not retain one changed transaction.");
+    ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
+    require(ui.snapshot()==before&&!ui.document.transactionActive(),"Ramp Escape did not restore exact positions, IDs and HDR colors.");
+    ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);
+    ui.click(stop(1));before=ui.snapshot();ui.key(ImGuiKey_Delete);
+    require(findMaterialNode(ui.document.definition().graph,gradient)&&ramp().stops.size()==2,"Gradient Delete removed a node or failed to remove its selected stop.");ui.oneUndo(before);
+    require(ui.document.undo(),"Could not restore deleted gradient stop.");ui.frame(3);
+    before=ui.snapshot();ui.click(stop(0),ImGuiMouseButton_Middle);
+    require(ramp().stops.size()==2&&ramp().stops.front().id==12,"Middle-clicking a ramp endpoint did not remove that stop.");ui.oneUndo(before);
+    require(ui.document.undo(),"Could not restore ramp endpoint.");ui.frame(3);
+    before=ui.snapshot();auto bounds=view();ui.click({(bounds.resetMinimum[0]+bounds.resetMaximum[0])*.5f,(bounds.resetMinimum[1]+bounds.resetMaximum[1])*.5f});
+    require(ramp().stops.size()==2&&ramp().stops.front().id==11&&ramp().stops.back().id==13&&ramp().stops.front().position==0&&ramp().stops.back().position==1&&
+        ramp().stops.front().color==Vec3{}&&ramp().stops.back().color==Vec3{1,1,1},"Ramp reset lost endpoint identities or failed to restore black/white.");ui.oneUndo(before);
+    ui.select({gradient});ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);
+    before=ui.snapshot();bounds=view();const ImVec2 outsideEndpoint{bounds.minimum[0]-2*ui.editor.presentation().zoom,bounds.maximum[1]+.3f*ImGui::GetFontSize()*ui.editor.presentation().zoom};
+    ui.click(outsideEndpoint);require(view().selected==11,"The outside half of an endpoint hitbox did not select its ramp stop.");ui.key(ImGuiKey_Delete);
+    require(findMaterialNode(ui.document.definition().graph,gradient)&&ramp().stops.size()==2&&ui.snapshot()==before&&!ui.document.transactionActive(),
+        "Delete on an endpoint hitbox escaped to node deletion at the two-stop minimum.");
+    require(ui.document.undo(),"Could not restore authored ramp after reset.");ui.frame(3);
+    ui.move(ui.emptyPoint());io.AddMouseWheelEvent(0,-2);ui.frame(24);
+    const auto anchor=ui.emptyPoint();io.AddMouseButtonEvent(ImGuiMouseButton_Right,true);ui.frame();ui.move({anchor.x-55,anchor.y+25});io.AddMouseButtonEvent(ImGuiMouseButton_Right,false);ui.frame(3);
+    auto combo=std::find_if(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& value){return value.node==gradient&&value.label=="Interpolation";});
+    require(combo!=ui.editor.presentation().combos.end(),"Gradient Map omitted its interpolation control.");
+    before=ui.snapshot();ui.click({(combo->minimum[0]+combo->maximum[0])*.5f,(combo->minimum[1]+combo->maximum[1])*.5f});
+    require(ui.popup()&&ui.snapshot()==before&&!ui.document.transactionActive(),"Opening ramp interpolation changed the material.");ui.click(ui.popupItem(2));
+    require(ramp().interpolation==MaterialGradientInterpolation::Smooth,"Ramp interpolation did not accept Smooth.");ui.oneUndo(before);
+    require(ui.document.undo(),"Could not restore Linear ramp interpolation.");ui.frame(3);
+    ui.frame(static_cast<int>(std::ceil(io.MouseDoubleClickTime/io.DeltaTime))+1);position=stop(1);before=ui.snapshot();
+    ui.click(position);ui.click(position);ui.frame(2);
+    require(ui.popup()&&view().selected==12&&ui.snapshot()==before&&!ui.document.transactionActive()&&!ui.editor.previewTarget(),"Double-clicking a ramp stop failed to open its transient HDR picker or toggled node preview.");
+    const auto* popup=ImGui::GetCurrentContext()->OpenPopupStack.back().Window;const auto* viewport=popup->Viewport;
+    require(popup&&popup->Pos.x>=viewport->WorkPos.x&&popup->Pos.y>=viewport->WorkPos.y&&popup->Pos.x+popup->Size.x<=viewport->WorkPos.x+viewport->WorkSize.x+1&&popup->Pos.y+popup->Size.y<=viewport->WorkPos.y+viewport->WorkSize.y+1&&
+        popup->Pos.x<=position.x+35&&popup->Pos.x+popup->Size.x>=position.x-35,"Panned/zoomed ramp popup was not anchored beside its stop within the viewport.");
+    ui.frame(8);require(ui.snapshot()==before,"Opening a material ramp HDR picker changed its linear colors.");
+    bounds=view();position={bounds.colorChannelMinimum[0][0]+(bounds.colorChannelMaximum[0][0]-bounds.colorChannelMinimum[0][0])*.25f,(bounds.colorChannelMinimum[0][1]+bounds.colorChannelMaximum[0][1])*.5f};
+    ui.drag(position,{position.x+45,position.y});
+    require(ramp().stops[1].color[0]>4&&ramp().stops[1].color[1]==2&&ramp().stops[1].color[2]==.3f,"Ramp color edit clamped HDR or changed another channel.");ui.oneUndo(before);
+    ui.key(ImGuiKey_Escape);ui.frame(3);
+    require(ui.document.edit("Full material ramp",[&](auto& asset) {
+        auto& value=findMaterialNode(asset.graph,gradient)->gradientMap;value.stops.clear();
+        for(std::uint64_t id=1;id<=16;++id)value.stops.push_back({id,static_cast<float>(id-1)/15,{.2f,.3f,.4f}});value.nextStopId=17;
+    }),"Could not configure a full material ramp.");ui.frame(3);before=ui.snapshot();ui.click(bar(.42f));
+    require(ramp().stops.size()==16&&ui.snapshot()==before&&!ui.document.transactionActive(),"A material ramp accepted more than sixteen stops.");
+    require(ui.document.edit("Exhausted material ramp identities",[&](auto& asset){auto& value=findMaterialNode(asset.graph,gradient)->gradientMap;value=MaterialGradientMapNode{};value.nextStopId=std::numeric_limits<std::uint64_t>::max();}),"Could not configure exhausted ramp identities.");
+    ui.frame(3);before=ui.snapshot();ui.click(bar(.42f));require(ui.snapshot()==before&&ramp().stops.size()==2,"Ramp insertion wrapped an exhausted stop ID counter.");
+    require(ui.editor.status().empty(),"Gradient Map UI left an authoring diagnostic.");
 }
 
 void atomicNodeCatalogAndTransactions() {
@@ -2030,5 +2141,5 @@ void boundedNodeSearchResults() {
 }
 
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();heightInputActivationAndFallback();refractionInputActivationAndFallbacks();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();imageAdjustmentAndGrungeControls();grungeParameterControls();grungeGeneratedImagePresentation();textureImagePresentationAndLegacyPins();staticNodeImagePresentation();overviewNodeImageCulling();doubleClickNodePreview();requestedImageAndChannelControls();imageNodeParameterTransactions();typedPinColorsConversionsAndResize();mixedImageInputsAndResolvedOutputs();imageEffectPreviewsAndMask();materialGradientEditing();atomicNodeCatalogAndTransactions();proceduralFamilyControlsAndResolution();atomicImageSourceAndMappingPins();boundedNodeSearchResults();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

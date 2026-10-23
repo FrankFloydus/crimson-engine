@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/MaterialGraph.h"
+#include <array>
 #include <memory>
 #include <functional>
 #include <optional>
@@ -44,6 +45,10 @@ public:
     struct ComboPresentation {MaterialNodeId node{};std::string label;Vec2 minimum{},maximum{};};
     struct ControlPresentation {MaterialNodeId node{};std::string label;Vec2 minimum{},maximum{};};
     struct ImagePresentation {MaterialNodeId node{};Vec2 minimum{},maximum{};std::uint64_t textureId{};};
+    struct GradientPresentation {
+        MaterialNodeId node{};Vec2 minimum{},maximum{},positionMinimum{},positionMaximum{},resetMinimum{},resetMaximum{};
+        std::array<Vec2,3> colorChannelMinimum{},colorChannelMaximum{};std::uint64_t selected{};
+    };
     struct Presentation {
         Vec2 canvasMinimum{},canvasMaximum{};
         float zoom{1};
@@ -53,6 +58,7 @@ public:
         std::vector<ComboPresentation> combos;
         std::vector<ControlPresentation> controls;
         std::vector<ImagePresentation> images;
+        std::vector<GradientPresentation> gradients;
     };
     MaterialGraphEditor();
     ~MaterialGraphEditor();

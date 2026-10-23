@@ -142,9 +142,12 @@ static auto interpolate(const Mark& lower, const Mark& upper, const RelativePosi
     switch (interpolation_mode)
     {
     case Interpolation::Linear:
+    case Interpolation::Smooth:
     {
-        const float mix_factor = (position.get() - lower.position.get())
+        float mix_factor = (position.get() - lower.position.get())
                                  / (upper.position.get() - lower.position.get());
+        if (interpolation_mode == Interpolation::Smooth)
+            mix_factor = mix_factor * mix_factor * (3.f - 2.f * mix_factor);
         // Canonical storage is already linear HDR RGB and straight alpha.
         // The editor's display mapping must never enter authored sampling.
         return ImLerp(lower.color, upper.color, mix_factor);

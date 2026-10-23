@@ -34,6 +34,8 @@ dependency target. Consumers link `imgui_gradient::imgui_gradient` and include
   its active ImGui item identity and the actual bar rectangle. This lets the engine retain stable IDs and one
   document-history command per gesture, including color-picker popups, without
   interpreting only the library's final ImGui item.
+  It also exposes actual mark-hitbox hover, so Delete and preview gestures stay
+  with a ramp stop even where an endpoint handle extends beyond the color bar.
 - `Settings` adds minimum/maximum mark counts, a position constraint callback,
   a reset callback, and display/custom-color-picker callbacks. The widget applies these to bar clicks, plus/minus,
   keyboard/middle-click deletion, dragging and numeric position editing.
@@ -59,8 +61,20 @@ dependency target. Consumers link `imgui_gradient::imgui_gradient` and include
   Keyboard Delete/Backspace is limited to the gradient's bar/options bounds,
   without an unrelated active widget or text input, so a selected gradient stop
   cannot consume deletion intended for an adjacent curve or numeric field.
+- Smooth interpolation appends a smoothstep mode without changing the existing
+  Linear/Constant identities. Authored sampling, inserted-stop colors and bar
+  drawing share the same interpolation; HDR values remain linear.
+- Optional popup-position and popup-context callbacks let a transformed node
+  canvas convert an opening anchor to screen space once and suspend its canvas
+  while submitting popup contents. Default callbacks are unset, preserving
+  ordinary particle editor behavior.
 
-The adapter is `src/tools/ParticleGradientEditor.cpp`. Its last returned draft
+The common host control is `src/tools/ColorGradientEditor.cpp`, consumed by
+the particle adapter in `src/tools/ParticleGradientEditor.cpp` and the material
+adapter in `src/tools/MaterialGradientEditor.h`. Particle ramps retain independent
+alpha and their existing controls; material Gradient Map ramps author RGB stops
+and inherit alpha from their image input. Both reuse the same widget, HDR color
+editor and stable identity handling. The last returned draft
 tracks ordinary active gestures. Any authoritative undo/reload mismatch rebuilds
 the widget and clears only its owned active ImGui item; cancellation does the
 same. Help remains in hover tooltips. Simulation and persistence retain their

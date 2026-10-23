@@ -23,7 +23,16 @@ void draw_material_atomic_controls(const MaterialNode& node,Parameter&& paramete
     const auto amount=[&](float minimum,float maximum) {
         parameter("Amount","Change image amount",[=](auto& n){return resettableProperty(n.atomic.amount,defaults.atomic.amount,[&]{return ImGui::DragFloat("Amount",&n.atomic.amount,.001f,minimum,maximum,"%.4f",ImGuiSliderFlags_AlwaysClamp);});});
     };
-    if(node.kind==MaterialNodeKind::Pixelization) {
+    if(node.kind==MaterialNodeKind::Kuwahara) {
+        parameter("Radius","Change Kuwahara radius",[&](auto& n){const bool changed=resettableProperty(n.kuwahara.radius,defaults.kuwahara.radius,[&]{return ImGui::DragInt("Radius",&n.kuwahara.radius,1,0,32,"%d px",ImGuiSliderFlags_AlwaysClamp);});tooltip("Filter radius measured in source image pixels.");return changed;});
+        parameter("Mix","Change Kuwahara mix",[defaults](auto& n){return resettableProperty(n.kuwahara.mix,defaults.kuwahara.mix,[&]{return ImGui::SliderFloat("Mix",&n.kuwahara.mix,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+    } else if(node.kind==MaterialNodeKind::GradientMap) {
+        option("Interpolation","Change gradient interpolation","Linear\0Constant\0Smooth\0",[](const auto& n){return static_cast<int>(n.gradientMap.interpolation);},[](auto& n,int v){n.gradientMap.interpolation=static_cast<MaterialGradientInterpolation>(v);});
+    } else if(node.kind==MaterialNodeKind::ColorRangeMask) {
+        parameter("Tolerance","Change color range tolerance",[defaults](auto& n){return resettableProperty(n.colorRangeMask.tolerance,defaults.colorRangeMask.tolerance,[&]{return ImGui::SliderFloat("Tolerance",&n.colorRangeMask.tolerance,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+        parameter("Softness","Change color range softness",[defaults](auto& n){return resettableProperty(n.colorRangeMask.softness,defaults.colorRangeMask.softness,[&]{return ImGui::SliderFloat("Softness",&n.colorRangeMask.softness,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+        parameter("Invert","Invert color range mask",[defaults](auto& n){return resettableProperty(n.colorRangeMask.invert,defaults.colorRangeMask.invert,[&]{return ImGui::Checkbox("Invert",&n.colorRangeMask.invert);});});
+    } else if(node.kind==MaterialNodeKind::Pixelization) {
         parameter("Pixel Size","Change material pixel size",[&](auto& n){const bool changed=resettableProperty(n.stylization.pixelSize,defaults.stylization.pixelSize,[&]{return ImGui::DragInt("Pixel Size",&n.stylization.pixelSize,1,1,128,"%d px",ImGuiSliderFlags_AlwaysClamp);});tooltip("Square blocks measured in source image pixels.");return changed;});
     } else if(node.kind==MaterialNodeKind::Posterization) {
         parameter("Levels","Change material posterization levels",[defaults](auto& n){return resettableProperty(n.stylization.levels,defaults.stylization.levels,[&]{return ImGui::DragInt("Levels",&n.stylization.levels,1,2,256,"%d",ImGuiSliderFlags_AlwaysClamp);});});

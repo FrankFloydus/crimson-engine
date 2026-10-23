@@ -48,7 +48,8 @@ static void draw_gradient_between_two_colors(
     ImVec2 const     bottom_right_corner,
     ColorRGBA const& left_color,
     ColorRGBA const& right_color,
-    Settings const&  settings
+    Settings const&  settings,
+    Interpolation interpolation
 )
 {
     const auto display = [&](ColorRGBA const& color) {
@@ -68,10 +69,11 @@ static void draw_gradient_between_two_colors(
     for (int i = 0; i < subdivisions; ++i)
     {
         float const t = static_cast<float>(i + 1) / static_cast<float>(subdivisions + 1);
+        const float weight = interpolation == Interpolation::Smooth ? t * t * (3.f - 2.f * t) : t;
         xs.push_back(top_left_corner.x * (1.f - t) + bottom_right_corner.x * t);
         colors.push_back(display(
-            left_color * ImVec4{1.f - t, 1.f - t, 1.f - t, 1.f - t}
-            + right_color * ImVec4{t, t, t, t}
+            left_color * ImVec4{1.f - weight, 1.f - weight, 1.f - weight, 1.f - weight}
+            + right_color * ImVec4{weight, weight, weight, weight}
         ));
     }
     xs.push_back(bottom_right_corner.x);
@@ -117,14 +119,14 @@ void draw_gradient(
         const auto to{gradient_position.x + mark.position.get() * size.x};
         if (mark.position.get() != 0.f)
         {
-            if (gradient.interpolation_mode() == Interpolation::Linear)
+            if (gradient.interpolation_mode() == Interpolation::Linear || gradient.interpolation_mode() == Interpolation::Smooth)
             {
                 draw_gradient_between_two_colors(
                     draw_list,
                     ImVec2{from - 0.55f, gradient_position.y},        // We extend the rectangle by 0.55 on each side, otherwise there can be small gaps that appear between rectangles
                     ImVec2{to + 0.55f, gradient_position.y + size.y}, // (for some gradient width and some mark positions) (see https://github.com/Coollab-Art/imgui_gradient/issues/5)
                     color_left, color_right,
-                    settings
+                    settings,gradient.interpolation_mode()
                 );
             }
             else if (gradient.interpolation_mode() == Interpolation::Constant)

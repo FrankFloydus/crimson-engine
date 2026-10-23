@@ -3,6 +3,7 @@
 #include "editor/MaterialGraphActions.h"
 #include "HdrColorEditor.h"
 #include "MaterialAtomicControls.h"
+#include "MaterialGradientEditor.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_node_editor.h>
@@ -137,6 +138,9 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::Pixelization:aliases="pixelization pixelisation pixelize pixelise pixelate pixelation mosaic blocks image filter node";break;
     case MaterialNodeKind::Posterization:aliases="posterization posterisation posterize posterise quantize quantise levels color colour image filter node";break;
     case MaterialNodeKind::Dither:aliases="dither dithering bayer ordered interleaved gradient noise pattern image filter node";break;
+    case MaterialNodeKind::Kuwahara:aliases="kuwahara painterly painting oil watercolor edge preserve smooth filter node";break;
+    case MaterialNodeKind::GradientMap:aliases="gradient map ramp remap color colour palette stops node";break;
+    case MaterialNodeKind::ColorRangeMask:aliases="color colour range mask select selection key chroma tolerance softness node";break;
     default:break;
     }
     std::string search(query);std::transform(search.begin(),search.end(),search.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -170,7 +174,8 @@ ImVec4 nodeColor(MaterialNodeKind kind) {
     case MaterialNodeKind::Blur:case MaterialNodeKind::GrowShrink:case MaterialNodeKind::MaskAdjust:case MaterialNodeKind::HistogramScan:
     case MaterialNodeKind::DirectionalWarp:case MaterialNodeKind::HeightOcclusion:case MaterialNodeKind::NormalOcclusion:
     case MaterialNodeKind::DirectionSelect:case MaterialNodeKind::DecodeNormal:
-    case MaterialNodeKind::Pixelization:case MaterialNodeKind::Posterization:case MaterialNodeKind::Dither:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::Pixelization:case MaterialNodeKind::Posterization:case MaterialNodeKind::Dither:
+    case MaterialNodeKind::Kuwahara:case MaterialNodeKind::GradientMap:case MaterialNodeKind::ColorRangeMask:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::RGBAMerge:case MaterialNodeKind::RGBASplit:case MaterialNodeKind::AlphaSplit:case MaterialNodeKind::AlphaMerge:
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
     case MaterialNodeKind::Texture2D:case MaterialNodeKind::Resize:case MaterialNodeKind::ImageInput:case MaterialNodeKind::ProceduralTexture:return {.23f,.48f,.65f,1};
@@ -322,6 +327,7 @@ struct MaterialGraphEditor::State {
     std::map<std::tuple<MaterialNodeId,MaterialPin,bool>,MaterialGraphConnection> connectionTargets;
     std::optional<MaterialGraphPreviewTarget> preview;
     std::map<std::pair<MaterialNodeId,MaterialPin>,HdrColorEditorState> colorEditors;
+    std::map<MaterialNodeId,ColorGradientEditorState> gradientEditors;
     std::map<MaterialNodeId,Vec3> scaleBaselines;
     std::map<MaterialNodeId,TexturePresentation> generatedTextures;
     std::map<MaterialNodeId,MaterialGraphPreviewTarget> generatedTargets;
@@ -329,7 +335,7 @@ struct MaterialGraphEditor::State {
     std::array<char,128> search{};
     int searchIndex{};
     bool focusSearch{};
-    ~State(){if(context)ed::DestroyEditor(context);}
+    ~State(){for(auto& [id,editor]:gradientEditors){(void)id;editor.cancel();}if(context)ed::DestroyEditor(context);}
     ed::NodeId node(MaterialNodeId id) {auto [it,inserted]=nodes.try_emplace(id,nextId);if(inserted)++nextId;return ed::NodeId(it->second);}
     ed::LinkId link(MaterialLinkId id) {auto [it,inserted]=links.try_emplace(id,nextId);if(inserted)++nextId;return ed::LinkId(it->second);}
     ed::PinId pin(MaterialNodeId nodeId,MaterialPin semantic,bool input) {
@@ -447,6 +453,7 @@ void MaterialGraphEditor::clearSelection() {
 void MaterialGraphEditor::cancelInteraction(){
     state_->moving=false;state_->scalarEditing=false;state_->syncPositions=true;state_->suppressUpdate=true;
     for(auto& [key,editor]:state_->colorEditors){(void)key;editor.cancel();}
+    for(auto& [key,editor]:state_->gradientEditors){(void)key;editor.cancel();}
     state_->blockGesture=ImGui::GetCurrentContext() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
     if(state_->creationItem && ImGui::GetCurrentContext() && ImGui::GetActiveID()==state_->creationItem)ImGui::ClearActiveID();
     state_->creationGesture=false;state_->creationItem=0;
@@ -461,6 +468,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     auto& s=*state_;if(!s.context)s.create();
     if(s.creationGesture && s.creationItem)ImGui::KeepAliveID(s.creationItem);
     std::erase_if(s.colorEditors,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first.first);});
+    std::erase_if(s.gradientEditors,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
     std::erase_if(s.scaleBaselines,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
     std::erase_if(s.generatedTextures,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
     std::erase_if(s.generatedTargets,[&](const auto& entry){return !findMaterialNode(document.definition().graph,entry.first);});
@@ -511,7 +519,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         ImGui::IsMouseHoveringRect(canvasMinimum,{canvasMinimum.x+canvasSize.x,canvasMinimum.y+canvasSize.y}) &&
         !io.WantTextInput && !ImGui::IsAnyItemActive() && !io.KeyAlt && !io.KeyShift && !io.KeySuper &&
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopupId|ImGuiPopupFlags_AnyPopupLevel) && !ImGui::GetDragDropPayload();
-    const bool keyboard=keyboardScope && !io.KeyCtrl,clipboardKeyboard=keyboardScope && io.KeyCtrl;
+    bool keyboard=keyboardScope && !io.KeyCtrl,clipboardKeyboard=keyboardScope && io.KeyCtrl;
     const bool frameSelection=keyboard && ImGui::IsKeyPressed(ImGuiKey_F,false);
     const bool frameAll=keyboard && ImGui::IsKeyPressed(ImGuiKey_Home,false);
     const bool straighten=keyboard && editable && !cancel && !document.transactionActive() && ImGui::IsKeyPressed(ImGuiKey_Q,false);
@@ -526,6 +534,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     if(cancel||s.cancelledConnectionGesture||!ImGui::IsMouseDown(ImGuiMouseButton_Left)){s.dragFrom.reset();s.connectionTargets.clear();}
     if(s.connectionRevision!=document.revision()){s.connectionTargets.clear();s.connectionRevision=document.revision();}
     std::optional<State::Pin> disconnect;
+    bool gradientOwnsInput{};
     for(const auto& node:graph.nodes) {
         const auto inputs=visibleInputs(graph,node,output);
         const auto outputs=visibleOutputs(graph,node,s.preview);
@@ -644,6 +653,33 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                 ImGui::GetCurrentContext()->LastItemData=itemData;
             };
             draw_material_atomic_controls(node,parameter,option,materialInputLink(graph,node.id,MaterialPin::UV)!=nullptr,tooltip);
+            if(node.kind==MaterialNodeKind::GradientMap) {
+                auto candidate=node;ColorGradientEditorOptions options;options.width=std::max(1.f,width-22);options.canvas=true;
+                options.screenPosition=[](Vec2 value){return point(ed::CanvasToScreen(point(value)));};
+                options.suspend=[]{ed::Suspend();};options.resume=[]{ed::Resume();};
+                ImGui::BeginDisabled(!editable);
+                auto& editor=s.gradientEditors[node.id];const auto edit=drawMaterialGradientMapEditor(candidate.gradientMap,editor,options);
+                ImGui::EndDisabled();
+                // The library's real mark hitboxes extend past the bar at 0/1.
+                gradientOwnsInput|=editor.markHovered||(ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)&&
+                    ImGui::IsMouseHoveringRect(point(editor.barMinimum),{editor.barMaximum[0],editor.resetMaximum[1]+ImGui::GetStyle().ItemSpacing.y}));
+                editNode("Change material gradient",candidate,edit.changed,edit.activated&&edit.changed,edit.deactivated||(edit.changed&&!edit.active));
+                s.presentation.gradients.push_back({node.id,point(ed::CanvasToScreen(point(editor.barMinimum))),point(ed::CanvasToScreen(point(editor.barMaximum))),
+                    point(ed::CanvasToScreen(point(editor.positionMinimum))),point(ed::CanvasToScreen(point(editor.positionMaximum))),
+                    point(ed::CanvasToScreen(point(editor.resetMinimum))),point(ed::CanvasToScreen(point(editor.resetMaximum))),
+                    editor.colorChannelMinimum,editor.colorChannelMaximum,editor.selected});
+            } else if(node.kind==MaterialNodeKind::ColorRangeMask) {
+                bool open=false;const auto color=hdrColorDisplay({node.colorRangeMask.color[0],node.colorRangeMask.color[1],node.colorRangeMask.color[2],1});
+                ImGui::SetNextItemWidth(labeledWidth("Color"));
+                choice("Reset color range reference",[&](auto& n){return resettableProperty(n.colorRangeMask.color,defaults.colorRangeMask.color,[&]{
+                    open=ImGui::ColorButton("Color",{color[0],color[1],color[2],1},ImGuiColorEditFlags_NoTooltip,{ImGui::CalcItemWidth(),ImGui::GetFrameHeight()});return false;});});
+                s.presentation.controls.push_back({node.id,"Color",point(ImGui::GetItemRectMin()),point(ImGui::GetItemRectMax())});
+                ed::Suspend();if(open)ImGui::OpenPopup("Color range reference");
+                if(ImGui::BeginPopup("Color range reference")) {
+                    auto candidate=node;auto edit=drawHdrColorControl("Reference color",candidate.colorRangeMask.color,nullptr,s.colorEditors[{node.id,MaterialPin::RGB}],true,1.f,"Alpha",defaults.colorRangeMask.color);
+                    editNode("Change color range reference",candidate,edit.changed,edit.activated&&edit.changed,edit.deactivated||(edit.changed&&!edit.active));ImGui::EndPopup();
+                }ed::Resume();
+            }
             if(node.kind==MaterialNodeKind::Resize) {
                 parameter("Width","Change resize width",[defaults](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=resettableProperty(value,static_cast<int>(defaults.resize.width),[&]{return ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
                 parameter("Height","Change resize height",[defaults](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=resettableProperty(value,static_cast<int>(defaults.resize.height),[&]{return ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});
@@ -960,14 +996,17 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     // The vendor completes creation on mouse release. Keep Escape latched
     // through that release instead of reopening search after its key-up frame.
     if(!ImGui::IsMouseDown(ImGuiMouseButton_Left))s.cancelledConnectionGesture=false;
+    if(gradientOwnsInput){keyboard=false;clipboardKeyboard=false;ed::EnableShortcuts(false);}
     if(editable && !document.transactionActive() && ed::BeginDelete()) {
         std::vector<MaterialNodeId> eraseNodes;std::vector<MaterialLinkId> eraseLinks;
-        ed::LinkId link;while(ed::QueryDeletedLink(&link))if(ed::AcceptDeletedItem())
-            for(const auto& [id,ui]:s.links)if(ui==link.Get())eraseLinks.push_back(id);
+        ed::LinkId link;while(ed::QueryDeletedLink(&link)) {
+            if(gradientOwnsInput)ed::RejectDeletedItem();
+            else if(ed::AcceptDeletedItem())for(const auto& [id,ui]:s.links)if(ui==link.Get())eraseLinks.push_back(id);
+        }
         ed::NodeId node;while(ed::QueryDeletedNode(&node)) {
             MaterialNodeId id{};for(const auto& [source,ui]:s.nodes)if(ui==node.Get())id=source;
             const auto* found=findMaterialNode(document.definition().graph,id);
-            if(found && found->kind!=MaterialNodeKind::Output){if(ed::AcceptDeletedItem())eraseNodes.push_back(id);}else ed::RejectDeletedItem();
+            if(!gradientOwnsInput && found && found->kind!=MaterialNodeKind::Output){if(ed::AcceptDeletedItem())eraseNodes.push_back(id);}else ed::RejectDeletedItem();
         }
         if(!eraseLinks.empty() || !eraseNodes.empty())document.edit("Delete graph selection",[&](auto& asset){
             for(auto id:eraseLinks)removeMaterialLink(asset.graph,id);for(auto id:eraseNodes)removeMaterialNode(asset.graph,id);
@@ -1106,7 +1145,7 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
     ed::Resume();
     if(s.frameContent){ed::NavigateToContent(0);s.frameContent=false;}
     ed::End();
-    if(!cancel&&!s.scalarEditing&&!document.transactionActive()&&!ImGui::GetIO().WantTextInput&&
+    if(!gradientOwnsInput&&!cancel&&!s.scalarEditing&&!document.transactionActive()&&!ImGui::GetIO().WantTextInput&&
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         const auto clicked=ed::GetDoubleClickedNode();
         if(clicked&&!ed::GetDoubleClickedPin())for(const auto& [id,ui]:s.nodes)if(ui==clicked.Get()) {

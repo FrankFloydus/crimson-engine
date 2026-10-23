@@ -10,6 +10,8 @@ enum class Interpolation : size_t { // We use size_t so that we can use the Wrap
     Linear,
     /// Crimson: hold the left mark until the next mark is reached.
     Constant,
+    /// Crimson: smoothstep interpolation between adjacent marks.
+    Smooth,
 };
 
 } // namespace ImGG

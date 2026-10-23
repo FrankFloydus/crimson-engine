@@ -1,6 +1,7 @@
 #pragma once
 
 #include "particles/ParticleTypes.h"
+#include "ColorGradientEditor.h"
 #include <array>
 #include <memory>
 
@@ -21,17 +22,7 @@ struct ParticleCurveEditorState {
     bool fitNext{true},panning{};
     void cancel() { dragging=0;panning=false; }
 };
-struct ParticleGradientWidgetState;
-struct ParticleGradientEditorState {
-    uint64_t selected{},dragging{};
-    Vec2 barMinimum{},barMaximum{};
-    std::array<Vec2,3> colorChannelMinimum{},colorChannelMaximum{};
-    Vec2 colorOpacityMinimum{},colorOpacityMaximum{};
-    Vec2 positionMinimum{},positionMaximum{},resetMinimum{},resetMaximum{};
-    std::shared_ptr<ParticleGradientWidgetState> widget;
-    void cancel();
-    size_t cachedColorEditors() const;
-};
+using ParticleGradientEditorState=ColorGradientEditorState;
 
 ParticleAppearanceEdit drawParticleCurveEditor(ParticleScalarCurve&,ParticleCurveEditorState&,
     float minimum,float maximum,float resetValue,const char* valueLabel);

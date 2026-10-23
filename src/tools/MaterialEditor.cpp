@@ -1,6 +1,7 @@
 #include "MaterialEditor.h"
 #include "DocumentEditorMenu.h"
 #include "MaterialAtomicControls.h"
+#include "MaterialGradientEditor.h"
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
@@ -127,7 +128,7 @@ void MaterialEditor::finishInteraction(AssetLibrary* assets) {
         // Undo may already have restored another value before properties draw.
         suppressFinalizedUpdate_=true;
     }
-    propertyEditing_=false;graph_.finishInteraction();colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();
+    propertyEditing_=false;graph_.finishInteraction();colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel();
     if(assets)publish(*assets);
 }
 void MaterialEditor::request(Pending pending,std::string id,AssetLibrary* assets) {
@@ -297,10 +298,10 @@ void MaterialEditor::properties(AssetLibrary& assets) {
     auto selected=graph_.selectedNode();
     const auto* selectedNode=findMaterialNode(document_.definition().graph,selected);
     if(!selectedNode || selectedNode->kind==MaterialNodeKind::Output)selected=materialOutputNode(document_.definition().graph).id;
-    if(propertyNode_!=selected) {propertyNode_=selected;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();}
+    if(propertyNode_!=selected) {propertyNode_=selected;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel();}
     const bool escape=propertyEditing_ && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
     const bool canceled=suppressFinalizedUpdate_ || escape;suppressFinalizedUpdate_=false;
-    if(escape){document_.cancel();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();}
+    if(escape){document_.cancel();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel();}
     const auto finish=[&] {
         if(!propertyEditing_)return;
         if(!document_.commit()){message_=document_.status();document_.cancel();}
@@ -318,14 +319,16 @@ void MaterialEditor::properties(AssetLibrary& assets) {
     const auto defaults=materialPropertyDefaults(*findMaterialNode(document_.definition().graph,selected));
     const auto hdr=[&](const char* label,const char* transaction,bool outputColor,bool emission=false,bool attenuation=false) {
         auto candidate=document_.definition();auto* node=findMaterialNode(candidate.graph,selected);if(!node)return;
-        Vec3 value=outputColor?(attenuation?node->output.attenuationColor:emission?node->output.emission:node->output.baseColor):Vec3{node->color[0],node->color[1],node->color[2]};
+        const bool range=node->kind==MaterialNodeKind::ColorRangeMask;
+        Vec3 value=outputColor?(attenuation?node->output.attenuationColor:emission?node->output.emission:node->output.baseColor):range?node->colorRangeMask.color:Vec3{node->color[0],node->color[1],node->color[2]};
         float alpha=node->color[3];ImGui::BeginDisabled(!editable);
-        const Vec3 defaultColor=outputColor?(attenuation?defaults.output.attenuationColor:emission?defaults.output.emission:defaults.output.baseColor):Vec3{defaults.color[0],defaults.color[1],defaults.color[2]};
-        auto edit=drawHdrColorControl(label,value,outputColor?nullptr:&alpha,attenuation?alphaEditor_:emission?emissionEditor_:colorEditor_,false,attenuation?1.f:1000000.f,"Alpha",defaultColor,defaults.color[3]);
+        const Vec3 defaultColor=outputColor?(attenuation?defaults.output.attenuationColor:emission?defaults.output.emission:defaults.output.baseColor):range?defaults.colorRangeMask.color:Vec3{defaults.color[0],defaults.color[1],defaults.color[2]};
+        auto edit=drawHdrColorControl(label,value,outputColor||range?nullptr:&alpha,attenuation?alphaEditor_:emission?emissionEditor_:colorEditor_,false,attenuation||range?1.f:1000000.f,"Alpha",defaultColor,defaults.color[3]);
         ImGui::EndDisabled();if(!editable)return;
         if(!canceled && (edit.activated || edit.changed) && !document_.transactionActive())propertyEditing_=document_.begin(transaction);
         if(!canceled && edit.changed && propertyEditing_) {
             if(outputColor){if(attenuation)node->output.attenuationColor=value;else if(emission)node->output.emission=value;else node->output.baseColor=value;}
+            else if(range)node->colorRangeMask.color=value;
             else node->color={value[0],value[1],value[2],alpha};
             document_.update([&](auto& asset){asset=std::move(candidate);});
         }
@@ -487,6 +490,15 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 };
                 draw_material_atomic_controls(node,parameter,option,materialInputLink(document_.definition().graph,selected,MaterialPin::UV)!=nullptr,
                     [](const char* text){ImGui::SetItemTooltip("%s",text);});
+                if(node.kind==MaterialNodeKind::GradientMap) {
+                    auto candidate=document_.definition();auto* target=findMaterialNode(candidate.graph,selected);
+                    ImGui::BeginDisabled(!editable);const auto edit=drawMaterialGradientMapEditor(target->gradientMap,gradientEditor_);ImGui::EndDisabled();
+                    if(editable&&!canceled&&edit.changed) {
+                        if(!document_.transactionActive())propertyEditing_=document_.begin("Change material gradient");
+                        if(propertyEditing_)document_.update([&](auto& asset){asset=std::move(candidate);});
+                    }
+                    if(propertyEditing_&&(edit.deactivated||(edit.changed&&!edit.active)))finish();
+                } else if(node.kind==MaterialNodeKind::ColorRangeMask)hdr("Color","Change color range reference",false);
             }
             if(node.kind==MaterialNodeKind::Resize) {
                 ImGui::SeparatorText("Resize");

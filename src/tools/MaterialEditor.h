@@ -3,6 +3,7 @@
 #include "editor/MaterialPreview.h"
 #include "MaterialGraphEditor.h"
 #include "HdrColorEditor.h"
+#include "ColorGradientEditor.h"
 #include <array>
 #include <span>
 namespace crimson {
@@ -34,7 +35,7 @@ public:
     void draw(AssetLibrary&,Renderer&,ResourceManager&,double dt);
     void setAntiAliasing(AntiAliasing value) { preview_.setAntiAliasing(value); }
     void filesChanged(std::span<const std::filesystem::path>);
-    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel(); }
+    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();gradientEditor_.cancel(); }
 private:
     enum class Pending { None,Open,Create,Close,Exit };
     MaterialDocument document_;
@@ -44,6 +45,7 @@ private:
     std::string imageDocument_;
     std::uint64_t imageRevision_{};
     HdrColorEditorState colorEditor_,emissionEditor_,alphaEditor_;
+    ColorGradientEditorState gradientEditor_;
     MaterialNodeId propertyNode_{};
     MaterialNodeId texturePickerNode_{};
     float previewHeight_{260};
