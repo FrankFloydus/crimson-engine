@@ -38,7 +38,7 @@ const std::map<std::string,std::string> varying{
     {"cs_ssao_evaluate","varying.def.sc"},{"cs_ssao_publish","varying.def.sc"},
     {"cs_shadow_contact_trace","varying.def.sc"},{"cs_shadow_contact_publish","varying.def.sc"},
     {"cs_refraction_downsample","varying.def.sc"},
-    {"cs_ssr_color","varying.def.sc"},{"cs_ssr_depth","varying.def.sc"},{"cs_ssr_reconstruct","varying.def.sc"},
+    {"cs_ssr_color","varying.def.sc"},{"cs_ssr_depth","varying.def.sc"},{"cs_ssr_reconstruct","varying.def.sc"},{"cs_ssr_trace","varying.def.sc"},
     {"fs_model_reflection","model.varying.def.sc"},{"fs_pbr_reflection","varying.def.sc"},{"fs_particle_reflection","particle.varying.def.sc"},
     {"vs_particle","particle.varying.def.sc"},{"fs_particle","particle.varying.def.sc"},
     {"vs_pbr","varying.def.sc"},{"fs_pbr","varying.def.sc"},{"vs_model","model.varying.def.sc"},{"fs_model","model.varying.def.sc"},

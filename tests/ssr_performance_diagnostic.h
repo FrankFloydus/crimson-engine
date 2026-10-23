@@ -3,6 +3,10 @@
 #include <cmath>
 #include <set>
 #include <string_view>
+#include <crimson/renderer/core/Profiler.hpp>
+#if CRIMSON_ENABLE_PROFILING
+#include <bgfx/profiling.h>
+#endif
 
 namespace {
 Json ssrDistribution(std::vector<double> values) {
@@ -13,17 +17,22 @@ Json ssrDistribution(std::vector<double> values) {
         {"p50",percentile(.5)},{"p95",percentile(.95)},{"min",values.front()},{"max",values.back()}};
 }
 int ssrPerformanceDiagnostic(int argc,char** argv) {
-    require(argc>=7,"Usage: forward_plus_room_benchmark --ssr-performance-project PROJECT SHADERC SHADER_SOURCES SHADER_INCLUDES OUTPUT [--width N --height N --warmup N --samples N --views game|both --ssr authored|off --profile-views --backend dx11|dx12]");
+    require(argc>=7,"Usage: forward_plus_room_benchmark --ssr-performance-project PROJECT SHADERC SHADER_SOURCES SHADER_INCLUDES OUTPUT [--width N --height N --warmup N --samples N --views game|both --ssr authored|off --profile-views --tracy --backend dx11|dx12 --shader-cache DIR --contact-shader-override DIR --ssr-trace-shader-override DIR]");
     unsigned width=1280,height=720,warmupMinimum=60,sampleMinimum=120;
-    bool both=false,ssrOff=false,profile=false;auto backend=selectedTestGraphicsBackend();
+    bool both=false,ssrOff=false,profile=false,tracy=false;auto backend=selectedTestGraphicsBackend();
+    fs::path persistentShaderCache,contactShaderSources,traceShaderSources;
     for(int i=7;i<argc;++i) {
         const std::string option=argv[i];
         if(option=="--profile"||option=="--profile-views")profile=true;
+        else if(option=="--tracy")tracy=true;
         else if(option=="--both")both=true;
         else if(option=="--ssr-off")ssrOff=true;
         else {
             require(i+1<argc,"Missing SSR performance option value: "+option);const std::string value=argv[++i];
-            if(option=="--views"){require(value=="game"||value=="both","--views must be game or both.");both=value=="both";}
+            if(option=="--shader-cache")persistentShaderCache=fs::absolute(value);
+            else if(option=="--contact-shader-override")contactShaderSources=fs::weakly_canonical(value);
+            else if(option=="--ssr-trace-shader-override")traceShaderSources=fs::weakly_canonical(value);
+            else if(option=="--views"){require(value=="game"||value=="both","--views must be game or both.");both=value=="both";}
             else if(option=="--ssr"){require(value=="authored"||value=="off","--ssr must be authored or off.");ssrOff=value=="off";}
             else if(option=="--backend"){const auto parsed=parseGraphicsBackend(value);require(parsed.has_value(),"Unknown SSR diagnostic backend.");backend=*parsed;}
             else if(option=="--width"||option=="--height"||option=="--warmup"||option=="--samples") {
@@ -59,8 +68,26 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
             shadowResolution=preferenceSnapshot.value("pointShadowResolution",1024u);
         }
     }
+    // Native Tracy GPU contexts are created during bgfx initialization.
+    shared::profiling::set_enabled(tracy);
     ResourceManager resources;Renderer renderer(native_renderer_context(window.get(),nullptr,backend));
     ShaderCompileConfig config{argv[3],argv[4],argv[5],resolveAssetPath(project,"assets/cache/shaders")};
+    if(!persistentShaderCache.empty()) {fs::create_directories(persistentShaderCache);config.cacheDirectory=persistentShaderCache;}
+    if(!contactShaderSources.empty()) {
+        require(fs::is_directory(contactShaderSources),"Private contact shader directory does not exist.");
+        require(contactShaderSources!=fs::weakly_canonical(config.sourceDirectory),"Contact attribution requires a private shader source directory.");
+        ShaderCompileConfig overrideConfig{config.compiler,contactShaderSources,config.includeDirectory,output/"contact-shader-cache"};
+        const std::array pairs{RendererShaderPair{RendererProgram::ShadowContactTrace,{},compileShader(overrideConfig,"cs_shadow_contact_trace").bytes},
+            RendererShaderPair{RendererProgram::ShadowContactPublish,{},compileShader(overrideConfig,"cs_shadow_contact_publish").bytes}};
+        require(renderer.reloadPrograms(pairs),renderer.shaderStatus());
+    }
+    if(!traceShaderSources.empty()) {
+        require(fs::is_directory(traceShaderSources),"Private SSR trace shader directory does not exist.");
+        require(traceShaderSources!=fs::weakly_canonical(config.sourceDirectory),"SSR attribution requires a private shader source directory.");
+        ShaderCompileConfig overrideConfig{config.compiler,traceShaderSources,config.includeDirectory,output/"ssr-trace-cache"};
+        const std::array pairs{RendererShaderPair{RendererProgram::SsrTraceCompute,{},compileShader(overrideConfig,"cs_ssr_trace").bytes}};
+        require(renderer.reloadPrograms(pairs),renderer.shaderStatus());
+    }
     MaterialGraphPrograms programs(resources,config);AssetLibrary assets(project,&resources);assets.setMaterialGraphPrograms(&programs);
     EditorResources prepared(assets,renderer,resources,project);
     const auto map=extracted.environment.environment.source==EnvironmentSource::Hdri?
@@ -96,17 +123,28 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         sample.wall=milliseconds(begin);sample.frame=frame;const auto* stats=bgfx::getStats();sample.query=stats->gpuFrameNum;
         sample.draws=stats->numDraw;sample.computes=stats->numCompute;sample.triangles=stats->numPrims[bgfx::Topology::TriList];sample.shadowDraws=renderer.shadowStats().drawCalls;
         if(stats->cpuTimerFreq>0)sample.backend=double(stats->cpuTimeEnd-stats->cpuTimeBegin)*1000./stats->cpuTimerFreq;
+        shared::profiling::counter("Diagnostic submitted frame",frame);shared::profiling::frame_mark();
         return sample;
     };
-    const auto deadline=Clock::now()+std::chrono::seconds{240};unsigned warm{},settled{};
+    const auto deadline=Clock::now()+std::chrono::seconds{900};unsigned warm{},settled{};
+    Clock::time_point readySince{};
     do {
         tick();++warm;settled=ready?settled+1:0;
+        // Background O3 admission waits for 750 ms of quiet. A short run of
+        // ready frames can precede that work, so require sustained readiness
+        // across that admission interval before opening the timed window.
+        if(!ready)readySince={};
+        else if(readySince==Clock::time_point{})readySince=Clock::now();
         if(warm%120==0)std::cout<<"Warmup "<<warm<<" ready="<<settled<<" model="<<prepared.status()<<" SSR="<<renderer.ssrStatus()<<std::endl;
         if(!ready)std::this_thread::sleep_for(std::chrono::milliseconds{2});
-    }while((warm<warmupMinimum||settled<8)&&Clock::now()<deadline);
-    require(ready&&settled>=8,"Saved-scene resources did not become ready: "+prepared.status()+"; "+assets.status());
+    }while((warm<warmupMinimum||settled<8||readySince==Clock::time_point{}||Clock::now()-readySince<std::chrono::seconds{2})&&Clock::now()<deadline);
+    require(ready&&settled>=8&&readySince!=Clock::time_point{}&&Clock::now()-readySince>=std::chrono::seconds{2},"Saved-scene resources did not become ready: "+prepared.status()+"; "+assets.status());
     const auto compilerBefore=shaderCompilerMetrics();const auto resourcesBefore=resources.stats();
+#if CRIMSON_ENABLE_PROFILING
+    const auto profilerBefore=bgfx::getProfilerStats();
+#endif
     const unsigned measurementFrames=sampleMinimum*2;const std::uint32_t first=frame+1,last=first+measurementFrames-1;
+    shared::profiling::message("SSR diagnostic measurement begin");
     std::vector<Cpu> cpu;std::vector<Gpu> gpu;std::set<std::uint32_t> gpuFrames;std::map<std::uint16_t,std::vector<double>> viewDurations;
     std::map<std::uint16_t,std::string> viewNames;Json rawViews=Json::array();
     const auto collect=[&]() {
@@ -123,7 +161,16 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
     const auto measureStart=Clock::now();
     for(unsigned i=0;i<measurementFrames;++i){cpu.push_back(tick());require(ready,"Resource preparation changed during timed workload.");collect();}
     const double measurementWall=milliseconds(measureStart);
+    shared::profiling::message("SSR diagnostic measurement end");
     for(unsigned i=0;i<16;++i){tick();collect();}
+#if CRIMSON_ENABLE_PROFILING
+    const auto profilerAfter=bgfx::getProfilerStats();
+    if(tracy) {
+        require(shared::profiling::connected()&&profilerAfter.gpuZones>profilerBefore.gpuZones,
+            "Tracy diagnostic did not record native GPU zones; enable profiling before renderer initialization and connect its collector.");
+        require(profilerAfter.gpuZonesDropped==profilerBefore.gpuZonesDropped,"Tracy diagnostic dropped native GPU zones.");
+    }
+#endif
     const auto cpuValues=[&](auto member){std::vector<double> values;for(const auto& sample:cpu)values.push_back(static_cast<double>(sample.*member));return ssrDistribution(std::move(values));};
     std::vector<double> gpuValues;for(const auto& sample:gpu)gpuValues.push_back(sample.elapsed);
     const auto compilerAfter=shaderCompilerMetrics();const auto resourceState=resources.stats();const auto& authored=extracted.environment.environment.ssr;
@@ -133,6 +180,12 @@ int ssrPerformanceDiagnostic(int argc,char** argv) {
         {"compiler",config.compiler.string()},{"shader_sources",config.sourceDirectory.string()},{"shader_includes",config.includeDirectory.string()},
         {"compiler_fingerprint",fingerprintFiles({config.compiler})},{"source_family_fingerprint",fingerprintFiles({config.sourceDirectory/"varying.def.sc",config.sourceDirectory/"fs_model.sc"})},
         {"views",both?"scene_game":"game"},{"viewport",{width,height}},{"profile_views",profile},{"warmup_frames",warm},{"measured_cpu_frames",measurementFrames},
+        {"shader_cache",config.cacheDirectory.string()},{"contact_shader_override",contactShaderSources.empty()?Json(nullptr):Json(contactShaderSources.string())},
+        {"ssr_trace_shader_override",traceShaderSources.empty()?Json(nullptr):Json(traceShaderSources.string())},{"tracy",tracy},
+#if CRIMSON_ENABLE_PROFILING
+        {"native_gpu_zones",profilerAfter.gpuZones-profilerBefore.gpuZones},
+        {"native_gpu_zones_dropped",profilerAfter.gpuZonesDropped-profilerBefore.gpuZonesDropped},
+#endif
         {"preferences",preferenceSnapshot},{"anti_aliasing",antiAliasing==AntiAliasing::Smaa?"smaa":"off"},{"point_shadow_resolution",shadowResolution},
         {"authored_ssr",{{"enabled",authored.enabled},{"strength",authored.strength},{"quality",int(authored.quality)},{"max_distance",authored.maxDistance},{"max_roughness",authored.maxRoughness},{"depth_tolerance",authored.depthTolerance},{"bias",authored.bias}}},
         {"effective_ssr",!ssrOff&&effectiveSsr(authored)},{"game_camera",{{"position",gameCamera->position},{"target",gameCamera->target},{"up",gameCamera->up},{"fov",gameCamera->fov},{"near",gameCamera->nearPlane},{"far",gameCamera->farPlane}}},

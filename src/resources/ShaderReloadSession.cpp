@@ -102,6 +102,7 @@ void ShaderReloadSession::pump() {
     pairs.push_back({RendererProgram::SsrColor,{},ready.at("cs_ssr_color")->bytes});
     pairs.push_back({RendererProgram::SsrDepth,{},ready.at("cs_ssr_depth")->bytes});
     pairs.push_back({RendererProgram::SsrReconstruct,{},ready.at("cs_ssr_reconstruct")->bytes});
+    pairs.push_back({RendererProgram::SsrTraceCompute,{},ready.at("cs_ssr_trace")->bytes});
     pairs.push_back({RendererProgram::ShadowContactTrace,{},ready.at("cs_shadow_contact_trace")->bytes});
     pairs.push_back({RendererProgram::ShadowContactPublish,{},ready.at("cs_shadow_contact_publish")->bytes});
     std::string diagnostic;
