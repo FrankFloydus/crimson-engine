@@ -218,7 +218,8 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
         std::array<RenderModelInstance,1> instances{{{1,{surface.model,transform},&pins->textures,1,true,false,&surface.model->materials}}};
         instances.front().receiveDecals=true;instances.front().castShadows=false;
         const std::array<DirectionalLight,1> lights{{{{-.4f,-1,-.7f},{1,1,1},2,true}}};
-        RenderScene scene{settings,{},nullptr,nullptr,instances,lights,{},showBackground_&&environment_.enabled,pins};
+        settings.environment.background.show=showBackground_&&environment_.enabled;
+        RenderScene scene{settings,{},nullptr,nullptr,instances,lights,{},true,pins};
         scene.decals=pins->decals;scene.materialContext=materialContext_;renderer.renderMaterialPreview(scene);
     } else renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,displayMesh,flatNode?Mat4{}:navigation_.objectTransform(),!flatNode && showBackground_ && environment_.enabled,displayed,materialContext_);
 }

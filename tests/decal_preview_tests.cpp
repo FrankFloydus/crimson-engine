@@ -14,6 +14,13 @@ void check(bool condition,const std::string& message){if(!condition)throw std::r
 void preview(MaterialPreviewMesh kind,const char* name,bool curvedPatch) {
     const auto geometry=decalPreviewGeometry(kind);
     check(geometry.model!=nullptr,std::string(name)+": receiver is missing.");
+    for(const auto& primitive:geometry.model->primitives){
+        check(primitive.bounds.valid&&math::finite(primitive.bounds.minimum)&&math::finite(primitive.bounds.maximum),
+            std::string(name)+": receiver has no finite primitive bounds for GPU decal eligibility.");
+        for(const auto& vertex:primitive.vertices)for(unsigned axis=0;axis<3;++axis)
+            check(vertex.position[axis]>=primitive.bounds.minimum[axis]-1e-5f&&vertex.position[axis]<=primitive.bounds.maximum[axis]+1e-5f,
+                std::string(name)+": receiver primitive bounds exclude source geometry.");
+    }
     const auto source=buildModelSurface(*geometry.model,1,SourceNormals::UseMeshNormals);
     check(!source.draws.empty(),std::string(name)+": original receiver has no triangles.");
     float sourceMinimum=std::numeric_limits<float>::max(),sourceMaximum=-sourceMinimum;

@@ -27,6 +27,8 @@ void shape(MaterialPreviewMesh kind) {
         "Preview shapes must supply indexed triangles, both UV sets and a UV0 tangent frame.");
     check(primitive.sourceVertexCount==primitive.vertices.size() && primitive.sourceIndexCount==primitive.indices.size(),
         "Preview shapes must retain exact CPU/GPU accounting metadata.");
+    check(primitive.bounds.valid && math::finite(primitive.bounds.minimum) && math::finite(primitive.bounds.maximum),
+        "Preview receivers must publish finite primitive bounds for decal rendering.");
     check(asset->bounds.valid && asset->stream && asset->stream->id==asset->id && asset->stream->primitives.size()==1 &&
         asset->stream->primitives.front().levels.size()==1,"Preview shapes must have one tracked immutable geometry LOD.");
     const auto& descriptor=asset->stream->primitives.front().levels.front();
@@ -57,6 +59,8 @@ void shape(MaterialPreviewMesh kind) {
     for(std::size_t axis=0;axis<3;++axis) {
         check(close(measured.minimum[axis],asset->bounds.minimum[axis]) && close(measured.maximum[axis],asset->bounds.maximum[axis]) &&
             close(asset->bounds.minimum[axis],-asset->bounds.maximum[axis]),"Preview bounds must tightly enclose geometry centered at the origin.");
+        check(close(measured.minimum[axis],primitive.bounds.minimum[axis]) && close(measured.maximum[axis],primitive.bounds.maximum[axis]),
+            "Preview primitive bounds must match their actual receiver geometry.");
     }
 }
 void roundedCube() {

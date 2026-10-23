@@ -4,6 +4,7 @@
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/RenderPassPlan.h"
 #include "assets/MaterialAsset.h"
+#include "editor/DecalPreview.h"
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
 #include <crimson/renderer/forward/DecalRenderTypes.h>
@@ -87,11 +88,11 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     MaterialGraphPrograms programs(resources,config);TestGpuContext gpu;std::uint32_t frame{};
     renderer.resizeViewport(Width,Height);renderer.setGridVisible(false);
     const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=renderer.advance_frame();gpu.flush();};
-    const auto read=[&] {
+    const auto read=[&](bgfx::TextureHandle source) {
         Texture staging{bgfx::createTexture2D(Width,Height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Generated decal staging allocation failed.");
         auto result=std::make_shared<DecodedImage>(DecodedImage{Width,Height,std::vector<std::uint8_t>(std::size_t(Width)*Height*4)});
-        destinations.push_back(result);bgfx::blit(DiagnosticReadbackView,staging.handle,0,0,renderer.viewportTexture(),0,0,Width,Height);
+        destinations.push_back(result);bgfx::blit(DiagnosticReadbackView,staging.handle,0,0,source,0,0,Width,Height);
         const auto ready=bgfx::readTexture(staging.handle,result->rgba.data());check(ready!=UINT32_MAX,"Generated decal readback unsupported.");
         for(unsigned attempt=0;attempt<120;++attempt){tick();if(picking::frameReady(frame,ready))return *result;}
         renderer.drainPending(frame);throw std::runtime_error("Generated decal readback timed out.");
@@ -153,7 +154,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     DirectionalLight light;light.direction={-.3f,-.2f,-1};light.color={1,1,1};light.intensity=2;
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.directionalLights=std::span(&light,1);
     const auto capture=[&](std::span<const RenderDecal> decals) {
-        scene.instances=instances;scene.decals=decals;renderer.render(scene);return read();
+        scene.instances=instances;scene.decals=decals;renderer.render(scene);return read(renderer.viewportTexture());
     };
     const auto decalGraph=[&](std::uint64_t fingerprint,bool color,bool normalEnabled,bool roughness,Vec3 rgb=Vec3{.75f,.015f,.01f},float normalOpacity=1.f,bool metallic=false) {
         MaterialAsset definition;definition.id="decal-domain-fixture-"+std::to_string(fingerprint);
@@ -252,6 +253,51 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     const auto dryOn=capture({});settings.environment.ssr.enabled=false;const auto dryOff=capture({});
     check(dryOn.rgba==dryOff.rgba,"Dry generated roughness-one reference unexpectedly entered SSR.");
     write(artifacts,"generated-wet-ssr-off",graphWetOff);write(artifacts,"generated-wet-ssr-on",graphWetOn);
+
+    // Exercise the actual Material Editor receiver producers and preview pass.
+    // Hand-authored fixture quads above cannot detect invalid preview bounds.
+    renderer.resizeMaterialPreview(Width,Height);
+    check(renderer.publishMaterialPreviewEnvironment(environment),renderer.environmentStatus());
+    constexpr std::array previewKinds{MaterialPreviewMesh::Sphere,MaterialPreviewMesh::Plane,MaterialPreviewMesh::Cylinder,
+        MaterialPreviewMesh::Cube,MaterialPreviewMesh::RoundedCube};
+    constexpr std::array previewNames{"sphere","plane","cylinder","cube","rounded-cube"};
+    for(std::size_t i=0;i<previewKinds.size();++i){
+        DecalPreviewGeometry geometry;const DecalPreviewSurface* surface{};
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{60};
+        do{tick();surface=&geometry.prepare(previewKinds[i],resources);
+            if(!surface->patch)std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }while(!surface->patch&&std::chrono::steady_clock::now()<deadline);
+        check(surface->model&&surface->patch,"Material preview chart failed: "+geometry.diagnostic());
+        check(renderer.prepareModel(*surface->model),renderer.modelStatus());
+        RenderModelInstance previewReceiver;previewReceiver.entityId=1;previewReceiver.resourceRevision=1;
+        previewReceiver.model.asset=surface->model;previewReceiver.materials=&surface->model->materials;
+        previewReceiver.receiveDecals=true;previewReceiver.forceFullDetail=true;previewReceiver.castShadows=false;
+        const std::array previewInstances{previewReceiver};
+        auto previewSettings=settings;previewSettings.camera=surface->camera;previewSettings.environment.enabled=true;
+        previewSettings.environment.background.show=false;
+        RenderScene previewScene{previewSettings,{}};previewScene.sceneMode=true;previewScene.instances=previewInstances;
+        previewScene.directionalLights=std::span(&light,1);
+        auto previewDecal=decal(surface->patch,red);previewDecal.frame=surface->frame;
+        const std::array previewDecals{previewDecal};
+        renderer.renderMaterialPreview(previewScene);const auto baseline=read(renderer.materialPreviewTexture());
+        previewScene.decals=previewDecals;renderer.renderMaterialPreview(previewScene);
+        const auto painted=read(renderer.materialPreviewTexture());
+        const auto affected=changed(baseline,painted);
+        write(artifacts,"material-preview-"+std::string(previewNames[i])+"-baseline",baseline);
+        write(artifacts,"material-preview-"+std::string(previewNames[i])+"-decal",painted);
+        std::cout<<"Material preview "<<previewNames[i]<<": changed pixels="<<affected<<'\n';
+        check(affected>100,"Material preview "+std::string(previewNames[i])+" did not visibly render its decal.");
+        renderer.renderMaterialPreview(previewScene);const auto repeated=read(renderer.materialPreviewTexture());
+        check(repeated.rgba==painted.rgba,"Material preview decal changed between static frames.");
+        previewSettings.environment.background.show=true;previewScene.decals={};
+        renderer.renderMaterialPreview(previewScene);const auto backgroundBaseline=read(renderer.materialPreviewTexture());
+        previewScene.decals=previewDecals;renderer.renderMaterialPreview(previewScene);
+        const auto backgroundPainted=read(renderer.materialPreviewTexture());
+        check(changed(backgroundBaseline,backgroundPainted)>100,"Showing the material preview background hid its decal.");
+        check(changed(painted,backgroundPainted)>100,"Material preview background visibility did not affect its image.");
+        check(error(painted,backgroundPainted,true)==0,"Material preview background visibility changed its opaque receiver.");
+        write(artifacts,"material-preview-"+std::string(previewNames[i])+"-background",backgroundPainted);
+    }
     resources.stop();renderer.drainPending(frame);
     std::cout<<"Generated twelve-texture PBR decal parity, normal-zero identity, completed refraction snapshot, transparent receiver rejection and wet SSR passed on "
         <<renderer.backendName()<<".\n";
