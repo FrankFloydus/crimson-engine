@@ -6,7 +6,7 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema 15 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below, including Pixelization, Posterization and Dither, and appends Kuwahara, Gradient Map and Color Range Mask without renumbering existing nodes. Readers accept schemas 1–15 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
+Current graph schema 16 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below, including the schema 15 Kuwahara, Gradient Map and Color Range Mask nodes, and appends Detail Balance without renumbering existing nodes. Readers accept schemas 1–16 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 
@@ -81,8 +81,13 @@ Do not interpret a packed roughness or metallic map as sRGB color.
 | Kuwahara | Completed static Scalar/RGB/RGBA image to the same family; center alpha preserved | Radius (0–32 source pixels, default 4), Mix (0–1, default 1) |
 | Gradient Map | Scalar or RGB/RGBA luminance to an editable color ramp; RGB/RGBA and component outputs | 2–16 color stops, positions, interpolation |
 | Color Range Mask | Scalar/RGB/RGBA color selection to a scalar mask; input alpha ignored | Color, Tolerance, Softness, Invert |
+| Detail Balance | Completed static Scalar/RGB/RGBA image to the same family; center alpha preserved | Radius (0–32 source pixels, default 4), Detail (0–2, default 1) |
 
 ## Painterly filtering and color selection
+
+**Detail Balance** reduces or boosts fine texture variation around a smoother base. Radius sets the detail scale in source-image pixels, from 0 to 32. Detail 0 returns the smoothed base, 1 preserves the original exactly, and 2 doubles the residual detail; intermediate values blend continuously. The low-pass is a normalized separable Gaussian with support ±Radius and sigma Radius/3, using periodic sampling. The result is `base + (original - base) * Detail`, without an RGB clamp or premultiplication; alpha stays at the completed source's center pixel. Radius 0 is identity at any Detail value. Defaults are Radius 4 and Detail 1. This standalone image node is separate from the Multiscale Spots generator's Detail balance setting.
+
+Detail Balance uses the same static UV0 cache, source resolution, cancellation, memory budget and last-good publication as Kuwahara and Blur. Place animated mapping after the completed image. Its controls regenerate pixels without changing shader topology. For the proposed cleanup chain, use `Texture → Detail Balance → Kuwahara → Grayscale → Gradient Map`, then Blend with the original texture before Base Color. Start by lowering Detail below 1; larger Radius includes broader features in the residual and can soften wanted edges too. This controls painted texture detail, not mesh shape or UV-island boundaries.
 
 **Kuwahara** simplifies small image variations while retaining stronger boundaries. This implementation uses the classic four overlapping square regions around each source pixel. It compares their summed RGB variances (the scalar variance for grayscale), selects the region with the lowest variance, and mixes its mean into the original color. Alpha stays at the original center pixel. Radius counts source-image pixels; Radius 0 and Mix 0 preserve the input. Periodic sampling agrees with the other cached spatial filters. Large invented seams and UV atlas boundaries can remain visible; this filter has no knowledge of geometry or UV islands. It is the classic filter, not an anisotropic direction-field filter. See the [Kuwahara reference](https://reference.wolfram.com/language/ref/KuwaharaFilter.html).
 

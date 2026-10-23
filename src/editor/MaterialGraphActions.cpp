@@ -19,11 +19,11 @@ constexpr std::array addableNodeKinds{MaterialNodeKind::UV,MaterialNodeKind::Tex
     MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion,
     MaterialNodeKind::DirectionSelect,MaterialNodeKind::ImageInput,MaterialNodeKind::DecodeNormal,
     MaterialNodeKind::Pixelization,MaterialNodeKind::Posterization,MaterialNodeKind::Dither,
-    MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask};
+    MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask,MaterialNodeKind::DetailBalance};
 bool polymorphicImage(MaterialNodeKind kind) {
     return kind==MaterialNodeKind::Levels||kind==MaterialNodeKind::Invert||kind==MaterialNodeKind::Blend||kind==MaterialNodeKind::BrightnessContrast||kind==MaterialNodeKind::Sharpen||kind==MaterialNodeKind::Resize||
         kind==MaterialNodeKind::Blur||kind==MaterialNodeKind::HistogramScan||kind==MaterialNodeKind::DirectionalWarp||kind==MaterialNodeKind::ImageTransform||
-        kind==MaterialNodeKind::Pixelization||kind==MaterialNodeKind::Posterization||kind==MaterialNodeKind::Dither||kind==MaterialNodeKind::Kuwahara;
+        kind==MaterialNodeKind::Pixelization||kind==MaterialNodeKind::Posterization||kind==MaterialNodeKind::Dither||kind==MaterialNodeKind::Kuwahara||kind==MaterialNodeKind::DetailBalance;
 }
 [[noreturn]] void invalid(const char* message){throw std::runtime_error(std::string("Material graph action: ")+message);}
 

@@ -31,6 +31,37 @@ struct Project {
 };
 MaterialGraph blank(){MaterialGraph graph;addMaterialNode(graph,MaterialNodeKind::Output);return graph;}
 MaterialNodeId node(MaterialGraph& graph,MaterialNodeKind kind){return addMaterialNode(graph,kind).id;}
+void detailBalanceAuthoring() {
+    auto graph=blank();const auto texture=node(graph,MaterialNodeKind::Texture2D),detail=node(graph,MaterialNodeKind::DetailBalance);
+    require(findMaterialNode(graph,detail)->detailBalance.radius==4&&findMaterialNode(graph,detail)->detailBalance.detail==1,
+        "Detail Balance defaults are not neutral.");
+    for(const auto [pin,type]:std::array{std::pair{MaterialPin::R,MaterialValueType::Scalar},std::pair{MaterialPin::RGB,MaterialValueType::Color},std::pair{MaterialPin::RGBA,MaterialValueType::Color4}}) {
+        connectMaterialNodes(graph,texture,pin,detail,MaterialPin::Left);
+        require(materialOutputType(graph,detail,MaterialPin::Value)==type,"Detail Balance did not retain the incoming image family.");
+    }
+    const auto time=node(graph,MaterialNodeKind::Time),particle=node(graph,MaterialNodeKind::ParticleColor),vector=node(graph,MaterialNodeKind::Vector2),normal=node(graph,MaterialNodeKind::DecodeNormal),uv=node(graph,MaterialNodeKind::UV);
+    for(const auto [source,pin]:std::array{std::pair{time,MaterialPin::Value},std::pair{particle,MaterialPin::RGB},std::pair{vector,MaterialPin::XY},std::pair{normal,MaterialPin::Normal},std::pair{uv,MaterialPin::UV}})
+        require(!materialCanConnect(graph,source,pin,detail,MaterialPin::Left),"Detail Balance accepted a contextual source or incompatible image family.");
+    connectMaterialNodes(graph,uv,MaterialPin::UV,texture,MaterialPin::UV);
+    findMaterialNode(graph,detail)->detailBalance={7,1.6f};
+    const auto text=serializeMaterialGraph(graph);require(nlohmann::json::parse(text)["version"]==16&&serializeMaterialGraph(parseMaterialGraph(text))==text,
+        "Detail Balance settings or image links failed schema16 persistence.");
+    auto old=nlohmann::json::parse(text);old["version"]=15;rejects([&]{parseMaterialGraph(old.dump());},"Schema15 accepted the schema16 Detail Balance kind.");
+    const auto invalid=[&](auto change,const char* message){auto bad=graph;change(*findMaterialNode(bad,detail));rejects([&]{validateMaterialGraph(bad);},message);};
+    for(const int radius:{-1,33})invalid([&](auto& n){n.detailBalance.radius=radius;},"Detail Balance accepted an out-of-range Radius.");
+    for(const float amount:{-.1f,2.1f,std::numeric_limits<float>::infinity()})invalid([&](auto& n){n.detailBalance.detail=amount;},"Detail Balance accepted invalid Detail.");
+    invalid([](auto& n){n.left.type=MaterialValueType::Vector2;},"Detail Balance accepted an incompatible disconnected fallback.");
+    auto unsupported=graph;findMaterialNode(unsupported,uv)->uv.mode=MaterialUvMode::UV1;
+    rejects([&]{validateMaterialGraph(unsupported);},"Detail Balance accepted a UV1 source branch.");
+    unsupported=graph;findMaterialNode(unsupported,uv)->uv.mode=MaterialUvMode::WorldTriplanar;
+    rejects([&]{validateMaterialGraph(unsupported);},"Detail Balance accepted a triplanar source branch.");
+    auto malformed=nlohmann::json::parse(text);for(auto& n:malformed["nodes"])if(n["id"]==detail)n["detailBalance"]["radius"]=.5;
+    rejects([&]{parseMaterialGraph(malformed.dump());},"Detail Balance loaded a fractional Radius.");
+    auto prior=blank();const auto priorFilter=node(prior,MaterialNodeKind::Kuwahara);auto priorJson=nlohmann::json::parse(serializeMaterialGraph(prior));priorJson["version"]=15;
+    const auto bytes=priorJson.dump();const auto migrated=parseMaterialGraph(bytes);
+    require(findMaterialNode(migrated,priorFilter)->kuwahara.radius==4&&priorJson.dump()==bytes&&nlohmann::json::parse(serializeMaterialGraph(migrated))["version"]==16,
+        "Detail Balance schema update changed existing schema15 material data during loading.");
+}
 void imageStyleAuthoring() {
     auto graph=blank();const auto texture=node(graph,MaterialNodeKind::Texture2D),color=node(graph,MaterialNodeKind::Color);
     const auto kuwahara=node(graph,MaterialNodeKind::Kuwahara),gradient=node(graph,MaterialNodeKind::GradientMap),mask=node(graph,MaterialNodeKind::ColorRangeMask);
@@ -93,8 +124,8 @@ void imageStyleAuthoring() {
     require(evaluateMaterialUniform(graph,mask,MaterialPin::Value).value[0]==0,"Color Range Mask inversion did not invert a selected color.");
     selection->colorRangeMask.invert=false;selection->colorRangeMask.softness=0;
     require(evaluateMaterialUniform(graph,mask,MaterialPin::Value).value[0]==1,"A zero-softness color selection lost its hard interior.");
-    const auto text=serializeMaterialGraph(graph);require(nlohmann::json::parse(text)["version"]==15&&serializeMaterialGraph(parseMaterialGraph(text))==text,
-        "Image-style nodes failed schema15 persistence.");
+    const auto text=serializeMaterialGraph(graph);require(nlohmann::json::parse(text)["version"]==16&&serializeMaterialGraph(parseMaterialGraph(text))==text,
+        "Image-style nodes failed current-schema persistence.");
     auto old=nlohmann::json::parse(text);old["version"]=14;rejects([&]{parseMaterialGraph(old.dump());},"Schema14 accepted schema15 image-style nodes.");
     const auto invalid=[&](MaterialNodeId id,auto change,const char* message){auto bad=graph;change(*findMaterialNode(bad,id));rejects([&]{validateMaterialGraph(bad);},message);};
     for(const int radius:{-1,33})invalid(kuwahara,[&](auto& n){n.kuwahara.radius=radius;},"Kuwahara accepted an out-of-range Radius.");
@@ -123,7 +154,7 @@ void imageStyleAuthoring() {
     auto legacyGraph=blank();const auto legacyPixel=node(legacyGraph,MaterialNodeKind::Pixelization);
     auto legacyJson=nlohmann::json::parse(serializeMaterialGraph(legacyGraph));legacyJson["version"]=14;const auto bytes=legacyJson.dump();
     const auto migrated=parseMaterialGraph(bytes);require(findMaterialNode(migrated,legacyPixel)->stylization.pixelSize==4&&legacyJson.dump()==bytes&&
-        nlohmann::json::parse(serializeMaterialGraph(migrated))["version"]==15,"Schema14 material data failed compatible in-memory loading.");
+        nlohmann::json::parse(serializeMaterialGraph(migrated))["version"]==16,"Schema14 material data failed compatible in-memory loading.");
 }
 void materialStylizationAuthoring() {
     auto graph=blank();const auto out=materialOutputNode(graph).id;
@@ -166,7 +197,7 @@ void materialStylizationAuthoring() {
     auto* pixelNode=findMaterialNode(graph,pixel);pixelNode->stylization.pixelSize=7;
     auto* ditherNode=findMaterialNode(graph,dither);ditherNode->stylization={4,11,DitherPattern::Bayer8x8,3,.6f};
     const auto text=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(text)["version"]==15&&serializeMaterialGraph(parseMaterialGraph(text))==text,
+    require(nlohmann::json::parse(text)["version"]==16&&serializeMaterialGraph(parseMaterialGraph(text))==text,
         "Stylization settings, image types or identities failed current-schema persistence.");
     auto prior=nlohmann::json::parse(text);prior["version"]=13;
     rejects([&]{parseMaterialGraph(prior.dump());},"A schema13 file accepted schema14 material kinds.");
@@ -322,7 +353,7 @@ void refractionAuthoringAndPersistence() {
     require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Alpha)==topology&&
         materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Alpha)!=values,"Optical value edit compiled topology or retained stale values.");
     const auto active=serializeMaterialGraph(graph);auto reopened=parseMaterialGraph(active);
-    require(nlohmann::json::parse(active)["version"]==15&&serializeMaterialGraph(reopened)==active&&
+    require(nlohmann::json::parse(active)["version"]==16&&serializeMaterialGraph(reopened)==active&&
         materialInputLink(reopened,output,MaterialPin::Ior)->id==opticalLink,"Optical defaults and pin identities failed current-schema round trip.");
     materialOutputNode(graph).output.refraction=false;
     order=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Alpha);demand=materialRuntimeTextureMappings(graph);
@@ -782,7 +813,7 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==15&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current-schema nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==16&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current-schema nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
@@ -883,7 +914,7 @@ void imageAdjustmentsAndGrunge() {
             "Prior Grunge style conversion lost authored values or layer defaults.");
         require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
             "Grunge style conversion changed links or persistent identities.");
-        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==15,"Legacy Grunge did not write the current schema.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==16,"Legacy Grunge did not write the current schema.");
         for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
         for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
         rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
@@ -965,7 +996,7 @@ void imageNodeFoundation() {
     const auto noise=node(graph,MaterialNodeKind::Noise),h2n=node(graph,MaterialNodeKind::HeightToNormal);connectMaterialNodes(graph,noise,MaterialPin::Value,h2n,MaterialPin::Left);require(!materialExpressionUniform(graph,noise,MaterialPin::Value)&&!materialExpressionUniform(graph,h2n,MaterialPin::Normal),"Spatial procedural nodes were classified as uniform.");
     auto a=findMaterialNode(graph,noise)->image;const auto n0=sampleMaterialNoise({.17f,-.23f,.61f},a);require(n0==sampleMaterialNoise({.17f,-.23f,.61f},a),"Noise is not deterministic.");a.seed=314;require(std::abs(n0-sampleMaterialNoise({.17f,-.23f,.61f},a))>.0001f,"Noise seed did not change the field.");require(near(sampleMaterialNoise({.17f,-.23f,.61f},a,100),.5f),"Unresolved Clouds did not converge to its mean.");a.noisePattern=MaterialNoisePattern::Spots;const auto spot=sampleMaterialNoise({.17f,-.23f,.61f},a,100);require(spot>0&&spot<.1f,"Unresolved Spots did not converge to its measured mean.");
     connectMaterialNodes(graph,sharpen,MaterialPin::Value,out,MaterialPin::BaseColor);
-    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":15")!=std::string::npos,"New nodes did not write current graph schema.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
+    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":16")!=std::string::npos,"New nodes did not write current graph schema.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
     auto bad=graph;findMaterialNode(bad,levels)->image.inputWhite=0;rejects([&]{validateMaterialGraph(bad);},"Levels accepted an empty input interval.");
     const auto vector=node(graph,MaterialNodeKind::Vector2);rejects([&]{connectMaterialNodes(graph,vector,MaterialPin::XY,invert,MaterialPin::Left);},"Vector2 connected to an image node.");
     auto& settings=findMaterialNode(graph,blend)->image;const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);settings.contrast=.2f;require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==topology,"A numeric image setting changed topology identity.");require(materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==values,"An inactive image branch affected active material values.");
@@ -1183,7 +1214,7 @@ void cloudScaleSchemaMigration() {
             near(findMaterialNode(migrated,cloud2)->procedural.settings.scale,.25f),"Schema11 cloud frequencies were not converted to reciprocal feature size.");
     require(findMaterialNode(migrated,other)->procedural.settings.scale==2.75f,"Cloud Scale conversion changed a different procedural family.");
     const auto current=serializeMaterialGraph(migrated);const auto reopened=parseMaterialGraph(current);
-    require(nlohmann::json::parse(current)["version"]==15&&serializeMaterialGraph(reopened)==current&&
+    require(nlohmann::json::parse(current)["version"]==16&&serializeMaterialGraph(reopened)==current&&
             findMaterialNode(reopened,cloud1)->procedural.settings.scale==findMaterialNode(migrated,cloud1)->procedural.settings.scale,
             "Current schema cloud Scale was converted twice or did not round trip.");
     require(prior.dump()==originalBytes,"Loading cloud Scale migration mutated the supplied serialized source.");
@@ -1210,7 +1241,7 @@ void resizeImageBaking() {
         "Context-dependent Resize connection changed the graph or lacked a diagnostic.");
     const auto time=node(graph,MaterialNodeKind::Time);
     require(!materialCanConnect(graph,time,MaterialPin::Value,levels,MaterialPin::Left,&diagnostic),"Resize accepted Time input.");
-    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==15,"Resize did not write current graph schema.");
+    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==16,"Resize did not write current graph schema.");
     require(serializeMaterialGraph(parseMaterialGraph(before))==before,"Resize settings or typed input failed round trip.");
     auto malformed=serialized;for(auto& n:malformed["nodes"])if(n["id"]==resize)n["resize"]["width"]=1.5;
     rejects([&]{parseMaterialGraph(malformed.dump());},"Resize accepted a fractional width.");
@@ -1383,7 +1414,7 @@ void atomicPointNodesAndSources() {
     findMaterialNode(graph,input)->atomic.enabled=true;order=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
     require(std::find(order.begin(),order.end(),source)==order.end()&&!materialExpressionUniform(graph,input,MaterialPin::RGBA),"Assigned Image Input did not override/prune Base.");
     for(const auto kind:{MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::DirectionalWarp,MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion})node(graph,kind);
-    const auto text=serializeMaterialGraph(graph);require(text.find("\"version\":15")!=std::string::npos&&serializeMaterialGraph(parseMaterialGraph(text))==text,"Atomic kinds/settings changed during current-schema round trip.");
+    const auto text=serializeMaterialGraph(graph);require(text.find("\"version\":16")!=std::string::npos&&serializeMaterialGraph(parseMaterialGraph(text))==text,"Atomic kinds/settings changed during current-schema round trip.");
     auto prior=nlohmann::json::parse(text);prior["version"]=10;rejects([&]{parseMaterialGraph(prior.dump());},"Prior schema accepted atomic node payloads.");
 }
 
@@ -1460,5 +1491,5 @@ void runtimeTextureDemandMappings() {
 }
 
 }
-int main(int argc,char** argv){try{imageStyleAuthoring();materialStylizationAuthoring();refractionAuthoringAndPersistence();originalNodePropertySemantics();cloudScaleSchemaMigration();runtimeTextureDemandMappings();atomicPointNodesAndSources();resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+int main(int argc,char** argv){try{detailBalanceAuthoring();imageStyleAuthoring();materialStylizationAuthoring();refractionAuthoringAndPersistence();originalNodePropertySemantics();cloudScaleSchemaMigration();runtimeTextureDemandMappings();atomicPointNodesAndSources();resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

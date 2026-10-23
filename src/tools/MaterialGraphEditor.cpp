@@ -141,6 +141,7 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::Kuwahara:aliases="kuwahara painterly painting oil watercolor edge preserve smooth filter node";break;
     case MaterialNodeKind::GradientMap:aliases="gradient map ramp remap color colour palette stops node";break;
     case MaterialNodeKind::ColorRangeMask:aliases="color colour range mask select selection key chroma tolerance softness node";break;
+    case MaterialNodeKind::DetailBalance:aliases="detail balance low pass lowpass high frequency sharpen smooth soften filter image node";break;
     default:break;
     }
     std::string search(query);std::transform(search.begin(),search.end(),search.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -175,7 +176,7 @@ ImVec4 nodeColor(MaterialNodeKind kind) {
     case MaterialNodeKind::DirectionalWarp:case MaterialNodeKind::HeightOcclusion:case MaterialNodeKind::NormalOcclusion:
     case MaterialNodeKind::DirectionSelect:case MaterialNodeKind::DecodeNormal:
     case MaterialNodeKind::Pixelization:case MaterialNodeKind::Posterization:case MaterialNodeKind::Dither:
-    case MaterialNodeKind::Kuwahara:case MaterialNodeKind::GradientMap:case MaterialNodeKind::ColorRangeMask:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::Kuwahara:case MaterialNodeKind::GradientMap:case MaterialNodeKind::ColorRangeMask:case MaterialNodeKind::DetailBalance:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::RGBAMerge:case MaterialNodeKind::RGBASplit:case MaterialNodeKind::AlphaSplit:case MaterialNodeKind::AlphaMerge:
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
     case MaterialNodeKind::Texture2D:case MaterialNodeKind::Resize:case MaterialNodeKind::ImageInput:case MaterialNodeKind::ProceduralTexture:return {.23f,.48f,.65f,1};

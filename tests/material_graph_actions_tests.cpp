@@ -626,7 +626,7 @@ void imageRemappingAuthoring() {
     std::vector<MaterialNodeId> selected;
     require(document.edit("Author image remapping",[&](auto& asset) {
         auto& graph=asset.graph;selected.push_back(addMaterialNode(graph,MaterialNodeKind::Color).id);
-        for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask}) {
+        for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask,MaterialNodeKind::DetailBalance}) {
             require(std::count(materialGraphNodeKinds().begin(),materialGraphNodeKinds().end(),kind)==1,"Image remapping node missing from add catalog.");
             auto& node=addMaterialNode(graph,kind);selected.push_back(node.id);
             require(materialGraphInputMixedImage(node,MaterialPin::Left),"Image remapping input omitted its grayscale/color capability.");
@@ -635,9 +635,11 @@ void imageRemappingAuthoring() {
         auto& gradient=findMaterialNode(graph,selected[2])->gradientMap;
         gradient.stops={{11,.1f,{4,.2f,.1f}},{12,.5f,{.3f,2,.2f}},{13,.9f,{.1f,.2f,8}}};gradient.nextStopId=14;gradient.interpolation=MaterialGradientInterpolation::Smooth;
         findMaterialNode(graph,selected[3])->colorRangeMask={{.2f,.4f,.6f},.22f,.13f,true};
+        findMaterialNode(graph,selected[4])->detailBalance={6,.4f};
         connectMaterialGraphAuthoring(graph,selected[0],MaterialPin::RGBA,selected[1],MaterialPin::Left);
         connectMaterialGraphAuthoring(graph,selected[1],MaterialPin::Value,selected[2],MaterialPin::Left);
         connectMaterialGraphAuthoring(graph,selected[2],MaterialPin::RGBA,selected[3],MaterialPin::Left);
+        connectMaterialGraphAuthoring(graph,selected[3],MaterialPin::Value,selected[4],MaterialPin::Left);
     }),"Could not author image-remapping nodes.");
     const auto authored=serializeMaterialAsset(document.definition());
     require(document.undo()&&document.redo()&&serializeMaterialAsset(document.definition())==authored,"Image remapping did not undo and redo as one edit.");
@@ -647,20 +649,26 @@ void imageRemappingAuthoring() {
     const auto& graph=document.definition().graph;
     require(pasted.size()==selected.size()&&findMaterialNode(graph,pasted[1])->kuwahara==findMaterialNode(graph,selected[1])->kuwahara&&
         findMaterialNode(graph,pasted[2])->gradientMap==findMaterialNode(graph,selected[2])->gradientMap&&
-        findMaterialNode(graph,pasted[3])->colorRangeMask==findMaterialNode(graph,selected[3])->colorRangeMask,
+        findMaterialNode(graph,pasted[3])->colorRangeMask==findMaterialNode(graph,selected[3])->colorRangeMask&&
+        findMaterialNode(graph,pasted[4])->detailBalance==findMaterialNode(graph,selected[4])->detailBalance,
         "Image-remapping clipboard lost filtering, HDR ramp colors/identities or mask controls.");
     require(materialInputLink(graph,pasted[2],MaterialPin::Left)->fromNode==pasted[1]&&materialInputLink(graph,pasted[3],MaterialPin::Left)->fromNode==pasted[2],"Image-remapping clipboard lost its typed chain.");
     require(document.undo()&&serializeMaterialAsset(document.definition())==authored,"Image-remapping paste did not undo as one command.");
     MaterialDocument reopened(project.root);require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==authored,"Image-remapping save/reopen changed authored settings.");
     const auto& restored=document.definition().graph;const auto output=materialOutputNode(restored).id;
     const auto targets=materialGraphNodeChoices(restored,{selected[0],MaterialPin::RGBA,false});
-    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask})
+    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask,MaterialNodeKind::DetailBalance})
         require(std::any_of(targets.begin(),targets.end(),[&](const auto& choice){return choice.kind==kind&&choice.pin==MaterialPin::Left;}),"RGBA pin search omitted an image-remapping target.");
     const auto sources=materialGraphNodeChoices(restored,{output,MaterialPin::BaseColor,true});
     const auto gradient=std::find_if(sources.begin(),sources.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::GradientMap&&choice.pin==MaterialPin::RGB;});
     require(gradient!=sources.end(),"Color input search omitted Gradient Map RGB.");
     auto candidate=restored;const auto connected=addConnectedMaterialGraphNode(candidate,{output,MaterialPin::BaseColor,true},*gradient,{200,100});
     require(materialInputLink(candidate,output,MaterialPin::BaseColor)->fromNode==connected,"Creating Gradient Map from a Color input lost its link.");
+    const auto detail=std::find_if(sources.begin(),sources.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::DetailBalance&&choice.pin==MaterialPin::Value;});
+    require(detail!=sources.end(),"Color input search omitted Detail Balance.");candidate=restored;
+    const auto detailId=addConnectedMaterialGraphNode(candidate,{output,MaterialPin::BaseColor,true},*detail,{200,100});
+    require(materialOutputType(candidate,detailId,MaterialPin::Value)==MaterialValueType::Color&&materialInputLink(candidate,output,MaterialPin::BaseColor)->fromNode==detailId,
+        "Creating Detail Balance from a Color input lost its family or link.");
 }
 void cachedRuntimeUvRequirements() {
     auto graph=graphWithOutput();const auto out=materialOutputNode(graph).id;

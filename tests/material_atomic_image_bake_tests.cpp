@@ -35,6 +35,67 @@ struct Fixture {
     }
     MaterialNode& node(){return *findMaterialNode(graph,root);}
 };
+FloatImage detailBalanceReference(const FloatImage& source,int radius,float detail) {
+    if(radius==0||detail==1)return source;
+    std::vector<double> weights(static_cast<std::size_t>(radius)*2+1);double sum=0;
+    const double sigma=radius/3.;
+    for(int offset=-radius;offset<=radius;++offset){const double value=std::exp(-.5*offset*offset/(sigma*sigma));weights[offset+radius]=value;sum+=value;}
+    const double normalization=1/(sum*sum);auto result=source;
+    // Independent full two-dimensional convolution, rather than reproducing
+    // the implementation's two separable passes and intermediate float plane.
+    for(unsigned y=0;y<source.height;++y)for(unsigned x=0;x<source.width;++x)for(unsigned c=0;c<3;++c) {
+        double low=0;
+        for(int dy=-radius;dy<=radius;++dy)for(int dx=-radius;dx<=radius;++dx) {
+            const auto i=(static_cast<std::size_t>(repeat(static_cast<int>(y)+dy,source.height))*source.width+repeat(static_cast<int>(x)+dx,source.width))*4+c;
+            low+=source.rgba[i]*weights[dx+radius]*weights[dy+radius]*normalization;
+        }
+        const auto i=(static_cast<std::size_t>(y)*source.width+x)*4+c;
+        result.rgba[i]=static_cast<float>(low+(source.rgba[i]-low)*detail);
+    }
+    return result;
+}
+void detailBalancePixels() {
+    for(const auto pin:{MaterialPin::R,MaterialPin::RGB,MaterialPin::RGBA}) {
+        Fixture fixture(9,5,MaterialNodeKind::DetailBalance,pin);fixture.node().detailBalance.radius=0;
+        const auto source=fixture.bake();
+        for(std::size_t i=0;i<source.rgba.size();++i) {
+            const auto c=i%4;const float expected=c==3?(pin==MaterialPin::RGBA?fixture.image->rgba[i]/255.f:1.f):
+                fixture.image->rgba[pin==MaterialPin::R?i-c:i]/255.f;
+            near(source.rgba[i],expected,1e-6f,"Detail Balance Radius0 source differs from decoded pixels beyond native-UV sampling tolerance.");
+        }
+        for(const int radius:{0,1,4,32})for(const float detail:{0.f,.5f,1.f,2.f}) {
+            fixture.node().detailBalance={radius,detail};const auto actual=fixture.bake();const auto expected=detailBalanceReference(source,radius,detail);
+            check(actual.width==source.width&&actual.height==source.height,"Detail Balance changed its completed source extent.");
+            if(radius==0||detail==1)check(actual.rgba==source.rgba,"Neutral Detail Balance did not retain its completed source exactly.");
+            for(unsigned y=0;y<source.height;++y)for(unsigned x=0;x<source.width;++x)for(unsigned c=0;c<4;++c) {
+                const auto i=(static_cast<std::size_t>(y)*source.width+x)*4+c;
+                if(std::abs(actual.rgba[i]-expected.rgba[i])>(c==3?0:3e-6f))
+                    throw std::runtime_error("Detail Balance Gaussian reference mismatch radius="+std::to_string(radius)+" detail="+std::to_string(detail)+
+                        " sourcePin="+std::to_string(static_cast<int>(pin))+" x="+std::to_string(x)+" y="+std::to_string(y)+" channel="+std::to_string(c)+
+                        " actual="+std::to_string(actual.rgba[i])+" expected="+std::to_string(expected.rgba[i]));
+            }
+        }
+    }
+    Fixture impulse(9,5,MaterialNodeKind::DetailBalance,MaterialPin::RGBA);
+    for(std::size_t i=0;i<impulse.image->rgba.size();i+=4){impulse.image->rgba[i]=impulse.image->rgba[i+1]=impulse.image->rgba[i+2]=0;impulse.image->rgba[i+3]=static_cast<unsigned char>(i%251);}
+    const auto center=(2*9+4)*4;impulse.image->rgba[center]=255;impulse.image->rgba[center+1]=64;impulse.image->rgba[center+2]=128;impulse.image->rgba[center+3]=0;
+    impulse.node().detailBalance={4,2};const auto sharpened=impulse.bake();
+    check(sharpened.rgba[center]>1&&std::any_of(sharpened.rgba.begin(),sharpened.rgba.end(),[](float value){return value<0;}),
+        "Detail Balance clamped boosted detail, removed negative relief or discarded transparent RGB.");
+    const auto preview=bakeMaterialGraphImagePreview(impulse.graph,{impulse.root,MaterialPin::Value},
+        [&](const std::string&)->std::shared_ptr<const DecodedImage>{return impulse.image;},{9,5,0});
+    check(preview.rgba==sharpened.rgba,"Detail Balance preview differs from its cached material image.");
+    std::stop_source stop;stop.request_stop();bool canceled=false;
+    try{impulse.bake(nullptr,stop.get_token());}catch(const std::exception&){canceled=true;}check(canceled,"Detail Balance ignored a canceled bake request.");
+    MaterialGraph graph;addMaterialNode(graph,MaterialNodeKind::Output);
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id,resize=addMaterialNode(graph,MaterialNodeKind::Resize).id,filter=addMaterialNode(graph,MaterialNodeKind::DetailBalance).id;
+    findMaterialNode(graph,color)->color={-2,4,.25f,0};findMaterialNode(graph,resize)->resize={5,3,MaterialResizeFilter::Nearest};
+    connectMaterialNodesData(graph,color,MaterialPin::RGBA,resize,MaterialPin::Left);connectMaterialNodesData(graph,resize,MaterialPin::Value,filter,MaterialPin::Left);
+    for(const float detail:{0.f,.5f,1.f,2.f}) {
+        findMaterialNode(graph,filter)->detailBalance={32,detail};const auto hdr=bakeMaterialCachedImage(graph,filter,{});
+        for(std::size_t i=0;i<hdr.rgba.size();i+=4){near(hdr.rgba[i],-2,1e-6f,"Detail Balance changed a signed uniform channel.");near(hdr.rgba[i+1],4,1e-6f,"Detail Balance clipped uniform HDR energy.");near(hdr.rgba[i+2],.25f,1e-6f,"Detail Balance changed a uniform color.");near(hdr.rgba[i+3],0,0,"Detail Balance changed independent alpha.");}
+    }
+}
 Vec4 kuwaharaReference(const FloatImage& source,unsigned x,unsigned y,int radius,bool grayscale,float mix) {
     const auto sample=[&](int sx,int sy,unsigned channel){return static_cast<double>(source.rgba[(static_cast<std::size_t>(repeat(sy,source.height))*source.width+repeat(sx,source.width))*4+(grayscale?0:channel)]);};
     Vec4 result{};double lowest=std::numeric_limits<double>::infinity();
@@ -629,6 +690,6 @@ void benchmark(const std::filesystem::path& file) {
 }
 }
 int main(int argc,char** argv) {
-    try{kuwaharaPixels();imageStylePointPixels();stylizationPixels();morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
+    try{detailBalancePixels();kuwaharaPixels();imageStylePointPixels();stylizationPixels();morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

@@ -1619,12 +1619,13 @@ void requestedImageAndChannelControls() {
         blend=addMaterialNode(asset.graph,MaterialNodeKind::Blend,{-250,220}).id;
         connectMaterialNodes(asset.graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);
     })&&ui.document.save(),"Could not configure image authoring controls.");ui.frame(24);
-    const std::array<std::pair<const char*,MaterialNodeKind>,20> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
+    const std::array<std::pair<const char*,MaterialNodeKind>,21> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
         {"image blend",MaterialNodeKind::Blend},{"luminance",MaterialNodeKind::Grayscale},{"to color",MaterialNodeKind::ToColor},{"procedural clouds",MaterialNodeKind::Noise},
         {"brightness contrast",MaterialNodeKind::BrightnessContrast},{"unsharp",MaterialNodeKind::Sharpen},{"height normal",MaterialNodeKind::HeightToNormal},
         {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge},{"resample",MaterialNodeKind::Resize},
         {"pixelate mosaic",MaterialNodeKind::Pixelization},{"posterize quantize",MaterialNodeKind::Posterization},{"ordered dither",MaterialNodeKind::Dither},
-        {"kuwahara painterly",MaterialNodeKind::Kuwahara},{"gradient ramp",MaterialNodeKind::GradientMap},{"color range mask",MaterialNodeKind::ColorRangeMask}}};
+        {"kuwahara painterly",MaterialNodeKind::Kuwahara},{"gradient ramp",MaterialNodeKind::GradientMap},{"color range mask",MaterialNodeKind::ColorRangeMask},
+        {"detail balance",MaterialNodeKind::DetailBalance}}};
     for(const auto& [alias,kind]:searches) {
         const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
         const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
@@ -1664,12 +1665,13 @@ void requestedImageAndChannelControls() {
     require(ui.editor.status().empty(),"Image/channel controls left an editor diagnostic.");
 }
 void imageNodeParameterTransactions() {
-    const std::array<std::pair<MaterialNodeKind,const char*>,16> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
+    const std::array<std::pair<MaterialNodeKind,const char*>,18> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
         {MaterialNodeKind::BrightnessContrast,"Brightness"},{MaterialNodeKind::Sharpen,"Amount"},{MaterialNodeKind::HeightToNormal,"Strength"},
         {MaterialNodeKind::Resize,"Width"},{MaterialNodeKind::Resize,"Height"},
         {MaterialNodeKind::Pixelization,"Pixel Size"},{MaterialNodeKind::Posterization,"Levels"},
         {MaterialNodeKind::Dither,"Size"},{MaterialNodeKind::Dither,"Strength"},{MaterialNodeKind::Dither,"Levels"},
-        {MaterialNodeKind::Kuwahara,"Radius"},{MaterialNodeKind::Kuwahara,"Mix"},{MaterialNodeKind::ColorRangeMask,"Tolerance"},{MaterialNodeKind::ColorRangeMask,"Softness"}}};
+        {MaterialNodeKind::Kuwahara,"Radius"},{MaterialNodeKind::Kuwahara,"Mix"},{MaterialNodeKind::ColorRangeMask,"Tolerance"},{MaterialNodeKind::ColorRangeMask,"Softness"},
+        {MaterialNodeKind::DetailBalance,"Radius"},{MaterialNodeKind::DetailBalance,"Detail"}}};
     for(const auto& [kind,label]:cases) {
         GraphUi ui;MaterialNodeId id{};
         require(ui.document.edit("Image parameter fixture",[&](auto& asset){asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});auto& node=addMaterialNode(asset.graph,kind,{-100,0});id=node.id;if(kind==MaterialNodeKind::Dither)node.stylization.strength=.25f;})&&ui.document.save(),"Could not configure image parameter fixture.");ui.frame(24);
@@ -1693,6 +1695,16 @@ void imageNodeParameterTransactions() {
             throw std::runtime_error(std::string("Image parameter did not remain active and change while dragging: ")+materialNodeKindName(kind)+" / "+label+", active="+std::to_string(ui.document.transactionActive())+", text="+std::to_string(ImGui::GetCurrentContext()->TempInputId));
         ui.key(ImGuiKey_Escape);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);ui.frame(3);
         require(ui.snapshot()==beforeCancel&&!ui.document.transactionActive(),"Cancelling image parameter did not restore its exact value.");
+        if(kind==MaterialNodeKind::DetailBalance) {
+            const auto control=std::find_if(ui.editor.presentation().controls.begin(),ui.editor.presentation().controls.end(),[&](const auto& value){return value.node==id&&value.label==label;});
+            require(control!=ui.editor.presentation().controls.end(),"Detail Balance reset control was absent.");
+            const ImVec2 reset{control->maximum[0]+(ImGui::GetStyle().ItemInnerSpacing.x+ImGui::GetFrameHeight()*.5f)*ui.editor.presentation().zoom,(control->minimum[1]+control->maximum[1])*.5f};
+            const auto beforeReset=ui.snapshot();ui.click(reset);
+            const auto& value=findMaterialNode(ui.document.definition().graph,id)->detailBalance;
+            require(std::string_view(label)=="Radius"?value.radius==4:value.detail==1,"Detail Balance reset did not restore its authored default.");ui.oneUndo(beforeReset);
+            const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.click(reset);
+            require(ui.snapshot()==stable&&ui.document.revision()==revision&&!ui.document.transactionActive(),"Clicking a disabled Detail Balance reset changed history.");
+        }
         if(kind==MaterialNodeKind::Noise) {
             require(ui.document.edit("Use Spots noise",[&](auto& asset){findMaterialNode(asset.graph,id)->image.noisePattern=MaterialNoisePattern::Spots;}),"Could not switch Noise to Spots.");ui.frame(3);
             const auto stable=ui.snapshot();const auto revision=ui.document.revision();
@@ -1777,6 +1789,7 @@ void mixedImageInputsAndResolvedOutputsFor(std::array<MaterialNodeKind,3> kinds)
 void mixedImageInputsAndResolvedOutputs() {
     mixedImageInputsAndResolvedOutputsFor({MaterialNodeKind::Levels,MaterialNodeKind::Invert,MaterialNodeKind::Resize});
     mixedImageInputsAndResolvedOutputsFor({MaterialNodeKind::Pixelization,MaterialNodeKind::Dither,MaterialNodeKind::Posterization});
+    mixedImageInputsAndResolvedOutputsFor({MaterialNodeKind::DetailBalance,MaterialNodeKind::Invert,MaterialNodeKind::Resize});
 }
 void typedPinColorsConversionsAndResize() {
     GraphUi ui;MaterialNodeId output{},color{},vector{},levels{},multiply{},resize{},normal{},uv{};
@@ -1841,7 +1854,7 @@ void typedPinColorsConversionsAndResize() {
 }
 
 void imageEffectPreviewsAndMask() {
-    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask}) {
+    for(const auto kind:{MaterialNodeKind::Kuwahara,MaterialNodeKind::GradientMap,MaterialNodeKind::ColorRangeMask,MaterialNodeKind::DetailBalance}) {
         GraphUi ui;MaterialNodeId effect{};
         require(ui.document.edit("Image effect preview fixture",[&](auto& asset) {
             asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{550,0});

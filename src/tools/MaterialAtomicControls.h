@@ -23,7 +23,10 @@ void draw_material_atomic_controls(const MaterialNode& node,Parameter&& paramete
     const auto amount=[&](float minimum,float maximum) {
         parameter("Amount","Change image amount",[=](auto& n){return resettableProperty(n.atomic.amount,defaults.atomic.amount,[&]{return ImGui::DragFloat("Amount",&n.atomic.amount,.001f,minimum,maximum,"%.4f",ImGuiSliderFlags_AlwaysClamp);});});
     };
-    if(node.kind==MaterialNodeKind::Kuwahara) {
+    if(node.kind==MaterialNodeKind::DetailBalance) {
+        parameter("Radius","Change detail balance radius",[&](auto& n){const bool changed=resettableProperty(n.detailBalance.radius,defaults.detailBalance.radius,[&]{return ImGui::DragInt("Radius",&n.detailBalance.radius,1,0,32,"%d px",ImGuiSliderFlags_AlwaysClamp);});tooltip("Low-pass radius measured in source image pixels.");return changed;});
+        parameter("Detail","Change detail balance",[&](auto& n){const bool changed=resettableProperty(n.detailBalance.detail,defaults.detailBalance.detail,[&]{return ImGui::SliderFloat("Detail",&n.detailBalance.detail,0,2,"%.3f",ImGuiSliderFlags_AlwaysClamp);});tooltip("0 softens detail, 1 preserves the original, 2 boosts high frequencies.");return changed;});
+    } else if(node.kind==MaterialNodeKind::Kuwahara) {
         parameter("Radius","Change Kuwahara radius",[&](auto& n){const bool changed=resettableProperty(n.kuwahara.radius,defaults.kuwahara.radius,[&]{return ImGui::DragInt("Radius",&n.kuwahara.radius,1,0,32,"%d px",ImGuiSliderFlags_AlwaysClamp);});tooltip("Filter radius measured in source image pixels.");return changed;});
         parameter("Mix","Change Kuwahara mix",[defaults](auto& n){return resettableProperty(n.kuwahara.mix,defaults.kuwahara.mix,[&]{return ImGui::SliderFloat("Mix",&n.kuwahara.mix,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
     } else if(node.kind==MaterialNodeKind::GradientMap) {
