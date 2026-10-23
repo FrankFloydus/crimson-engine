@@ -639,6 +639,85 @@ void resizeShaderChecks() {
             [](const auto& binding){return binding.kind==ShaderUniformKind::Sampler;})==1,
             "Height domain bindings include a direct or Resize branch unrelated to Height.");
 }
+MaterialAsset stylizationFixture(MaterialNodeKind kind) {
+    MaterialAsset material;auto& graph=material.graph;
+    const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id,texture=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    const auto effect=addMaterialNode(graph,kind).id;
+    findMaterialNode(graph,texture)->texture.image.id="assets/textures/stylization.png";
+    materialOutputNode(graph).output.tessellation.enabled=true;materialOutputNode(graph).output.blend=MaterialBlend::Mask;
+    connectMaterialNodes(graph,texture,MaterialPin::RGBA,effect,MaterialPin::Left);
+    connectMaterialNodes(graph,effect,MaterialPin::Value,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,effect,MaterialPin::Value,output,MaterialPin::OpacityMask);
+    connectMaterialNodes(graph,effect,MaterialPin::Value,output,MaterialPin::Height);
+    return material;
+}
+void stylizationShaderChecks() {
+    for(const auto kind:{MaterialNodeKind::Pixelization,MaterialNodeKind::Posterization,MaterialNodeKind::Dither}) {
+        auto material=stylizationFixture(kind);const auto generated=generateMaterialGraphShader(material);
+        const auto effect=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[&](const auto& n){return n.kind==kind;})->id;
+        check(generated.textures.size()==1,"Stylization duplicated the source image's shader binding.");
+        auto* node=findMaterialNode(material.graph,effect);
+        if(kind==MaterialNodeKind::Pixelization)node->stylization.pixelSize=9;
+        else if(kind==MaterialNodeKind::Posterization)node->stylization.levels=6;
+        else {node->stylization.strength=.4f;node->stylization.pattern=DitherPattern::Bayer8x8;node->stylization.size=3;node->stylization.levels=7;}
+        const auto edited=generateMaterialGraphShader(material);
+        check(edited.topologyKey==generated.topologyKey,"A numeric stylization edit changed the generated shader topology.");
+        if(kind==MaterialNodeKind::Posterization) {
+            check(!generated.textures[0].resize&&edited.uniforms!=generated.uniforms,
+                "Posterization must stay a direct image adjustment with value-only parameter updates.");
+        } else {
+            check(generated.textures[0].resize&&edited.textures[0].resize&&generated.textures[0].role==MaterialGraphTextureRole::Data,
+                "Pixelization or Dither escaped its cached linear image boundary.");
+            check(edited.uniforms==generated.uniforms&&edited.textures[0].resize->definitionKey!=generated.textures[0].resize->definitionKey&&
+                edited.runtimeDefinitionSignature!=generated.runtimeDefinitionSignature,
+                "Cached stylization controls did not invalidate image content independently of the shader packet.");
+            if(kind==MaterialNodeKind::Pixelization)check(generated.textures[0].sampler.magFilter==ModelFilter::Nearest,
+                "Pixelization's materialized sampler would interpolate across neighboring pixel blocks.");
+            if(kind==MaterialNodeKind::Pixelization)node->stylization.pixelSize=1;else node->stylization.strength=0;
+            const auto neutral=generateMaterialGraphShader(material);
+            check(neutral.topologyKey==edited.topologyKey&&neutral.textures[0].sampler.magFilter==ModelFilter::Linear&&
+                neutral.textures[0].sampler.minFilter==ModelFilter::LinearMipmapLinear,
+                "Neutral Pixelization or Dither retained crisp filtering or recompiled its shader topology.");
+            if(kind==MaterialNodeKind::Pixelization)node->stylization.pixelSize=9;else node->stylization.strength=.4f;
+        }
+        const auto preview=generateMaterialGraphPreviewShader(material,{effect,MaterialPin::Value});
+        check(preview.textures.size()==1&&preview.textures[0].resize.has_value()==(kind!=MaterialNodeKind::Posterization),
+            "Stylization preview changed the material's direct or cached sampling contract.");
+        const auto before=edited.runtimeDefinitionSignature;
+        for(auto& n:material.graph.nodes)n.position={123,456};
+        check(generateMaterialGraphShader(material).runtimeDefinitionSignature==before,"Moving stylization nodes invalidated generated image content.");
+    }
+}
+void compileStylization(const ShaderCompileConfig& config) {
+    unsigned fragments{},domains{};
+    const auto compile=[&](const MaterialGraphShader& generated) {
+        for(const auto& variant:generated.variants) {
+            const auto fragment=compileShader(config,materialGraphShaderRecipe(config,generated,variant));
+            const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+            if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+                throw std::runtime_error("Material stylization: "+diagnostic);
+            ++fragments;
+            if(variant.tessellation) {
+                const auto domain=compileShader(config,materialGraphDomainShaderRecipe(config,generated,variant));
+                if(!preflightGeneratedTessellationDomain(domain.bytes,vertex.bytes,variant.domainManifest,diagnostic))
+                    throw std::runtime_error("Material stylization domain: "+diagnostic);
+                ++domains;
+            }
+        }
+    };
+    for(const auto kind:{MaterialNodeKind::Pixelization,MaterialNodeKind::Posterization,MaterialNodeKind::Dither}) {
+        const auto material=stylizationFixture(kind);compile(generateMaterialGraphShader(material));
+        const auto effect=std::find_if(material.graph.nodes.begin(),material.graph.nodes.end(),[&](const auto& n){return n.kind==kind;})->id;
+        compile(generateMaterialGraphPreviewShader(material,{effect,MaterialPin::Value}));
+    }
+    check(fragments>0&&domains>0,"Stylization compile coverage omitted fragments or native domain stages.");
+    std::cout<<"Material stylization compiled "<<fragments<<" fragments and "<<domains<<" native domain stages.\n";
+}
+void stylizationCompileChecks(const std::filesystem::path& compiler,const std::filesystem::path& source,const std::filesystem::path& include) {
+    const auto root=std::filesystem::temp_directory_path()/("crimson-stylization-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-stylization-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
+    compileStylization({compiler,source,include,root});
+}
 void imageFoundationShaderChecks() {
     auto material=imageFoundationFixture();const auto generated=generateMaterialGraphShader(material);check(generated.textures.size()==1,"Procedural Noise allocated a sampler or split/merge duplicated image resources.");
     check(generated.variants.front().source.find("ccImageOffsetContext")!=std::string::npos&&generated.variants.front().source.find("dFdx(context.uv.zw)")!=std::string::npos,"Spatial image operations omitted the UV0-to-UV1 Jacobian.");
@@ -842,6 +921,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 throw std::runtime_error("Grunge/image adjustments: "+diagnostic);
         }
     };
+    compileStylization(config);
     {
         auto material=refractionFixture();const auto ordinary=generateMaterialGraphShader(material);compileGenerated(ordinary);
         // The matte transport target is a required part of the transmission
@@ -1178,10 +1258,11 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
+        stylizationShaderChecks();constantRoughnessEligibilityChecks();decodedNormalMappingChecks();atomicShaderChecks();resizeShaderChecks();imageFoundationShaderChecks();refractionShaderChecks();cpuChecks();tessellatedCoverageNormalChecks();runtimeUniformChecks();adjustmentChecks();passIdentityChecks();
         if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         else if(argc==5&&std::string_view(argv[1])=="--ssr")ssrCompileChecks(argv[2],argv[3],argv[4]);
-        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr] <shaderc> <source-dir> <include-dir>");
+        else if(argc==5&&std::string_view(argv[1])=="--stylization")stylizationCompileChecks(argv[2],argv[3],argv[4]);
+        else if(argc!=1)throw std::runtime_error("Usage: material_graph_shader_tests [--ssr|--stylization] <shaderc> <source-dir> <include-dir>");
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

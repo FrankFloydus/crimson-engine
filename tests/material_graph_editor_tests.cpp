@@ -1022,18 +1022,19 @@ void refractionInputActivationAndFallbacks() {
 }
 
 void inlineComboPopupCoordinates() {
-    GraphUi ui;MaterialNodeId mapping{},texture{},grunge{};
+    GraphUi ui;MaterialNodeId mapping{},texture{},grunge{},dither{};
     require(ui.document.edit("Dropdown fixture",[&](auto& asset) {
         asset.graph={};auto& output=addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0}).output;
         output.shading=MaterialShading::Unlit;output.blend=MaterialBlend::Additive;
         mapping=addMaterialNode(asset.graph,MaterialNodeKind::UV,{-400,0}).id;
         texture=addMaterialNode(asset.graph,MaterialNodeKind::Texture2D,{0,0}).id;
         grunge=addMaterialNode(asset.graph,MaterialNodeKind::Grunge,{0,350}).id;
+        dither=addMaterialNode(asset.graph,MaterialNodeKind::Dither,{-400,350}).id;
     })&&ui.document.save(),"Could not configure dropdown fixture.");
     ui.frame(5);auto& io=ImGui::GetIO();ui.move(ui.emptyPoint());io.AddMouseWheelEvent(0,-2);ui.frame(24);
     const auto anchor=ui.emptyPoint();io.AddMouseButtonEvent(ImGuiMouseButton_Right,true);ui.frame();ui.move({anchor.x-70,anchor.y+20});
     io.AddMouseButtonEvent(ImGuiMouseButton_Right,false);ui.frame(3);
-    for(const auto id:{mapping,texture}) {
+    for(const auto id:{mapping,texture,dither}) {
         const auto before=ui.snapshot();const auto revision=ui.document.revision();
         auto found=std::find_if(ui.editor.presentation().combos.begin(),ui.editor.presentation().combos.end(),[&](const auto& item){return item.node==id;});
         require(found!=ui.editor.presentation().combos.end(),"Inline dropdown did not report its actual widget bounds.");
@@ -1047,7 +1048,7 @@ void inlineComboPopupCoordinates() {
         ui.click(ui.popupItem(id==mapping?3:2));
         require(!ui.popup()&&!ui.document.transactionActive(),"Selecting a dropdown option left its popup or transaction open.");
         const auto* node=findMaterialNode(ui.document.definition().graph,id);
-        require(id==mapping?node->uv.mode==MaterialUvMode::WorldTriplanar:node->texture.role==MaterialTextureRole::Normal,
+        require(id==mapping?node->uv.mode==MaterialUvMode::WorldTriplanar:id==texture?node->texture.role==MaterialTextureRole::Normal:node->stylization.pattern==DitherPattern::Bayer8x8,
             "Material lost access to mapping or sample choices.");
         ui.oneUndo(before);
     }
@@ -1617,10 +1618,11 @@ void requestedImageAndChannelControls() {
         blend=addMaterialNode(asset.graph,MaterialNodeKind::Blend,{-250,220}).id;
         connectMaterialNodes(asset.graph,merge,MaterialPin::RGBA,split,MaterialPin::Left);
     })&&ui.document.save(),"Could not configure image authoring controls.");ui.frame(24);
-    const std::array<std::pair<const char*,MaterialNodeKind>,14> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
+    const std::array<std::pair<const char*,MaterialNodeKind>,17> searches{{{"levels",MaterialNodeKind::Levels},{"invert",MaterialNodeKind::Invert},
         {"image blend",MaterialNodeKind::Blend},{"luminance",MaterialNodeKind::Grayscale},{"to color",MaterialNodeKind::ToColor},{"procedural clouds",MaterialNodeKind::Noise},
         {"brightness contrast",MaterialNodeKind::BrightnessContrast},{"unsharp",MaterialNodeKind::Sharpen},{"height normal",MaterialNodeKind::HeightToNormal},
-        {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge},{"resample",MaterialNodeKind::Resize}}};
+        {"rgba merge",MaterialNodeKind::RGBAMerge},{"rgba split",MaterialNodeKind::RGBASplit},{"alpha split",MaterialNodeKind::AlphaSplit},{"alpha merge",MaterialNodeKind::AlphaMerge},{"resample",MaterialNodeKind::Resize},
+        {"pixelate mosaic",MaterialNodeKind::Pixelization},{"posterize quantize",MaterialNodeKind::Posterization},{"ordered dither",MaterialNodeKind::Dither}}};
     for(const auto& [alias,kind]:searches) {
         const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
         const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
@@ -1660,12 +1662,14 @@ void requestedImageAndChannelControls() {
     require(ui.editor.status().empty(),"Image/channel controls left an editor diagnostic.");
 }
 void imageNodeParameterTransactions() {
-    const std::array<std::pair<MaterialNodeKind,const char*>,7> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
+    const std::array<std::pair<MaterialNodeKind,const char*>,12> cases{{{MaterialNodeKind::Levels,"Midtones"},{MaterialNodeKind::Noise,"Feature size"},
         {MaterialNodeKind::BrightnessContrast,"Brightness"},{MaterialNodeKind::Sharpen,"Amount"},{MaterialNodeKind::HeightToNormal,"Strength"},
-        {MaterialNodeKind::Resize,"Width"},{MaterialNodeKind::Resize,"Height"}}};
+        {MaterialNodeKind::Resize,"Width"},{MaterialNodeKind::Resize,"Height"},
+        {MaterialNodeKind::Pixelization,"Pixel Size"},{MaterialNodeKind::Posterization,"Levels"},
+        {MaterialNodeKind::Dither,"Size"},{MaterialNodeKind::Dither,"Strength"},{MaterialNodeKind::Dither,"Levels"}}};
     for(const auto& [kind,label]:cases) {
         GraphUi ui;MaterialNodeId id{};
-        require(ui.document.edit("Image parameter fixture",[&](auto& asset){asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});id=addMaterialNode(asset.graph,kind,{-100,0}).id;})&&ui.document.save(),"Could not configure image parameter fixture.");ui.frame(24);
+        require(ui.document.edit("Image parameter fixture",[&](auto& asset){asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{450,0});auto& node=addMaterialNode(asset.graph,kind,{-100,0});id=node.id;if(kind==MaterialNodeKind::Dither)node.stylization.strength=.25f;})&&ui.document.save(),"Could not configure image parameter fixture.");ui.frame(24);
         const auto point=[&] {
             for(const auto& control:ui.editor.presentation().controls)if(control.node==id&&control.label==label) {
                 const auto& view=ui.editor.presentation();const float labelWidth=(ImGui::CalcTextSize(label).x+ImGui::GetStyle().ItemInnerSpacing.x)*view.zoom;
@@ -1696,14 +1700,14 @@ void imageNodeParameterTransactions() {
         }
     }
 }
-void mixedImageInputsAndResolvedOutputs() {
+void mixedImageInputsAndResolvedOutputsFor(std::array<MaterialNodeKind,3> kinds) {
     GraphUi ui;MaterialNodeId source{},levels{},invert{},resize{},output{};
     require(ui.document.edit("Mixed input fixture",[&](auto& asset) {
         auto& graph=asset.graph;graph={};
         source=addMaterialNode(graph,MaterialNodeKind::Color,{-700,0}).id;
-        levels=addMaterialNode(graph,MaterialNodeKind::Levels,{-350,0}).id;
-        invert=addMaterialNode(graph,MaterialNodeKind::Invert,{0,0}).id;
-        resize=addMaterialNode(graph,MaterialNodeKind::Resize,{350,0}).id;
+        levels=addMaterialNode(graph,kinds[0],{-350,0}).id;
+        invert=addMaterialNode(graph,kinds[1],{0,0}).id;
+        resize=addMaterialNode(graph,kinds[2],{350,0}).id;
         output=addMaterialNode(graph,MaterialNodeKind::Output,{700,0}).id;
         materialOutputNode(graph).output.tessellation.enabled=true;
         connectMaterialNodes(graph,source,MaterialPin::R,levels,MaterialPin::Left);
@@ -1766,6 +1770,10 @@ void mixedImageInputsAndResolvedOutputs() {
     const auto fallback=findMaterialNode(ui.document.definition().graph,levels)->left.type;
     verify(fallback,fallback==MaterialValueType::Scalar?gray:fallback==MaterialValueType::Color?color:rgba);
     require(ui.document.undo(),"Mixed input disconnection did not undo.");ui.frame(2);verify(MaterialValueType::Color4,rgba);
+}
+void mixedImageInputsAndResolvedOutputs() {
+    mixedImageInputsAndResolvedOutputsFor({MaterialNodeKind::Levels,MaterialNodeKind::Invert,MaterialNodeKind::Resize});
+    mixedImageInputsAndResolvedOutputsFor({MaterialNodeKind::Pixelization,MaterialNodeKind::Dither,MaterialNodeKind::Posterization});
 }
 void typedPinColorsConversionsAndResize() {
     GraphUi ui;MaterialNodeId output{},color{},vector{},levels{},multiply{},resize{},normal{},uv{};

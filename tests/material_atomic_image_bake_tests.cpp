@@ -1,4 +1,5 @@
 #include <crimson/renderer/forward/MaterialGraphImageBake.h>
+#include <crimson/renderer/forward/PostProcess.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -33,6 +34,81 @@ struct Fixture {
     }
     MaterialNode& node(){return *findMaterialNode(graph,root);}
 };
+void stylizationPixels() {
+    Fixture pixels(17,11,MaterialNodeKind::Pixelization,MaterialPin::RGBA);
+    pixels.node().stylization.pixelSize=4;
+    const auto blocked=pixels.bake();
+    check(blocked.width==17&&blocked.height==11,"Pixelization resized the authored source lattice.");
+    const auto center=[](unsigned position,unsigned extent){const unsigned start=position/4*4;return (start+std::min(start+4,extent))*.5f-.5f;};
+    for(unsigned y=0;y<11;++y)for(unsigned x=0;x<17;++x) {
+        const float cx=center(x,17),cy=center(y,11);
+        const unsigned x0=static_cast<unsigned>(std::floor(cx)),y0=static_cast<unsigned>(std::floor(cy));
+        const unsigned x1=std::min(x0+1,16u),y1=std::min(y0+1,10u);const float tx=cx-x0,ty=cy-y0;
+        for(unsigned c=0;c<4;++c) {
+            const auto sample=[&](unsigned sx,unsigned sy){return pixels.image->rgba[(sy*17+sx)*4+c]/255.f;};
+            const float top=sample(x0,y0)+(sample(x1,y0)-sample(x0,y0))*tx;
+            const float bottom=sample(x0,y1)+(sample(x1,y1)-sample(x0,y1))*tx;
+            near(blocked.rgba[(y*17+x)*4+c],top+(bottom-top)*ty,2e-6f,"Pixelization did not uniformly sample the geometric block center or partial edge.");
+        }
+    }
+    pixels.node().stylization.pixelSize=1;const auto neutral=pixels.bake();
+    for(std::size_t i=0;i<neutral.rgba.size();++i)near(neutral.rgba[i],pixels.image->rgba[i]/255.f,1e-6f,"Pixel Size 1 did not retain the exact source image and alpha.");
+
+    Fixture dither(17,11,MaterialNodeKind::Dither,MaterialPin::RGBA);
+    for(const auto pattern:{DitherPattern::Bayer2x2,DitherPattern::Bayer4x4,DitherPattern::Bayer8x8,DitherPattern::InterleavedGradientNoise})for(const int size:{1,3}) {
+        dither.node().stylization.pattern=pattern;dither.node().stylization.size=size;
+        dither.node().stylization.strength=.7f;dither.node().stylization.levels=5;
+        const auto actual=dither.bake();const auto repeated=dither.bake();
+        check(actual.rgba==repeated.rgba,"Dither pattern changed between identical evaluations.");
+        for(unsigned y=0;y<11;++y)for(unsigned x=0;x<17;++x) {
+            const auto i=(y*17+x)*4;Vec3 input{dither.image->rgba[i]/255.f,dither.image->rgba[i+1]/255.f,dither.image->rgba[i+2]/255.f};
+            const auto expected=post_processing::display_levels(input,5,false,post_processing::dither_noise(x,y,pattern,size)*.7f/4);
+            for(unsigned c=0;c<3;++c)near(actual.rgba[i+c],expected[c],2e-6f,"Material Dither differs from the selected post-process pattern, Size or Strength interval.");
+            near(actual.rgba[i+3],dither.image->rgba[i+3]/255.f,1e-6f,"Dither altered independent alpha.");
+        }
+    }
+    dither.node().stylization.strength=0;const auto noDither=dither.bake();
+    for(std::size_t i=0;i<noDither.rgba.size();++i)near(noDither.rgba[i],dither.image->rgba[i]/255.f,1e-6f,"Zero Dither Strength did not retain the source image.");
+    MaterialGraph flat;addMaterialNode(flat,MaterialNodeKind::Output);const auto flatNoise=addMaterialNode(flat,MaterialNodeKind::Dither).id;
+    findMaterialNode(flat,flatNoise)->left={MaterialValueType::Color4,{.2f,.2f,.2f,.37f}};
+    check(materialCachedImageExtent(flat,flatNoise)==std::array<unsigned,2>{1024,1024},"Constant Dither did not report the canonical pattern lattice.");
+    const auto flatPattern=bakeMaterialCachedImage(flat,flatNoise,{});
+    check(flatPattern.width==1024&&flatPattern.height==1024&&flatPattern.rgba[0]!=flatPattern.rgba[4]&&flatPattern.rgba[3]==.37f,
+        "A constant material's Dither collapsed to one texel or changed alpha.");
+    for(unsigned y=0;y<4;++y)for(unsigned x=0;x<4;++x) {
+        const auto expected=post_processing::ordered_dither({.2f,.2f,.2f},x,y,1.f);
+        near(flatPattern.rgba[(y*1024+x)*4],expected[0],2e-6f,"Default material Dither differs from standalone post-process noise amplitude.");
+    }
+    findMaterialNode(flat,flatNoise)->stylization.strength=0;
+    check(materialCachedImageExtent(flat,flatNoise)==std::array<unsigned,2>{1,1},"A neutral constant Dither unnecessarily enlarged the source lattice.");
+    const auto flatNeutral=bakeMaterialCachedImage(flat,flatNoise,{});
+    check(flatNeutral.width==1&&flatNeutral.height==1&&flatNeutral.rgba==std::vector<float>{.2f,.2f,.2f,.37f},
+        "Zero Strength changed a constant material's source extent, values or alpha.");
+    // A constant HDR branch still uses a small, explicit lattice so identity
+    // checks cover unclamped color and transparent RGB without a large bake.
+    MaterialGraph graph;addMaterialNode(graph,MaterialNodeKind::Output);
+    const auto color=addMaterialNode(graph,MaterialNodeKind::Color).id,resize=addMaterialNode(graph,MaterialNodeKind::Resize).id;
+    const auto noise=addMaterialNode(graph,MaterialNodeKind::Dither).id,pixel=addMaterialNode(graph,MaterialNodeKind::Pixelization).id;
+    findMaterialNode(graph,color)->color={-2,4,.2f,0};findMaterialNode(graph,resize)->resize={5,3,MaterialResizeFilter::Nearest};
+    findMaterialNode(graph,noise)->stylization.strength=0;findMaterialNode(graph,pixel)->stylization.pixelSize=4;
+    connectMaterialNodesData(graph,color,MaterialPin::RGBA,resize,MaterialPin::Left);connectMaterialNodesData(graph,resize,MaterialPin::Value,noise,MaterialPin::Left);
+    connectMaterialNodesData(graph,noise,MaterialPin::Value,pixel,MaterialPin::Left);
+    const auto hdr=bakeMaterialCachedImage(graph,pixel,{});
+    for(std::size_t i=0;i<hdr.rgba.size();i+=4)check(hdr.rgba[i]==-2&&hdr.rgba[i+1]==4&&hdr.rgba[i+2]==.2f&&hdr.rgba[i+3]==0,
+        "Neutral Dither or Pixelization clipped HDR values or discarded transparent RGB.");
+
+    // Both an ordinary image branch and a spatial cached boundary use the
+    // same Posterization equation; the alpha channel bypasses quantization.
+    Fixture poster(17,11,MaterialNodeKind::Posterization,MaterialPin::RGBA);poster.node().stylization.levels=4;
+    const auto resolve=[&](const std::string&)->std::shared_ptr<const DecodedImage>{return poster.image;};
+    const auto result=bakeMaterialGraphImagePreview(poster.graph,{poster.root,MaterialPin::Value},resolve,{17,11,0});
+    for(std::size_t i=0;i<result.rgba.size();i+=4) {
+        const Vec3 source{poster.image->rgba[i]/255.f,poster.image->rgba[i+1]/255.f,poster.image->rgba[i+2]/255.f};
+        const auto expected=post_processing::posterize(source,4);
+        for(unsigned c=0;c<3;++c)near(result.rgba[i+c],expected[c],2e-6f,"Image Posterization does not use the perceptual channel levels from Post Process.");
+        near(result.rgba[i+3],poster.image->rgba[i+3]/255.f,1e-6f,"Posterization quantized alpha.");
+    }
+}
 std::vector<float> morphologyReference(std::vector<float> source,unsigned width,unsigned height,float amount) {
     std::vector<float> target(source.size());
     for(unsigned axis=0;axis<2;++axis) {
@@ -413,6 +489,6 @@ void benchmark(const std::filesystem::path& file) {
 }
 }
 int main(int argc,char** argv) {
-    try{morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
+    try{stylizationPixels();morphology();gaussian();fractionalBroadBlurResponse();atomicPropertyPixels();warpAndCompletedTransform();occlusionReferenceParity();occlusion();sourcesTypesAndCancellation();sharedIntermediateAndDynamicRejection();nodeImagePreviews();previewReductionParity();if(argc==3&&std::string(argv[1])=="--benchmark")benchmark(argv[2]);if(argc==3&&std::string(argv[1])=="--benchmark-preview")previewBenchmark(argv[2]);std::cout<<"Atomic static image DAG checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

@@ -14,8 +14,8 @@ inline MaterialNode materialPropertyDefaults(const MaterialNode& node) {
 }
 // Both graph-inline and Inspector editors call these controls through their
 // existing transaction/popup adapters. Each field has one authored owner.
-template<class Parameter,class Option>
-void draw_material_atomic_controls(const MaterialNode& node,Parameter&& parameter,Option&& option,bool mappingConnected=false) {
+template<class Parameter,class Option,class Tooltip>
+void draw_material_atomic_controls(const MaterialNode& node,Parameter&& parameter,Option&& option,bool mappingConnected,Tooltip&& tooltip) {
     auto defaults=materialPropertyDefaults(node);
     // Each procedural family owns its parameter defaults; changing one field
     // must preserve the selected family and its other authored settings.
@@ -23,7 +23,16 @@ void draw_material_atomic_controls(const MaterialNode& node,Parameter&& paramete
     const auto amount=[&](float minimum,float maximum) {
         parameter("Amount","Change image amount",[=](auto& n){return resettableProperty(n.atomic.amount,defaults.atomic.amount,[&]{return ImGui::DragFloat("Amount",&n.atomic.amount,.001f,minimum,maximum,"%.4f",ImGuiSliderFlags_AlwaysClamp);});});
     };
-    if(node.kind==MaterialNodeKind::Blur)amount(0,.128f);
+    if(node.kind==MaterialNodeKind::Pixelization) {
+        parameter("Pixel Size","Change material pixel size",[&](auto& n){const bool changed=resettableProperty(n.stylization.pixelSize,defaults.stylization.pixelSize,[&]{return ImGui::DragInt("Pixel Size",&n.stylization.pixelSize,1,1,128,"%d px",ImGuiSliderFlags_AlwaysClamp);});tooltip("Square blocks measured in source image pixels.");return changed;});
+    } else if(node.kind==MaterialNodeKind::Posterization) {
+        parameter("Levels","Change material posterization levels",[defaults](auto& n){return resettableProperty(n.stylization.levels,defaults.stylization.levels,[&]{return ImGui::DragInt("Levels",&n.stylization.levels,1,2,256,"%d",ImGuiSliderFlags_AlwaysClamp);});});
+    } else if(node.kind==MaterialNodeKind::Dither) {
+        option("Pattern","Change material dither pattern","Bayer 2x2\0Bayer 4x4\0Bayer 8x8\0Interleaved Gradient Noise\0",[](const auto& n){return static_cast<int>(n.stylization.pattern);},[](auto& n,int v){n.stylization.pattern=static_cast<DitherPattern>(v);});
+        parameter("Size","Change material dither size",[&](auto& n){const bool changed=resettableProperty(n.stylization.size,defaults.stylization.size,[&]{return ImGui::DragInt("Size",&n.stylization.size,1,1,16,"%d px",ImGuiSliderFlags_AlwaysClamp);});tooltip("Source image pixels per dither cell.");return changed;});
+        parameter("Strength","Change material dither strength",[defaults](auto& n){return resettableProperty(n.stylization.strength,defaults.stylization.strength,[&]{return ImGui::SliderFloat("Strength",&n.stylization.strength,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});
+        parameter("Levels","Change material dither levels",[&](auto& n){const bool changed=resettableProperty(n.stylization.levels,defaults.stylization.levels,[&]{return ImGui::DragInt("Levels",&n.stylization.levels,1,2,256,"%d",ImGuiSliderFlags_AlwaysClamp);});tooltip("Noise interval is 1 / (Levels - 1). Match a following Posterization node's Levels.");return changed;});
+    } else if(node.kind==MaterialNodeKind::Blur)amount(0,.128f);
     else if(node.kind==MaterialNodeKind::GrowShrink)amount(-.128f,.128f);
     else if(node.kind==MaterialNodeKind::MaskAdjust||node.kind==MaterialNodeKind::HistogramScan) {
         parameter("Coverage","Change mask coverage",[defaults](auto& n){return resettableProperty(n.atomic.coverage,defaults.atomic.coverage,[&]{return ImGui::SliderFloat("Coverage",&n.atomic.coverage,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp);});});

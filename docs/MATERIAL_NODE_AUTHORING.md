@@ -52,7 +52,7 @@ This guide applies when adding or modifying Material Editor nodes. The CPU mater
 - Panner consumes and returns Mapping. Disconnected Coordinate uses UV0, with UV1 available in properties. Speed defaults to zero; disconnected Time uses game seconds. Fractional Part wraps only `time * speed`, before adding the displacement, and never wraps the source coordinates. Connected mappings preserve UV set, triplanar mode and the existing normal reconstruction contract. Time and Speed inputs must be uniform expressions.
 - Time exposes Ignore Pause and an optional nonnegative Period. Period zero stops its output at zero. Scene materials animate in Edit mode; Play time starts at zero and advances with accepted fixed ticks. Material and particle previews use their own transient clocks; thumbnails evaluate at zero. Elapsed time is never serialized or published as a material edit.
 - Runtime-dependent mapping rows are evaluated at submission. Shader topology and authored material signatures remain stable as time advances. Color, shadow and particle passes use one world-frame context; asynchronous picking retains the displayed frame's context. Only time-dependent Mask coverage invalidates cached shadow silhouettes.
-- Graph schema v13 appends optical Output inputs and the Refraction setting after the existing image/channel kinds, preserving their numeric identities. Native material files remain v6; graph readers accept schemas 1–13 and convert older Grunge style settings to layer values in memory. Save writes only the current representation. Preserve node/pin kind values, IDs, links and history. Loading never rewrites a file.
+- Graph schema v13 introduced optical Output inputs and the Refraction setting. Current schema v14 appends Pixelization, Posterization and Dither after the existing image/channel kinds, preserving their numeric identities. Native material files remain v6; graph readers accept schemas 1–14 and convert older Grunge style settings to layer values in memory. Save writes only the current representation. Preserve node/pin kind values, IDs, links and history. Loading never rewrites a file.
 
 ## Common materials and particle attributes
 
@@ -85,7 +85,7 @@ For each new node, cover CPU typing/validation, persistence and undo/redo, unifo
 ## Image and channel node foundation
 
 See [Image and channel nodes](MATERIAL_IMAGE_NODES.md) for the thirteen added nodes,
-explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 13 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations described there, with optional optical Output inputs.
+explicit Color4/RGBA contract, artist controls and spatial sampling. Current graph schema 14 retains [Resize](MATERIAL_RESIZE.md), optical Output inputs and the reusable image operations described there, including the three material stylization nodes.
 Preserve all four independently wired split outputs, transparent RGB, disconnected
 defaults and per-output previews. Image adjustments preserve alpha. Noise Detail
 amount is Clouds-only; never expose it as material roughness.
@@ -93,6 +93,8 @@ amount is Clouds-only; never expose it as material roughness.
 Resize exposes Width, Height and Filter inline and in Properties, using the same transaction and Escape cancellation rules. It preserves Scalar/RGB/RGBA type and materializes supported static UV0 branches into cached linear float images. Reject runtime or surface-dependent inputs rather than silently baking a different result. See [Resize](MATERIAL_RESIZE.md) for the sampling, cache and memory contract.
 
 New image operations reuse the same mixed-input, direct-wire, transaction and per-output preview rules. Keep expensive spatial kernels behind the canonical static-image boundary. Image Transform samples the whole completed image; runtime mapping edits must not alter its content key. Image Input retains override/Base/Constant precedence and prunes disabled work while preserving authored references. Normal Map decodes processed linear RGB with a common source mapping into the strict Normal type. Procedural Texture family selection uses canonical per-family defaults, preserves seed/resolution and displays only active controls.
+
+Pixelization, Posterization and Dither share one adaptable Scalar/RGB/RGBA Input and a Result of the same type. Their controls are shared between inline and Properties UI and use ordinary transactions, resets and Escape cancellation. Pixelization and Dither operate on the completed static source lattice through the existing image cache; Pixel Size and Dither Size are source-pixel units. Posterization is a point expression and remains uniform when its source is uniform. Use the post-process perceptual RGB equations, preserving alpha for Posterization/Dither and returning linear values. Dither Levels is explicit, independent of any neighboring node or Environment, and defaults to 17 for the standalone 1/16 interval. See [material stylization](MATERIAL_IMAGE_NODES.md#material-stylization) for controls and ordering.
 
 Clouds Scale is feature size; other procedural frequency controls are named
 Density or Tiling. Custom sizing is a transient disclosure until dimensions

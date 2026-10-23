@@ -4,6 +4,7 @@
 #include "assets/ContentStorage.h"
 #include "resources/AssetId.h"
 #include <crimson/renderer/forward/MaterialGraphImageBake.h>
+#include <crimson/renderer/forward/PostProcess.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -29,6 +30,66 @@ struct Project {
 };
 MaterialGraph blank(){MaterialGraph graph;addMaterialNode(graph,MaterialNodeKind::Output);return graph;}
 MaterialNodeId node(MaterialGraph& graph,MaterialNodeKind kind){return addMaterialNode(graph,kind).id;}
+void materialStylizationAuthoring() {
+    auto graph=blank();const auto out=materialOutputNode(graph).id;
+    const auto texture=node(graph,MaterialNodeKind::Texture2D),scalar=node(graph,MaterialNodeKind::Scalar);
+    const auto vector=node(graph,MaterialNodeKind::Vector2),uv=node(graph,MaterialNodeKind::UV);
+    const auto normal=node(graph,MaterialNodeKind::DecodeNormal);
+    const auto pixel=node(graph,MaterialNodeKind::Pixelization),poster=node(graph,MaterialNodeKind::Posterization),dither=node(graph,MaterialNodeKind::Dither);
+    require(findMaterialNode(graph,pixel)->stylization.pixelSize==4&&findMaterialNode(graph,poster)->stylization.levels==8&&
+        findMaterialNode(graph,dither)->stylization.levels==17&&findMaterialNode(graph,dither)->stylization.pattern==DitherPattern::Bayer4x4&&
+        findMaterialNode(graph,dither)->stylization.size==1&&findMaterialNode(graph,dither)->stylization.strength==1,
+        "Material stylization defaults differ from their independent post-process controls.");
+    for(const auto id:{pixel,poster,dither}) {
+        for(const auto [pin,type]:std::array{std::pair{MaterialPin::R,MaterialValueType::Scalar},std::pair{MaterialPin::RGB,MaterialValueType::Color},std::pair{MaterialPin::RGBA,MaterialValueType::Color4}}) {
+            connectMaterialNodes(graph,texture,pin,id,MaterialPin::Left);
+            require(materialOutputType(graph,id,MaterialPin::Value)==type,"Stylization changed the connected image family.");
+        }
+        const auto before=serializeMaterialGraph(graph);
+        for(const auto [source,pin]:std::array{std::pair{vector,MaterialPin::XY},std::pair{uv,MaterialPin::UV},std::pair{normal,MaterialPin::Normal}})
+            require(!materialCanConnect(graph,source,pin,id,MaterialPin::Left),"Stylization accepted a Vector2, Mapping or decoded Normal image.");
+        require(serializeMaterialGraph(graph)==before,"A rejected stylization connection changed authored data.");
+        connectMaterialNodes(graph,scalar,MaterialPin::Value,id,MaterialPin::Left);
+    }
+    const auto time=node(graph,MaterialNodeKind::Time);
+    for(const auto id:{pixel,dither})require(!materialCanConnect(graph,time,MaterialPin::Value,id,MaterialPin::Left),
+        "A static stylization image accepted a runtime Time source.");
+    require(materialCanConnect(graph,time,MaterialPin::Value,poster,MaterialPin::Left),"Direct Posterization rejected a supported runtime uniform.");
+    auto* posterNode=findMaterialNode(graph,poster);posterNode->stylization.levels=5;
+    findMaterialNode(graph,scalar)->scalar=.21404114f;
+    require(materialExpressionUniform(graph,poster,MaterialPin::Value),"A constant Posterization was not retained as a uniform expression.");
+    require(near(evaluateMaterialUniform(graph,poster,MaterialPin::Value).value[0],post_processing::posterize({.21404114f,.21404114f,.21404114f},5)[0]),
+        "Uniform Posterization differs from the existing perceptual post-process equation.");
+    const auto color=node(graph,MaterialNodeKind::Color);findMaterialNode(graph,color)->color={-.5f,4.f,.21404114f,.37f};
+    connectMaterialNodes(graph,color,MaterialPin::RGBA,poster,MaterialPin::Left);
+    const auto value=evaluateMaterialUniform(graph,poster,MaterialPin::Value);
+    require(value.type==MaterialValueType::Color4&&value.value[0]==0&&value.value[1]==1&&value.value[3]==.37f,
+        "Posterization clipped alpha, lost RGBA type or failed its bounded display color contract.");
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,pixel,MaterialPin::Left);
+    connectMaterialNodes(graph,pixel,MaterialPin::Value,out,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,dither,MaterialPin::Value,out,MaterialPin::Roughness);
+    auto* pixelNode=findMaterialNode(graph,pixel);pixelNode->stylization.pixelSize=7;
+    auto* ditherNode=findMaterialNode(graph,dither);ditherNode->stylization={4,11,DitherPattern::Bayer8x8,3,.6f};
+    const auto text=serializeMaterialGraph(graph);
+    require(nlohmann::json::parse(text)["version"]==14&&serializeMaterialGraph(parseMaterialGraph(text))==text,
+        "Stylization settings, image types or identities failed schema14 persistence.");
+    auto prior=nlohmann::json::parse(text);prior["version"]=13;
+    rejects([&]{parseMaterialGraph(prior.dump());},"A schema13 file accepted schema14 material kinds.");
+    for(const auto id:{pixel,poster,dither}) {
+        const auto invalid=[&](auto change,const char* message){auto bad=graph;change(*findMaterialNode(bad,id));rejects([&]{validateMaterialGraph(bad);},message);};
+        if(id==pixel)for(const int size:{0,129})invalid([&](auto& n){n.stylization.pixelSize=size;},"Pixelization accepted an out-of-range block size.");
+        if(id==poster||id==dither)for(const int levels:{1,257})invalid([&](auto& n){n.stylization.levels=levels;},"Stylization accepted an out-of-range level count.");
+        if(id==dither) {
+            for(const int size:{0,17})invalid([&](auto& n){n.stylization.size=size;},"Dither accepted an out-of-range cell size.");
+            for(const float strength:{-.1f,1.1f,std::numeric_limits<float>::infinity()})invalid([&](auto& n){n.stylization.strength=strength;},"Dither accepted invalid Strength.");
+            invalid([](auto& n){n.stylization.pattern=static_cast<DitherPattern>(4);},"Dither accepted an unknown pattern.");
+        }
+    }
+    for(const auto [id,field]:std::array{std::pair{pixel,"pixelSize"},std::pair{poster,"levels"},std::pair{dither,"size"},std::pair{dither,"pattern"}}) {
+        auto malformed=nlohmann::json::parse(text);for(auto& n:malformed["nodes"])if(n["id"]==id)n["stylization"][field]=1.5;
+        rejects([&]{parseMaterialGraph(malformed.dump());},"A fractional stylization integer was accepted on load.");
+    }
+}
 MaterialValue evaluate(const MaterialGraph& graph,MaterialNodeId id,MaterialPin pin) {
     const auto& n=*findMaterialNode(graph,id);MaterialValue result;result.type=materialOutputType(graph,id,pin);
     if(n.kind==MaterialNodeKind::Scalar){result.value={n.scalar,n.scalar,n.scalar,n.scalar};return result;}
@@ -166,8 +227,8 @@ void refractionAuthoringAndPersistence() {
     require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Alpha)==topology&&
         materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Alpha)!=values,"Optical value edit compiled topology or retained stale values.");
     const auto active=serializeMaterialGraph(graph);auto reopened=parseMaterialGraph(active);
-    require(nlohmann::json::parse(active)["version"]==13&&serializeMaterialGraph(reopened)==active&&
-        materialInputLink(reopened,output,MaterialPin::Ior)->id==opticalLink,"Optical defaults and pin identities failed schema13 round trip.");
+    require(nlohmann::json::parse(active)["version"]==14&&serializeMaterialGraph(reopened)==active&&
+        materialInputLink(reopened,output,MaterialPin::Ior)->id==opticalLink,"Optical defaults and pin identities failed schema14 round trip.");
     materialOutputNode(graph).output.refraction=false;
     order=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Alpha);demand=materialRuntimeTextureMappings(graph);
     require(std::find(order.begin(),order.end(),ior)==order.end()&&std::find(order.begin(),order.end(),specular)!=order.end()&&
@@ -626,7 +687,7 @@ void arithmeticAndAnimatedMappings() {
     mapping=materialTextureMapping(graph,texture,{7,1.25});
     require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
     const auto serialized=serializeMaterialGraph(graph);
-    require(nlohmann::json::parse(serialized).at("version")==13&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema13 nodes failed round-trip.");
+    require(nlohmann::json::parse(serialized).at("version")==14&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Current schema14 nodes failed round-trip.");
     (void)materialTextureMapping(graph,texture,{1,17});
     require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
     auto old=nlohmann::json::parse(before);old["version"]=3;
@@ -727,7 +788,7 @@ void imageAdjustmentsAndGrunge() {
             "Prior Grunge style conversion lost authored values or layer defaults.");
         require(loadedPrior.links==graph.links&&loadedPrior.nextNodeId==graph.nextNodeId&&loadedPrior.nextLinkId==graph.nextLinkId,
             "Grunge style conversion changed links or persistent identities.");
-        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==13,"Legacy Grunge did not write the current schema.");
+        auto upgraded=nlohmann::json::parse(serializeMaterialGraph(loadedPrior));require(upgraded["version"]==14,"Legacy Grunge did not write the current schema.");
         for(const auto& n:upgraded["nodes"])if(n["id"]==grunge)require(!n["grunge"].contains("style"),"Legacy Grunge style survived its one-time conversion.");
         for(auto& n:prior["nodes"])if(n["id"]==grunge)n["grunge"]["style"]=4;
         rejects([&]{parseMaterialGraph(prior.dump());},"Invalid legacy Grunge style was accepted.");
@@ -809,7 +870,7 @@ void imageNodeFoundation() {
     const auto noise=node(graph,MaterialNodeKind::Noise),h2n=node(graph,MaterialNodeKind::HeightToNormal);connectMaterialNodes(graph,noise,MaterialPin::Value,h2n,MaterialPin::Left);require(!materialExpressionUniform(graph,noise,MaterialPin::Value)&&!materialExpressionUniform(graph,h2n,MaterialPin::Normal),"Spatial procedural nodes were classified as uniform.");
     auto a=findMaterialNode(graph,noise)->image;const auto n0=sampleMaterialNoise({.17f,-.23f,.61f},a);require(n0==sampleMaterialNoise({.17f,-.23f,.61f},a),"Noise is not deterministic.");a.seed=314;require(std::abs(n0-sampleMaterialNoise({.17f,-.23f,.61f},a))>.0001f,"Noise seed did not change the field.");require(near(sampleMaterialNoise({.17f,-.23f,.61f},a,100),.5f),"Unresolved Clouds did not converge to its mean.");a.noisePattern=MaterialNoisePattern::Spots;const auto spot=sampleMaterialNoise({.17f,-.23f,.61f},a,100);require(spot>0&&spot<.1f,"Unresolved Spots did not converge to its measured mean.");
     connectMaterialNodes(graph,sharpen,MaterialPin::Value,out,MaterialPin::BaseColor);
-    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":13")!=std::string::npos,"New nodes did not write graph schema 13.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
+    const auto json=serializeMaterialGraph(graph);require(json.find("\"version\":14")!=std::string::npos,"New nodes did not write graph schema 14.");require(serializeMaterialGraph(parseMaterialGraph(json))==json,"Image node settings, outputs or IDs failed round trip.");
     auto bad=graph;findMaterialNode(bad,levels)->image.inputWhite=0;rejects([&]{validateMaterialGraph(bad);},"Levels accepted an empty input interval.");
     const auto vector=node(graph,MaterialNodeKind::Vector2);rejects([&]{connectMaterialNodes(graph,vector,MaterialPin::XY,invert,MaterialPin::Left);},"Vector2 connected to an image node.");
     auto& settings=findMaterialNode(graph,blend)->image;const auto topology=materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque),values=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);settings.contrast=.2f;require(materialGraphTopologyHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==topology,"A numeric image setting changed topology identity.");require(materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque)==values,"An inactive image branch affected active material values.");
@@ -1027,7 +1088,7 @@ void cloudScaleSchemaMigration() {
             near(findMaterialNode(migrated,cloud2)->procedural.settings.scale,.25f),"Schema11 cloud frequencies were not converted to reciprocal feature size.");
     require(findMaterialNode(migrated,other)->procedural.settings.scale==2.75f,"Cloud Scale conversion changed a different procedural family.");
     const auto current=serializeMaterialGraph(migrated);const auto reopened=parseMaterialGraph(current);
-    require(nlohmann::json::parse(current)["version"]==13&&serializeMaterialGraph(reopened)==current&&
+    require(nlohmann::json::parse(current)["version"]==14&&serializeMaterialGraph(reopened)==current&&
             findMaterialNode(reopened,cloud1)->procedural.settings.scale==findMaterialNode(migrated,cloud1)->procedural.settings.scale,
             "Current schema cloud Scale was converted twice or did not round trip.");
     require(prior.dump()==originalBytes,"Loading cloud Scale migration mutated the supplied serialized source.");
@@ -1054,7 +1115,7 @@ void resizeImageBaking() {
         "Context-dependent Resize connection changed the graph or lacked a diagnostic.");
     const auto time=node(graph,MaterialNodeKind::Time);
     require(!materialCanConnect(graph,time,MaterialPin::Value,levels,MaterialPin::Left,&diagnostic),"Resize accepted Time input.");
-    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==13,"Resize did not write graph schema 13.");
+    auto serialized=nlohmann::json::parse(before);require(serialized["version"]==14,"Resize did not write graph schema 14.");
     require(serializeMaterialGraph(parseMaterialGraph(before))==before,"Resize settings or typed input failed round trip.");
     auto malformed=serialized;for(auto& n:malformed["nodes"])if(n["id"]==resize)n["resize"]["width"]=1.5;
     rejects([&]{parseMaterialGraph(malformed.dump());},"Resize accepted a fractional width.");
@@ -1227,7 +1288,7 @@ void atomicPointNodesAndSources() {
     findMaterialNode(graph,input)->atomic.enabled=true;order=materialGraphOrder(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
     require(std::find(order.begin(),order.end(),source)==order.end()&&!materialExpressionUniform(graph,input,MaterialPin::RGBA),"Assigned Image Input did not override/prune Base.");
     for(const auto kind:{MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::DirectionalWarp,MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion})node(graph,kind);
-    const auto text=serializeMaterialGraph(graph);require(text.find("\"version\":13")!=std::string::npos&&serializeMaterialGraph(parseMaterialGraph(text))==text,"Atomic kinds/settings changed during schema13 round trip.");
+    const auto text=serializeMaterialGraph(graph);require(text.find("\"version\":14")!=std::string::npos&&serializeMaterialGraph(parseMaterialGraph(text))==text,"Atomic kinds/settings changed during schema14 round trip.");
     auto prior=nlohmann::json::parse(text);prior["version"]=10;rejects([&]{parseMaterialGraph(prior.dump());},"Prior schema accepted atomic node payloads.");
 }
 
@@ -1304,5 +1365,5 @@ void runtimeTextureDemandMappings() {
 }
 
 }
-int main(int argc,char** argv){try{refractionAuthoringAndPersistence();originalNodePropertySemantics();cloudScaleSchemaMigration();runtimeTextureDemandMappings();atomicPointNodesAndSources();resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+int main(int argc,char** argv){try{materialStylizationAuthoring();refractionAuthoringAndPersistence();originalNodePropertySemantics();cloudScaleSchemaMigration();runtimeTextureDemandMappings();atomicPointNodesAndSources();resizeImageBaking();resizeMappingsAndSpatialBranches();imageNodeFoundation();typesChainsAndTransactions();signaturesAndDormantReferences();heightTessellationPersistence();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();imageAdjustmentsAndGrunge();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

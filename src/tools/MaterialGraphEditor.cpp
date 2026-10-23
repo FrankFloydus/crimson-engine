@@ -134,6 +134,9 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::DirectionSelect:aliases="direction select encoded normal axis hemisphere node";break;
     case MaterialNodeKind::ImageInput:aliases="image input override base fallback constant enabled source node";break;
     case MaterialNodeKind::DecodeNormal:aliases="normal map decode encoded tangent rgb strength y conversion node";break;
+    case MaterialNodeKind::Pixelization:aliases="pixelization pixelisation pixelize pixelise pixelate pixelation mosaic blocks image filter node";break;
+    case MaterialNodeKind::Posterization:aliases="posterization posterisation posterize posterise quantize quantise levels color colour image filter node";break;
+    case MaterialNodeKind::Dither:aliases="dither dithering bayer ordered interleaved gradient noise pattern image filter node";break;
     default:break;
     }
     std::string search(query);std::transform(search.begin(),search.end(),search.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -166,7 +169,8 @@ ImVec4 nodeColor(MaterialNodeKind kind) {
     case MaterialNodeKind::Noise:case MaterialNodeKind::BrightnessContrast:case MaterialNodeKind::Sharpen:case MaterialNodeKind::HeightToNormal:
     case MaterialNodeKind::Blur:case MaterialNodeKind::GrowShrink:case MaterialNodeKind::MaskAdjust:case MaterialNodeKind::HistogramScan:
     case MaterialNodeKind::DirectionalWarp:case MaterialNodeKind::HeightOcclusion:case MaterialNodeKind::NormalOcclusion:
-    case MaterialNodeKind::DirectionSelect:case MaterialNodeKind::DecodeNormal:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::DirectionSelect:case MaterialNodeKind::DecodeNormal:
+    case MaterialNodeKind::Pixelization:case MaterialNodeKind::Posterization:case MaterialNodeKind::Dither:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::RGBAMerge:case MaterialNodeKind::RGBASplit:case MaterialNodeKind::AlphaSplit:case MaterialNodeKind::AlphaMerge:
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
     case MaterialNodeKind::Texture2D:case MaterialNodeKind::Resize:case MaterialNodeKind::ImageInput:case MaterialNodeKind::ProceduralTexture:return {.23f,.48f,.65f,1};
@@ -633,7 +637,13 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
                     if(changed)set(n,selected);return changed;
                 });
             };
-            draw_material_atomic_controls(node,parameter,option,materialInputLink(graph,node.id,MaterialPin::UV)!=nullptr);
+            const auto tooltip=[](const char* text) {
+                if(!ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))return;
+                const auto itemData=ImGui::GetCurrentContext()->LastItemData;
+                ed::Suspend();ImGui::SetTooltip("%s",text);ed::Resume();
+                ImGui::GetCurrentContext()->LastItemData=itemData;
+            };
+            draw_material_atomic_controls(node,parameter,option,materialInputLink(graph,node.id,MaterialPin::UV)!=nullptr,tooltip);
             if(node.kind==MaterialNodeKind::Resize) {
                 parameter("Width","Change resize width",[defaults](auto& n){int value=static_cast<int>(n.resize.width);const bool changed=resettableProperty(value,static_cast<int>(defaults.resize.width),[&]{return ImGui::DragInt("Width",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.resize.width=static_cast<unsigned>(value);return changed;});
                 parameter("Height","Change resize height",[defaults](auto& n){int value=static_cast<int>(n.resize.height);const bool changed=resettableProperty(value,static_cast<int>(defaults.resize.height),[&]{return ImGui::DragInt("Height",&value,1,1,4096,"%d",ImGuiSliderFlags_AlwaysClamp);});if(changed)n.resize.height=static_cast<unsigned>(value);return changed;});

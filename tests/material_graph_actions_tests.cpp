@@ -529,6 +529,61 @@ void requestedImageAndChannelActions() {
         std::none_of(outgoing.begin(),outgoing.end(),[](const auto& choice){return choice.kind==MaterialNodeKind::UV||choice.kind==MaterialNodeKind::Vector2;}),"RGBA pin-drag suggestions lost channel nodes or offered mapping expressions.");
 }
 
+void materialStylizationAuthoring() {
+    constexpr std::array kinds{MaterialNodeKind::Pixelization,MaterialNodeKind::Dither,MaterialNodeKind::Posterization};
+    Project project;MaterialDocument document(project.root);require(document.create("Material stylization"),"Could not create stylization document.");
+    std::vector<MaterialNodeId> selected;
+    require(document.edit("Author material stylization",[&](auto& asset) {
+        auto& graph=asset.graph;
+        for(const auto kind:kinds)require(std::count(materialGraphNodeKinds().begin(),materialGraphNodeKinds().end(),kind)==1,"Stylization node missing from the add catalog.");
+        selected.push_back(addMaterialNode(graph,MaterialNodeKind::Color).id);
+        findMaterialNode(graph,selected.front())->color={.2f,.4f,.6f,.25f};
+        for(const auto kind:kinds) {
+            auto& node=addMaterialNode(graph,kind);selected.push_back(node.id);
+            node.left={MaterialValueType::Color4,{.1f,.3f,.5f,.7f}};
+            require(materialGraphInputMixedImage(node,MaterialPin::Left),"Stylization input lost its grayscale/color capability.");
+        }
+        findMaterialNode(graph,selected[1])->stylization.pixelSize=9;
+        auto& dither=findMaterialNode(graph,selected[2])->stylization;
+        dither.pattern=DitherPattern::InterleavedGradientNoise;dither.size=3;dither.strength=.65f;dither.levels=12;
+        findMaterialNode(graph,selected[3])->stylization.levels=12;
+        connectMaterialGraphAuthoring(graph,selected[0],MaterialPin::RGBA,selected[1],MaterialPin::Left);
+        connectMaterialGraphAuthoring(graph,selected[1],MaterialPin::Value,selected[2],MaterialPin::Left);
+        connectMaterialGraphAuthoring(graph,selected[2],MaterialPin::Value,selected[3],MaterialPin::Left);
+        for(std::size_t index=1;index<selected.size();++index)
+            require(materialOutputType(graph,selected[index],MaterialPin::Value)==MaterialValueType::Color4,"Stylization chain discarded RGBA type.");
+    }),"Could not author material stylization.");
+    const auto authored=serializeMaterialAsset(document.definition());
+    require(document.undo()&&document.redo()&&serializeMaterialAsset(document.definition())==authored,"Stylization authoring did not undo and redo exactly.");
+    require(document.save(),"Could not save material stylization.");
+    const auto copied=copyMaterialGraphSelection(document.definition().graph,selected);std::vector<MaterialNodeId> pasted;
+    require(document.edit("Paste stylization",[&](auto& asset){pasted=pasteMaterialGraphSelection(asset.graph,copied,{500,200});}),"Could not paste material stylization.");
+    require(pasted.size()==selected.size(),"Stylization clipboard omitted nodes.");
+    const auto& pastedGraph=document.definition().graph;
+    const auto& pixel=findMaterialNode(pastedGraph,pasted[1])->stylization;
+    const auto& dither=findMaterialNode(pastedGraph,pasted[2])->stylization;
+    const auto& poster=findMaterialNode(pastedGraph,pasted[3])->stylization;
+    require(pixel.pixelSize==9&&dither.pattern==DitherPattern::InterleavedGradientNoise&&dither.size==3&&dither.strength==.65f&&dither.levels==12&&poster.levels==12,
+        "Stylization clipboard lost effect controls.");
+    require(materialInputLink(pastedGraph,pasted[2],MaterialPin::Left)->fromNode==pasted[1]&&
+        materialInputLink(pastedGraph,pasted[3],MaterialPin::Left)->fromNode==pasted[2],"Stylization clipboard lost chain wiring.");
+    require(document.undo()&&serializeMaterialAsset(document.definition())==authored,"Stylization paste did not undo as one command.");
+    MaterialDocument reopened(project.root);
+    require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==authored,"Stylization settings changed during save/reopen.");
+    auto graph=document.definition().graph;
+    const auto destination=materialOutputNode(graph).id;
+    const auto outgoing=materialGraphNodeChoices(graph,{selected.front(),MaterialPin::RGBA,false});
+    const auto incoming=materialGraphNodeChoices(graph,{destination,MaterialPin::BaseColor,true});
+    for(const auto kind:kinds) {
+        require(std::any_of(outgoing.begin(),outgoing.end(),[&](const auto& choice){return choice.kind==kind&&choice.pin==MaterialPin::Left;}),"RGBA wire search omitted a stylization target.");
+        const auto choice=std::find_if(incoming.begin(),incoming.end(),[&](const auto& value){return value.kind==kind&&value.pin==MaterialPin::Value;});
+        require(choice!=incoming.end(),"Color input search omitted a stylization source.");
+        auto candidate=graph;const auto created=addConnectedMaterialGraphNode(candidate,{destination,MaterialPin::BaseColor,true},*choice,{200,200});
+        require(materialOutputType(candidate,created,MaterialPin::Value)==MaterialValueType::Color&&
+            materialInputLink(candidate,destination,MaterialPin::BaseColor)->fromNode==created,"Connected stylization creation did not retain the Color input family.");
+    }
+}
+
 void atomicAuthoringAndReferences() {
     constexpr std::array kinds{MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::MaskAdjust,MaterialNodeKind::HistogramScan,
         MaterialNodeKind::DirectionalWarp,MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,
@@ -625,6 +680,6 @@ void cachedRuntimeUvRequirements() {
 
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();atomicAuthoringAndReferences();cachedRuntimeUvRequirements();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();directChannelAuthoringAndResize();directDesaturationHeightRoute();mixedImageInputCapabilities();animatedNodeHistory();adjustmentAndGrungeActions();requestedImageAndChannelActions();materialStylizationAuthoring();atomicAuthoringAndReferences();cachedRuntimeUvRequirements();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

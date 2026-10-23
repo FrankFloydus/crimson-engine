@@ -17,10 +17,12 @@ constexpr std::array addableNodeKinds{MaterialNodeKind::UV,MaterialNodeKind::Tex
     MaterialNodeKind::BrightnessContrast,MaterialNodeKind::Sharpen,MaterialNodeKind::HeightToNormal,MaterialNodeKind::RGBAMerge,MaterialNodeKind::RGBASplit,MaterialNodeKind::AlphaSplit,MaterialNodeKind::AlphaMerge,MaterialNodeKind::Resize,
     MaterialNodeKind::Blur,MaterialNodeKind::GrowShrink,MaterialNodeKind::MaskAdjust,MaterialNodeKind::HistogramScan,MaterialNodeKind::DirectionalWarp,
     MaterialNodeKind::ImageTransform,MaterialNodeKind::ProceduralTexture,MaterialNodeKind::HeightOcclusion,MaterialNodeKind::NormalOcclusion,
-    MaterialNodeKind::DirectionSelect,MaterialNodeKind::ImageInput,MaterialNodeKind::DecodeNormal};
+    MaterialNodeKind::DirectionSelect,MaterialNodeKind::ImageInput,MaterialNodeKind::DecodeNormal,
+    MaterialNodeKind::Pixelization,MaterialNodeKind::Posterization,MaterialNodeKind::Dither};
 bool polymorphicImage(MaterialNodeKind kind) {
     return kind==MaterialNodeKind::Levels||kind==MaterialNodeKind::Invert||kind==MaterialNodeKind::Blend||kind==MaterialNodeKind::BrightnessContrast||kind==MaterialNodeKind::Sharpen||kind==MaterialNodeKind::Resize||
-        kind==MaterialNodeKind::Blur||kind==MaterialNodeKind::HistogramScan||kind==MaterialNodeKind::DirectionalWarp||kind==MaterialNodeKind::ImageTransform;
+        kind==MaterialNodeKind::Blur||kind==MaterialNodeKind::HistogramScan||kind==MaterialNodeKind::DirectionalWarp||kind==MaterialNodeKind::ImageTransform||
+        kind==MaterialNodeKind::Pixelization||kind==MaterialNodeKind::Posterization||kind==MaterialNodeKind::Dither;
 }
 [[noreturn]] void invalid(const char* message){throw std::runtime_error(std::string("Material graph action: ")+message);}
 

@@ -6,7 +6,7 @@ Alpha Split and Alpha Merge. They are ordinary editable nodes, available from
 the graph add/search menu and compatible typed-pin creation. Existing links,
 node/pin IDs, document history and the default ImGui style are retained.
 
-Current graph schema 12 retains [Resize](MATERIAL_RESIZE.md) and adds the reusable image operations below. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
+Current graph schema 14 retains [Resize](MATERIAL_RESIZE.md) and the reusable image operations below, and appends Pixelization, Posterization and Dither without renumbering existing nodes. Readers accept schemas 1–14 within native material v6. Empty adaptable image inputs show grayscale/color capability; connected inputs, outputs and wires show their resolved types. Compatible endpoints connect directly, including RGB/RGBA-to-fixed-Scalar links, without automatic conversion nodes. Scalar receivers retain the existing first-channel rule and its R badge.
 
 ## Artist workflow
 
@@ -75,6 +75,21 @@ Do not interpret a packed roughness or metallic map as sRGB color.
 | Direction Select | Normalized encoded RGB direction to scalar selection | Signed Axis, Both directions |
 | Image Input | Optional managed image override, Base image and constant fallback | Enabled, Image, Color/Linear Data, Constant |
 | Normal Map | Processed encoded linear RGB to typed surface Normal | Strength, Flip Y |
+| Pixelization | Completed static image to square source-pixel blocks; same Scalar/RGB/RGBA family | Pixel Size (1–128, default 4) |
+| Posterization | Perceptual color quantization; same Scalar/RGB/RGBA family, alpha preserved | Levels (2–256, default 8) |
+| Dither | Stable threshold pattern on the source image lattice; same family, alpha preserved | Pattern, Size (1–16), Strength (0–1), Levels (2–256, default 17) |
+
+## Material stylization
+
+Pixelization, Posterization and Dither process the branch connected to their Input. Connect their Result to Base Color, Emission or another material channel. Their settings belong to that material and are independent of the Environment's post-processing controls. Material effects run before lighting and tone mapping; the Environment effects process the final view, so enabling both combines their results.
+
+Pixelization evaluates the completed source image and repeats the sample at the center of each square block. Pixel Size counts source-image pixels, not viewport pixels; size 1 preserves the image. Partial blocks at the right and bottom edges use their actual centers. The baked image retains its source dimensions and uses nearest sampling to preserve block boundaries when Pixel Size exceeds 1. Size 1 uses the ordinary linear cached-image sampler. Pixelization resamples all channels, including alpha.
+
+Posterization clamps input RGB to 0–1, converts it to perceptual sRGB levels, rounds each channel to the nearest of the authored Levels, and converts the result back to linear material values. It preserves RGBA alpha. This uses the same level equation as post-processing, without introducing another display encoding. Uniform inputs remain uniform; textured or animated inputs follow the ordinary shader expression path.
+
+Dither offers Bayer 2×2, Bayer 4×4, Bayer 8×8 and Interleaved Gradient Noise, matching the post-process patterns. Size counts source pixels per threshold cell. Strength scales centered noise by `1 / (Levels - 1)` in perceptual RGB, then returns linear values; Dither does not quantize by itself. The default 17 levels gives the standalone post-process interval of 1/16. For `Dither → Posterization`, set both Levels to the same value. Zero Strength preserves every input value, including HDR and alpha. The pattern remains stable between frames. With positive Strength, a uniform or 1×1 source uses a 1024×1024 dither lattice so a solid-color material still has a visible pattern; larger source images retain their own dimensions.
+
+Pixelization and Dither use the existing cached static UV0 image pipeline and its source-resolution evaluation, float precision, cancellation and last-good publication rules. Runtime Time, moving source mappings, Particle Color, UV1/triplanar sources and decoded surface normals cannot be placed upstream of these image boundaries. Use Image Transform after processing to apply the completed image with a runtime mapping. Posterization has no static-image restriction.
 
 ## Cached image operations
 

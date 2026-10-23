@@ -485,7 +485,8 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 const auto option=[&](const char* label,const char* transaction,const char* values,const auto& get,const auto& set,int defaultSelection=-1) {
                     control(transaction,[&](auto& n){int selected=get(n);const bool changed=resettableProperty(selected,defaultSelection<0?get(defaults):defaultSelection,[&]{return ImGui::Combo(label,&selected,values);});if(changed)set(n,selected);return changed;});
                 };
-                draw_material_atomic_controls(node,parameter,option,materialInputLink(document_.definition().graph,selected,MaterialPin::UV)!=nullptr);
+                draw_material_atomic_controls(node,parameter,option,materialInputLink(document_.definition().graph,selected,MaterialPin::UV)!=nullptr,
+                    [](const char* text){ImGui::SetItemTooltip("%s",text);});
             }
             if(node.kind==MaterialNodeKind::Resize) {
                 ImGui::SeparatorText("Resize");
