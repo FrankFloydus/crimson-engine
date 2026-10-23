@@ -16,7 +16,6 @@
 #include "app/FrameProfile.h"
 #include "gameplay/Attributes.h"
 #include "profiling/EngineProfile.h"
-#include "tools/ProfilingMenu.h"
 #include <crimson/renderer/core/Profiler.hpp>
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -221,11 +220,10 @@ int run(const AppOptions& options) {
             ImGui::NewFrame();
             if (editor) {
                 editor->setProfilingActive(profile.observing(editor->playing()));
-                editor->frame(assets,renderer,navigation,window.get(),bgfxFrame,pendingQuit);
+                editor->frame(assets,renderer,navigation,window.get(),bgfxFrame,pendingQuit,&profile.captures());
                 pendingQuit=false;
                 running=!editor->exitAccepted();
             } else { renderer.advanceStreaming();diagnostic->frame(assets,renderer,navigation,window.get()); }
-            if(editor)drawProfilingMenu(profile.captures(),editor->playing());
             }
             {
             CRIMSON_PROFILE_ZONE("UI rendering and platform windows");

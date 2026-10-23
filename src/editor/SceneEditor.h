@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 namespace crimson {
+namespace profiling { class CaptureController; }
 class QuaderBridge;
 class ParticleEditor;
 class MaterialEditor;
@@ -26,7 +27,7 @@ class SceneEditor {
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
                      bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&,NavigationAgentProfileEditor&,CollisionLayersEditor&,GameplayEffectEditor&,AnimationEditor&,
-                     const GameplayInspectorContext& gameplay={});
+                     const GameplayInspectorContext& gameplay={}, profiling::CaptureController* captures=nullptr);
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }

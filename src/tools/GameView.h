@@ -12,6 +12,7 @@
 struct ImDrawList;
 struct ImFont;
 namespace crimson {
+namespace profiling { struct CaptureStatus; }
 class SceneDocument;
 class Scene;
 namespace shared { class Renderer; } using Renderer=shared::Renderer;
@@ -58,6 +59,7 @@ public:
     GameViewFrame draw(SceneDocument&,Renderer&,bool& open,bool playing,bool focus=false,std::uint64_t textureAndProgramBytes=0,
                        bool attributeDebug=false);
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
+    void drawCaptureStatus(const profiling::CaptureStatus&) const;
     void drawRoute(const Camera&,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
     void drawAttributeDebug(const Camera&,const Scene&,EntityId target,std::span<const AttributeDebugRow> rows,

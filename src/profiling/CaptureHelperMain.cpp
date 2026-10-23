@@ -30,7 +30,7 @@ int wmain(int argc,wchar_t** argv) {
         log.open(std::filesystem::path(argv[3]),std::ios::binary|std::ios::trunc);
         if(!log)throw std::runtime_error("Cannot open capture broker log.");
         const auto duration=std::stoul(argv[4]),port=std::stoul(argv[5]);
-        if(duration<1||duration>3600||port<1||port>65535)throw std::runtime_error("Capture broker duration or port is invalid.");
+        if(duration>3600||port<1||port>65535)throw std::runtime_error("Capture broker duration or port is invalid.");
         const auto stop=parseHandle(argv[6]),ready=parseHandle(argv[7]),abort=parseHandle(argv[8]);
         DWORD ignored{};
         if(!GetHandleInformation(stop,&ignored)||!GetHandleInformation(ready,&ignored)||!GetHandleInformation(abort,&ignored))
@@ -44,7 +44,11 @@ int wmain(int argc,wchar_t** argv) {
         Handle consoleOutput(CreateFileW(L"CONOUT$",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,&security,OPEN_EXISTING,0,nullptr));
         if(!consoleInput.valid()||!consoleOutput.valid())throw windowsError("Cannot inherit private collector console");
         const std::array inherited{consoleInput.value,consoleOutput.value};
-        child=launch(executable,{L"-a",L"127.0.0.1",L"-p",argv[5],L"-o",output.wstring(),L"-s",argv[4]},inherited,0,consoleInput.value,consoleOutput.value);
+        std::vector<std::wstring> arguments{L"-a",L"127.0.0.1",L"-p",argv[5],L"-o",output.wstring()};
+        // Without -s the official collector records until our explicit stop
+        // event. Never pass -s 0: zero denotes manual mode in Crimson only.
+        if(duration){arguments.emplace_back(L"-s");arguments.emplace_back(argv[4]);}
+        child=launch(executable,arguments,inherited,0,consoleInput.value,consoleOutput.value);
         // Change only this process after the child inherits normal Ctrl-C
         // behavior. The official CLI installs its SIGINT handler on connection.
         if(!SetConsoleCtrlHandler(nullptr,TRUE))throw windowsError("Cannot protect private capture broker from Ctrl-C");

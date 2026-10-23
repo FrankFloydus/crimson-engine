@@ -1,6 +1,7 @@
 #include "GameView.h"
 #include "GameViewInteraction.h"
 #include "RenderDebugControls.h"
+#include "ProfilingStatus.h"
 #include "editor/CollisionWire.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
@@ -88,6 +89,23 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
     }
     ImGui::End();frame.closed=!open;
     return frame;
+}
+void GameView::drawCaptureStatus(const profiling::CaptureStatus& status) const {
+    if(!imageDrawList_ || !imageFont_ || !imageWidth_ || !imageHeight_)return;
+    const auto text=profilingStatusLabel(status);
+    if(text.empty())return;
+    const auto& style=ImGui::GetStyle();const auto padding=style.WindowPadding;
+    const auto extent=imageFont_->CalcTextSizeA(imageFontSize_,std::numeric_limits<float>::max(),0,text.c_str());
+    const ImVec2 origin{imageRegion_.x,imageRegion_.y},end{origin.x+imageRegion_.width,origin.y+imageRegion_.height};
+    const ImVec2 minimum{origin.x+padding.x,std::max(origin.y+padding.y,end.y-extent.y-padding.y*3)};
+    const ImVec2 maximum{minimum.x+extent.x+padding.x*2,minimum.y+extent.y+padding.y*2};
+    const auto color=status.state==profiling::CaptureState::Capturing || status.state==profiling::CaptureState::Failed?
+        IM_COL32(255,90,90,255):status.state==profiling::CaptureState::Saved?IM_COL32(100,220,130,255):ImGui::GetColorU32(ImGuiCol_Text);
+    imageDrawList_->PushClipRect(origin,end,true);
+    imageDrawList_->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGuiCol_WindowBg),style.WindowRounding);
+    if(style.WindowBorderSize>0)imageDrawList_->AddRect(minimum,maximum,ImGui::GetColorU32(ImGuiCol_Border),style.WindowRounding,0,style.WindowBorderSize);
+    imageDrawList_->AddText(imageFont_,imageFontSize_,{minimum.x+padding.x,minimum.y+padding.y},color,text.c_str());
+    imageDrawList_->PopClipRect();
 }
 void GameView::drawAttributeDebug(const Camera& camera,const Scene& scene,EntityId target,std::span<const AttributeDebugRow> rows,
                                 const NavigationAgentProfileQuery& profiles,const ModelBoundsQuery& modelBounds) {

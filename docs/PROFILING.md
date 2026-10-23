@@ -25,9 +25,19 @@ The canonical vcpkg overlays supply one static `Tracy::TracyClient` 0.14.1 share
 
 An explicit startup recording waits at most five seconds for the official collector and this engine's client to connect before SDL, renderer and asset initialization. It covers initialization, model/material preparation and the first coherent rendered frames. Readiness combines production render-preparation results with resource queue/running counts. Eight further distinct submissions let delayed GPU timestamps arrive. Recording ends after that tail or the duration cap; the editor continues running. A successfully saved trace can have incomplete startup coverage, which the manifest reports separately.
 
-Gameplay mode arms the next actual PlaySession. It never starts Play, supplies movement or changes input ownership. While already playing, **Profiling → Capture gameplay (10 s)** starts a recording; **Stop and save** ends it early. The menu displays status/error tooltips and exposes **Copy trace path** after saving.
+For an interactive gameplay recording:
 
-`--profile-duration` accepts 1–3600 seconds; defaults are 15 seconds for startup and 10 for gameplay. `--profile-output DIR` changes this process's capture root, including later menu captures. An isolated `--project-root DIR` keeps project/cache/session writes in that project. Cold-cache experiments require disposable snapshots: remove only their proven cache subtree, never authored Content or all of `.crimson`.
+1. Start **Play**.
+2. Choose **Profiling → Start recording** in the top menu bar, beside **File / Edit / View**. Press **Escape** first if Game has captured the mouse.
+3. Wait for the visible status to change from **Connecting** to **Recording**. The recording indicator shows elapsed capture time while the menu is closed. The same status appears at the bottom-left of the Game image, including in a detached window, independently of the F1 metrics overlay.
+4. Reproduce the workload for as long as needed, then click **Stop and save**. Leaving Play also stops and saves the recording.
+5. Wait for **Saving** to finish. The saved result remains visible, and **Profiling → Copy trace path** copies the saved file's location. A failed connection or save produces a visible error.
+
+Menu recordings run until stopped; they have no fixed ten-second cutoff. Connection time is excluded from the elapsed recording time, which stops advancing while the trace saves. Stopping Play or closing the application also requests a graceful save.
+
+The CLI's `--profile gameplay` mode arms a timed recording of the next actual PlaySession. It never starts Play, supplies movement or changes input ownership. The same visible capture status and **Stop and save** control apply after the editor opens.
+
+`--profile-duration` accepts 1–3600 seconds; CLI defaults are 15 seconds for startup and 10 for gameplay. This option limits CLI recordings and does not impose a duration on later manual menu recordings. `--profile-output DIR` changes this process's capture root, including later menu captures. An isolated `--project-root DIR` keeps project/cache/session writes in that project. Cold-cache experiments require disposable snapshots: remove only their proven cache subtree, never authored Content or all of `.crimson`.
 
 ## Saved evidence
 

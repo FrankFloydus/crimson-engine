@@ -53,7 +53,8 @@ public:
         return gameInput_.handleEvent(event);
     }
     bool blocksEditorEvent(const SDL_Event& event) const { return gameInput_.blocksEditorEvent(event); }
-    void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested);
+    void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested,
+               profiling::CaptureController* captures=nullptr);
     void prepareFrame(AssetLibrary&,Renderer&,std::uint32_t bgfxFrame);
     void filesChanged(std::span<const std::filesystem::path>);
     void setResourceStatus(std::string value) { resourceStatus_=std::move(value); }

@@ -9,6 +9,7 @@
 #include "tools/CollisionLayersEditor.h"
 #include "tools/GameplayEffectEditor.h"
 #include "tools/AnimationEditor.h"
+#include "tools/ProfilingMenu.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -316,7 +317,7 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
 EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, AssetLibrary& assets,
                               Renderer& renderer, SDL_Window* window, bool navigationActive,
                               uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials,NavigationAgentProfileEditor& profiles,CollisionLayersEditor& collisionLayers,GameplayEffectEditor& effects,AnimationEditor& animations,
-                              const GameplayInspectorContext& gameplay) {
+                              const GameplayInspectorContext& gameplay, profiling::CaptureController* captures) {
     documentReplaced_=false;
     editingAssets_=&assets;
     if(!document.transient() && deferred_!=Pending::None) {
@@ -478,11 +479,14 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         const char* playLabel=document.transient()?"Stop":"Play";
         const float playWidth=ImGui::CalcTextSize(playLabel).x+ImGui::GetStyle().FramePadding.x*2;
         const float playPosition=ImGui::GetWindowWidth()-playWidth-ImGui::GetStyle().WindowPadding.x;
+        if(captures)drawProfilingMenu(*captures,document.transient(),playPosition-ImGui::GetStyle().ItemSpacing.x);
         const auto titlePosition=ImGui::GetCursorScreenPos();
-        ImGui::PushClipRect(titlePosition,{ImGui::GetWindowPos().x+playPosition-ImGui::GetStyle().ItemSpacing.x,
-            titlePosition.y+ImGui::GetFrameHeight()},true);
-        ImGui::Text("%s%s%s",document.displayName().c_str(),document.transient()?" (Play)":"",document.dirty() ? " *" : "");
-        ImGui::PopClipRect();
+        const float titleRight=ImGui::GetWindowPos().x+playPosition-ImGui::GetStyle().ItemSpacing.x;
+        if(titleRight>titlePosition.x) {
+            ImGui::PushClipRect(titlePosition,{titleRight,titlePosition.y+ImGui::GetFrameHeight()},true);
+            ImGui::Text("%s%s%s",document.displayName().c_str(),document.transient()?" (Play)":"",document.dirty() ? " *" : "");
+            ImGui::PopClipRect();
+        }
         ImGui::SameLine(playPosition);
         ImGui::BeginDisabled(document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
         if(ImGui::Button(playLabel))togglePlay=true;

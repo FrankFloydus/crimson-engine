@@ -62,10 +62,10 @@ void validateTools(const std::filesystem::path& directory) {
     if(hash.size()!=64 || !std::all_of(hash.begin(),hash.end(),[](unsigned char value){return std::isxdigit(value)!=0;}))
         throw std::runtime_error("Paired Tracy capture tool manifest has an invalid SHA256 entry.");
 }
-enum StopReason { NoStop,UserStop,StartupReady,DurationLimit,Shutdown,ConnectionTimeout };
+enum StopReason { NoStop,UserStop,StartupReady,DurationLimit,Shutdown,ConnectionTimeout,PlayEnded };
 const char* stopName(int reason) {
     switch(reason){case UserStop:return "requested";case StartupReady:return "startup-materials-ready";case DurationLimit:return "duration-limit";
-    case Shutdown:return "application-shutdown";case ConnectionTimeout:return "connection-timeout";default:return "collector-finished";}
+    case Shutdown:return "application-shutdown";case ConnectionTimeout:return "connection-timeout";case PlayEnded:return "play-ended";default:return "collector-finished";}
 }
 }
 
@@ -83,14 +83,24 @@ struct CaptureController::Impl {
     bool connected{},traceComplete{},forced{},ownsDirectory{};
     std::uint64_t traceBytes{};std::vector<std::string> errors;
     std::string requestedUtc,connectedUtc,endedUtc;
+    Clock::time_point recordingStarted{},recordingStopped{};
     explicit Impl(CaptureOptions settings,CaptureContext metadata):options(std::move(settings)),context(std::move(metadata)) {
         options.connectionTimeout=std::clamp(options.connectionTimeout,std::chrono::milliseconds{1},std::chrono::milliseconds{5000});
         options.stopTimeout=std::clamp(options.stopTimeout,std::chrono::milliseconds{100},std::chrono::milliseconds{15000});
         if(options.outputDirectory.empty())options.outputDirectory=std::filesystem::current_path()/"captures/profiling";
     }
     void stop(int reason) noexcept {int previous=NoStop;stopReason.compare_exchange_strong(previous,reason,std::memory_order_relaxed);}
+    double elapsedLocked(Clock::time_point now=Clock::now()) const noexcept {
+        if(recordingStarted==Clock::time_point{})return 0;
+        return std::chrono::duration<double>((recordingStopped==Clock::time_point{}?now:recordingStopped)-recordingStarted).count();
+    }
+    void stateLocked(CaptureState state,const char* detail) {
+        const auto now=Clock::now();
+        if(state!=CaptureState::Capturing&&recordingStarted!=Clock::time_point{}&&recordingStopped==Clock::time_point{})recordingStopped=now;
+        status.state=state;status.detail=detail;status.elapsedSeconds=elapsedLocked(now);
+    }
     void transition(CaptureState state,const char* detail) {
-        {std::lock_guard lock(mutex);status.state=state;status.detail=detail;}
+        {std::lock_guard lock(mutex);stateLocked(state,detail);}
         changed.notify_all();
     }
     void manifest() {
@@ -99,6 +109,7 @@ struct CaptureController::Impl {
             std::lock_guard lock(mutex);if(!ownsDirectory)return;auto allErrors=errors;
             value={{"schema",1},{"tracy_version","0.14.1"},{"capture_type",captureKindName(status.kind)},
                 {"state",captureStateName(status.state)},{"duration_limit_seconds",status.durationSeconds},
+                {"recording_mode",status.durationSeconds?"timed":"manual"},{"elapsed_seconds",elapsedLocked()},
                 {"process_id",GetCurrentProcessId()},{"collector_address","127.0.0.1"},{"collector_port",options.port},
                 {"trace",pathText(status.trace)},{"log",pathText(status.log)},{"trace_bytes",traceBytes},
                 {"requested_utc",requestedUtc},{"connected_utc",connectedUtc.empty()?Json(nullptr):Json(connectedUtc)},
@@ -157,15 +168,20 @@ struct CaptureController::Impl {
                 const auto now=Clock::now();
                 if(!handshake&&WaitForSingleObject(readyEvent.value,0)==WAIT_OBJECT_0&&shared::profiling::connected()) {
                     handshake=true;connectedAt=now;
-                    {std::lock_guard lock(mutex);connected=true;connectedUtc=utc();}
-                    transition(CaptureState::Capturing,"Recording Tracy CPU and supported native GPU zones.");manifest();
+                    {
+                        std::lock_guard lock(mutex);connected=true;connectedUtc=utc();recordingStarted=now;
+                        const bool stopping=stopReason.load(std::memory_order_relaxed)!=NoStop;
+                        stateLocked(stopping?CaptureState::Saving:CaptureState::Capturing,
+                            stopping?"Saving the official Tracy capture.":"Recording Tracy CPU and supported native GPU zones.");
+                    }
+                    changed.notify_all();manifest();
                 }
                 if(!handshake&&now>=connectionDeadline&&!abortSent) {
                     stop(ConnectionTimeout);SetEvent(abortEvent.value);abortSent=true;savingDeadline=now+options.stopTimeout;
                     {std::lock_guard lock(mutex);forced=true;errors.push_back("This engine and its official collector did not complete the capture handshake before the timeout.");}
                     transition(CaptureState::Saving,"Capture connection failed; stopping its private collector.");
                 }
-                if(handshake&&now-connectedAt>=std::chrono::seconds(initial.durationSeconds))stop(DurationLimit);
+                if(handshake&&initial.durationSeconds&&now-connectedAt>=std::chrono::seconds(initial.durationSeconds))stop(DurationLimit);
                 if(handshake&&!stopSent&&stopReason.load(std::memory_order_relaxed)!=NoStop) {
                     if(!SetEvent(stopEvent.value))throw detail::windowsError("Cannot request graceful capture stop");
                     stopSent=true;savingDeadline=now+options.stopTimeout;
@@ -186,14 +202,13 @@ struct CaptureController::Impl {
                 traceComplete=connected&&!forced&&exitCode==0&&traceBytes>0&&log.find("Trace size")!=std::string::npos&&
                     log.find("Instrumentation failure:")==std::string::npos;
                 if(!traceComplete)errors.push_back("Official collector did not confirm a complete trace save (exit "+std::to_string(exitCode)+").");
-                status.state=traceComplete?CaptureState::Saved:CaptureState::Failed;
-                status.detail=traceComplete?(initial.kind==CaptureKind::Startup&&!readiness.complete()?
-                    "Trace saved; startup readiness and GPU submission tail were not completed before the capture ended.":"Tracy capture saved."):"Capture incomplete; see its manifest and collector log.";
+                stateLocked(traceComplete?CaptureState::Saved:CaptureState::Failed,traceComplete?(initial.kind==CaptureKind::Startup&&!readiness.complete()?
+                    "Trace saved; startup readiness and GPU submission tail were not completed before the capture ended.":"Tracy capture saved."):"Capture incomplete; see its manifest and collector log.");
             }
             manifest();
         } catch(const std::exception& error) {
             if(job.valid())TerminateJobObject(job.value,ERROR_CANCELLED);
-            {std::lock_guard lock(mutex);endedUtc=utc();errors.push_back(error.what());status.state=CaptureState::Failed;status.detail=error.what();}
+            {std::lock_guard lock(mutex);endedUtc=utc();errors.push_back(error.what());stateLocked(CaptureState::Failed,error.what());}
             try{manifest();}catch(const std::exception& failure){std::lock_guard lock(mutex);status.detail+=" Manifest: ";status.detail+=failure.what();}
         }
         active.store(false,std::memory_order_release);changed.notify_all();
@@ -205,7 +220,7 @@ CaptureController::~CaptureController(){finish();}
 bool CaptureController::captureNow(CaptureKind kind,std::uint32_t duration) {
     auto& owner=*impl_;
     if(owner.active.load(std::memory_order_acquire))return false;
-    if(duration<1||duration>3600) {std::lock_guard lock(owner.mutex);owner.status.detail="Capture duration must be from 1 to 3600 seconds.";return false;}
+    if(duration>3600||(kind==CaptureKind::Startup&&!duration)) {std::lock_guard lock(owner.mutex);owner.status.detail="Timed captures require 1 to 3600 seconds; gameplay may use zero for manual recording.";return false;}
     if(owner.worker.joinable())owner.worker.join();
     static std::atomic_uint64_t sequence{};
     {
@@ -215,6 +230,7 @@ bool CaptureController::captureNow(CaptureKind kind,std::uint32_t duration) {
         owner.status={kind,CaptureState::Connecting,duration,directory/"capture.tracy",directory/"manifest.json",directory/"collector.log","Connecting the official local Tracy collector."};
         owner.requestedContext=owner.context;owner.requestedUtc=utc();owner.connectedUtc.clear();owner.endedUtc.clear();
         owner.frames=0;owner.readiness={};owner.connected=owner.traceComplete=owner.forced=owner.ownsDirectory=false;owner.traceBytes=0;owner.errors.clear();
+        owner.recordingStarted=owner.recordingStopped={};
         owner.stopReason.store(NoStop,std::memory_order_relaxed);owner.active.store(true,std::memory_order_release);
     }
     try{owner.worker=std::jthread([&owner]{owner.collect();});return true;}
@@ -231,14 +247,26 @@ void CaptureController::frame(const CaptureFrame& value) noexcept {
     auto& owner=*impl_;if(!owner.active.load(std::memory_order_relaxed))return;
     try {
         std::lock_guard lock(owner.mutex);
+        if(owner.status.kind==CaptureKind::Gameplay&&!value.playing&&
+            (owner.status.state==CaptureState::Connecting||owner.status.state==CaptureState::Capturing)) {
+            owner.stop(PlayEnded);owner.stateLocked(CaptureState::Saving,"Play ended; saving the Tracy capture.");
+        }
         if(owner.status.state!=CaptureState::Capturing)return;
         if(!owner.frames)owner.first=value;owner.last=value;++owner.frames;
         if(owner.status.kind==CaptureKind::Startup&&owner.readiness.observe(value))owner.stop(StartupReady);
     }catch(...){}
 }
-void CaptureController::requestStop() noexcept {if(impl_->active.load(std::memory_order_relaxed))impl_->stop(UserStop);}
+void CaptureController::requestStop() noexcept {
+    auto& owner=*impl_;if(!owner.active.load(std::memory_order_relaxed))return;
+    owner.stop(UserStop);
+    try {
+        std::lock_guard lock(owner.mutex);
+        if(owner.status.state==CaptureState::Connecting||owner.status.state==CaptureState::Capturing)
+            owner.stateLocked(CaptureState::Saving,owner.connected?"Saving the official Tracy capture.":"Stopping capture connection; waiting for the collector to finish.");
+    }catch(...){}
+}
 bool CaptureController::active() const noexcept{return impl_->active.load(std::memory_order_relaxed);}
-CaptureStatus CaptureController::status() const {std::lock_guard lock(impl_->mutex);return impl_->status;}
+CaptureStatus CaptureController::status() const {std::lock_guard lock(impl_->mutex);auto result=impl_->status;result.elapsedSeconds=impl_->elapsedLocked();return result;}
 void CaptureController::finish() noexcept {
     auto& owner=*impl_;if(owner.active.load(std::memory_order_relaxed))owner.stop(Shutdown);
     if(owner.worker.joinable())owner.worker.join();

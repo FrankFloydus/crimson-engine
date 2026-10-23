@@ -1,5 +1,6 @@
 #include "profiling/CaptureController.h"
 #include "profiling/CaptureReadiness.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -51,6 +52,8 @@ void failedCollectorManifest() {
     require(!fs::exists(first.trace)&&fs::is_regular_file(first.manifest),"Failed capture fabricated a trace or lost its manifest.");
     const auto firstBytes=read(first.manifest);const auto manifest=nlohmann::json::parse(firstBytes);
     require(manifest["schema"]==1&&manifest["capture_type"]=="startup"&&manifest["state"]=="failed", "Failure manifest lost its version, type or final state.");
+    require(manifest["recording_mode"]=="timed"&&manifest["duration_limit_seconds"]==15&&manifest["elapsed_seconds"]==0,
+        "Unconnected timed capture lost its mode/cap or counted connection delay as recording.");
     require(!manifest["complete"].get<bool>()&&!manifest["trace_complete"].get<bool>()&&!manifest["connected"].get<bool>(),"Unconnected capture claimed complete trace data.");
     require(!manifest["startup_readiness_reached"].get<bool>()&&manifest["frames_observed"]==0&&manifest["first_frame"].is_null(),
         "Preconnection frame state falsely proved startup capture coverage.");
@@ -58,13 +61,15 @@ void failedCollectorManifest() {
         manifest["context"]["settings"]["ssr"]==false&&manifest["context"]["settings"]["width"]==909&&
         manifest["context"]["cache"]["state"]=="cold"&&!manifest["errors"].empty(),"Failure manifest lost reproducible context or the collector error.");
     context.cacheJson=R"({"state":"warm"})";controller.updateContext(context);
-    require(controller.captureNow(CaptureKind::Gameplay,1),"A failed capture prevented a later explicit retry.");
+    require(controller.captureNow(CaptureKind::Gameplay,0),"Manual gameplay capture was rejected after a failed capture.");
     controller.finish();const auto second=controller.status();
     require(second.state==CaptureState::Failed&&second.manifest!=first.manifest&&read(first.manifest)==firstBytes,
         "Retry overwrote a prior capture or lost its independent failure state.");
     const auto retried=nlohmann::json::parse(read(second.manifest));
     require(retried["capture_type"]=="gameplay"&&retried["context"]["cache"]["state"]=="warm"&&!retried["complete"].get<bool>(),
         "Retry reused stale context or reported a nonexistent complete capture.");
+    require(retried["recording_mode"]=="manual"&&retried["duration_limit_seconds"]==0&&retried["elapsed_seconds"]==0&&second.elapsedSeconds==0,
+        "Manual gameplay capture inherited a duration cap or recorded connection/failure time.");
     fs::create_directories(options.toolsDirectory);
     // Deliberately nonexecutable placeholders must be rejected by the version
     // guard before any process can be launched.
@@ -76,6 +81,57 @@ void failedCollectorManifest() {
     require(incompatible.state==CaptureState::Failed&&incompatible.detail.find("0.14.1")!=std::string::npos&&!fs::exists(incompatible.trace),
         "An incompatible paired collector manifest was not rejected before launch.");
 }
+void liveManualCaptures(const fs::path& tools,const fs::path& output) {
+    using Clock=std::chrono::steady_clock;
+    namespace profiler=crimson::shared::profiling;
+    profiler::set_enabled(true);profiler::thread_name("Capture lifecycle verification");
+    CaptureOptions options;options.toolsDirectory=fs::absolute(tools);options.outputDirectory=fs::absolute(output);
+    CaptureContext context;context.engineCommit="capture-lifecycle-verification";context.backend="CPU-only lifecycle diagnostic";
+    context.settingsJson=R"({"diagnostic":"manual capture lifecycle","gpu":false})";
+    CaptureController controller(options,context);CaptureFrame frame;frame.playing=true;
+    auto tick=[&] {
+        {
+            CRIMSON_PROFILE_ZONE("Capture lifecycle tick");
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        }
+        profiler::frame_mark();++frame.appFrame;++frame.bgfxFrame;controller.frame(frame);
+    };
+    auto verifySaved=[&](const char* reason) {
+        controller.finish();const auto status=controller.status();
+        require(status.state==CaptureState::Saved&&!controller.active(),"Live manual capture did not save successfully.");
+        const auto manifest=nlohmann::json::parse(read(status.manifest));
+        require(manifest["complete"].get<bool>()&&manifest["trace_complete"].get<bool>()&&manifest["errors"].empty(),
+            "Live manual capture did not produce complete official trace evidence.");
+        require(manifest["recording_mode"]=="manual"&&manifest["duration_limit_seconds"]==0&&manifest["stop_reason"]==reason,
+            "Live manual capture used a duration cap or lost its explicit stop reason.");
+        require(fs::file_size(status.trace)>0&&status.elapsedSeconds==manifest["elapsed_seconds"].get<double>(),
+            "Saved manual capture lost its trace or changed its elapsed recording time while saving.");
+        std::cout<<status.manifest.string()<<'\n';
+    };
+    require(controller.captureNow(CaptureKind::Gameplay,0),"Cannot request live manual capture.");
+    require(controller.waitForConnection(),"Live manual capture did not connect to its official collector.");
+    const auto begun=Clock::now();
+    while(Clock::now()-begun<std::chrono::seconds{11}) {
+        tick();require(controller.status().state==CaptureState::Capturing,"Manual capture stopped before an explicit stop after ten seconds.");
+    }
+    require(controller.status().elapsedSeconds>10,"Manual capture timer did not measure beyond the former ten-second limit.");
+    controller.requestStop();const auto saving=controller.status();
+    require(saving.state==CaptureState::Saving,"Stop did not immediately expose the saving state.");
+    verifySaved("requested");
+    require(controller.status().elapsedSeconds==saving.elapsedSeconds,"Saving time was added to recording elapsed time.");
+
+    require(controller.captureNow(CaptureKind::Gameplay,0),"Cannot reconnect for a second manual capture.");
+    require(controller.waitForConnection(),"Second manual capture did not connect.");
+    const auto secondBegun=Clock::now();
+    while(Clock::now()-secondBegun<std::chrono::milliseconds{250})tick();
+    frame.playing=false;controller.frame(frame);
+    require(controller.status().state==CaptureState::Saving,"Ending Play did not immediately save its gameplay capture.");
+    verifySaved("play-ended");
+    profiler::set_enabled(false);
 }
-int main(){try{startupSubmissionTail();failedCollectorManifest();std::cout<<"Capture idle, duration, missing-tool, submission-tail, manifest and retry checks passed.\n";return 0;}
+}
+int main(int argc,char** argv){try{
+    if(argc==4&&std::string_view(argv[1])=="--live") {liveManualCaptures(argv[2],argv[3]);std::cout<<"Live manual capture, elapsed time, explicit stop, reconnect and Play-end checks passed.\n";return 0;}
+    require(argc==1,"Usage: profiling_capture_tests [--live TOOLS OUTPUT]");
+    startupSubmissionTail();failedCollectorManifest();std::cout<<"Capture idle, duration, missing-tool, submission-tail, manifest and retry checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
