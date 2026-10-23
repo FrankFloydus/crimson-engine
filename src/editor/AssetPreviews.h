@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -61,6 +62,23 @@ struct PreviewRetryState {
         next=now+std::chrono::seconds{std::min(1u<<exponent,30u)};
     }
     void reset() { next={};failures=0; }
+};
+// Requests can remain pending while their images or shaders prepare. Resume
+// after the last attempted card so one expensive pending asset cannot consume
+// every frame's preparation budget ahead of the other visible cards.
+struct PreviewRequestSchedule {
+    std::size_t next{};
+    template<class Request,class BudgetAvailable>
+    void run(std::span<const std::string> ids,Request&& request,BudgetAvailable&& budgetAvailable) {
+        if(ids.empty()) { next=0;return; }
+        const auto first=next%ids.size();
+        for(std::size_t attempted=0;attempted<ids.size();++attempted) {
+            const auto index=(first+attempted)%ids.size();
+            request(ids[index]);
+            next=(index+1)%ids.size();
+            if(!budgetAvailable())break;
+        }
+    }
 };
 // Derived thumbnail requests use isolated renderer targets/environment. Pump
 // before ImGui::NewFrame, using the previous frame's visible browser identities.

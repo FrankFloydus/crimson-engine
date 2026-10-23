@@ -42,7 +42,8 @@ CaptureContext initialContext(const std::filesystem::path& root) {
     result.rendererCommit=shared::kRendererSourceCommit;result.rendererDirty=shared::kRendererWorkingTreeDirty;
     result.sourcesJson=nlohmann::json{{"engineConfiguredSourceSha256",kEngineProfileSourceSha256},
         {"rendererManifestSha256",shared::kRendererManifestSha256},{"buildConfiguration",kEngineProfileConfiguration},
-        {"tracyVersion","0.14.1"},{"materialAbi",35},{"materialGenerator",36}}.dump();
+        {"tracyVersion","0.14.1"},{"materialAbi",kEngineProfileMaterialAbi},
+        {"materialGenerator",kEngineProfileMaterialGenerator}}.dump();
     return result;
 }
 std::string adapterName() {
@@ -67,7 +68,7 @@ std::string adapterName() {
 EngineProfile::EngineProfile(const AppOptions& options)
     : root_(options.projectRoot.empty()?std::filesystem::path(CC_PROJECT_ROOT):std::filesystem::absolute(utf8Path(options.projectRoot))),
       context_(initialContext(root_)),captures_(captureOptions(options,root_),context_),
-      gameplayArmed_(options.profileMode=="gameplay"),gameplayDuration_(options.profileDuration) {
+      gameplayArmed_(options.profileMode=="gameplay"),editorArmed_(options.profileMode=="editor"),captureDuration_(options.profileDuration) {
     shared::profiling::set_enabled(CRIMSON_ENABLE_PROFILING!=0);
     shared::profiling::thread_name("Engine main");
     if(options.profileMode=="startup") {
@@ -85,11 +86,14 @@ void EngineProfile::backendInitialized(GraphicsBackend backend) {
     shared::profiling::app_info(std::string("Crimson Engine ")+context_.engineCommit+"; renderer "+context_.rendererCommit+"; "+context_.backend);
 }
 bool EngineProfile::observing(bool playing) const {
-    return (gameplayArmed_ && playing) || shared::profiling::connected() || captures_.active();
+    return editorArmed_ || (gameplayArmed_ && playing) || shared::profiling::connected() || captures_.active();
 }
 void EngineProfile::frame(CaptureFrame frame,const SceneSettings* settings,const ResourceStats* resources,const SceneDocument* document) {
+    if(editorArmed_) {
+        editorArmed_=false;captures_.captureNow(CaptureKind::Editor,captureDuration_);
+    }
     if(gameplayArmed_ && frame.playing) {
-        gameplayArmed_=false;captures_.captureNow(CaptureKind::Gameplay,gameplayDuration_);
+        gameplayArmed_=false;captures_.captureNow(CaptureKind::Gameplay,captureDuration_);
     }
     const auto* stats=bgfx::getStats();
     if(stats && stats->gpuTimerFreq>0 && stats->gpuTimeEnd>stats->gpuTimeBegin)frame.sourceFrame=stats->gpuFrameNum;

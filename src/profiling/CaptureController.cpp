@@ -73,7 +73,10 @@ const char* captureStateName(CaptureState state) noexcept {
     switch(state){case CaptureState::Idle:return "idle";case CaptureState::Connecting:return "connecting";case CaptureState::Capturing:return "capturing";
     case CaptureState::Saving:return "saving";case CaptureState::Saved:return "saved";case CaptureState::Failed:return "failed";}return "failed";
 }
-const char* captureKindName(CaptureKind kind) noexcept{return kind==CaptureKind::Startup?"startup":"gameplay";}
+const char* captureKindName(CaptureKind kind) noexcept {
+    switch(kind){case CaptureKind::Startup:return "startup";case CaptureKind::Gameplay:return "gameplay";case CaptureKind::Editor:return "editor";}
+    return "unknown";
+}
 
 struct CaptureController::Impl {
     CaptureOptions options;CaptureContext context,requestedContext;
@@ -220,7 +223,7 @@ CaptureController::~CaptureController(){finish();}
 bool CaptureController::captureNow(CaptureKind kind,std::uint32_t duration) {
     auto& owner=*impl_;
     if(owner.active.load(std::memory_order_acquire))return false;
-    if(duration>3600||(kind==CaptureKind::Startup&&!duration)) {std::lock_guard lock(owner.mutex);owner.status.detail="Timed captures require 1 to 3600 seconds; gameplay may use zero for manual recording.";return false;}
+    if(duration>3600||(kind==CaptureKind::Startup&&!duration)) {std::lock_guard lock(owner.mutex);owner.status.detail="Timed captures require 1 to 3600 seconds; editor and gameplay may use zero for manual recording.";return false;}
     if(owner.worker.joinable())owner.worker.join();
     static std::atomic_uint64_t sequence{};
     {

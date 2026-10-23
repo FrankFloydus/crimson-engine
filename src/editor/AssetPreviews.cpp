@@ -19,6 +19,7 @@
 #include "scene/SceneExtraction.h"
 #include "scene/SceneDocument.h"
 #include "math/Json.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <lodepng.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -157,6 +158,7 @@ struct AssetPreviews::Impl {
     uint32_t previewSize{128};
     PreviewValidationKey validation;
     AssetPreviewStats statistics;
+    PreviewRequestSchedule requestSchedule;
     std::chrono::steady_clock::time_point validationDeadline;
     std::filesystem::path cacheFolder;
     std::unordered_map<std::string,AssetKind> catalogKinds;
@@ -349,6 +351,8 @@ struct AssetPreviews::Impl {
         return false;
     }
     void request(const std::string& id,Entry& entry) {
+        static shared::profiling::CpuLocation location{"Asset thumbnail request",__func__,__FILE__,__LINE__};
+        shared::profiling::CpuZone requestZone{location};requestZone.text(id);
         ++statistics.requests;
         if (assets.references().deleted(id) || !entry.retry.ready(PreviewRetryState::Clock::now())) return;
         if(entry.clean && entry.validated==validation && !entry.forceScene && !entry.saveRequested)
@@ -769,11 +773,20 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uin
         if (asset==impl_->catalogKinds.end() || (asset->second!=AssetKind::Model && asset->second!=AssetKind::Scene && asset->second!=AssetKind::Material && asset->second!=AssetKind::Decal)) continue;
         auto& entry=impl_->entries[id]; entry.kind=asset->second; entry.wanted=true;
     }
-    impl_->validationDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds{2};
+    std::vector<std::string> wanted;
     for (auto& [id,entry]:impl_->entries) if (entry.wanted) {
         entry.used=std::chrono::steady_clock::now();
+        wanted.push_back(id);
+    }
+    std::sort(wanted.begin(),wanted.end());
+    impl_->validationDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds{2};
+    impl_->requestSchedule.run(wanted,[&](const auto& id) {
+        auto& entry=impl_->entries.at(id);
         try { impl_->request(id,entry); }
         catch (const std::exception& error) { entry.error=error.what();entry.retry.failed(PreviewRetryState::Clock::now()); }
+    },[&]{return std::chrono::steady_clock::now()<impl_->validationDeadline;});
+    for(const auto& id:wanted) {
+        const auto& entry=impl_->entries.at(id);
         if (!entry.error.empty()) impl_->status+=impl_->assets.displayName(id)+": "+entry.error+"\n";
     }
     // Keep bounded, lightweight validated signatures with the GPU working set.

@@ -31,7 +31,13 @@ void drawProfilingMenu(profiling::CaptureController& captures,bool playing,float
     ImGui::PushID(&captures);
     auto status=captures.status();
     if(ImGui::BeginMenu("Profiling")) {
-        if(ImGui::MenuItem("Start recording",nullptr,false,CRIMSON_ENABLE_PROFILING && playing && !captures.active())) {
+        if(ImGui::MenuItem("Record editor / viewport",nullptr,false,CRIMSON_ENABLE_PROFILING && !captures.active())) {
+            captures.captureNow(profiling::CaptureKind::Editor,0);
+            status=captures.status();
+        }
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !CRIMSON_ENABLE_PROFILING)
+            ImGui::SetTooltip("Profiling is disabled in this build.");
+        if(ImGui::MenuItem("Record gameplay",nullptr,false,CRIMSON_ENABLE_PROFILING && playing && !captures.active())) {
             captures.captureNow(profiling::CaptureKind::Gameplay,0);
             status=captures.status();
         }

@@ -13,6 +13,7 @@
 #include "resources/Paths.h"
 #include "tools/SceneDiagnostics.h"
 #include "QuaderSceneIntegration.h"
+#include <crimson/renderer/core/Profiler.hpp>
 #include <imgui.h>
 #include <SDL3/SDL_keyboard.h>
 #include <nlohmann/json.hpp>
@@ -148,8 +149,11 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     }
 }
 void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::uint32_t bgfxFrame) {
-    collisions_.collect();decals_.collect();
+    { CRIMSON_PROFILE_ZONE("Collision resource collection");collisions_.collect(); }
+    { CRIMSON_PROFILE_ZONE("Decal resource collection");decals_.collect(); }
     std::vector<QuaderTarget> targets;
+    {
+    CRIMSON_PROFILE_ZONE("Editor scene resource demand");
     const auto records=document_.scene().records();
     for(const auto& record:records) {
         if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->mesh && !record.collider->source.empty())(void)collisions_.query(record.collider->source.id);
@@ -157,6 +161,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
             const bool imported=std::any_of(records.begin(),records.end(),[&](const auto& child){return child.quaderGenerated && child.quaderGenerated->owner==record.id;});
             targets.push_back({record.id,*record.quader,imported,record.quader->saveKey});
         }
+    }
     }
     QuaderBridgeHooks hooks;
     hooks.dirtyMaterial=[this](const std::string& id){return materialEditor_.blocksExternalRefresh(id);};
@@ -186,9 +191,14 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
         }
         materialEditor_.filesChanged(changed);
     };
-    quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks);
-    if(!play_.playing() && !document_.transactionActive())assets.collectUnusedQuaderModels(document_);
+    { CRIMSON_PROFILE_ZONE("Quader resource observation");quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks); }
+    if(!play_.playing() && !document_.transactionActive()) { CRIMSON_PROFILE_ZONE("Quader unused model collection");assets.collectUnusedQuaderModels(document_); }
+    {
+    CRIMSON_PROFILE_ZONE("Editor resource retention and streaming");
     prepared_.beginFrame(); renderer.advanceStreaming();renderer.setAppearance(editor_.appearance());
+    }
+    {
+    CRIMSON_PROFILE_ZONE("External scene preparation");
     for(const auto& file:changedFiles_) {
         const auto id=assetIdAtPath(root_,file);
         if(id==document_.assetId() && std::filesystem::is_regular_file(file)) {
@@ -208,6 +218,9 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
             notifiedSceneFingerprint_=snapshot->fingerprint;editor_.notifyExternalSceneChange(*snapshot);
         }
     }
+    }
+    {
+    CRIMSON_PROFILE_ZONE("Editor environment preparation");
     const auto environment=resolveEnvironment(activeDocument().scene());
     const auto map=environment.environment.source==EnvironmentSource::Hdri?
         assets.references().resolveEnvironment(environment.environment.map):std::string{};
@@ -225,7 +238,8 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
         },std::move(options));
     }
     if(auto snapshot=environment_.snapshot()) if(snapshot.revision()!=environmentRevision_ && renderer.publishEnvironment(*snapshot)) environmentRevision_=snapshot.revision();
-    previews_->pump(bgfxFrame,visiblePreviewIds_,editor_.thumbnailDemand());
+    }
+    { CRIMSON_PROFILE_ZONE("Asset preview preparation");previews_->pump(bgfxFrame,visiblePreviewIds_,editor_.thumbnailDemand()); }
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     cameraPilot_.cancelGesture(activeDocument(),settings_.camera);cameraGestureCancel_=false;

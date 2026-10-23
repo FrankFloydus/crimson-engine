@@ -241,7 +241,7 @@ void transactionsAndSelection() {
     require(document.redo(),"Redo after no-op failed.");
 }
 
-void viewportParentSelection() {
+void viewportIndividualSelection() {
     TempProject project; SceneDocument document(project.root);
     const auto parent=document.createEmpty("Object");
     const auto branch=document.createEmpty("Visual branch");
@@ -257,24 +257,34 @@ void viewportParentSelection() {
     const auto character=document.createPlayer();
     document.select({character});require(document.reparentSelection(other),document.status());
     require(parent && branch && model && collider && particle && light && camera && other && character,"Viewport selection fixture failed.");
-    require(viewportSelectionRoot(document.scene(),NoEntity)==NoEntity && viewportSelectionRoot(document.scene(),999)==NoEntity,
+    require(!viewportEntityHasMarker(*document.scene().find(parent)) &&
+        !viewportEntityHasMarker(*document.scene().find(branch)) &&
+        !viewportEntityHasMarker(*document.scene().find(other)),
+        "An organizational group retained a viewport hit marker instead of Outliner-only selection.");
+    for(const auto id:std::array<EntityId,5>{collider,particle,light,camera,character})
+        require(viewportEntityHasMarker(*document.scene().find(id)),"A visual component lost its viewport marker.");
+    require(viewportSelectionEntity(document.scene(),NoEntity)==NoEntity && viewportSelectionEntity(document.scene(),999)==NoEntity,
         "Empty or stale viewport hits resolved to a selection.");
     const auto history=document.history().size();
     for(const auto hit:std::array<EntityId,7>{parent,branch,model,collider,particle,light,camera}) {
         require(selectViewportHit(document,hit,false,false),"Viewport selection was blocked.");
-        require(document.selection().ids==std::vector<EntityId>{parent} && document.selection().primary==parent,
-            "A viewport model, collision or marker hit selected a child instead of the top-level parent.");
+        require(document.selection().ids==std::vector<EntityId>{hit} && document.selection().primary==hit,
+            "A viewport model, collision or marker hit selected an ancestor instead of the actual entity.");
     }
-    require(selectViewportHit(document,character,false,true) && document.selection().ids==std::vector<EntityId>({parent,other}) &&
-        document.selection().primary==other,"Shift-click did not append the hit's top-level parent.");
-    require(selectViewportHit(document,collider,false,true) && document.selection().ids==std::vector<EntityId>({parent,other}) &&
-        document.selection().primary==parent,"Shift-click duplicated an already selected parent.");
-    require(selectViewportHit(document,model,true,false) && document.selection().ids==std::vector<EntityId>{other},
-        "Ctrl-click did not toggle the parent off through its child.");
-    require(selectViewportHit(document,particle,true,true) && document.selection().ids==std::vector<EntityId>({other,parent}),
+    require(selectViewportHit(document,character,false,true) && document.selection().ids==std::vector<EntityId>({camera,character}) &&
+        document.selection().primary==character,"Shift-click did not append the actual child entity.");
+    require(selectViewportHit(document,camera,false,true) && document.selection().ids==std::vector<EntityId>({camera,character}) &&
+        document.selection().primary==camera,"Shift-click duplicated an already selected entity.");
+    require(selectViewportHit(document,camera,true,false) && document.selection().ids==std::vector<EntityId>{character},
+        "Ctrl-click did not toggle the exact entity off.");
+    require(selectViewportHit(document,particle,true,true) && document.selection().ids==std::vector<EntityId>({character,particle}),
         "Ctrl+Shift-click did not retain toggle behavior.");
-    require(selectViewportHit(document,NoEntity,false,true) && document.selection().ids==std::vector<EntityId>({other,parent}),
-        "Shift-clicking the background cleared selection.");
+    require(selectViewportHit(document,NoEntity,false,true) && document.selection().ids.empty(),
+        "Shift-clicking the background did not clear selection.");
+    document.select({parent,model},model);
+    require(selectViewportHit(document,NoEntity,true,false) && document.selection().ids.empty(),
+        "Ctrl-clicking the background did not clear selection.");
+    document.select({parent,model},model);
     require(selectViewportHit(document,NoEntity,false,false) && document.selection().ids.empty(),"Background click did not clear selection.");
     document.select({collider},collider);
     require(document.selection().primary==collider && document.selection().ids==std::vector<EntityId>{collider},
@@ -298,16 +308,20 @@ void viewportEntityHierarchySelection() {
     for(const auto child:document.scene().children(player))if(document.scene().find(child)->camera)camera=child;
     require(camera!=NoEntity,"Player camera fixture is missing.");
     const auto before=document.scene().records();const auto history=document.history().size();
-    require(viewportSelectionRoot(document.scene(),light)==model,
-        "Viewport selection discarded an ordinary model's actual child hierarchy.");
-    require(viewportSelectionRoot(document.scene(),visual)==player && viewportSelectionRoot(document.scene(),camera)==player,
-        "Player visual/camera hits did not resolve to the single Player entity.");
-    require(selectViewportHit(document,light,false,false) && document.selection().primary==model,
-        "An attached light did not select its assembled object in the viewport.");
-    require(selectViewportHit(document,visual,false,false) && document.selection().primary==player,
-        "The Player visual exposed an internal authoring record.");
+    require(viewportSelectionEntity(document.scene(),light)==light,
+        "Viewport selection remapped an ordinary model's light child.");
+    require(viewportSelectionEntity(document.scene(),visual)==visual && viewportSelectionEntity(document.scene(),camera)==camera,
+        "Viewport selection remapped Player visual/camera children.");
+    require(selectViewportHit(document,light,false,false) && document.selection().primary==light,
+        "An attached light did not select its actual entity in the viewport.");
+    require(selectViewportHit(document,visual,false,false) && document.selection().primary==visual,
+        "The Player visual was not independently selectable.");
+    require(selectViewportHit(document,camera,false,false) && document.selection().primary==camera,
+        "The Player camera was not independently selectable.");
     require(selectViewportHit(document,camera,true,false) && document.selection().ids.empty(),
-        "Ctrl-click on the Player camera did not toggle the same Player entity.");
+        "Ctrl-click on the Player camera did not toggle the same camera entity.");
+    document.select({player},player);
+    require(document.selection().primary==player,"Outliner-style selection could not select the whole group.");
     sameRecords(document.scene().records(),before);
     require(document.history().size()==history,"Hierarchy viewport selection mutated scene history.");
 }
@@ -1869,7 +1883,7 @@ int main() {
         registryAndHierarchy();cachedHierarchicalVisibility();physicalSceneStorage();
         reparentPreservesAffine();
         transactionsAndSelection();
-        viewportParentSelection();
+        viewportIndividualSelection();
         viewportEntityHierarchySelection();
         subtreeCommands();duplicateNameFamilies();duplicateTransformTransactions();
         persistenceAndCatalog();

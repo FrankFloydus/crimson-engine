@@ -538,8 +538,6 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,
         overlays_.collisions,overlays_.transformGizmo,cameraNavigationAllowed,cameraGestureActive_,viewedCamera_!=NoEntity);
-    if(frame.viewport.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetDragDropPayload())
-        finishScenePanelEdit(document);
     BrowserActions browser;
     if (panels_.assetBrowser) {
         browser=browser_.draw(assets,window,preferences_.values().browserPreviewSize,&renderer);

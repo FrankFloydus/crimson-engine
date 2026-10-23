@@ -41,7 +41,7 @@ bool ViewportTransformGesture::begin(SceneDocument& document,std::vector<EntityI
     if(!capture(document,document.scene().topmost(ids))){decalFrame_.reset();return false;}
     owner_=&document;generation_=document.documentGeneration();revision_=document.scene().revision();
     transaction_=0;inverseProxy_=*inverse;initialProxy_=proxy;selection_=document.selection();operation_=operation;
-    duplicate_=shift && operation!=ViewportTransformOperation::Scale;return true;
+    duplicate_=shift && operation==ViewportTransformOperation::Translate;return true;
 }
 bool ViewportTransformGesture::valid(const SceneDocument& document) const {
     if(owner_!=&document || generation_!=document.documentGeneration() || revision_!=document.scene().revision() ||
@@ -65,8 +65,7 @@ bool ViewportTransformGesture::update(SceneDocument& document,const Mat4& proxy,
         if(!dragThresholdReached || !meaningful(delta))return true;
         std::vector<EntityId> ids;ids.reserve(roots_.size());
         for(const auto& root:roots_)ids.push_back(root.id);
-        const char* label=duplicate_?(operation_==ViewportTransformOperation::Rotate?
-            "Duplicate and rotate selection":"Duplicate and move selection"):"Transform selection";
+        const char* label=duplicate_?"Duplicate and move selection":"Transform selection";
         const bool begun=duplicate_?document.beginDuplicateTransform(label,std::move(ids)):
             document.beginTransform(label,std::move(ids));
         if(!begun){reset();return false;}

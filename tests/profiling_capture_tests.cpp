@@ -70,6 +70,12 @@ void failedCollectorManifest() {
         "Retry reused stale context or reported a nonexistent complete capture.");
     require(retried["recording_mode"]=="manual"&&retried["duration_limit_seconds"]==0&&retried["elapsed_seconds"]==0&&second.elapsedSeconds==0,
         "Manual gameplay capture inherited a duration cap or recorded connection/failure time.");
+    require(controller.captureNow(CaptureKind::Editor,0),"Manual editor capture was rejected outside Play.");
+    controller.frame(frame);controller.finish();const auto editor=controller.status();
+    const auto editorManifest=nlohmann::json::parse(read(editor.manifest));
+    require(editor.kind==CaptureKind::Editor&&editor.manifest!=second.manifest&&editorManifest["capture_type"]=="editor"&&
+        editorManifest["recording_mode"]=="manual"&&editorManifest["stop_reason"]!="play-ended",
+        "Editor capture was mislabeled or stopped because Play was inactive.");
     fs::create_directories(options.toolsDirectory);
     // Deliberately nonexecutable placeholders must be rejected by the version
     // guard before any process can be launched.
@@ -127,11 +133,26 @@ void liveManualCaptures(const fs::path& tools,const fs::path& output) {
     frame.playing=false;controller.frame(frame);
     require(controller.status().state==CaptureState::Saving,"Ending Play did not immediately save its gameplay capture.");
     verifySaved("play-ended");
+
+    require(controller.captureNow(CaptureKind::Editor,0),"Cannot request editor capture outside Play.");
+    require(controller.waitForConnection(),"Editor capture did not connect outside Play.");
+    const auto editorBegun=Clock::now();
+    while(Clock::now()-editorBegun<std::chrono::milliseconds{250}) {
+        tick();require(controller.status().state==CaptureState::Capturing,"Editor recording stopped while Play was inactive.");
+    }
+    frame.playing=true;tick();frame.playing=false;tick();
+    require(controller.status().kind==CaptureKind::Editor&&controller.status().state==CaptureState::Capturing,
+        "Starting or ending Play stopped an editor recording.");
+    controller.requestStop();verifySaved("requested");
+    const auto editorManifest=nlohmann::json::parse(read(controller.status().manifest));
+    require(editorManifest["capture_type"]=="editor"&&editorManifest["first_frame"]["playing"]==false&&
+        editorManifest["last_frame"]["playing"]==false&&editorManifest["frames_observed"].get<unsigned>()>0,
+        "Editor capture lost its non-Play frame metadata.");
     profiler::set_enabled(false);
 }
 }
 int main(int argc,char** argv){try{
-    if(argc==4&&std::string_view(argv[1])=="--live") {liveManualCaptures(argv[2],argv[3]);std::cout<<"Live manual capture, elapsed time, explicit stop, reconnect and Play-end checks passed.\n";return 0;}
+    if(argc==4&&std::string_view(argv[1])=="--live") {liveManualCaptures(argv[2],argv[3]);std::cout<<"Live editor/gameplay capture, elapsed time, explicit stop, reconnect and Play transition checks passed.\n";return 0;}
     require(argc==1,"Usage: profiling_capture_tests [--live TOOLS OUTPUT]");
     startupSubmissionTail();failedCollectorManifest();std::cout<<"Capture idle, duration, missing-tool, submission-tail, manifest and retry checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

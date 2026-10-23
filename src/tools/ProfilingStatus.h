@@ -19,7 +19,7 @@ inline std::string profilingStatusLabel(const profiling::CaptureStatus& status) 
     case profiling::CaptureState::Idle:return {};
     case profiling::CaptureState::Connecting:return "Connecting...";
     case profiling::CaptureState::Capturing: {
-        auto text="Recording "+profilingCaptureTime(status.elapsedSeconds);
+        auto text=std::string(status.kind==profiling::CaptureKind::Editor?"Recording editor ":"Recording ")+profilingCaptureTime(status.elapsedSeconds);
         if(status.durationSeconds)text+=" / "+profilingCaptureTime(status.durationSeconds);
         return text;
     }

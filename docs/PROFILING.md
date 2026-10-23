@@ -16,28 +16,31 @@ The canonical vcpkg overlays supply one static `Tracy::TracyClient` 0.14.1 share
 
 `CRIMSON_ENABLE_PROFILING=OFF` disables application profiling and capture controls. It does not remove the SDK from the shared instrumented bgfx dependency. Preserve the pinned baseline, overlays, native hooks and matching client/tool versions.
 
-## Capture startup and gameplay
+## Capture editor, startup and gameplay
 
 ```powershell
 & '.\build\Release\bin\crimson-renderer.exe' --profile startup --profile-duration 15
+& '.\build\Release\bin\crimson-renderer.exe' --profile editor --profile-duration 10
 & '.\build\Release\bin\crimson-renderer.exe' --profile gameplay --profile-duration 10
 ```
 
 An explicit startup recording waits at most five seconds for the official collector and this engine's client to connect before SDL, renderer and asset initialization. It covers initialization, model/material preparation and the first coherent rendered frames. Readiness combines production render-preparation results with resource queue/running counts. Eight further distinct submissions let delayed GPU timestamps arrive. Recording ends after that tail or the duration cap; the editor continues running. A successfully saved trace can have incomplete startup coverage, which the manifest reports separately.
 
+For an interactive editor or viewport recording, choose **Profiling → Record editor / viewport** while editing. Play is not required. Wait for **Recording editor**, reproduce the slowdown by selecting, transforming or navigating as usual, then choose **Stop and save**. This captures the whole process, including editor/resource preparation, workers and all visible Scene/Game/preview GPU passes. The recording continues across starting or stopping Play, and ends only on an explicit stop or application shutdown. Captures use an `editor-...` folder and `capture_type: "editor"` in the manifest, with Scene/Game image dimensions and the Play state of the first and last observed frames.
+
 For an interactive gameplay recording:
 
 1. Start **Play**.
-2. Choose **Profiling → Start recording** in the top menu bar, beside **File / Edit / View**. Press **Escape** first if Game has captured the mouse.
+2. Choose **Profiling → Record gameplay** in the top menu bar, beside **File / Edit / View**. Press **Escape** first if Game has captured the mouse.
 3. Wait for the visible status to change from **Connecting** to **Recording**. The recording indicator shows elapsed capture time while the menu is closed. The same status appears at the bottom-left of the Game image, including in a detached window, independently of the F1 metrics overlay.
 4. Reproduce the workload for as long as needed, then click **Stop and save**. Leaving Play also stops and saves the recording.
 5. Wait for **Saving** to finish. The saved result remains visible, and **Profiling → Copy trace path** copies the saved file's location. A failed connection or save produces a visible error.
 
-Menu recordings run until stopped; they have no fixed ten-second cutoff. Connection time is excluded from the elapsed recording time, which stops advancing while the trace saves. Stopping Play or closing the application also requests a graceful save.
+Menu recordings run until stopped; they have no fixed ten-second cutoff. Connection time is excluded from the elapsed recording time, which stops advancing while the trace saves. Stopping Play saves a gameplay recording; closing the application requests a graceful save for every recording kind.
 
-The CLI's `--profile gameplay` mode arms a timed recording of the next actual PlaySession. It never starts Play, supplies movement or changes input ownership. The same visible capture status and **Stop and save** control apply after the editor opens.
+The CLI's `--profile gameplay` mode arms a timed recording of the next actual PlaySession. `--profile editor` begins a timed editor recording after initialization without requiring Play. Neither mode starts Play, supplies movement or changes input ownership. The same visible capture status and **Stop and save** control apply after the editor opens.
 
-`--profile-duration` accepts 1–3600 seconds; CLI defaults are 15 seconds for startup and 10 for gameplay. This option limits CLI recordings and does not impose a duration on later manual menu recordings. `--profile-output DIR` changes this process's capture root, including later menu captures. An isolated `--project-root DIR` keeps project/cache/session writes in that project. Cold-cache experiments require disposable snapshots: remove only their proven cache subtree, never authored Content or all of `.crimson`.
+`--profile-duration` accepts 1–3600 seconds; CLI defaults are 15 seconds for startup and 10 for editor/gameplay. This option limits CLI recordings and does not impose a duration on later manual menu recordings. `--profile-output DIR` changes this process's capture root, including later menu captures. An isolated `--project-root DIR` keeps project/cache/session writes in that project. Cold-cache experiments require disposable snapshots: remove only their proven cache subtree, never authored Content or all of `.crimson`.
 
 ## Saved evidence
 
@@ -105,7 +108,7 @@ Frame marks cover the whole editor process, including visible Scene/Game, previe
 
 ## Focused checks
 
-`profiling_capture_core` and `app_options_core` cover idle behavior, durations, readiness/tail handling, missing/incompatible tools, failure manifests and retries. The existing benchmark target also has an explicit hidden integration diagnostic:
+`profiling_capture_core` and `app_options_core` cover editor/gameplay mode parsing, idle behavior, durations, readiness/tail handling, missing/incompatible tools, failure manifests and retries. The CPU-only `profiling_capture_tests --live TOOLS OUTPUT` diagnostic records through the official collector and checks manual stop, reconnect, gameplay auto-save and editor recording across Play state changes. It creates no application window. The existing benchmark target also has an explicit hidden integration diagnostic:
 
 ```powershell
 & '.\build\Release\bin\forward_plus_room_benchmark.exe' --tracy-project `

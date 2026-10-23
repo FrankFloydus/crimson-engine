@@ -152,6 +152,26 @@ foreach(CC_PROFILE_SOURCE IN LISTS CC_ENGINE_PROFILE_SOURCES)
     string(APPEND CC_ENGINE_PROFILE_DIGEST_INPUT "${CC_PROFILE_SOURCE_RELATIVE}:${CC_PROFILE_SOURCE_HASH}\n")
 endforeach()
 string(SHA256 CC_ENGINE_PROFILE_SOURCE_SHA256 "${CC_ENGINE_PROFILE_DIGEST_INPUT}")
+# Capture the compiler's renderer identities at configure time; reading a
+# subsequently updated checkout at runtime could misidentify an older binary.
+set(CC_PROFILE_RENDERER_MANIFEST "${CC_RENDERER_SOURCE_DIR}/renderer-manifest.json")
+set(CC_PROFILE_MATERIAL_GENERATOR "${CC_RENDERER_SOURCE_DIR}/src/forward/MaterialGraphShader.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CC_PROFILE_RENDERER_MANIFEST}" "${CC_PROFILE_MATERIAL_GENERATOR}")
+file(READ "${CC_PROFILE_RENDERER_MANIFEST}" CC_PROFILE_RENDERER_MANIFEST_JSON)
+string(JSON CC_ENGINE_PROFILE_MATERIAL_ABI GET "${CC_PROFILE_RENDERER_MANIFEST_JSON}" shader_abis material)
+file(STRINGS "${CC_PROFILE_MATERIAL_GENERATOR}" CC_PROFILE_MATERIAL_GENERATOR_MARKERS
+    REGEX "crimson-material-graph-generator-v[0-9]+")
+list(LENGTH CC_PROFILE_MATERIAL_GENERATOR_MARKERS CC_PROFILE_MATERIAL_GENERATOR_MARKER_COUNT)
+if(NOT CC_PROFILE_MATERIAL_GENERATOR_MARKER_COUNT EQUAL 1)
+    message(FATAL_ERROR "Profiling identity requires one canonical material graph generator version marker.")
+endif()
+string(REGEX MATCH "crimson-material-graph-generator-v([0-9]+)" CC_PROFILE_MATERIAL_GENERATOR_MATCH
+    "${CC_PROFILE_MATERIAL_GENERATOR_MARKERS}")
+set(CC_ENGINE_PROFILE_MATERIAL_GENERATOR "${CMAKE_MATCH_1}")
+if(NOT CC_ENGINE_PROFILE_MATERIAL_ABI GREATER 0 OR NOT CC_ENGINE_PROFILE_MATERIAL_GENERATOR GREATER 0)
+    message(FATAL_ERROR "Profiling identity could not resolve the canonical material ABI and generator versions.")
+endif()
 configure_file(src/profiling/EngineProfileIdentity.h.in "${CC_GENERATED_DIR}/EngineProfileIdentity.h" @ONLY)
 configure_file(src/platform/CrimsonResources.rc.in "${CC_GENERATED_DIR}/CrimsonResources.rc" @ONLY)
 set_source_files_properties("${CC_GENERATED_DIR}/CrimsonResources.rc" PROPERTIES

@@ -12,6 +12,29 @@
 
 namespace {
 void require(bool value,const char* message) { if (!value) throw std::runtime_error(message); }
+void fairRequestScheduling() {
+    using namespace crimson;
+    const std::vector<std::string> visible{"expensive-pending","material-b","material-c","material-d"};
+    PreviewRequestSchedule schedule;
+    std::vector<std::string> visited;
+    // Every request can consume the entire frame budget while still waiting
+    // for shader/image preparation. All cards must nevertheless make progress.
+    for(std::size_t frame=0;frame<visible.size();++frame)
+        schedule.run(visible,[&](const auto& id){visited.push_back(id);},[]{return false;});
+    require(visited==visible,"A pending thumbnail starved other visible material previews.");
+    visited.clear();
+    schedule.run(visible,[&](const auto& id){visited.push_back(id);},[]{return true;});
+    require(visited==visible,"A warm thumbnail batch repeated or skipped a visible card.");
+    schedule.next=3;
+    const std::vector<std::string> scrolled{"new-material","last-material"};
+    visited.clear();
+    for(std::size_t frame=0;frame<scrolled.size();++frame)
+        schedule.run(scrolled,[&](const auto& id){visited.push_back(id);},[]{return false;});
+    std::sort(visited.begin(),visited.end());auto expected=scrolled;std::sort(expected.begin(),expected.end());
+    require(visited==expected,"Changing browser demand left material previews unreachable.");
+    schedule.run({},[](const auto&){},[]{return true;});
+    require(schedule.next==0,"An empty preview demand retained an invalid scheduling cursor.");
+}
 template<class Function> void rejects(Function&& action,const char* message) {
     bool failed=false;try{action();}catch(const std::exception&){failed=true;}require(failed,message);
 }
@@ -182,7 +205,7 @@ int main() {
         for(unsigned i=0;i<8;++i)retry.failed(now);
         require(!retry.ready(now+std::chrono::seconds{29}) && retry.ready(now+std::chrono::seconds{30}),"Thumbnail retry delay must remain bounded.");
         retry.reset();require(retry.ready(now),"A source edit or successful publication must reset retry backoff.");
-        persistentCache();deletedSourceObservers();
+        fairRequestScheduling();persistentCache();deletedSourceObservers();
         std::cout << "Preview source coherence passed.\n"; return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

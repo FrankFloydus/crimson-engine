@@ -9,7 +9,7 @@
 
 namespace crimson::profiling {
 
-enum class CaptureKind { Startup, Gameplay };
+enum class CaptureKind { Startup, Gameplay, Editor };
 enum class CaptureState { Idle, Connecting, Capturing, Saving, Saved, Failed };
 
 struct CaptureOptions {
@@ -57,8 +57,9 @@ public:
     CaptureController& operator=(const CaptureController&)=delete;
 
     // Nonblocking, including explicit probes. Gameplay never starts Play or
-    // supplies input. A zero duration requests manual gameplay recording until
-    // Stop, Play ends, or shutdown. Positive durations are capped at 3600 s.
+    // supplies input. A zero duration requests manual recording until Stop or
+    // shutdown. Gameplay also stops when Play ends; Editor spans Play changes.
+    // Positive durations are capped at 3600 s.
     // Startup observes eight normal submissions after material readiness before
     // stopping and requires a positive duration cap.
     bool captureNow(CaptureKind,std::uint32_t durationSeconds);

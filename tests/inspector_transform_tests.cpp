@@ -4,6 +4,8 @@
 #include "crimson-renderer/ModelTransform.h"
 #include "scene/SceneDocument.h"
 #include "editor/DecalAuthoring.h"
+#include "editor/ViewportSelection.h"
+#include "editor/ViewportSelectionUi.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <array>
@@ -87,6 +89,21 @@ public:
             }
         }
         ImGui::End();
+        if(viewportSelectionEnabled){
+            ImGui::SetNextWindowPos({650,300});ImGui::SetNextWindowSize({280,300});
+            ImGui::Begin("Selection viewport",nullptr,flags);
+            const auto origin=ImGui::GetCursorScreenPos();const ImVec2 size{240,250};
+            ImGui::Image(ImTextureRef(static_cast<ImTextureID>(1)),size);
+            viewportCenter={origin.x+size.x*.5f,origin.y+size.y*.5f};
+            const auto interaction=viewportImageInteraction([&]{return finishInspectorTransform(document,state);});
+            if(interaction.hovered && !interaction.textInputBlocked && !document.transactionActive() &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Left)){
+                require(selectViewportHit(document,viewportHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift),
+                    "A viewport click was blocked after releasing the Inspector edit.");
+                ++viewportSelections;
+            }
+            ImGui::End();
+        }
         if(docked_){
             // These panels follow Inspector in SceneEditor. They must not alter
             // the scene-panel focus used by the actual production shortcut gate.
@@ -154,6 +171,10 @@ public:
     std::array<Vec2,9> centers{};
     std::array<unsigned,3> columnCounts{};
     bool sceneUndo{},sceneRedo{},diagnosticsEnabled{};
+    bool viewportSelectionEnabled{};
+    EntityId viewportHit{};
+    Vec2 viewportCenter{};
+    unsigned viewportSelections{};
     unsigned diagnosticFrames{};
     std::string focus;
 private:
@@ -223,6 +244,28 @@ void collapsedTransformReleasesOwnership(){
     require(!ui.document.transactionActive()&&!ui.state.editing&&ui.document.history().size()==1,
         "Collapsing Transform stranded its active numeric transaction.");
     ui.undo();require(ui.sceneUndo&&ui.matrix()==ui.baseline,"A collapsed Transform section blocked scene Undo.");
+}
+void viewportClickReleasesInspectorOwnership(){
+    Project project;Inspector ui(project.root);
+    const auto other=ui.document.createBox("Other mesh");
+    ui.document.select({ui.entity},ui.entity);
+    ui.viewportSelectionEnabled=true;ui.tick();ui.tick();
+    const auto history=ui.document.history().size();
+    ui.activate(0);ui.replaceText("3");ui.tick();
+    require(ui.document.transactionActive() && ImGui::GetIO().WantTextInput,
+        "The viewport regression did not retain an active numeric text edit.");
+    ui.viewportHit=other;ui.mouse(ui.viewportCenter,false);ui.mouse(ui.viewportCenter,true);
+    require(ui.viewportSelections==1 && ui.document.selection().primary==other &&
+        !ui.document.transactionActive() && !ui.state.editing,
+        "The first viewport click after an Inspector edit left selection locked or needed a second click.");
+    require(ui.document.history().size()==history+1 && std::abs(ui.matrix().at(0,3)-3.f)<1e-6f,
+        "Picking another entity discarded the completed Inspector value or created duplicate history.");
+    ui.mouse(ui.viewportCenter,false);ui.viewportHit=NoEntity;ui.mouse(ui.viewportCenter,true);
+    require(ui.document.selection().ids.empty(),"Clicking an empty viewport after an Inspector edit did not deselect.");
+    ui.mouse(ui.viewportCenter,false);ui.viewportHit=ui.entity;ui.mouse(ui.viewportCenter,true);
+    require(ui.document.selection().primary==ui.entity && ui.viewportSelections==3,
+        "Selection remained locked after clearing the previous selection.");
+    ui.mouse(ui.viewportCenter,false);
 }
 void dragReleaseCommits(){
     Project project;Inspector ui(project.root);const auto start=ui.centers[6];
@@ -438,6 +481,7 @@ int main(){
     run("menu Undo finalizes and does not reapply text",menuFinishesAndDoesNotReapply);
     run("clipped scalar finalizes without deactivation",missedDeactivationReleasesOwnership);
     run("collapsing Transform finalizes its active numeric field",collapsedTransformReleasesOwnership);
+    run("viewport click releases Inspector ownership before picking and empty-space deselection",viewportClickReleasesInspectorOwnership);
     run("zero scale drag and release",dragReleaseCommits);
     run("diagnostics preserve real Ctrl+Z after zero-scale drag (floating/docked, XYZ)",diagnosticAppearanceKeepsUndo);
     run("transform properties use horizontal XYZ rows",horizontalTransformRows);

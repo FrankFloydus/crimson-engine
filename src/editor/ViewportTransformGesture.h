@@ -8,7 +8,8 @@ enum class ViewportTransformOperation { Translate,Rotate,Scale };
 
 // A handle press owns a pending gesture, but authors nothing until the pointer
 // crosses the drag threshold and produces a nonidentity world-space delta.
-// The duplication modifier is captured at that initial press.
+// Shift duplicates Translate only and is captured at that initial press.
+// Rotation snapping belongs to the gizmo and follows the current Shift state.
 class ViewportTransformGesture final {
 public:
     bool begin(SceneDocument&,std::vector<EntityId> roots,const Mat4& proxy,

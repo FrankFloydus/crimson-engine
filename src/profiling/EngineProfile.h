@@ -26,8 +26,8 @@ private:
     std::filesystem::path root_;
     CaptureContext context_;
     CaptureController captures_;
-    bool gameplayArmed_{};
-    std::uint32_t gameplayDuration_{10};
+    bool gameplayArmed_{},editorArmed_{};
+    std::uint32_t captureDuration_{10};
     std::uint32_t lastGpuFrame_{std::numeric_limits<std::uint32_t>::max()};
     std::chrono::steady_clock::time_point lastContext_{};
 };

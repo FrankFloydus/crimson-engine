@@ -6,23 +6,22 @@
 
 namespace crimson {
 
-// Viewport geometry and markers select the assembled object. Explicit
-// Outliner selection still addresses any individual scene entity.
-inline EntityId viewportSelectionRoot(const Scene& scene,EntityId hit) {
-    while(hit) {
-        const auto entity=scene.find(hit);
-        if(!entity)return NoEntity;
-        if(!entity->parent)return hit;
-        hit=entity->parent;
-    }
-    return NoEntity;
+// Geometry and markers address the actual entity. Parenting affects transforms,
+// never picking; an organizational group is selected explicitly in the Outliner.
+inline EntityId viewportSelectionEntity(const Scene& scene,EntityId hit) {
+    return scene.contains(hit)?hit:NoEntity;
+}
+
+inline bool viewportEntityHasMarker(const EntityRecord& entity) {
+    return entity.directional || entity.point || entity.particle || entity.decal ||
+        entity.collider || entity.controller || entity.navigationVolume || entity.camera;
 }
 
 inline bool selectViewportHit(SceneDocument& document,EntityId hit,bool toggle,bool append) {
     if(document.transactionActive())return false;
-    const auto id=viewportSelectionRoot(document.scene(),hit);
+    const auto id=viewportSelectionEntity(document.scene(),hit);
     auto ids=document.selection().ids;
-    if(!toggle && !append)ids.clear();
+    if(!id || (!toggle && !append))ids.clear();
     const auto found=std::find(ids.begin(),ids.end(),id);
     if(id) {
         if(toggle && found!=ids.end())ids.erase(found);

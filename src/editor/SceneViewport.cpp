@@ -3,6 +3,8 @@
 #include "tools/RenderDebugControls.h"
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
+#include "ViewportSelectionUi.h"
+#include "tools/ScenePanels.h"
 #include "CollisionWire.h"
 #include "ColliderGizmoUi.h"
 #include "assets/AssetLibrary.h"
@@ -169,9 +171,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) waitForRelease_ = false;
     if(!ImGui::GetDragDropPayload()){materialDropCanceled_=false;decalDropCanceled_=false;}
     if (ImGui::Begin("Viewport",nullptr,ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        drawRenderDebugControls(renderer,RenderViewPurpose::Scene);
-        const bool blockKeys = ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
-            navigationActive || ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        drawRenderDebugControls(renderer,RenderViewPurpose::Scene,&rotationSnapDegrees_);
         const ImVec2 size = ImGui::GetContentRegionAvail();
         if (size.x > 0 && size.y > 0) {
             const auto* host=ImGui::GetWindowViewport();
@@ -180,9 +180,12 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                                     static_cast<uint32_t>(std::max(1.0f,std::round(size.y*scale.y))));
             const auto origin = ImGui::GetCursorScreenPos();
             ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(renderer.viewportTexture())),size);
-            const bool imageHovered = ImGui::IsItemHovered();
+            const auto imageInteraction=viewportImageInteraction([&]{return finishScenePanelEdit(document);});
+            const bool imageHovered=imageInteraction.hovered;
+            const bool blockKeys=imageInteraction.textInputBlocked || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
+                navigationActive || ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle);
             frame.viewport = {origin.x,origin.y,size.x,size.y,imageHovered,
-                ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)};
+                imageInteraction.textInputBlocked || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)};
             frame.viewport.windowId=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(host->PlatformHandle));
             imageDrawList_=ImGui::GetWindowDrawList();imageRegion_=frame.viewport;
             acceptViewportModelDrop(frame);
@@ -346,7 +349,8 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const auto handles=decalEditFrame_?(operation_==ImGuizmo::ROTATE?ImGuizmo::ROTATE_Z:
                     static_cast<ImGuizmo::OPERATION>(ImGuizmo::SCALE_X|ImGuizmo::SCALE_Y)):static_cast<ImGuizmo::OPERATION>(operation_);
                 const bool changed = front && ImGuizmo::Manipulate(view.data(),projection.data(),handles,
-                    decalEditFrame_?ImGuizmo::LOCAL:ImGuizmo::WORLD,proxy_.data());
+                    decalEditFrame_?ImGuizmo::LOCAL:ImGuizmo::WORLD,proxy_.data(),nullptr,
+                    rotationGizmoSnap(operation_==ImGuizmo::ROTATE,ImGui::GetIO().KeyShift,rotationSnapDegrees_));
                 overGizmo |= front && ImGuizmo::IsOver();
                 if (ImGuizmo::IsUsing() && !transformDrag_.active()) {
                     ImGui::SetWindowFocus();
@@ -366,13 +370,18 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 if(transformDrag_.active() && ImGui::IsKeyPressed(ImGuiKey_Escape,false))cancel(document,renderer);
                 else if(transformDrag_.active() && !ImGuizmo::IsUsing())transformDrag_.finish(document);
             }
+            // Release ownership even if a newly blocked/hidden handle skipped
+            // Manipulate this frame. A transaction must not outlive its button.
+            if(transformDrag_.active() && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                transformDrag_.finish(document);ImGuizmo::Enable(false);
+            }
             draw->ChannelsSetCurrent(0);
             // Resolve markers after applying this frame's gizmo delta, so their
             // heading and the light submitted later in the frame agree exactly.
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
                 if(!document.scene().isVisible(record.id))continue;
-                if (!record.directional && !record.point && !record.particle && !record.decal && !record.collider && !record.controller && !record.navigationVolume && !record.camera && (record.model || record.parent)) continue;
+                if (!viewportEntityHasMarker(record)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -409,7 +418,6 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 else if(record.decal) {
                     draw->AddQuad({center.x,center.y-7},{center.x+7,center.y},{center.x,center.y+7},{center.x-7,center.y},color,1.5f);
                 }
-                else draw->AddRect(ImVec2(center.x-5,center.y-5),ImVec2(center.x+5,center.y+5),color);
                 if (centerVisible && selected(document,record.id)) draw->AddCircle(center,11,color,16);
                 if (distance < iconDistance) { iconDistance=distance; iconHit=record.id; }
             }

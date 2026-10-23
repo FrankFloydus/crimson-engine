@@ -31,6 +31,9 @@ void run() {
     require(missingRejected,"Renderer override without a value was accepted.");
     require(parse({"--profile","startup"}).profileDuration==15,"Startup capture default duration changed.");
     require(parse({"--profile","gameplay"}).profileDuration==10,"Gameplay capture default duration changed.");
+    require(parse({"--profile","editor"}).profileMode=="editor" && parse({"--profile","editor"}).profileDuration==10,
+        "Editor capture mode or default duration was not parsed.");
+    require(parse({"--profile","editor","--profile-duration","25"}).profileDuration==25,"Editor capture ignored its duration.");
     const auto profile=parse({"--profile","startup","--profile-duration","37","--profile-output","capture directory"});
     require(profile.profileMode=="startup" && profile.profileDuration==37 && profile.profileOutput=="capture directory",
         "Tracy capture options were not retained.");

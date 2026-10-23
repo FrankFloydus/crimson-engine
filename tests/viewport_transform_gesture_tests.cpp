@@ -1,4 +1,5 @@
 #include "editor/ViewportTransformGesture.h"
+#include "editor/ViewportRotationSnap.h"
 #include "decals/DecalTransform.h"
 #include "scene/CameraAuthoring.h"
 #include <imgui_internal.h>
@@ -109,18 +110,18 @@ void rotateAffineAndCancel(const std::filesystem::path& root) {
     const auto proxy=math::translation(pivot);const auto history=document.history().size();const auto count=document.scene().records().size();
     const auto delta=proxy*math::eulerRotationXYZ({0,1.2f,0})* *math::inverse(proxy);
     ViewportTransformGesture drag;
-    require(drag.begin(document,{first,second},proxy,ViewportTransformOperation::Rotate,true) && drag.duplicating(),"Shift rotate did not latch duplication.");
+    require(drag.begin(document,{first,second},proxy,ViewportTransformOperation::Rotate,true) && !drag.duplicating(),"Shift rotate incorrectly latched duplication.");
     require(drag.update(document,delta*proxy,true),"Shift rotate through an affine parent failed.");
-    const auto copies=document.selection().ids;
-    require(copies.size()==2 && copies[0]!=first && copies[1]!=second && document.scene().records().size()==count+2,"Shift rotate did not select exactly the new copies.");
-    near(*document.scene().worldTransform(copies[0]),delta*firstWorld,"Rotated copy lost parent scale, reflection or shear.");
-    near(*document.scene().worldTransform(copies[1]),delta*secondWorld,"Multi-selection rotation used a different pivot for the second copy.");
-    require(document.scene().find(first)->local==firstLocal && document.scene().find(second)->local==secondLocal,"Shift rotate moved original entities.");
+    require(document.selection().ids==std::vector<EntityId>{first,second} && document.scene().records().size()==count,"Shift rotate duplicated or replaced selected entities.");
+    near(*document.scene().worldTransform(first),delta*firstWorld,"Rotation lost parent scale, reflection or shear.");
+    near(*document.scene().worldTransform(second),delta*secondWorld,"Multi-selection rotation used a different pivot for the second entity.");
     drag.cancel(document);
-    require(!drag.active() && !document.transactionActive() && document.scene().records().size()==count && document.history().size()==history,"Canceled Shift rotate left copies or history.");
+    require(!drag.active() && !document.transactionActive() && document.scene().records().size()==count && document.history().size()==history,"Canceled Shift rotate left an edit or history.");
+    require(document.scene().find(first)->local==firstLocal && document.scene().find(second)->local==secondLocal,"Canceled Shift rotate did not restore exact affine transforms.");
     require(document.selection().ids==std::vector<EntityId>{first,second} && document.selection().primary==first,"Canceled Shift rotate did not restore source selection.");
-    require(drag.begin(document,{first,second},proxy,ViewportTransformOperation::Rotate,true) && drag.update(document,delta*proxy,true) && drag.finish(document),"Release did not commit a duplicate rotation.");
-    require(document.history().size()==history+1 && document.undo() && document.scene().records().size()==count,"Duplicate rotation Undo retained copies.");
+    require(drag.begin(document,{first,second},proxy,ViewportTransformOperation::Rotate,true) && drag.update(document,delta*proxy,true) && drag.finish(document),"Release did not commit rotation.");
+    require(document.history().size()==history+1 && document.undo() && document.scene().records().size()==count,"Rotation Undo retained an edit.");
+    require(document.scene().find(first)->local==firstLocal && document.scene().find(second)->local==secondLocal,"Rotation Undo did not restore exact affine transforms.");
 }
 void decalSurfaceGestures(const std::filesystem::path& root) {
     const auto axis=[](const Mat4& frame,unsigned column){return Vec3{frame.at(0,column),frame.at(1,column),frame.at(2,column)};};
@@ -188,14 +189,13 @@ void decalSurfaceGestures(const std::filesystem::path& root) {
         drag.cancel(document);require(sameEntity(*document.scene().find(entity),original),"Surface scale Cancel lost the exact raw transform.");
 
         require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Rotate,true,*frame)&&drag.update(document,rotatedProxy,true),
-            "Shift surface rotate did not create a copy.");
-        const auto copy=document.selection().primary;
-        require(copy!=entity&&document.scene().records().size()==count+1&&sameEntity(*document.scene().find(entity),original),
-            "Shift surface rotate changed its original or produced the wrong copy count.");
-        require(document.scene().find(copy)->parent==parent,"Shift surface rotate detached its copied decal.");
-        near(*document.scene().worldTransform(copy),turned,"Shift surface rotate did not use the canonical footprint baseline.");
-        require(drag.finish(document)&&document.undo()&&!document.scene().contains(copy)&&sameEntity(*document.scene().find(entity),original),
-            "Shift surface rotate Undo did not restore the exact original and remove its copy.");
+            "Shift surface rotate did not edit its decal.");
+        require(document.selection().primary==entity&&document.scene().records().size()==count&&!drag.duplicating(),
+            "Shift surface rotate duplicated its decal.");
+        require(document.scene().find(entity)->parent==parent,"Shift surface rotate detached its decal.");
+        near(*document.scene().worldTransform(entity),turned,"Shift surface rotate did not use the canonical footprint baseline.");
+        require(drag.finish(document)&&document.undo()&&sameEntity(*document.scene().find(entity),original),
+            "Shift surface rotate Undo did not restore the exact original.");
     }
 }
 void invalidation(const std::filesystem::path& root) {
@@ -246,7 +246,8 @@ public:
         ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());ImGuizmo::SetRect(20,20,800,600);
         ImGuizmo::SetOrthographic(true);ImGuizmo::Enable(!waitForRelease_&&!ImGui::GetIO().AppFocusLost);
         const auto operation=operation_==ViewportTransformOperation::Rotate?ImGuizmo::ROTATE_Z:ImGuizmo::TRANSLATE_X;
-        const bool changed=ImGuizmo::Manipulate(view_.data(),projection_.data(),operation,ImGuizmo::WORLD,proxy_.data());
+        const bool changed=ImGuizmo::Manipulate(view_.data(),projection_.data(),operation,ImGuizmo::WORLD,proxy_.data(),nullptr,
+            rotationGizmoSnap(operation_==ViewportTransformOperation::Rotate,ImGui::GetIO().KeyShift,snapDegrees));
         hovered=ImGuizmo::IsOver(operation);
         if(ImGuizmo::IsUsing()&&!gesture.active()) {
             require(gesture.begin(document,document.scene().topmost(document.selection().ids),baseline_,operation_,ImGui::GetIO().KeyShift),"Real ImGuizmo press did not arm its production gesture.");
@@ -271,6 +272,7 @@ public:
     }
     void shift(bool value){ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift,value);}
     SceneDocument document;ViewportTransformGesture gesture;EntityId entity{};bool hovered{};
+    float snapDegrees{DefaultRotationSnapDegrees};
 private:
     ImGuiContext* context_{};ViewportTransformOperation operation_{};bool waitForRelease_{};
     Mat4 proxy_{},baseline_{};
@@ -298,19 +300,46 @@ void realGizmoInput(const std::filesystem::path& root) {
     {
         GizmoUi ui(root,ViewportTransformOperation::Rotate);const auto point=ui.pickHandle();
         const auto initial=*ui.document.scene().find(ui.entity);const auto history=ui.document.history().size();
-        const auto radius=point[0]-420.f;const Vec2 rotated{420.f+radius*.8f,320.f-radius*.6f};
+        const auto angle=[&] {
+            const auto local=ui.document.scene().find(ui.entity)->local;
+            return std::abs(std::atan2(local.at(1,0),local.at(0,0))*57.295779513f);
+        };
+        const auto rotatedPoint=[](Vec2 start) {
+            const auto radius=start[0]-420.f;
+            return Vec2{420.f+radius*.766044443f,320.f-radius*.642787610f}; // 40 degrees
+        };
+        const auto rotated=rotatedPoint(point);
         ui.shift(true);ui.mouse(point,true);ui.tick();ui.mouse(rotated,true);ui.tick();
-        require(ui.document.scene().records().size()==2&&ui.document.selection().primary!=ui.entity,"Real Shift+Rotate did not create a rotated copy.");
-        require(sameEntity(*ui.document.scene().find(ui.entity),initial),"Real Shift+Rotate changed the original.");
-        const auto copy=ui.document.selection().primary;
-        require(ui.document.scene().find(copy)->local!=initial.local,"Real rotate handle left its copy unrotated.");
+        require(ui.document.scene().records().size()==1&&ui.document.selection().primary==ui.entity&&!ui.gesture.duplicating(),"Real Shift+Rotate duplicated the selection.");
+        require(std::abs(angle()-45.f)<.01f,"The default 15-degree setting did not snap a real rotate handle to 45 degrees.");
         ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape,true);ui.tick();
-        require(ui.document.scene().records().size()==1&&ui.document.selection().primary==ui.entity&&!ui.document.transactionActive()&&ui.document.history().size()==history,"Escape retained real rotated copies or history.");
+        require(sameEntity(*ui.document.scene().find(ui.entity),initial)&&!ui.document.transactionActive()&&ui.document.history().size()==history,"Escape retained the real snapped rotation or history.");
         ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape,false);ui.mouse(rotated,false);ui.tick();
-        const auto again=ui.pickHandle();ui.mouse(again,true);ui.tick();ui.mouse({420.f+(again[0]-420.f)*.8f,320.f-(again[0]-420.f)*.6f},true);ui.tick();
-        require(ui.document.scene().records().size()==2,"Focus-loss fixture failed to duplicate.");
+        ui.shift(false);ui.snapDegrees=30.f;
+        const auto again=ui.pickHandle();const auto againRotated=rotatedPoint(again);
+        ui.mouse(again,true);ui.tick();ui.mouse(againRotated,true);ui.tick();
+        // ImGui rounds mouse positions to physical pixels; a short handle's
+        // requested 40-degree arc can therefore differ by about one degree.
+        const auto unsnappedAngle=angle();
+        require(std::abs(unsnappedAngle-40.f)<2.f,"An unmodified rotate handle unexpectedly snapped.");
+        ui.shift(true);ui.tick();
+        require(std::abs(angle()-30.f)<.01f,"Pressing Shift during rotation did not apply the changed 30-degree setting.");
+        ui.shift(false);ui.tick();
+        require(std::abs(angle()-unsnappedAngle)<.01f,"Releasing Shift during rotation did not restore continuous rotation.");
+        ui.shift(true);ui.tick();
         ImGui::GetIO().AddFocusEvent(false);ui.tick();
-        require(ui.document.scene().records().size()==1&&!ui.document.transactionActive()&&ui.document.history().size()==history,"Application focus loss committed real rotated copies.");
+        require(sameEntity(*ui.document.scene().find(ui.entity),initial)&&!ui.document.transactionActive()&&ui.document.history().size()==history,"Application focus loss committed a real snapped rotation.");
+    }
+    {
+        GizmoUi ui(root,ViewportTransformOperation::Rotate);const auto point=ui.pickHandle();
+        const auto initial=*ui.document.scene().find(ui.entity);const auto history=ui.document.history().size();
+        const auto radius=point[0]-420.f;const Vec2 rotated{420.f+radius*.766044443f,320.f-radius*.642787610f};
+        ui.snapDegrees=30.f;ui.shift(true);ui.mouse(point,true);ui.tick();ui.mouse(rotated,true);ui.tick();
+        const auto snapped=*ui.document.scene().find(ui.entity);
+        ui.mouse(rotated,false);ui.tick();
+        require(ui.document.scene().records().size()==1&&ui.document.history().size()==history+1&&!ui.document.transactionActive(),"Release did not commit exactly one snapped rotation.");
+        require(ui.document.undo()&&sameEntity(*ui.document.scene().find(ui.entity),initial),"Snapped rotation Undo did not restore the exact original.");
+        require(ui.document.redo()&&sameEntity(*ui.document.scene().find(ui.entity),snapped),"Snapped rotation Redo lost the committed pose or entity identity.");
     }
 }
 }

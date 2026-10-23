@@ -7,6 +7,7 @@
 #include "ColliderGizmo.h"
 #include "NavigationVolumeGizmo.h"
 #include "ViewportTransformGesture.h"
+#include "ViewportRotationSnap.h"
 #include <span>
 #include <optional>
 #include <vector>
@@ -31,6 +32,7 @@ public:
     void setDecalFrameQuery(std::function<std::optional<Mat4>(EntityId)> query) { decalFrames_=std::move(query); }
 private:
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
+    float rotationSnapDegrees_{DefaultRotationSnapDegrees};
     bool pickCtrl_{false}, pickShift_{false}, waitForRelease_{false};
     uint64_t serial_{}, selectionGeneration_{};
     std::vector<EntityId> previousSelection_;
