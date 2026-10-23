@@ -1,4 +1,5 @@
 #include "SceneViewport.h"
+#include "DecalAuthoring.h"
 #include "tools/RenderDebugControls.h"
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
@@ -324,10 +325,16 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             if (transformVisible && !waitForRelease_ && !colliderHandles.hovered && !volumeHandles.hovered && !colliderDrag_.active() && !volumeDrag_.active() && !materialDrop_.active() && !decalDrop_.active() && !frame.materialAssignment &&
                 !navigationActive && !keyboardBlocked && !ImGui::GetIO().AppFocusLost && (!document.transactionActive() || transformDrag_.active())) {
                 if (!transformDrag_.active()) {
+                    decalEditFrame_.reset();
                     const auto bounds = boundsOf(document,assets,{},collisionMeshes_,agentProfiles_);
                     if (visibleSelection.size() == 1) {
                         const auto world = document.scene().worldTransform(transformRoots.front()).value_or(Mat4{});
                         proxy_ = math::translation(math::transformPoint(world,{0,0,0}));
+                        if(operation_==ImGuizmo::ROTATE||operation_==ImGuizmo::SCALE) {
+                            const auto id=transformRoots.front();
+                            decalEditFrame_=crimson::decalEditFrame(document.scene(),id,decalFrames_?decalFrames_(id):std::nullopt);
+                            if(decalEditFrame_)if(const auto frame=decals::decalGizmoFrame(*decalEditFrame_))proxy_=*frame;
+                        }
                     } else if (bounds.valid) proxy_ = math::translation((bounds.minimum+bounds.maximum)*0.5);
                     startProxy_ = proxy_;
                 }
@@ -336,14 +343,16 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const float proxyClipZ=math::transformPoint(vp,math::transformPoint(proxy_,{0,0,0}))[2];
                 const bool front=transformDrag_.active() || (math::finite(proxyClipZ) && proxyClipZ >= .001f);
                 ImGuizmo::Enable(front && !blockKeys && ImGui::GetDragDropPayload() == nullptr);
-                const bool changed = front && ImGuizmo::Manipulate(view.data(),projection.data(),static_cast<ImGuizmo::OPERATION>(operation_),
-                    ImGuizmo::WORLD,proxy_.data());
+                const auto handles=decalEditFrame_?(operation_==ImGuizmo::ROTATE?ImGuizmo::ROTATE_Z:
+                    static_cast<ImGuizmo::OPERATION>(ImGuizmo::SCALE_X|ImGuizmo::SCALE_Y)):static_cast<ImGuizmo::OPERATION>(operation_);
+                const bool changed = front && ImGuizmo::Manipulate(view.data(),projection.data(),handles,
+                    decalEditFrame_?ImGuizmo::LOCAL:ImGuizmo::WORLD,proxy_.data());
                 overGizmo |= front && ImGuizmo::IsOver();
                 if (ImGuizmo::IsUsing() && !transformDrag_.active()) {
                     ImGui::SetWindowFocus();
                     const auto operation=operation_==ImGuizmo::ROTATE?ViewportTransformOperation::Rotate:
                         operation_==ImGuizmo::SCALE?ViewportTransformOperation::Scale:ViewportTransformOperation::Translate;
-                    if(transformDrag_.begin(document,transformRoots,startProxy_,operation,ImGui::GetIO().KeyShift)) {
+                    if(transformDrag_.begin(document,transformRoots,startProxy_,operation,ImGui::GetIO().KeyShift,decalEditFrame_)) {
                         pickIntent_=false;renderer.cancelPicking();++serial_;
                     }
                 }

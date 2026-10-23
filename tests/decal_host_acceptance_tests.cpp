@@ -7,6 +7,7 @@
 #include "editor/EditorSession.h"
 #include "editor/ResourceRuntime.h"
 #include "editor/ViewportDecalDrop.h"
+#include "decals/DecalTransform.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
@@ -41,6 +42,7 @@ using Clock=std::chrono::steady_clock;
 constexpr std::uint16_t Width=640,Height=480;
 constexpr const char* TextureId="737de3e1-9ff3-498f-93f0-f0b6207fad13";
 constexpr const char* DecalId="db6e9555-b494-48fc-9715-a78208e0e8eb";
+constexpr const char* WallDecalId="68011f04-64c3-4596-b6dc-1f12047863ba";
 void check(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 std::string readText(const fs::path& file){std::ifstream in(file,std::ios::binary);check(bool(in),"Cannot read "+file.string());return {std::istreambuf_iterator<char>(in),{}};}
 struct Project {
@@ -62,6 +64,28 @@ bool onTriangle(Vec3 point,const std::array<Vec3,3>& p,double& error){
     const double v=(bb*qa-ab*qb)/denominator,w=(aa*qb-ab*qa)/denominator,u=1-v-w;
     if(std::min({u,v,w})<-.0001||std::max({u,v,w})>1.0001)return false;
     const auto reconstructed=p[0]*float(u)+p[1]*float(v)+p[2]*float(w);error=math::length(reconstructed-point);return error<.00005;
+}
+Vec2 patchUvAt(const DecalPatchData& patch,Vec3 point) {
+    std::optional<Vec2> result;
+    for(std::size_t i=0;i+2<patch.indices.size();i+=3){
+        const auto& p=patch.vertices[patch.indices[i]];const auto& q=patch.vertices[patch.indices[i+1]];const auto& r=patch.vertices[patch.indices[i+2]];
+        const auto a=q.position-p.position,b=r.position-p.position,c=point-p.position;
+        const double aa=math::dot(a,a),ab=math::dot(a,b),bb=math::dot(b,b),ca=math::dot(c,a),cb=math::dot(c,b),denominator=aa*bb-ab*ab;
+        if(std::abs(denominator)<1e-16)continue;
+        const double v=(bb*ca-ab*cb)/denominator,w=(aa*cb-ab*ca)/denominator,u=1-v-w;
+        if(std::min({u,v,w})<-.0001||std::max({u,v,w})>1.0001||math::length(p.position*float(u)+q.position*float(v)+r.position*float(w)-point)>.00005)continue;
+        const Vec2 uv{float(p.uv[0]*u+q.uv[0]*v+r.uv[0]*w),float(p.uv[1]*u+q.uv[1]*v+r.uv[1]*w)};
+        if(result)check(std::abs((*result)[0]-uv[0])<.002&&std::abs((*result)[1]-uv[1])<.002,"Wall chart has conflicting UVs at a fixed source point.");
+        result=uv;
+    }
+    check(bool(result),"Authoring probe left the prepared +X wall patch.");return *result;
+}
+Mat4 savedWorld(const Json& entities,const std::string& id,unsigned depth=0) {
+    check(depth<32,"Saved authoring fixture hierarchy is cyclic or too deep.");
+    const auto found=std::find_if(entities.begin(),entities.end(),[&](const auto& entity){return entity.at("id")==id;});
+    check(found!=entities.end(),"Saved authoring fixture lost its receiver parent.");
+    const auto local=found->at("local").get<Mat4>();const auto parent=found->value("parent",std::string("0000000000000000"));
+    return parent=="0000000000000000"?local:savedWorld(entities,parent,depth+1)*local;
 }
 void exportGeometry(Json& report,const decals::ModelSurface& source,const Mat4& world,const DecalPatchData* patch,const Mat4& placement) {
     report["entityWorld"]=world;report["placement"]=placement;report["sourceFingerprint"]=source.fingerprint;report["sourceDraws"]=Json::array();
@@ -110,6 +134,20 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
     writeFileAtomically(output/"actual-source-decal.json",assetBytes);
     auto isolated=Json::parse(serializeSceneSnapshot({newAssetId(),"Actual saved cylinder",{},{}}));
     isolated["entities"]=Json::array();const auto authored=Json::parse(sceneBytes);
+    const auto wallEntity=std::find_if(authored.at("entities").begin(),authored.at("entities").end(),[](const auto& entity){return entity.contains("decal")&&entity.at("decal").at("asset")==WallDecalId;});
+    check(wallEntity!=authored.at("entities").end(),"Actual saved New Decal 2 is unavailable.");
+    const auto wallAssetFile=resolveAssetPath(sourceRoot,WallDecalId);const auto wallAssetBytes=readText(wallAssetFile);
+    auto wallSurface=deserializeDecalAsset(wallAssetBytes,WallDecalId);
+    const auto wallMaterialFile=resolveAssetPath(sourceRoot,wallSurface.material.id);const auto wallMaterialBytes=readText(wallMaterialFile);
+    const auto wallMaterial=loadMaterialAsset(sourceRoot,wallSurface.material.id);std::vector<fs::path> wallSourceFiles{wallAssetFile,wallMaterialFile};
+    for(const auto& image:materialTextureReferences(wallMaterial))if(!isEngineAssetId(image))wallSourceFiles.push_back(resolveAssetPath(sourceRoot,image));
+    const auto wallSourceFingerprint=fingerprintFiles(wallSourceFiles);
+    copyMaterial(wallMaterial);saveDecalAsset(project.root,wallSurface);
+    const auto wallSavedFrame=savedWorld(authored.at("entities"),wallEntity->at("id").get<std::string>());
+    const auto wallSavedReceiver=wallEntity->at("decal").at("seed").at("receiver").get<std::string>();
+    const auto wallSavedWorld=savedWorld(authored.at("entities"),wallSavedReceiver);
+    const auto wallSeedPoint=wallEntity->at("decal").at("seed").at("localPoint").get<Vec3>();
+    const auto wallPoint=math::transformPoint(wallSavedWorld,wallSeedPoint);
     EntityId actualReceiver{},actualDecal{};
     for(const auto& entity:authored.at("entities")){
         if(!entity.contains("decal")||entity.at("decal").at("asset")!=DecalId)continue;
@@ -281,7 +319,86 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
     };
     SceneDocument builtin(project.root);const auto cylinder=builtin.createCylinder("Real host Cylinder");const bool freshReady=run(builtin,cylinder,0,"committed-cylinder",true);
     SceneDocument actual(project.root);check(actual.load(isolatedId),actual.status());const bool actualReady=run(actual,actualReceiver,actualDecal,"actual-saved-cylinder",false);
+    // Isolate the saved Box_3 +X face, keeping its actual affine transform and
+    // New Decal 2 material. A wide builtin box places its +Z face on the saved
+    // source plane z=-2; distant edges keep wall UV edits independent of folds.
+    SceneDocument wall(project.root);const auto wallReceiver=wall.createBox("Box_3 +X authoring receiver");
+    auto wallRecord=*wall.scene().find(wallReceiver);wallRecord.primitive=PrimitiveMeshSettings{};wallRecord.primitive->size={16,16,4};
+    wallRecord.local=wallSavedWorld*math::translation({0,0,wallSeedPoint[2]-2});
+    check(wall.updateEntity(wallReceiver,wallRecord),wall.status());const auto unchangedReceiver=*wall.scene().find(wallReceiver);
+    const auto wallNormalMatrix=math::normalMatrix(wallRecord.local);check(bool(wallNormalMatrix),"Invalid saved Box_3 affine transform.");
+    const auto wallNormal=math::normalized(math::transformDirection(*wallNormalMatrix,{0,0,1}));
+    check(math::dot(wallNormal,Vec3{1,0,0})>.999,"Saved Box_3 authoring fixture is no longer a +X wall.");
+    DecalPlacementResult wallPlacement;
+    until([&]{wallPlacement=decals.resolvePlacement(wall.scene(),wallReceiver,0,0,0,wallPoint);check(!wallPlacement.failed,wallPlacement.diagnostic);return wallPlacement.ready;},"Saved +X wall source did not resolve.");
+    SceneDecal wallStain;wallStain.asset.id=wallSurface.id;wallStain.seed=wallPlacement.seed;wallStain.edgeFeather=0;
+    const auto wallDecal=wall.createDecal(wallStain,"New Decal 2 wall authoring",wallSavedFrame);check(wallDecal!=0,wall.status());
+    const auto canonical=decals::decalAuthoringFrame(wallSavedFrame,wallNormal);check(bool(canonical),"Saved New Decal 2 frame cannot be canonicalized.");
+    const auto square=decals::decalGizmoFrame(*canonical);check(bool(square),"Saved +X wall has no orthonormal authoring basis.");
+    const auto origin=math::transformPoint(*square,{}),axisU=math::transformDirection(*square,{1,0,0}),axisV=math::transformDirection(*square,{0,1,0});
+    const std::array<Vec3,3> probes{origin,origin+axisU*.08,origin+axisV*.08};
+    Camera wallCamera;wallCamera.position=wallPoint+wallNormal*5;wallCamera.target=wallPoint;
+    wallCamera.fovAxis=CameraFovAxis::Vertical;wallCamera.fov=45;wallCamera.nearPlane=.05f;wallCamera.farPlane=2048;
+    std::optional<std::uint64_t> originalSourceFingerprint;
+    std::shared_ptr<const decals::ModelSurface> originalWallSource;
+    const auto prepareWall=[&](const Mat4& transform,const std::string& label){
+        auto record=*wall.scene().find(wallDecal);record.local=transform;check(wall.updateEntity(wallDecal,record,label)||wall.scene().find(wallDecal)->local==transform,wall.status());
+        DecalPreparedScene prepared;std::shared_ptr<const DecalPatchData> patch;
+        until([&]{
+            auto extracted=extractScene(wall.scene());prepared=decals.prepare(wall.scene(),extracted,ResourcePriority::Placement);
+            if(!prepared.ready||!prepared.refined||prepared.decals.empty())return false;
+            const auto model=std::find_if(extracted.models.begin(),extracted.models.end(),[&](const auto& value){return value.id==wallReceiver;});
+            check(model!=extracted.models.end(),"Wall authoring lost its receiver occurrence.");
+            const auto source=decals.modelSurface(*model);if(!source.current)return false;
+            if(!originalSourceFingerprint){originalSourceFingerprint=source.fingerprint;originalWallSource=source.surface;}
+            check(source.fingerprint==*originalSourceFingerprint&&source.surface==originalWallSource,"Decal authoring rebuilt or changed the original wall source.");
+            patch=decals.patch(wallDecal);return bool(patch);
+        },"Wall authoring preparation failed after "+label+": "+decals.status(wallDecal));
+        check(wall.scene().find(wallReceiver)->local==unchangedReceiver.local&&wall.scene().find(wallReceiver)->primitive==unchangedReceiver.primitive,"Decal authoring edited the receiver.");
+        check(wall.scene().find(wallDecal)->local==transform&&wall.scene().find(wallDecal)->decal->seed==wallStain.seed,"Decal preparation rewrote the authored transform or seed.");
+        check(std::all_of(patch->receivers.begin(),patch->receivers.end(),[&](const auto& span){return span.entityId==wallReceiver;}),"Wall authoring switched to a different receiver.");
+        std::array<Vec2,3> uv;for(unsigned i=0;i<uv.size();++i)uv[i]=patchUvAt(*patch,probes[i]);
+        report["wallAuthoring"]["cases"][label]={{"frame",transform},{"uvAtFixedWorldPoints",uv},{"patchFingerprint",patch->fingerprint},{"vertices",patch->vertices.size()},{"status",prepared.status}};
+        until([&]{
+            auto extracted=extractScene(wall.scene());DirectionalLight light;light.direction=wallNormal*-1;light.intensity=2;extracted.directional={light};
+            EditorRenderFrameInput input;input.extracted=std::move(extracted);input.settings.environment.enabled=true;input.settings.environment.background.show=false;
+            input.settings.environment.ambientLight.source=AmbientLightSource::Disabled;input.settings.environment.toneMapping=ToneMapping::Linear;
+            input.sceneCamera=wallCamera;input.gameCamera=wallCamera;input.sceneWidth=input.gameWidth=Width;input.sceneHeight=input.gameHeight=Height;
+            input.sceneAspect=float(Width)/Height;input.sceneVisible=input.gameVisible=true;input.surfacePickActive=true;
+            input.decals=prepared.decals;input.decalReceivers=prepared.receivers;input.worldId=53;input.shadowResolution=256;
+            EditorRenderFramePreparationStats ready;const auto packet=prepareEditorRenderFrame(std::move(input),assets,models,&ready);renderer.renderFrame(packet);models.endFrame();
+            return ready.ready&&ready.refined;
+        },"Wall receiver render packet did not become ready after "+label);
+        const auto image=read(renderer.viewportTexture()),gameImage=read(renderer.gameViewportTexture());
+        check(image.rgba==gameImage.rgba,"Wall authoring differs between Scene and Game.");saveImage(output/("wall-authoring-"+label+"-scene.png"),image);
+        writeFileAtomically(output/"host-report.json",report.dump(2));return uv;
+    };
+    const auto sameUv=[&](const std::array<Vec2,3>& a,const std::array<Vec2,3>& b,const char* message){for(unsigned i=0;i<a.size();++i)for(unsigned j=0;j<2;++j)check(std::abs(a[i][j]-b[i][j])<.002,message);};
+    const auto delta=[](const std::array<Vec2,3>& uv,unsigned point){return Vec2{uv[point][0]-uv[0][0],uv[point][1]-uv[0][1]};};
+    const auto expect=[](Vec2 value,Vec2 expected,const char* message){check(std::abs(value[0]-expected[0])<.002&&std::abs(value[1]-expected[1])<.002,message);};
+    const auto rawUv=prepareWall(wallSavedFrame,"saved-raw-frame"),canonicalUv=prepareWall(*canonical,"saved-surface-frame");
+    sameUv(rawUv,canonicalUv,"Canonicalizing saved New Decal 2 changed its visible wall UV mapping.");
+    const auto baseline=prepareWall(*square,"square-baseline");
+    expect(delta(baseline,1),{.08f,0},"Baseline +X wall U chart axis is incorrect.");expect(delta(baseline,2),{0,.08f},"Baseline +X wall V chart axis is incorrect.");
+    const auto rotated=decals::withDecalRotation(*square,decals::decalRotationDegrees(*square)+90);check(bool(rotated),"Wall rotation was rejected.");
+    const auto rotatedUv=prepareWall(*rotated,"normal-spin-90");
+    expect(delta(rotatedUv,1),{0,-.08f},"A +90 degree normal spin did not map fixed U to -V.");expect(delta(rotatedUv,2),{.08f,0},"A +90 degree normal spin did not map fixed V to U.");
+    const auto wide=decals::withDecalSize(*square,{2,1});check(bool(wide),"Wall width edit was rejected.");const auto wideUv=prepareWall(*wide,"width-2");
+    expect(delta(wideUv,1),{.04f,0},"Width 2 did not halve delta U.");expect(delta(wideUv,2),{0,.08f},"Width 2 changed delta V.");
+    const auto doubled=decals::withDecalSize(*square,{2,2});check(bool(doubled),"Wall XY scale was rejected.");const auto doubledUv=prepareWall(*doubled,"xy-2");
+    expect(delta(doubledUv,1),{.04f,0},"XY 2 did not halve delta U.");expect(delta(doubledUv,2),{0,.04f},"XY 2 did not halve delta V.");
+    auto hiddenDepth=*square;for(unsigned row=0;row<3;++row)hiddenDepth.at(row,2)*=215;
+    const auto depthUv=prepareWall(hiddenDepth,"hidden-z-215");sameUv(depthUv,baseline,"Hidden Z 215 entered the wall footprint size.");
+    const auto editedDepth=decals::withDecalSize(hiddenDepth,{2,1});check(bool(editedDepth),"Hidden-depth size edit was rejected.");
+    sameUv(prepareWall(*editedDepth,"hidden-z-width-2"),wideUv,"Hidden Z changed a later width edit.");
+    report["wallAuthoring"]["savedEntity"]=*wallEntity;report["wallAuthoring"]["savedReceiverWorld"]=wallSavedWorld;
+    report["wallAuthoring"]["fixtureReceiverWorld"]=wallRecord.local;report["wallAuthoring"]["fixedWorldPoints"]=probes;
+    report["wallAuthoring"]["sourceFingerprint"]=*originalSourceFingerprint;report["wallAuthoring"]["passed"]=true;
+    report["wallAuthoring"]["savedHiddenDepthLength"]=math::length(math::transformDirection(wallSavedFrame,{0,0,1}));
+    writeFileAtomically(output/"host-report.json",report.dump(2));
+    std::cout<<"New Decal 2 +X wall: fixed-point UV spin/width/XY/hidden-Z checks passed; original receiver/source/seed unchanged.\n";
     check(readText(sourceScene)==sceneBytes&&readText(sourceAsset)==assetBytes&&fingerprintFiles({sourceImage})==sourceImageFingerprint,"Read-only source project changed during acceptance.");
+    check(readText(wallAssetFile)==wallAssetBytes&&readText(wallMaterialFile)==wallMaterialBytes&&fingerprintFiles(wallSourceFiles)==wallSourceFingerprint,"Read-only New Decal 2 source assets changed during acceptance.");
     runtime.stop();resources.stop();renderer.drainPending(frame);check(freshReady&&actualReady,"Host Cylinder surface wrapping failed; see host-report.json and baseline screenshots.");
 }
 }

@@ -533,7 +533,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     std::uint64_t playParticle{},placeDecal{};std::string openParticle,openMaterial,openProfile,openEffect,openAnimation,openDecal;
     auto inspectorGameplay=gameplay;inspectorGameplay.openEffect=&openEffect;
     if (panels_.outliner) drawSceneOutliner(document,assets,!viewportBusy() && !actionPending);
-    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_},&collisionLayers.names(),inspectorGameplay,&openAnimation,{&openDecal,&placeDecal,decalStatus_});
+    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial,{&navigationPreviewProfile_,&openProfile,navigationBuildStatus_},&collisionLayers.names(),inspectorGameplay,&openAnimation,{&openDecal,&placeDecal,decalStatus_,decalFrames_});
     if(placeDecal)viewport_.beginDecalPlacement(placeDecal);
     const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,

@@ -1,5 +1,7 @@
 #include "InspectorTransform.h"
 #include "PropertyReset.h"
+#include "editor/DecalAuthoring.h"
+#include "decals/DecalTransform.h"
 #include "scene/SceneDocument.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -24,7 +26,7 @@ bool finishInspectorTransform(SceneDocument& document,InspectorTransformState& c
     return true;
 }
 void drawInspectorTransform(SceneDocument& document, InspectorTransformState& cache, const EntityRecord& record,
-                            const InspectorTransformTransactions& transactions) {
+                            const InspectorTransformTransactions& transactions,const std::optional<Mat4>& decalSurfaceFrame) {
     if (!ImGui::CollapsingHeader("Transform",ImGuiTreeNodeFlags_DefaultOpen)) {
         if (cache.editing) {
             if (cache.activeItem==ImGui::GetActiveID()) ImGui::ClearActiveID();
@@ -41,23 +43,36 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
     };
     const bool sameContext=cache.entity==record.id && cache.documentGeneration==document.documentGeneration() &&
         cache.selection==document.selection().ids;
+    const bool decal=record.decal.has_value();
     if (!cache.valid || !sameContext || cache.refresh || cache.shownMatrix!=record.local ||
+        (decal&&cache.shownDecalSurfaceFrame!=decalSurfaceFrame) ||
         cache.sceneGeneration!=document.scene().generation() || cache.sceneRevision!=document.scene().revision()) {
         const auto displayed=math::affineTransformFields(record.local,sameContext && cache.valid ? &cache.fields : nullptr);
         if (displayed) {
+            const float decalReference=sameContext?cache.degrees[2]:0;
             cache.fields=*displayed; cache.degrees=inDegrees(displayed->rotationRadians);
             cache.valid=true; cache.error.clear();
+            if(decal){
+                const auto frame=decalEditFrame(document.scene(),record.id,decalSurfaceFrame);
+                cache.decalFrameValid=bool(frame);
+                if(frame){
+                    const auto size=decals::decalSize(*frame);
+                    cache.fields.scale={size[0],size[1],1};
+                    cache.degrees={0,0,decals::decalRotationDegrees(*frame,decalReference)};
+                }
+            }
         } else {
             cache.valid=false; cache.error="This transform cannot be displayed as position, rotation and scale.";
         }
         cache.entity=record.id; cache.documentGeneration=document.documentGeneration(); cache.selection=document.selection().ids;
         cache.sceneGeneration=document.scene().generation(); cache.sceneRevision=document.scene().revision();
         cache.shownMatrix=record.local; cache.refresh=false;
+        cache.shownDecalSurfaceFrame=decalSurfaceFrame;
     }
     if (cache.valid) {
         ImGui::PushID("Transform properties");
-        const std::array<const char*,3> labels{"Position","Rotation (deg)","Scale"};
-        const std::array<const char*,3> commandLabels{"Change local position","Change local rotation","Change local scale"};
+        const std::array<const char*,3> labels{"Position","Rotation (deg)",decal?"Size (m)":"Scale"};
+        const std::array<const char*,3> commandLabels{"Change local position",decal?"Rotate decal":"Change local rotation",decal?"Resize decal":"Change local scale"};
         const std::array<const char*,3> axes{"X","Y","Z"};
         const std::array<ImU32,3> axisColors{IM_COL32(170,0,0,255),IM_COL32(0,170,0,255),IM_COL32(0,0,170,255)};
         const std::array<float,3> speeds{.05f,.5f,.02f};
@@ -70,28 +85,45 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                 ImGui::SameLine(std::max(ImGui::GetItemRectMax().x-ImGui::GetWindowPos().x+ImGui::GetStyle().ItemSpacing.x,right));
                 resettableProperty(cache.scaleLinked,InspectorTransformState{}.scaleLinked,[&]{return ImGui::Checkbox("Lock proportions",&cache.scaleLinked);});
             }
-            if (ImGui::BeginTable("Axes",3,ImGuiTableFlags_SizingStretchSame)) {
-                for (const auto* axis:axes) ImGui::TableSetupColumn(axis,ImGuiTableColumnFlags_WidthStretch);
+            const unsigned columns=decal&&property>0?(property==1?1u:2u):3u;
+            if (ImGui::BeginTable("Axes",static_cast<int>(columns),ImGuiTableFlags_SizingStretchSame)) {
+                for(unsigned column=0;column<columns;++column)ImGui::TableSetupColumn(axes[column],ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableNextRow();
-                for (size_t axis=0;axis<3;++axis) {
-                    ImGui::TableSetColumnIndex(static_cast<int>(axis)); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(axes[axis]);
-                    ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
+                for (unsigned column=0;column<columns;++column) {
+                    const unsigned axis=decal&&property==1?2u:column;
+                    ImGui::TableSetColumnIndex(static_cast<int>(column));
+                    if(!(decal&&property==1)){
+                        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(decal&&property==2?(axis==0?"Width":"Height"):axes[axis]);
+                        ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
+                    }
                     ImGui::PushID(static_cast<int>(axis)); ImGui::SetNextItemWidth(-1);
                     const auto field=static_cast<unsigned>(property*3+axis);
                     auto value=property==0 ? cache.fields.position[axis] : property==1 ? cache.degrees[axis] : cache.fields.scale[axis];
+                    ImGui::BeginDisabled(decal&&property>0&&!cache.decalFrameValid);
                     const bool changed=resettableProperty(value,property==2?1.f:0.f,[&]{return ImGui::DragFloat("##value",&value,speeds[property],0,0,"%.3f");});
+                    ImGui::EndDisabled();
                     const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();
                     const float stripWidth=std::max(1.f,ImGui::GetFontSize()*.15f);
-                    ImGui::GetWindowDrawList()->AddRectFilled({minimum.x,minimum.y},{minimum.x+stripWidth,maximum.y},ImGui::GetColorU32(axisColors[axis]));
+                    if(!(decal&&property==1))ImGui::GetWindowDrawList()->AddRectFilled({minimum.x,minimum.y},{minimum.x+stripWidth,maximum.y},ImGui::GetColorU32(axisColors[axis]));
                     if ((ImGui::IsItemActivated() || changed) && (!cache.editing || cache.activeField!=field || !document.transactionActive())) {
                         // Another field can finish earlier in this same draw.
                         // Capture the document's current matrix and rotation
                         // basis, rather than this panel's begin-frame record.
                         const auto current=document.scene().find(record.id);
                         const auto captured=current ? math::affineTransformFields(current->local,&cache.fields) : std::nullopt;
-                        if (captured && transactions.begin(field,commandLabels[property])) {
+                        const auto frame=decal?decalEditFrame(document.scene(),record.id,decalSurfaceFrame):std::optional<Mat4>{};
+                        const auto parentWorld=current&&current->parent?document.scene().worldTransform(current->parent):std::optional<Mat4>{Mat4{}};
+                        const auto parentInverse=parentWorld?math::inverse(*parentWorld):std::nullopt;
+                        if (captured && (!decal||property==0||(frame&&parentInverse)) && transactions.begin(field,commandLabels[property])) {
+                            const float decalReference=cache.degrees[2];
                             cache.baseline=current->local; cache.fields=*captured; cache.degrees=inDegrees(captured->rotationRadians);
                             cache.captured=*captured; cache.capturedDegrees=cache.degrees; cache.editing=true;
+                            if(decal&&frame){
+                                cache.capturedDecalFrame=*frame;if(parentInverse)cache.capturedParentInverse=*parentInverse;
+                                const auto size=decals::decalSize(*frame);
+                                cache.fields.scale=cache.captured.scale={size[0],size[1],1};
+                                cache.degrees=cache.capturedDegrees={0,0,decals::decalRotationDegrees(*frame,decalReference)};
+                            }
                             cache.capturedScaleLinked=cache.scaleLinked;
                             cache.activeField=field; cache.activeItem=ImGui::GetItemID();
                             cache.shownMatrix=current->local; cache.sceneGeneration=document.scene().generation();
@@ -113,8 +145,14 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                                 requested=cache.captured.scale+Vec3{delta,delta,delta};
                             }
                             requested[axis]=value;
+                            if(decal)requested[2]=1;
                         }
-                        const auto candidate=property==0 ? math::withAffinePosition(cache.baseline,requested) : property==1 ?
+                        std::optional<Mat4> candidate;
+                        if(decal&&property>0){
+                            const auto world=property==1?decals::withDecalRotation(cache.capturedDecalFrame,value):
+                                decals::withDecalSize(cache.capturedDecalFrame,{requested[0],requested[1]});
+                            if(world)candidate=cache.capturedParentInverse*(*world);
+                        }else candidate=property==0 ? math::withAffinePosition(cache.baseline,requested) : property==1 ?
                             math::withAffineRotation(cache.baseline,cache.captured,requested) : math::withAffineScale(cache.baseline,cache.captured,requested);
                         if (candidate && document.update(changeEntity(record.id,[matrix=*candidate](auto& entity){entity.local=matrix;}))) {
                             if (property==0) cache.fields.position=requested;

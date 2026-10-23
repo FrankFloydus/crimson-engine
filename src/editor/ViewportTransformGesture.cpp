@@ -1,4 +1,5 @@
 #include "ViewportTransformGesture.h"
+#include "decals/DecalTransform.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,18 +21,26 @@ bool ViewportTransformGesture::capture(const SceneDocument& document,const std::
         const auto parent=record && record->parent?document.scene().worldTransform(record->parent):std::optional{Mat4{}};
         const auto inverse=parent?math::inverse(*parent):std::nullopt;
         if(!record || !world || !inverse)return false;
-        roots.push_back({id,record->parent,*world,*parent,*inverse});
+        auto baseline=*world;
+        if(decalFrame_&&ids.size()==1&&record->decal&&operation_!=ViewportTransformOperation::Translate) {
+            baseline=*decalFrame_;
+            for(unsigned axis=0;axis<3;++axis)baseline.at(axis,3)=world->at(axis,3);
+        }
+        roots.push_back({id,record->parent,baseline,*parent,*inverse});
     }
     if(roots.empty())return false;
     roots_=std::move(roots);return true;
 }
 bool ViewportTransformGesture::begin(SceneDocument& document,std::vector<EntityId> ids,const Mat4& proxy,
-                                    ViewportTransformOperation operation,bool shift) {
+                                    ViewportTransformOperation operation,bool shift,std::optional<Mat4> decalSurfaceFrame) {
     if(active() || document.transactionActive() || !math::finite(proxy) || !math::isAffine(proxy))return false;
     const auto inverse=math::inverse(proxy);
-    if(!inverse || !capture(document,document.scene().topmost(ids)))return false;
+    if(!inverse)return false;
+    operation_=operation;decalFrame_=std::move(decalSurfaceFrame);
+    if(decalFrame_&&(!math::finite(*decalFrame_)||!math::isAffine(*decalFrame_)||!math::inverse(*decalFrame_))){decalFrame_.reset();return false;}
+    if(!capture(document,document.scene().topmost(ids))){decalFrame_.reset();return false;}
     owner_=&document;generation_=document.documentGeneration();revision_=document.scene().revision();
-    transaction_=0;inverseProxy_=*inverse;selection_=document.selection();operation_=operation;
+    transaction_=0;inverseProxy_=*inverse;initialProxy_=proxy;selection_=document.selection();operation_=operation;
     duplicate_=shift && operation!=ViewportTransformOperation::Scale;return true;
 }
 bool ViewportTransformGesture::valid(const SceneDocument& document) const {
@@ -49,6 +58,7 @@ bool ViewportTransformGesture::valid(const SceneDocument& document) const {
 bool ViewportTransformGesture::update(SceneDocument& document,const Mat4& proxy,bool dragThresholdReached) {
     if(!valid(document)){cancel(document);return false;}
     if(!math::finite(proxy) || !math::isAffine(proxy))return true;
+    if(!editing()&&proxy==initialProxy_)return true;
     const auto delta=proxy*inverseProxy_;
     if(!math::finite(delta) || !math::isAffine(delta))return true;
     if(!editing()) {
@@ -66,7 +76,17 @@ bool ViewportTransformGesture::update(SceneDocument& document,const Mat4& proxy,
     const bool updated=document.update([&](auto& records,auto&) {
         for(const auto& root:roots_) {
             const auto record=std::find_if(records.begin(),records.end(),[&](const auto& candidate){return candidate.id==root.id;});
-            if(record!=records.end())record->local=root.parentInverse*delta*root.world;
+            if(record!=records.end()) {
+                auto candidate=delta*root.world;
+                if(decalFrame_&&record->decal&&roots_.size()==1&&operation_!=ViewportTransformOperation::Translate) {
+                    const auto normal=math::transformDirection(*decalFrame_,{0,0,1});
+                    for(unsigned axis=0;axis<3;++axis)candidate.at(axis,2)=normal[axis];
+                    const auto conformed=decals::decalAuthoringFrame(candidate,normal);
+                    if(!conformed)continue;
+                    candidate=*conformed;
+                }
+                record->local=root.parentInverse*candidate;
+            }
         }
     });
     revision_=document.scene().revision();
@@ -82,6 +102,6 @@ void ViewportTransformGesture::cancel(SceneDocument& document) {
     reset();
 }
 void ViewportTransformGesture::reset() {
-    owner_=nullptr;generation_=revision_=transaction_=0;roots_.clear();selection_={};duplicate_=false;
+    owner_=nullptr;generation_=revision_=transaction_=0;roots_.clear();selection_={};duplicate_=false;decalFrame_.reset();
 }
 }

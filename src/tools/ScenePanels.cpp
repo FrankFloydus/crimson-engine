@@ -1492,7 +1492,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 const InspectorTransformTransactions transactions{
                     [&](unsigned field,const char* label){return beginEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field),label,record.id);},
                     [&](unsigned field){finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));}};
-                drawInspectorTransform(document,state.transforms[record.id],record,transactions);
+                drawInspectorTransform(document,state.transforms[record.id],record,transactions,decals.surfaceFrame?decals.surfaceFrame(record.id):std::nullopt);
             }
             gameplayControls(document,state,record,section,assets,navigation,collisionNames,gameplay);
             if(section==SceneComponentKind::NavigationVolume && record.navigationVolume)navigationVolumeControls(document,state,record,assets,navigation);

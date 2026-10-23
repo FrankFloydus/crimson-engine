@@ -1,10 +1,9 @@
 #pragma once
 #include "DecalModelSurface.h"
+#include "DecalTransform.h"
 namespace crimson {struct ModelMaterial;}
 namespace crimson::decals {
 bool receiverMaterialEligible(const ModelMaterial&,std::string* diagnostic=nullptr);
-// Stable unit surface frame: world-up on walls, world-X on near-horizontal surfaces.
-Mat4 surfacePlacementFrame(Vec3 position,Vec3 surfaceNormal);
 // Reorient the complete authored linear block rigidly between stable surface
 // bases. This retains metre scale, in-plane rotation, shear and reflection.
 Mat4 reanchorDecalFrame(const Mat4& previousWorld,Vec3 previousSurfaceNormal,const Mat4& newSurfaceFrame);

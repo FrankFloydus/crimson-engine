@@ -44,6 +44,80 @@ void rotatedSurfaceFrameRetainsFootprint() {
     }
     check(!conformDecalFrame(math::scaling({0,1,1}),{},{0,0,1}),"Collapsed footprint was accepted.");
 }
+void surfaceAuthoringControls() {
+    // The saved wall example had an invisible 215-metre Z column. Editing its
+    // visible footprint must never rotate that depth into width or height.
+    const Mat4 authored{
+        1.242539525f,.399440706f,-1.746122241f,0,
+        .522620201f,-2.223793983f,-.136816323f,0,
+        -170.141799927f,-32.085025787f,-128.412567139f,0,
+        .000000857f,2.934373379f,24.563133240f,1};
+    const Vec3 normal{1,0,0},position=math::transformPoint(authored,{});
+    const auto axis=[](const Mat4& frame,unsigned column){return Vec3{frame.at(0,column),frame.at(1,column),frame.at(2,column)};};
+    const auto same=[](const Mat4& a,const Mat4& b,double tolerance=2e-5){
+        for(std::size_t i=0;i<a.size();++i)if(std::abs(a[i]-b[i])>tolerance)return false;return true;
+    };
+    const auto frame=decalAuthoringFrame(authored,normal);
+    const auto visible=conformDecalFrame(authored,position,normal);
+    check(frame&&visible&&same(*frame,*visible),"Authoring canonicalization changed the existing visible decal frame.");
+    check(math::transformPoint(*frame,{})==position,"Authoring canonicalization moved the authored position.");
+    check(math::length(axis(*frame,2)-normal)<1e-6,"Authoring retained the hidden depth column.");
+    const auto size=decalSize(*frame);
+    check(std::abs(size[0]-2.18f)<2e-5&&std::abs(size[1]-2.28847335f)<2e-5,"Authoring size does not measure the saved visible footprint.");
+    const auto proxy=decalGizmoFrame(*frame);
+    check(proxy&&math::handedness(*proxy)>0,"Surface gizmo did not produce a right-handed frame.");
+    check(math::transformPoint(*proxy,{})==position,"Surface gizmo moved the authored position.");
+    for(unsigned i=0;i<3;++i)for(unsigned j=0;j<3;++j)
+        check(std::abs(math::dot(axis(*proxy,i),axis(*proxy,j))-(i==j?1.:0.))<2e-6,"Surface gizmo retained scale or shear.");
+    const float initialAngle=decalRotationDegrees(*frame);
+    const auto turned=withDecalRotation(*frame,initialAngle+90);
+    check(turned&&std::abs(math::dot(axis(*turned,0),axis(*frame,0)))<2e-5,"A 90-degree surface rotation did not turn width orthogonally.");
+    check(math::length(axis(*turned,0)-math::cross(normal,axis(*frame,0)))<2e-5,"Positive surface rotation used the wrong normal-axis direction.");
+    check(std::abs(decalRotationDegrees(*turned,initialAngle+90)-(initialAngle+90))<2e-5,"Surface rotation did not retain its requested angle branch.");
+    const auto absolute=withDecalRotation(*frame,90);
+    const auto stable=surfacePlacementFrame({},normal);
+    check(absolute&&math::length(math::normalized(axis(*absolute,0))-axis(stable,1))<2e-5,"Setting surface rotation to 90 degrees did not use the stable wall basis.");
+    const auto widened=withDecalSize(*frame,{size[0]*2,size[1]});
+    check(widened&&math::length(axis(*widened,0)-axis(*frame,0)*2)<2e-5&&math::length(axis(*widened,1)-axis(*frame,1))<2e-5,
+        "Changing decal width changed height or mixed hidden depth into its footprint.");
+    check(math::transformPoint(*turned,{})==position&&math::transformPoint(*widened,{})==position,"Footprint editing moved the authored translation.");
+    check(math::length(axis(*turned,2)-normal)<1e-6&&math::length(axis(*widened,2)-normal)<1e-6,"Footprint editing changed the unit receiver normal.");
+
+    auto sheared=*frame;
+    for(unsigned row=0;row<3;++row)sheared.at(row,1)=-frame->at(row,1)+frame->at(row,0)*.35f;
+    const auto shearSize=decalSize(sheared);
+    check(shearSize[1]<0,"Signed decal height did not expose reflection.");
+    const auto edited=withDecalSize(sheared,{shearSize[0]*1.7f,shearSize[1]*.6f});
+    const auto spun=withDecalRotation(sheared,decalRotationDegrees(sheared)+90);
+    check(edited&&spun&&math::handedness(*edited)<0&&math::handedness(*spun)<0,"Surface size or rotation discarded a mirrored footprint.");
+    const double cosineBefore=math::dot(axis(sheared,0),axis(sheared,1))/(math::length(axis(sheared,0))*math::length(axis(sheared,1)));
+    const double cosineAfter=math::dot(axis(*edited,0),axis(*edited,1))/(math::length(axis(*edited,0))*math::length(axis(*edited,1)));
+    check(std::abs(cosineAfter-cosineBefore)<2e-6,"Independent surface size edits changed the shear angle.");
+    for(unsigned i=0;i<2;++i)for(unsigned j=0;j<2;++j)
+        check(std::abs(math::dot(axis(*spun,i),axis(*spun,j))-math::dot(axis(sheared,i),axis(sheared,j)))<2e-5,"Surface rotation changed the mirrored XY metric.");
+    const auto unmirrored=withDecalSize(sheared,{shearSize[0],-shearSize[1]});
+    check(unmirrored&&math::handedness(*unmirrored)>0,"Changing signed height did not reflect the footprint.");
+    check(!withDecalSize(*frame,{0,1})&&!withDecalSize(*frame,{1,0}),"Collapsed surface sizes were accepted.");
+    check(!decalAuthoringFrame(authored,{})&&!decalAuthoringFrame(authored,{1e-12f,0,0}),"A missing receiver normal produced an editable surface frame.");
+    auto noNormal=*frame;for(unsigned row=0;row<3;++row)noNormal.at(row,2)=0;
+    check(!decalGizmoFrame(noNormal)&&!withDecalRotation(noNormal,90)&&!withDecalSize(noNormal,{2,3}),"Surface edit helpers accepted a frame without a receiver normal.");
+    check(std::abs(decalRotationDegrees(*absolute,810)-810)<2e-5,"Surface angle lost an equivalent multi-turn UI branch.");
+
+    // A world-frame edit is converted back through the complete parent affine
+    // transform. Neither a mirrored parent nor shear changes the visible result.
+    for(const Vec3 parentScale:std::array<Vec3,2>{{{1.5f,.7f,2},{-1.5f,.7f,2}}}) {
+        auto parent=math::translation({8,-3,5})*math::eulerRotationXYZ({.3f,-.7f,.8f})*math::scaling(parentScale);
+        parent.at(0,1)+=.2f;
+        const auto inverse=math::inverse(parent);check(inverse.has_value(),"Parent fixture is singular.");
+        const auto local=(*inverse)*authored;
+        const auto parented=decalAuthoringFrame(parent*local,normal);
+        check(parented&&same(*parented,*frame),"Parent affine transform changed the canonical surface frame.");
+        const auto parentedTurn=withDecalRotation(*parented,initialAngle+90);
+        check(parentedTurn.has_value(),"Parented surface rotation failed.");
+        const auto editedLocal=(*inverse)*(*parentedTurn);
+        check(same(parent*editedLocal,*turned),"Converting a surface edit back to parent-local space lost its result.");
+    }
+}
 void materialEligibility() {
     ModelMaterial material;check(receiverMaterialEligible(material),"Opaque imported material excluded.");
     material.alphaMask=true;check(receiverMaterialEligible(material),"Masked imported material excluded.");
@@ -88,7 +162,7 @@ void reanchorRetainsAffineFootprint() {
 }
 }
 int main() {
-    try {boundedSurfaceProjection();rotatedSurfaceFrameRetainsFootprint();materialEligibility();geometryChangeReprojection();reanchorRetainsAffineFootprint();
-        std::cout<<"decal_resolve: generic closest-point projection, XYZ affine frames, PBR coverage eligibility, changed source provenance and ambiguous projection proofs passed\n";return 0;
+    try {boundedSurfaceProjection();rotatedSurfaceFrameRetainsFootprint();surfaceAuthoringControls();materialEligibility();geometryChangeReprojection();reanchorRetainsAffineFootprint();
+        std::cout<<"decal_resolve: generic closest-point projection, surface footprint controls, XYZ affine frames, PBR coverage eligibility, changed source provenance and ambiguous projection proofs passed\n";return 0;
     } catch(const std::exception&error){std::cerr<<error.what()<<'\n';return 1;}
 }

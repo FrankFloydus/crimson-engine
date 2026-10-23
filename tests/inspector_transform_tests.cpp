@@ -3,6 +3,7 @@
 #include "editor/SceneShortcuts.h"
 #include "crimson-renderer/ModelTransform.h"
 #include "scene/SceneDocument.h"
+#include "editor/DecalAuthoring.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <array>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -71,14 +73,18 @@ public:
             ImGui::ClearActiveID();window->SkipItems=true;
         }
         if(collapseTransform)ImGui::SetNextItemOpen(false,ImGuiCond_Always);
-        drawInspectorTransform(document,state,*document.scene().find(entity),transactions);
+        drawInspectorTransform(document,state,*document.scene().find(entity),transactions,decalSurfaceFrame);
         window->SkipItems=skipped;
         for(unsigned property=0;property<3;++property){
             const auto id=axesTableId(property);const auto* table=ImGui::GetCurrentContext()->Tables.GetByKey(id);
             if(!table)continue;
-            for(unsigned axis=0;axis<3;++axis)centers[property*3+axis]={
-                (table->Columns[axis].WorkMinX+ImGui::CalcTextSize("X").x+ImGui::GetStyle().ItemInnerSpacing.x+table->Columns[axis].WorkMaxX)*.5f,
+            columnCounts[property]=static_cast<unsigned>(table->ColumnsCount);
+            const bool decal=document.scene().find(entity)->decal.has_value();
+            const unsigned columns=decal&&property>0?(property==1?1u:2u):3u;
+            for(unsigned column=0;column<columns;++column){const unsigned axis=decal&&property==1?2u:column;centers[property*3+axis]={
+                (table->Columns[column].WorkMinX+ImGui::CalcTextSize("X").x+ImGui::GetStyle().ItemInnerSpacing.x+table->Columns[column].WorkMaxX)*.5f,
                 table->OuterRect.Min.y+table->RowCellPaddingY+ImGui::GetFrameHeight()*.5f};
+            }
         }
         ImGui::End();
         if(docked_){
@@ -120,17 +126,33 @@ public:
         require(document.updateEntity(entity,record)&&document.save()&&document.load(document.assetId()),"Cannot prepare the isolated transform fixture.");
         document.select({entity},entity);baseline=matrix;tick();tick();
     }
+    void setDecalTransform(const Mat4& world,const std::optional<Mat4>& parent={}){
+        EntityId parentId{};Mat4 local=world;
+        if(parent){parentId=document.createEmpty("Decal parent");
+            require(parentId!=0,"Could not create the decal parent.");auto group=*document.scene().find(parentId);group.local=*parent;
+            require(document.updateEntity(parentId,group),"Could not place the decal parent.");local=(*math::inverse(*parent))*world;}
+        SceneDecal value;value.asset.id="68011f04-64c3-4596-b6dc-1f12047863ba";
+        value.seed.receiver=entity;value.seed.localNormal={1,0,0};
+        entity=document.createDecal(value,"New Decal 2",local);require(entity!=0,"Could not create the decal fixture.");
+        if(parentId){auto record=*document.scene().find(entity);record.parent=parentId;require(document.updateEntity(entity,record),"Could not parent the decal fixture.");}
+        require(document.save()&&document.load(document.assetId()),"Could not save and reopen the decal fixture.");
+        decalSurfaceFrame=decals::surfacePlacementFrame(math::transformPoint(world,{}),{1,0,0});
+        document.select({entity},entity);baseline=document.scene().find(entity)->local;tick();tick();
+    }
     void enter(){key(ImGuiKey_Enter,true);tick();key(ImGuiKey_Enter,false);tick();tick();}
     void key(ImGuiKey key,bool down){ImGui::GetIO().AddKeyEvent(key,down);}
     void undo(){key(ImGuiMod_Ctrl,true);key(ImGuiKey_Z,true);tick();key(ImGuiKey_Z,false);key(ImGuiMod_Ctrl,false);tick();tick();}
     void redo(){key(ImGuiMod_Ctrl,true);key(ImGuiKey_Y,true);tick();key(ImGuiKey_Y,false);key(ImGuiMod_Ctrl,false);tick();tick();}
     void mouse(Vec2 point,bool down){auto& io=ImGui::GetIO();io.AddMousePosEvent(point[0],point[1]);io.AddMouseButtonEvent(ImGuiMouseButton_Left,down);tick();}
     Mat4 matrix()const{return document.scene().find(entity)->local;}
+    Mat4 worldMatrix()const{return *document.scene().worldTransform(entity);}
     SceneDocument document;
     InspectorTransformState state;
     EntityId entity{};
     Mat4 baseline{};
+    std::optional<Mat4> decalSurfaceFrame;
     std::array<Vec2,9> centers{};
+    std::array<unsigned,3> columnCounts{};
     bool sceneUndo{},sceneRedo{},diagnosticsEnabled{};
     unsigned diagnosticFrames{};
     std::string focus;
@@ -275,6 +297,79 @@ void linkedScaleCrossesZeroAndRecovers(){
     ui.undo();require(ui.matrix()==ui.baseline,"Undo after linked zero recovery lost the collapsed baseline.");
 }
 
+Mat4 savedNewDecalTransform(){
+    // Exact saved New Decal 2 linear basis, including its unused 215 m Z axis.
+    Mat4 value;value.values={
+        1.242539525f,.399440706f,-1.746122241f,0,
+        .522620201f,-2.223793983f,-.136816323f,0,
+        -170.141799927f,-32.085025787f,-128.412567139f,0,
+        .000000856617f,2.934373379f,24.563133240f,1};return value;
+}
+Vec3 column(const Mat4& matrix,unsigned index){return {matrix.at(0,index),matrix.at(1,index),matrix.at(2,index)};}
+void decalSurfaceRotationAndPosition(){
+    for(const bool parented:{false,true}){
+        Project project;Inspector ui(project.root);
+        const auto parent=parented?std::optional<Mat4>{math::translation({3,-2,7})*math::eulerRotationXYZ({.3f,-.4f,.2f})*math::scaling({1.5f,.7f,-2.f})}:std::nullopt;
+        ui.setDecalTransform(savedNewDecalTransform(),parent);
+        const auto original=ui.worldMatrix(),local=ui.matrix();
+        const auto visible=*decalEditFrame(ui.document.scene(),ui.entity,ui.decalSurfaceFrame);
+        require(ui.columnCounts==std::array<unsigned,3>{3,1,2},"Decal Inspector did not replace Euler/XYZ scale with one surface rotation and width/height.");
+        ui.tick();ui.tick();ui.activate(5);ui.enter();
+        require(ui.matrix()==local&&!ui.document.dirty()&&ui.document.history().size()==0,
+            "Displaying or activating a decal field rewrote the saved tilted transform.");
+
+        const auto target=std::to_string(ui.state.degrees[2]+90.f);
+        ui.activate(5);ui.type(target.c_str());ui.enter();const auto rotated=ui.worldMatrix();
+        const auto expected=math::rotate(column(visible,0),Vec3{1,0,0},std::numbers::pi_v<double>*.5);
+        require(math::length(column(rotated,0)-expected)<1e-4,"Decal rotation did not turn its visible U axis by 90 degrees on the wall.");
+        require(std::abs(math::dot(column(rotated,0),Vec3{1,0,0}))+std::abs(math::dot(column(rotated,1),Vec3{1,0,0}))<1e-4,
+            "Decal rotation tilted its width/height axes away from the receiving wall.");
+        for(unsigned axis=0;axis<2;++axis)require(std::abs(math::length(column(rotated,axis))-math::length(column(original,axis)))<1e-4,
+            "Decal rotation changed its width or height.");
+        require(math::length(column(rotated,2)-Vec3{1,0,0})<1e-4&&math::length(column(rotated,3)-column(original,3))<1e-4,
+            "Decal rotation retained hidden depth or changed authored translation.");
+        require(ui.document.history().size()==1&&!ui.document.transactionActive(),"Decal rotation did not commit exactly one gesture.");
+        const auto rotatedLocal=ui.matrix();ui.undo();
+        require(ui.sceneUndo&&ui.matrix()==local&&!ui.document.dirty(),"Decal rotation Undo lost the exact saved affine matrix.");
+        ui.redo();require(ui.sceneRedo&&ui.matrix()==rotatedLocal,"Decal rotation Redo did not restore its edited matrix.");
+
+        ui.undo();const auto position=std::to_string(ui.state.fields.position[0]+.25f);
+        ui.activate(0);ui.type(position.c_str());ui.enter();
+        for(unsigned axis=0;axis<3;++axis)for(unsigned row=0;row<3;++row)
+            require(ui.matrix().at(row,axis)==local.at(row,axis),"Decal position editing canonicalized its unedited affine basis.");
+        require(std::abs(ui.matrix().at(0,3)-local.at(0,3)-.25f)<1e-4,"Decal Position stopped using parent-local coordinates.");
+        ui.undo();require(ui.matrix()==local,"Decal position Undo did not restore its exact local matrix.");
+    }
+}
+void decalSurfaceSizeAndCancellation(){
+    for(const bool linked:{false,true}){
+        Project project;Inspector ui(project.root);
+        auto authored=savedNewDecalTransform();
+        if(linked)for(unsigned row=0;row<3;++row){authored.at(row,1)+=authored.at(row,0)*.2f;authored.at(row,0)*=-1;}
+        ui.setDecalTransform(authored);ui.state.scaleLinked=linked;
+        const auto original=ui.worldMatrix(),local=ui.matrix();
+        const auto visible=*decalEditFrame(ui.document.scene(),ui.entity,ui.decalSurfaceFrame);
+        const auto originalSize=decals::decalSize(visible);const auto width=std::to_string(originalSize[0]*2);
+        ui.activate(6);ui.type(width.c_str());ui.enter();const auto resized=ui.worldMatrix();
+        require(std::abs(math::length(column(resized,0))-originalSize[0]*2)<1e-4,
+            "Decal width did not resize proportionally in world metres.");
+        require(std::abs(math::length(column(resized,1))-std::abs(originalSize[1])*(linked?2:1))<1e-4,
+            "Decal Lock proportions did not scale just its width and height.");
+        require(math::length(column(resized,2)-Vec3{1,0,0})<1e-5&&math::length(column(resized,3)-column(original,3))<1e-5,
+            "Resizing a decal mixed its old huge depth into its width or moved its center.");
+        require(math::handedness(resized)==math::handedness(original),"Decal size editing lost reflection.");
+        const auto cosine=[](const Mat4& m){return math::dot(column(m,0),column(m,1))/(math::length(column(m,0))*math::length(column(m,1)));};
+        require(std::abs(cosine(resized)-cosine(visible))<1e-5,"Decal size editing lost XY shear.");
+        const auto resizedLocal=ui.matrix();ui.undo();
+        require(ui.matrix()==local&&!ui.document.dirty()&&ui.document.history().size()==1,"Decal size Undo lost its exact saved transform or gesture boundary.");
+        ui.redo();require(ui.matrix()==resizedLocal,"Decal size Redo did not restore its edited transform.");
+        ui.undo();ui.activate(7);ui.type(std::to_string(originalSize[1]*.5f).c_str());
+        require(ui.document.transactionActive(),"Decal size input did not retain its live transaction.");
+        ui.document.cancel();ImGui::ClearActiveID();ui.tick();ui.tick();
+        require(ui.matrix()==local&&!ui.document.dirty()&&!ui.document.transactionActive(),"Canceling a decal size gesture canonicalized its saved transform.");
+    }
+}
+
 void particleShortcutOwnership(){
     struct ContextLifetime {
         ImGuiContext* value{ImGui::CreateContext()};
@@ -348,6 +443,8 @@ int main(){
     run("transform properties use horizontal XYZ rows",horizontalTransformRows);
     run("linked scale preserves affine ratios and one undo gesture",linkedScalePreservesAffineAndHistory);
     run("linked scale crosses zero and recovers collapsed axes",linkedScaleCrossesZeroAndRecovers);
+    run("decal surface rotation, parent conversion and position keep exact history",decalSurfaceRotationAndPosition);
+    run("decal metre sizes, XY proportions, reflection, shear and cancellation",decalSurfaceSizeAndCancellation);
     run("particle/material document shortcuts preserve scene-only commands and input ownership",particleShortcutOwnership);
     return failures?1:0;
 }

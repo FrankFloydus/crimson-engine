@@ -8,6 +8,7 @@
 #include "NavigationVolumeGizmo.h"
 #include "ViewportTransformGesture.h"
 #include <span>
+#include <optional>
 #include <vector>
 
 struct ImDrawList;
@@ -27,6 +28,7 @@ public:
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { agentProfiles_=std::move(query); }
     void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { decalPatches_=std::move(query); }
+    void setDecalFrameQuery(std::function<std::optional<Mat4>(EntityId)> query) { decalFrames_=std::move(query); }
 private:
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
     bool pickCtrl_{false}, pickShift_{false}, waitForRelease_{false};
@@ -50,6 +52,8 @@ private:
     CollisionMeshQuery collisionMeshes_;
     NavigationAgentProfileQuery agentProfiles_;
     std::function<std::shared_ptr<const DecalPatchData>(EntityId)> decalPatches_;
+    std::function<std::optional<Mat4>(EntityId)> decalFrames_;
+    std::optional<Mat4> decalEditFrame_;
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;
     void select(SceneDocument&, EntityId, bool toggle, bool append);

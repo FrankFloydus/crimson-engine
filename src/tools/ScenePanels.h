@@ -1,5 +1,7 @@
 #pragma once
 #include "GameplayInspectorContext.h"
+#include "math/Math.h"
+#include <optional>
 #include <cstdint>
 #include <string>
 #include <functional>
@@ -19,6 +21,7 @@ struct DecalInspectorContext {
     std::string* openAsset{};
     std::uint64_t* placeEntity{};
     std::function<std::string(std::uint64_t)> status;
+    std::function<std::optional<Mat4>(std::uint64_t)> surfaceFrame;
 };
 
 // Explicit menu actions may finish an owned panel edit before querying history.

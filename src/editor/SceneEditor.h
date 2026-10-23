@@ -57,6 +57,7 @@ public:
     void setNavigationBuildStatus(std::function<std::string(const std::string&)> query) { navigationBuildStatus_=std::move(query); }
     void setDecalStatusQuery(std::function<std::string(EntityId)> query) { decalStatus_=std::move(query); }
     void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { viewport_.setDecalPatchQuery(std::move(query)); }
+    void setDecalFrameQuery(std::function<std::optional<Mat4>(EntityId)> query) { decalFrames_=query;viewport_.setDecalFrameQuery(std::move(query)); }
     void drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) { viewport_.drawDecalPlacementPlane(frame,camera,texture,color); }
     const std::string& navigationPreviewProfile() const { return navigationPreviewProfile_; }
 private:
@@ -90,6 +91,7 @@ private:
     EntityId navigationPreviewVolume_{};
     std::function<std::string(const std::string&)> navigationBuildStatus_;
     std::function<std::string(EntityId)> decalStatus_;
+    std::function<std::optional<Mat4>(EntityId)> decalFrames_;
     enum class CommandTarget { Scene,Particle,Material,Profile,CollisionLayers,Effect,Animation,Decal,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     bool viewportBusy() const { return viewport_.interacting() || cameraGestureActive_; }

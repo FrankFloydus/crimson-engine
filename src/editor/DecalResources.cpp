@@ -132,6 +132,7 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     const auto normalMatrix=math::normalMatrix(seedCandidate->world);
     const auto effectiveFrame=normalMatrix?decals::conformDecalFrame(d.world,math::transformPoint(seedCandidate->world,seed->localPoint),math::transformDirection(*normalMatrix,seed->localNormal)):std::nullopt;
     if(!effectiveFrame){pending("Invalid footprint.");return;}
+    entry.surfaceFrame=*effectiveFrame;
     const auto surfaceCenter=math::transformPoint(*effectiveFrame,{});const Aabb patchRegion{surfaceCenter-extent,surfaceCenter+extent,true};
     signature.add(*effectiveFrame);signature.add(seed->seed.receiver.entity);signature.add(seed->seed.receiver.draw);signature.add(seed->seed.receiver.primitive);signature.add(seed->seed.triangle);signature.add(seed->seed.barycentrics);
     const auto key=signature.value;
@@ -158,13 +159,14 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     entry.current=true;
     const auto material=assets_.preparedDecalMaterial(d.decal.asset.id,1024,priority);if(!material||!material->ready||!material->current||!material->render){pending(material&&!material->diagnostic.empty()?material->diagnostic:"Preparing decal material.");return;}
     entry.status=patch->message;out.decals.push_back({d.id,d.id,d.decal.priority,entry.render,material->render,d.decal.tint,d.decal.opacity,d.decal.edgeFeather});
-    out.decals.back().frame=d.world;
+    out.decals.back().frame=*effectiveFrame;
     if(patch->status==decals::DecalPatchStatus::Incomplete&&!out.status.size())out.status=patch->message;
 }
 DecalPreparedScene DecalResources::prepare(const Scene&scene,const ExtractedScene&extracted,ResourcePriority priority){DecalPreparedScene result;for(auto&[id,entry]:patches_){(void)id;entry.current=false;}for(const auto&d:extracted.decals)append(result,scene,extracted,d,priority);std::sort(result.receivers.begin(),result.receivers.end());result.receivers.erase(std::unique(result.receivers.begin(),result.receivers.end()),result.receivers.end());return result;}
 DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const ExtractedScene&extracted,const SceneDecal&decal,const Mat4&frame,uint64_t id,ResourcePriority priority){DecalPreparedScene result;append(result,scene,extracted,{id,frame,decal,true},priority);return result;}
 std::string DecalResources::status(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::string{}:it->second.status;}
 std::shared_ptr<const DecalPatchData> DecalResources::patch(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()||!it->second.current?nullptr:it->second.render;}
+std::optional<Mat4> DecalResources::surfaceFrame(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::nullopt:it->second.surfaceFrame;}
 void DecalResources::collect(){const auto now=std::chrono::steady_clock::now();const auto grace=resources_.config().idleGrace;std::erase_if(sources_,[&](const auto&entry){return now-entry.second.used>grace;});std::erase_if(patches_,[&](const auto&entry){return now-entry.second.used>grace;});}
 void DecalResources::clear(){patches_.clear();sources_.clear();}
 }

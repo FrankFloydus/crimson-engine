@@ -1,4 +1,5 @@
 #include "editor/ViewportTransformGesture.h"
+#include "decals/DecalTransform.h"
 #include "scene/CameraAuthoring.h"
 #include <imgui_internal.h>
 #include <ImGuizmo.h>
@@ -121,6 +122,82 @@ void rotateAffineAndCancel(const std::filesystem::path& root) {
     require(drag.begin(document,{first,second},proxy,ViewportTransformOperation::Rotate,true) && drag.update(document,delta*proxy,true) && drag.finish(document),"Release did not commit a duplicate rotation.");
     require(document.history().size()==history+1 && document.undo() && document.scene().records().size()==count,"Duplicate rotation Undo retained copies.");
 }
+void decalSurfaceGestures(const std::filesystem::path& root) {
+    const auto axis=[](const Mat4& frame,unsigned column){return Vec3{frame.at(0,column),frame.at(1,column),frame.at(2,column)};};
+    const Vec3 normal{1,0,0};
+    const Mat4 savedWorld{
+        1.242539525f,.399440706f,-1.746122241f,0,
+        .522620201f,-2.223793983f,-.136816323f,0,
+        -170.141799927f,-32.085025787f,-128.412567139f,0,
+        .000000857f,2.934373379f,24.563133240f,1};
+    for(const bool parented:{false,true}) {
+        SceneDocument document(root);const auto receiver=document.createBox("Wall receiver");
+        Mat4 parentWorld;
+        EntityId parent=NoEntity;
+        if(parented) {
+            parentWorld=math::translation({8,-3,5})*math::eulerRotationXYZ({.3f,-.7f,.8f})*math::scaling({-1.5f,.7f,2});
+            parentWorld.at(0,1)+=.2f;parent=place(document,"Mirrored affine parent",parentWorld);
+        }
+        const auto entity=document.createEmpty("Saved wall decal");auto record=*document.scene().find(entity);
+        record.parent=parent;record.local=(*math::inverse(parentWorld))*savedWorld;
+        record.decal.emplace();record.decal->asset.id="68011f04-64c3-4596-b6dc-1f12047863ba";
+        record.decal->seed.receiver=receiver;record.decal->seed.modelId=document.scene().find(receiver)->model->id;
+        record.decal->seed.fingerprint=0x0123456789abcdefull;record.decal->seed.barycentric={.2f,.3f,.5f};record.decal->seed.localNormal=normal;
+        require(document.updateEntity(entity,record),"Could not create the saved decal gesture fixture.");
+        document.select({entity},entity);
+        const auto original=*document.scene().find(entity);const auto rawWorld=*document.scene().worldTransform(entity);
+        const auto frame=decals::decalAuthoringFrame(rawWorld,normal);
+        require(frame.has_value(),"Saved decal did not produce an authoring frame.");
+        const auto proxy=decals::decalGizmoFrame(*frame);require(proxy.has_value(),"Saved decal did not produce a surface gizmo.");
+        const auto history=document.history().size(),count=document.scene().records().size();
+        const auto rotatedProxy=(*proxy)*math::eulerRotationXYZ({0,0,1.5707963268f});
+        ViewportTransformGesture drag;
+        require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Rotate,false,*frame),"Surface rotation did not arm.");
+        require(drag.update(document,*proxy,true)&&drag.update(document,rotatedProxy,false),"Pending surface rotation failed.");
+        require(!drag.editing()&&sameEntity(*document.scene().find(entity),original)&&document.history().size()==history,
+            "A pending surface click canonicalized the authored hidden-depth transform.");
+        require(drag.finish(document)&&sameEntity(*document.scene().find(entity),original),"An unchanged surface click authored data.");
+
+        require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Rotate,false,*frame)&&drag.update(document,rotatedProxy,true),
+            "Surface-normal decal rotation failed.");
+        const auto turned=*document.scene().worldTransform(entity);
+        require(math::length(axis(turned,0)-math::cross(normal,axis(*frame,0)))<2e-5,
+            "The surface rotation mixed the saved 215-unit Z column into its visible width.");
+        require(std::abs(math::dot(axis(turned,0),axis(*frame,0)))<2e-5,"The decal did not visibly turn by 90 degrees.");
+        require(math::length(axis(turned,2)-normal)<2e-5,"Surface rotation did not retain the unit receiver normal.");
+        require(math::length(math::transformPoint(turned,{})-math::transformPoint(rawWorld,{}))<2e-5,"Surface rotation moved the authored placement.");
+        require(drag.finish(document)&&document.history().size()==history+1&&document.undo(),"Surface rotation did not create one undo command.");
+        require(sameEntity(*document.scene().find(entity),original),"Surface rotation Undo did not restore the exact raw hidden-depth transform.");
+        require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Rotate,false,*frame)&&drag.update(document,rotatedProxy,true),"Canceled surface rotation failed to start.");
+        drag.cancel(document);
+        require(sameEntity(*document.scene().find(entity),original)&&!document.transactionActive(),"Surface rotation Cancel did not restore the exact original transform.");
+
+        for(const Vec3 scale:std::array<Vec3,3>{{{2,1,1},{2,2,2},{-2,-2,-2}}}) {
+            require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Scale,true,*frame)&&!drag.duplicating(),"Surface Scale incorrectly duplicated its decal.");
+            require(drag.update(document,(*proxy)*math::scaling(scale),true),"Surface scale failed.");
+            const auto scaled=*document.scene().worldTransform(entity);
+            require(math::length(axis(scaled,0)-axis(*frame,0)*scale[0])<2e-5&&math::length(axis(scaled,1)-axis(*frame,1)*scale[1])<2e-5,
+                "Surface scale did not change only the requested visible footprint dimensions.");
+            require(math::length(axis(scaled,2)-normal)<2e-5,"Uniform surface scale retained a hidden depth magnitude.");
+            require(math::length(math::transformPoint(scaled,{})-math::transformPoint(rawWorld,{}))<2e-5,"Surface scale moved the decal.");
+            require(drag.finish(document)&&document.history().size()==history+1&&document.undo(),"Surface scale did not commit exactly one undoable gesture.");
+            require(sameEntity(*document.scene().find(entity),original),"Surface scale Undo did not restore the exact original data.");
+        }
+        require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Scale,false,*frame)&&drag.update(document,(*proxy)*math::scaling({2,1,1}),true),
+            "Canceled surface scale failed to start.");
+        drag.cancel(document);require(sameEntity(*document.scene().find(entity),original),"Surface scale Cancel lost the exact raw transform.");
+
+        require(drag.begin(document,{entity},*proxy,ViewportTransformOperation::Rotate,true,*frame)&&drag.update(document,rotatedProxy,true),
+            "Shift surface rotate did not create a copy.");
+        const auto copy=document.selection().primary;
+        require(copy!=entity&&document.scene().records().size()==count+1&&sameEntity(*document.scene().find(entity),original),
+            "Shift surface rotate changed its original or produced the wrong copy count.");
+        require(document.scene().find(copy)->parent==parent,"Shift surface rotate detached its copied decal.");
+        near(*document.scene().worldTransform(copy),turned,"Shift surface rotate did not use the canonical footprint baseline.");
+        require(drag.finish(document)&&document.undo()&&!document.scene().contains(copy)&&sameEntity(*document.scene().find(entity),original),
+            "Shift surface rotate Undo did not restore the exact original and remove its copy.");
+    }
+}
 void invalidation(const std::filesystem::path& root) {
     SceneDocument document(root);const auto entity=place(document,"Object",Mat4{});document.select({entity},entity);
     ViewportTransformGesture drag;const auto initial=*document.scene().find(entity);const auto history=document.history().size();
@@ -240,7 +317,7 @@ void realGizmoInput(const std::filesystem::path& root) {
 int main() {
     try {
         Project project;pendingAndOrdinary(project.root);duplicateHierarchy(project.root);
-        rotateAffineAndCancel(project.root);invalidation(project.root);realGizmoInput(project.root);
+        rotateAffineAndCancel(project.root);decalSurfaceGestures(project.root);invalidation(project.root);realGizmoInput(project.root);
         std::cout<<"Viewport transform gesture checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

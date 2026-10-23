@@ -38,6 +38,7 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     editor_.setCollisionMeshQuery([this](const std::string& id){return collisions_.query(id);});
     editor_.setDecalStatusQuery([this](EntityId id){return decals_.status(id);});
     editor_.setDecalPatchQuery([this](EntityId id){return decals_.patch(id);});
+    editor_.setDecalFrameQuery([this](EntityId id){return decals_.surfaceFrame(id);});
     editor_.setQuaderBridge(&quader_);
     const NavigationAgentProfileQuery agentProfiles=[this,&assets](const std::string& id) {
         try {

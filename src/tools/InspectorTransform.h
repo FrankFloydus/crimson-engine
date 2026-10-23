@@ -2,6 +2,7 @@
 
 #include "scene/Scene.h"
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,9 +18,11 @@ struct InspectorTransformState {
     math::AffineTransformFields fields{},captured{};
     Vec3 degrees{},capturedDegrees{};
     Mat4 shownMatrix{},baseline{};
+    Mat4 capturedDecalFrame{},capturedParentInverse{};
+    std::optional<Mat4> shownDecalSurfaceFrame;
     uint32_t activeItem{};
     unsigned activeField{};
-    bool valid{},editing{},refresh{},scaleLinked{},capturedScaleLinked{};
+    bool valid{},editing{},refresh{},scaleLinked{},capturedScaleLinked{},decalFrameValid{};
     std::string error;
 };
 
@@ -30,6 +33,6 @@ struct InspectorTransformTransactions {
     std::function<void(unsigned field)> finish;
 };
 void drawInspectorTransform(SceneDocument&,InspectorTransformState&,const EntityRecord&,
-                            const InspectorTransformTransactions&);
+                            const InspectorTransformTransactions&,const std::optional<Mat4>& decalSurfaceFrame={});
 bool finishInspectorTransform(SceneDocument&,InspectorTransformState&);
 } // namespace crimson

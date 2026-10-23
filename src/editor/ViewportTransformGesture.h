@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/SceneDocument.h"
+#include <optional>
 
 namespace crimson {
 enum class ViewportTransformOperation { Translate,Rotate,Scale };
@@ -11,7 +12,7 @@ enum class ViewportTransformOperation { Translate,Rotate,Scale };
 class ViewportTransformGesture final {
 public:
     bool begin(SceneDocument&,std::vector<EntityId> roots,const Mat4& proxy,
-               ViewportTransformOperation,bool shift);
+               ViewportTransformOperation,bool shift,std::optional<Mat4> decalSurfaceFrame={});
     bool update(SceneDocument&,const Mat4& proxy,bool dragThresholdReached);
     bool finish(SceneDocument&);
     void cancel(SceneDocument&);
@@ -23,11 +24,12 @@ private:
     struct Root {EntityId id{},parent{};Mat4 world{},parentWorld{},parentInverse{};};
     SceneDocument* owner_{};
     std::uint64_t generation_{},revision_{},transaction_{};
-    Mat4 inverseProxy_{};
+    Mat4 inverseProxy_{},initialProxy_{};
     std::vector<Root> roots_;
     SceneSelection selection_;
     ViewportTransformOperation operation_{};
     bool duplicate_{};
+    std::optional<Mat4> decalFrame_;
     bool capture(const SceneDocument&,const std::vector<EntityId>&);
     void reset();
 };
