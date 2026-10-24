@@ -4,6 +4,7 @@
 #include "GameplayTagControls.h"
 #include "EnemyInspectorControls.h"
 #include "PlayerInputInspectorControls.h"
+#include "TraceTestInspectorControls.h"
 #include "MovementInspectorControls.h"
 #include "CollisionFilterControls.h"
 #include "editor/CollisionLayersDocument.h"
@@ -80,6 +81,7 @@ enum class Edit { None, Name, InlineName, Visible,
     EnvironmentSsrTolerance,EnvironmentSsrRoughness,EnvironmentSsrBias,
     CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
     NavigationEnabled,PlayerInputEnabled,PlayerMouseSensitivity,PlayerInvertY,
+    PlayerTraceDuration,PlayerTraceLength,PlayerTraceQuadSize,PlayerTraceLayers,
     MovementEnabled,PlayerJumpHeight,
     PlayerGroundAcceleration,PlayerGroundFriction,PlayerAirAcceleration,PlayerAirControl,PlayerStrafeTilt,PlayerTiltResponse,PlayerStairSmoothingTime,
     EnemyBehaviour,EnemyRadius,EnemyMinWait,EnemyMaxWait,
@@ -1223,10 +1225,21 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
                 propertyEdit(document,state,property,label,changed,changeEntity(record.id,[value](auto& entity){entity.playerInput=value;}));
                 activeDrawn|=state.active==property;
             });
+            static_assert(static_cast<unsigned>(Edit::PlayerTraceLayers)-static_cast<unsigned>(Edit::PlayerTraceDuration)==
+                static_cast<unsigned>(TraceTestInspectorControl::CollisionLayers));
+            if(ImGui::CollapsingHeader("Trace Test",ImGuiTreeNodeFlags_DefaultOpen)) {
+                drawTraceTestInspectorControls(value.traceTest,collisionNames,[&](TraceTestInspectorControl control,const char* label,bool changed) {
+                    const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::PlayerTraceDuration)+static_cast<unsigned>(control));
+                    if(control==TraceTestInspectorControl::CollisionLayers) {
+                        if(changed) {finishScenePanelEdit(document);document.edit(label,changeEntity(record.id,[value](auto& entity){entity.playerInput->traceTest.collisionMask=value.traceTest.collisionMask;}));}
+                    } else propertyEdit(document,state,property,label,changed,changeEntity(record.id,[value](auto& entity){entity.playerInput=value;}));
+                    activeDrawn|=state.active==property;
+                });
+            }
             if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Controlled Player");
             else if(ImGui::Button("Make Player")){finishScenePanelEdit(document);document.setPlayerCharacter(record.id);}
         }
-        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerInvertY)finishEdit(document,state,state.active);
+        if(!activeDrawn&&state.active>=Edit::PlayerInputEnabled&&state.active<=Edit::PlayerTraceLayers)finishEdit(document,state,state.active);
     }
     if(record.movement && section==SceneComponentKind::Movement) {
         static_assert(static_cast<unsigned>(Edit::PlayerStairSmoothingTime)-static_cast<unsigned>(Edit::MovementEnabled)==

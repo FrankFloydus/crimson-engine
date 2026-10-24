@@ -130,10 +130,18 @@ struct SceneNavigationVolume {
     std::vector<AssetRef<NavigationAgentProfile>> profiles{AssetRef<NavigationAgentProfile>{DefaultNavigationAgentProfileId}};
     bool operator==(const SceneNavigationVolume&) const = default;
 };
+struct SceneTraceTestSettings {
+    float duration{.5f}; // Seconds; zero hides the visualization immediately.
+    float length{10.f}; // World-space meters along the camera's center ray.
+    float collisionQuadSize{.12f}; // World-space side length of the contact marker.
+    std::uint32_t collisionMask{AllCollisionLayers}; // Target layer membership to detect.
+    bool operator==(const SceneTraceTestSettings&) const = default;
+};
 struct ScenePlayerInput {
     bool enabled{true};
     float mouseSensitivity{.10f}; // Degrees per logical mouse pixel.
     bool invertY{false};
+    SceneTraceTestSettings traceTest;
     bool operator==(const ScenePlayerInput&) const = default;
 };
 struct SceneEffects {

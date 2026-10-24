@@ -32,7 +32,7 @@ void proofs(const std::filesystem::path&root){
         for(size_t v=0;v<patch.chunks[c].vertices.size();++v){const auto&a=patch.chunks[c].vertices[v],&b=restored->chunks[c].vertices[v];
             check(math::length(a.position-b.position)<3e-5&&math::length(a.baseNormal-b.baseNormal)<1e-5&&a.uv==b.uv&&a.sourceTriangle==b.sourceTriangle&&a.barycentrics==b.barycentrics,"Cache lost UV, affine normal, or source provenance.");}}
     check(!readDecalCache(file,recipe+1,surface,buildRequest),"Stale recipe cache accepted.");
-    auto wrongVersion=original;const uint32_t version=DecalChartCacheVersion+1;std::memcpy(wrongVersion.data()+8,&version,sizeof(version));store(file,wrongVersion);
+    auto wrongVersion=original;const uint32_t version=DecalChartCacheVersion-1;std::memcpy(wrongVersion.data()+8,&version,sizeof(version));store(file,wrongVersion);
     check(!readDecalCache(file,recipe,surface,buildRequest),"Obsolete cache version accepted.");
     store(file,original.substr(0,original.size()/2));check(!readDecalCache(file,recipe,surface,buildRequest),"Truncated cache accepted.");
     auto damaged=original;damaged.back()^=0x13;store(file,damaged);check(!readDecalCache(file,recipe,surface,buildRequest),"Damaged checksum accepted.");
@@ -44,6 +44,8 @@ void proofs(const std::filesystem::path&root){
     invalid=original;replace(invalid,104,5.f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Invalid source barycentrics accepted.");
     invalid=original;replace(invalid,80,500.f);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Off-surface cached position accepted.");
     invalid=original;for(size_t i=0;i<sizeof(Vec2);++i)std::swap(invalid[92+i],invalid[128+i]);reseal(invalid);store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Folded cache UV orientation accepted.");
+    auto upsideDown=patch;for(auto&chunk:upsideDown.chunks)for(auto&vertex:chunk.vertices)vertex.uv[1]=1-vertex.uv[1];
+    check(writeDecalCache(file,recipe,upsideDown,buildRequest.limits)&&!readDecalCache(file,recipe,surface,buildRequest),"Obsolete upward raster V escaped cache orientation validation.");
     invalid=original;replace(invalid,72,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded vertex allocation accepted.");
     invalid=original;replace(invalid,76,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded index allocation accepted.");
     invalid=original;replace(invalid,52,uint32_t{0xffffffff});store(file,invalid);check(!readDecalCache(file,recipe,surface,buildRequest),"Unbounded receiver allocation accepted.");

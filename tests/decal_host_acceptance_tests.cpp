@@ -379,14 +379,14 @@ void exercise(SDL_Window* window,const fs::path& sourceRoot,const fs::path& outp
     const auto rawUv=prepareWall(wallSavedFrame,"saved-raw-frame"),canonicalUv=prepareWall(*canonical,"saved-surface-frame");
     sameUv(rawUv,canonicalUv,"Canonicalizing saved New Decal 2 changed its visible wall UV mapping.");
     const auto baseline=prepareWall(*square,"square-baseline");
-    expect(delta(baseline,1),{.08f,0},"Baseline +X wall U chart axis is incorrect.");expect(delta(baseline,2),{0,.08f},"Baseline +X wall V chart axis is incorrect.");
+    expect(delta(baseline,1),{.08f,0},"Baseline +X wall U chart axis is incorrect.");expect(delta(baseline,2),{0,-.08f},"Baseline +X wall raster V axis is incorrect.");
     const auto rotated=decals::withDecalRotation(*square,decals::decalRotationDegrees(*square)+90);check(bool(rotated),"Wall rotation was rejected.");
     const auto rotatedUv=prepareWall(*rotated,"normal-spin-90");
-    expect(delta(rotatedUv,1),{0,-.08f},"A +90 degree normal spin did not map fixed U to -V.");expect(delta(rotatedUv,2),{.08f,0},"A +90 degree normal spin did not map fixed V to U.");
+    expect(delta(rotatedUv,1),{0,.08f},"A +90 degree normal spin did not map fixed U to +V.");expect(delta(rotatedUv,2),{.08f,0},"A +90 degree normal spin did not map fixed V to U.");
     const auto wide=decals::withDecalSize(*square,{2,1});check(bool(wide),"Wall width edit was rejected.");const auto wideUv=prepareWall(*wide,"width-2");
-    expect(delta(wideUv,1),{.04f,0},"Width 2 did not halve delta U.");expect(delta(wideUv,2),{0,.08f},"Width 2 changed delta V.");
+    expect(delta(wideUv,1),{.04f,0},"Width 2 did not halve delta U.");expect(delta(wideUv,2),{0,-.08f},"Width 2 changed delta V.");
     const auto doubled=decals::withDecalSize(*square,{2,2});check(bool(doubled),"Wall XY scale was rejected.");const auto doubledUv=prepareWall(*doubled,"xy-2");
-    expect(delta(doubledUv,1),{.04f,0},"XY 2 did not halve delta U.");expect(delta(doubledUv,2),{0,.04f},"XY 2 did not halve delta V.");
+    expect(delta(doubledUv,1),{.04f,0},"XY 2 did not halve delta U.");expect(delta(doubledUv,2),{0,-.04f},"XY 2 did not halve delta V.");
     auto hiddenDepth=*square;for(unsigned row=0;row<3;++row)hiddenDepth.at(row,2)*=215;
     const auto depthUv=prepareWall(hiddenDepth,"hidden-z-215");sameUv(depthUv,baseline,"Hidden Z 215 entered the wall footprint size.");
     const auto editedDepth=decals::withDecalSize(hiddenDepth,{2,1});check(bool(editedDepth),"Hidden-depth size edit was rejected.");

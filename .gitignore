@@ -9,4 +9,6 @@
 /crimson_ui.ini
 /crimson_window.json
 /renderer.log
+/output/
+/scripts/profiling/__pycache__/
 /.vs/

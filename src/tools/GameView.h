@@ -4,6 +4,7 @@
 #include "editor/AttributeDebug.h"
 #include "assets/NavigationAgentProfile.h"
 #include "scene/SceneExtraction.h"
+#include "runtime/TraceVisualization.h"
 #include <optional>
 #include <span>
 #include <string>
@@ -62,6 +63,7 @@ public:
     void drawCaptureStatus(const profiling::CaptureStatus&) const;
     void drawRoute(const Camera&,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
+    void drawTraces(const Camera&,std::span<const TraceVisualRecord>);
     void drawAttributeDebug(const Camera&,const Scene&,EntityId target,std::span<const AttributeDebugRow> rows,
                             const NavigationAgentProfileQuery& profiles={},const ModelBoundsQuery& modelBounds={});
 private:

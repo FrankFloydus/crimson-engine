@@ -5,6 +5,7 @@
 #include "AgentSteering.h"
 #include "EntityAttributes.h"
 #include "EntityEffects.h"
+#include "TraceVisualization.h"
 #include "navigation/NavigationWorld.h"
 #include <functional>
 #include <chrono>
@@ -75,6 +76,12 @@ public:
     std::span<const TriggerEvent> triggerEvents() const{return triggerEvents_;}
     std::vector<EntityId> triggerOverlaps(EntityId trigger) const;
     std::optional<PhysicsRayHit> raycast(const Ray&,float maxDistance,const PhysicsQueryFilter& = {}) const;
+    // Queries the current CPU collision world. Visualization is optional and
+    // belongs only to this Play session; it never edits scene/history state.
+    PhysicsTraceResult trace(const PhysicsTrace&,const PhysicsQueryFilter& = {},
+                            PhysicsTraceMode = PhysicsTraceMode::Closest,
+                            std::optional<TraceVisualizationSettings> visualization = {});
+    const TraceVisualization& traceVisualization() const {return traceVisualization_;}
 private:
     std::filesystem::path projectRoot_;
     std::unique_ptr<SceneDocument> document_;
@@ -87,6 +94,8 @@ private:
     std::unordered_map<std::string,std::shared_ptr<const NavigationAgentProfile>> acceptedProfiles_;
     std::vector<NavigationAgentProfile> supportedProfiles_;
     Scene presentation_;
+    TraceVisualization traceVisualization_;
+    EntityId traceCamera_{};
     SceneParticles particles_;
     SceneParticles::DefinitionQuery particleDefinitions_;
     CollisionMeshQuery collisionMeshes_;
@@ -156,6 +165,7 @@ private:
     bool suspended_{},failed_{};
     void advanceInternal(double,Vec2,const Camera&,bool,GameInput* = nullptr);
     void refreshPresentation();
+    void firePlayerTrace(EntityId);
     void reconcileParticles(double);
     void resetInterpolation();
     void reconcileAgents();

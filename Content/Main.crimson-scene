@@ -1662,6 +1662,65 @@
       "visible": true
     },
     {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.6371068954467773,
+            0.07350695133209229,
+            0.28938615322113037
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localPoint": [
+            -0.8226413726806641,
+            0.3681584596633911,
+            -2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 14
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "0d025e168182a3ee",
+      "local": [
+        5.960464477539063e-08,
+        0.0,
+        -1.0,
+        0.0,
+        -0.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        5.960464477539063e-08,
+        0.0,
+        1.8938533230539178e-07,
+        1.1575446128845215,
+        23.572641372680664,
+        1.0
+      ],
+      "name": "New Decal",
+      "order": 54,
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
       "actor": {},
       "controller": {
         "collision": {
@@ -1730,7 +1789,13 @@
       "playerInput": {
         "enabled": true,
         "invertY": false,
-        "mouseSensitivity": 0.10000000149011612
+        "mouseSensitivity": 0.10000000149011612,
+        "traceTest": {
+          "collisionMask": 1,
+          "collisionQuadSize": 0.03500000014901161,
+          "duration": 1.600000023841858,
+          "length": 10.0
+        }
       },
       "visible": true
     },
@@ -2720,7 +2785,7 @@
             "enabled": true,
             "pattern": "Bayer4x4",
             "size": 1,
-            "strength": 0.6899999976158142
+            "strength": 0.6800000071525574
           },
           "enabled": true,
           "fog": {
@@ -2779,7 +2844,7 @@
           },
           "posterization": {
             "enabled": true,
-            "levels": 11
+            "levels": 10
           },
           "procedural": {
             "groundBottom": [
@@ -3947,6 +4012,32 @@
       "visible": true
     },
     {
+      "id": "3a0e21ab3f7a49e5",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.14071369171142578,
+        1.7301034927368164,
+        24.032154083251953,
+        1.0
+      ],
+      "name": "Flames",
+      "order": 49,
+      "parent": "0000000000000000",
+      "particle": "44942436-f974-4025-8e63-4f1e14a79d11",
+      "visible": true
+    },
+    {
       "collider": {
         "collision": {
           "layers": 1,
@@ -4038,6 +4129,45 @@
         "owner": "8d34ebed2a97cb52",
         "sourceKey": "mesh:69:69:0/collision"
       },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "id": "3d4f0ce7f41f5ece",
+      "lightingScopes": {
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        -1.6528160572052002,
+        0.0,
+        0.2389543205499649,
+        0.0,
+        0.0,
+        1.6699998378753662,
+        0.0,
+        0.0,
+        -0.2389543205499649,
+        0.0,
+        -1.6528160572052002,
+        0.0,
+        0.47795820236206055,
+        -0.03558911383152008,
+        24.83248519897461,
+        1.0
+      ],
+      "meshShading": 0,
+      "model": "8d0b8c6a-a21f-5f70-aa85-e474fa04c010",
+      "modelAnimation": {
+        "asset": "",
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "skeleton+pile+3d+model (1)",
+      "order": 43,
+      "parent": "0000000000000000",
+      "receiveShadows": true,
       "visible": true
     },
     {
@@ -5673,9 +5803,9 @@
         0.0,
         1.0,
         0.0,
-        2.970562219619751,
-        2.481269121170044,
-        23.266904830932617,
+        5.304404258728027,
+        1.918160319328308,
+        24.271251678466797,
         1.0
       ],
       "name": "Point Light_004",
@@ -5685,16 +5815,16 @@
         "attenuation": 2.0,
         "castShadows": true,
         "color": [
-          0.9166666865348816,
-          0.7689110040664673,
-          0.5302287936210632
+          0.38823530077934265,
+          0.5647059082984924,
+          0.7882353067398071
         ],
         "edgeSoftness": 1.0,
         "enabled": true,
         "indirectEnergy": 1.0,
-        "intensity": 4.599999904632568,
+        "intensity": 5.199999809265137,
         "nearFalloffRadius": 0.0,
-        "radius": 6.099999904632568,
+        "radius": 3.700000047683716,
         "rangeFalloffExponent": 4.0,
         "roles": {
           "receiverMask": 3,
@@ -5705,6 +5835,65 @@
         "sourceRadius": 0.0,
         "specularStrength": 1.0
       },
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.27799999713897705,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.2302640825510025,
+            0.45214515924453735,
+            0.31759074330329895
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            -1.5777432338381914e-07,
+            -0.688746452331543,
+            -0.7250022888183594
+          ],
+          "localPoint": [
+            -4.574018478393555,
+            1.5593329668045044,
+            0.4959683418273926
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 33
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "4dca1e6b4bbe0986",
+      "local": [
+        4.322546942603367e-07,
+        -3.533380787054132e-15,
+        1.6200000047683716,
+        0.0,
+        -1.1829235553741455,
+        1.1068387031555176,
+        3.156322634367825e-07,
+        0.0,
+        -0.6832337975502014,
+        -0.7301996946334839,
+        1.82303097062686e-07,
+        0.0,
+        3.7439522743225098,
+        2.7457773685455322,
+        27.324018478393555,
+        1.0
+      ],
+      "name": "New Decal",
+      "order": 52,
+      "parent": "0000000000000000",
       "visible": true
     },
     {
@@ -5851,6 +6040,55 @@
       "visible": true
     },
     {
+      "id": "54a6005ba0335229",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        5.304404258728027,
+        1.918160319328308,
+        21.31161117553711,
+        1.0
+      ],
+      "name": "Point Light_005",
+      "order": 46,
+      "parent": "0000000000000000",
+      "point": {
+        "attenuation": 2.0,
+        "castShadows": true,
+        "color": [
+          0.386870414018631,
+          0.564375638961792,
+          0.7892156839370728
+        ],
+        "edgeSoftness": 1.0,
+        "enabled": true,
+        "indirectEnergy": 1.0,
+        "intensity": 5.199999809265137,
+        "nearFalloffRadius": 0.0,
+        "radius": 3.700000047683716,
+        "rangeFalloffExponent": 4.0,
+        "roles": {
+          "receiverMask": 3,
+          "shadowCasterMask": 3
+        },
+        "shadowDepthBias": 0.004999999888241291,
+        "shadowNormalBias": 1.0,
+        "sourceRadius": 0.0,
+        "specularStrength": 1.0
+      },
+      "visible": true
+    },
+    {
       "camera": {
         "far": 2048.0,
         "near": 0.05000000074505806,
@@ -5904,6 +6142,65 @@
       "name": "Camera",
       "order": 0,
       "parent": "0ef73fe233641b37",
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.6565810441970825,
+            0.14497163891792297,
+            0.1984473466873169
+          ],
+          "draw": 0,
+          "fingerprint": "9ee0f18027e8f328",
+          "localNormal": [
+            0.028350166976451874,
+            0.0,
+            -0.9995980262756348
+          ],
+          "localPoint": [
+            0.014141282066702843,
+            0.3015526533126831,
+            -0.49860721826553345
+          ],
+          "model": "887714c2-afcd-5ad9-b2b4-6a641198fac9",
+          "primitive": 0,
+          "receiver": "0602e6df2ed4062d",
+          "triangle": 48
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "5636dce6dd4d7f2f",
+      "local": [
+        -0.9995980262756348,
+        0.0,
+        -0.028350166976451874,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.028350166976451874,
+        0.0,
+        -0.9995980262756348,
+        0.0,
+        2.122968912124634,
+        1.0973461866378784,
+        22.22686004638672,
+        1.0
+      ],
+      "name": "New Decal",
+      "order": 37,
+      "parent": "0000000000000000",
       "visible": true
     },
     {
@@ -6459,6 +6756,55 @@
       "visible": true
     },
     {
+      "id": "749bd72c94c6be45",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.4065743684768677,
+        1.7853538990020752,
+        24.093650817871094,
+        1.0
+      ],
+      "name": "Point Light_006",
+      "order": 47,
+      "parent": "0000000000000000",
+      "point": {
+        "attenuation": 2.0,
+        "castShadows": true,
+        "color": [
+          0.9166666865348816,
+          0.7348135709762573,
+          0.5302287936210632
+        ],
+        "edgeSoftness": 1.0,
+        "enabled": true,
+        "indirectEnergy": 1.0,
+        "intensity": 5.199999809265137,
+        "nearFalloffRadius": 0.0,
+        "radius": 2.4000000953674316,
+        "rangeFalloffExponent": 4.0,
+        "roles": {
+          "receiverMask": 3,
+          "shadowCasterMask": 3
+        },
+        "shadowDepthBias": 0.004999999888241291,
+        "shadowNormalBias": 1.0,
+        "sourceRadius": 0.0,
+        "specularStrength": 1.0
+      },
+      "visible": true
+    },
+    {
       "castShadows": true,
       "id": "753d83528088ae00",
       "lightingScopes": {
@@ -6499,6 +6845,93 @@
         "sourceKey": "mesh:164:164:0"
       },
       "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "id": "754bf672467d48ed",
+      "lightingScopes": {
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        -0.7851790189743042,
+        0.04726296663284302,
+        0.41636502742767334,
+        0.0,
+        0.0,
+        0.8843209147453308,
+        -0.10038218647241592,
+        0.0,
+        -0.41903889179229736,
+        -0.08855953812599182,
+        -0.7801688313484192,
+        0.0,
+        5.645815849304199,
+        -0.011597663164138794,
+        24.499174118041992,
+        1.0
+      ],
+      "meshShading": 0,
+      "model": "997bffe6-0263-58e3-a216-7c9e59fe74a2",
+      "modelAnimation": {
+        "asset": "",
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "bone+skull+pile+3d+model_001",
+      "order": 42,
+      "parent": "0000000000000000",
+      "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "collider": {
+        "collision": {
+          "layers": 1,
+          "mask": 4294967295
+        },
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "mode": "solid",
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "8d0b8c6a-a21f-5f70-aa85-e474fa04c010"
+      },
+      "id": "76a17160bf1b42ee",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Collider",
+      "order": 0,
+      "parent": "3d4f0ce7f41f5ece",
       "visible": true
     },
     {
@@ -8043,6 +8476,114 @@
       "visible": true
     },
     {
+      "id": "8481cd563e9ecaf1",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        2.970562219619751,
+        0.9339306354522705,
+        24.55353355407715,
+        1.0
+      ],
+      "name": "Point Light_008",
+      "order": 51,
+      "parent": "0000000000000000",
+      "point": {
+        "attenuation": 2.0,
+        "castShadows": true,
+        "color": [
+          0.5302287936210632,
+          0.8143743872642517,
+          0.9166666865348816
+        ],
+        "edgeSoftness": 1.0,
+        "enabled": true,
+        "indirectEnergy": 1.0,
+        "intensity": 4.599999904632568,
+        "nearFalloffRadius": 0.0,
+        "radius": 7.800000190734863,
+        "rangeFalloffExponent": 4.0,
+        "roles": {
+          "receiverMask": 3,
+          "shadowCasterMask": 3
+        },
+        "shadowDepthBias": 0.004999999888241291,
+        "shadowNormalBias": 1.0,
+        "sourceRadius": 0.0,
+        "specularStrength": 1.0
+      },
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "68011f04-64c3-4596-b6dc-1f12047863ba",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.2753657400608063,
+            0.5758465528488159,
+            0.148787721991539
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            1.8617117802932626e-07,
+            -0.5641145706176758,
+            0.825696587562561
+          ],
+          "localPoint": [
+            -4.833353042602539,
+            1.4960421323776245,
+            -0.5592586398124695
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 38
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "859fac765bf21aec",
+      "local": [
+        0.061756957322359085,
+        0.08034953474998474,
+        1.6569037437438965,
+        0.0,
+        -1.0097097158432007,
+        -1.313703179359436,
+        0.10134086012840271,
+        0.0,
+        0.7928663492202759,
+        -0.6093955636024475,
+        -2.208947904591696e-07,
+        0.0,
+        2.161111831665039,
+        2.6613895893096924,
+        27.58335304260254,
+        1.0
+      ],
+      "name": "New Decal 2",
+      "order": 53,
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
       "castShadows": true,
       "id": "86020edcca0a16d3",
       "lightingScopes": {
@@ -8291,6 +8832,65 @@
         "sourceKey": "mesh:76:76:0"
       },
       "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": -8,
+        "seed": {
+          "barycentric": [
+            0.2501618266105652,
+            0.336901992559433,
+            0.41293618083000183
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localPoint": [
+            -0.9785880446434021,
+            1.7495144605636597,
+            -2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 15
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "91e8684fd89dc06b",
+      "local": [
+        5.6146173932347665e-08,
+        7.128366785735807e-10,
+        -1.0,
+        0.0,
+        -5.143565129372973e-09,
+        1.0,
+        -2.1095408753168954e-10,
+        0.0,
+        1.0,
+        -5.8970961447357695e-09,
+        4.949308873847258e-08,
+        0.0,
+        1.8009018276643474e-07,
+        2.9993526935577393,
+        23.728588104248047,
+        1.0
+      ],
+      "name": "New Decal",
+      "order": 55,
+      "parent": "0000000000000000",
       "visible": true
     },
     {
@@ -8867,6 +9467,55 @@
       "visible": true
     },
     {
+      "id": "9d3384c785ef71a6",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.5573542714118958,
+        1.918160319328308,
+        21.31161117553711,
+        1.0
+      ],
+      "name": "Point Light_007",
+      "order": 48,
+      "parent": "0000000000000000",
+      "point": {
+        "attenuation": 2.0,
+        "castShadows": true,
+        "color": [
+          0.9166666865348816,
+          0.7689110040664673,
+          0.5302287936210632
+        ],
+        "edgeSoftness": 1.0,
+        "enabled": true,
+        "indirectEnergy": 1.0,
+        "intensity": 5.199999809265137,
+        "nearFalloffRadius": 0.0,
+        "radius": 3.700000047683716,
+        "rangeFalloffExponent": 4.0,
+        "roles": {
+          "receiverMask": 3,
+          "shadowCasterMask": 3
+        },
+        "shadowDepthBias": 0.004999999888241291,
+        "shadowNormalBias": 1.0,
+        "sourceRadius": 0.0,
+        "specularStrength": 1.0
+      },
+      "visible": true
+    },
+    {
       "collider": {
         "collision": {
           "layers": 1,
@@ -8958,6 +9607,65 @@
         "owner": "8d34ebed2a97cb52",
         "sourceKey": "mesh:57:57:0/collision"
       },
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.32720693945884705,
+            0.08074311167001724,
+            0.5920499563217163
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "localPoint": [
+            1.0367584228515625,
+            0.7238501906394958,
+            2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 16
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "a42900df08a9fd49",
+      "local": [
+        0.5278953909873962,
+        0.8641481995582581,
+        -0.7232611179351807,
+        0.0,
+        0.38226714730262756,
+        -0.8886547684669495,
+        -0.7827491760253906,
+        0.0,
+        -1.0600610971450806,
+        0.10987680405378342,
+        -0.6424399614334106,
+        0.0,
+        6.0,
+        1.1281616687774658,
+        22.654821395874023,
+        1.0
+      ],
+      "name": "New Decal_001",
+      "order": 40,
+      "parent": "0000000000000000",
       "visible": true
     },
     {
@@ -9278,55 +9986,6 @@
       "visible": true
     },
     {
-      "id": "afa0d7b9da436dcb",
-      "local": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        2.970562219619751,
-        1.7140774726867676,
-        27.15129280090332,
-        1.0
-      ],
-      "name": "Point Light_002",
-      "order": 31,
-      "parent": "0000000000000000",
-      "point": {
-        "attenuation": 2.0,
-        "castShadows": true,
-        "color": [
-          0.5302287936210632,
-          0.8143743872642517,
-          0.9166666865348816
-        ],
-        "edgeSoftness": 1.0,
-        "enabled": true,
-        "indirectEnergy": 1.0,
-        "intensity": 4.599999904632568,
-        "nearFalloffRadius": 0.0,
-        "radius": 2.9000000953674316,
-        "rangeFalloffExponent": 4.0,
-        "roles": {
-          "receiverMask": 3,
-          "shadowCasterMask": 3
-        },
-        "shadowDepthBias": 0.004999999888241291,
-        "shadowNormalBias": 1.0,
-        "sourceRadius": 0.0,
-        "specularStrength": 1.0
-      },
-      "visible": true
-    },
-    {
       "id": "b07599733fcb87c2",
       "local": [
         -1.0,
@@ -9382,6 +10041,65 @@
       ],
       "name": "ShadowCamera",
       "order": 11,
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.6914246678352356,
+            0.0015021959552541375,
+            0.30707311630249023
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localPoint": [
+            -1.1485481262207031,
+            0.4212193489074707,
+            -2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 14
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "b1951c77ffcb5cbe",
+      "local": [
+        1.2814999195143173e-07,
+        0.0,
+        -2.1500000953674316,
+        0.0,
+        0.0,
+        2.1500000953674316,
+        0.0,
+        0.0,
+        2.1500000953674316,
+        0.0,
+        1.2814999195143173e-07,
+        0.0,
+        1.6995977603073698e-07,
+        1.228292465209961,
+        23.898548126220703,
+        1.0
+      ],
+      "name": "New Decal",
+      "order": 38,
       "parent": "0000000000000000",
       "visible": true
     },
@@ -9520,6 +10238,65 @@
       "order": 27,
       "parent": "0000000000000000",
       "receiveShadows": true,
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "68011f04-64c3-4596-b6dc-1f12047863ba",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.1602417230606079,
+            0.2078104019165039,
+            0.6319478750228882
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localPoint": [
+            -1.7531375885009766,
+            2.019274950027466,
+            -2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 15
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "b29539069210bdc1",
+      "local": [
+        -7.629394360719743e-08,
+        -4.007788767523834e-09,
+        1.2799999713897705,
+        0.0,
+        -2.6410044720674144e-15,
+        -1.080366849899292,
+        4.430870248484098e-08,
+        0.0,
+        1.0,
+        0.0,
+        5.960464477539063e-08,
+        0.0,
+        1.3392343589657685e-07,
+        3.524963855743408,
+        23.351770401000977,
+        1.0
+      ],
+      "name": "New Decal 2_001",
+      "order": 45,
+      "parent": "0000000000000000",
       "visible": true
     },
     {
@@ -10084,8 +10861,8 @@
         1.0,
         0.0,
         2.970562219619751,
-        1.7140774726867676,
-        30.35113525390625,
+        0.9339306354522705,
+        32.10626220703125,
         1.0
       ],
       "name": "Point Light_003",
@@ -10104,7 +10881,7 @@
         "indirectEnergy": 1.0,
         "intensity": 4.599999904632568,
         "nearFalloffRadius": 0.0,
-        "radius": 2.9000000953674316,
+        "radius": 7.800000190734863,
         "rangeFalloffExponent": 4.0,
         "roles": {
           "receiverMask": 3,
@@ -23854,6 +24631,65 @@
         "owner": "8d34ebed2a97cb52",
         "sourceKey": "mesh:123:123:0/collision"
       },
+      "visible": true
+    },
+    {
+      "decal": {
+        "asset": "db6e9555-b494-48fc-9715-a78208e0e8eb",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.32720693945884705,
+            0.08074311167001724,
+            0.5920499563217163
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "localPoint": [
+            1.0367584228515625,
+            0.7238501906394958,
+            2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 16
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "cffbb9d3ba45d840",
+      "local": [
+        0.8654022216796875,
+        1.7135504484176636,
+        0.6902354955673218,
+        0.0,
+        0.6266674399375916,
+        0.44471704959869385,
+        -1.8897392749786377,
+        0.0,
+        -1.7378051280975342,
+        1.0136926174163818,
+        -0.3377290964126587,
+        0.0,
+        6.0,
+        1.6318001747131348,
+        21.713241577148438,
+        1.0
+      ],
+      "name": "New Decal",
+      "order": 39,
+      "parent": "0000000000000000",
       "visible": true
     },
     {
@@ -45958,6 +46794,32 @@
       "visible": true
     },
     {
+      "id": "e5b821768c860ddb",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.14071369171142578,
+        1.7301034927368164,
+        21.592052459716797,
+        1.0
+      ],
+      "name": "Flames_001",
+      "order": 50,
+      "parent": "0000000000000000",
+      "particle": "44942436-f974-4025-8e63-4f1e14a79d11",
+      "visible": true
+    },
+    {
       "castShadows": true,
       "id": "e6d34747fbc49441",
       "lightingScopes": {
@@ -46091,6 +46953,65 @@
       "visible": true
     },
     {
+      "decal": {
+        "asset": "68011f04-64c3-4596-b6dc-1f12047863ba",
+        "edgeFeather": 0.02500000037252903,
+        "opacity": 1.0,
+        "priority": 0,
+        "seed": {
+          "barycentric": [
+            0.1602417230606079,
+            0.2078104019165039,
+            0.6319478750228882
+          ],
+          "draw": 0,
+          "fingerprint": "8ffdf75d22d033d5",
+          "localNormal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "localPoint": [
+            -1.7531375885009766,
+            2.019274950027466,
+            -2.0
+          ],
+          "model": "c84803af-1892-5efd-b3ec-cfb542296a96",
+          "primitive": 0,
+          "receiver": "6f1f1f91d24b1ed1",
+          "triangle": 15
+        },
+        "tint": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "id": "eab35bc49ecdcbea",
+      "local": [
+        -1.299381438002456e-07,
+        -6.8257666185900234e-09,
+        2.1800003051757813,
+        0.0,
+        -4.497961366838358e-15,
+        -1.840000033378601,
+        7.546326941110237e-08,
+        0.0,
+        1.0,
+        0.0,
+        5.960464477539063e-08,
+        0.0,
+        1.3392343589657685e-07,
+        3.369943380355835,
+        24.361488342285156,
+        1.0
+      ],
+      "name": "New Decal 2",
+      "order": 44,
+      "parent": "0000000000000000",
+      "visible": true
+    },
+    {
       "id": "ec073a3ce168b6bb",
       "local": [
         -1.0,
@@ -46117,6 +47038,45 @@
         "owner": "8d34ebed2a97cb52",
         "sourceKey": "mesh:138:138:0"
       },
+      "visible": true
+    },
+    {
+      "castShadows": true,
+      "id": "efd506205fe63c87",
+      "lightingScopes": {
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.053238723427057266,
+        0.0,
+        0.8884060382843018,
+        0.0,
+        0.0,
+        0.8899999856948853,
+        0.0,
+        0.0,
+        -0.8884060382843018,
+        0.0,
+        0.053238723427057266,
+        0.0,
+        5.592547416687012,
+        0.0,
+        25.018413543701172,
+        1.0
+      ],
+      "meshShading": 0,
+      "model": "997bffe6-0263-58e3-a216-7c9e59fe74a2",
+      "modelAnimation": {
+        "asset": "",
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "bone+skull+pile+3d+model",
+      "order": 41,
+      "parent": "0000000000000000",
+      "receiveShadows": true,
       "visible": true
     },
     {
@@ -57558,19 +58518,19 @@
     "fov": 45.0,
     "near": 0.0013988493010401726,
     "position": [
-      2.485665798187256,
-      2.261089324951172,
-      23.950302124023438
+      2.281733512878418,
+      3.5074939727783203,
+      23.137216567993164
     ],
     "target": [
-      5.993929862976074,
-      0.45588386058807373,
-      26.95639419555664
+      -22.584104537963867,
+      -1.0507560968399048,
+      29.040836334228516
     ],
     "up": [
-      0.27636629343032837,
-      0.931422233581543,
-      0.23679998517036438
+      -0.17083485424518585,
+      0.9844642877578735,
+      0.0405653715133667
     ]
   },
   "settings": {
@@ -57579,5 +58539,5 @@
     "playerCharacter": "0ef73fe233641b37"
   },
   "type": "crimson-scene",
-  "version": 23
+  "version": 24
 }

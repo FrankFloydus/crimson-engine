@@ -66,7 +66,7 @@ bool developableChart(const AnalysisPatch&a,std::vector<D2>&chart,std::vector<bo
     const double tolerance=std::max(a.scale*1e-6,a.tolerance*2);
     const auto intersectsImage=[&](const std::array<D2,3>&metres){
         std::vector<Point>poly;for(const auto p:metres)poly.push_back({{},
-            {.5+(a.by*p.x-a.bx*p.y)/a.frameDet,.5+(-a.ay*p.x+a.ax*p.y)/a.frameDet}});
+            {.5+(a.by*p.x-a.bx*p.y)/a.frameDet,.5-(-a.ay*p.x+a.ax*p.y)/a.frameDet}});
         constexpr double halo=1e-6;
         for(size_t axis=0;axis<2&&!poly.empty();++axis){poly=clipUv(poly,axis,-halo,false);if(!poly.empty())poly=clipUv(poly,axis,1+halo,true);}
         return poly.size()>=3;
@@ -122,7 +122,9 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     auto restricted=intrinsic.restrictToInput(chart);inputChart.resize(a.positions.size());for(gs::Vertex v:mesh.vertices())inputChart[v.getIndex()]={restricted[v].x,restricted[v].y};
     for(gs::Face f:common.mesh->faces()){ChartTriangle t{};t.sourceFace=common.sourceFaceA[f].getIndex();size_t i=0;for(gs::Vertex v:f.adjacentVertices()){if(i>=3)throw Failure(DecalPatchStatus::InvalidChart,"Common subdivision did not triangulate.");auto p=commonPosition[v];auto c=commonChart[v];t.positions[i]={p.x,p.y,p.z};t.vertices[i]=v.getIndex();t.metres[i++]={c.x,c.y};}if(i==3)triangles.push_back(t);}
     }
-    const auto uv=[&](D2 p){return D2{.5+(a.by*p.x-a.bx*p.y)/a.frameDet,.5+(-a.ay*p.x+a.ax*p.y)/a.frameDet};};
+    // Chart metres retain the oriented surface basis. Raster V runs downward,
+    // so the authored local +Y edge samples the top of the source image.
+    const auto uv=[&](D2 p){return D2{.5+(a.by*p.x-a.bx*p.y)/a.frameDet,.5-(-a.ay*p.x+a.ax*p.y)/a.frameDet};};
     // Keep analysis positions in double precision through validation. Published
     // world-space floats can move an FPS-sized patch off its seed at large
     // coordinates and can separate otherwise shared surface edges by an ULP.

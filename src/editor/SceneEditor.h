@@ -59,6 +59,7 @@ public:
     void setDecalPatchQuery(std::function<std::shared_ptr<const DecalPatchData>(EntityId)> query) { viewport_.setDecalPatchQuery(std::move(query)); }
     void setDecalFrameQuery(std::function<std::optional<Mat4>(EntityId)> query) { decalFrames_=query;viewport_.setDecalFrameQuery(std::move(query)); }
     void drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) { viewport_.drawDecalPlacementPlane(frame,camera,texture,color); }
+    void drawTraces(const Camera& camera,std::span<const TraceVisualRecord> traces) { viewport_.drawTraces(camera,traces); }
     const std::string& navigationPreviewProfile() const { return navigationPreviewProfile_; }
 private:
     enum class Pending { None, New, Open, Exit };

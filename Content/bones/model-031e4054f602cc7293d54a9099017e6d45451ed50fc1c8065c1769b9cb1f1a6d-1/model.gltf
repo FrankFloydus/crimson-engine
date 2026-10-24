@@ -1,0 +1,142 @@
+{
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 16348,
+      "max": [
+        0.499755859375,
+        0.27001953125,
+        0.439208984375
+      ],
+      "min": [
+        -0.499755859375,
+        0,
+        -0.439208984375
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 16348,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 16348,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 29799,
+      "type": "SCALAR"
+    }
+  ],
+  "asset": {
+    "generator": "Tripo",
+    "version": "2.0"
+  },
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 196176,
+      "byteOffset": 0,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 196176,
+      "byteOffset": 196176,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 130784,
+      "byteOffset": 392352,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 59598,
+      "byteOffset": 523136,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 1758139,
+      "byteOffset": 582736
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 2340876,
+      "uri": "buffers/0.bin"
+    }
+  ],
+  "images": [
+    {
+      "mimeType": "image/jpeg",
+      "name": "tripo_image_9a05bc59-7c4f-447f-900a-0ea6cb8b4372_0_0",
+      "uri": "images/0.jpg"
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "name": "tripo_mat_9a05bc59-7c4f-447f-900a-0ea6cb8b4372",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0,
+        "roughnessFactor": 0.8999999761581421
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "tripo_mesh_9a05bc59-7c4f-447f-900a-0ea6cb8b4372",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 1,
+            "POSITION": 0,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "name": "tripo_node_9a05bc59-7c4f-447f-900a-0ea6cb8b4372"
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987
+    }
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "source": 0
+    }
+  ]
+}

@@ -1,4 +1,6 @@
 #include "DecalInternal.h"
+#include "DecalPolygon.h"
+#include "DecalSourceContacts.h"
 #include <chrono>
 #include <map>
 #include <numeric>
@@ -22,28 +24,40 @@ Polygon clip(const Polygon&poly,const Plane&plane,double epsilon){
 bool inside(const Source&s,D3 p,double e){const D3 b=barycentric(s,p);return b.x>=-e&&b.y>=-e&&b.z>=-e;}
 struct Box {D3 lo,hi;};
 Box bounds(const Source&s){Box b{s.p[0],s.p[0]};for(D3 p:s.p){b.lo={std::min(b.lo.x,p.x),std::min(b.lo.y,p.y),std::min(b.lo.z,p.z)};b.hi={std::max(b.hi.x,p.x),std::max(b.hi.y,p.y),std::max(b.hi.z,p.z)};}return b;}
+Box bounds(const Polygon&p){Box b{p.front(),p.front()};for(D3 v:p){b.lo={std::min(b.lo.x,v.x),std::min(b.lo.y,v.y),std::min(b.lo.z,v.z)};b.hi={std::max(b.hi.x,v.x),std::max(b.hi.y,v.y),std::max(b.hi.z,v.z)};}return b;}
 bool overlaps(const Box&a,const Box&b,double e){for(size_t k=0;k<3;++k)if(a.lo[k]>b.hi[k]+e||b.lo[k]>a.hi[k]+e)return false;return true;}
-void addPlane(std::vector<Plane>&v,D3 n,D3 p){if(length(n)>1e-15){n=unit(n);v.push_back({n,dot(n,p)});}}
-void contactCuts(const Source&a,const Source&b,std::vector<Plane>&ca,std::vector<Plane>&cb,double tol){
+struct Cut {Plane plane;Box support;};
+struct Segment {D3 a,b;};
+void addPlane(std::vector<Cut>&v,D3 n,D3 p,const Box&support){if(length(n)>1e-15){n=unit(n);v.push_back({{n,dot(n,p)},support});}}
+bool boundarySegment(const Source&s,D3 p,D3 q,double tol){for(size_t i=0;i<3;++i){const D3 a=s.p[i],e=s.p[(i+1)%3]-a;const double len=length(e);if(len<=1e-15)continue;const D3 n=e/len;const double u=dot(p-a,n),v=dot(q-a,n);if(length(p-a-n*u)<=tol&&length(q-a-n*v)<=tol&&std::min(u,v)>=-tol&&std::max(u,v)<=len+tol)return true;}return false;}
+// Return coplanar overlap separately: overlapping sources must participate in
+// multiplicity tests even though an interior crossing is never a surface join.
+bool contactCuts(const Source&a,const Source&b,std::vector<Cut>&ca,std::vector<Cut>&cb,std::vector<Segment>&ba,std::vector<Segment>&bb,double tol){
     const D3 na=unit(cross(a.p[1]-a.p[0],a.p[2]-a.p[0])),nb=unit(cross(b.p[1]-b.p[0],b.p[2]-b.p[0]));
     if(length(cross(na,nb))<1e-8){
-        if(std::abs(dot(na,b.p[0]-a.p[0]))>tol)return;
+        if(std::abs(dot(na,b.p[0]-a.p[0]))>tol)return false;
         Polygon intersection{a.p[0],a.p[1],a.p[2]};for(size_t i=0;i<3;++i){D3 n=unit(cross(b.p[(i+1)%3]-b.p[i],nb));intersection=clip(intersection,{n,dot(n,b.p[i])},tol*1e-5);if(intersection.size()<3)break;}
         double overlap=0;if(intersection.size()>=3)for(size_t j=1;j+1<intersection.size();++j)overlap+=length(cross(intersection[j]-intersection[0],intersection[j+1]-intersection[0]));
         // Cut actual coplanar overlap, not arbitrary extensions of unrelated
         // edges. The latter creates tiny cells on otherwise regular meshes.
-        for(size_t i=0;i<3;++i){if(overlap>tol*tol){addPlane(ca,cross(na,b.p[(i+1)%3]-b.p[i]),b.p[i]);addPlane(cb,cross(nb,a.p[(i+1)%3]-a.p[i]),a.p[i]);}
+        const bool areaOverlap=overlap>tol*tol;const Box support=intersection.empty()?bounds(a):bounds(intersection);
+        for(size_t i=0;i<3;++i){if(areaOverlap){addPlane(ca,cross(na,b.p[(i+1)%3]-b.p[i]),b.p[i],support);addPlane(cb,cross(nb,a.p[(i+1)%3]-a.p[i]),a.p[i],support);}
             const D3 ea=a.p[(i+1)%3]-a.p[i],eb=b.p[(i+1)%3]-b.p[i];
-            for(D3 q:b.p){double t=dot(q-a.p[i],ea)/dot(ea,ea);if(t>1e-7&&t<1-1e-7&&length(q-a.p[i]-ea*t)<=tol)addPlane(ca,ea,q);}
-            for(D3 q:a.p){double t=dot(q-b.p[i],eb)/dot(eb,eb);if(t>1e-7&&t<1-1e-7&&length(q-b.p[i]-eb*t)<=tol)addPlane(cb,eb,q);}
-        }return;
+            for(D3 q:b.p){double t=dot(q-a.p[i],ea)/dot(ea,ea);if(t>1e-7&&t<1-1e-7&&length(q-a.p[i]-ea*t)<=tol)addPlane(ca,ea,q,{q,q});}
+            for(D3 q:a.p){double t=dot(q-b.p[i],eb)/dot(eb,eb);if(t>1e-7&&t<1-1e-7&&length(q-b.p[i]-eb*t)<=tol)addPlane(cb,eb,q,{q,q});}
+        }return overlap>0;
     }
     std::vector<D3> pts;
     const auto collect=[&](const Source&s,const Source&t,D3 nt){for(size_t i=0;i<3;++i){D3 p=s.p[i],q=s.p[(i+1)%3];const double x=dot(nt,p-t.p[0]),y=dot(nt,q-t.p[0]);if(std::abs(x)<=tol&&inside(t,p,tol))pts.push_back(p);if(x*y<0){D3 at=p+(q-p)*(x/(x-y));if(inside(t,at,tol))pts.push_back(at);}}};
     collect(a,b,nb);collect(b,a,na);double best=tol;D3 p{},q{};
     for(D3 x:pts)for(D3 y:pts)if(length(x-y)>best){best=length(x-y);p=x;q=y;}
-    if(best<=tol)return;D3 dir=unit(q-p);addPlane(ca,cross(na,dir),p);addPlane(cb,cross(nb,dir),p);
-    for(D3 end:{p,q}){bool va=false,vb=false;for(D3 v:a.p)va|=length(v-end)<=tol;for(D3 v:b.p)vb|=length(v-end)<=tol;if(!va)addPlane(ca,dir,end);if(!vb)addPlane(cb,dir,end);}
+    if(best<=tol)return false;D3 dir=unit(q-p);const Box support=bounds(Polygon{p,q});addPlane(ca,cross(na,dir),p,support);addPlane(cb,cross(nb,dir),p,support);
+    for(D3 end:{p,q}){bool va=false,vb=false;for(D3 v:a.p)va|=length(v-end)<=tol;for(D3 v:b.p)vb|=length(v-end)<=tol;if(!va)addPlane(ca,dir,end,support);if(!vb)addPlane(cb,dir,end,support);}
+    if(!boundarySegment(a,p,q,tol)||!boundarySegment(b,p,q,tol)){
+        const auto projected=[](D3 p,const Source&s,D3 n){return p-n*dot(n,p-s.p[0]);};
+        ba.push_back({projected(p,a,na),projected(q,a,na)});bb.push_back({projected(p,b,nb),projected(q,b,nb)});
+    }
+    return false;
 }
 struct Dsu {std::vector<size_t> p;explicit Dsu(size_t n):p(n){std::iota(p.begin(),p.end(),size_t{});}size_t find(size_t a){while(p[a]!=a){p[a]=p[p[a]];a=p[a];}return a;}void join(size_t a,size_t b){a=find(a);b=find(b);if(a!=b)p[std::max(a,b)]=std::min(a,b);}};
 struct EdgeUse {size_t face{},corner{};};
@@ -77,23 +91,54 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
         }
     }
     if(seedSource==SIZE_MAX)throw Failure(DecalPatchStatus::MissingSeed,"Seed geometry is degenerate or outside its footprint.");stats.inputTriangles=static_cast<uint32_t>(patch.sources.size());
-    std::vector<std::vector<Plane>> cuts(patch.sources.size());std::vector<Box> boxes;for(const auto&s:patch.sources)boxes.push_back(bounds(s));std::vector<size_t> order(patch.sources.size());std::iota(order.begin(),order.end(),size_t{});std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return boxes[a].lo.x<boxes[b].lo.x;});size_t pairs=0;
+    std::vector<std::vector<Cut>> cuts(patch.sources.size());std::vector<std::vector<Segment>> barriers(patch.sources.size());Dsu sourceSheets(patch.sources.size());std::vector<Box> boxes;for(const auto&s:patch.sources)boxes.push_back(bounds(s));std::vector<size_t> order(patch.sources.size());std::iota(order.begin(),order.end(),size_t{});std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return boxes[a].lo.x<boxes[b].lo.x;});size_t pairs=0;
+    // Contact metadata follows the bounded original input. Reserve the smaller
+    // derived-geometry allowance for the sheet that can actually reach the seed.
     size_t cutCount=0;
-    for(size_t a=0;a<order.size();++a)for(size_t b=a+1;b<order.size()&&boxes[order[b]].lo.x<=boxes[order[a]].hi.x+tol;++b){cancelled(stop);if(++pairs>1000000)throw Failure(DecalPatchStatus::LimitExceeded,"Local contact-pair budget exceeded.");const size_t i=order[a],j=order[b];if(!overlaps(boxes[i],boxes[j],tol))continue;const size_t before=cuts[i].size()+cuts[j].size();contactCuts(patch.sources[i],patch.sources[j],cuts[i],cuts[j],tol);cutCount+=cuts[i].size()+cuts[j].size()-before;if(cutCount>static_cast<size_t>(r.limits.maximumTriangles)*8)throw Failure(DecalPatchStatus::LimitExceeded,"Local contact-plane budget exceeded.");}
+    for(size_t a=0;a<order.size();++a)for(size_t b=a+1;b<order.size()&&boxes[order[b]].lo.x<=boxes[order[a]].hi.x+tol;++b){
+        cancelled(stop);const size_t i=order[a],j=order[b];if(!overlaps(boxes[i],boxes[j],tol))continue;
+        if(++pairs>1000000)throw Failure(DecalPatchStatus::LimitExceeded,"Local contact-pair budget exceeded.");
+        const size_t before=cuts[i].size()+cuts[j].size();const bool overlap=contactCuts(patch.sources[i],patch.sources[j],cuts[i],cuts[j],barriers[i],barriers[j],tol);
+        cutCount+=cuts[i].size()+cuts[j].size()-before;if(cutCount>static_cast<size_t>(r.limits.maximumInputTriangles)*32)throw Failure(DecalPatchStatus::LimitExceeded,"Local contact-plane budget exceeded.");
+        if(overlap||sourceBoundaryOverlap(patch.sources[i],patch.sources[j],tol,std::max(1e-11,patch.scale*1e-10)))sourceSheets.join(i,j);
+    }
+    // Only an original boundary/boundary contact can give a traversable
+    // two-sided seam. Interior crossings have three/four uses. Keep their exact
+    // cuts and barrier segments, but do not tessellate an entire unrelated mesh
+    // merely to rediscover that it cannot join the seed sheet.
+    const size_t seedSheet=sourceSheets.find(seedSource);
     const double eps=std::max(1e-11,patch.scale*1e-10),weld=std::min(tol,std::max(1e-9,patch.scale*1e-7));std::vector<AnalysisFace> allFaces;std::map<std::tuple<int64_t,int64_t,int64_t>,std::vector<size_t>> buckets;
     const auto node=[&](D3 p){const int64_t ix=static_cast<int64_t>(std::floor((p.x-o.x)/weld)),iy=static_cast<int64_t>(std::floor((p.y-o.y)/weld)),iz=static_cast<int64_t>(std::floor((p.z-o.z)/weld));size_t found=SIZE_MAX;double nearest=weld;
         for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy)for(int dz=-1;dz<=1;++dz){auto it=buckets.find({ix+dx,iy+dy,iz+dz});if(it!=buckets.end())for(size_t id:it->second){double d=length(p-patch.positions[id]);if(d<nearest||(d==nearest&&id<found)){found=id;nearest=d;}}}
         if(found!=SIZE_MAX)return found;const size_t id=patch.positions.size();patch.positions.push_back(p);buckets[{ix,iy,iz}].push_back(id);return id;};
-    for(size_t si=0;si<patch.sources.size();++si){cancelled(stop);const Source&s=patch.sources[si];Polygon poly{s.p[0],s.p[1],s.p[2]};for(size_t k=0;k<3;++k){D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;poly=clip(poly,{n,o[k]+radius},eps);poly=clip(poly,{n*-1,-o[k]+radius},eps);if(poly.size()<3)break;}if(poly.size()<3)continue;
+    struct Cell {Polygon polygon;size_t source;};std::vector<Cell> allCells;
+    for(size_t si=0;si<patch.sources.size();++si){cancelled(stop);if(sourceSheets.find(si)!=seedSheet)continue;const Source&s=patch.sources[si];Polygon poly{s.p[0],s.p[1],s.p[2]};for(size_t k=0;k<3;++k){D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;poly=clip(poly,{n,o[k]+radius},eps);poly=clip(poly,{n*-1,-o[k]+radius},eps);if(poly.size()<3)break;}if(poly.size()<3)continue;
         const size_t omittedAxis=std::abs(patch.seedNormal.x)>std::abs(patch.seedNormal.y)?(std::abs(patch.seedNormal.x)>std::abs(patch.seedNormal.z)?0:2):(std::abs(patch.seedNormal.y)>std::abs(patch.seedNormal.z)?1:2);
-        std::vector<Polygon> cells{std::move(poly)};std::vector<Plane> planes=std::move(cuts[si]);for(size_t k=0;k<3;++k){if(k==omittedAxis)continue;D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;const int steps=static_cast<int>(std::ceil(radius/spacing));for(int j=-steps;j<=steps;++j)planes.push_back({n,o[k]+j*spacing});}
-        for(const Plane&plane:planes){std::vector<Polygon> next;for(auto&cell:cells){bool positive=false,negative=false;for(D3 p:cell){double d=distance(plane,p);positive|=d>eps;negative|=d< -eps;}if(positive&&negative){auto a=clip(cell,plane,eps),b=clip(cell,{plane.n*-1,-plane.d},eps);if(a.size()>=3)next.push_back(std::move(a));if(b.size()>=3)next.push_back(std::move(b));}else next.push_back(std::move(cell));}cells=std::move(next);if(cells.size()+allFaces.size()>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Derived triangle budget exceeded.");}
-        for(auto&cell:cells)for(size_t j=1;j+1<cell.size();++j){if(length(cross(cell[j]-cell[0],cell[j+1]-cell[0]))<=eps*eps)continue;AnalysisFace f{{node(cell[0]),node(cell[j]),node(cell[j+1])},si};if(f.v[0]==f.v[1]||f.v[1]==f.v[2]||f.v[2]==f.v[0])continue;if(dot(cross(cell[j]-cell[0],cell[j+1]-cell[0]),s.geometricNormal)<0)std::swap(f.v[1],f.v[2]);allFaces.push_back(f);if(allFaces.size()>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Derived triangle budget exceeded.");}
+        // Establish the common grid first. A short contact may split the cells
+        // it touches, never extend hundreds of infinite planes across a wall.
+        std::vector<Polygon> cells{std::move(poly)};std::vector<Cut> planes;for(size_t k=0;k<3;++k){if(k==omittedAxis)continue;D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;const int steps=static_cast<int>(std::ceil(radius/spacing));for(int j=-steps;j<=steps;++j)planes.push_back({{n,o[k]+j*spacing},roi});}
+        planes.insert(planes.end(),cuts[si].begin(),cuts[si].end());
+        for(const Cut&cut:planes){cancelled(stop);std::vector<Polygon> next;for(auto&cell:cells){if(!overlaps(bounds(cell),cut.support,tol)){next.push_back(std::move(cell));continue;}const Plane&plane=cut.plane;bool positive=false,negative=false;for(D3 p:cell){double d=distance(plane,p);positive|=d>eps;negative|=d< -eps;}if(positive&&negative){auto a=clip(cell,plane,eps),b=clip(cell,{plane.n*-1,-plane.d},eps);if(a.size()>=3)next.push_back(std::move(a));if(b.size()>=3)next.push_back(std::move(b));}else next.push_back(std::move(cell));}cells=std::move(next);if(cells.size()+allCells.size()>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Derived triangle budget exceeded.");}
+        for(auto&cell:cells){for(D3 p:cell)node(p);allCells.push_back({std::move(cell),si});}
+    }
+    // Local cuts can end on a neighboring cell's edge. Insert every welded
+    // endpoint on that edge before triangulation, preserving a conforming mesh.
+    std::array<std::vector<size_t>,3> sortedNodes;for(size_t axis=0;axis<3;++axis){auto&ids=sortedNodes[axis];ids.resize(patch.positions.size());std::iota(ids.begin(),ids.end(),size_t{});std::stable_sort(ids.begin(),ids.end(),[&](size_t a,size_t b){return patch.positions[a][axis]<patch.positions[b][axis];});}
+    for(const auto&cell:allCells){cancelled(stop);std::vector<size_t> boundary;
+        for(size_t j=0;j<cell.polygon.size();++j){const size_t first=node(cell.polygon[j]),last=node(cell.polygon[(j+1)%cell.polygon.size()]);if(first==last)continue;const D3 a=patch.positions[first],b=patch.positions[last],e=b-a;const double len=length(e);if(len<=eps)continue;const D3 direction=e/len;size_t axis=0;for(size_t k=1;k<3;++k)if(std::abs(e[k])>std::abs(e[axis]))axis=k;std::vector<std::pair<double,size_t>> points{{0,first}};
+            const auto&ids=sortedNodes[axis];const double lo=std::min(a[axis],b[axis])-weld,hi=std::max(a[axis],b[axis])+weld;auto it=std::lower_bound(ids.begin(),ids.end(),lo,[&](size_t id,double x){return patch.positions[id][axis]<x;});
+            for(;it!=ids.end()&&patch.positions[*it][axis]<=hi;++it){if(*it==first||*it==last)continue;const D3 q=patch.positions[*it];const double t=dot(q-a,direction);if(t>weld&&t<len-weld&&length(q-a-direction*t)<=eps*4)points.push_back({t,*it});}
+            std::sort(points.begin(),points.end());for(const auto&[t,id]:points)if(boundary.empty()||boundary.back()!=id)boundary.push_back(id);
+        }
+        if(boundary.size()>1&&boundary.front()==boundary.back())boundary.pop_back();
+        if(boundary.size()<3)continue;double area=0;for(size_t j=1;j+1<boundary.size();++j)area+=dot(cross(patch.positions[boundary[j]]-patch.positions[boundary[0]],patch.positions[boundary[j+1]]-patch.positions[boundary[0]]),patch.sources[cell.source].geometricNormal);if(std::abs(area)<=eps*eps)continue;
+        if(!triangulateConvexPolygon(boundary,patch.positions,patch.sources[cell.source].geometricNormal,eps,[&](std::array<size_t,3> triangle){allFaces.push_back({triangle,cell.source});if(allFaces.size()>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Derived triangle budget exceeded.");}))throw Failure(DecalPatchStatus::InvalidChart,"Contact cell triangulation failed.");
     }
     std::map<std::pair<size_t,size_t>,std::vector<EdgeUse>> edges;size_t seedFace=SIZE_MAX,seedCorner=0;
     for(size_t i=0;i<allFaces.size();++i){const auto&f=allFaces[i];for(size_t j=0;j<3;++j){if(f.source==seedSource&&length(patch.positions[f.v[j]]-o)<=tol){seedFace=i;seedCorner=j;}edges[std::minmax(f.v[j],f.v[(j+1)%3])].push_back({i,j});}}
     if(seedFace==SIZE_MAX)throw Failure(DecalPatchStatus::InvalidChart,"Seed insertion failed in the derived patch.");std::vector<std::vector<size_t>> adjacent(allFaces.size());Dsu corners(allFaces.size()*3);std::set<size_t> ambiguousFaces;std::vector<std::pair<EdgeUse,EdgeUse>> joinedEdges;
-    for(const auto&[edge,uses]:edges){if(uses.size()<2)continue;bool good=uses.size()==2;if(good){const auto&a=uses[0];const auto&b=uses[1];const auto&fa=allFaces[a.face];const auto&fb=allFaces[b.face];good=fa.v[a.corner]==fb.v[(b.corner+1)%3]&&dot(patch.sources[fa.source].geometricNormal,patch.sources[fb.source].geometricNormal)>-.999999;
+    const auto blocked=[&](const EdgeUse&use){const auto&f=allFaces[use.face];const D3 p=patch.positions[f.v[use.corner]],q=patch.positions[f.v[(use.corner+1)%3]];for(const auto&segment:barriers[f.source]){const D3 e=segment.b-segment.a;const double len=length(e);if(len<=eps)continue;const D3 n=e/len;const double u=dot(p-segment.a,n),v=dot(q-segment.a,n);if(std::min(u,v)>=-4*weld&&std::max(u,v)<=len+4*weld&&length(p-segment.a-n*u)<=4*weld&&length(q-segment.a-n*v)<=4*weld)return true;}return false;};
+    for(const auto&[edge,uses]:edges){const bool barrier=std::any_of(uses.begin(),uses.end(),blocked);if(uses.size()<2&&!barrier)continue;bool good=uses.size()==2&&!barrier;if(good){const auto&a=uses[0];const auto&b=uses[1];const auto&fa=allFaces[a.face];const auto&fb=allFaces[b.face];good=fa.v[a.corner]==fb.v[(b.corner+1)%3]&&dot(patch.sources[fa.source].geometricNormal,patch.sources[fb.source].geometricNormal)>-.999999;
             if(good){adjacent[a.face].push_back(b.face);adjacent[b.face].push_back(a.face);joinedEdges.emplace_back(a,b);corners.join(3*a.face+a.corner,3*b.face+(b.corner+1)%3);corners.join(3*a.face+(a.corner+1)%3,3*b.face+b.corner);if(patch.sources[fa.source].receiver!=patch.sources[fb.source].receiver)++stats.joinedEdges;}}
         if(!good){++stats.ambiguousEdges;for(auto use:uses)ambiguousFaces.insert(use.face);}
     }

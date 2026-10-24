@@ -1,6 +1,7 @@
 #include "decals/DecalSurface.h"
 #include "decals/DecalResolve.h"
 #include "decal_arch_fixture.h"
+#include "decal_polygon_fixture.h"
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
@@ -16,10 +17,26 @@ void provenance(const DecalSurfaceSnapshot&s,const DecalPatch&p){
 }
 void planeAndAffine(){
     DecalSurfaceSnapshot s{{quad(1,{-10,-10,0},{10,-10,0},{10,10,0},{-10,10,0})}};auto r=request();auto p=build(s,r,"coarse plane");require(p.usable(),p.message);require(p.status==DecalPatchStatus::Ready,"Interior plane was incomplete");provenance(s,p);
-    for(const auto&c:p.chunks)for(const auto&v:c.vertices){require(std::abs(v.uv[0]-(v.position[0]+.5))<.02,"Plane metre scale X drift");require(std::abs(v.uv[1]-(v.position[1]+.5))<.02,"Plane metre scale Y drift");}
+    for(const auto&c:p.chunks)for(const auto&v:c.vertices){require(std::abs(v.uv[0]-(v.position[0]+.5))<.02,"Plane metre scale X drift");require(std::abs(v.uv[1]-(.5-v.position[1]))<.02,"Plane image V does not run downward");}
     auto repeat=buildDecalPatch(s,r);require(repeat.chunks.size()==p.chunks.size()&&repeat.statistics.outputTriangles==p.statistics.outputTriangles,"Repeated chart is nondeterministic");for(size_t i=0;i<p.chunks[0].vertices.size();++i)require(p.chunks[0].vertices[i].uv==repeat.chunks[0].vertices[i].uv,"Repeat UV bits changed");
-    r.frame.at(0,0)=-1;r.frame.at(0,1)=.25f;auto mirror=build(s,r,"mirrored sheared plane");require(mirror.usable(),mirror.message);for(const auto&c:mirror.chunks)for(const auto&v:c.vertices){double y=v.position[1],x=v.position[0];require(std::abs(v.uv[0]-(.5-x+.25*y))<.02,"Mirror/shear applied incorrectly");}provenance(s,mirror);
+    r.frame.at(0,0)=-1;r.frame.at(0,1)=.25f;auto mirror=build(s,r,"mirrored sheared plane");require(mirror.usable(),mirror.message);for(const auto&c:mirror.chunks)for(const auto&v:c.vertices){double y=v.position[1],x=v.position[0];require(std::abs(v.uv[0]-(.5-x+.25*y))<.02,"Mirror/shear applied incorrectly");require(std::abs(v.uv[1]-(.5-y))<.02,"Raster V changed under authored X mirror/shear");}provenance(s,mirror);
     auto&m=s.receivers[0].localToWorld;m.at(0,0)=2;m.at(1,1)=.5f;m.at(2,2)=-1;m.at(0,3)=2;m.at(1,3)=3;m.at(2,3)=1;r=request();r.frame.at(0,3)=2;r.frame.at(1,3)=3;r.frame.at(2,3)=1;auto affine=build(s,r,"affine receiver");require(affine.usable(),affine.message);provenance(s,affine);for(const auto&c:affine.chunks)for(const auto&v:c.vertices)require(v.baseNormal[2]<-.99f,"Mirrored normal transform lost handedness");
+}
+void imageOrientation(){
+    DecalSurfaceSnapshot surface{{quad(1,{-3,-3,0},{3,-3,0},{3,3,0},{-3,3,0})}};
+    auto r=request();r.frame=surfacePlacementFrame({0,0,0},{0,0,1})*math::scaling({2,2,1});
+    for(const bool mirroredY:{false,true}){
+        auto oriented=r;if(mirroredY)oriented.frame.at(1,1)*=-1;
+        const auto patch=build(surface,oriented,mirroredY?"authored vertical image mirror":"upright asymmetric image");require(patch.usable(),patch.message);
+        bool top=false,bottom=false;
+        for(const auto&chunk:patch.chunks)for(const auto&vertex:chunk.vertices){
+            const double localY=vertex.position[1]*(mirroredY?-.5:.5);
+            require(std::abs(vertex.uv[1]-(.5-localY))<1e-5,"Image V disagrees with the authored vertical axis");
+            if(localY>.499){top=true;require(vertex.uv[1]<1e-5,"Top of the decal samples the bottom image row");}
+            if(localY<-.499){bottom=true;require(vertex.uv[1]>1-1e-5,"Bottom of the decal samples the top image row");}
+        }
+        require(top&&bottom,"Orientation proof did not reach both asymmetric image edges");provenance(surface,patch);
+    }
 }
 void translatedPlanePrecision(){
     DecalSurfaceSnapshot s{{quad(1,{-10,-10,0},{10,-10,0},{10,10,0},{-10,10,0})}};
@@ -71,6 +88,24 @@ void seams(){
     DecalSurfaceSnapshot t{{quad(1,{-1,-1,0},{0,-1,0},{0,1,0},{-1,1,0}),quad(2,{0,-1,0},{1,-1,0},{1,.17f,0},{0,.17f,0}),quad(3,{0,.17f,0},{1,.17f,0},{1,1,0},{0,1,0})}};auto tp=build(t,r,"coplanar T junction");require(tp.usable()&&tp.chunks.size()==3,"Two-sheet T topology did not connect all three separate meshes");provenance(t,tp);
     auto three=corner();three.receivers[0]=quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0});r=request();r.seed.triangle=1;r.seed.barycentrics={.5f,.4f,.1f};auto amb=build(three,r,"three-sheet wall T");require(amb.usable()&&amb.status==DecalPatchStatus::Incomplete,"Ambiguous three-sheet contact not diagnosed");require(amb.chunks.size()==1,"Ambiguous contact crossed onto another sheet");
 }
+void boundedConnectedPreparation(){
+    DecalSurfaceSnapshot surface{{quad(1,{-3,-3,0},{3,-3,0},{3,3,0},{-3,3,0})}};SurfaceReceiver nearby;nearby.id.entity=2;nearby.generation=1;
+    // A dense independent receiver sits within the extraction box. Its original
+    // triangles already exceed the seed sheet's derived budget, but none can
+    // join the plane. The budget must not be spent subdividing that receiver.
+    constexpr unsigned side=40;for(unsigned y=0;y<side;++y)for(unsigned x=0;x<side;++x){const float a=-1.f+x*.05f,b=-1.f+y*.05f;auto cell=quad(2,{a,b,.1f},{a+.05f,b,.1f},{a+.05f,b+.05f,.1f},{a,b+.05f,.1f});for(auto triangle:cell.triangles){triangle.triangle=static_cast<uint32_t>(nearby.triangles.size());nearby.triangles.push_back(triangle);}}
+    surface.receivers.push_back(nearby);auto r=request();r.limits.maximumTriangles=2048;
+    const auto independent=build(surface,r,"dense disconnected receiver keeps seed budget");require(independent.status==DecalPatchStatus::Ready&&independent.chunks.size()==1&&uvArea(independent)>.999,"Disconnected geometry consumed the seed sheet's preparation budget: "+independent.message);require(independent.statistics.inputTriangles>r.limits.maximumTriangles,"Dense receiver proof did not exceed the derived budget in its broad phase");provenance(surface,independent);
+    // Many short interior intersections lie outside the image but inside the
+    // analysis halo. Their finite barriers remain real; extending every cut
+    // across the coarse wall used to create a quadratic arrangement and fail.
+    surface.receivers.resize(1);nearby.triangles.clear();for(unsigned y=0;y<20;++y)for(unsigned x=0;x<20;++x){const float a=.8f+x*.02f,b=-.8f+y*.08f;auto cell=quad(2,{a,b,-.1f},{a,b+.025f,-.1f},{a,b+.025f,.1f},{a,b,.1f});for(auto triangle:cell.triangles){triangle.triangle=static_cast<uint32_t>(nearby.triangles.size());nearby.triangles.push_back(triangle);}}
+    surface.receivers.push_back(nearby);r=request();const auto contacts=build(surface,r,"finite contacts beside image stay local");require(contacts.usable()&&contacts.chunks.size()==1&&uvArea(contacts)>.999,"Short neighboring contacts destroyed an interior plane footprint: "+contacts.message);provenance(surface,contacts);
+    // A terminating foreign sheet is still a barrier even though its interior
+    // cannot join the seed's boundary graph. Do not regain coverage by simply
+    // deleting the third branch from topology preparation.
+    surface={{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0}),quad(2,{0,-.2f,0},{0,.2f,0},{0,.2f,1},{0,-.2f,1})}};r=request();r.seed.triangle=1;r.seed.barycentrics={.5f,.4f,.1f};const auto barrier=build(surface,r,"finite interior branch remains a barrier");require(barrier.usable()&&barrier.status==DecalPatchStatus::Incomplete&&barrier.chunks.size()==1,"Excluded branch lost its finite ambiguity barrier");provenance(surface,barrier);
+}
 void curved(){
     DecalSurfaceSnapshot s;SurfaceReceiver receiver;receiver.id.entity=1;receiver.generation=1;constexpr int count=24;for(int i=0;i<count;++i){double aa=-1.2+i*.1,bb=aa+.1;auto p=[](double t,float y){return Vec3{std::sin(t),y,1-std::cos(t)};};auto q=quad(1,p(aa,-1),p(bb,-1),p(bb,1),p(aa,1));for(auto&t:q.triangles){t.triangle=static_cast<uint32_t>(receiver.triangles.size());receiver.triangles.push_back(t);}}s.receivers.push_back(receiver);auto r=request();r.seed.triangle=25;r.seed.barycentrics={.5f,0,.5f};r.frame.at(0,0)=1.2f;r.frame.at(1,1)=.8f;auto p=build(s,r,"cylindrical surface");require(p.usable(),p.message);provenance(s,p);for(const auto&c:p.chunks)for(const auto&v:c.vertices){double angle=std::atan2(v.position[0],1-v.position[2]);require(std::abs(v.uv[0]-(.5+angle/1.2))<.025,"Curved wrap did not follow surface distance");}
 }
@@ -111,4 +146,4 @@ void closedBuiltinCylinder(){
 }
 void failures(){DecalSurfaceSnapshot s{{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0})}};auto r=request();std::stop_source stop;stop.request_stop();require(buildDecalPatch(s,r,stop.get_token()).status==DecalPatchStatus::Cancelled,"Cancellation ignored");r.limits.maximumTriangles=5;require(buildDecalPatch(s,r).status==DecalPatchStatus::LimitExceeded,"Geometry cap silently truncated");r=request();r.frame.at(0,0)=0;require(buildDecalPatch(s,r).status==DecalPatchStatus::InvalidInput,"Singular frame accepted");r=request();r.seed.receiver.entity=99;require(buildDecalPatch(s,r).status==DecalPatchStatus::MissingSeed,"Missing seed invented surface");}
 }
-int main(){try{planeAndAffine();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}
+int main(){try{test::runPolygonProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}

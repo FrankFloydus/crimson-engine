@@ -11,6 +11,18 @@ namespace {
 using namespace crimson;
 using namespace crimson::decals;
 void check(bool condition,const std::string& message){if(!condition)throw std::runtime_error(message);}
+void flatImageOrientation(){
+    const auto& surface=decalPreviewSurface();
+    check(surface.patch&&!surface.patch->vertices.empty(),"Flat preview has no patch.");
+    bool top=false,bottom=false;
+    for(const auto& vertex:surface.patch->vertices){
+        check(std::abs(vertex.uv[0]-(.5f+vertex.position[0]/1.6f))<1e-6f,"Flat preview mirrors the image horizontally.");
+        check(std::abs(vertex.uv[1]-(.5f-vertex.position[1]/1.6f))<1e-6f,"Flat preview renders the source image upside down.");
+        if(vertex.position[1]>.79f){top=true;check(vertex.uv[1]<1e-6f,"Flat preview top samples the bottom image row.");}
+        if(vertex.position[1]<-.79f){bottom=true;check(vertex.uv[1]>1-1e-6f,"Flat preview bottom samples the top image row.");}
+    }
+    check(top&&bottom,"Flat preview orientation proof missed an image edge.");
+}
 void preview(MaterialPreviewMesh kind,const char* name,bool curvedPatch) {
     const auto geometry=decalPreviewGeometry(kind);
     check(geometry.model!=nullptr,std::string(name)+": receiver is missing.");
@@ -58,6 +70,7 @@ void preview(MaterialPreviewMesh kind,const char* name,bool curvedPatch) {
 }
 }
 int main(){try{
+    flatImageOrientation();
     preview(MaterialPreviewMesh::Sphere,"Sphere",true);
     preview(MaterialPreviewMesh::Cylinder,"Cylinder",true);
     preview(MaterialPreviewMesh::Cube,"Cube",false);

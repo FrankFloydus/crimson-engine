@@ -71,7 +71,7 @@ bool PlaySession::start(const SceneDocument& authored) {
         physics_->setAgentProfiles([this](const std::string& id){const auto found=frameProfiles_.find(id);return found==frameProfiles_.end()?nullptr:found->second;});
         reconcileProfiles();physics_->reconcile(document_->scene(),{},meshColliders_);reconcileNavigation();agents_.clear();
         remainder_=0;ticks_=droppedTicks_=0;suspended_=failed_=false;
-        firstPerson_.reset();pendingJump_=false;
+        firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
         controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
         editRevision_=document_->scene().revision();reconcileAttributes();reconcileAgents();resetInterpolation();reconcileParticles(0);
         status_=physics_->status()+particles_.status();return true;
@@ -86,7 +86,7 @@ void PlaySession::stop() {
     particles_=SceneParticles{};navigation_.reset();agents_.clear();enemies_.clear();physics_.reset();document_.reset();previous_.clear();current_.clear();frameProfiles_.clear();acceptedProfiles_.clear();supportedProfiles_.clear();
     presentation_.apply({},{});remainder_=0;ticks_=droppedTicks_=0;editRevision_=agentsRevision_=0;suspended_=failed_=false;status_.clear();
     navigationUpdate_={};navigationDomain_=navigationSceneRevision_=navigationGeometryRevision_=0;navigationVolume_.reset();navigationTransaction_=navigationCoalescing_=false;
-    firstPerson_.reset();pendingJump_=false;
+    firstPerson_.reset();pendingJump_=false;traceVisualization_.clear();traceCamera_=NoEntity;
     controlled_=inputOwner_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
 }
 void PlaySession::reconcileAttributes() {
@@ -122,6 +122,40 @@ std::vector<EntityId> PlaySession::triggerOverlaps(EntityId trigger) const {
 }
 std::optional<PhysicsRayHit> PlaySession::raycast(const Ray& ray,float maxDistance,const PhysicsQueryFilter& filter) const {
     return physics_?physics_->raycast(ray,maxDistance,filter):std::nullopt;
+}
+PhysicsTraceResult PlaySession::trace(const PhysicsTrace& request,const PhysicsQueryFilter& filter,
+                                    PhysicsTraceMode mode,std::optional<TraceVisualizationSettings> visualization) {
+    if(!physics_ || failed_)return {};
+    auto result=physics_->trace(request,filter,mode);
+    if(visualization) {
+        // Any can stop at an arbitrary eligible collider. Draw the nearest
+        // obstruction so debug colors always change at the actual first hit.
+        if(mode==PhysicsTraceMode::Any && result.valid && !result.hits.empty())
+            traceVisualization_.add(request,physics_->trace(request,filter,PhysicsTraceMode::Closest),*visualization);
+        else traceVisualization_.add(request,result,*visualization);
+    }
+    return result;
+}
+void PlaySession::firePlayerTrace(EntityId id) {
+    const auto record=document_->scene().find(id);
+    const auto camera=resolveGameCamera(presentation_);
+    if(!record || !record->playerInput || !camera)return;
+    // Ignore this actor's owned hierarchy, stopping at independent nested actors.
+    std::vector<EntityId> ignored,pending{id};
+    while(!pending.empty()) {
+        const auto current=pending.back();pending.pop_back();
+        const auto child=document_->scene().find(current);
+        if(!child || (current!=id && (child->actor || child->controller)))continue;
+        ignored.push_back(current);
+        const auto children=document_->scene().children(current);
+        pending.insert(pending.end(),children.begin(),children.end());
+    }
+    const auto& settings=record->playerInput->traceTest;
+    PhysicsTrace request;
+    request.ray={camera->position,camera->forward()};request.maxDistance=settings.length;
+    TraceVisualizationSettings visualization;
+    visualization.duration=settings.duration;visualization.collisionQuadSize=settings.collisionQuadSize;
+    trace(request,PhysicsQueryFilter{settings.collisionMask,ignored,true,true,false},PhysicsTraceMode::Closest,visualization);
 }
 bool PlaySession::prepareMeshColliders(const Scene& scene,bool requireReady) {
     std::vector<PhysicsMeshCollider> prepared;
@@ -426,9 +460,12 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);
         reconcileNavigation();
         const auto controlled=document_->scene().properties().playerCharacter;
+        const auto activeCamera=document_->scene().properties().activeCamera;
         const auto controlledPose=document_->scene().worldTransform(controlled);
         const bool replacedPlayer=controlled_!=NoEntity && controlled_!=controlled;
         const bool editedPose=lastControlledPose_ && controlledPose && *lastControlledPose_!=*controlledPose;
+        if(controlled_!=controlled || editedPose || traceCamera_!=activeCamera)traceVisualization_.clear();
+        traceCamera_=activeCamera;
         const auto controlledRecord=document_->scene().find(controlled);
         const bool acceptsInput=controlledRecord&&controlledRecord->playerInput&&controlledRecord->playerInput->enabled&&
             controlledRecord->controller&&controlledRecord->movement&&controlledRecord->movement->enabled;
@@ -454,16 +491,20 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(firstPerson_ && (physics_->characterLocked(controlled) || controlledRecord->movement->stairSmoothingTime<=0))
             clearFirstPersonStep();
         if(!active) {
+            traceVisualization_.clear();
             clearFirstPersonStep();
             clearPlayerRoute();inputOwner_=NoEntity;remainder_=0;suspended_=true;resetInterpolation();refreshPresentation();reconcileParticles(0);status_=physics_->status()+particles_.status();return;
         }
+        bool fireTrace=false;
         if(input && newInputOwner) {
             movement=input->movement();
             pendingJump_=input->consumeJump() || pendingJump_;
+            fireTrace=input->consumeTrace();
             updateFirstPerson(*input,*controlledRecord->playerInput,*controlledRecord->movement,0);
         }
         if(suspended_){seconds=0;suspended_=false;remainder_=0;resetInterpolation();}
         if(!std::isfinite(seconds) || seconds<0)seconds=0;
+        traceVisualization_.advance(seconds);
         // Large stalls are discarded here rather than replayed as future work.
         const double bounded=std::min(seconds,1.0);remainder_+=bounded;
         const auto available=static_cast<std::uint64_t>(std::floor((remainder_+1e-12)/FixedStep));
@@ -541,6 +582,9 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(remainder_>=FixedStep)remainder_=std::fmod(remainder_,FixedStep);
         if(input && acceptsInput)updateFirstPerson(*input,*controlledRecord->playerInput,*controlledRecord->movement,seconds);
         refreshPresentation();reconcileParticles(0);
+        // Fire after render-frame look, tilt and stair compensation have all
+        // resolved, including frames that execute no fixed simulation tick.
+        if(fireTrace)firePlayerTrace(controlled);
         status_=physics_->status();
         if(!attributes_.status().empty())status_+=attributes_.status();
         if(!effects_.status().empty())status_+=effects_.status();
@@ -551,7 +595,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         for(const auto& [id,agent]:agents_)if(!agent.status.empty())status_+="Actor "+std::to_string(id)+": "+agent.status;
         if(!particles_.status().empty())status_+=particles_.status();
         if(droppedTicks_)status_+="Play discarded "+std::to_string(droppedTicks_)+" catch-up ticks.\n";
-    } catch(const std::exception& error){triggerEvents_.clear();remainder_=0;failed_=true;status_="Play simulation stopped: "+std::string(error.what());}
+    } catch(const std::exception& error){triggerEvents_.clear();traceVisualization_.clear();remainder_=0;failed_=true;status_="Play simulation stopped: "+std::string(error.what());}
 }
 void PlaySession::refreshPresentation() {
     std::vector<ScenePoseUpdate> poses;poses.reserve(current_.size());const double alpha=std::clamp(interpolation(),0.0,1.0);

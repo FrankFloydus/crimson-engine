@@ -3,6 +3,7 @@
 #include "RenderDebugControls.h"
 #include "ProfilingStatus.h"
 #include "editor/CollisionWire.h"
+#include "editor/TraceOverlay.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/Renderer.h"
@@ -157,6 +158,11 @@ void GameView::drawAttributeDebug(const Camera& camera,const Scene& scene,Entity
     if(style.WindowBorderSize>0)imageDrawList_->AddRect(minimum,maximum,ImGui::GetColorU32(ImGuiCol_Border),style.WindowRounding,0,style.WindowBorderSize);
     imageDrawList_->AddText(imageFont_,imageFontSize_,{minimum.x+padding.x,minimum.y+padding.y},ImGui::GetColorU32(ImGuiCol_Text),text.c_str());
     imageDrawList_->PopClipRect();
+}
+void GameView::drawTraces(const Camera& camera,std::span<const TraceVisualRecord> traces) {
+    if(!imageDrawList_)return;
+    drawTraceOverlay(*imageDrawList_,camera,static_cast<float>(imageWidth_),static_cast<float>(imageHeight_),
+        {imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height},traces);
 }
 void GameView::drawRoute(const Camera& camera,std::span<const Vec3> route,
                          const std::optional<Vec3>& characterPosition) {

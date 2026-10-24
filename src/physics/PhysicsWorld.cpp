@@ -31,6 +31,7 @@
 #include <numbers>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace crimson {
@@ -117,6 +118,30 @@ bool validCharacter(const Mat4& world,const AgentTraversalSettings& character,st
     return true;
 }
 float nonnegative(float value){return std::isfinite(value)?std::max(0.f,value):0.f;}
+// Retain at most one hit per body while allowing Jolt to prune farther triangles.
+// Direct virtual-character/trigger queries use the same collector with an
+// explicit entity because they do not have rigid-body handles.
+template<class Base> class TraceCollector final:public Base {
+public:
+    using Result=typename Base::ResultType;
+    std::function<bool(EntityId,const JPH::TransformedShape*,const Result&)> accept;
+    EntityId entity{};
+    PhysicsTraceMode mode{PhysicsTraceMode::Closest};
+    float bodyLimit{};
+    void OnBody(const JPH::Body& body) override {entity=body.GetUserData();bodyLimit=Base::GetEarlyOutFraction();}
+    void OnBodyEnd() override {if(mode==PhysicsTraceMode::All)Base::ResetEarlyOutFraction(bodyLimit);}
+    void AddHit(const Result& hit) override {
+        if(!accept(entity,Base::GetContext(),hit))return;
+        if(mode==PhysicsTraceMode::Any)Base::ForceEarlyOut();
+        else {
+            // Jolt ranks initial shape overlaps by negative penetration depth.
+            // Our distance-zero ties use entity/subshape identity, so a deep
+            // overlap must not prune a shallower overlap on another collider.
+            const float limit=std::nextafter(std::max(0.f,hit.GetEarlyOutFraction()),std::numeric_limits<float>::infinity());
+            if(limit<Base::GetEarlyOutFraction())Base::UpdateEarlyOutFraction(limit);
+        }
+    }
+};
 Vec3 approachVelocity(const Vec3& current,const Vec3& target,float maximumChange) {
     const auto delta=target-current;const auto length=math::length(delta);
     return length<=maximumChange?target:current+delta*(maximumChange/length);
@@ -175,6 +200,7 @@ struct PhysicsWorld::Impl final: JPH::CharacterContactListener,JPH::CharacterVsC
     struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};CollisionFilter collision{WorldCollisionLayer,AllCollisionLayers};};
     std::map<EntityId,MeshCollider> meshColliders;
     std::map<EntityId,Character> characters;
+    std::map<EntityId,EntityId> queryOwners;
     struct Trigger {JPH::RefConst<JPH::Shape> shape;Mat4 world;SceneCollider definition;EntityId owner{};};
     std::map<EntityId,Trigger> triggers;
     std::map<EntityId,std::set<EntityId>> overlaps;
@@ -349,6 +375,18 @@ void PhysicsWorld::reconcileInternal(const Scene& scene,std::span<const EntityId
     bool collidersChanged=false,charactersChanged=false;
     std::unordered_set<EntityId> keptColliders,keptCharacters,keptTriggers;
     const auto records=scene.records();
+    state.queryOwners.clear();
+    std::unordered_map<EntityId,const EntityRecord*> recordById;recordById.reserve(records.size());
+    for(const auto& record:records)recordById.emplace(record.id,&record);
+    for(const auto& record:records) {
+        if(!record.collider && !record.controller)continue;
+        auto* current=&record;EntityId owner=record.id;
+        while(current) {
+            if(current->actor || current->controller){owner=current->id;break;}
+            const auto parent=recordById.find(current->parent);current=parent==recordById.end()?nullptr:parent->second;
+        }
+        state.queryOwners[record.id]=owner;
+    }
     for(const auto& record:records) {
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         if(record.collider && record.collider->shape!=ColliderShape::Trimesh) {
@@ -682,6 +720,144 @@ void PhysicsWorld::cancelCharacterInput(EntityId id) {
 std::span<const TriggerEvent> PhysicsWorld::triggerEvents() const{return impl_->events;}
 std::vector<EntityId> PhysicsWorld::triggerOverlaps(EntityId id) const {
     const auto found=impl_->overlaps.find(id);return found==impl_->overlaps.end()?std::vector<EntityId>{}:std::vector<EntityId>(found->second.begin(),found->second.end());
+}
+PhysicsTraceResult PhysicsWorld::trace(const PhysicsTrace& request,const PhysicsQueryFilter& filter,PhysicsTraceMode mode) const {
+    CRIMSON_PROFILE_ZONE("PhysicsWorld::trace");
+    PhysicsTraceResult result;
+    if(mode!=PhysicsTraceMode::Any && mode!=PhysicsTraceMode::Closest && mode!=PhysicsTraceMode::All)return result;
+    if(!math::finite(request.ray.origin) || !math::finite(request.ray.direction) ||
+       !std::isfinite(request.maxDistance) || request.maxDistance<=0)return result;
+    const auto directionLength=math::length(request.ray.direction);
+    if(!std::isfinite(directionLength) || directionLength<=1e-8f)return result;
+    const auto direction=request.ray.direction/directionLength;
+    const auto displacement=direction*request.maxDistance;
+    if(!math::finite(displacement) || !math::finite(request.ray.origin+displacement))return result;
+    const auto origin=JPH::RVec3(request.ray.origin[0],request.ray.origin[1],request.ray.origin[2]);
+    JPH::ShapeSettings::ShapeResult shapeResult;
+    JPH::Quat orientation=JPH::Quat::sIdentity();
+    if(request.shape!=PhysicsTraceShape::Line) {
+        if(!math::finite(request.orientation))return result;
+        double lengthSquared=0;for(const auto value:request.orientation)lengthSquared+=static_cast<double>(value)*value;
+        if(lengthSquared<=1e-16 || !std::isfinite(lengthSquared))return result;
+        const auto reciprocal=1/std::sqrt(lengthSquared);
+        orientation=JPH::Quat(static_cast<float>(request.orientation[0]*reciprocal),static_cast<float>(request.orientation[1]*reciprocal),
+            static_cast<float>(request.orientation[2]*reciprocal),static_cast<float>(request.orientation[3]*reciprocal));
+        switch(request.shape) {
+        case PhysicsTraceShape::Sphere:
+            if(!std::isfinite(request.radius) || request.radius<=1e-6f)return result;
+            shapeResult=JPH::SphereShapeSettings(request.radius).Create();break;
+        case PhysicsTraceShape::Box:
+            if(!math::finite(request.halfExtents) || request.halfExtents[0]<=1e-6f || request.halfExtents[1]<=1e-6f || request.halfExtents[2]<=1e-6f)return result;
+            // Zero convex radius keeps authored box dimensions exact.
+            shapeResult=JPH::BoxShapeSettings(native(request.halfExtents),0).Create();break;
+        case PhysicsTraceShape::Capsule:
+            if(!std::isfinite(request.radius) || request.radius<=1e-6f || !std::isfinite(request.capsuleHalfHeight) || request.capsuleHalfHeight<0)return result;
+            shapeResult=request.capsuleHalfHeight<=1e-6f?JPH::SphereShapeSettings(request.radius).Create():
+                JPH::CapsuleShapeSettings(request.capsuleHalfHeight,request.radius).Create();break;
+        default:return result;
+        }
+        if(shapeResult.HasError())return result;
+    }
+    result.valid=true;
+    if(!filter.mask)return result;
+    const auto owner=[&](EntityId id){const auto found=impl_->queryOwners.find(id);return found==impl_->queryOwners.end()?id:found->second;};
+    const auto allowed=[&](EntityId id,std::uint32_t layers) {
+        if(!(filter.mask&layers))return false;
+        const auto actor=owner(id);
+        return std::find(filter.ignored.begin(),filter.ignored.end(),id)==filter.ignored.end() &&
+            std::find(filter.ignored.begin(),filter.ignored.end(),actor)==filter.ignored.end();
+    };
+    const auto earlier=[](const PhysicsTraceHit& a,const PhysicsTraceHit& b) {
+        if(a.fraction!=b.fraction)return a.fraction<b.fraction;
+        if(a.entity!=b.entity)return a.entity<b.entity;
+        return a.subshape<b.subshape;
+    };
+    std::map<EntityId,PhysicsTraceHit> entries;
+    const auto remember=[&](PhysicsTraceHit hit) {
+        if(!std::isfinite(hit.fraction) || hit.fraction<0 || hit.fraction>1 || !math::finite(hit.position))return false;
+        if(!math::finite(hit.normal) || math::length(hit.normal)<=1e-8f)hit.normal=direction*-1;
+        else hit.normal=math::normalized(hit.normal);
+        hit.owner=owner(hit.entity);hit.distance=hit.fraction*request.maxDistance;
+        hit.center=request.ray.origin+displacement*hit.fraction;
+        if(mode==PhysicsTraceMode::All) {
+            const auto found=entries.find(hit.entity);
+            if(found==entries.end())entries.emplace(hit.entity,hit);
+            else if(earlier(hit,found->second))found->second=hit;
+        } else if(result.hits.empty())result.hits.push_back(hit);
+        else if(earlier(hit,result.hits.front()))result.hits.front()=hit;
+        return true;
+    };
+    class QueryBodies final:public JPH::BodyFilter {
+    public:
+        std::function<bool(EntityId)> accepts;
+        bool ShouldCollideLocked(const JPH::Body& body) const override{return accepts(body.GetUserData());}
+    } bodies;
+    bodies.accepts=[&](EntityId id) {
+        if(const auto found=impl_->colliders.find(id);found!=impl_->colliders.end())return allowed(id,found->second.definition.collision.layers);
+        if(const auto found=impl_->meshColliders.find(id);found!=impl_->meshColliders.end())return allowed(id,found->second.collision.layers);
+        return false;
+    };
+    const auto broad=JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0));
+    const auto layer=JPH::SpecifiedObjectLayerFilter(StaticLayer);
+    const auto queryVirtuals=[&](auto&& cast) {
+        if(filter.includeCharacters)for(const auto& [id,character]:impl_->characters) {
+            if(!allowed(id,character.collision.layers))continue;
+            cast(id,character.motor->GetTransformedShape());
+            if(mode==PhysicsTraceMode::Any && !result.hits.empty())return;
+        }
+        if(filter.includeTriggers)for(const auto& [id,trigger]:impl_->triggers) {
+            if(!allowed(id,trigger.definition.collision.layers))continue;
+            const auto fields=math::affineTransformFields(trigger.world);if(!fields)continue;
+            JPH::TransformedShape shape;shape.mShape=trigger.shape;
+            shape.SetWorldTransform(position(trigger.world),rotation(fields->rotation),JPH::Vec3::sOne());
+            cast(id,shape);
+            if(mode==PhysicsTraceMode::Any && !result.hits.empty())return;
+        }
+    };
+    if(request.shape==PhysicsTraceShape::Line) {
+        const JPH::RRayCast ray(origin,native(displacement));
+        JPH::RayCastSettings settings;settings.mBackFaceModeTriangles=JPH::EBackFaceMode::CollideWithBackFaces;
+        TraceCollector<JPH::CastRayCollector> collector;collector.mode=mode;
+        collector.accept=[&](EntityId id,const JPH::TransformedShape* shape,const JPH::RayCastResult& hit) {
+            if(!shape)return false;
+            PhysicsTraceHit contact;contact.entity=id;contact.fraction=hit.mFraction;
+            contact.startedInside=hit.mFraction==0;contact.subshape=hit.mSubShapeID2.GetValue();
+            contact.position=own(ray.GetPointOnRay(hit.mFraction));
+            // An interior point has no unique surface normal (a sphere's center
+            // would otherwise normalize zero inside Jolt). Publish a stable one.
+            if(contact.startedInside)contact.normal=direction*-1;
+            else {const auto normal=shape->GetWorldSpaceSurfaceNormal(hit.mSubShapeID2,ray.GetPointOnRay(hit.mFraction));contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};}
+            return remember(contact);
+        };
+        if(filter.includeWorld)impl_->world.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broad,layer,bodies);
+        if(mode==PhysicsTraceMode::Any && !result.hits.empty())return result;
+        queryVirtuals([&](EntityId id,const JPH::TransformedShape& shape) {
+            auto direct=collector;direct.entity=id;direct.mode=mode==PhysicsTraceMode::Any?mode:PhysicsTraceMode::Closest;
+            direct.Reset();shape.CastRay(ray,settings,direct);
+        });
+    } else {
+        const JPH::RShapeCast cast(shapeResult.Get(),JPH::Vec3::sOne(),JPH::RMat44::sRotationTranslation(orientation,origin),native(displacement));
+        JPH::ShapeCastSettings settings;settings.SetBackFaceMode(JPH::EBackFaceMode::CollideWithBackFaces);settings.mReturnDeepestPoint=true;
+        TraceCollector<JPH::CastShapeCollector> collector;collector.mode=mode;
+        collector.accept=[&](EntityId id,const JPH::TransformedShape*,const JPH::ShapeCastResult& hit) {
+            PhysicsTraceHit contact;contact.entity=id;contact.fraction=hit.mFraction;
+            contact.startedInside=hit.mFraction==0;contact.subshape=hit.mSubShapeID2.GetValue();
+            contact.position=request.ray.origin+Vec3{hit.mContactPointOn2.GetX(),hit.mContactPointOn2.GetY(),hit.mContactPointOn2.GetZ()};
+            contact.normal={-hit.mPenetrationAxis.GetX(),-hit.mPenetrationAxis.GetY(),-hit.mPenetrationAxis.GetZ()};
+            return remember(contact);
+        };
+        if(filter.includeWorld)impl_->world.GetNarrowPhaseQuery().CastShape(cast,settings,origin,collector,broad,layer,bodies);
+        if(mode==PhysicsTraceMode::Any && !result.hits.empty())return result;
+        queryVirtuals([&](EntityId id,const JPH::TransformedShape& shape) {
+            auto direct=collector;direct.entity=id;direct.mode=mode==PhysicsTraceMode::Any?mode:PhysicsTraceMode::Closest;
+            direct.Reset();shape.CastShape(cast,settings,origin,direct);
+        });
+    }
+    if(mode==PhysicsTraceMode::All) {
+        result.hits.reserve(entries.size());for(const auto& [id,hit]:entries){(void)id;result.hits.push_back(hit);}
+        std::sort(result.hits.begin(),result.hits.end(),earlier);
+    }
+    return result;
 }
 std::optional<PhysicsRayHit> PhysicsWorld::raycast(const Ray& ray,float maxDistance) const {
     PhysicsQueryFilter filter;filter.includeCharacters=false;return raycast(ray,maxDistance,filter);

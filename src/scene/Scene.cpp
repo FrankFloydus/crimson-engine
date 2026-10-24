@@ -358,6 +358,13 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Player Input requires Movement and Character Controller components.");
         if(record.playerInput && (!std::isfinite(record.playerInput->mouseSensitivity) || record.playerInput->mouseSensitivity<.001f || record.playerInput->mouseSensitivity>10.f))
             throw std::runtime_error("Player Input requires finite mouse sensitivity between 0.001 and 10.");
+        if(record.playerInput) {
+            const auto& trace=record.playerInput->traceTest;
+            if(!std::isfinite(trace.duration)||trace.duration<0||trace.duration>3600||
+               !std::isfinite(trace.length)||trace.length<=0||trace.length>100000||
+               !std::isfinite(trace.collisionQuadSize)||trace.collisionQuadSize<=0||trace.collisionQuadSize>1000)
+                throw std::runtime_error("Trace Test requires duration between 0 and 3600 seconds, positive length up to 100000 meters and positive collision quad size up to 1000 meters.");
+        }
         if(record.movement) {
             const auto& value=*record.movement;
             const auto inRange=[](float v,float low,float high){return std::isfinite(v)&&v>=low&&v<=high;};

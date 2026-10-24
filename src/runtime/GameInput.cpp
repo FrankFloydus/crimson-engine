@@ -24,6 +24,7 @@ std::optional<std::size_t> actionKey(SDL_Scancode code) {
     case SDL_SCANCODE_S:return 2;
     case SDL_SCANCODE_D:return 3;
     case SDL_SCANCODE_SPACE:return 4;
+    case SDL_SCANCODE_F:return 5;
     default:return {};
     }
 }
@@ -63,7 +64,7 @@ void GameInput::releaseMouseCapture() {
     captureWindowId_=0;discardNextMotion_=false;
 }
 void GameInput::cancel() {
-    releaseMouseCapture();held_.fill(false);lookDelta_={};jumpPending_=false;armed_=false;++cancellationRevision_;
+    releaseMouseCapture();held_.fill(false);lookDelta_={};jumpPending_=false;tracePending_=false;armed_=false;++cancellationRevision_;
     if(imageAcquisition_==ImageAcquisition::Pending)imageAcquisition_=ImageAcquisition::Canceled;
 }
 void GameInput::syncMouseCapture() {
@@ -87,6 +88,9 @@ Vec2 GameInput::consumeLookDelta() {
 }
 bool GameInput::consumeJump() {
     const bool result=ownsKeyboard() && jumpPending_;jumpPending_=false;return result;
+}
+bool GameInput::consumeTrace() {
+    const bool result=ownsKeyboard() && tracePending_;tracePending_=false;return result;
 }
 bool GameInput::handleEvent(const SDL_Event& event) {
     if(event.type==SDL_EVENT_WINDOW_FOCUS_LOST || event.type==SDL_EVENT_WINDOW_HIDDEN ||
@@ -130,6 +134,7 @@ bool GameInput::handleEvent(const SDL_Event& event) {
     // another jump while Space is held. A new physical press is required.
     if(down && event.key.repeat)return true;
     if(*index==4 && down && !held_[*index])jumpPending_=true;
+    if(*index==5 && down && !held_[*index])tracePending_=true;
     held_[*index]=down;
     return true;
 }

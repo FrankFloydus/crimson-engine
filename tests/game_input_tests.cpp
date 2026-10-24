@@ -56,6 +56,24 @@ void jumpUsesPhysicalPressEdges() {
     input.handleEvent(key(SDL_SCANCODE_SPACE,false));input.handleEvent(key(SDL_SCANCODE_SPACE));
     require(input.consumeJump(),"A new physical jump remained suppressed after reacquisition.");
 }
+void traceUsesOwnedPhysicalPressEdges() {
+    GameInput input;input.setViewport(Region,true,false);
+    require(!input.handleEvent(key(SDL_SCANCODE_F)) && !input.consumeTrace(),"An unowned F press queued a trace.");
+    input.acquire();
+    require(!input.handleEvent(key(SDL_SCANCODE_F,true,10)),"A different window supplied a trace.");
+    input.handleEvent(key(SDL_SCANCODE_F));input.handleEvent(key(SDL_SCANCODE_F,false));
+    require(input.consumeTrace() && !input.consumeTrace(),"A short F press was lost or consumed twice.");
+    input.handleEvent(key(SDL_SCANCODE_F));require(input.consumeTrace(),"A new F press did not queue a trace.");
+    input.handleEvent(key(SDL_SCANCODE_F,true,9,true));input.handleEvent(key(SDL_SCANCODE_F));
+    require(!input.consumeTrace(),"Holding F generated repeated traces.");
+    input.handleEvent(key(SDL_SCANCODE_F,false));input.handleEvent(key(SDL_SCANCODE_F));
+    input.cancel();input.acquire();
+    require(!input.consumeTrace(),"Canceled input retained a queued trace.");
+    input.handleEvent(key(SDL_SCANCODE_F,true,9,true));
+    require(!input.consumeTrace(),"Key repeat revived a trace after lost ownership.");
+    input.handleEvent(key(SDL_SCANCODE_F,false));input.handleEvent(key(SDL_SCANCODE_F));
+    require(input.consumeTrace(),"A fresh trace remained suppressed after reacquisition.");
+}
 void relativeLookAccumulatesOnce() {
     GameInput input;input.setViewport(Region,true,false);input.acquire();
     require(input.handleEvent(motion(12,-3)) && input.handleEvent(motion(-2,7)),"Game did not consume owned relative motion.");
@@ -129,7 +147,7 @@ void editorEventGateSeparatesFpsAndUi() {
     SDL_Event wheel{};wheel.type=SDL_EVENT_MOUSE_WHEEL;wheel.wheel.windowID=9;
     require(gameInputBlocksEditorEvent(wheel,9,true,true),"Captured gameplay wheel input reached editor controls.");
     require(!gameInputBlocksEditorEvent(mouse(50,60,SDL_EVENT_MOUSE_BUTTON_UP),9,true,true),"Acquisition mouse release could leave ImGui's image held.");
-    for(const auto code:{SDL_SCANCODE_W,SDL_SCANCODE_A,SDL_SCANCODE_S,SDL_SCANCODE_D,SDL_SCANCODE_SPACE}) {
+    for(const auto code:{SDL_SCANCODE_W,SDL_SCANCODE_A,SDL_SCANCODE_S,SDL_SCANCODE_D,SDL_SCANCODE_SPACE,SDL_SCANCODE_F}) {
         require(gameInputBlocksEditorEvent(key(code),9,true,true),"FPS press edges could activate an editor shortcut or widget.");
         require(!gameInputBlocksEditorEvent(key(code,false),9,true,true),"A key pressed before acquisition could remain stuck in ImGui.");
         require(!gameInputBlocksEditorEvent(key(code),9,false,false),"Released Game suppressed editor keyboard input.");
@@ -140,7 +158,7 @@ void editorEventGateSeparatesFpsAndUi() {
 }
 int main() {
     try {
-        heldMovementAndWindowRouting();jumpUsesPhysicalPressEdges();relativeLookAccumulatesOnce();
+        heldMovementAndWindowRouting();jumpUsesPhysicalPressEdges();traceUsesOwnedPhysicalPressEdges();relativeLookAccumulatesOnce();
         ownershipCancellationClearsActions();imageClickOnlyAcquiresAndHonorsCancellation();missingNativeOwnerCannotCapture();
         editorEventGateSeparatesFpsAndUi();
         std::cout<<"FPS Game input checks passed.\n";return 0;

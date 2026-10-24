@@ -66,7 +66,8 @@ std::optional<DecalPatch> readDecalCache(const std::filesystem::path&path,uint64
             for(uint32_t i=0;i<indices;++i){const auto index=reader.take<uint32_t>();if(index>=vertices)return {};chunk.indices.push_back(index);}
             for(size_t i=0;i<indices;i+=3){const auto&a=chunk.vertices[chunk.indices[i]],&b=chunk.vertices[chunk.indices[i+1]],&c=chunk.vertices[chunk.indices[i+2]];if(a.sourceTriangle!=b.sourceTriangle||a.sourceTriangle!=c.sourceTriangle)return {};const auto x=b.uv[0]-a.uv[0],y=b.uv[1]-a.uv[1],xx=c.uv[0]-a.uv[0],yy=c.uv[1]-a.uv[1];const double uvArea=double(x)*yy-double(y)*xx;if(std::abs(uvArea)<1e-14)return {};
                 const auto&source=sources.at({chunk.receiver,a.sourceTriangle});const auto&t=*source.triangle;const auto normal=math::transformDirection(source.normal,math::cross(t.positions[1]-t.positions[0],t.positions[2]-t.positions[0]));
-                if(math::dot(math::cross(b.position-a.position,c.position-a.position),normal)*uvArea*frameParity<=0)return {};
+                // Raster V opposes authored local +Y, including mirrored frames.
+                if(math::dot(math::cross(b.position-a.position,c.position-a.position),normal)*uvArea*frameParity>=0)return {};
             }
             result.chunks.push_back(std::move(chunk));
         }

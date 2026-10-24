@@ -16,6 +16,29 @@ struct PhysicsQueryFilter {
     std::span<const EntityId> ignored;
     bool includeWorld{true},includeCharacters{true},includeTriggers{false};
 };
+enum class PhysicsTraceShape : std::uint8_t { Line,Sphere,Box,Capsule };
+enum class PhysicsTraceMode : std::uint8_t { Any,Closest,All };
+struct PhysicsTrace {
+    PhysicsTraceShape shape{PhysicsTraceShape::Line};
+    Ray ray{};
+    float maxDistance{10.f};
+    float radius{.25f};
+    Vec3 halfExtents{.5f,.5f,.5f};
+    // Cylinder half-height; the complete capsule height is 2*(halfHeight+radius).
+    float capsuleHalfHeight{.5f};
+    Quat orientation{}; // Fixed world orientation; casts translate without rotating.
+};
+struct PhysicsTraceHit {
+    EntityId entity{},owner{}; // Exact collider and nearest actor (or entity itself).
+    Vec3 position{},normal{},center{}; // Target contact and query center at impact.
+    float distance{},fraction{}; // Center travel in meters and normalized [0,1].
+    bool startedInside{}; // Initial overlap/contact; normal may be a fallback.
+    std::uint32_t subshape{}; // Opaque, transient primitive identifier, never saved.
+};
+struct PhysicsTraceResult {
+    bool valid{}; // False for malformed/unsupported requests; a valid miss has no hits.
+    std::vector<PhysicsTraceHit> hits;
+};
 enum class TriggerEventKind : std::uint8_t { Enter,Exit };
 enum class TriggerEventReason : std::uint8_t { Motion,Initial,Configuration,Removed };
 struct TriggerEvent {
@@ -67,6 +90,13 @@ public:
     // normalized internally; maxDistance and the returned position use meters.
     std::optional<PhysicsRayHit> raycast(const Ray&,float maxDistance) const;
     std::optional<PhysicsRayHit> raycast(const Ray&,float maxDistance,const PhysicsQueryFilter&) const;
+    // Queries the accepted collision world, independent of movement response.
+    // Mask selects target authored layers; ignored IDs also exclude their actor
+    // descendants. All returns the nearest entry/contact per collider, ordered
+    // by distance, entity and subshape; it does not stop at the first collider.
+    // Triangle backfaces collide. Convex initial overlaps return distance zero.
+    // Any may return any accepted hit and avoids unnecessary query work.
+    PhysicsTraceResult trace(const PhysicsTrace&,const PhysicsQueryFilter& = {},PhysicsTraceMode = PhysicsTraceMode::Closest) const;
 private:
     friend class CharacterMotor;
     void requestMovement(EntityId,const Vec3& desiredVelocity);

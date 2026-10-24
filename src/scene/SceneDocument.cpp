@@ -404,6 +404,14 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                 if(!c.is_object())throw std::runtime_error("Player Input must be an object.");
                 auto& input=record.playerInput.emplace();input.enabled=c.value("enabled",input.enabled);
                 input.mouseSensitivity=c.value("mouseSensitivity",input.mouseSensitivity);input.invertY=c.value("invertY",input.invertY);
+                if(c.contains("traceTest")) {
+                    const auto& trace=c.at("traceTest");
+                    if(!trace.is_object())throw std::runtime_error("Player Trace Test must be an object.");
+                    input.traceTest.duration=trace.value("duration",input.traceTest.duration);
+                    input.traceTest.length=trace.value("length",input.traceTest.length);
+                    input.traceTest.collisionQuadSize=trace.value("collisionQuadSize",input.traceTest.collisionQuadSize);
+                    if(trace.contains("collisionMask"))input.traceTest.collisionMask=readCollisionBits(trace.at("collisionMask"));
+                }
                 if(!entity.contains("movement") && record.movement) {
                     auto& movement=*record.movement;
                     movement.jumpHeight=c.value("jumpHeight",movement.jumpHeight);
@@ -416,7 +424,7 @@ SceneSnapshot readScene(const std::filesystem::path& path,const std::string& own
                     movement.stairSmoothingTime=c.value("stairSmoothingTime",movement.stairSmoothingTime);
                 }
                 constexpr std::array firstPersonFields{"mouseSensitivity","invertY","jumpHeight","groundAcceleration","groundFriction",
-                    "airAcceleration","airControl","strafeTilt","tiltResponse","stairSmoothingTime"};
+                    "airAcceleration","airControl","strafeTilt","tiltResponse","stairSmoothingTime","traceTest"};
                 if(!entity.contains("movement") && std::none_of(firstPersonFields.begin(),firstPersonFields.end(),[&](const char* field){return c.contains(field);}))
                     legacyPlayerInputs.insert(record.id);
             }
@@ -769,7 +777,9 @@ Json writeScene(const SceneSnapshot& snapshot) {
             entity["navigationVolume"]={{"size",volume.size},{"enabled",volume.enabled},{"profiles",volume.profiles},
                 {"bake",{{"cellSize",bake.cellSize},{"cellHeight",bake.cellHeight},{"tileSize",bake.tileSize},{"maxSimplificationError",bake.maxSimplificationError}}}};}
         if(record.playerInput) {const auto& c=*record.playerInput;entity["playerInput"]={{"enabled",c.enabled},
-            {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY}};}
+            {"mouseSensitivity",c.mouseSensitivity},{"invertY",c.invertY},
+            {"traceTest",{{"duration",c.traceTest.duration},{"length",c.traceTest.length},
+                {"collisionQuadSize",c.traceTest.collisionQuadSize},{"collisionMask",c.traceTest.collisionMask}}}};}
         if (record.collider) { const auto& c=*record.collider;
             const auto shape=c.shape==ColliderShape::Box?"box":c.shape==ColliderShape::Sphere?"sphere":c.shape==ColliderShape::Cylinder?"cylinder":c.shape==ColliderShape::Capsule?"capsule":"trimesh";
             entity["collider"]={{"shape",shape},{"mode",c.mode==ColliderMode::Solid?"solid":"trigger"},{"collision",collisionFilterJson(c.collision)},{"size",c.size},{"radius",c.radius},{"height",c.height},{"source",c.source},

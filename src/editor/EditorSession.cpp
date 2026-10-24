@@ -644,9 +644,11 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     profileFrame_.playing=play_.playing();
     EditorRenderFramePreparationStats preparation;
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_,profilePreparationActive_?&preparation:nullptr));
+    if(play_.playing())editor_.drawTraces(sceneCamera,play_.traceVisualization().records());
     profileFrame_.materialsReady=profilePreparationActive_ && preparation.ready;
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         if(play_.playing()) {
+            gameView_.drawTraces(*gameCamera,play_.traceVisualization().records());
             for(const auto& actor:renderScene.records())if(actor.navigation && actor.navigation->enabled && actor.navigation->showRoute && renderScene.isVisible(actor.id)) {
                 std::optional<Vec3> position;
                 if(const auto world=renderScene.worldTransform(actor.id))position=math::transformPoint(*world,{});

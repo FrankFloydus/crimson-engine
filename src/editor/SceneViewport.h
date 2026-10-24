@@ -8,6 +8,7 @@
 #include "NavigationVolumeGizmo.h"
 #include "ViewportTransformGesture.h"
 #include "ViewportRotationSnap.h"
+#include "runtime/TraceVisualization.h"
 #include <span>
 #include <optional>
 #include <vector>
@@ -25,6 +26,7 @@ public:
     void beginDecalPlacement(EntityId entity) { decalDrop_.beginReplace(entity);decalPlacementJustArmed_=true; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect, bool preserveLens=false);
     void drawDecalPlacementPlane(const Mat4&,const Camera&,bgfx::TextureHandle,const Vec4&);
+    void drawTraces(const Camera&,std::span<const TraceVisualRecord>);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
     void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
     void setAgentProfileQuery(NavigationAgentProfileQuery query) { agentProfiles_=std::move(query); }

@@ -9,7 +9,7 @@ const DecalPreviewSurface& decalPreviewSurface() {
     static const auto surface=[] {
         DecalPreviewSurface result;
         auto model=std::make_shared<ModelAsset>();
-        model->id="crimson-internal-decal-preview-flat-v2";model->name="Decal Plane";model->format="BUILTIN";
+        model->id="crimson-internal-decal-preview-flat-v3";model->name="Decal Plane";model->format="BUILTIN";
         ModelMaterial material;material.baseColor={.18f,.18f,.18f,1};material.metallic=0;material.roughness=.65f;
         model->materials.push_back(material);
         const auto quad=[&](std::array<Vec3,4> positions,Vec3 normal) {
@@ -25,12 +25,12 @@ const DecalPreviewSurface& decalPreviewSurface() {
             model->draws.push_back({index,Mat4{},-1});
         };
         quad({Vec3{-1,-1,0},Vec3{1,-1,0},Vec3{1,1,0},Vec3{-1,1,0}},{0,0,1});
-        auto patch=std::make_shared<DecalPatchData>();patch->fingerprint=2;
+        auto patch=std::make_shared<DecalPatchData>();patch->fingerprint=3;
         const auto patchQuad=[&](std::uint32_t draw,std::array<Vec3,4> positions,Vec3 normal) {
             const auto firstVertex=static_cast<std::uint32_t>(patch->vertices.size());
             const auto firstIndex=static_cast<std::uint32_t>(patch->indices.size());
             for(const auto position:positions) {
-                patch->vertices.push_back({position,normal,{.5f+position[0]/1.6f,.5f+position[1]/1.6f}});
+                patch->vertices.push_back({position,normal,{.5f+position[0]/1.6f,.5f-position[1]/1.6f}});
                 math::include(patch->bounds,position);
             }
             for(auto index:{0u,1u,2u,0u,2u,3u})patch->indices.push_back(firstVertex+index);
@@ -51,7 +51,7 @@ DecalPreviewSurface decalPreviewGeometry(MaterialPreviewMesh mesh) {
     DecalPreviewSurface result;
     // Keep a neutral receiver; the decal material contributes the surface detail.
     auto model=std::make_shared<ModelAsset>(*materialPreviewGeometry(mesh));
-    model->id+="-decal-receiver-v3";
+    model->id+="-decal-receiver-v4";
     for(auto& material:model->materials){material=ModelMaterial{};material.baseColor={.18f,.18f,.18f,1};material.roughness=.65f;}
     result.model=std::move(model);result.camera=decalPreviewSurface().camera;
     const float front=result.model->bounds.maximum[2];
@@ -103,12 +103,12 @@ const DecalPreviewSurface& DecalPreviewGeometry::prepare(MaterialPreviewMesh mes
     if(!surface_.model||mesh_!=mesh){
         clear();mesh_=mesh;surface_=decalPreviewGeometry(mesh);
         if(!surface_.patch){
-            const auto key="decal-preview-chart-v3:"+std::to_string(static_cast<unsigned>(mesh));
+            const auto key="decal-preview-chart-v4:"+std::to_string(static_cast<unsigned>(mesh));
             ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;options.cancelWhenUnused=true;
             handle_=resources.requestDerived<decals::DecalPatch>(key,[mesh](std::stop_token stop){
                 auto patch=std::make_shared<const decals::DecalPatch>(buildDecalPreviewPatch(mesh,stop));
                 std::size_t bytes=sizeof(*patch);for(const auto& chunk:patch->chunks)bytes+=chunk.vertices.size()*sizeof(decals::DecalPatchVertex)+chunk.indices.size()*sizeof(std::uint32_t);
-                return ResourceLoadResult<decals::DecalPatch>{patch,bytes,3+static_cast<unsigned>(mesh),{}};
+                return ResourceLoadResult<decals::DecalPatch>{patch,bytes,4+static_cast<unsigned>(mesh),{}};
             },std::move(options));
         }
     }

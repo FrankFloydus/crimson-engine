@@ -199,7 +199,7 @@ void firstPersonInputStorageAndCameraConversion() {
     same(document.scene().records(),reopened.scene().records());
     const auto saved=Json::parse(serializeSceneSnapshot(snapshot));
     for(const auto& entity:saved.at("entities"))if(entity.contains("playerInput")) {
-        require(entity.at("playerInput").size()==3&&entity.at("playerInput").at("mouseSensitivity")==.23f&&
+        require(entity.at("playerInput").size()==4&&entity.at("playerInput").at("mouseSensitivity")==.23f&&
             entity.at("playerInput").at("invertY")==true&&entity.at("movement").at("jumpHeight")==1.7f&&
             entity.at("movement").at("stairSmoothingTime")==.24f&&!entity.contains("motor"),"Movement ownership was not persisted.");
     }
@@ -294,6 +294,55 @@ void firstPersonInputStorageAndCameraConversion() {
                 found->cameraFollow->worldBasis==entity.at("cameraFollow").at("worldBasis").get<Mat4>(),
                 "Legacy FPS conversion changed an authored camera or a standalone override.");
     }
+}
+
+void playerTraceSettingsStorageHistoryAndRuntime() {
+    TempProject project;SceneDocument document(project.root);const auto player=document.createPlayer("Trace player");
+    const SceneTraceTestSettings defaults;
+    require(defaults.duration==.5f&&defaults.length==10.f&&defaults.collisionQuadSize==.12f&&defaults.collisionMask==AllCollisionLayers&&
+        document.scene().find(player)->playerInput->traceTest==defaults,"Player trace defaults changed.");
+    auto tuned=*document.scene().find(player);tuned.playerInput->traceTest={1.25f,23.f,.3f,WorldCollisionLayer|EnemyCollisionLayer|(1u<<31)};
+    const auto history=document.history().size();require(document.updateEntity(player,tuned,"Tune trace test")&&
+        document.history().size()==history+1,document.status());
+    require(document.undo()&&document.scene().find(player)->playerInput->traceTest==defaults,"Trace properties did not undo together.");
+    require(document.redo()&&document.scene().find(player)->playerInput==tuned.playerInput,"Trace properties did not redo exactly.");
+    require(document.save("Trace settings"),document.status());
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId())&&!reopened.dirty(),reopened.status());
+    same(document.scene().records(),reopened.scene().records());
+    const auto saved=Json::parse(serializeSceneSnapshot({{},"Trace",document.scene().records(),document.scene().properties()}));
+    require(saved.at("version")==24,"Optional trace settings unnecessarily changed the scene schema.");
+    auto legacy=saved;for(auto& entity:legacy["entities"])if(entity.contains("playerInput"))entity["playerInput"].erase("traceTest");
+    const std::string legacyId="assets/scenes/no-trace-settings.crimson-scene";writeSceneFixture(project.root,legacyId,legacy);
+    require(reopened.load(legacyId)&&!reopened.dirty()&&reopened.scene().find(player)->playerInput->traceTest==defaults,
+        "An existing Player did not receive trace defaults without dirtying the scene.");
+    {std::ifstream input(sceneAssetPath(project.root,legacyId),std::ios::binary);
+        require(std::string{std::istreambuf_iterator<char>(input),{}}==legacy.dump(),"Loading trace defaults rewrote saved scene data.");}
+    const auto records=document.scene().records();const auto beforeHistory=document.history().size();
+    constexpr std::array<float SceneTraceTestSettings::*,3> fields{&SceneTraceTestSettings::duration,&SceneTraceTestSettings::length,&SceneTraceTestSettings::collisionQuadSize};
+    for(const auto field:fields)for(const float bad:{-1.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        auto invalid=tuned;invalid.playerInput->traceTest.*field=bad;
+        require(!document.updateEntity(player,invalid),"Invalid trace dimensions were accepted.");
+        same(records,document.scene().records());require(document.history().size()==beforeHistory,"Rejected trace settings added history.");
+    }
+    for(const auto field:{&SceneTraceTestSettings::length,&SceneTraceTestSettings::collisionQuadSize}) {
+        auto invalid=tuned;invalid.playerInput->traceTest.*field=0;
+        require(!document.updateEntity(player,invalid),"Zero trace length or marker size was accepted.");
+    }
+    for(const auto mask:{0u,AllCollisionLayers}) {
+        auto valid=tuned;valid.playerInput->traceTest.collisionMask=mask;valid.playerInput->traceTest.duration=0;
+        require(document.updateEntity(player,valid)&&document.undo(),"Empty/full trace mask or zero duration was rejected.");
+    }
+    for(const auto mask:{Json(-1),Json(4294967296ull),Json(1.5),Json("World")}) {
+        auto invalid=saved;for(auto& entity:invalid["entities"])if(entity.contains("playerInput"))entity["playerInput"]["traceTest"]["collisionMask"]=mask;
+        writeSceneFixture(project.root,legacyId,invalid);require(!reopened.load(legacyId),"Invalid persisted trace mask was accepted.");
+    }
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    auto live=*runtime.scene().find(player);live.playerInput->traceTest.length=42;
+    require(runtime.updateEntity(player,live,"Live trace length"),runtime.status());pose(runtime,player,{3,0,4});
+    require(runtime.undo()&&runtime.scene().find(player)->playerInput->traceTest==tuned.playerInput->traceTest,
+        "Runtime trace tuning did not undo.");near(position(runtime.scene(),player),{3,0,4});
+    require(runtime.redo()&&runtime.scene().find(player)->playerInput->traceTest.length==42,"Runtime trace tuning did not redo.");
+    near(position(runtime.scene(),player),{3,0,4});same(records,document.scene().records());
 }
 
 void presentationCameraPoseOverrides() {
@@ -1422,4 +1471,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();sphereCreationMaterialsAndStorage();primitiveParametersStorageHistoryAndRuntime();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentGlowLevelsRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();meshShadingStorageHistoryAndRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{composedPlayerRecipeAndMigration();firstPersonInputStorageAndCameraConversion();playerTraceSettingsStorageHistoryAndRuntime();presentationCameraPoseOverrides();nativeColliderStorageAndValidation();componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();sphereCreationMaterialsAndStorage();primitiveParametersStorageHistoryAndRuntime();boxMaterialAndPointRadius();importedMaterialSlots();obsoleteModelFadeSettingsAreIgnored();directionalAngularDiameterStorageHistoryAndRuntime();entityVisibilityStorageAndRuntime();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();lightIndirectEnergyExtractionAndRuntime();environmentToneMappingStorageAndRuntime();environmentGlowLevelsRuntime();environmentAmbientLightRuntime();environmentSsgiRuntime();meshShadingStorageHistoryAndRuntime();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

@@ -1,6 +1,7 @@
 #include "tools/SceneInspectorSections.h"
 #include "tools/EnemyInspectorControls.h"
 #include "tools/PlayerInputInspectorControls.h"
+#include "tools/TraceTestInspectorControls.h"
 #include "tools/MovementInspectorControls.h"
 #include "tools/InspectorTransform.h"
 #include "tools/CameraAuthoringControls.h"
@@ -592,6 +593,73 @@ void enemyInspector(const fs::path& root) {
         "Switching behaviour discarded hidden Random Move values.");
 }
 
+class TraceTestUi {
+public:
+    explicit TraceTestUi(const fs::path& root):document(root) {player=document.createPlayer();tick();tick();}
+    void tick(bool collapsed=false) {
+        ImGui::NewFrame();shown.clear();
+        const bool canceled=ImGui::IsKeyPressed(ImGuiKey_Escape,false)&&document.transactionActive();
+        if(canceled){document.cancel();ImGui::ClearActiveID();active.reset();}
+        ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({760,570});
+        ImGui::Begin("Inspector",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings);
+        auto value=capture();
+        if(!collapsed)drawTraceTestInspectorControls(value,names,[&](TraceTestInspectorControl control,const char* label,bool changed) {
+            shown.push_back(control);const auto low=ImGui::GetItemRectMin(),high=ImGui::GetItemRectMax();
+            centers[static_cast<std::size_t>(control)]={low.x+ImGui::CalcItemWidth()*.5f,(low.y+high.y)*.5f};
+            if(control==TraceTestInspectorControl::CollisionLayers) {
+                if(changed)require(document.edit(label,[&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.playerInput->traceTest=value;}),"Trace mask edit failed.");
+                return;
+            }
+            if(!canceled&&(ImGui::IsItemActivated()||changed)) {
+                if(active!=control) {
+                    if(document.transactionActive())document.commit();
+                    require(document.begin(label),"Trace property could not begin its scene gesture.");active=control;
+                }
+                if(changed)require(document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==player)record.playerInput->traceTest=value;}),"Trace property did not update atomically.");
+            }
+            if(active==control&&(ImGui::IsItemDeactivated()||(changed&&!ImGui::IsItemActive()))) {
+                require(document.commit(),"Trace property gesture did not commit.");active.reset();
+            }
+        });
+        if(collapsed&&active){require(document.commit(),"Collapsing Trace Test left its gesture active.");active.reset();}
+        ImGui::End();ImGui::Render();
+        require(ImGui::GetCurrentContext()->ErrorCountCurrentFrame==0,"Trace controls left invalid ImGui state.");
+    }
+    SceneTraceTestSettings capture()const{return document.scene().find(player)->playerInput->traceTest;}
+    void text(TraceTestInspectorControl control,const char* text) {
+        const auto center=centers[static_cast<std::size_t>(control)];auto& io=ImGui::GetIO();
+        io.AddKeyEvent(ImGuiMod_Ctrl,true);io.AddMousePosEvent(center.x,center.y);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);tick();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);tick();io.AddKeyEvent(ImGuiMod_Ctrl,false);tick();
+        require(document.transactionActive(),"Trace numeric entry did not activate its scene transaction.");io.AddInputCharactersUTF8(text);tick();
+    }
+    void key(ImGuiKey key){auto& io=ImGui::GetIO();io.AddKeyEvent(key,true);tick();io.AddKeyEvent(key,false);tick();tick();}
+    SceneDocument document;EntityId player{};
+    std::array<ImVec2,4> centers{};std::vector<TraceTestInspectorControl> shown;
+private:
+    Context context_;std::optional<TraceTestInspectorControl> active;std::array<std::string,32> names{};
+};
+void traceTestInspector(const fs::path& root) {
+    TraceTestUi ui(root);require(ui.shown.size()==4,"Trace Test Inspector omitted a requested property.");
+    const auto initial=*ui.document.scene().find(ui.player);
+    for(const auto& [control,text]:std::array{
+        std::pair{TraceTestInspectorControl::Duration,"1.25"},std::pair{TraceTestInspectorControl::Length,"30"},
+        std::pair{TraceTestInspectorControl::CollisionQuadSize,"0.35"}}) {
+        const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(control,text);
+        const auto live=ui.capture();require(live!=before&&ui.document.transactionActive()&&ui.document.history().size()==history,
+            "Trace numeric entry committed before release or failed to update.");
+        ui.key(ImGuiKey_Enter);require(!ui.document.transactionActive()&&ui.document.history().size()==history+1,"Trace gesture was not one undo command.");
+        require(ui.document.undo()&&ui.capture()==before,"Trace property Undo lost authored values.");ui.tick();
+        require(ui.document.redo()&&ui.capture()==live,"Trace property Redo lost authored values.");ui.tick();
+        auto expected=initial;expected.playerInput->traceTest=live;
+        require(sameEntity(expected,*ui.document.scene().find(ui.player)),"Trace tuning changed unrelated Player properties.");
+    }
+    const auto before=ui.capture();const auto history=ui.document.history().size();ui.text(TraceTestInspectorControl::Length,"65");ui.key(ImGuiKey_Escape);
+    require(!ui.document.transactionActive()&&ui.capture()==before&&ui.document.history().size()==history,"Escape committed a trace setting gesture.");
+    ui.tick();require(ui.capture()==before,"Canceled trace numeric input reapplied its value.");
+    ui.text(TraceTestInspectorControl::Duration,"2.5");ui.tick(true);
+    require(!ui.document.transactionActive()&&ui.document.history().size()==history+1,"Collapsing Trace Test did not finish its property gesture.");
+}
+
 class MovementUi {
 public:
     explicit MovementUi(const fs::path& root):document(root) {
@@ -666,7 +734,7 @@ int main(){
     try{
         Project project;directEntitySelectionAndSections(project.root);directEnvironmentProperties(project.root);
         preserveRealHierarchy(project.root);reparentedPlayerChildrenStaySelectable(project.root);inlineVisualTransform(project.root);
-        inlineOwnedCamera(project.root,true);inlineOwnedCamera(project.root,false);entityColorPopup(project.root);enemyInspector(project.root);firstPersonInspector(project.root);
+        inlineOwnedCamera(project.root,true);inlineOwnedCamera(project.root,false);entityColorPopup(project.root);enemyInspector(project.root);firstPersonInspector(project.root);traceTestInspector(project.root);
         std::cout<<"Direct entity selection, retained hierarchy, complete Inspector sections, owned visual/Camera gestures and entity colors passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

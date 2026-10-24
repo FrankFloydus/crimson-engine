@@ -6,6 +6,7 @@
 #include "ViewportSelectionUi.h"
 #include "tools/ScenePanels.h"
 #include "CollisionWire.h"
+#include "TraceOverlay.h"
 #include "ColliderGizmoUi.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -123,6 +124,11 @@ void SceneViewport::focus(Camera& camera, const SceneDocument& document, const A
         camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
         if(preserveLens){camera.nearPlane=nearPlane;camera.farPlane=farPlane;}
     }
+}
+void SceneViewport::drawTraces(const Camera& camera,std::span<const TraceVisualRecord> traces) {
+    if(!imageDrawList_ || imageRegion_.width<=0 || imageRegion_.height<=0)return;
+    drawTraceOverlay(*imageDrawList_,camera,imageRegion_.width,imageRegion_.height,
+        {imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height},traces,ClipDepth::NegativeOneToOne);
 }
 void SceneViewport::drawDecalPlacementPlane(const Mat4& frame,const Camera& camera,bgfx::TextureHandle texture,const Vec4& color) {
     if(!imageDrawList_||imageRegion_.width<=0||imageRegion_.height<=0)return;

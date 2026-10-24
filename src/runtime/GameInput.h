@@ -35,18 +35,19 @@ public:
     // sensitivity and inversion are applied by the player's look controller.
     Vec2 consumeLookDelta();
     bool consumeJump();
+    bool consumeTrace();
     std::uint64_t cancellationRevision() const { return cancellationRevision_; }
 private:
     bool contains(Vec2 position) const;
     void releaseMouseCapture();
     enum class ImageAcquisition { None, Pending, Canceled };
     ViewportRegion viewport_;
-    std::array<bool,5> held_{}; // W, A, S, D, Space.
+    std::array<bool,6> held_{}; // W, A, S, D, Space, F.
     Vec2 lookDelta_{};
     std::uint64_t cancellationRevision_{};
     SDL_WindowID captureWindowId_{};
     ImageAcquisition imageAcquisition_{};
-    bool jumpPending_{},discardNextMotion_{};
+    bool jumpPending_{},tracePending_{},discardNextMotion_{};
     bool enabled_{},blocked_{},armed_{},desktopCoordinates_{};
 };
 }
