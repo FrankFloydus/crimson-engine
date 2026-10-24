@@ -20,7 +20,7 @@ public:
     bool canSaveAs() const {return isOpen();}
     void undo(){resetSimulation();document_.undo();}
     void redo(){resetSimulation();document_.redo();}
-    void finishInteraction();
+    void finishInteraction(bool preserveActiveItem=false);
     void cancelInteraction();
     void requestOpen(std::string id,AssetLibrary&);
     void requestExit();

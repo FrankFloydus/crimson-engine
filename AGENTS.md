@@ -138,7 +138,7 @@ Select existing focused checks for the changed contract after the integration bu
 | Bundle resource dependencies, browser paths and deletion policy | `asset_resource_core`, `asset_browser_core`, `asset_browser_path_core`, `asset_library_deletion_core`, `import_identity_core` |
 | Entity selection, parenting and scene transactions | `scene_core`, `scene_gameplay_core`, `scene_component_ui_core`, `scene_extraction_core`; focused `player_parenting_render_core`/DX11 counterpart when rendering is affected |
 | First-person input, motor, camera or stair presentation | `fps_controller_core`, `physics_core`, `play_runtime_core`, `game_input_core`, `game_view_input_core`, `camera_authoring_core`, `camera_pilot_core`; add `scene_gameplay_core` and `scene_component_ui_core` for authored controls |
-| Ragdoll authoring, bodies, runtime or preview | `ragdoll_asset_core`, `ragdoll_document_core`, `ragdoll_physics_core`, `ragdoll_runtime_core`, `ragdoll_scene_core`, `ragdoll_library_core`, `ragdoll_preview_plan_core`; retain `physics_core` and `fps_controller_core` for character contacts |
+| Ragdoll authoring, bodies, runtime or preview | `ragdoll_asset_core`, `ragdoll_document_core`, `ragdoll_physics_core`, `ragdoll_runtime_core`, `ragdoll_scene_core`, `ragdoll_library_core`, `ragdoll_preview_plan_core`, `ragdoll_preview_input_core`; retain `physics_core` and `fps_controller_core` for character contacts |
 | Backend selection, shaders, GI/AO/fog/tone mapping | `app_options_core`, `editor_preferences_core`, `shader_preflight_core`, `render_pass_plan_core`, `ssgi_core`, `environment_presentation_core`, `tone_mapping_core`; relevant `ssgi_render_core`, `ssao_render_core`, `fog_background_render_core`/DX11 counterparts when GPU behavior changes |
 
 ## Source layout

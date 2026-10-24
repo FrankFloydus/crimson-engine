@@ -1,4 +1,5 @@
 #include "RagdollEditor.h"
+#include "RagdollPreviewInteraction.h"
 #include "DocumentEditorMenu.h"
 #include "PropertyReset.h"
 #include "physics/PhysicsWorld.h"
@@ -29,8 +30,8 @@ bool RagdollEditor::focused() const {
     const auto* window=ImGui::GetCurrentContext()->NavWindow;
     return isOpen()&&window&&window->RootWindow->ID==ImHashStr("###RagdollEditor");
 }
-void RagdollEditor::finishInteraction() {
-    if(document_.transactionActive()&&document_.commit()){ImGui::ClearActiveID();suppressFinalUpdate_=true;propertySection_=0;}
+void RagdollEditor::finishInteraction(bool preserveActiveItem) {
+    if(document_.transactionActive()&&document_.commit()){if(!preserveActiveItem)ImGui::ClearActiveID();suppressFinalUpdate_=true;propertySection_=0;}
 }
 void RagdollEditor::cancelInteraction() {
     previewGesture_=0;endDrag();
@@ -400,22 +401,26 @@ void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceMana
         if(framePending_&&startingPose&&startingPose->bounds.valid){settings_.camera=Camera{};auto bounds=startingPose->bounds;if(simulating_)bounds=math::transformBounds(bounds,previewWorld_);settings_.camera.frameBounds(bounds.minimum,bounds.maximum,float(width)/height);framePending_=false;}
         const auto model=source?prepared.prepare(source->id,previewWorld_,settings_.camera,height,true,ResourcePriority::Selected,float(width)/height):nullptr;
         const auto texture=renderer.ragdollPreviewTexture();
-        if(bgfx::isValid(texture)&&texture.idx==displayedTarget_&&model&&model->ready&&startingPose&&environmentRevision_)ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)),available);else ImGui::Dummy(available);imageDrawn=true;displayedTarget_=texture.idx;
-        const auto& io=ImGui::GetIO();const bool ownsInput=!io.WantTextInput&&!ImGui::IsAnyItemActive()&&!ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&!io.AppFocusLost&&!ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+        const bool imageReady=bgfx::isValid(texture)&&texture.idx==displayedTarget_&&model&&model->ready&&startingPose&&environmentRevision_;
+        const auto interaction=drawRagdollPreviewImage(imageReady?ImTextureRef(ImGuiBgfx::textureId(texture)):ImTextureRef{},available,imageReady);
+        const bool activated=ImGui::IsItemActivated();
+        const int mouseOwner=interaction.active?ImGui::GetCurrentContext()->ActiveIdMouseButton:-1;
+        imageDrawn=true;displayedTarget_=texture.idx;
+        const auto& io=ImGui::GetIO();const bool ownsInput=!interaction.blocked;
         const auto ray=settings_.camera.screenRay(io.MousePos.x,io.MousePos.y,region);
-        if(ownsInput&&ImGui::IsItemHovered()) {
-            if(ImGui::IsMouseClicked(ImGuiMouseButton_Middle)){endDrag();ImGui::SetWindowFocus();previewGesture_=io.KeyShift?2:1;}
+        if(ownsInput&&interaction.hovered) {
+            if(activated&&mouseOwner==ImGuiMouseButton_Middle){endDrag();ImGui::SetWindowFocus();previewGesture_=io.KeyShift?2:1;}
             if(io.MouseWheel)settings_.camera.zoom(io.MouseWheel);
-            if(ImGui::IsMouseClicked(ImGuiMouseButton_Left)&&ray&&previewGesture_==0) {
-                finishInteraction();ImGui::SetWindowFocus();
+            if(activated&&mouseOwner==ImGuiMouseButton_Left&&ray&&previewGesture_==0) {
+                finishInteraction(true);ImGui::SetWindowFocus();
                 if(simulation_) {if(const auto hit=simulation_->pickRagdoll(*ray,settings_.camera.farPlane)){selectedBody_=int(hit->bodyIndex);selectedNode_=int(document_.definition().bodies[hit->bodyIndex].node);if(!paused_&&simulation_->beginRagdollDrag(hit->entity,hit->bodyIndex,hit->position)){dragging_=true;dragPoint_=hit->position;dragNormal_=settings_.camera.forward();}}}
                 else if(source&&startingPose){float best=14.f;int selected=-1;for(std::size_t i=0;i<document_.definition().bodies.size();++i){const auto& body=document_.definition().bodies[i];if(body.node>=startingPose->worldTransforms.size())continue;const auto world=startingPose->worldTransforms[body.node];const auto p=math::project({world[12],world[13],world[14]},settings_.camera.projectionMatrix(region.width/region.height,ClipDepth::ZeroToOne)*settings_.camera.viewMatrix(),{region.x,region.y,region.width,region.height},ClipDepth::ZeroToOne);if(p&&(*p)[2]>=0&&(*p)[2]<=1){const float distance=std::hypot((*p)[0]-io.MousePos.x,(*p)[1]-io.MousePos.y);if(distance<best){best=distance;selected=int(i);}}}if(selected>=0){selectedBody_=selected;selectedNode_=int(document_.definition().bodies[selected].node);}}
             }
         }
         const bool focused=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-        if(!ownsInput||!focused||!ImGui::IsMouseDown(ImGuiMouseButton_Left)||paused_)endDrag();
+        if(!ownsInput||!focused||mouseOwner!=ImGuiMouseButton_Left||!ImGui::IsMouseDown(ImGuiMouseButton_Left)||paused_)endDrag();
         if(dragging_&&ray)if(const auto target=math::intersectPlane(*ray,dragPoint_,dragNormal_))simulation_->updateRagdollDrag(*target);
-        if(!ownsInput||!focused||!ImGui::IsMouseDown(ImGuiMouseButton_Middle))previewGesture_=0;
+        if(!ownsInput||!focused||mouseOwner!=ImGuiMouseButton_Middle||!ImGui::IsMouseDown(ImGuiMouseButton_Middle))previewGesture_=0;
         if(previewGesture_==1)settings_.camera.orbit(io.MouseDelta.x,io.MouseDelta.y,settings_.camera.target);
         if(previewGesture_==2)settings_.camera.pan(io.MouseDelta.x,io.MouseDelta.y,available.x,available.y);
         if(simulating_&&!paused_&&simulation_&&std::isfinite(dt)&&dt>0){accumulator_+=std::min(dt,.1);while(accumulator_>=1./60){simulation_->step(floor_,NoEntity,{},1.f/60);accumulator_-=1./60;}}
@@ -424,7 +429,7 @@ void RagdollEditor::preview(AssetLibrary& assets,Renderer& renderer,ResourceMana
         else if(!model||!model->ready)previewStatus_="Preparing ragdoll preview...";else if(!environmentRevision_)previewStatus_="Preparing preview environment...";
         if(environment_.state()==ResourceState::Failed)previewStatus_=environment_.diagnostic();
         if(model&&model->ready&&pose&&environmentRevision_){auto pins=std::make_shared<PreviewPins>();pins->model=model;pins->pose=pose;pins->environment=environment.shared();std::array<RenderModelInstance,1> instances{{{0,{model->asset,previewWorld_},&model->textures,model->revision,false,false,&model->materials}}};instances.front().pose=pose;instances.front().castShadows=false;RenderScene scene{settings_,{},nullptr,nullptr,instances,{}, {},true,pins};renderer.renderRagdollPreview(scene);overlays(*source,*pose,region);}
-    }catch(const std::exception& error){previewStatus_=error.what();endDrag();if(!imageDrawn)ImGui::Dummy(available);}
+    }catch(const std::exception& error){previewStatus_=error.what();endDrag();if(!imageDrawn)drawRagdollPreviewImage(ImTextureRef{},available,false);}
 }
 void RagdollEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,EditorResources& prepared,double dt) {
     if(pending_==Pending::Exit&&!document_.dirty())perform(assets);
@@ -439,7 +444,7 @@ void RagdollEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager
         const auto action=drawDocumentEditorMenuBar([&]{finishInteraction();},[&]{return DocumentEditorMenuState{canSave(),canSaveAs(),canUndo(),canRedo(),document_.undoLabel(),document_.redoLabel()};});
         if(action==DocumentEditorAction::Save)save(assets);if(action==DocumentEditorAction::SaveAs)save(assets,true);if(action==DocumentEditorAction::Close)request(Pending::Close,{},&assets);if(action==DocumentEditorAction::Undo)undo();if(action==DocumentEditorAction::Redo)redo();
         if(isOpen()) {
-            const bool canceled=suppressFinalUpdate_||(document_.transactionActive()&&(ImGui::IsKeyPressed(ImGuiKey_Escape,false)||ImGui::GetIO().AppFocusLost));if(canceled)cancelInteraction();suppressFinalUpdate_=false;
+            const bool canceled=suppressFinalUpdate_||(document_.transactionActive()&&(ImGui::IsKeyPressed(ImGuiKey_Escape,false)||ImGui::GetIO().AppFocusLost));if(canceled&&document_.transactionActive())cancelInteraction();suppressFinalUpdate_=false;
             if(ImGui::BeginTable("Ragdoll layout",2,ImGuiTableFlags_Resizable|ImGuiTableFlags_BordersInnerV)) {
                 ImGui::TableSetupColumn("Properties",ImGuiTableColumnFlags_WidthFixed,390);ImGui::TableSetupColumn("Preview",ImGuiTableColumnFlags_WidthStretch);
                 ImGui::TableNextColumn();ImGui::BeginChild("Ragdoll properties",{0,0});properties(assets,assets.findModel(document_.definition().sourceModel.id),canceled);if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());if(!previewStatus_.empty())ImGui::TextWrapped("%s",previewStatus_.c_str());ImGui::EndChild();
