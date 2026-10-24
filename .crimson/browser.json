@@ -324,6 +324,10 @@
       "folder": "folder:content",
       "name": ""
     },
+    "76308539-cdbf-4cbd-bbf3-128fb38df8a7": {
+      "folder": "6b77f30d-bcf9-4621-8e4e-54bc2627c0de",
+      "name": ""
+    },
     "7a13499c-4024-5fa2-b82f-a7c168794557": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
@@ -386,6 +390,10 @@
     },
     "868afb1b-b320-5eb4-b9fd-9061b5bd3c14": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
+    "86e27204-c54e-5b21-ac2e-4a51a90af83b": {
+      "folder": "5083cf68-b4f4-4916-9b30-a97dfdddf4bb",
       "name": ""
     },
     "8a7789db-2a57-4c99-9972-c70c7ee0707b": {
@@ -458,6 +466,10 @@
     },
     "9a82e56e-5eb4-502e-8252-a3de52e55139": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
+      "name": ""
+    },
+    "9c537f49-9742-41e6-af9a-7043c55fcb63": {
+      "folder": "5083cf68-b4f4-4916-9b30-a97dfdddf4bb",
       "name": ""
     },
     "9ce631b5-c52a-5998-9d9d-e5f0f79c632a": {
@@ -620,6 +632,10 @@
       "folder": "6b77f30d-bcf9-4621-8e4e-54bc2627c0de",
       "name": ""
     },
+    "c74cb23c-d3a5-597f-a79c-ca3b349e5401": {
+      "folder": "5083cf68-b4f4-4916-9b30-a97dfdddf4bb",
+      "name": ""
+    },
     "c84803af-1892-5efd-b3ec-cfb542296a96": {
       "folder": "3b38cb14-1bf1-4485-99fc-5439b74eb6b9",
       "name": ""
@@ -694,6 +710,10 @@
     },
     "dc0f3b4d-1f98-5ea4-b6f7-9bafc3f0e4d6": {
       "folder": "a21fe72d-ad05-447c-bc68-929497ee944c",
+      "name": ""
+    },
+    "dc5a0bec-1f4a-5957-99e2-2d293485d3e9": {
+      "folder": "5083cf68-b4f4-4916-9b30-a97dfdddf4bb",
       "name": ""
     },
     "dd2eede1-61f0-5ee6-b0fd-12493387656d": {
@@ -871,6 +891,12 @@
       "name": "bones",
       "parent": "folder:content",
       "path": "Content/bones"
+    },
+    {
+      "id": "5083cf68-b4f4-4916-9b30-a97dfdddf4bb",
+      "name": "manny",
+      "parent": "folder:content",
+      "path": "Content/manny"
     },
     {
       "id": "6b77f30d-bcf9-4621-8e4e-54bc2627c0de",
