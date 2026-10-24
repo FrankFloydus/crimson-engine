@@ -439,7 +439,7 @@ void cpuChecks() {
                 "Reflection variants were omitted from Lit coverage or admitted for Unlit/Additive materials.");
         }
     for(const auto& variant:original.variants) {
-        check(variant.source.find("crimson-material-graph-generator-v41")!=std::string::npos,
+        check(variant.source.find("crimson-material-graph-generator-v42")!=std::string::npos,
             "Generated material identity does not invalidate earlier PBR/optical bundles.");
         const bool circularInput=variant.source.find("v_uvInterpolationCoordinates, v_uvInterpolationCorrection, v_uvInterpolationMode")!=std::string::npos;
         check(circularInput==(variant.pass!=MaterialGraphPass::Particle&&variant.pass!=MaterialGraphPass::ParticleReflection),

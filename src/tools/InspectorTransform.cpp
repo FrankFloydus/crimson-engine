@@ -43,7 +43,12 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
     };
     const bool sameContext=cache.entity==record.id && cache.documentGeneration==document.documentGeneration() &&
         cache.selection==document.selection().ids;
-    const bool decal=record.decal.has_value();
+    const bool box=record.decal&&record.decal->projection==SceneDecalProjection::Box;
+    const bool decal=record.decal&&record.decal->projection==SceneDecalProjection::Surface;
+    const auto worldSize=[](const Mat4& frame){return Vec3{
+        static_cast<float>(math::length(math::transformDirection(frame,{1,0,0}))),
+        static_cast<float>(math::length(math::transformDirection(frame,{0,1,0}))),
+        static_cast<float>(math::length(math::transformDirection(frame,{0,0,1})))};};
     if (!cache.valid || !sameContext || cache.refresh || cache.shownMatrix!=record.local ||
         (decal&&cache.shownDecalSurfaceFrame!=decalSurfaceFrame) ||
         cache.sceneGeneration!=document.scene().generation() || cache.sceneRevision!=document.scene().revision()) {
@@ -52,6 +57,7 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
             const float decalReference=sameContext?cache.degrees[2]:0;
             cache.fields=*displayed; cache.degrees=inDegrees(displayed->rotationRadians);
             cache.valid=true; cache.error.clear();
+            if(box)if(const auto frame=document.scene().worldTransform(record.id))cache.fields.scale=worldSize(*frame);
             if(decal){
                 const auto frame=decalEditFrame(document.scene(),record.id,decalSurfaceFrame);
                 cache.decalFrameValid=bool(frame);
@@ -71,8 +77,8 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
     }
     if (cache.valid) {
         ImGui::PushID("Transform properties");
-        const std::array<const char*,3> labels{"Position","Rotation (deg)",decal?"Size (m)":"Scale"};
-        const std::array<const char*,3> commandLabels{"Change local position",decal?"Rotate decal":"Change local rotation",decal?"Resize decal":"Change local scale"};
+        const std::array<const char*,3> labels{"Position","Rotation (deg)",(decal||box)?"Size (m)":"Scale"};
+        const std::array<const char*,3> commandLabels{"Change local position",decal?"Rotate decal":"Change local rotation",(decal||box)?"Resize decal":"Change local scale"};
         const std::array<const char*,3> axes{"X","Y","Z"};
         const std::array<ImU32,3> axisColors{IM_COL32(170,0,0,255),IM_COL32(0,170,0,255),IM_COL32(0,0,170,255)};
         const std::array<float,3> speeds{.05f,.5f,.02f};
@@ -93,7 +99,7 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                     const unsigned axis=decal&&property==1?2u:column;
                     ImGui::TableSetColumnIndex(static_cast<int>(column));
                     if(!(decal&&property==1)){
-                        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted(decal&&property==2?(axis==0?"Width":"Height"):axes[axis]);
+                        ImGui::AlignTextToFramePadding();ImGui::TextUnformatted((decal||box)&&property==2?(axis==0?"Width":axis==1?"Height":"Depth"):axes[axis]);
                         ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
                     }
                     ImGui::PushID(static_cast<int>(axis)); ImGui::SetNextItemWidth(-1);
@@ -111,13 +117,17 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                         // basis, rather than this panel's begin-frame record.
                         const auto current=document.scene().find(record.id);
                         const auto captured=current ? math::affineTransformFields(current->local,&cache.fields) : std::nullopt;
-                        const auto frame=decal?decalEditFrame(document.scene(),record.id,decalSurfaceFrame):std::optional<Mat4>{};
+                        const auto frame=decal?decalEditFrame(document.scene(),record.id,decalSurfaceFrame):box?document.scene().worldTransform(record.id):std::optional<Mat4>{};
                         const auto parentWorld=current&&current->parent?document.scene().worldTransform(current->parent):std::optional<Mat4>{Mat4{}};
                         const auto parentInverse=parentWorld?math::inverse(*parentWorld):std::nullopt;
-                        if (captured && (!decal||property==0||(frame&&parentInverse)) && transactions.begin(field,commandLabels[property])) {
+                        if (captured && (!(decal||box)||property==0||(frame&&parentInverse)) && transactions.begin(field,commandLabels[property])) {
                             const float decalReference=cache.degrees[2];
                             cache.baseline=current->local; cache.fields=*captured; cache.degrees=inDegrees(captured->rotationRadians);
                             cache.captured=*captured; cache.capturedDegrees=cache.degrees; cache.editing=true;
+                            if(box&&frame){
+                                cache.capturedDecalFrame=*frame;if(parentInverse)cache.capturedParentInverse=*parentInverse;
+                                cache.fields.scale=cache.captured.scale=worldSize(*frame);
+                            }
                             if(decal&&frame){
                                 cache.capturedDecalFrame=*frame;if(parentInverse)cache.capturedParentInverse=*parentInverse;
                                 const auto size=decals::decalSize(*frame);
@@ -148,7 +158,13 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                             if(decal)requested[2]=1;
                         }
                         std::optional<Mat4> candidate;
-                        if(decal&&property>0){
+                        if(box&&property==2){
+                            if(const auto basis=math::affineTransformFields(cache.capturedDecalFrame)) {
+                                auto signedSize=requested;
+                                for(unsigned component=0;component<3;++component)if(basis->scale[component]<0)signedSize[component]*=-1;
+                                if(const auto world=math::withAffineScale(cache.capturedDecalFrame,*basis,signedSize))candidate=cache.capturedParentInverse*(*world);
+                            }
+                        }else if(decal&&property>0){
                             const auto world=property==1?decals::withDecalRotation(cache.capturedDecalFrame,value):
                                 decals::withDecalSize(cache.capturedDecalFrame,{requested[0],requested[1]});
                             if(world)candidate=cache.capturedParentInverse*(*world);

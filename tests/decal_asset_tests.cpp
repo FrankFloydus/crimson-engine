@@ -101,6 +101,27 @@ void genericVisualReceiveDecals() {
     json["entities"][0]["receiveDecals"]="false";writeFileAtomically(file,json.dump());require(!reopened.load(document.assetId()),"A nonboolean receiver flag was silently accepted.");
     EntityRecord parent;parent.id=1;parent.name="Actor";parent.actor.emplace();parent.receiveDecals=false;EntityRecord visual;visual.id=2;visual.parent=1;visual.name="Independent visual";visual.model=AssetRef<ModelAsset>{BuiltinBoxModelId};Scene scene;scene.apply({parent,visual},{});require(extractScene(scene).models.front().receiveDecals,"Receiver flags leaked from an actor parent to its visual child.");
 }
+void boxDecalHistoryAndPersistence() {
+    Project p;SceneDocument document(p.root);const auto parent=document.createEmpty("Parent");
+    auto pRecord=*document.scene().find(parent);pRecord.local=math::translation({2,3,4})*math::scaling({2,3,-4});
+    require(document.updateEntity(parent,pRecord),document.status());
+    const auto box=document.createBoxDecal("Box Decal",parent);
+    require(box&&document.scene().find(box)->decal->projection==SceneDecalProjection::Box,"Box decal creation lost projection mode.");
+    require(document.undo()&&!document.scene().contains(box)&&document.redo()&&document.scene().contains(box),"Box creation did not undo/redo.");
+    const auto world=*document.scene().worldTransform(box);const std::array selected{box};
+    const auto bounds=selectionBounds(document.scene(),selected,{});
+    const auto expected=math::transformBounds(Aabb{{-.5f,-.5f,-.5f},{.5f,.5f,.5f},true},world);
+    require(bounds.valid&&bounds.minimum==expected.minimum&&bounds.maximum==expected.maximum,"Box selection omitted its depth or parent affine.");
+    const auto boxes=selectionBoxes(document.scene(),selected,{});
+    require(boxes.size()==1&&boxes.front().local.minimum[2]==-.5f&&boxes.front().local.maximum[2]==.5f,"Box wire bounds retained a flat conforming footprint.");
+    require(extractScene(document.scene()).decals.front().decal.projection==SceneDecalProjection::Box,"Extraction lost box mode.");
+    require(document.save("Box decal scene"),document.status());const auto file=sceneAssetPath(p.root,document.assetId());const auto bytes=read(file);
+    auto json=Json::parse(bytes);auto found=std::find_if(json["entities"].begin(),json["entities"].end(),[](const auto& e){return e.contains("decal");});
+    require(found!=json["entities"].end()&&(*found)["decal"]["projection"]=="Box"&&!(*found)["decal"].contains("seed"),"Box writer retained irrelevant surface seed data.");
+    SceneDocument reopened(p.root);require(reopened.load(document.assetId())&&!reopened.dirty()&&reopened.scene().find(box)->local==document.scene().find(box)->local&&reopened.scene().find(box)->decal==document.scene().find(box)->decal&&read(file)==bytes,"Box load changed data or dirtied scene.");
+    (*found)["decal"]["projection"]="Unknown";writeFileAtomically(file,json.dump());
+    require(!reopened.load(document.assetId()),"Unknown box projection was silently accepted.");
+}
 void sceneCapabilityHistoryAndMigration() {
     Project p;const auto asset=createDecalAsset(p.root,"Scene decal");SceneDocument document(p.root);const auto receiver=document.createBox("Receiver");
     SceneDecal value;value.asset.id=asset.id;value.seed.receiver=receiver;value.seed.modelId=document.scene().find(receiver)->model->id;value.seed.fingerprint=0x0123456789abcdefull;
@@ -128,6 +149,6 @@ void sceneCapabilityHistoryAndMigration() {
 }
 }
 int main() {
-    try{assetsRoundTripAndPolicies();replacementCoverageIsSafe();documentHistoryAndSaveAs();sceneCapabilityHistoryAndMigration();genericVisualReceiveDecals();std::cout<<"Decal asset, document and scene tests passed\n";return 0;}
+    try{assetsRoundTripAndPolicies();replacementCoverageIsSafe();documentHistoryAndSaveAs();sceneCapabilityHistoryAndMigration();genericVisualReceiveDecals();boxDecalHistoryAndPersistence();std::cout<<"Decal asset, document and scene tests passed\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

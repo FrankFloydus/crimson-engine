@@ -455,6 +455,15 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                         }
                     });
                 }
+                else if(record.decal&&record.decal->projection==SceneDecalProjection::Box) {
+                    boxWireSegments({1,1,1},[&](Vec3 a,Vec3 b) {
+                        if(const auto line=projectClippedSegment(math::transformPoint(*world,a),math::transformPoint(*world,b),vp,viewport)) {
+                            const ImVec2 from{(*line)[0][0],(*line)[0][1]},to{(*line)[1][0],(*line)[1][1]};
+                            if(selected(document,record.id))draw->AddLine(from,to,WireColor,1.5f);
+                            distance=std::min(distance,segmentDistance(ImGui::GetIO().MousePos,from,to));
+                        }
+                    });
+                }
                 else if (record.collider || record.controller) {
                     if(!showCollisions)continue;
                     const auto& rgba=record.controller ? record.controller->collisionColor : record.collider->collisionColor;

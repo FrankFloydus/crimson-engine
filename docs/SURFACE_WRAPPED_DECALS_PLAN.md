@@ -1,6 +1,6 @@
 # Surface-wrapped PBR decals: implementation plan
 
-The implemented workflow now uses material-reference decal assets and a dedicated Decal graph shader model. Receiver selection is generic and controlled by default-on per-entity Receive Decals; the initial Quader-specific receiver scopes below are superseded. See the current [architecture](ENGINE_ARCHITECTURE.md#surface-wrapped-pbr-decals) and [workflow](../README.md#surface-wrapped-decals).
+The implemented workflow now uses material-reference decal assets and a dedicated Decal graph shader model. Receiver selection is generic and controlled by default-on per-entity Receive Decals; the initial Quader-specific receiver scopes below are superseded. See the current [architecture](ENGINE_ARCHITECTURE.md#surface-wrapped-pbr-decals) and [workflow](../README.md#decals).
 
 Status: implemented and Release integration built, 2026-10-23. The CPU solver, separate-Quader-mesh proof, renderer, assets, persistence and editor integration are implemented. The real cylinder/drop/texture acceptance diagnostic passes on DX11 and DX12; interactive feature acceptance belongs to the user. The original plan was prepared after checkpoint `cb7e108` was pushed to `origin/codex/material-atomic-nodes`, against renderer baseline `881de829bb37ce46fb043c6bd775691bf6b46ef8`.
 

@@ -17,9 +17,11 @@ struct MeshPaintPreparedDraw {
 };
 struct PreparedMeshPaintModel {
     std::shared_ptr<const ModelAsset> asset;
+    // Geometrically equivalent receiver proxy; rendered paint always uses asset.
+    std::shared_ptr<const ModelAsset> decalAsset;
     std::vector<MeshPaintPreparedDraw> draws;
     std::vector<RenderMeshPaintBinding> bindings;
-    std::uint64_t revision{},signature{};
+    std::uint64_t revision{},signature{},decalSignature{};
     bool ready{},failed{};
     std::string diagnostic;
 };

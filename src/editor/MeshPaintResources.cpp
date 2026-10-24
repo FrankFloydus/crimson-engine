@@ -5,6 +5,7 @@
 #include "assets/MaterialAsset.h"
 #include "resources/StreamingModel.h"
 #include "scene/SceneExtraction.h"
+#include "decals/DecalPaintSurface.h"
 #include <crimson/renderer/core/Profiler.hpp>
 #include <algorithm>
 #include <atomic>
@@ -21,6 +22,7 @@ struct ModelData final:ModelAsset {
     std::vector<Draw> paintedDraws;
     std::optional<SceneMeshPaint> resampled;
     std::shared_ptr<const ModelAsset> source;
+    std::shared_ptr<const ModelAsset> decalAsset;
     std::uint64_t revision{},signature{};
 };
 struct SurfaceData final:ModelAsset {
@@ -35,6 +37,7 @@ std::size_t bytes(const ModelData& model){std::size_t total=sizeof(ModelData);st
     for(const auto& p:model.primitives)total+=sizeof(ModelPrimitive)+p.vertices.size()*sizeof(ModelVertex)+p.indices.size()*sizeof(std::uint32_t);
     for(const auto& d:model.paintedDraws)if(geometries.insert(d.geometry.get()).second){total+=sizeof(MeshPaintGeometry)+(d.geometry->vertices.size()+d.geometry->shadingVertices.size())*sizeof(ModelVertex)+d.geometry->indices.size()*sizeof(std::uint32_t)+d.geometry->cells.size()*sizeof(MeshPaintCell)+d.geometry->boundaryEdges.size()*sizeof(std::array<std::uint32_t,2>);
         for(const auto& list:d.geometry->vertexTriangles)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);for(const auto& list:d.geometry->seamVertices)total+=sizeof(list)+list.size()*sizeof(std::uint32_t);}
+    if(model.decalAsset){total+=sizeof(ModelAsset);for(const auto& p:model.decalAsset->primitives)total+=sizeof(ModelPrimitive)+p.vertices.size()*sizeof(ModelVertex)+p.indices.size()*sizeof(std::uint32_t);}
     if(model.resampled)for(const auto& d:model.resampled->draws)if(d.weights)for(const auto& page:d.weights->pages)if(page)total+=sizeof(MeshPaintPage);return total;
 }
 std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source,EntityId entity,std::uint32_t level,std::uint64_t revision,std::optional<SceneMeshPaint> paint,bool resample,std::stop_token stop){
@@ -42,6 +45,7 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
     cancelled(stop);if(!rigidSource(*source))throw std::runtime_error("Vertex painting supports rigid static meshes.");
     auto result=std::make_shared<ModelData>();static_cast<ModelAsset&>(*result)=*source;result->source=source;result->revision=revision;result->stream.reset();result->primitives.clear();result->paintedDraws.clear();result->signature=revision;mix(result->signature,level);
     std::vector<std::shared_ptr<const ModelPrimitive>> originals(source->primitives.size());std::vector<std::shared_ptr<const MeshPaintGeometry>> geometries(source->primitives.size());
+    std::shared_ptr<ModelAsset> decalAsset;
     std::uint64_t vertexTotal{},triangleTotal{};
     for(std::uint32_t drawIndex=0;drawIndex<source->draws.size();++drawIndex){cancelled(stop);const auto& draw=source->draws[drawIndex];if(draw.primitive>=source->primitives.size())throw std::runtime_error("Paint draw has an invalid primitive.");auto& original=originals[draw.primitive];
         if(!original){const auto& primitive=source->primitives[draw.primitive];if(!primitive.vertices.empty())original={source,&primitive};else {if(!source->stream||draw.primitive>=source->stream->primitives.size()||source->stream->primitives[draw.primitive].levels.empty())throw std::runtime_error("Original mesh geometry is unavailable.");
@@ -50,12 +54,18 @@ std::shared_ptr<ModelData> build(const std::shared_ptr<const ModelAsset>& source
         auto& geometry=geometries[draw.primitive];if(!geometry){CRIMSON_PROFILE_ZONE("Vertex paint corner quad refinement");geometry=buildMeshPaintGeometry(*original,level,stop);}
         vertexTotal+=geometry->vertices.size();triangleTotal+=geometry->indices.size()/3;if(vertexTotal>MaximumMeshPaintVertices||triangleTotal>MaximumMeshPaintTriangles)throw std::runtime_error("Subdivision exceeds this entity's 262144 vertex / 524288 triangle budget.");
         const auto primitive=static_cast<std::uint32_t>(result->primitives.size());result->primitives.push_back(meshPaintRenderPrimitive(*original,*geometry));result->draws[drawIndex].primitive=primitive;result->paintedDraws.push_back({draw.primitive,geometry,makeMeshPaintPayload(static_cast<std::uint32_t>(geometry->vertices.size()))});mix(result->signature,geometry->signature);
+        {CRIMSON_PROFILE_ZONE("Decal paint-only refinement removal");
+        if(auto simplified=decals::simplifyDecalPaintPrimitive(*original,*geometry,stop)){
+            if(!decalAsset){decalAsset=std::make_shared<ModelAsset>();*decalAsset=*result;decalAsset->primitives.back()=std::move(*simplified);}
+            else decalAsset->primitives.push_back(std::move(*simplified));
+        }else if(decalAsset)decalAsset->primitives.push_back(result->primitives.back());}
     }
     result->id="mesh-paint:"+source->id+":"+std::to_string(entity)+":"+std::to_string(result->signature);
     if(result->materialIds.size()<result->materials.size())result->materialIds.resize(result->materials.size());
     for(std::size_t i=0;i<result->materials.size();++i)if(result->materialIds[i].empty())result->materialIds[i]=importedMaterialId(source->id,i);
     // Keep model-node metadata coherent with expanded occurrence primitives.
     for(std::size_t mesh=0;mesh<result->meshes.size();++mesh){auto& p=result->meshes[mesh].primitives;p.clear();for(std::uint32_t i=0;i<source->draws.size();++i){const auto node=source->draws[i].node;if(node>=0&&static_cast<std::size_t>(node)<source->nodes.size()&&source->nodes[node].mesh==static_cast<std::int32_t>(mesh))p.push_back(result->draws[i].primitive);}}
+    if(decalAsset){decalAsset->id=result->id;decalAsset->draws=result->draws;decalAsset->meshes=result->meshes;decalAsset->materialIds=result->materialIds;result->decalAsset=std::move(decalAsset);}
     if(resample){result->resampled=paint.value_or(SceneMeshPaint{});auto& replacement=*result->resampled;replacement.subdivisionLevel=level;replacement.recipeVersion=MeshPaintRecipeVersion;
         for(auto& stored:replacement.draws){cancelled(stop);if(stored.draw>=result->paintedDraws.size()||result->paintedDraws[stored.draw].sourcePrimitive!=stored.primitive)throw std::runtime_error("Reset incompatible paint before changing subdivision.");const auto& current=result->paintedDraws[stored.draw];
             if(stored.sourceSignature!=current.geometry->sourceSignature||!stored.weights)throw std::runtime_error("Reset incompatible paint before changing subdivision.");
@@ -87,6 +97,10 @@ ResourceHandle<ModelAsset> MeshPaintResources::request(const EntityRecord& recor
 PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,ResourcePriority priority){CRIMSON_PROFILE_ZONE("Vertex paint prepared geometry and weights");PreparedMeshPaintModel out;std::string diagnostic;const auto handle=request(record,record.meshPaint?record.meshPaint->subdivisionLevel:0,priority,false,diagnostic);out.diagnostic=diagnostic;out.failed=handle&&handle.state()==ResourceState::Failed;
     const auto snapshot=handle.snapshot();if(!snapshot||handle.state()!=ResourceState::Ready){statuses_[record.id]=out.diagnostic;return out;}
     const auto data=std::static_pointer_cast<const ModelData>(snapshot.shared());out.asset=data;out.revision=data->revision;out.signature=data->signature;out.ready=true;
+    // Generated smooth normals depend on triangle density. Retain their exact
+    // render mesh; only explicit/flat normal modes use the proven proxy.
+    out.decalAsset=record.meshShading!=MeshShading::Smooth&&data->decalAsset?data->decalAsset:out.asset;
+    out.decalSignature=out.signature;if(out.decalAsset!=out.asset)mix(out.decalSignature,0x646563616c707278ull);
     for(std::uint32_t i=0;i<data->paintedDraws.size();++i){const auto& d=data->paintedDraws[i];MeshPaintPreparedDraw result;result.draw=i;result.sourcePrimitive=d.sourcePrimitive;result.primitive=data->draws[i].primitive;result.geometry=d.geometry;
         const SceneMeshPaintDraw* stored=nullptr;if(record.meshPaint)for(const auto& candidate:record.meshPaint->draws)if(candidate.draw==i&&candidate.primitive==d.sourcePrimitive){stored=&candidate;break;}
         if(stored){result.compatible=stored->sourceSignature==d.geometry->sourceSignature&&stored->level==d.geometry->level&&stored->weights&&stored->weights->vertexCount==d.geometry->vertices.size();if(result.compatible)result.weights=stored->weights;else out.diagnostic="Vertex paint source changed. Reset Paint to start again.";}
@@ -94,7 +108,7 @@ PreparedMeshPaintModel MeshPaintResources::prepare(const EntityRecord& record,Re
     if(record.meshPaint)for(const auto& stored:record.meshPaint->draws)if(stored.draw>=data->paintedDraws.size()||data->paintedDraws[stored.draw].sourcePrimitive!=stored.primitive)out.diagnostic="Vertex paint source changed. Reset Paint to start again.";
     statuses_[record.id]=out.diagnostic;return out;
 }
-PreparedMeshPaintModel MeshPaintResources::prepare(const ExtractedModel& model,ResourcePriority priority){EntityRecord record;record.id=model.id;record.model=AssetRef<ModelAsset>{model.assetId};record.primitive=model.primitive;record.modelMaterials=model.materialOverrides;record.modelAnimation=model.animation;record.modelRagdoll=model.ragdoll;record.meshPaint=model.meshPaint;return prepare(record,priority);}
+PreparedMeshPaintModel MeshPaintResources::prepare(const ExtractedModel& model,ResourcePriority priority){EntityRecord record;record.id=model.id;record.model=AssetRef<ModelAsset>{model.assetId};record.primitive=model.primitive;record.modelMaterials=model.materialOverrides;record.modelAnimation=model.animation;record.modelRagdoll=model.ragdoll;record.meshPaint=model.meshPaint;record.meshShading=model.meshShading;return prepare(record,priority);}
 VertexPaintTargets MeshPaintResources::targets(const SceneDocument& document,EntityId entity){CRIMSON_PROFILE_ZONE("Vertex paint selected draw preparation");VertexPaintTargets out;const auto record=document.scene().find(entity);const auto world=document.scene().worldTransform(entity);if(!record||!world||!document.scene().isVisible(entity)){out.diagnostic="Select a visible rigid mesh.";return out;}
     const auto prepared=prepare(*record,ResourcePriority::Selected);out.diagnostic=prepared.diagnostic;if(!prepared.ready||!out.diagnostic.empty())return out;
     try{const auto materials=assets_.resolvedModelMaterials(*prepared.asset,record->modelMaterials);for(const auto& draw:prepared.draws){const auto& p=prepared.asset->primitives[draw.primitive];if(p.material>=materials.size()||!materials[p.material].graph)continue;const auto& output=materialOutputNode(*materials[p.material].graph).output;

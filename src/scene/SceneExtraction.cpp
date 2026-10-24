@@ -167,7 +167,7 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
             }
             if(record->decal) {
                 auto bounds=decalBounds?decalBounds(id):std::nullopt;
-                if(!bounds||!bounds->valid||!math::finite(bounds->minimum)||!math::finite(bounds->maximum))bounds=math::transformBounds(Aabb{{-.5f,-.5f,0},{.5f,.5f,0},true},*world);
+                if(!bounds||!bounds->valid||!math::finite(bounds->minimum)||!math::finite(bounds->maximum))bounds=math::transformBounds(Aabb{{-.5f,-.5f,record->decal->projection==SceneDecalProjection::Box?-.5f:0.f},{.5f,.5f,record->decal->projection==SceneDecalProjection::Box?.5f:0.f},true},*world);
                 math::include(result,*bounds);hasBounds=true;
             }
             if (!hasBounds || record->directional || record->point) {
@@ -216,7 +216,7 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
             if(record->decal) {
                 const auto bounds=decalBounds?decalBounds(id):std::nullopt;
                 if(bounds&&usable(*bounds)&&inverse)math::include(visuals,math::transformBounds(*bounds,*inverse));
-                else math::include(visuals,math::transformBounds(Aabb{{-.5f,-.5f,0},{.5f,.5f,0},true},local));
+                else math::include(visuals,math::transformBounds(Aabb{{-.5f,-.5f,record->decal->projection==SceneDecalProjection::Box?-.5f:0.f},{.5f,.5f,record->decal->projection==SceneDecalProjection::Box?.5f:0.f},true},local));
             }
         }
         // Do not load collision geometry or inflate an ordinary mesh outline

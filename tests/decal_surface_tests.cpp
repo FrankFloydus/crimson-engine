@@ -6,6 +6,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <chrono>
+#include <unordered_map>
 namespace {
 using namespace crimson;using namespace crimson::decals;
 void require(bool ok,const std::string&m){if(!ok)throw std::runtime_error(m);}
@@ -13,7 +14,7 @@ SurfaceReceiver quad(uint64_t id,Vec3 a,Vec3 b,Vec3 c,Vec3 d){SurfaceReceiver r;
 DecalBuildRequest request(uint64_t id=1){DecalBuildRequest r;r.seed={{id,0,0},0,{.5f,0,.5f}};return r;}
 DecalPatch build(const DecalSurfaceSnapshot&s,const DecalBuildRequest&r,const char*name){auto out=buildDecalPatch(s,r);std::cout<<name<<": "<<decalPatchStatusName(out.status)<<", "<<out.message<<", triangles="<<out.statistics.analysisTriangles<<"/"<<out.statistics.outputTriangles<<", stretch="<<out.statistics.maximumStretch<<", ms="<<out.statistics.topologyMilliseconds+out.statistics.solveMilliseconds<<'\n';return out;}
 void provenance(const DecalSurfaceSnapshot&s,const DecalPatch&p){
-    for(const auto&c:p.chunks){const SurfaceReceiver*rec=nullptr;for(const auto&r:s.receivers)if(r.id==c.receiver)rec=&r;require(rec&&rec->generation==c.generation,"Receiver provenance/generation lost");for(const auto&v:c.vertices){const SurfaceTriangle*t=nullptr;for(const auto&tri:rec->triangles)if(tri.triangle==v.sourceTriangle)t=&tri;require(t,"Source triangle lost");Vec3 local{};for(size_t i=0;i<3;++i)for(size_t k=0;k<3;++k)local[k]+=t->positions[i][k]*v.barycentrics[i];for(size_t k=0;k<3;++k){double expected=rec->localToWorld.at(k,3);for(size_t j=0;j<3;++j)expected+=rec->localToWorld.at(k,j)*local[j];require(std::abs(expected-v.position[k])<2e-5,"Output not exactly on its source triangle");}require(v.uv[0]>=0&&v.uv[0]<=1&&v.uv[1]>=0&&v.uv[1]<=1,"UV outside clipped footprint");}}
+    for(const auto&c:p.chunks){const SurfaceReceiver*rec=nullptr;for(const auto&r:s.receivers)if(r.id==c.receiver)rec=&r;require(rec&&rec->generation==c.generation,"Receiver provenance/generation lost");std::unordered_map<uint32_t,const SurfaceTriangle*> sources;for(const auto&triangle:rec->triangles)sources.emplace(triangle.triangle,&triangle);for(const auto&v:c.vertices){const auto found=sources.find(v.sourceTriangle);require(found!=sources.end(),"Source triangle lost");const auto*t=found->second;Vec3 local{};for(size_t i=0;i<3;++i)for(size_t k=0;k<3;++k)local[k]+=t->positions[i][k]*v.barycentrics[i];for(size_t k=0;k<3;++k){double expected=rec->localToWorld.at(k,3);for(size_t j=0;j<3;++j)expected+=rec->localToWorld.at(k,j)*local[j];require(std::abs(expected-v.position[k])<2e-5,"Output not exactly on its source triangle");}require(v.uv[0]>=0&&v.uv[0]<=1&&v.uv[1]>=0&&v.uv[1]<=1,"UV outside clipped footprint");}}
 }
 void planeAndAffine(){
     DecalSurfaceSnapshot s{{quad(1,{-10,-10,0},{10,-10,0},{10,10,0},{-10,10,0})}};auto r=request();auto p=build(s,r,"coarse plane");require(p.usable(),p.message);require(p.status==DecalPatchStatus::Ready,"Interior plane was incomplete");provenance(s,p);
@@ -84,7 +85,7 @@ DecalBuildRequest cornerRequest(){auto r=request();r.seed.triangle=0;r.seed.bary
 void seams(){
     auto s=corner();auto r=cornerRequest();auto p=build(s,r,"separate mesh 90deg corner");require(p.usable(),p.message);require(p.chunks.size()==2,"90-degree corner did not reach second mesh");provenance(s,p);double worst=0;for(const auto&c:p.chunks)for(const auto&v:c.vertices){const double unrolled=c.receiver.entity==1?v.position[0]:v.position[2];worst=std::max(worst,std::abs(v.uv[0]-(.7+unrolled)));}require(worst<.02,"Corner wrap streaked or changed metre scale");
     auto partial=corner(-.37f,.47f);auto pp=build(partial,r,"partial mismatched edges");require(pp.usable()&&pp.chunks.size()==2,"Partial edge contact was not split/joined");provenance(partial,pp);
-    auto gap=corner(-1,1,.01f);auto gp=build(gap,r,"open gap");require(gp.usable()&&gp.chunks.size()==1,"Surface chart jumped an open gap");
+    auto gap=corner(-1,1,.01f);auto gp=build(gap,r,"open gap");require(gp.status==DecalPatchStatus::Incomplete&&gp.chunks.size()==1,"Surface chart jumped an open gap or called its clipped image complete");
     DecalSurfaceSnapshot t{{quad(1,{-1,-1,0},{0,-1,0},{0,1,0},{-1,1,0}),quad(2,{0,-1,0},{1,-1,0},{1,.17f,0},{0,.17f,0}),quad(3,{0,.17f,0},{1,.17f,0},{1,1,0},{0,1,0})}};auto tp=build(t,r,"coplanar T junction");require(tp.usable()&&tp.chunks.size()==3,"Two-sheet T topology did not connect all three separate meshes");provenance(t,tp);
     auto three=corner();three.receivers[0]=quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0});r=request();r.seed.triangle=1;r.seed.barycentrics={.5f,.4f,.1f};auto amb=build(three,r,"three-sheet wall T");require(amb.usable()&&amb.status==DecalPatchStatus::Incomplete,"Ambiguous three-sheet contact not diagnosed");require(amb.chunks.size()==1,"Ambiguous contact crossed onto another sheet");
 }
@@ -100,11 +101,51 @@ void boundedConnectedPreparation(){
     // analysis halo. Their finite barriers remain real; extending every cut
     // across the coarse wall used to create a quadratic arrangement and fail.
     surface.receivers.resize(1);nearby.triangles.clear();for(unsigned y=0;y<20;++y)for(unsigned x=0;x<20;++x){const float a=.8f+x*.02f,b=-.8f+y*.08f;auto cell=quad(2,{a,b,-.1f},{a,b+.025f,-.1f},{a,b+.025f,.1f},{a,b,.1f});for(auto triangle:cell.triangles){triangle.triangle=static_cast<uint32_t>(nearby.triangles.size());nearby.triangles.push_back(triangle);}}
-    surface.receivers.push_back(nearby);r=request();const auto contacts=build(surface,r,"finite contacts beside image stay local");require(contacts.usable()&&contacts.chunks.size()==1&&uvArea(contacts)>.999,"Short neighboring contacts destroyed an interior plane footprint: "+contacts.message);provenance(surface,contacts);
+    surface.receivers.push_back(nearby);r=request();const auto contacts=build(surface,r,"finite contacts beside image stay local");require(contacts.status==DecalPatchStatus::Ready&&contacts.chunks.size()==1&&uvArea(contacts)>.999,"Outside-image contact barriers changed a fully covered image: "+contacts.message);provenance(surface,contacts);
     // A terminating foreign sheet is still a barrier even though its interior
     // cannot join the seed's boundary graph. Do not regain coverage by simply
     // deleting the third branch from topology preparation.
     surface={{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0}),quad(2,{0,-.2f,0},{0,.2f,0},{0,.2f,1},{0,-.2f,1})}};r=request();r.seed.triangle=1;r.seed.barycentrics={.5f,.4f,.1f};const auto barrier=build(surface,r,"finite interior branch remains a barrier");require(barrier.usable()&&barrier.status==DecalPatchStatus::Incomplete&&barrier.chunks.size()==1,"Excluded branch lost its finite ambiguity barrier");provenance(surface,barrier);
+}
+void denseSourceAndFootprintBudgets(){
+    // Imported dense planar meshes need the same treatment as paint-derived
+    // ones. More than 16k original triangles lie in the analysis halo, while
+    // the actual image needs only 8k. Do not spend its output cap on the halo.
+    SurfaceReceiver receiver;receiver.id.entity=1;receiver.generation=1;
+    constexpr unsigned side=96;
+    for(unsigned y=0;y<side;++y)for(unsigned x=0;x<side;++x){
+        const float a=-3.f+x*.0625f,b=-3.f+y*.0625f;
+        const auto cell=quad(1,{a,b,0},{a+.0625f,b,0},{a+.0625f,b+.0625f,0},{a,b+.0625f,0});
+        for(auto triangle:cell.triangles){triangle.triangle=static_cast<uint32_t>(receiver.triangles.size());receiver.triangles.push_back(triangle);}
+    }
+    DecalSurfaceSnapshot surface{{receiver}};auto r=request();r.seed.triangle=2*((side/2)*side+side/2);r.seed.barycentrics={1,0,0};
+    for(const float size:{.125f,1.f,4.f}){
+        r.frame=math::scaling({size,size,1});const auto patch=build(surface,r,"dense 96x96 plane resized footprint");
+        require(patch.status==DecalPatchStatus::Ready&&patch.statistics.usedDevelopableUnfolding&&uvArea(patch)>.999,"Dense planar source spent the final-image budget before clipping: "+patch.message);
+        require(patch.statistics.outputTriangles<=r.limits.maximumTriangles,"Dense planar source bypassed the final output limit");
+        if(size==4)require(patch.statistics.inputTriangles>r.limits.maximumTriangles,"Dense source proof did not exceed the old preparation limit");
+        provenance(surface,patch);
+    }
+    // A wall normal to X must not degenerate the original contact sweep into
+    // an all-pairs scan merely because every source AABB has the same X.
+    const auto wall=math::eulerRotationXYZ({0,1.5707963267948966f,0});surface.receivers[0].localToWorld=wall;r.frame=wall*math::scaling({4,4,1});
+    const auto wallPatch=build(surface,r,"dense 96x96 perpendicular wall");require(wallPatch.status==DecalPatchStatus::Ready&&uvArea(wallPatch)>.999,"Dense perpendicular source lost valid coverage: "+wallPatch.message);provenance(surface,wallPatch);
+    // Exact provenance still bounds final publication. An image covering all
+    // 18,432 source triangles must fail explicitly rather than truncate them.
+    surface.receivers[0].localToWorld=Mat4{};r.frame=math::scaling({6,6,1});const auto oversized=build(surface,r,"dense final output remains bounded");
+    require(oversized.status==DecalPatchStatus::LimitExceeded&&oversized.message=="Output triangle budget exceeded.","Dense final output did not retain its explicit publication cap");
+    r.limits.maximumTriangles=32768;const auto allowed=build(surface,r,"dense exact publication with explicit allowance");
+    require(allowed.status==DecalPatchStatus::Ready&&allowed.statistics.outputTriangles>=receiver.triangles.size()&&uvArea(allowed)>.999,"An explicitly sufficient bounded publication allowance failed: "+allowed.message);provenance(surface,allowed);
+}
+void narrowFootprints(){
+    DecalSurfaceSnapshot surface{{quad(1,{-200,-200,0},{200,-200,0},{200,200,0},{-200,200,0})}};
+    auto r=request();
+    for(const float width:{32.f,256.f}){
+        r.frame=math::scaling({width,1,1});const auto patch=build(surface,r,"long narrow exact plane footprint");
+        require(patch.status==DecalPatchStatus::Ready&&patch.statistics.usedDevelopableUnfolding&&uvArea(patch)>.999,"Automatic sampling rejected a valid aspect ratio: "+patch.message);provenance(surface,patch);
+    }
+    r.limits.sampleSpacing=.125;const auto tooFine=buildDecalPatch(surface,r);
+    require(tooFine.status==DecalPatchStatus::LimitExceeded&&tooFine.message=="Sampling extent exceeds the bounded grid budget.","Explicit excessive sampling silently changed its requested spacing");
 }
 void curved(){
     DecalSurfaceSnapshot s;SurfaceReceiver receiver;receiver.id.entity=1;receiver.generation=1;constexpr int count=24;for(int i=0;i<count;++i){double aa=-1.2+i*.1,bb=aa+.1;auto p=[](double t,float y){return Vec3{std::sin(t),y,1-std::cos(t)};};auto q=quad(1,p(aa,-1),p(bb,-1),p(bb,1),p(aa,1));for(auto&t:q.triangles){t.triangle=static_cast<uint32_t>(receiver.triangles.size());receiver.triangles.push_back(t);}}s.receivers.push_back(receiver);auto r=request();r.seed.triangle=25;r.seed.barycentrics={.5f,0,.5f};r.frame.at(0,0)=1.2f;r.frame.at(1,1)=.8f;auto p=build(s,r,"cylindrical surface");require(p.usable(),p.message);provenance(s,p);for(const auto&c:p.chunks)for(const auto&v:c.vertices){double angle=std::atan2(v.position[0],1-v.position[2]);require(std::abs(v.uv[0]-(.5+angle/1.2))<.025,"Curved wrap did not follow surface distance");}
@@ -146,4 +187,4 @@ void closedBuiltinCylinder(){
 }
 void failures(){DecalSurfaceSnapshot s{{quad(1,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0})}};auto r=request();std::stop_source stop;stop.request_stop();require(buildDecalPatch(s,r,stop.get_token()).status==DecalPatchStatus::Cancelled,"Cancellation ignored");r.limits.maximumTriangles=5;require(buildDecalPatch(s,r).status==DecalPatchStatus::LimitExceeded,"Geometry cap silently truncated");r=request();r.frame.at(0,0)=0;require(buildDecalPatch(s,r).status==DecalPatchStatus::InvalidInput,"Singular frame accepted");r=request();r.seed.receiver.entity=99;require(buildDecalPatch(s,r).status==DecalPatchStatus::MissingSeed,"Missing seed invented surface");}
 }
-int main(){try{test::runPolygonProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}
+int main(){try{test::runPolygonProofs();planeAndAffine();imageOrientation();translatedPlanePrecision();resizedArch();localDevelopableFootprint();seams();boundedConnectedPreparation();denseSourceAndFootprintBudgets();narrowFootprints();curved();nondevelopable();closedBuiltinCylinder();failures();std::cout<<"All decal CPU surface proofs passed\n";return 0;}catch(const std::exception&e){std::cerr<<"DECAL PROOF FAILED: "<<e.what()<<'\n';return 1;}}

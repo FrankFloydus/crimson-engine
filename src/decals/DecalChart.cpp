@@ -117,9 +117,11 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     const double dx=dot(direction,a.basisX),dy=dot(direction,a.basisY),rx=dx*h.x+dy*h.y,ry=dy*h.x-dx*h.y;const gc::Vector2 origin=chart[seed];
     for(gs::Vertex v:intrinsic.intrinsicMesh->vertices()){gc::Vector2 p=chart[v]-origin;chart[v]={rx*p.x-ry*p.y,ry*p.x+rx*p.y};}
     auto&common=intrinsic.getCommonSubdivision();common.constructMesh(true);cancelled(stop);
-    if(common.mesh->nFaces()>static_cast<size_t>(r.limits.maximumTriangles)*4)throw Failure(DecalPatchStatus::LimitExceeded,"Intrinsic common-subdivision budget exceeded.");
+    // Original input boundaries and the analysis halo are not final output.
+    // Keep the solver's temporary transfer bounded independently of clipping.
+    const size_t commonLimit=static_cast<size_t>(std::min<uint64_t>(1'000'000,std::max<uint64_t>(uint64_t(r.limits.maximumTriangles)*4,uint64_t(a.faces.size())*4)));
+    if(common.mesh->nFaces()>commonLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Intrinsic common-subdivision budget exceeded.");
     auto commonChart=common.interpolateAcrossB(chart);auto commonPosition=common.interpolateAcrossA(positions);
-    auto restricted=intrinsic.restrictToInput(chart);inputChart.resize(a.positions.size());for(gs::Vertex v:mesh.vertices())inputChart[v.getIndex()]={restricted[v].x,restricted[v].y};
     for(gs::Face f:common.mesh->faces()){ChartTriangle t{};t.sourceFace=common.sourceFaceA[f].getIndex();size_t i=0;for(gs::Vertex v:f.adjacentVertices()){if(i>=3)throw Failure(DecalPatchStatus::InvalidChart,"Common subdivision did not triangulate.");auto p=commonPosition[v];auto c=commonChart[v];t.positions[i]={p.x,p.y,p.z};t.vertices[i]=v.getIndex();t.metres[i++]={c.x,c.y};}if(i==3)triangles.push_back(t);}
     }
     // Chart metres retain the oriented surface basis. Raster V runs downward,
@@ -138,16 +140,6 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     };
     struct OutputRef{size_t chunk,index;std::array<D3,3>positions;std::array<VertexKey,3>vertices;};
     std::map<size_t,size_t>chunks;std::vector<UvTriangle>uvTriangles;std::vector<OutputRef>outputRefs;
-    bool incomplete=a.incomplete;
-    // Surface boundaries inside the intended image mean a deliberately clipped footprint.
-    if(out.statistics.usedDevelopableUnfolding){
-        std::map<std::pair<size_t,size_t>,size_t>edgeUses;
-        for(size_t i=0;i<a.faces.size();++i)if(developedFaces[i])for(size_t j=0;j<3;++j){const auto&v=a.faces[i].v;++edgeUses[std::minmax(v[j],v[(j+1)%3])];}
-        for(const auto&[edge,uses]:edgeUses)if(uses==1&&intersectsFootprintInterior(uv(inputChart[edge.first]),uv(inputChart[edge.second])))incomplete=true;
-    }else for(gs::Edge e:mesh.edges())if(e.isBoundary()){
-        auto he=e.halfedge();D2 x=uv(inputChart[he.tailVertex().getIndex()]),y=uv(inputChart[he.tipVertex().getIndex()]);
-        if(intersectsFootprintInterior(x,y))incomplete=true;
-    }
     for(size_t faceIndex=0;faceIndex<triangles.size();++faceIndex){const auto&f=triangles[faceIndex];
         cancelled(stop);const size_t sourceFace=f.sourceFace;if(sourceFace>=a.faces.size())throw Failure(DecalPatchStatus::InvalidChart,"Common subdivision lost source provenance.");
         // The working halo is a numerical boundary condition, never a donor
@@ -162,9 +154,9 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
         if(poly.size()<3)continue;
         const double chartArea=cross2(metres[1]-metres[0],metres[2]-metres[0]);const double surfaceParity=dot(cross(original[1].p-original[0].p,original[2].p-original[0].p),s.geometricNormal);
         if(std::abs(surfaceParity)<a.scale*a.scale*1e-13)continue;
-        if(chartArea*surfaceParity<=0){incomplete=true;continue;}
+        if(chartArea*surfaceParity<=0)continue;
         const double distortion=stretch(original[1].p-original[0].p,original[2].p-original[0].p,metres[1]-metres[0],metres[2]-metres[0]);
-        if(!std::isfinite(distortion)||distortion>r.limits.maximumStretch+1e-6){incomplete=true;continue;}
+        if(!std::isfinite(distortion)||distortion>r.limits.maximumStretch+1e-6)continue;
         out.statistics.maximumStretch=std::max(out.statistics.maximumStretch,distortion);
         auto[it,inserted]=chunks.try_emplace(s.receiver,out.chunks.size());if(inserted)out.chunks.push_back({receiver.id,receiver.generation,{},{}});auto&chunk=out.chunks[it->second];
         for(size_t j=1;j+1<poly.size();++j){std::array<Point,3>tri{poly[0],poly[j],poly[j+1]};if(std::abs(cross2(tri[1].uv-tri[0].uv,tri[2].uv-tri[0].uv))<1e-14)continue;UvTriangle uvtri{{tri[0].uv,tri[1].uv,tri[2].uv}};uvTriangles.push_back(uvtri);outputRefs.push_back({it->second,chunk.indices.size(),{}, {}});
@@ -174,12 +166,13 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     }
     // Validate global chart injectivity on the bounded output, using a sweep to
     // avoid comparing spatially disjoint UV triangles.
+    struct UvBounds{D2 lo,hi;};std::vector<UvBounds>uvBounds;uvBounds.reserve(uvTriangles.size());
+    for(const auto&t:uvTriangles)uvBounds.push_back({{std::min({t.p[0].x,t.p[1].x,t.p[2].x}),std::min({t.p[0].y,t.p[1].y,t.p[2].y})},{std::max({t.p[0].x,t.p[1].x,t.p[2].x}),std::max({t.p[0].y,t.p[1].y,t.p[2].y})}});
     std::vector<size_t>order(uvTriangles.size());for(size_t i=0;i<order.size();++i)order[i]=i;
-    const auto minx=[&](size_t i){const auto&t=uvTriangles[i];return std::min({t.p[0].x,t.p[1].x,t.p[2].x});};const auto maxx=[&](size_t i){const auto&t=uvTriangles[i];return std::max({t.p[0].x,t.p[1].x,t.p[2].x});};
-    std::stable_sort(order.begin(),order.end(),[&](size_t x,size_t y){return minx(x)<minx(y);});
+    std::stable_sort(order.begin(),order.end(),[&](size_t x,size_t y){return uvBounds[x].lo.x<uvBounds[y].lo.x;});
     const auto positionsOf=[&](size_t triangle)->const std::array<D3,3>&{return outputRefs[triangle].positions;};
     std::vector<bool>valid(uvTriangles.size(),true);std::vector<double>sourceDistances;sourceDistances.reserve(uvTriangles.size());for(size_t i=0;i<uvTriangles.size();++i)sourceDistances.push_back(triangleDistance(a.seedPosition,positionsOf(i)));
-    size_t comparisons=0;for(size_t i=0;i<order.size();++i)for(size_t j=i+1;j<order.size()&&minx(order[j])<=maxx(order[i])+1e-12;++j){cancelled(stop);if(++comparisons>4000000)throw Failure(DecalPatchStatus::LimitExceeded,"Chart overlap-validation budget exceeded.");const auto x=order[i],y=order[j];if(!valid[x]||!valid[y])continue;if(overlapArea(uvTriangles[x],uvTriangles[y])>1e-10){valid[sourceDistances[x]<=sourceDistances[y]?y:x]=false;incomplete=true;}}
+    size_t comparisons=0;for(size_t i=0;i<order.size();++i)for(size_t j=i+1;j<order.size()&&uvBounds[order[j]].lo.x<=uvBounds[order[i]].hi.x+1e-12;++j){cancelled(stop);const auto x=order[i],y=order[j];if(!valid[x]||!valid[y]||uvBounds[x].lo.y>uvBounds[y].hi.y+1e-12||uvBounds[y].lo.y>uvBounds[x].hi.y+1e-12)continue;if(++comparisons>4000000)throw Failure(DecalPatchStatus::LimitExceeded,"Chart overlap-validation budget exceeded.");if(overlapArea(uvTriangles[x],uvTriangles[y])>1e-10)valid[sourceDistances[x]<=sourceDistances[y]?y:x]=false;}
     // Validation failures are chart boundaries. Retain only the valid portion
     // reached from the actual seed through proven chart edges. Carry their
     // topology through UV clipping: a spatial weld can collapse thin valid
@@ -193,8 +186,21 @@ void buildChart(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,co
     if(seedTriangle==SIZE_MAX||seedDistance>std::max(a.scale*1e-5,1e-5))throw Failure(DecalPatchStatus::InvalidChart,"Surface chart has no valid seed-connected footprint.");
     std::vector<std::vector<size_t>>adjacent(uvTriangles.size());for(const auto&[edge,uses]:edges){(void)edge;if(uses.size()==2&&uses[0].forward!=uses[1].forward){adjacent[uses[0].triangle].push_back(uses[1].triangle);adjacent[uses[1].triangle].push_back(uses[0].triangle);}}
     std::vector<bool>retained(uvTriangles.size());std::queue<size_t>pending;pending.push(seedTriangle);retained[seedTriangle]=true;while(!pending.empty()){cancelled(stop);const auto f=pending.front();pending.pop();for(size_t next:adjacent[f])if(valid[next]&&!retained[next]){retained[next]=true;pending.push(next);}}
+    // Completeness belongs to the validated image, not its preparation halo.
+    // Contacts, cut loci and rejected components outside the image can make
+    // analysis incomplete while leaving every image pixel covered. Conversely,
+    // an actual gap/barrier/distortion cut leaves a proven output boundary in
+    // the rectangle's interior. Use connectivity, never area alone, to tell.
+    bool incomplete=false;
+    for(const auto&[edge,uses]:edges){
+        std::array<EdgeUse,2> kept{};size_t count=0;for(const auto& use:uses)if(retained[use.triangle]){if(count<kept.size())kept[count]=use;++count;}
+        if(!count||(count==2&&kept[0].forward!=kept[1].forward))continue;
+        if(count!=1){incomplete=true;continue;}
+        const size_t triangle=kept[0].triangle;
+        for(size_t corner=0;corner<3;++corner){const auto first=node(outputRefs[triangle].vertices[corner]),last=node(outputRefs[triangle].vertices[(corner+1)%3]);if(std::min(first,last)==edge.first&&std::max(first,last)==edge.second&&intersectsFootprintInterior(uvTriangles[triangle].p[corner],uvTriangles[triangle].p[(corner+1)%3]))incomplete=true;}
+    }
     auto previous=std::move(out.chunks);out.chunks.clear();out.chunks.resize(previous.size());for(size_t i=0;i<previous.size();++i){out.chunks[i].receiver=previous[i].receiver;out.chunks[i].generation=previous[i].generation;}out.statistics.outputTriangles=0;
-    for(size_t i=0;i<retained.size();++i){if(!retained[i]){incomplete=true;continue;}const auto ref=outputRefs[i];auto&chunk=out.chunks[ref.chunk];for(size_t j=0;j<3;++j){chunk.indices.push_back(static_cast<uint32_t>(chunk.vertices.size()));chunk.vertices.push_back(previous[ref.chunk].vertices[previous[ref.chunk].indices[ref.index+j]]);}++out.statistics.outputTriangles;}
+    for(size_t i=0;i<retained.size();++i){if(!retained[i])continue;const auto ref=outputRefs[i];auto&chunk=out.chunks[ref.chunk];for(size_t j=0;j<3;++j){chunk.indices.push_back(static_cast<uint32_t>(chunk.vertices.size()));chunk.vertices.push_back(previous[ref.chunk].vertices[previous[ref.chunk].indices[ref.index+j]]);}++out.statistics.outputTriangles;}
     std::erase_if(out.chunks,[](const auto&chunk){return chunk.indices.empty();});
     if(out.statistics.outputTriangles==0)throw Failure(DecalPatchStatus::InvalidChart,"Footprint has no valid receiver triangles.");
     out.status=incomplete?DecalPatchStatus::Incomplete:DecalPatchStatus::Ready;out.message=decalPatchStatusName(out.status);out.statistics.solveMilliseconds=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();

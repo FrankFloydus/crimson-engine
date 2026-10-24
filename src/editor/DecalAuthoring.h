@@ -8,7 +8,7 @@ namespace crimson {
 // editing basis while its original geometry is still being prepared.
 inline std::optional<Mat4> decalEditFrame(const Scene& scene,EntityId id,std::optional<Mat4> resolved={}) {
     const auto entity=scene.find(id);const auto world=scene.worldTransform(id);
-    if(!entity||!entity->decal||!world)return {};
+    if(!entity||!entity->decal||entity->decal->projection==SceneDecalProjection::Box||!world)return {};
     Vec3 normal{};
     if(resolved)normal=math::transformDirection(*resolved,{0,0,1});
     else if(const auto receiver=scene.worldTransform(entity->decal->seed.receiver)) {

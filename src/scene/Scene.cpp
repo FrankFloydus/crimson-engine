@@ -327,6 +327,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         }
         if(record.decal) {
             const auto& decal=*record.decal;const auto& seed=decal.seed;
+            if(decal.projection!=SceneDecalProjection::Surface&&decal.projection!=SceneDecalProjection::Box)throw std::runtime_error("Invalid decal projection.");
             if(!decal.asset.empty()&&(!isAssetUuid(decal.asset.id)||isEngineAssetId(decal.asset.id)))throw std::runtime_error("Decal reference requires a writable managed decal UUID.");
             if(!seed.modelId.empty()&&!isAssetUuid(seed.modelId))throw std::runtime_error("Decal seed geometry requires a managed model UUID.");
             if(!math::finite(seed.barycentric)||!math::finite(seed.localPoint)||!math::finite(seed.localNormal)||math::length(seed.localNormal)<1e-8)

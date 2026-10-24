@@ -20,6 +20,26 @@ struct Project {
     ~Project(){std::error_code error;const auto owner=fs::weakly_canonical(fs::temp_directory_path(),error),target=fs::weakly_canonical(root,error);
         if(!error&&target.parent_path()==owner&&target.filename().string().starts_with("crimson-decal-spatial-"))fs::remove_all(target,error);}
 };
+void boxBypassesSurfacePreparation(){
+    Project project;const auto asset=createDecalAsset(project.root,"Box material pending");
+    ResourceManager resources;AssetLibrary assets(project.root,&resources);DecalResources decals(assets,resources);
+    SceneDocument document(project.root);const auto receiver=document.createBox("Receiver");
+    const auto box=document.createBoxDecal();auto record=*document.scene().find(box);record.decal->asset.id=asset.id;
+    record.local=math::translation({0,.5f,0})*math::scaling({4,3,.2f});check(document.updateEntity(box,record),document.status());
+    for(unsigned retry=0;retry<20;++retry){
+        resources.pump();assets.updateResources(0);
+        const auto prepared=decals.prepare(document.scene(),extractScene(document.scene()));
+        check(prepared.receivers.empty()&&!decals.patch(box)&&!decals.surfaceFrame(box),"Box preparation acquired a frozen surface or original-LOD dependency.");
+    }
+    const auto initial=decals.stats();check(initial.spatialPreparations==0&&initial.seedQueries==0,"Box material readiness retries ran surface discovery or seed queries.");
+    const auto previous=record.local;record.local=math::scaling({2,1,1})*record.local;
+    check(document.updateEntity(box,record)&&document.undo(),document.status());
+    check(document.scene().find(box)->local==previous&&!document.transactionActive(),"Box edit held commands or lost exact undo.");
+    auto receiverRecord=*document.scene().find(receiver);receiverRecord.receiveDecals=false;check(document.updateEntity(receiver,receiverRecord),document.status());
+    decals.prepare(document.scene(),extractScene(document.scene()));
+    check(decals.stats().spatialPreparations==0&&decals.stats().seedQueries==0,"Receiver changes sent a box through the conforming solver.");
+    resources.stop();
+}
 void exercise(){
     Project project;
     const auto material=createMaterialAsset(project.root,"Receiver");
@@ -104,4 +124,4 @@ void exercise(){
     resources.stop();
 }
 }
-int main(){try{exercise();return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{boxBypassesSurfacePreparation();exercise();return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

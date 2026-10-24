@@ -5,7 +5,6 @@
 #include <map>
 #include <numeric>
 #include <queue>
-#include <set>
 #include <tuple>
 namespace crimson::decals::detail {
 namespace {
@@ -26,6 +25,14 @@ struct Box {D3 lo,hi;};
 Box bounds(const Source&s){Box b{s.p[0],s.p[0]};for(D3 p:s.p){b.lo={std::min(b.lo.x,p.x),std::min(b.lo.y,p.y),std::min(b.lo.z,p.z)};b.hi={std::max(b.hi.x,p.x),std::max(b.hi.y,p.y),std::max(b.hi.z,p.z)};}return b;}
 Box bounds(const Polygon&p){Box b{p.front(),p.front()};for(D3 v:p){b.lo={std::min(b.lo.x,v.x),std::min(b.lo.y,v.y),std::min(b.lo.z,v.z)};b.hi={std::max(b.hi.x,v.x),std::max(b.hi.y,v.y),std::max(b.hi.z,v.z)};}return b;}
 bool overlaps(const Box&a,const Box&b,double e){for(size_t k=0;k<3;++k)if(a.lo[k]>b.hi[k]+e||b.lo[k]>a.hi[k]+e)return false;return true;}
+double triangleDistance(D3 p,const Source& s){
+    const D3 n=unit(cross(s.p[1]-s.p[0],s.p[2]-s.p[0]));
+    const double height=dot(p-s.p[0],n);const D3 projected=p-n*height,b=barycentric(s,projected);
+    if(std::min({b.x,b.y,b.z})>=0)return std::abs(height);
+    double nearest=INFINITY;
+    for(size_t i=0;i<3;++i){const D3 edge=s.p[(i+1)%3]-s.p[i];const double along=std::clamp(dot(p-s.p[i],edge)/dot(edge,edge),0.,1.);nearest=std::min(nearest,length(p-s.p[i]-edge*along));}
+    return nearest;
+}
 struct Cut {Plane plane;Box support;};
 struct Segment {D3 a,b;};
 void addPlane(std::vector<Cut>&v,D3 n,D3 p,const Box&support){if(length(n)>1e-15){n=unit(n);v.push_back({{n,dot(n,p)},support});}}
@@ -64,7 +71,7 @@ struct EdgeUse {size_t face{},corner{};};
 }
 AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuildRequest&r,DecalBuildStatistics&stats,std::stop_token stop){
     const auto started=std::chrono::steady_clock::now();AnalysisPatch patch;
-    if(r.limits.maximumTriangles<4||r.limits.maximumInputTriangles<1||!std::isfinite(r.limits.maximumStretch)||r.limits.maximumStretch<1)throw Failure(DecalPatchStatus::InvalidInput,"Invalid surface preparation limits.");
+    if(r.limits.maximumTriangles<4||r.limits.maximumTriangles>1'000'000||r.limits.maximumInputTriangles<1||r.limits.maximumInputTriangles>1'000'000||!std::isfinite(r.limits.maximumStretch)||r.limits.maximumStretch<1)throw Failure(DecalPatchStatus::InvalidInput,"Invalid surface preparation limits.");
     for(float f:r.frame)if(!std::isfinite(f))throw Failure(DecalPatchStatus::InvalidInput,"Footprint frame is nonfinite.");
     if(std::abs(r.frame.at(3,0))+std::abs(r.frame.at(3,1))+std::abs(r.frame.at(3,2))+std::abs(r.frame.at(3,3)-1)>1e-6)throw Failure(DecalPatchStatus::InvalidInput,"Footprint frame must be affine.");
     const SurfaceReceiver*seedReceiver=nullptr;const SurfaceTriangle*seedTriangle=nullptr;
@@ -77,25 +84,39 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
     const D3 fx=column(r.frame,0),fy=column(r.frame,1),px=fx-patch.seedNormal*dot(fx,patch.seedNormal),py=fy-patch.seedNormal*dot(fy,patch.seedNormal);
     patch.basisX=unit(px);patch.basisY=cross(patch.seedNormal,patch.basisX);patch.ax=dot(px,patch.basisX);patch.ay=dot(px,patch.basisY);patch.bx=dot(py,patch.basisX);patch.by=dot(py,patch.basisY);patch.frameDet=patch.ax*patch.by-patch.ay*patch.bx;patch.scale=std::min(length(px),length(py));
     if(!finite(patch.seedNormal)||length(patch.seedNormal)<.5||patch.scale<1e-6||std::abs(patch.frameDet)<1e-10*length(px)*length(py))throw Failure(DecalPatchStatus::InvalidInput,"Footprint has a singular surface frame.");
-    const double tol=r.limits.seamTolerance>0?r.limits.seamTolerance:std::min(.001,.001*patch.scale),spacing=r.limits.sampleSpacing>0?r.limits.sampleSpacing:patch.scale/8;
-    if(!std::isfinite(tol)||!std::isfinite(spacing)||tol<=0||spacing<=tol*4)throw Failure(DecalPatchStatus::InvalidInput,"Invalid sampling or seam tolerance.");patch.tolerance=tol;
     const double radius=.5*std::max(length(px+py),length(px-py))*r.limits.maximumStretch+patch.scale*.5;
+    // Automatic numerical refinement must remain bounded for long, narrow
+    // footprints too. Exact source triangles and finite contacts are retained;
+    // this spacing adds samples, it never simplifies the receiving surface.
+    const double tol=r.limits.seamTolerance>0?r.limits.seamTolerance:std::min(.001,.001*patch.scale),spacing=r.limits.sampleSpacing>0?r.limits.sampleSpacing:std::max(patch.scale/8,radius/64);
+    if(!std::isfinite(tol)||!std::isfinite(spacing)||tol<=0||spacing<=tol*4)throw Failure(DecalPatchStatus::InvalidInput,"Invalid sampling or seam tolerance.");patch.tolerance=tol;
     if(radius/spacing>128)throw Failure(DecalPatchStatus::LimitExceeded,"Sampling extent exceeds the bounded grid budget.");
+    const double intrinsicRadius=.5*std::max(length(px+py),length(px-py))*r.limits.maximumStretch+2*spacing;
     const D3 o=patch.seedPosition;const Box roi{o-D3{radius,radius,radius},o+D3{radius,radius,radius}};size_t seedSource=SIZE_MAX;
     for(size_t ri=0;ri<snapshot.receivers.size();++ri){const auto&rec=snapshot.receivers[ri];const Mat4&m=rec.localToWorld;
         for(float f:m)if(!std::isfinite(f))throw Failure(DecalPatchStatus::InvalidInput,"Receiver frame is nonfinite.");
         if(std::abs(dot(column(m,0),cross(column(m,1),column(m,2))))<1e-15)throw Failure(DecalPatchStatus::InvalidInput,"Receiver frame is singular.");
         for(size_t ti=0;ti<rec.triangles.size();++ti){cancelled(stop);const auto&t=rec.triangles[ti];Source s;s.receiver=ri;s.triangle=ti;D3 ng=cross(d3(t.positions[1])-d3(t.positions[0]),d3(t.positions[2])-d3(t.positions[0]));if(length(ng)<1e-16)continue;s.geometricNormal=normal(m,ng);
             for(size_t j=0;j<3;++j){s.p[j]=point(m,d3(t.positions[j]));s.n[j]=normal(m,length(d3(t.normals[j]))>1e-10?d3(t.normals[j]):ng);if(!finite(s.p[j])||!finite(s.n[j]))throw Failure(DecalPatchStatus::InvalidInput,"Receiver geometry is nonfinite.");}
-            if(!overlaps(bounds(s),roi,tol))continue;if(&rec==seedReceiver&&&t==seedTriangle)seedSource=patch.sources.size();patch.sources.push_back(s);if(patch.sources.size()>r.limits.maximumInputTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Input triangle budget exceeded.");
+            // The box is only a broad phase. A triangle farther than the
+            // intrinsic frontier cannot supply a path or a contact inside it.
+            // Retain one sample of halo for edge-path distance approximation.
+            if(!overlaps(bounds(s),roi,tol)||triangleDistance(o,s)>intrinsicRadius+spacing+tol)continue;if(&rec==seedReceiver&&&t==seedTriangle)seedSource=patch.sources.size();patch.sources.push_back(s);if(patch.sources.size()>r.limits.maximumInputTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Input triangle budget exceeded.");
         }
     }
     if(seedSource==SIZE_MAX)throw Failure(DecalPatchStatus::MissingSeed,"Seed geometry is degenerate or outside its footprint.");stats.inputTriangles=static_cast<uint32_t>(patch.sources.size());
-    std::vector<std::vector<Cut>> cuts(patch.sources.size());std::vector<std::vector<Segment>> barriers(patch.sources.size());Dsu sourceSheets(patch.sources.size());std::vector<Box> boxes;for(const auto&s:patch.sources)boxes.push_back(bounds(s));std::vector<size_t> order(patch.sources.size());std::iota(order.begin(),order.end(),size_t{});std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return boxes[a].lo.x<boxes[b].lo.x;});size_t pairs=0;
+    // Analysis includes a sampling halo and original source boundaries that
+    // disappear when the chart is clipped to the image. Its allowance must be
+    // independent of the final output cap, while remaining strictly bounded.
+    const size_t analysisLimit=static_cast<size_t>(std::min<uint64_t>(1'000'000,uint64_t(r.limits.maximumTriangles)*4+patch.sources.size()));
+    std::vector<std::vector<Cut>> cuts(patch.sources.size());std::vector<std::vector<Segment>> barriers(patch.sources.size());Dsu sourceSheets(patch.sources.size());std::vector<Box> boxes;for(const auto&s:patch.sources)boxes.push_back(bounds(s));std::vector<size_t> order(patch.sources.size());std::iota(order.begin(),order.end(),size_t{});
+    Box sourceBounds=boxes.front();for(const auto& box:boxes){sourceBounds.lo={std::min(sourceBounds.lo.x,box.lo.x),std::min(sourceBounds.lo.y,box.lo.y),std::min(sourceBounds.lo.z,box.lo.z)};sourceBounds.hi={std::max(sourceBounds.hi.x,box.hi.x),std::max(sourceBounds.hi.y,box.hi.y),std::max(sourceBounds.hi.z,box.hi.z)};}
+    size_t sweepAxis=0;for(size_t axis=1;axis<3;++axis)if(sourceBounds.hi[axis]-sourceBounds.lo[axis]>sourceBounds.hi[sweepAxis]-sourceBounds.lo[sweepAxis])sweepAxis=axis;
+    std::stable_sort(order.begin(),order.end(),[&](size_t a,size_t b){return boxes[a].lo[sweepAxis]<boxes[b].lo[sweepAxis];});size_t pairs=0;
     // Contact metadata follows the bounded original input. Reserve the smaller
     // derived-geometry allowance for the sheet that can actually reach the seed.
     size_t cutCount=0;
-    for(size_t a=0;a<order.size();++a)for(size_t b=a+1;b<order.size()&&boxes[order[b]].lo.x<=boxes[order[a]].hi.x+tol;++b){
+    for(size_t a=0;a<order.size();++a)for(size_t b=a+1;b<order.size()&&boxes[order[b]].lo[sweepAxis]<=boxes[order[a]].hi[sweepAxis]+tol;++b){
         cancelled(stop);const size_t i=order[a],j=order[b];if(!overlaps(boxes[i],boxes[j],tol))continue;
         if(++pairs>1000000)throw Failure(DecalPatchStatus::LimitExceeded,"Local contact-pair budget exceeded.");
         const size_t before=cuts[i].size()+cuts[j].size();const bool overlap=contactCuts(patch.sources[i],patch.sources[j],cuts[i],cuts[j],barriers[i],barriers[j],tol);
@@ -116,10 +137,16 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
         const size_t omittedAxis=std::abs(patch.seedNormal.x)>std::abs(patch.seedNormal.y)?(std::abs(patch.seedNormal.x)>std::abs(patch.seedNormal.z)?0:2):(std::abs(patch.seedNormal.y)>std::abs(patch.seedNormal.z)?1:2);
         // Establish the common grid first. A short contact may split the cells
         // it touches, never extend hundreds of infinite planes across a wall.
-        std::vector<Polygon> cells{std::move(poly)};std::vector<Cut> planes;for(size_t k=0;k<3;++k){if(k==omittedAxis)continue;D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;const int steps=static_cast<int>(std::ceil(radius/spacing));for(int j=-steps;j<=steps;++j)planes.push_back({{n,o[k]+j*spacing},roi});}
+        double maximumEdge=0;for(size_t edge=0;edge<poly.size();++edge)maximumEdge=std::max(maximumEdge,length(poly[(edge+1)%poly.size()]-poly[edge]));
+        std::vector<Polygon> cells{std::move(poly)};std::vector<Cut> planes;for(size_t k=0;k<3;++k){if(k==omittedAxis)continue;D3 n{};if(k==0)n.x=1;if(k==1)n.y=1;if(k==2)n.z=1;
+            // Already fine source triangles need no second sampling grid. The
+            // seed still needs both planes through its exact position. Contact
+            // cuts and the shared-endpoint pass below maintain conformity.
+            const int steps=maximumEdge>spacing?static_cast<int>(std::ceil(radius/spacing)):0;
+            if(steps||si==seedSource)for(int j=-steps;j<=steps;++j)planes.push_back({{n,o[k]+j*spacing},roi});}
         planes.insert(planes.end(),cuts[si].begin(),cuts[si].end());
-        for(const Cut&cut:planes){cancelled(stop);std::vector<Polygon> next;for(auto&cell:cells){if(!overlaps(bounds(cell),cut.support,tol)){next.push_back(std::move(cell));continue;}const Plane&plane=cut.plane;bool positive=false,negative=false;for(D3 p:cell){double d=distance(plane,p);positive|=d>eps;negative|=d< -eps;}if(positive&&negative){auto a=clip(cell,plane,eps),b=clip(cell,{plane.n*-1,-plane.d},eps);if(a.size()>=3)next.push_back(std::move(a));if(b.size()>=3)next.push_back(std::move(b));}else next.push_back(std::move(cell));}cells=std::move(next);if(cells.size()+allCells.size()>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Derived triangle budget exceeded.");}
-        for(auto&cell:cells){for(D3 p:cell)node(p);allCells.push_back({std::move(cell),si});}
+        for(const Cut&cut:planes){cancelled(stop);std::vector<Polygon> next;for(auto&cell:cells){if(!overlaps(bounds(cell),cut.support,tol)){next.push_back(std::move(cell));continue;}const Plane&plane=cut.plane;bool positive=false,negative=false;for(D3 p:cell){double d=distance(plane,p);positive|=d>eps;negative|=d< -eps;}if(positive&&negative){auto a=clip(cell,plane,eps),b=clip(cell,{plane.n*-1,-plane.d},eps);if(a.size()>=3)next.push_back(std::move(a));if(b.size()>=3)next.push_back(std::move(b));}else next.push_back(std::move(cell));}cells=std::move(next);if(cells.size()+allCells.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}
+        for(auto&cell:cells){for(D3 p:cell)node(p);allCells.push_back({std::move(cell),si});if(allCells.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}
     }
     // Local cuts can end on a neighboring cell's edge. Insert every welded
     // endpoint on that edge before triangulation, preserving a conforming mesh.
@@ -132,15 +159,15 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
         }
         if(boundary.size()>1&&boundary.front()==boundary.back())boundary.pop_back();
         if(boundary.size()<3)continue;double area=0;for(size_t j=1;j+1<boundary.size();++j)area+=dot(cross(patch.positions[boundary[j]]-patch.positions[boundary[0]],patch.positions[boundary[j+1]]-patch.positions[boundary[0]]),patch.sources[cell.source].geometricNormal);if(std::abs(area)<=eps*eps)continue;
-        if(!triangulateConvexPolygon(boundary,patch.positions,patch.sources[cell.source].geometricNormal,eps,[&](std::array<size_t,3> triangle){allFaces.push_back({triangle,cell.source});if(allFaces.size()>r.limits.maximumTriangles)throw Failure(DecalPatchStatus::LimitExceeded,"Derived triangle budget exceeded.");}))throw Failure(DecalPatchStatus::InvalidChart,"Contact cell triangulation failed.");
+        if(!triangulateConvexPolygon(boundary,patch.positions,patch.sources[cell.source].geometricNormal,eps,[&](std::array<size_t,3> triangle){allFaces.push_back({triangle,cell.source});if(allFaces.size()>analysisLimit)throw Failure(DecalPatchStatus::LimitExceeded,"Analysis triangle budget exceeded.");}))throw Failure(DecalPatchStatus::InvalidChart,"Contact cell triangulation failed.");
     }
     std::map<std::pair<size_t,size_t>,std::vector<EdgeUse>> edges;size_t seedFace=SIZE_MAX,seedCorner=0;
     for(size_t i=0;i<allFaces.size();++i){const auto&f=allFaces[i];for(size_t j=0;j<3;++j){if(f.source==seedSource&&length(patch.positions[f.v[j]]-o)<=tol){seedFace=i;seedCorner=j;}edges[std::minmax(f.v[j],f.v[(j+1)%3])].push_back({i,j});}}
-    if(seedFace==SIZE_MAX)throw Failure(DecalPatchStatus::InvalidChart,"Seed insertion failed in the derived patch.");std::vector<std::vector<size_t>> adjacent(allFaces.size());Dsu corners(allFaces.size()*3);std::set<size_t> ambiguousFaces;std::vector<std::pair<EdgeUse,EdgeUse>> joinedEdges;
+    if(seedFace==SIZE_MAX)throw Failure(DecalPatchStatus::InvalidChart,"Seed insertion failed in the derived patch.");std::vector<std::vector<size_t>> adjacent(allFaces.size());Dsu corners(allFaces.size()*3);std::vector<std::pair<EdgeUse,EdgeUse>> joinedEdges;
     const auto blocked=[&](const EdgeUse&use){const auto&f=allFaces[use.face];const D3 p=patch.positions[f.v[use.corner]],q=patch.positions[f.v[(use.corner+1)%3]];for(const auto&segment:barriers[f.source]){const D3 e=segment.b-segment.a;const double len=length(e);if(len<=eps)continue;const D3 n=e/len;const double u=dot(p-segment.a,n),v=dot(q-segment.a,n);if(std::min(u,v)>=-4*weld&&std::max(u,v)<=len+4*weld&&length(p-segment.a-n*u)<=4*weld&&length(q-segment.a-n*v)<=4*weld)return true;}return false;};
     for(const auto&[edge,uses]:edges){const bool barrier=std::any_of(uses.begin(),uses.end(),blocked);if(uses.size()<2&&!barrier)continue;bool good=uses.size()==2&&!barrier;if(good){const auto&a=uses[0];const auto&b=uses[1];const auto&fa=allFaces[a.face];const auto&fb=allFaces[b.face];good=fa.v[a.corner]==fb.v[(b.corner+1)%3]&&dot(patch.sources[fa.source].geometricNormal,patch.sources[fb.source].geometricNormal)>-.999999;
             if(good){adjacent[a.face].push_back(b.face);adjacent[b.face].push_back(a.face);joinedEdges.emplace_back(a,b);corners.join(3*a.face+a.corner,3*b.face+(b.corner+1)%3);corners.join(3*a.face+(a.corner+1)%3,3*b.face+b.corner);if(patch.sources[fa.source].receiver!=patch.sources[fb.source].receiver)++stats.joinedEdges;}}
-        if(!good){++stats.ambiguousEdges;for(auto use:uses)ambiguousFaces.insert(use.face);}
+        if(!good)++stats.ambiguousEdges;
     }
     // The Euclidean extraction box is only a broad phase. A small mark on a
     // closed cylinder can otherwise collect the whole circumference and both
@@ -149,14 +176,13 @@ AnalysisPatch buildTopology(const DecalSurfaceSnapshot&snapshot,const DecalBuild
     // oriented topology rather than coincident position vertices. The halo
     // covers the edge-path approximation and keeps the footprint interior
     // away from the artificial frontier.
-    const double intrinsicRadius=.5*std::max(length(px+py),length(px-py))*r.limits.maximumStretch+2*spacing;
     struct Step {double distance;size_t corner;bool operator>(const Step&other)const{return distance>other.distance;}};
     std::vector<std::vector<std::pair<size_t,double>>> graph(allFaces.size()*3);
     for(size_t i=0;i<allFaces.size();++i)for(size_t j=0;j<3;++j){const auto a=corners.find(i*3+j),b=corners.find(i*3+(j+1)%3);const double weight=length(patch.positions[allFaces[i].v[j]]-patch.positions[allFaces[i].v[(j+1)%3]]);graph[a].push_back({b,weight});graph[b].push_back({a,weight});}
     std::vector<double>distances(graph.size(),INFINITY);std::priority_queue<Step,std::vector<Step>,std::greater<Step>>frontier;const size_t seedNode=corners.find(seedFace*3+seedCorner);distances[seedNode]=0;frontier.push({0,seedNode});
     while(!frontier.empty()){cancelled(stop);const auto current=frontier.top();frontier.pop();if(current.distance!=distances[current.corner]||current.distance>intrinsicRadius+spacing)continue;for(const auto[next,weight]:graph[current.corner])if(current.distance+weight<distances[next]){distances[next]=current.distance+weight;frontier.push({distances[next],next});}}
     const auto insideFrontier=[&](size_t face){for(size_t j=0;j<3;++j)if(distances[corners.find(face*3+j)]<=intrinsicRadius)return true;return false;};
-    std::vector<bool>visited(allFaces.size());std::queue<size_t>queue;queue.push(seedFace);visited[seedFace]=true;while(!queue.empty()){const size_t f=queue.front();queue.pop();if(ambiguousFaces.contains(f))patch.incomplete=true;for(size_t n:adjacent[f])if(!visited[n]&&insideFrontier(n)){visited[n]=true;queue.push(n);}}
+    std::vector<bool>visited(allFaces.size());std::queue<size_t>queue;queue.push(seedFace);visited[seedFace]=true;while(!queue.empty()){const size_t f=queue.front();queue.pop();for(size_t n:adjacent[f])if(!visited[n]&&insideFrontier(n)){visited[n]=true;queue.push(n);}}
     // Clipping the neighborhood can separate vertex fans that were joined
     // through faces outside the intrinsic frontier. Reusing their old roots
     // would give the chart a bow-tie vertex with multiple boundary loops.

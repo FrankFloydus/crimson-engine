@@ -184,7 +184,7 @@ bool selected(const SceneDocument& document, EntityId id) {
     return std::find(ids.begin(),ids.end(),id)!=ids.end();
 }
 const char* kind(const EntityRecord& record) {
-    if(record.decal)return "Decal";
+    if(record.decal)return record.decal->projection==SceneDecalProjection::Box?"Box Decal":"Decal";
     if(record.quader)return "Quader";
     if(record.navigationVolume)return "NavigationVolume";
     if(record.enemy)return "Enemy";
@@ -224,6 +224,7 @@ void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
     if (ImGui::MenuItem("Box")) document.createBox();
     if (ImGui::MenuItem("Sphere")) document.createSphere();
     if (ImGui::MenuItem("Cylinder")) document.createCylinder();
+    if (ImGui::MenuItem("Box Decal")) document.createBoxDecal("Box Decal",parent);
     if (ImGui::MenuItem("Collider")) document.createCollider("Collider",parent);
     const auto records=document.scene().records();
     const bool hasVolume=std::any_of(records.begin(),records.end(),[](const auto& record){return record.navigationVolume && record.navigationVolume->enabled;});
@@ -1775,10 +1776,12 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                     property(Edit::DecalOpacity,"Change decal opacity",resettableProperty(value.opacity,defaults.opacity,[&]{return ImGui::SliderFloat("Opacity",&value.opacity,0,1,"%.3f");}));
                     property(Edit::DecalFeather,"Change decal edge feather",resettableProperty(value.edgeFeather,defaults.edgeFeather,[&]{return ImGui::SliderFloat("Edge Feather",&value.edgeFeather,0,.5f,"%.3f");}));
                     property(Edit::DecalPriority,"Change decal priority",resettableProperty(value.priority,defaults.priority,[&]{return ImGui::DragInt("Priority",&value.priority,1);}));
+                    if(value.projection==SceneDecalProjection::Surface) {
                     const auto receiver=document.scene().find(value.seed.receiver);
                     ImGui::Text("Surface: %s",receiver?receiver->name.c_str():"Unresolved");
                     if(decals.placeEntity&&ImGui::Button("Place on Surface")) {finishScenePanelEdit(document);*decals.placeEntity=record.id;}
                     if(ImGui::IsItemHovered())ImGui::SetTooltip("Click a visible surface in the viewport to place this decal there.");
+                    }
                     if(decals.status)if(const auto diagnostic=decals.status(record.id);!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
                 }else if(state.active>=Edit::DecalTint&&state.active<=Edit::DecalPriority)finishEdit(document,state,state.active);
             }

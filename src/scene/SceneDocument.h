@@ -175,6 +175,7 @@ public:
         const ModelMaterialRemap& remapMaterials={},const ModelPaintRemap& remapPaint={},bool preservePlacement=false);
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
     EntityId createDecal(const SceneDecal&,const std::string& name="Decal",const Mat4& local=Mat4{});
+    EntityId createBoxDecal(const std::string& name="Box Decal",EntityId parent=NoEntity);
     EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models,EntityId parent=NoEntity);
     EntityId createDirectionalLight(const std::string& name = "Directional Light");

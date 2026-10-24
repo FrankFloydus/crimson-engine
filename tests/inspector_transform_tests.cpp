@@ -81,7 +81,8 @@ public:
             const auto id=axesTableId(property);const auto* table=ImGui::GetCurrentContext()->Tables.GetByKey(id);
             if(!table)continue;
             columnCounts[property]=static_cast<unsigned>(table->ColumnsCount);
-            const bool decal=document.scene().find(entity)->decal.has_value();
+            const auto capability=document.scene().find(entity)->decal;
+            const bool decal=capability&&capability->projection==SceneDecalProjection::Surface;
             const unsigned columns=decal&&property>0?(property==1?1u:2u):3u;
             for(unsigned column=0;column<columns;++column){const unsigned axis=decal&&property==1?2u:column;centers[property*3+axis]={
                 (table->Columns[column].WorkMinX+ImGui::CalcTextSize("X").x+ImGui::GetStyle().ItemInnerSpacing.x+table->Columns[column].WorkMaxX)*.5f,
@@ -413,6 +414,25 @@ void decalSurfaceSizeAndCancellation(){
     }
 }
 
+void boxDecalSizeAndHistory(){
+    Project project;Inspector ui(project.root);
+    const auto parent=math::translation({3,-2,7})*math::eulerRotationXYZ({.3f,-.4f,.2f})*math::scaling({1.5f,.7f,-2.f});
+    ui.setDecalTransform(savedNewDecalTransform(),parent);
+    auto record=*ui.document.scene().find(ui.entity);record.decal->projection=SceneDecalProjection::Box;
+    require(ui.document.updateEntity(ui.entity,record),"Cannot change isolated fixture to Box.");
+    ui.state.refresh=true;ui.tick();ui.tick();
+    require(ui.columnCounts==std::array<unsigned,3>{3,3,3},"Box Inspector omitted full rotation or depth.");
+    require(!decalEditFrame(ui.document.scene(),ui.entity),"Box edits entered surface canonicalization.");
+    const auto before=ui.worldMatrix(),local=ui.matrix();
+    const float depth=math::length(column(before,2));
+    ui.activate(8);ui.type(std::to_string(depth*.5f).c_str());ui.enter();const auto after=ui.worldMatrix();
+    require(std::abs(math::length(column(after,2))-depth*.5f)<1e-3,"Box depth did not resize in world metres under an affine parent.");
+    for(unsigned axis:{0u,1u,3u})require(math::length(column(after,axis)-column(before,axis))<1e-4,"Box depth changed footprint, shear or centre.");
+    require(math::handedness(after)==math::handedness(before),"Box size lost reflection.");
+    const auto edited=ui.matrix();ui.undo();require(ui.matrix()==local&&!ui.document.transactionActive(),"Box depth undo lost exact authored transform.");
+    ui.redo();require(ui.matrix()==edited,"Box depth redo lost edited transform.");
+}
+
 void particleShortcutOwnership(){
     struct ContextLifetime {
         ImGuiContext* value{ImGui::CreateContext()};
@@ -489,6 +509,7 @@ int main(){
     run("linked scale crosses zero and recovers collapsed axes",linkedScaleCrossesZeroAndRecovers);
     run("decal surface rotation, parent conversion and position keep exact history",decalSurfaceRotationAndPosition);
     run("decal metre sizes, XY proportions, reflection, shear and cancellation",decalSurfaceSizeAndCancellation);
+    run("box decal world sizes, affine parent, depth and exact history",boxDecalSizeAndHistory);
     run("particle/material document shortcuts preserve scene-only commands and input ownership",particleShortcutOwnership);
     return failures?1:0;
 }

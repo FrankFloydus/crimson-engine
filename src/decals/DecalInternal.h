@@ -27,7 +27,7 @@ struct AnalysisFace {std::array<size_t,3> v{};size_t source{};};
 struct AnalysisPatch {
     std::vector<Source> sources;std::vector<D3> positions;std::vector<AnalysisFace> faces;
     size_t seedVertex{},seedFace{};D3 seedPosition{},basisX{},basisY{},seedNormal{};
-    double ax{},ay{},bx{},by{},frameDet{},scale{},tolerance{};bool incomplete{};
+    double ax{},ay{},bx{},by{},frameDet{},scale{},tolerance{};
 };
 AnalysisPatch buildTopology(const DecalSurfaceSnapshot&,const DecalBuildRequest&,DecalBuildStatistics&,std::stop_token);
 void buildChart(const DecalSurfaceSnapshot&,const DecalBuildRequest&,const AnalysisPatch&,DecalPatch&,std::stop_token);

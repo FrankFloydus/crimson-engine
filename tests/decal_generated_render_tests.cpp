@@ -8,6 +8,8 @@
 #include "resources/ResourceManager.h"
 #include "GpuTestBackend.h"
 #include <crimson/renderer/forward/DecalRenderTypes.h>
+#include <crimson/renderer/forward/DecalGpu.h>
+#include <crimson/renderer/forward/ModelAnimation.h>
 #include <SDL3/SDL.h>
 #include <lodepng.h>
 #include <algorithm>
@@ -28,7 +30,7 @@ using namespace crimson;
 namespace fs=std::filesystem;
 constexpr std::uint16_t Width=161,Height=129;
 constexpr std::uint32_t Clamp=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
-void check(bool result,const std::string& diagnostic){if(!result)throw std::runtime_error(diagnostic);}
+void check(bool result,const std::string& diagnostic){if(!result){std::cerr<<diagnostic<<std::endl;throw std::runtime_error(diagnostic);}}
 struct Texture {
     bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
     ~Texture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}
@@ -156,12 +158,15 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     const auto capture=[&](std::span<const RenderDecal> decals) {
         scene.instances=instances;scene.decals=decals;renderer.render(scene);return read(renderer.viewportTexture());
     };
-    const auto decalGraph=[&](std::uint64_t fingerprint,bool color,bool normalEnabled,bool roughness,Vec3 rgb=Vec3{.75f,.015f,.01f},float normalOpacity=1.f,bool metallic=false) {
+    const auto decalGraph=[&](std::uint64_t fingerprint,bool color,bool normalEnabled,bool roughness,Vec3 rgb=Vec3{.75f,.015f,.01f},float normalOpacity=1.f,bool metallic=false,bool uvGradient=false,bgfx::TextureHandle colorTexture=bgfx::TextureHandle{BGFX_INVALID_HANDLE}) {
         MaterialAsset definition;definition.id="decal-domain-fixture-"+std::to_string(fingerprint);
         auto& out=addMaterialNode(definition.graph,MaterialNodeKind::Output);
         const auto decalOutput=out.id;out.output.shading=MaterialShading::Decal;out.output.baseColor=rgb;
         out.output.decalColorEnabled=color;out.output.decalNormalEnabled=normalEnabled;out.output.decalRoughnessEnabled=roughness;
         out.output.decalNormalStrength=normalOpacity;out.output.roughness=.06f;out.output.decalMetallicEnabled=metallic;out.output.metallic=.9f;
+        if(bgfx::isValid(colorTexture)){const auto texture=addMaterialNode(definition.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(definition.graph,texture)->texture.image.id=uvGradient?"assets/textures/box-uv-identity.png":"assets/textures/box-mip-identity.png";
+            connectMaterialNodes(definition.graph,texture,MaterialPin::RGB,decalOutput,MaterialPin::BaseColor);}
         if(normalEnabled) {
             const auto texture=addMaterialNode(definition.graph,MaterialNodeKind::Texture2D).id;
             findMaterialNode(definition.graph,texture)->texture.role=MaterialTextureRole::Normal;
@@ -177,7 +182,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
         auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=result.programs;packet->uniforms=generated.uniforms;
         packet->sources=generated.textures;packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
         packet->shading=MaterialShading::Decal;packet->signature=result.programs->signature;packet->decalChannels=generated.decalChannels;
-        for(const auto& source:generated.textures){packet->textures[source.slot]=normal.handle;packet->flags[source.slot]=Clamp;}
+        for(const auto& source:generated.textures){packet->textures[source.slot]=source.role==MaterialGraphTextureRole::Normal?normal.handle:colorTexture;packet->flags[source.slot]=Clamp;}
         auto prepared=std::make_shared<PreparedDecalMaterial>();prepared->fingerprint=fingerprint;prepared->graph=std::move(packet);return prepared;
     };
     auto patch=flatPatch();auto red=decalGraph(1,true,false,false);
@@ -203,6 +208,105 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
     auto zeroNormal=decalGraph(5,false,true,false,{1,1,1},0);
     decals.push_back(decal(patch,zeroNormal,102,2));
     check(capture(decals).rgba==lowerNormal.rgba,"Zero normal strength erased a lower normal on a generated receiver.");
+
+    // Projected boxes consume current depth and geometric normals without a
+    // chart, seed, original-triangle array or frozen geometry budget.
+    RenderDecal box=decal({},red);box.projection=DecalProjection::Box;
+    box.frame=math::scaling({1.3f,1.3f,.4f});decals={box};
+    {
+        // The raster is recorded before current mesh LOD decisions. A coarse
+        // fallback token must reject that frozen Surface draw while remaining
+        // nonzero for Box, which reads the currently rendered geometry.
+        DecalGpu admission(red->graph->program(MaterialGraphPass::Decal));
+        const std::array mixed{box,decal(patch,red)};
+        check(admission.prepare(mixed,instances,settings.camera,Width,Height),admission.status());
+        const auto frozen=admission.receiver_token(1,0,0),coarse=admission.coarse_receiver_token(1,0,0);
+        check(admission.requires_original_surface(1,0,0)&&frozen!=Vec4{}&&coarse!=Vec4{}&&frozen!=coarse,
+            "Mixed Surface/Box coarse residency lost Box coverage or reused a frozen original identity.");
+        check(admission.coarse_receiver_token(1,0,0)==coarse,"Repeated current-surface admission changed receiver identity.");
+        admission.suppress_receiver(1,0,0);check(admission.receiver_token(1,0,0)==Vec4{},"Missing geometry kept an active receiver token.");
+        auto unsupportedGraph=std::make_shared<PreparedGraphMaterial>(*graphBindings[0].graph);unsupportedGraph->tessellation.enabled=true;
+        std::vector<ModelMaterialTextures> unsupportedBindings(1);unsupportedBindings[0].graph=std::move(unsupportedGraph);
+        auto unsupported=instances[0];unsupported.textures=&unsupportedBindings;
+        check(!admission.prepare(std::array{box},std::array{unsupported},settings.camera,Width,Height),
+            "Unsupported Height receivers bypassed the explicit Box eligibility boundary.");
+    }
+    const auto boxColor=capture(decals);
+    check(changed(graphBase,boxColor)>100,"Box projection produced no visible material.");
+    const auto boxStats=renderer.decalStats(RenderViewPurpose::Scene);
+    check(boxStats.submitted==1&&boxStats.drawCalls==1,"A box must rasterize once, independently of receiver triangle count.");
+    const auto surfaceColor=capture(std::array{decal(patch,red)});
+    check(error(boxColor,surfaceColor)<.3,"Box color disagrees with an independently charted coplanar footprint.");
+    std::vector<std::uint8_t> uvPixels;
+    for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){
+        uvPixels.push_back(static_cast<std::uint8_t>(x*255/63));uvPixels.push_back(static_cast<std::uint8_t>(y*255/63));
+        uvPixels.push_back(0);uvPixels.push_back(255);
+    }
+    Texture uvIdentity{bgfx::createTexture2D(64,64,false,1,bgfx::TextureFormat::RGBA8,Clamp,
+        bgfx::copy(uvPixels.data(),static_cast<std::uint32_t>(uvPixels.size())))};
+    check(bgfx::isValid(uvIdentity.handle),"Box UV-identity texture allocation failed.");
+    auto gradient=decalGraph(8,true,false,false,{1,1,1},1,false,true,uvIdentity.handle);
+    auto orientedPatch=std::make_shared<DecalPatchData>(*patch);orientedPatch->fingerprint=808;
+    for(auto& vertex:orientedPatch->vertices)vertex.uv[1]=1-vertex.uv[1];
+    box.material=gradient;const auto boxUv=capture(std::array{box});
+    const auto surfaceUv=capture(std::array{decal(orientedPatch,gradient)});
+    check(error(boxUv,surfaceUv)<.3,"Box UV mapping inverted image-top Y or used the wrong footprint dimensions.");
+    box.material=normalOnly;const auto boxNormal=capture(std::array{box});
+    const auto surfaceNormal=capture(std::array{decal(orientedPatch,normalOnly)});
+    check(changed(graphBase,boxNormal)>100&&error(boxNormal,surfaceNormal)<.5,"Box normal mapping disagrees with the geometric receiver frame.");
+    box.material=red;instances[0].receiveDecals=false;
+    check(capture(std::array{box}).rgba==graphBase.rgba,"An opted-out receiver received a box decal.");
+    instances[0].receiveDecals=true;
+    box.frame=math::translation({0,0,.5f})*math::scaling({1.3f,1.3f,.1f});
+    check(capture(std::array{box}).rgba==graphBase.rgba,"Box depth planes failed to reject a receiver outside the volume.");
+    box.frame=math::scaling({1.3f,1.3f,.4f});
+    instances[0].pose=std::make_shared<ModelPose>(evaluateModelPose(*mesh));
+    check(error(capture(std::array{box}),boxColor)<.3,"A current posed receiver was incorrectly excluded from box projection.");
+    instances[0].pose.reset();
+    auto blocker=receiver;blocker.entityId=31;blocker.receiveDecals=false;
+    blocker.model.transform=math::translation({0,0,.15f})*math::scaling({.3f,.3f,1});instances.push_back(blocker);
+    const auto blockedBase=capture({}),blockedPaint=capture(std::array{box});
+    const auto center=(std::size_t(Height/2)*Width+Width/2)*4;
+    check(std::equal(blockedBase.rgba.begin()+center,blockedBase.rgba.begin()+center+4,blockedPaint.rgba.begin()+center)&&changed(blockedBase,blockedPaint)>100,
+        "A box decal leaked onto foreground opted-out geometry or lost the visible surrounding receiver.");
+    instances.resize(1);
+    std::vector<std::uint8_t> mipPixels;
+    for(unsigned size=64,level=0;size;size>>=1,++level)for(unsigned pixel=0;pixel<size*size;++pixel){
+        mipPixels.push_back(level?0:255);mipPixels.push_back(level?255:0);mipPixels.push_back(0);mipPixels.push_back(255);
+    }
+    Texture mipIdentity{bgfx::createTexture2D(64,64,true,1,bgfx::TextureFormat::RGBA8,Clamp,
+        bgfx::copy(mipPixels.data(),static_cast<std::uint32_t>(mipPixels.size())))};
+    check(bgfx::isValid(mipIdentity.handle),"Box mip-identity texture allocation failed.");
+    auto texturedBox=box;texturedBox.frame=math::scaling({3,3,.4f});
+    texturedBox.material=decalGraph(9,true,false,false,{1,1,1},1,false,false,mipIdentity.handle);
+    const auto priorMipAntialiasing=settings.antiAliasing;settings.antiAliasing=AntiAliasing::Off;
+    const auto sharpFloor=capture(std::array{texturedBox});
+    auto blueBlockerSurfaces=surfaces;blueBlockerSurfaces[0].baseColor={0,0,1,1};
+    blocker.materials=&blueBlockerSurfaces;blocker.shading=MaterialShading::Unlit;
+    blocker.model.transform=math::translation({0,0,1.5f})*math::scaling({.2f,.2f,1});instances.push_back(blocker);
+    const auto sharpOccluded=capture(std::array{texturedBox});unsigned sharpSamples{};
+    write(artifacts,"box-silhouette-mips-baseline",sharpFloor);write(artifacts,"box-silhouette-mips",sharpOccluded);
+    unsigned sharpEdgeSamples{};
+    const auto foreground=[&](std::size_t offset){return int(sharpOccluded.rgba[offset+2])>int(sharpFloor.rgba[offset+2])+32;};
+    for(unsigned y=1;y+1<Height;++y)for(unsigned x=1;x+1<Width;++x){
+        const auto offset=(std::size_t(y)*Width+x)*4;
+        if(int(sharpFloor.rgba[offset])<int(sharpFloor.rgba[offset+1])+40||
+            int(sharpFloor.rgba[offset])<int(sharpFloor.rgba[offset+2])+40||foreground(offset))continue;
+        ++sharpSamples;
+        const bool adjacent=foreground(offset-4)||foreground(offset+4)||foreground(offset-std::size_t(Width)*4)||foreground(offset+std::size_t(Width)*4);
+        sharpEdgeSamples+=adjacent;
+        for(unsigned channel=0;channel<3;++channel)check(std::abs(int(sharpFloor.rgba[offset+channel])-int(sharpOccluded.rgba[offset+channel]))<=2,
+            "A foreground depth discontinuity contaminated visible box texture derivatives and selected a wrong mip.");
+    }
+    std::cout<<"Box silhouette mip samples="<<sharpSamples<<" directly adjacent="<<sharpEdgeSamples<<'\n';
+    check(sharpSamples>100&&sharpEdgeSamples>32,"Box silhouette mip fixture did not cover enough receiver and silhouette-adjacent pixels.");
+    write(artifacts,"box-silhouette-mips",sharpOccluded);instances.resize(1);settings.antiAliasing=priorMipAntialiasing;
+    const auto priorCamera=settings.camera;
+    settings.camera.position={0,0,.15f};settings.camera.nearPlane=.03f;
+    const auto insideBase=capture({}),insidePaint=capture(std::array{box});
+    check(changed(insideBase,insidePaint)>100,"A camera inside the box or near-plane crossing suppressed projected material.");
+    settings.camera=priorCamera;write(artifacts,"box-color",boxColor);write(artifacts,"box-uv",boxUv);write(artifacts,"box-normal",boxNormal);
+    write(artifacts,"box-occlusion",blockedPaint);write(artifacts,"box-camera-inside",insidePaint);
 
     // Index-matched transmission must see the completed painted opaque source.
     decals={decal(patch,red)};const auto opaquePaint=capture(decals);
@@ -305,6 +409,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config,const fs::pat
 }
 int main(int argc,char** argv) {
     try {
+        std::cout<<std::unitbuf;
         check(argc==5,"Pass shaderc, source/include directories and artifact root.");
         const auto cache=fs::temp_directory_path()/("crimson-decal-graph-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         struct Cleanup {

@@ -45,7 +45,7 @@ DecalSourceResult DecalResources::modelSurface(const ExtractedModel&m,ResourcePr
     bool painted=m.meshPaint.has_value();
     try{if(!painted)for(const auto& material:assets_.resolvedModelMaterials(*model,m.materialOverrides))if(material.graph&&materialOutputNode(*material.graph).output.shading==MaterialShading::BlendPbr){painted=true;break;}}
     catch(const std::exception& error){result.failed=true;result.diagnostic=error.what();return result;}
-    if(painted){const auto prepared=meshPaint_.prepare(m,priority);if(!prepared.ready){result.failed=prepared.failed;result.diagnostic=prepared.diagnostic;return result;}model=prepared.asset;result.revision=prepared.revision;result.fingerprint=prepared.signature;identity=Hash{};identity.add(model->id);identity.add(result.fingerprint);}
+    if(painted){const auto prepared=meshPaint_.prepare(m,priority);if(!prepared.ready){result.failed=prepared.failed;result.diagnostic=prepared.diagnostic;return result;}model=prepared.decalAsset;result.revision=prepared.revision;result.fingerprint=prepared.decalSignature;identity=Hash{};identity.add(model->id);identity.add(result.fingerprint);}
     result.model=model;
     // The stream key covers original primitive attributes. Draw occurrence
     // transforms are separate metadata and must also invalidate the source.
@@ -133,6 +133,16 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     // A pending frame submits no packet, while retaining a compatible CPU
     // publication so texture preparation cannot trigger a chart rebuild.
     const auto pending=[&](std::string message,bool ready=false){entry.status=std::move(message);out.ready&=ready;out.refined=false;if(out.status.empty())out.status=entry.status;};
+    if(d.decal.projection==SceneDecalProjection::Box) {
+        entry.resource={};entry.render.reset();entry.spatial.reset();entry.surfaceFrame.reset();
+        if(!math::inverse(d.world)){pending("Invalid decal box transform.");return;}
+        const auto material=assets_.preparedDecalMaterial(d.decal.asset.id,1024,priority);
+        if(!material||!material->ready||!material->current||!material->render){pending(material&&!material->diagnostic.empty()?material->diagnostic:"Preparing decal material.");return;}
+        RenderDecal packet;packet.entityId=d.id;packet.stableOrder=d.id;packet.layer=d.decal.priority;
+        packet.material=material->render;packet.tint=d.decal.tint;packet.opacity=d.decal.opacity;packet.edgeFeather=d.decal.edgeFeather;
+        packet.frame=d.world;packet.projection=DecalProjection::Box;
+        out.decals.push_back(std::move(packet));entry.status.clear();entry.current=true;return;
+    }
     Hash inputs;inputs.add(sceneSignature);inputs.add(d.world);
     inputs.add(d.decal.seed.receiver);inputs.add(d.decal.seed.fingerprint);inputs.add(d.decal.seed.draw);inputs.add(d.decal.seed.primitive);
     inputs.add(d.decal.seed.localPoint);
@@ -199,13 +209,17 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
         for(const auto&m:extracted.models)if(std::any_of(candidates.begin(),candidates.end(),[&](const auto&c){return c.entity==m.id;}))options.assetDependencies.push_back(m.assetId);
         decals::DecalBuildRequest request;request.seed=seed->seed;request.frame=*effectiveFrame;
         const auto cacheFile=decals::decalCachePath(assets_.projectRoot(),key);
-        entry.resource=resources_.requestDerived<decals::DecalPatch>("decal-patch:"+std::to_string(key),[candidates=std::move(candidates),region=patchRegion,request,key,cacheFile](std::stop_token stop){
+        entry.resource=resources_.requestDerived<decals::DecalPatch>("decal-patch:"+std::to_string(key),[candidates=std::move(candidates),region=patchRegion,request,key,cacheFile](std::stop_token stop) mutable{
             decals::DecalSurfaceSnapshot snapshot;size_t triangles=0;
             for(const auto&candidate:candidates)for(const auto&draw:candidate.source->draws){if(stop.stop_requested())throw std::runtime_error("Decal preparation cancelled.");if(draw.material>=candidate.slots.size()||!candidate.slots[draw.material])continue;
                 const auto indices=decals::querySurfaceTriangles(draw,candidate.world,region);if(indices.empty())continue;
                 if((triangles+=indices.size())>request.limits.maximumInputTriangles)throw std::runtime_error("Decal receiver neighborhood exceeds its triangle budget.");
                 decals::SurfaceReceiver receiver;receiver.id=draw.surface.id;receiver.id.entity=candidate.entity;receiver.generation=candidate.revision;receiver.localToWorld=candidate.world*draw.surface.localToWorld;receiver.triangles.reserve(indices.size());for(uint32_t i:indices)receiver.triangles.push_back(draw.surface.triangles[i]);snapshot.receivers.push_back(std::move(receiver));
             }
+            // Keep the final upload bounded while allowing genuinely dense
+            // receiver fields to survive a large image. Flat paint-only detail
+            // was already removed; retained curved/normal fields are not lossy.
+            request.limits.maximumTriangles=static_cast<uint32_t>(std::clamp<size_t>(triangles*2,16384,65536));
             auto cached=decals::readDecalCache(cacheFile,key,snapshot,request,stop);
             auto patch=std::make_shared<decals::DecalPatch>(cached?std::move(*cached):decals::buildDecalPatch(snapshot,request,stop));
             if(!cached&&patch->usable())decals::writeDecalCache(cacheFile,key,*patch,request.limits,stop);
@@ -227,8 +241,8 @@ void DecalResources::append(DecalPreparedScene&out,const Scene&scene,const Extra
     out.decals.back().frame=spatial.frame;
     if(patch->status==decals::DecalPatchStatus::Incomplete&&!out.status.size())out.status=patch->message;
 }
-DecalPreparedScene DecalResources::prepare(const Scene&scene,const ExtractedScene&extracted,ResourcePriority priority){DecalPreparedScene result;for(auto&[id,entry]:patches_){(void)id;entry.current=false;}const auto signature=extracted.decals.empty()?0:spatialSceneSignature(extracted);for(const auto&d:extracted.decals)append(result,scene,extracted,d,priority,signature);std::sort(result.receivers.begin(),result.receivers.end());result.receivers.erase(std::unique(result.receivers.begin(),result.receivers.end()),result.receivers.end());return result;}
-DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const ExtractedScene&extracted,const SceneDecal&decal,const Mat4&frame,uint64_t id,ResourcePriority priority){DecalPreparedScene result;append(result,scene,extracted,{id,frame,decal,true},priority,spatialSceneSignature(extracted));return result;}
+DecalPreparedScene DecalResources::prepare(const Scene&scene,const ExtractedScene&extracted,ResourcePriority priority){DecalPreparedScene result;for(auto&[id,entry]:patches_){(void)id;entry.current=false;}const auto surface=std::any_of(extracted.decals.begin(),extracted.decals.end(),[](const auto& d){return d.visible&&d.decal.projection==SceneDecalProjection::Surface;});const auto signature=surface?spatialSceneSignature(extracted):0;for(const auto&d:extracted.decals)append(result,scene,extracted,d,priority,signature);std::sort(result.receivers.begin(),result.receivers.end());result.receivers.erase(std::unique(result.receivers.begin(),result.receivers.end()),result.receivers.end());return result;}
+DecalPreparedScene DecalResources::prepareTransient(const Scene&scene,const ExtractedScene&extracted,const SceneDecal&decal,const Mat4&frame,uint64_t id,ResourcePriority priority){DecalPreparedScene result;append(result,scene,extracted,{id,frame,decal,true},priority,decal.projection==SceneDecalProjection::Surface?spatialSceneSignature(extracted):0);return result;}
 std::string DecalResources::status(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::string{}:it->second.status;}
 std::shared_ptr<const DecalPatchData> DecalResources::patch(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()||!it->second.current?nullptr:it->second.render;}
 std::optional<Mat4> DecalResources::surfaceFrame(EntityId id)const{const auto it=patches_.find(id);return it==patches_.end()?std::nullopt:it->second.surfaceFrame;}

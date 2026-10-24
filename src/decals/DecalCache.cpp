@@ -15,7 +15,7 @@ struct Reader {
     template<class T>T take(){if(bytes.size()<sizeof(T))throw std::runtime_error("Incomplete decal cache.");T value;std::memcpy(&value,bytes.data(),sizeof(T));bytes.remove_prefix(sizeof(T));return value;}
 };
 uint64_t checksum(std::string_view bytes){uint64_t result=io::HashSeed;io::hash(result,bytes.data(),bytes.size());return result;}
-bool validLimits(const DecalBuildLimits&limits){return limits.maximumTriangles>=4&&limits.maximumTriangles<=1'000'000&&limits.maximumInputTriangles>0&&std::isfinite(limits.maximumStretch)&&limits.maximumStretch>=1;}
+bool validLimits(const DecalBuildLimits&limits){return limits.maximumTriangles>=4&&limits.maximumTriangles<=1'000'000&&limits.maximumInputTriangles>0&&limits.maximumInputTriangles<=1'000'000&&std::isfinite(limits.maximumStretch)&&limits.maximumStretch>=1;}
 void cancelled(std::stop_token stop){if(stop.stop_requested())throw std::runtime_error("Decal cache preparation cancelled.");}
 using SourceKey=std::pair<ReceiverId,uint32_t>;
 struct SourceReference {const SurfaceReceiver*receiver;const SurfaceTriangle*triangle;Mat4 normal;};

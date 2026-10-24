@@ -130,19 +130,28 @@ Json meshPaintJson(const SceneMeshPaint& paint) {
 }
 SceneDecal readDecal(const Json& json) {
     SceneDecal decal;decal.asset=json.at("asset").get<AssetRef<DecalAsset>>();
+    if(json.contains("projection")) {
+        const auto projection=json.at("projection").get<std::string>();
+        if(projection=="Box")decal.projection=SceneDecalProjection::Box;
+        else if(projection!="Surface")throw std::runtime_error("Unknown decal projection.");
+    }
+    if(json.contains("seed")) {
     const auto& seed=json.at("seed");decal.seed.receiver=parseId(seed.at("receiver"));
     decal.seed.modelId=seed.at("model").get<std::string>();decal.seed.fingerprint=parseId(seed.at("fingerprint"));
     decal.seed.draw=readCollisionBits(seed.at("draw"));decal.seed.primitive=readCollisionBits(seed.at("primitive"));decal.seed.triangle=readCollisionBits(seed.at("triangle"));
     decal.seed.barycentric=seed.at("barycentric").get<Vec3>();decal.seed.localPoint=seed.at("localPoint").get<Vec3>();decal.seed.localNormal=seed.at("localNormal").get<Vec3>();
+    } else if(decal.projection==SceneDecalProjection::Surface)throw std::runtime_error("Surface decal requires seed provenance.");
     decal.tint=json.at("tint").get<Vec3>();decal.opacity=json.at("opacity").get<float>();decal.edgeFeather=json.at("edgeFeather").get<float>();
     const auto& priority=json.at("priority");if(!priority.is_number_integer()||(priority.is_number_unsigned()?priority.get<uint64_t>()>INT32_MAX:priority.get<int64_t>()<INT32_MIN||priority.get<int64_t>()>INT32_MAX))throw std::runtime_error("Decal layer priority must be a signed 32-bit integer.");
     decal.priority=priority.get<int32_t>();return decal;
 }
 Json decalJson(const SceneDecal& decal) {
     const auto& seed=decal.seed;
-    return {{"asset",decal.asset},{"seed",{{"receiver",hexId(seed.receiver)},{"model",seed.modelId},{"fingerprint",hexId(seed.fingerprint)},
+    Json result={{"asset",decal.asset},{"seed",{{"receiver",hexId(seed.receiver)},{"model",seed.modelId},{"fingerprint",hexId(seed.fingerprint)},
         {"draw",seed.draw},{"primitive",seed.primitive},{"triangle",seed.triangle},{"barycentric",seed.barycentric},{"localPoint",seed.localPoint},{"localNormal",seed.localNormal}}},
         {"tint",decal.tint},{"opacity",decal.opacity},{"edgeFeather",decal.edgeFeather},{"priority",decal.priority}};
+    if(decal.projection==SceneDecalProjection::Box){result["projection"]="Box";result.erase("seed");}
+    return result;
 }
 std::string uniqueToken() { return hexId(randomId()) + hexId(randomId()); }
 std::filesystem::path scenePath(const std::filesystem::path& root, const std::string& id) {
@@ -1751,6 +1760,11 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
 EntityId SceneDocument::createModel(const std::string& assetId, const std::string& name, const Mat4& local) {
     EntityRecord record; record.name = name; record.model=AssetRef<ModelAsset>{assetId}; record.local = local;
     return create(std::move(record),"Place model");
+}
+EntityId SceneDocument::createBoxDecal(const std::string& name,EntityId parent) {
+    EntityRecord record;record.name=name;record.parent=parent;record.decal.emplace();
+    record.decal->projection=SceneDecalProjection::Box;
+    return create(std::move(record),"Create box decal");
 }
 EntityId SceneDocument::createDecal(const SceneDecal& decal,const std::string& name,const Mat4& local) {
     EntityRecord record;record.name=name;record.local=local;record.decal=decal;return create(std::move(record),"Place decal");
